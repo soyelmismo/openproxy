@@ -70,7 +70,7 @@ impl PiiSession {
     }
 
     /// Seed sequential counters above any pre-existing synthetic placeholders
-    /// (e.g. `<EMAIL_1>`, `<KEY_3>`, `Alex Vance (P1)`, `10.240.0.1`) present in the input text to prevent collision bugs.
+    /// (e.g. `<EMAIL_1>`, `<KEY_3>`, `Alex Vance`, `10.240.0.1`) present in the input text to prevent collision bugs.
     pub fn seed_existing_placeholders(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -375,13 +375,23 @@ impl PiiSession {
                     "Murphy",
                     "Rivera",
                 ];
-                let zero_based = c - 1;
-                let first_idx = zero_based % FIRST_NAMES.len();
-                let cycle = zero_based / FIRST_NAMES.len();
-                let last_idx = (first_idx + cycle) % LAST_NAMES.len();
-                let first = FIRST_NAMES[first_idx];
-                let last = LAST_NAMES[last_idx];
-                format!("{first} {last} (P{c})")
+                let gen_name = |idx: usize| -> String {
+                    let zero_based = idx - 1;
+                    let first_idx = zero_based % FIRST_NAMES.len();
+                    let cycle = zero_based / FIRST_NAMES.len();
+                    let last_idx = (first_idx + cycle) % LAST_NAMES.len();
+                    let first = FIRST_NAMES[first_idx];
+                    let last = LAST_NAMES[last_idx];
+                    format!("{first} {last}")
+                };
+                let mut current_c = c;
+                let mut name = gen_name(current_c);
+                while name.eq_ignore_ascii_case(original) {
+                    *count += 1;
+                    current_c = *count;
+                    name = gen_name(current_c);
+                }
+                name
             }
         };
 

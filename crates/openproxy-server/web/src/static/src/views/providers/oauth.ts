@@ -16,7 +16,6 @@ import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { showToast } from '../../components/toast.js';
 import { flashButton, showApiError } from '../../lib/ui-utils.js';
-import { copyToClipboard } from '../../lib/clipboard.js';
 import { showConfirm } from '../../lib/show-confirm.js';
 import { icons } from '../../lib/icons.js';
 import {
@@ -25,37 +24,11 @@ import {
   updateAccountLabel,
   copyAccountApiKey,
 } from '../../handlers/account-handlers.js';
-import { OAuthLogin } from '../../handlers/oauth-handlers.js';
 import { renderQuotaCell } from '../quota-cell.js';
 import type { Account, HealthStatus, Provider } from '../../lib/types/api.js';
 
-// ================================
-//  OAuth handlers (lines 284-301)
-// ================================
-
-function onOAuthStartPKCE(providerId: string): void {
-  void OAuthLogin.startPKCE(providerId);
-}
-
-function onOAuthStartDeviceCode(providerId: string): void {
-  void OAuthLogin.startDeviceCode(providerId);
-}
-
-function onOAuthSubmitManualCallback(): void {
-  void OAuthLogin.submitManualCallback();
-}
-
-function onCopyAuthUrl(): void {
-  const el = document.getElementById('oauth-auth-url') as HTMLInputElement | null;
-  if (el) {
-    copyToClipboard(el.value || '').catch(() => {
-      /* ignore — silent best-effort */
-    });
-  }
-}
-
 // ==========================================
-//  Connection / account handlers (lines 305-430)
+//  Connection / account handlers
 // ==========================================
 
 async function onSetHealth(id: number, e: Event | null): Promise<void> {
@@ -190,43 +163,8 @@ async function onApplyLocalCli(accountId: number): Promise<void> {
 //  Render: OAuth section
 // ================================
 
-export function renderOAuthSection(provider: Provider): TemplateResult {
-  if (provider.auth_type !== 'oauth') return html``;
-  const buttons: TemplateResult[] = [];
-  if (
-    provider.oauth_flows?.includes('pkce') ||
-    provider.oauth_flows?.includes('auth_code')
-  ) {
-    buttons.push(
-      html`<button class="primary" @click=${() => onOAuthStartPKCE(provider.id)}>Log in with ${provider.name || provider.id}</button>`,
-    );
-  }
-  if (provider.oauth_flows?.includes('device')) {
-    buttons.push(
-      html`<button class="primary" @click=${() => onOAuthStartDeviceCode(provider.id)}>Log in with ${provider.name || provider.id}</button>`,
-    );
-  }
-  return html`
-    <section class="detail-section">
-      <div class="section-header"><h3>OAuth login</h3></div>
-      <div class="oauth-buttons">${buttons}</div>
-      <div id="oauth-device-info" style="display:none;"></div>
-      <div id="oauth-manual-section" class="oauth-manual-card" style="display:none;">
-        <h4>1. Authorize</h4>
-        <p>Open this URL in a new tab and complete the login:</p>
-        <div class="oauth-manual-url">
-          <input id="oauth-auth-url" type="text" readonly>
-          <button type="button" class="btn-secondary" @click=${onCopyAuthUrl}>Copy</button>
-        </div>
-        <h4>2. Paste the callback URL</h4>
-        <p>After the OAuth provider redirects, copy the full URL from your address bar and paste it here:</p>
-        <div class="oauth-manual-input">
-          <input id="oauth-callback-input" type="text" placeholder="https://...">
-          <button type="button" class="primary" @click=${onOAuthSubmitManualCallback}>Submit</button>
-        </div>
-      </div>
-    </section>
-  `;
+export function renderOAuthSection(_provider: Provider): TemplateResult {
+  return html``;
 }
 
 // ================================

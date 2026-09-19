@@ -112,6 +112,15 @@ pub fn build_opencode_headers(
     append_format_auth_headers(&mut headers, adapter, api_key, target_format);
 
     headers.extend(OpenCodeSpoofer.headers());
+
+    for (k, v) in &adapter.config().extra_headers {
+        if let Some(pos) = headers.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+            headers[pos].1 = v.clone();
+        } else {
+            headers.push((k.clone(), v.clone()));
+        }
+    }
+
     headers
 }
 
@@ -231,6 +240,16 @@ impl OpenCodeAdapter {
                 } else if m_lower == "muse-spark-1.2" || m_lower == "muse-spark-1.2-contributor" {
                     *m_val =
                         serde_json::Value::String("muse-spark-1.2-contributor-free".to_string());
+                } else if m_lower == "mimo-v2.5" {
+                    *m_val = serde_json::Value::String("mimo-v2.5-free".to_string());
+                } else if m_lower == "deepseek-v4-flash" {
+                    *m_val = serde_json::Value::String("deepseek-v4-flash-free".to_string());
+                } else if m_lower == "nemotron-3-ultra" {
+                    *m_val = serde_json::Value::String("nemotron-3-ultra-free".to_string());
+                } else if m_lower == "nemotron-3.5-lightning" {
+                    *m_val = serde_json::Value::String("nemotron-3.5-lightning-free".to_string());
+                } else if m_lower == "ling-3.0-flash-fin" {
+                    *m_val = serde_json::Value::String("ling-3.0-flash-fin-free".to_string());
                 }
             }
             inject_opencode_agent_quartet_tools(obj, target_format);
@@ -240,6 +259,10 @@ impl OpenCodeAdapter {
             CoreError::Parse(format!("failed to re-serialize wrapped opencode body: {e}"))
         })?;
         Ok(bytes::Bytes::from(updated_bytes))
+    }
+
+    pub fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        Some(&mut self.config)
     }
 }
 
@@ -258,6 +281,7 @@ pub fn is_free_opencode_tier(
     m.ends_with("-free")
         || m == "big-pickle"
         || m == "union-alpha"
+        || m == "grok-code"
         || m.contains("contributor-free")
 }
 
@@ -502,6 +526,9 @@ impl crate::adapters::ProviderAdapter for OpenCodeGoAdapter {
     fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
         self.0.config()
     }
+    fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        self.0.config_mut()
+    }
     fn is_anonymous_fallback(&self) -> bool {
         self.0.is_anonymous_fallback()
     }
@@ -556,6 +583,9 @@ impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
     fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
         self.0.config()
     }
+    fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        self.0.config_mut()
+    }
     fn is_anonymous_fallback(&self) -> bool {
         self.0.is_anonymous_fallback()
     }
@@ -599,6 +629,10 @@ impl crate::adapters::ProviderAdapter for OpenCodeZenAdapter {
 impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
     fn config(&self) -> &crate::adapters::ProviderAdapterConfig {
         &self.config
+    }
+
+    fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
+        Some(&mut self.config)
     }
 
     fn is_anonymous_fallback(&self) -> bool {

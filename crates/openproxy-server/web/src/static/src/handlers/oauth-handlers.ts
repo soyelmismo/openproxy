@@ -34,6 +34,7 @@ interface OAuthLoginShape {
   showManualPasteForm(provider: string, authData: AuthData): void;
   submitManualCallback(): Promise<void>;
   startDeviceCode(provider: string): Promise<void>;
+  cancelOAuth(): void;
 }
 
 export const OAuthLogin: OAuthLoginShape = {
@@ -211,18 +212,21 @@ export const OAuthLogin: OAuthLoginShape = {
         error?: string;
         device_code?: string;
         verification_uri?: string;
+        verification_uri_complete?: string;
         user_code?: string;
       };
       if (resp.error) throw new Error(resp.error);
       const deviceInfo = document.getElementById("oauth-device-info");
       if (deviceInfo) {
         const verificationUri = resp.verification_uri || "";
+        const verificationUriComplete = resp.verification_uri_complete || "";
+        const targetUrl = verificationUriComplete || verificationUri;
         const userCode = resp.user_code || "";
         render(html`
           <div class="device-code-flow">
             <p>To log in with ${provider}:</p>
             <ol>
-              <li>Open <a href=${verificationUri} target="_blank" rel="noopener">${verificationUri}</a></li>
+              <li>Open <a href=${targetUrl} target="_blank" rel="noopener">${targetUrl}</a></li>
               <li>Enter code: <strong class="copy-text">${userCode}</strong></li>
             </ol>
             <p class="polling-status">Waiting for authorization...</p>
@@ -256,6 +260,17 @@ export const OAuthLogin: OAuthLoginShape = {
       const msg = err instanceof Error ? err.message : String(err);
       showToast(`Device code failed: ${msg}`, "error");
     }
+  },
+  cancelOAuth(): void {
+    if (this._devicePollInterval) {
+      clearInterval(this._devicePollInterval);
+      this._devicePollInterval = null;
+    }
+    this._currentAuth = null;
+    const deviceInfo = document.getElementById("oauth-device-info");
+    if (deviceInfo) deviceInfo.style.display = "none";
+    const manualSection = document.getElementById("oauth-manual-section");
+    if (manualSection) manualSection.style.display = "none";
   },
 };
 

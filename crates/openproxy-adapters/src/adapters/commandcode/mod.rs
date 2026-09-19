@@ -13,7 +13,7 @@ pub mod payload;
 mod tests;
 
 pub(crate) use billing::*;
-pub(crate) use payload::*;
+pub use payload::*;
 
 use super::{
     Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter, ProviderAdapterConfig, Result,
@@ -22,37 +22,34 @@ use super::{
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamRequest};
 use crate::{AdapterAuthType, AdapterFormat};
 use openproxy_types::{AccountQuota, ProviderId, ProviderMetadata, ResultExt};
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::OnceLock;
 
-pub const DEFAULT_COMMANDCODE_CLI_VERSION: &str = "1.54.0";
+pub use crate::spoofer::{
+    current_commandcode_ua, current_commandcode_version, set_dynamic_commandcode_extra_header,
+    set_dynamic_commandcode_ua, set_dynamic_commandcode_version,
+};
+
+pub const DEFAULT_COMMANDCODE_CLI_VERSION: &str = crate::spoofer::DEFAULT_COMMANDCODE_CLI_VERSION;
 const NPM_COMMANDCODE_METADATA_URL: &str = "https://registry.npmjs.org/command-code/latest";
-
-static DYNAMIC_CLI_VERSION: OnceLock<RwLock<String>> = OnceLock::new();
-
-fn version_lock() -> &'static RwLock<String> {
-    DYNAMIC_CLI_VERSION.get_or_init(|| RwLock::new(DEFAULT_COMMANDCODE_CLI_VERSION.to_string()))
-}
 
 /// Returns the current dynamic Command Code CLI version.
 /// Respects `OPENPROXY_COMMANDCODE_CLI_VERSION` env var if set.
 pub fn get_commandcode_cli_version() -> String {
-    if let Ok(env_ver) = std::env::var("OPENPROXY_COMMANDCODE_CLI_VERSION")
-        && !env_ver.trim().is_empty()
-    {
-        return env_ver.trim().to_string();
-    }
-    version_lock().read().clone()
+    current_commandcode_version()
 }
 
 /// Updates the dynamic Command Code CLI version.
 pub fn set_commandcode_cli_version(version: String) {
-    let trimmed = version.trim();
-    if !trimmed.is_empty() {
-        *version_lock().write() = trimmed.to_string();
-    }
+    set_dynamic_commandcode_version(version);
+}
+
+/// Resolves the canonical base URL for Command Code API, honoring `OPENPROXY_COMMANDCODE_BASE_URL`.
+pub fn commandcode_base_url() -> String {
+    std::env::var("OPENPROXY_COMMANDCODE_BASE_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "https://api.commandcode.ai".to_string())
 }
 
 /// Asynchronously queries npm registry for the latest `command-code` CLI version.
@@ -92,12 +89,7 @@ impl CommandCodeGoAdapter {
                 base_url: "https://api.commandcode.ai".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::CommandCodeGo,
-                extra_headers: vec![
-                    ("x-cli-environment".into(), "production".into()),
-                    ("x-project-slug".into(), "project".into()),
-                    ("x-taste-learning".into(), "true".into()),
-                    ("User-Agent".into(), "cli".into()),
-                ],
+                extra_headers: vec![],
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
             },
@@ -124,7 +116,13 @@ impl ProviderAdapter for CommandCodeGoAdapter {
     }
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
-        format!("{}/alpha/generate", self.config().base_url)
+        if let Ok(url) = std::env::var("OPENPROXY_COMMANDCODE_CHAT_URL")
+            && !url.trim().is_empty()
+        {
+            return url.trim().to_string();
+        }
+        let base = commandcode_base_url();
+        format!("{base}/alpha/generate")
     }
 
     fn build_headers(
@@ -133,19 +131,11 @@ impl ProviderAdapter for CommandCodeGoAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = Vec::with_capacity(8 + self.config().extra_headers.len());
+        use crate::spoofer::{ClientSpoofer, CommandCodeSpoofer};
+        let mut headers = CommandCodeSpoofer.headers();
         if let Some((name, value)) = self.build_auth_header(api_key) {
             headers.push((name, value));
         }
-        headers.push(("Content-Type".into(), "application/json".into()));
-        headers.push((
-            "x-command-code-version".into(),
-            get_commandcode_cli_version(),
-        ));
-        headers.push(("user-agent".into(), "cli".into()));
-        headers.push(("x-cli-environment".into(), "production".into()));
-        headers.push(("x-project-slug".into(), "project".into()));
-        headers.push(("x-taste-learning".into(), "true".into()));
         for (k, v) in &self.config().extra_headers {
             headers.push((k.clone(), v.clone()));
         }
@@ -153,7 +143,8 @@ impl ProviderAdapter for CommandCodeGoAdapter {
     }
 
     fn models_url(&self) -> Option<String> {
-        Some(format!("{}/provider/v1/models", self.config().base_url))
+        let base = commandcode_base_url();
+        Some(format!("{base}/provider/v1/models"))
     }
 
     fn wrap_request_body(
@@ -273,6 +264,7 @@ impl ProviderAdapter for CommandCodeGoAdapter {
 }
 
 pub fn apply_commandcode_cli_headers(req: &mut UpstreamRequest, token: &str) {
+    use crate::spoofer::{ClientSpoofer, CommandCodeSpoofer};
     let auth_header = format!("Bearer {token}");
     if let (Ok(name), Ok(val)) = (
         http::HeaderName::from_bytes(b"authorization"),
@@ -280,26 +272,5 @@ pub fn apply_commandcode_cli_headers(req: &mut UpstreamRequest, token: &str) {
     ) {
         req.headers.insert(name, val);
     }
-    if let (Ok(name), Ok(val)) = (
-        http::HeaderName::from_bytes(b"x-command-code-version"),
-        http::HeaderValue::from_str(&get_commandcode_cli_version()),
-    ) {
-        req.headers.insert(name, val);
-    }
-    if let Ok(name) = http::HeaderName::from_bytes(b"x-cli-environment") {
-        req.headers
-            .insert(name, http::HeaderValue::from_static("production"));
-    }
-    if let Ok(name) = http::HeaderName::from_bytes(b"x-project-slug") {
-        req.headers
-            .insert(name, http::HeaderValue::from_static("project"));
-    }
-    if let Ok(name) = http::HeaderName::from_bytes(b"x-taste-learning") {
-        req.headers
-            .insert(name, http::HeaderValue::from_static("true"));
-    }
-    if let Ok(name) = http::HeaderName::from_bytes(b"user-agent") {
-        req.headers
-            .insert(name, http::HeaderValue::from_static("cli"));
-    }
+    CommandCodeSpoofer.apply_to_request(req);
 }

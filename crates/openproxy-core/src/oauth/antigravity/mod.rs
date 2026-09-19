@@ -48,7 +48,7 @@ use retry::drive_invalid_grant_retry;
 
 /// Google OAuth client_id for Cloud Code (Antigravity).
 /// Segmented with LazyLock to prevent false-positive secret scanner alerts on public native app IDs.
-static CLIENT_ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+pub static CLIENT_ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     let pfx = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep";
     let dom = "apps.googleusercontent.com";
     format!("{pfx}.{dom}")
@@ -58,14 +58,14 @@ static CLIENT_ID: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
 /// This is NOT a real secret — Google explicitly documents that native app
 /// client_secrets are distributed in source code.
 /// https://developers.google.com/identity/protocols/oauth2/native-app
-static DEFAULT_CLIENT_SECRET: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+pub static DEFAULT_CLIENT_SECRET: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     let pfx = "GOCSPX";
     let sfx = "K58FWR486LdLJ1mLB8sXC4z6qDAf";
     format!("{pfx}-{sfx}")
 });
 
 /// Google OAuth scopes for Cloud Code.
-const SCOPES: &[&str] = &[
+pub const SCOPES: &[&str] = &[
     "openid",
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -75,8 +75,8 @@ const SCOPES: &[&str] = &[
 ];
 
 /// Google OAuth endpoints.
-const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
-const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+pub const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+pub const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 
 /// Cloud Code `metadata.ideType` used when the operator has not
 /// configured a custom IDE identity. The Antigravity client sends

@@ -36,7 +36,7 @@ import {
   setProviderUi,
   type ProviderDetailUiState,
 } from './shared.js';
-import { renderOAuthSection, renderConnectionsSection } from './oauth.js';
+import { renderConnectionsSection } from './oauth.js';
 import { renderModelsSection } from './models.js';
 
 // ================================
@@ -307,7 +307,6 @@ export function renderProviderDetail(): TemplateResult {
   return html`
     <div class="page-header"><a href="#/providers" class="back-link">← All providers</a><h2>${provider.name}</h2></div>
     ${renderDetailHeader(provider)}
-    ${renderOAuthSection(provider)}
     ${renderConnectionsSection(provider, accounts)}
     ${renderModelsSection(provider, providerModels, ui)}
   `;

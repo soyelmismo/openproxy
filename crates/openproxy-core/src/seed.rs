@@ -87,6 +87,15 @@ fn seed_single_adapter(
                 "update builtin auth_type",
             ))?;
         }
+        if conf.id.as_str() == "minimax" && existing.base_url.contains("api.minimax.io") {
+            conn.execute(
+                "UPDATE providers SET base_url = ?1 WHERE id = ?2",
+                rusqlite::params![conf.base_url.as_str(), conf.id.as_str()],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "update builtin base_url",
+            ))?;
+        }
         return Ok(false);
     }
 
@@ -344,7 +353,7 @@ mod tests {
         let minimax = providers::get(&conn, &ProviderId::new("minimax"))
             .expect("get")
             .unwrap();
-        assert_eq!(minimax.auth_type, AuthType::Bearer);
+        assert_eq!(minimax.auth_type, AuthType::OAuth);
         assert_eq!(minimax.format, ProviderFormat::Anthropic);
 
         let zen = providers::get(&conn, &ProviderId::new("opencode-zen"))

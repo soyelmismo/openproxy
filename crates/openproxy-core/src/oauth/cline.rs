@@ -9,12 +9,40 @@ use openproxy_adapters::upstream::{
 };
 use std::sync::Arc;
 
+pub const CLINE_DEFAULT_BASE_URL: &str = "https://api.cline.bot";
+pub const CLINE_AUTH_AUTHORIZE_PATH: &str = "/api/v1/auth/authorize";
+pub const CLINE_AUTH_TOKEN_PATH: &str = "/api/v1/auth/token";
+pub const CLINE_AUTH_REFRESH_PATH: &str = "/api/v1/auth/refresh";
+pub const CLINE_CLIENT_TYPE: &str = "extension";
+pub const CLINE_PROVIDER: &str = "cline";
+
 #[derive(Clone)]
-pub struct ClineOAuthProvider {}
+pub struct ClineOAuthProvider {
+    resolver: super::OAuthEndpointResolver,
+}
 
 impl ClineOAuthProvider {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            resolver: super::OAuthEndpointResolver::new(
+                "OPENPROXY_CLINE_OAUTH_BASE_URL",
+                CLINE_DEFAULT_BASE_URL,
+            ),
+        }
+    }
+
+    pub fn with_base_url(base_url: impl Into<String>) -> Self {
+        Self {
+            resolver: super::OAuthEndpointResolver::new(
+                "OPENPROXY_CLINE_OAUTH_BASE_URL",
+                CLINE_DEFAULT_BASE_URL,
+            )
+            .with_custom_base(base_url),
+        }
+    }
+
+    pub fn base_url(&self) -> String {
+        self.resolver.base_url()
     }
 }
 
@@ -37,12 +65,12 @@ impl OAuthProvider for ClineOAuthProvider {
         &self,
         redirect_uri: &str,
     ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
-        let authorize_url = "https://api.cline.bot/api/v1/auth/authorize";
+        let authorize_url = self.resolver.url_with_path(CLINE_AUTH_AUTHORIZE_PATH);
 
         let state = uuid::Uuid::new_v4().to_string();
 
         let params = vec![
-            ("client_type", "extension"),
+            ("client_type", CLINE_CLIENT_TYPE),
             ("callback_url", redirect_uri),
             ("redirect_uri", redirect_uri),
             ("state", state.as_str()),
@@ -73,8 +101,9 @@ impl OAuthProvider for ClineOAuthProvider {
 
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
+        let token_url = self.resolver.url_with_path(CLINE_AUTH_TOKEN_PATH);
         let mut req = UpstreamRequest::post_json(
-            "https://api.cline.bot/api/v1/auth/token",
+            token_url,
             bytes::Bytes::from(body_bytes),
         );
         req.headers.insert(
@@ -95,15 +124,7 @@ impl OAuthProvider for ClineOAuthProvider {
             .await
             .map_err(|e| map_upstream_err(e, "cline exchange body"))?;
 
-        if !status.is_success() {
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "cline",
-                "<oauth>",
-                String::from_utf8_lossy(&resp_body).to_string(),
-                false,
-            ));
-        }
+        super::check_oauth_status(status, "cline", &resp_body)?;
 
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
             .map_err(|e| CoreError::Parse(format!("cline token parse: {e}")))?;
@@ -149,7 +170,7 @@ impl OAuthProvider for ClineOAuthProvider {
         _account_id: crate::ids::AccountId,
         _db: DbRef<'_>,
     ) -> Result<TokenResponse> {
-        let refresh_url = "https://api.cline.bot/api/v1/auth/refresh";
+        let refresh_url = self.resolver.url_with_path(CLINE_AUTH_REFRESH_PATH);
 
         let body = serde_json::json!({
             "granttype": "refresh_token",
@@ -182,15 +203,7 @@ impl OAuthProvider for ClineOAuthProvider {
             .await
             .map_err(|e| map_upstream_err(e, "cline refresh body"))?;
 
-        if !status.is_success() {
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "cline",
-                "<oauth>",
-                String::from_utf8_lossy(&resp_body).to_string(),
-                false,
-            ));
-        }
+        super::check_oauth_status(status, "cline", &resp_body)?;
 
         let resp: ClineResponse = serde_json::from_slice(&resp_body)
             .map_err(|e| CoreError::Parse(format!("cline token refresh parse: {e}")))?;
@@ -213,35 +226,7 @@ impl OAuthProvider for ClineOAuthProvider {
     }
 
     fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
-        let extract = |claims: &serde_json::Value| -> Option<String> {
-            claims
-                .get("email")
-                .and_then(|v| v.as_str())
-                .filter(|v| !v.is_empty())
-                .or_else(|| {
-                    claims
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .filter(|v| !v.is_empty())
-                })
-                .map(ToString::to_string)
-        };
-
-        if let Some(ref id_jwt) = token.id_token
-            && let Some(claims) = super::decode_jwt_payload(id_jwt)
-            && let Some(val) = extract(&claims)
-        {
-            return Some(val);
-        }
-
-        let jwt = token
-            .access_token
-            .strip_prefix("Bearer ")
-            .unwrap_or(&token.access_token)
-            .strip_prefix("workos:")
-            .unwrap_or(&token.access_token);
-        let claims = super::decode_jwt_payload(jwt)?;
-        extract(&claims)
+        super::extract_email_from_token(token)
     }
 }
 
@@ -332,4 +317,115 @@ mod tests {
             Some("user@example.com")
         );
     }
+
+    #[tokio::test]
+    async fn test_cline_provider_metadata() {
+        let provider = ClineOAuthProvider::new();
+        assert_eq!(provider.name(), "cline");
+        assert_eq!(provider.flow(), OAuthFlow::AuthorizationCode);
+        assert!(provider.aliases().is_empty());
+        assert_eq!(provider.base_url(), CLINE_DEFAULT_BASE_URL);
+    }
+
+    #[tokio::test]
+    async fn test_cline_build_auth_url() {
+        let provider = ClineOAuthProvider::new();
+        let redirect_uri = "http://127.0.0.1:4000/oauth/callback";
+        let (url, verifier, challenge, state) = provider
+            .build_auth_url(redirect_uri)
+            .await
+            .expect("build auth url");
+
+        assert!(verifier.is_empty(), "Cline does not use PKCE verifier");
+        assert!(challenge.is_empty(), "Cline does not use PKCE challenge");
+        assert!(
+            uuid::Uuid::parse_str(&state).is_ok(),
+            "state must be a valid UUID v4"
+        );
+        assert!(
+            url.starts_with("https://api.cline.bot/api/v1/auth/authorize?"),
+            "URL must target Cline authorize endpoint: {url}"
+        );
+        assert!(url.contains("client_type=extension"));
+        assert!(url.contains("callback_url=http%3A%2F%2F127.0.0.1%3A4000%2Foauth%2Fcallback"));
+        assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Foauth%2Fcallback"));
+        assert!(url.contains(&format!("state={state}")));
+    }
+
+    #[tokio::test]
+    async fn test_cline_build_auth_url_custom_base() {
+        let provider = ClineOAuthProvider::with_base_url("http://localhost:9999");
+        assert_eq!(provider.base_url(), "http://localhost:9999");
+        let (url, _, _, _) = provider
+            .build_auth_url("http://loc/cb")
+            .await
+            .expect("build custom base auth url");
+        assert!(url.starts_with("http://localhost:9999/api/v1/auth/authorize?"));
+    }
+
+    #[tokio::test]
+    async fn test_cline_device_flow_unsupported() {
+        let provider = ClineOAuthProvider::new();
+        let client = Arc::new(UpstreamClient::new());
+        let dev_res = provider.request_device_code(&client).await;
+        assert!(dev_res.is_err());
+
+        let poll_res = provider.poll_device_token("dev-code", &client).await;
+        assert!(poll_res.is_err());
+    }
+
+    #[test]
+    fn test_cline_email_fallback_to_name() {
+        let provider = ClineOAuthProvider::new();
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"name":"Developer Bob"}"#);
+        let token = TokenResponse {
+            access_token: format!("{header}.{payload}.sig"),
+            token_type: "Bearer".into(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            id_token: None,
+        };
+        assert_eq!(
+            provider.email_from_token(&token).as_deref(),
+            Some("Developer Bob")
+        );
+    }
+
+    #[test]
+    fn test_cline_email_from_id_token() {
+        let provider = ClineOAuthProvider::new();
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(r#"{"email":"id_user@example.com"}"#);
+        let token = TokenResponse {
+            access_token: "non_jwt_access_token".into(),
+            token_type: "Bearer".into(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            id_token: Some(format!("{header}.{payload}.sig")),
+        };
+        assert_eq!(
+            provider.email_from_token(&token).as_deref(),
+            Some("id_user@example.com")
+        );
+    }
+
+    #[test]
+    fn test_cline_email_invalid_tokens() {
+        let provider = ClineOAuthProvider::new();
+        let token = TokenResponse {
+            access_token: "invalid-token".into(),
+            token_type: "Bearer".into(),
+            expires_in: None,
+            refresh_token: None,
+            scope: None,
+            id_token: None,
+        };
+        assert_eq!(provider.email_from_token(&token), None);
+    }
 }
+

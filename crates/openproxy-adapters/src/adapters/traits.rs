@@ -87,6 +87,11 @@ pub trait ProviderAdapter: Send + Sync {
     /// Static configuration snapshot.
     fn config(&self) -> &ProviderAdapterConfig;
 
+    /// Mutable configuration access (for dynamic extra headers / overrides).
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        None
+    }
+
     /// Provider metadata for frontend/admin
     fn metadata(&self) -> ProviderMetadata {
         let built_in = true;
@@ -326,4 +331,21 @@ pub trait ProviderAdapter: Send + Sync {
                 openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
             })
     }
+}
+
+/// Helper to construct standard headers for providers with a client spoofer,
+/// merging auth, Content-Type, spoofed identity headers, and custom extra headers.
+pub fn build_spoofer_headers(
+    auth: Option<(String, String)>,
+    spoofer: &impl crate::spoofer::ClientSpoofer,
+    extra_headers: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut headers = Vec::with_capacity(8 + extra_headers.len());
+    if let Some(auth) = auth {
+        headers.push(auth);
+    }
+    headers.push(("Content-Type".into(), "application/json".into()));
+    headers.extend(spoofer.headers());
+    crate::spoofer::merge_header_refs(&mut headers, extra_headers);
+    headers
 }

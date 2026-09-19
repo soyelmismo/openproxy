@@ -7,6 +7,11 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
+struct ModelsDevModelProvider {
+    npm: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ModelsDevModel {
     id: String,
     tool_call: Option<bool>,
@@ -17,6 +22,7 @@ struct ModelsDevModel {
     modalities: Option<ModelsDevModalities>,
     family: Option<String>,
     status: Option<String>,
+    provider: Option<ModelsDevModelProvider>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,10 +44,37 @@ struct ModelsDevModalities {
     output: Option<Vec<String>>,
 }
 
+/// Translate models.dev `provider.npm` or provider-level `npm` to OpenProxy `TargetFormat`.
+///
+/// Handles canonical npm packages from OpenCode and AI SDK ecosystem:
+/// - `@ai-sdk/anthropic` (or ending in `anthropic`) -> Anthropic (`/messages`)
+/// - `@ai-sdk/google` (or containing `google`) -> Gemini (`/models/...`)
+/// - `@ai-sdk/openai` -> Responses (`/responses`)
+/// - `@ai-sdk/openai-compatible` -> Openai (`/chat/completions`)
+pub fn resolve_routing_format(
+    model_npm: Option<&str>,
+    provider_npm: Option<&str>,
+) -> Option<openproxy_types::TargetFormat> {
+    let npm = model_npm.or(provider_npm)?;
+    let lower = npm.to_ascii_lowercase();
+    if lower.ends_with("anthropic") {
+        Some(openproxy_types::TargetFormat::Anthropic)
+    } else if lower.contains("google") {
+        Some(openproxy_types::TargetFormat::Gemini)
+    } else if lower.ends_with("openai") || lower == "@ai-sdk/openai" {
+        Some(openproxy_types::TargetFormat::Responses)
+    } else if lower.contains("openai-compatible") {
+        Some(openproxy_types::TargetFormat::Openai)
+    } else {
+        None
+    }
+}
+
 fn upsert_single_model(
     stmt: &mut rusqlite::Statement,
     model_val: &serde_json::Value,
     all_ids: &[&str],
+    provider_npm: Option<&str>,
 ) -> Result<usize> {
     let model: ModelsDevModel = match serde::Deserialize::deserialize(model_val) {
         Ok(m) => m,
@@ -71,6 +104,12 @@ fn upsert_single_model(
         .map(|inputs| inputs.iter().any(|s| s == "image"));
 
     let normalized = crate::model_normalize::normalize_model_id(&model.id);
+    let routing_format = resolve_routing_format(
+        model.provider.as_ref().and_then(|p| p.npm.as_deref()),
+        provider_npm,
+    )
+    .map(|f| f.as_str().to_string());
+
     let mut count = 0;
 
     for our_id in all_ids {
@@ -91,6 +130,7 @@ fn upsert_single_model(
             model.family.as_deref(),
             model.status.as_deref(),
             &normalized,
+            routing_format.as_deref(),
         ])
         .map_err(openproxy_db::error::map_db_error)?;
         count += 1;
@@ -109,10 +149,11 @@ fn upsert_provider_models(
     };
 
     let all_ids = resolve_provider_target_ids(ext_id);
+    let provider_npm = provider_val.get("npm").and_then(|v| v.as_str());
     let mut count = 0;
 
     for model_val in models_obj.values() {
-        count += upsert_single_model(stmt, model_val, &all_ids)?;
+        count += upsert_single_model(stmt, model_val, &all_ids, provider_npm)?;
     }
 
     Ok(count)
@@ -125,8 +166,8 @@ fn prepare_upsert_capabilities_stmt(conn: &Connection) -> Result<rusqlite::State
           pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, \
           tool_call, reasoning, vision, structured_output, \
           modalities_input, modalities_output, family, status, \
-          model_id_normalized) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
+          model_id_normalized, routing_format) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
          ON CONFLICT(provider_id, model_id) DO UPDATE SET \
           context_length       = coalesce(excluded.context_length,       model_capabilities_sync.context_length),\
           max_output_tokens    = coalesce(excluded.max_output_tokens,    model_capabilities_sync.max_output_tokens),\
@@ -142,6 +183,7 @@ fn prepare_upsert_capabilities_stmt(conn: &Connection) -> Result<rusqlite::State
           family        = coalesce(excluded.family,        model_capabilities_sync.family),\
           status        = coalesce(excluded.status,        model_capabilities_sync.status),\
           model_id_normalized = coalesce(excluded.model_id_normalized, model_capabilities_sync.model_id_normalized),\
+          routing_format = coalesce(excluded.routing_format, model_capabilities_sync.routing_format),\
           fetched_at    = strftime('%Y-%m-%dT%H:%M:%SZ','now')"
     ).map_err(openproxy_db::error::map_db_error)
 }

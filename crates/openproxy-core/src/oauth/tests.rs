@@ -117,6 +117,71 @@ fn builtin_registry_registers_aliases() {
     );
 }
 
+#[test]
+fn builtin_registry_all_providers_contract() {
+    let reg = OAuthProviderRegistry::builtin();
+
+    // 1. Antigravity
+    let ag = reg.get("antigravity").expect("antigravity registered");
+    assert_eq!(ag.name(), "antigravity");
+    assert_eq!(ag.flow(), OAuthFlow::AuthorizationCode);
+    let ag_cli = reg.get("antigravity-cli").expect("antigravity-cli alias registered");
+    assert_eq!(ag_cli.name(), "antigravity");
+
+    // 2. Cline
+    let cline = reg.get("cline").expect("cline registered");
+    assert_eq!(cline.name(), "cline");
+    assert_eq!(cline.flow(), OAuthFlow::AuthorizationCode);
+
+    // 3. Codex
+    let codex = reg.get("codex").expect("codex registered");
+    assert_eq!(codex.name(), "codex");
+    assert_eq!(codex.flow(), OAuthFlow::DeviceCode);
+
+    // 4. MiniMax
+    let minimax = reg.get("minimax").expect("minimax registered");
+    assert_eq!(minimax.name(), "minimax");
+    assert_eq!(minimax.flow(), OAuthFlow::DeviceCode);
+    let mm_coding = reg.get("minimax-coding").expect("minimax-coding alias registered");
+    assert_eq!(mm_coding.name(), "minimax");
+    let mm_cn = reg.get("minimax-cn").expect("minimax-cn alias registered");
+    assert_eq!(mm_cn.name(), "minimax");
+
+    // 5. Kiro
+    let kiro = reg.get("kiro").expect("kiro registered");
+    assert_eq!(kiro.name(), "kiro");
+    assert_eq!(kiro.flow(), OAuthFlow::DeviceCode);
+
+    // Unknown provider
+    assert!(reg.get("nonexistent-provider").is_none());
+}
+
+#[test]
+fn all_oauth_flow_variants_and_meta_serde_roundtrip() {
+    let flows = [
+        (OAuthFlow::DeviceCode, "device_code"),
+        (OAuthFlow::AuthorizationCodePkce, "authorization_code_pkce"),
+        (OAuthFlow::AuthorizationCode, "authorization_code"),
+    ];
+
+    for (flow, expected_str) in flows {
+        assert_eq!(flow.as_str(), expected_str);
+        let json = serde_json::to_string(&flow).unwrap();
+        assert_eq!(json, format!("\"{expected_str}\""));
+        let back: OAuthFlow = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, flow);
+
+        let meta = OAuthProviderMeta {
+            flow,
+            extra: serde_json::json!({"test_key": "test_val"}),
+        };
+        let meta_json = serde_json::to_string(&meta).unwrap();
+        let meta_back: OAuthProviderMeta = serde_json::from_str(&meta_json).unwrap();
+        assert_eq!(meta_back.flow, flow);
+        assert_eq!(meta_back.extra["test_key"], "test_val");
+    }
+}
+
 fn dummy_account(expires_at: Option<&str>) -> Account {
     Account {
         id: AccountId(1),

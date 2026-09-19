@@ -300,6 +300,26 @@ pub fn build_custom_provider_meta(
             antigravity_metadata: None,
             codex_workspace_id: None,
         })
+    } else if provider_id == "codex" {
+        let codex_workspace_id = raw_account_opt
+            .and_then(|a| a.oauth_provider_specific.as_deref())
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|meta| {
+                meta.get("workspaceId")
+                    .or_else(|| meta.get("workspace_id"))
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.is_empty())
+                    .map(ToString::to_string)
+            });
+        Some(openproxy_types::context::CustomProviderMeta {
+            access_token: api_key.to_string(),
+            maybe_refresh: None,
+            kiro_region: None,
+            kiro_profile_arn: None,
+            antigravity_project: None,
+            antigravity_metadata: None,
+            codex_workspace_id,
+        })
     } else {
         None
     }

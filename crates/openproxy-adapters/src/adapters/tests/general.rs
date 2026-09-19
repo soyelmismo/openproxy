@@ -51,11 +51,19 @@ fn openrouter_headers_include_referer_and_content_type() {
 // ---- MiniMax -----------------------------------------------------
 
 #[test]
-fn minimax_builds_messages_url_with_beta() {
+fn minimax_builds_messages_url_managed_and_byok() {
     let a = MiniMaxAdapter::new();
     let url = a.build_chat_url(TargetFormat::Anthropic, &ModelId::new("m"));
     assert_eq!(
         url,
+        "https://agent.minimax.io/mavis/api/v1/llm/v1/messages"
+    );
+
+    let mut byok = MiniMaxAdapter::new();
+    byok.config.base_url = "https://api.minimax.io".into();
+    let byok_url = byok.build_chat_url(TargetFormat::Anthropic, &ModelId::new("m"));
+    assert_eq!(
+        byok_url,
         "https://api.minimax.io/anthropic/v1/messages?beta=true"
     );
 }
@@ -145,7 +153,7 @@ fn opencode_zen_uses_public_auth_when_key_empty() {
     );
     assert_eq!(
         first_header(&headers, "User-Agent"),
-        Some("opencode/1.18.31")
+        Some(crate::spoofer::OPENCODE_UA)
     );
     assert_eq!(first_header(&headers, "x-opencode-client"), Some("cli"));
     assert_eq!(first_header(&headers, "x-opencode-project"), Some("global"));
@@ -172,7 +180,7 @@ fn opencode_zen_headers_have_user_agent_and_content_type() {
         let headers = a.build_headers("k", fmt, &ModelId::new("m"));
         assert_eq!(
             first_header(&headers, "User-Agent"),
-            Some("opencode/1.18.31")
+            Some(crate::spoofer::OPENCODE_UA)
         );
         assert_eq!(first_header(&headers, "x-opencode-client"), Some("cli"));
         assert_eq!(first_header(&headers, "x-opencode-project"), Some("global"));

@@ -166,6 +166,29 @@ macro_rules! define_jump_map {
     };
 }
 
+/// Helper for integration tests to load upstream source files directly via HTTP from remote
+/// repositories (e.g. GitHub Raw, npm) with an optional local file fallback.
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn load_upstream_source(http_url: &str, local_rel_path: &str) -> Option<String> {
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+    let req = UpstreamRequest::get(http_url);
+    if let Ok(resp) = client.call(req, TimeoutProfile::OAuth, cancel).await
+        && resp.status.is_success()
+        && let Ok(body) = resp.collect().await
+    {
+        return Some(String::from_utf8_lossy(&body).into_owned());
+    }
+
+    let base_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    let path = std::path::Path::new(&base_dir).join(local_rel_path);
+    if path.exists() {
+        return std::fs::read_to_string(&path).ok();
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod jump_map_tests {
     define_jump_map! {

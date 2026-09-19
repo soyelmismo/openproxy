@@ -353,15 +353,18 @@ impl PipelineStage for DispatchStage {
         let url =
             adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
         let mut headers = adapter.build_headers(api_key, target_format, &model.model_id);
-        if target.provider_id.as_str().starts_with("opencode")
-            || adapter.id().as_str().starts_with("opencode")
-        {
-            propagate_opencode_headers(
-                &mut headers,
-                &ctx.req.request_headers,
-                &ctx.req.openai_request,
-            );
-        }
+        let codex_ws = current
+            .custom_meta
+            .as_ref()
+            .and_then(|m| m.codex_workspace_id.as_deref());
+        propagate_provider_target_headers(
+            &mut headers,
+            target.provider_id.as_str(),
+            adapter.id().as_str(),
+            &ctx.req.request_headers,
+            &ctx.req.openai_request,
+            codex_ws,
+        );
 
         openproxy_types::emit_stage_event!(
             request_id: ctx.req.request_id,
@@ -690,7 +693,7 @@ impl PipelineStage for CustomAdapterStage {
     }
 }
 
-pub(crate) use super::target_headers::propagate_opencode_headers;
+use super::target_headers::propagate_provider_target_headers;
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

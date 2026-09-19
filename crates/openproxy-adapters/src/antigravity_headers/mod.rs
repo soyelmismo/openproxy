@@ -34,9 +34,9 @@ static HEADER_X_GOOG_USER_PROJECT: HeaderName = HeaderName::from_static("x-goog-
 /// Known stable Antigravity version (must be >= the version Google's
 /// API requires to accept requests). Updated from the
 /// Antigravity-Manager reference.
-const KNOWN_STABLE_VERSION: &str = "4.3.0";
-const KNOWN_STABLE_CHROME: &str = "132.0.6834.160";
-const KNOWN_STABLE_ELECTRON: &str = "39.2.3";
+pub const KNOWN_STABLE_VERSION: &str = "4.3.0";
+pub const KNOWN_STABLE_CHROME: &str = "132.0.6834.160";
+pub const KNOWN_STABLE_ELECTRON: &str = "39.2.3";
 
 /// Platform info for the User-Agent string.
 fn platform_info() -> &'static str {
@@ -47,19 +47,70 @@ fn platform_info() -> &'static str {
     }
 }
 
-static VERSION: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("OPENPROXY_ANTIGRAVITY_VERSION")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| KNOWN_STABLE_VERSION.to_string())
+static DYNAMIC_VERSION: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// Set dynamic version override in memory at runtime without recompiling.
+pub fn set_dynamic_version(ver: impl Into<String>) {
+    if let Ok(mut lock) = DYNAMIC_VERSION.write() {
+        *lock = Some(ver.into());
+    }
+}
+
+/// Dynamic resolution of current Antigravity version.
+/// Priority: in-memory dynamic override > OPENPROXY_ANTIGRAVITY_VERSION env var > KNOWN_STABLE_VERSION.
+pub fn current_version() -> String {
+    if let Ok(lock) = DYNAMIC_VERSION.read()
+        && let Some(ref ver) = *lock
+    {
+        return ver.clone();
+    }
+    if let Ok(env_ver) = std::env::var("OPENPROXY_ANTIGRAVITY_VERSION")
+        && !env_ver.is_empty()
+    {
+        return env_ver;
+    }
+    KNOWN_STABLE_VERSION.to_string()
+}
+
+static DYNAMIC_EXTRA_HEADERS: std::sync::RwLock<std::collections::BTreeMap<String, String>> =
+    std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Set dynamic extra header override for Antigravity in memory at runtime without recompiling.
+pub fn set_dynamic_extra_header(key: impl Into<String>, val: impl Into<String>) {
+    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
+        lock.insert(key.into(), val.into());
+    }
+}
+
+/// Reset dynamic in-memory overrides for Antigravity (useful for tests and cleanup).
+pub fn reset_dynamic_overrides() {
+    if let Ok(mut lock) = DYNAMIC_VERSION.write() {
+        *lock = None;
+    }
+    if let Ok(mut lock) = DYNAMIC_EXTRA_HEADERS.write() {
+        lock.clear();
+    }
+}
+
+#[cfg(test)]
+pub(crate) static ANTIGRAVITY_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+static EXTRA_HEADERS: LazyLock<Vec<(HeaderName, HeaderValue)>> = LazyLock::new(|| {
+    let Ok(env_str) = std::env::var("OPENPROXY_ANTIGRAVITY_EXTRA_HEADERS") else {
+        return Vec::new();
+    };
+    let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(&env_str) else {
+        return Vec::new();
+    };
+    map.into_iter()
+        .filter_map(|(k, v)| {
+            let name = HeaderName::from_bytes(k.as_bytes()).ok()?;
+            let val = HeaderValue::from_str(&v).ok()?;
+            Some((name, val))
+        })
+        .collect()
 });
 
-static HEADER_VAL_VERSION: LazyLock<HeaderValue> =
-    LazyLock::new(|| HeaderValue::from_str(&VERSION).expect("version must be valid ascii"));
-
-fn version() -> &'static str {
-    &VERSION
-}
 
 /// Persistent machine ID. Generated once per process lifetime from
 /// the hostname + OS. This mimics the `machine_uid` crate used by the
@@ -126,25 +177,31 @@ fn session_id() -> &'static str {
     &SESSION_ID
 }
 
-static HEADER_VAL_USER_AGENT: LazyLock<HeaderValue> = LazyLock::new(|| {
+/// Build a User-Agent header value for a given Antigravity version.
+pub fn build_user_agent(ver: &str) -> HeaderValue {
     let mut bytes = bytes::BytesMut::with_capacity(128);
     bytes.extend_from_slice(b"Antigravity/");
-    bytes.extend_from_slice(version().as_bytes());
+    bytes.extend_from_slice(ver.as_bytes());
     bytes.extend_from_slice(b" (");
     bytes.extend_from_slice(platform_info().as_bytes());
     bytes.extend_from_slice(b") Chrome/");
     bytes.extend_from_slice(KNOWN_STABLE_CHROME.as_bytes());
     bytes.extend_from_slice(b" Electron/");
     bytes.extend_from_slice(KNOWN_STABLE_ELECTRON.as_bytes());
-    HeaderValue::from_maybe_shared(bytes.freeze()).expect("user_agent must be valid ascii")
-});
+    HeaderValue::from_maybe_shared(bytes.freeze())
+        .unwrap_or_else(|_| HeaderValue::from_static("Antigravity/4.3.0"))
+}
+
+/// Dynamic User-Agent reflecting current version.
+pub fn user_agent() -> HeaderValue {
+    build_user_agent(&current_version())
+}
 
 /// Native OAuth User-Agent (used for token exchange / refresh / userinfo):
 /// `vscode/1.X.X (Antigravity/{version})`
 pub fn oauth_user_agent() -> String {
     let mut out = String::with_capacity(64);
-    use std::fmt::Write;
-    let _ = write!(out, "vscode/1.X.X (Antigravity/{})", version());
+    let _ = write!(out, "vscode/1.X.X (Antigravity/{})", current_version());
     out
 }
 
@@ -160,12 +217,15 @@ fn is_valid_project_id(pid: &str) -> bool {
 /// set to the project ID (required for the API to route the request
 /// to the correct Cloud Code project).
 pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Option<&str>) {
-    headers.insert(http::header::USER_AGENT, HEADER_VAL_USER_AGENT.clone());
+    let ver = current_version();
+    headers.insert(http::header::USER_AGENT, build_user_agent(&ver));
     headers.insert(
         &HEADER_X_CLIENT_NAME,
         HeaderValue::from_static("antigravity"),
     );
-    headers.insert(&HEADER_X_CLIENT_VERSION, HEADER_VAL_VERSION.clone());
+    if let Ok(val) = HeaderValue::from_str(&ver) {
+        headers.insert(&HEADER_X_CLIENT_VERSION, val);
+    }
     headers.insert(&HEADER_X_MACHINE_ID, HEADER_VAL_MACHINE_ID.clone());
     headers.insert(&HEADER_X_VSCODE_SESSIONID, HEADER_VAL_SESSION_ID.clone());
 
@@ -174,11 +234,20 @@ pub fn inject_antigravity_headers(headers: &mut http::HeaderMap, project_id: Opt
     {
         headers.insert(&HEADER_X_GOOG_USER_PROJECT, v);
     }
-}
 
-/// Get the current Antigravity version string (for logging / diagnostics).
-pub fn current_version() -> String {
-    version().to_string()
+    for (k, v) in EXTRA_HEADERS.iter() {
+        headers.insert(k.clone(), v.clone());
+    }
+
+    if let Ok(lock) = DYNAMIC_EXTRA_HEADERS.read() {
+        for (k, v) in lock.iter() {
+            if let Ok(name) = HeaderName::from_bytes(k.as_bytes())
+                && let Ok(val) = HeaderValue::from_str(v)
+            {
+                headers.insert(name, val);
+            }
+        }
+    }
 }
 
 /// Build a zero-allocation `Authorization: Bearer <token>` header value.

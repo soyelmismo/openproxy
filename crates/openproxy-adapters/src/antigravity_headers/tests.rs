@@ -2,7 +2,8 @@ use super::*;
 
 #[test]
 fn user_agent_contains_antigravity_and_version() {
-    let ua = HEADER_VAL_USER_AGENT.to_str().unwrap();
+    let ua_hdr = user_agent();
+    let ua = ua_hdr.to_str().unwrap();
     assert!(ua.contains("Antigravity/"));
     assert!(ua.contains("Chrome/"));
     assert!(ua.contains("Electron/"));
@@ -80,7 +81,49 @@ fn test_oauth_user_agent_and_current_version() {
     let version = current_version();
     assert!(ua.starts_with("vscode/1.X.X (Antigravity/"));
     assert!(ua.ends_with(')'));
-    assert_eq!(version, VERSION.as_str());
+    assert!(!version.is_empty());
+}
+
+#[test]
+fn test_dynamic_version_override() {
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
+    let old_ver = current_version();
+    set_dynamic_version("4.7.3");
+    assert_eq!(current_version(), "4.7.3");
+
+    let ua = user_agent();
+    assert!(ua.to_str().unwrap().contains("Antigravity/4.7.3"));
+
+    let oauth = oauth_user_agent();
+    assert_eq!(oauth, "vscode/1.X.X (Antigravity/4.7.3)");
+
+    let mut hm = http::HeaderMap::new();
+    inject_antigravity_headers(&mut hm, None);
+    assert_eq!(hm.get("x-client-version").unwrap(), "4.7.3");
+    assert!(hm.get(http::header::USER_AGENT).unwrap().to_str().unwrap().contains("Antigravity/4.7.3"));
+
+    // Reset back to previous
+    set_dynamic_version(old_ver);
+}
+
+#[test]
+fn test_dynamic_extra_headers_override() {
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
+    reset_dynamic_overrides();
+
+    set_dynamic_extra_header("x-goog-api-client", "gl-rust/1.80");
+    set_dynamic_extra_header("x-antigravity-canary", "canary-v1");
+
+    let mut hm = http::HeaderMap::new();
+    inject_antigravity_headers(&mut hm, None);
+
+    assert_eq!(hm.get("x-goog-api-client").unwrap(), "gl-rust/1.80");
+    assert_eq!(hm.get("x-antigravity-canary").unwrap(), "canary-v1");
+
+    reset_dynamic_overrides();
+    let mut hm_clean = http::HeaderMap::new();
+    inject_antigravity_headers(&mut hm_clean, None);
+    assert!(hm_clean.get("x-antigravity-canary").is_none());
 }
 
 #[test]

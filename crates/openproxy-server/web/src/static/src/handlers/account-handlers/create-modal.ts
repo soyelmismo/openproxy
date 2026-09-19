@@ -11,9 +11,25 @@ import {
   type ParsedKeyEntry,
 } from "./validation.js";
 import { closeCreateAccount } from "./operations.js";
+import {
+  createOAuthTabHandler,
+  type OAuthTabHandler,
+} from "./oauth-tab.js";
 
 export function showCreateAccount(providerId: string): void {
-  let activeTab: "single" | "bulk" = "single";
+  const provider = (state.providers || []).find((p) => p.id === providerId);
+  const oauthFlows = provider?.oauth_flows || [];
+  const hasOAuth = Boolean(
+    provider &&
+      (provider.auth_type === "oauth" || oauthFlows.length > 0)
+  );
+  const hasPkce =
+    oauthFlows.includes("pkce") ||
+    oauthFlows.includes("auth_code") ||
+    (!oauthFlows.length && provider?.auth_type === "oauth");
+  const hasDeviceCode = oauthFlows.includes("device");
+
+  let activeTab: "oauth" | "single" | "bulk" = hasOAuth ? "oauth" : "single";
   let singleLabel = "";
   let singleSecret = "";
   let singleScopes = "";
@@ -27,9 +43,28 @@ export function showCreateAccount(providerId: string): void {
   root.appendChild(wrapper);
 
   let closed = false;
+
+  let oauthHandler: OAuthTabHandler | null = null;
+  if (hasOAuth) {
+    oauthHandler = createOAuthTabHandler({
+      providerId,
+      provider,
+      hasPkce,
+      hasDeviceCode,
+      onSuccess: () => {
+        close();
+        requestUpdate();
+        pollForDiscoveredModels(providerId);
+      },
+      requestRender: () => renderModal(),
+      isClosed: () => closed,
+    });
+  }
+
   const close = (): void => {
     if (closed) return;
     closed = true;
+    oauthHandler?.stop();
     window.removeEventListener("keydown", onKeydown, true);
     render(html``, wrapper);
     wrapper.remove();
@@ -54,6 +89,8 @@ export function showCreateAccount(providerId: string): void {
     if (bulkInput) bulkText = bulkInput.value;
     const bulkScopesInput = wrapper.querySelector<HTMLInputElement>("#bulk-account-scopes");
     if (bulkScopesInput) bulkScopes = bulkScopesInput.value;
+    const callbackInput = wrapper.querySelector<HTMLInputElement>("#oauth-callback-input");
+    if (callbackInput && oauthHandler) oauthHandler.manualCallbackUrl = callbackInput.value;
   };
 
   const submitSingle = async (): Promise<void> => {
@@ -129,11 +166,27 @@ export function showCreateAccount(providerId: string): void {
     const title = `New account for ${providerId}`;
     const body = html`
       <div class="filter-tabs" style="margin-bottom: var(--space-3);">
+        ${hasOAuth
+          ? html`
+              <button
+                type="button"
+                class="filter-tab ${activeTab === "oauth" ? "active" : ""}"
+                @click=${() => {
+                  saveCurrentInputs();
+                  activeTab = "oauth";
+                  renderModal();
+                }}
+              >
+                OAuth
+              </button>
+            `
+          : html``}
         <button
           type="button"
           class="filter-tab ${activeTab === "single" ? "active" : ""}"
           @click=${() => {
             saveCurrentInputs();
+            if (activeTab === "oauth") oauthHandler?.stop();
             activeTab = "single";
             renderModal();
           }}
@@ -145,6 +198,7 @@ export function showCreateAccount(providerId: string): void {
           class="filter-tab ${activeTab === "bulk" ? "active" : ""}"
           @click=${() => {
             saveCurrentInputs();
+            if (activeTab === "oauth") oauthHandler?.stop();
             activeTab = "bulk";
             renderModal();
           }}
@@ -153,7 +207,9 @@ export function showCreateAccount(providerId: string): void {
         </button>
       </div>
 
-      ${activeTab === "single"
+      ${activeTab === "oauth" && oauthHandler
+        ? oauthHandler.renderTab()
+        : activeTab === "single"
         ? html`
             <div class="field">
               <label for="account-label">Label (optional)</label>
@@ -256,34 +312,37 @@ export function showCreateAccount(providerId: string): void {
           `}
     `;
 
-    const actions = html`
-      <button type="button" @click=${() => close()}>Cancel</button>
-      <button
-        type="button"
-        class="primary"
-        ?disabled=${isSubmitting || (activeTab === "bulk" && parsedKeys.length === 0)}
-        @click=${async (e: Event) => {
-          e.preventDefault();
-          saveCurrentInputs();
-          if (isSubmitting) return;
-          isSubmitting = true;
-          renderModal();
-          try {
-            if (activeTab === "single") {
-              await submitSingle();
-            } else {
-              await submitBulk();
-            }
-          } finally {
-            isSubmitting = false;
-          }
-        }}
-      >
-        ${activeTab === "bulk" && parsedKeys.length > 0
-          ? `Create (${parsedKeys.length} accounts)`
-          : "Create"}
-      </button>
-    `;
+    const actions =
+      activeTab === "oauth" && oauthHandler
+        ? oauthHandler.renderFooterActions(() => close())
+        : html`
+            <button type="button" @click=${() => close()}>Cancel</button>
+            <button
+              type="button"
+              class="primary"
+              ?disabled=${isSubmitting || (activeTab === "bulk" && parsedKeys.length === 0)}
+              @click=${async (e: Event) => {
+                e.preventDefault();
+                saveCurrentInputs();
+                if (isSubmitting) return;
+                isSubmitting = true;
+                renderModal();
+                try {
+                  if (activeTab === "single") {
+                    await submitSingle();
+                  } else {
+                    await submitBulk();
+                  }
+                } finally {
+                  isSubmitting = false;
+                }
+              }}
+            >
+              ${activeTab === "bulk" && parsedKeys.length > 0
+                ? `Create (${parsedKeys.length} accounts)`
+                : "Create"}
+            </button>
+          `;
 
     const template = html`
       <div

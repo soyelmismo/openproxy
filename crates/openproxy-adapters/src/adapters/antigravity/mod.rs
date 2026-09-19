@@ -15,15 +15,27 @@ pub use quota::{
     parse_antigravity_user_quota_summary, prune_plan_cache,
 };
 pub use tokens::{
-    COUNT_TOKENS_URL, LOAD_CODE_ASSIST_URL, ONBOARD_USER_URL, count_tokens, load_code_assist,
-    onboard_user, parse_total_tokens,
+    COUNT_TOKENS_URL, LOAD_CODE_ASSIST_URL, ONBOARD_USER_URL, SENTINEL_SIGNATURE, count_tokens,
+    load_code_assist, onboard_user, parse_total_tokens,
 };
 
 crate::define_jump_map! {
     /// Jump map for Antigravity physical model translation.
     pub fn map_antigravity_physical_model(model: &str) -> &str {
-        "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" => "gemini-pro-agent",
-        "gemini-3.5-flash-high" => "gemini-3-flash-agent",
+        "gemini-3.1-pro" | "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" | "gemini-3-pro" => "gemini-pro-agent",
+        "gemini-3.5-flash"
+        | "gemini-3.5-flash-high"
+        | "gemini-3.5-flash-medium"
+        | "gemini-3.6-flash"
+        | "gemini-3.6-flash-high"
+        | "gemini-3.6-flash-medium"
+        | "gemini-3.7-flash"
+        | "gemini-3.7-flash-high"
+        | "gemini-3.7-flash-medium"
+        | "gemini-3.8-flash"
+        | "gemini-3.8-flash-high"
+        | "gemini-3.8-flash-medium"
+        | "gemini-3-flash" => "gemini-3-flash-agent",
         other => other,
     }
 }
@@ -162,6 +174,10 @@ impl ProviderAdapter for AntigravityAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata {
             built_in: true,
@@ -220,7 +236,11 @@ impl ProviderAdapter for AntigravityAdapter {
         headers_vec.extend(AntigravitySpoofer::new().headers());
 
         for (k, v) in &self.config.extra_headers {
-            headers_vec.push((k.clone(), v.clone()));
+            if let Some(pos) = headers_vec.iter().position(|(hk, _)| hk.eq_ignore_ascii_case(k)) {
+                headers_vec[pos].1 = v.clone();
+            } else {
+                headers_vec.push((k.clone(), v.clone()));
+            }
         }
 
         headers_vec

@@ -148,6 +148,10 @@ impl ProviderAdapter for CustomAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn metadata(&self) -> ProviderMetadata {
         ProviderMetadata::custom_default()
     }

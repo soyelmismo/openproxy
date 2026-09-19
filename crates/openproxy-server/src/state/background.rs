@@ -90,6 +90,12 @@ pub(crate) fn spawn_background_tasks(
         Arc::clone(&oauth_provider_registry),
     );
 
+    openproxy_core::minimax_checkin::start_checkin_scheduler(
+        Arc::clone(&db_pool),
+        Arc::clone(&upstream_client),
+        Arc::clone(&master_key),
+    );
+
     supervisor.spawn(crate::background::FreeProxiesSyncService {
         db_pool: Arc::clone(&db_pool),
     });

@@ -240,7 +240,7 @@ pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &s
 /// - **Non-rotating tokens**: 15 minutes before expiry (standard
 ///   conservative window).
 /// - **Special cases** (e.g. iflow): 24 hours before expiry.
-pub(crate) fn refresh_lead_seconds(provider_id: &str) -> u64 {
+pub fn refresh_lead_seconds(provider_id: &str) -> u64 {
     let adapters = openproxy_adapters::adapters::builtin_adapters();
     if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == provider_id)
         && let Some(lead) = adapter.metadata().oauth_refresh_lead_seconds

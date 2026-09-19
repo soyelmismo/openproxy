@@ -305,3 +305,183 @@ fn test_serialize_gemini_request_assistant_tool_calls_and_tool_response() {
     assert_eq!(fr["response"]["name"], "get_weather");
     assert_eq!(fr["response"]["content"]["temp"], 25);
 }
+
+#[test]
+fn test_serialize_gemini_request_resolves_tool_call_id_when_name_is_none() {
+    let req = openproxy_types::OpenAIRequest {
+        model: "gemini-pro".into(),
+        messages: vec![],
+        stream: false,
+        ..Default::default()
+    };
+    // In real OpenAI clients (Cline, Cursor, OpenCode), tool response messages do NOT have a `name` field.
+    let messages = vec![
+        openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_calc_999",
+                "type": "function",
+                "function": {
+                    "name": "calculator",
+                    "arguments": "{\"expr\":\"2+2\"}"
+                }
+            })]),
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(json!("4")),
+            name: None, // name is None!
+            tool_call_id: Some("call_calc_999".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+    ];
+
+    let bytes = serialize_gemini_request(&req, &messages).expect("must serialize");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    let contents = parsed["contents"].as_array().expect("contents is array");
+
+    // The tool response name must be resolved to "calculator", NOT "call_calc_999"
+    let fr = &contents[1]["parts"][0]["functionResponse"];
+    assert_eq!(fr["name"], "calculator");
+    assert_eq!(fr["response"]["name"], "calculator");
+}
+
+#[test]
+fn test_serialize_gemini_request_consolidates_consecutive_tools_and_users() {
+    let req = openproxy_types::OpenAIRequest {
+        model: "gemini-pro".into(),
+        messages: vec![],
+        stream: false,
+        ..Default::default()
+    };
+    let messages = vec![
+        openproxy_types::OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!("Part 1")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!("Part 2")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![
+                json!({ "id": "c1", "type": "function", "function": { "name": "f1", "arguments": "{}" } }),
+                json!({ "id": "c2", "type": "function", "function": { "name": "f2", "arguments": "{}" } }),
+            ]),
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(json!("res1")),
+            name: None,
+            tool_call_id: Some("c1".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(json!("res2")),
+            name: None,
+            tool_call_id: Some("c2".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+    ];
+
+    let bytes = serialize_gemini_request(&req, &messages).expect("must serialize");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    let contents = parsed["contents"].as_array().expect("contents is array");
+
+    // 1. Two separate user messages preserved (2 user turns)
+    assert_eq!(contents.len(), 4);
+    assert_eq!(contents[0]["role"], "user");
+    assert_eq!(contents[0]["parts"][0]["text"], "Part 1");
+    assert_eq!(contents[1]["role"], "user");
+    assert_eq!(contents[1]["parts"][0]["text"], "Part 2");
+
+    // 2. Assistant has 2 functionCalls in 1 model turn
+    assert_eq!(contents[2]["role"], "model");
+    assert_eq!(contents[2]["parts"].as_array().unwrap().len(), 2);
+
+    // 3. Consecutive tools merged into 1 function turn with 2 functionResponse parts
+    assert_eq!(contents[3]["role"], "function");
+    let tool_parts = contents[3]["parts"].as_array().unwrap();
+    assert_eq!(tool_parts.len(), 2);
+    assert_eq!(tool_parts[0]["functionResponse"]["name"], "f1");
+    assert_eq!(tool_parts[1]["functionResponse"]["name"], "f2");
+}
+
+#[test]
+fn test_serialize_gemini_request_extracts_thinking_and_reasoning() {
+    let req = openproxy_types::OpenAIRequest {
+        model: "gemini-pro".into(),
+        messages: vec![],
+        stream: false,
+        ..Default::default()
+    };
+    let mut extra = serde_json::Map::new();
+    extra.insert("reasoning_content".to_string(), json!("Thinking through step 1"));
+
+    let messages = vec![
+        openproxy_types::OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!("solve this")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some(json!("Result is 42")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra,
+        },
+        openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: Some(json!("<think>\ninline thought\n</think>\nfinal answer")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+    ];
+
+    let bytes = serialize_gemini_request(&req, &messages).expect("must serialize");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    let contents = parsed["contents"].as_array().expect("contents is array");
+
+    // User turn
+    assert_eq!(contents[0]["role"], "user");
+
+    // First model turn with reasoning_content
+    assert_eq!(contents[1]["role"], "model");
+    let parts1 = contents[1]["parts"].as_array().unwrap();
+    assert!(parts1.iter().any(|p| p.get("thought") == Some(&json!(true)) && p["text"] == "Thinking through step 1"));
+    assert!(parts1.iter().any(|p| p["text"] == "Result is 42"));
+
+    // Second model turn with think tag
+    assert_eq!(contents[2]["role"], "model");
+    let parts2 = contents[2]["parts"].as_array().unwrap();
+    assert!(parts2.iter().any(|p| p.get("thought") == Some(&json!(true)) && p["text"] == "inline thought"));
+    assert!(parts2.iter().any(|p| p["text"] == "final answer"));
+}

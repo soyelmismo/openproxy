@@ -56,6 +56,17 @@ macro_rules! define_provider_adapter {
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.config(), )+
                 }
             }
+            pub fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
+                match self {
+                    $( Self::$b_variant(inner) => inner.config_mut(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.config_mut(), )+
+                }
+            }
+            pub fn append_extra_headers(&mut self, extra: Vec<(String, String)>) {
+                if let Some(c) = self.config_mut() {
+                    c.extra_headers.extend(extra);
+                }
+            }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 match self {
                     $( Self::$b_variant(inner) => inner.metadata(), )+

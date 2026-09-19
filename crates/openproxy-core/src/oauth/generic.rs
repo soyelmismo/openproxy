@@ -145,6 +145,46 @@ impl GenericOAuthProvider {
         &self.spec
     }
 
+    pub fn resolved_token_url(&self) -> String {
+        let env_key = format!("OPENPROXY_{}_TOKEN_URL", self.spec.id.replace('-', "_").to_ascii_uppercase());
+        if let Ok(val) = std::env::var(&env_key) && !val.trim().is_empty() {
+            return val.trim().to_string();
+        }
+        self.spec.token_url.to_string()
+    }
+
+    pub fn resolved_authorize_url(&self) -> Result<String> {
+        let env_key = format!("OPENPROXY_{}_AUTH_URL", self.spec.id.replace('-', "_").to_ascii_uppercase());
+        if let Ok(val) = std::env::var(&env_key) && !val.trim().is_empty() {
+            return Ok(val.trim().to_string());
+        }
+        self.spec.authorize_url.map(ToString::to_string).ok_or_else(|| {
+            CoreError::Validation(format!(
+                "provider '{}' does not support authorization URL",
+                self.spec.id
+            ))
+        })
+    }
+
+    pub fn resolved_device_auth_url(&self) -> Result<String> {
+        let env_key = format!(
+            "OPENPROXY_{}_DEVICE_AUTH_URL",
+            self.spec.id.replace('-', "_").to_ascii_uppercase()
+        );
+        if let Ok(val) = std::env::var(&env_key) && !val.trim().is_empty() {
+            return Ok(val.trim().to_string());
+        }
+        self.spec
+            .device_authorization_url
+            .map(ToString::to_string)
+            .ok_or_else(|| {
+                CoreError::Validation(format!(
+                    "provider '{}' does not support device authorization URL",
+                    self.spec.id
+                ))
+            })
+    }
+
     async fn token_request(
         &self,
         upstream_client: &Arc<UpstreamClient>,
@@ -156,7 +196,8 @@ impl GenericOAuthProvider {
             OAuthRequestEncoding::Json => json_body(params)?,
         };
 
-        let mut req = UpstreamRequest::post_json(self.spec.token_url, body);
+        let token_url = self.resolved_token_url();
+        let mut req = UpstreamRequest::post_json(&token_url, body);
         match self.spec.request_encoding {
             OAuthRequestEncoding::FormUrlEncoded => {
                 req.headers.insert(
@@ -197,12 +238,7 @@ impl OAuthProvider for GenericOAuthProvider {
         redirect_uri: &str,
     ) -> impl std::future::Future<Output = Result<(String, String, String, String)>> + Send {
         let res = (|| {
-            let authorize_url = self.spec.authorize_url.ok_or_else(|| {
-                CoreError::Validation(format!(
-                    "provider '{}' does not support authorization URL",
-                    self.spec.id
-                ))
-            })?;
+            let authorize_url = self.resolved_authorize_url()?;
             if self.spec.flow != OAuthFlow::AuthorizationCodePkce
                 && self.spec.flow != OAuthFlow::AuthorizationCode
             {
@@ -291,12 +327,7 @@ impl OAuthProvider for GenericOAuthProvider {
         &self,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<DeviceAuthorizationResponse> {
-        let url = self.spec.device_authorization_url.ok_or_else(|| {
-            CoreError::Validation(format!(
-                "provider '{}' does not support device code flow",
-                self.spec.id
-            ))
-        })?;
+        let url = self.resolved_device_auth_url()?;
         if self.spec.flow != OAuthFlow::DeviceCode {
             return Err(CoreError::Validation(format!(
                 "provider '{}' does not support device code flow",

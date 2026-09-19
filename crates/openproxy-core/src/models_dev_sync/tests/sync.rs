@@ -132,6 +132,7 @@ fn enrich_via_normalized_matches_date_suffix() {
              input_modalities_json TEXT,
              output_modalities_json TEXT,
              model_type          TEXT NOT NULL DEFAULT 'chat',
+             target_format       TEXT NOT NULL DEFAULT 'openai',
              custom              INTEGER NOT NULL DEFAULT 0,
              model_id_normalized TEXT,
              UNIQUE(provider_id, model_id)
@@ -214,4 +215,53 @@ fn test_resolved_provider_map_uses_adapter_metadata() {
 
     let opencode_go_mapped = map.get("opencode-go").expect("opencode-go must be mapped");
     assert!(opencode_go_mapped.iter().any(|s| &**s == "opencode-go"));
+}
+
+#[test]
+fn test_models_dev_sync_persists_and_enriches_routing_format() {
+    let conn = Connection::open_in_memory().unwrap();
+    create_sync_table(&conn);
+
+    let test_json = r#"{
+      "opencode": {
+        "id": "opencode",
+        "npm": "@ai-sdk/openai-compatible",
+        "models": {
+          "claude-sonnet-4-6": {
+            "id": "claude-sonnet-4-6",
+            "provider": { "npm": "@ai-sdk/anthropic" },
+            "limit": { "context": 200000, "output": 64000 }
+          },
+          "gpt-5": {
+            "id": "gpt-5",
+            "provider": { "npm": "@ai-sdk/openai" },
+            "limit": { "context": 200000, "output": 64000 }
+          },
+          "gemini-3-flash": {
+            "id": "gemini-3-flash",
+            "provider": { "npm": "@ai-sdk/google" },
+            "limit": { "context": 1000000, "output": 64000 }
+          },
+          "deepseek-v4-flash": {
+            "id": "deepseek-v4-flash",
+            "limit": { "context": 1000000, "output": 64000 }
+          }
+        }
+      }
+    }"#;
+
+    upsert_models_dev(test_json.as_bytes(), &conn).unwrap();
+
+    let query_routing = |m_id: &str| -> Option<String> {
+        conn.query_row(
+            "SELECT routing_format FROM model_capabilities_sync WHERE provider_id = 'opencode-zen' AND model_id = ?1",
+            [m_id],
+            |r| r.get(0),
+        ).unwrap()
+    };
+
+    assert_eq!(query_routing("claude-sonnet-4-6"), Some("anthropic".into()));
+    assert_eq!(query_routing("gpt-5"), Some("responses".into()));
+    assert_eq!(query_routing("gemini-3-flash"), Some("gemini".into()));
+    assert_eq!(query_routing("deepseek-v4-flash"), Some("openai".into()));
 }

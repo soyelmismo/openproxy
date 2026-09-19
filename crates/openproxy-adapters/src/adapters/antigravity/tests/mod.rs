@@ -133,14 +133,22 @@ fn test_inject_sentinel_thought_signatures_flash() {
     ]);
 
     tokens::inject_sentinel_thought_signatures(&mut contents, "gemini-3.7-flash-high");
-    let fc_part = &contents[0]["parts"][0];
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+    assert_eq!(parts.len(), 2, "must prepend placeholder thought block before functionCall");
+    
+    // Part 0: prepended placeholder thought
+    assert_eq!(parts[0]["thought"], true);
+    assert_eq!(parts[0]["text"], "...");
+    assert_eq!(parts[0]["thoughtSignature"], "skip_thought_signature_validator");
+
+    // Part 1: functionCall with sentinel signature and cleaned snake_case
     assert_eq!(
-        fc_part["thoughtSignature"],
+        parts[1]["thoughtSignature"],
         "skip_thought_signature_validator"
     );
-    assert_eq!(
-        fc_part["thought_signature"],
-        "skip_thought_signature_validator"
+    assert!(
+        parts[1].get("thought_signature").is_none(),
+        "snake_case thought_signature must be purged for Google Cloud Code API"
     );
 }
 
@@ -261,4 +269,87 @@ async fn count_tokens_propagates_4xx() {
         err.contains("auth required"),
         "body should be in msg: {err}"
     );
+}
+
+#[test]
+fn test_antigravity_adapter_build_headers_with_extra_and_dynamic_overrides() {
+    use crate::adapters::ProviderAdapter;
+    use crate::antigravity_headers::{
+        reset_dynamic_overrides, set_dynamic_extra_header, set_dynamic_version,
+        ANTIGRAVITY_TEST_LOCK,
+    };
+
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
+    reset_dynamic_overrides();
+    let mut a = AntigravityAdapter::new();
+    let cfg = a.config_mut().expect("config_mut");
+    cfg.extra_headers.push(("x-admin-injected".into(), "true".into()));
+    cfg.extra_headers.push(("x-goog-user-project".into(), "override-proj".into()));
+
+    set_dynamic_version("4.9.0");
+    set_dynamic_extra_header("x-antigravity-custom-edge", "edge-val");
+
+    let headers = a.build_headers("ya29.test", TargetFormat::Gemini, &ModelId::new("gemini-1.5-pro"));
+    let get = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    assert_eq!(get("authorization"), Some("Bearer ya29.test"));
+    assert_eq!(get("x-admin-injected"), Some("true"));
+    assert_eq!(get("x-goog-user-project"), Some("override-proj"));
+    assert_eq!(get("x-client-version"), Some("4.9.0"));
+    assert_eq!(get("x-antigravity-custom-edge"), Some("edge-val"));
+
+    reset_dynamic_overrides();
+}
+
+#[test]
+fn test_antigravity_default_headers_contract() {
+    use crate::adapters::ProviderAdapter;
+    use crate::antigravity_headers::{reset_dynamic_overrides, ANTIGRAVITY_TEST_LOCK};
+
+    let _guard = ANTIGRAVITY_TEST_LOCK.lock().unwrap();
+    reset_dynamic_overrides();
+    let a = AntigravityAdapter::new();
+    let headers = a.build_headers("token-xyz", TargetFormat::Gemini, &ModelId::new("gemini-1.5-pro"));
+
+    let get = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    // Strict bijective baseline contract: exactly the expected set of keys, no more, no less
+    let actual_keys: std::collections::BTreeSet<String> = headers
+        .iter()
+        .map(|(k, _)| k.to_ascii_lowercase())
+        .collect();
+    let expected_keys: std::collections::BTreeSet<String> = [
+        "authorization",
+        "content-type",
+        "user-agent",
+        "x-client-name",
+        "x-client-version",
+        "x-machine-id",
+        "x-vscode-sessionid",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "Antigravity contract breach: header added or removed"
+    );
+
+    assert_eq!(get("authorization"), Some("Bearer token-xyz"));
+    assert_eq!(get("content-type"), Some("application/json"));
+    assert_eq!(get("x-client-name"), Some("antigravity"));
+    assert!(get("x-client-version").is_some_and(|v| !v.is_empty()));
+    assert!(get("user-agent").is_some_and(|ua| ua.starts_with("Antigravity/")));
+    assert!(get("x-machine-id").is_some_and(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())));
+    assert!(get("x-vscode-sessionid").is_some_and(|s| !s.is_empty()));
 }

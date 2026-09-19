@@ -208,7 +208,14 @@ impl AppState {
             })
         }?;
         for p in &all_providers {
-            if !openproxy_core::seed::is_builtin(p.id.as_str()) {
+            if openproxy_core::seed::is_builtin(p.id.as_str()) {
+                if let Some(ref json_str) = p.extra_headers_json
+                    && let Ok(map) = serde_json::from_str::<std::collections::BTreeMap<String, String>>(json_str)
+                    && let Some(adapter) = new_adapters.iter_mut().find(|a| a.id() == &p.id)
+                {
+                    adapter.append_extra_headers(map.into_iter().collect());
+                }
+            } else {
                 new_adapters.push(adapters::ProviderAdapterEnum::Custom(Box::new(
                     adapters::CustomAdapter::from_provider_row(p),
                 )));
