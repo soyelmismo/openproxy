@@ -16,6 +16,7 @@ import {
   executeImageRequest,
   executeEmbeddingRequest,
   executeAudioRequest,
+  executeDecisionRequest,
 } from './executors.js';
 
 function beginExecution(st: PlaygroundState): void {
@@ -82,6 +83,8 @@ export async function executeRequest(st: PlaygroundState, ensureDefaultModel: (s
       await executeEmbeddingRequest(st, key, effectiveModel);
     } else if (st.modality === 'audio') {
       await executeAudioRequest(st, key, effectiveModel);
+    } else if (st.modality === 'decision') {
+      await executeDecisionRequest(st, key, effectiveModel);
     }
   } catch (err: unknown) {
     if (st.abortController?.signal.aborted) {

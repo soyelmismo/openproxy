@@ -200,6 +200,103 @@ async fn mock_embeddings_handler(
     (StatusCode::OK, AxumJson(resp)).into_response()
 }
 
+async fn mock_systemone_handler(
+    AxumState(state): AxumState<Arc<MockState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let delay = *state.delay.lock();
+    if let Some(d) = delay {
+        tokio::time::sleep(d).await;
+    }
+    if let Some(status) = *state.error_status.lock() {
+        let err_msg =
+            state.error_body.lock().clone().unwrap_or_else(|| {
+                json!({"error": {"message": "injected mock error"}}).to_string()
+            });
+        return (
+            status,
+            [(header::CONTENT_TYPE, "application/json")],
+            err_msg,
+        )
+            .into_response();
+    }
+    let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let rec_headers = headers
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    state.recorded_requests.lock().push(RecordedRequest {
+        path: "/systemone".into(),
+        method: "POST".into(),
+        headers: rec_headers,
+        body: parsed.clone(),
+    });
+
+    let state_text = parsed.get("state").and_then(Value::as_str).unwrap_or("");
+    let questions = parsed.get("questions").and_then(Value::as_object);
+
+    let mut answers = serde_json::Map::new();
+    if let Some(q_map) = questions {
+        for (q_id, q_val) in q_map {
+            let options = q_val.get("options").and_then(Value::as_array);
+            let choice = if let Some(opts) = options {
+                let chosen = opts
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .find(|opt| {
+                        let st = state_text.to_lowercase();
+                        let criteria_desc = q_val
+                            .get("criteria")
+                            .and_then(|c| c.get(*opt))
+                            .and_then(Value::as_str)
+                            .unwrap_or(*opt)
+                            .to_lowercase();
+                        if st.contains("complex") || st.contains("rust") || st.contains("deep") {
+                            criteria_desc.contains("deep")
+                                || criteria_desc.contains("complex")
+                                || criteria_desc.contains("rust")
+                                || opt.contains('2')
+                                || opt.contains("deep")
+                        } else {
+                            criteria_desc.contains("fast")
+                                || criteria_desc.contains("simple")
+                                || opt.contains('1')
+                                || opt.contains("fast")
+                        }
+                    })
+                    .or_else(|| opts.first().and_then(Value::as_str))
+                    .unwrap_or("choice_1");
+                Some(chosen.to_string())
+            } else {
+                None
+            };
+
+            answers.insert(
+                q_id.clone(),
+                json!({
+                    "choice": choice,
+                    "response": if choice.is_none() { Some("mock answer") } else { None },
+                    "probabilities": {
+                        choice.as_deref().unwrap_or("choice_1"): 0.98
+                    }
+                }),
+            );
+        }
+    }
+
+    let resp = json!({
+        "answers": answers,
+        "usage": {
+            "input_tokens": 15,
+            "output_tokens": 5,
+            "total_tokens": 20
+        }
+    });
+
+    (StatusCode::OK, AxumJson(resp)).into_response()
+}
+
 pub async fn spawn_mock_server(initial_models: Vec<String>) -> (SocketAddr, MockHandle) {
     let state = MockState::new(initial_models);
     let handle = MockHandle(Arc::clone(&state));
@@ -210,6 +307,8 @@ pub async fn spawn_mock_server(initial_models: Vec<String>) -> (SocketAddr, Mock
         .route("/chat/completions", post(mock_chat_handler))
         .route("/v1/embeddings", post(mock_embeddings_handler))
         .route("/embeddings", post(mock_embeddings_handler))
+        .route("/v1/systemone", post(mock_systemone_handler))
+        .route("/systemone", post(mock_systemone_handler))
         .with_state(state);
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -485,6 +584,15 @@ impl TestHarness {
             Method::POST,
             "/v1/embeddings",
             Body::from(json!({"model": model, "input": input}).to_string()),
+        ))
+        .await
+    }
+
+    pub async fn client_systemone_call(&self, payload: Value) -> (StatusCode, Value) {
+        self.oneshot_json(self.client_request(
+            Method::POST,
+            "/v1/systemone",
+            Body::from(payload.to_string()),
         ))
         .await
     }

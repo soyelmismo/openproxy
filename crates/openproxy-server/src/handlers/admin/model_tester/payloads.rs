@@ -253,6 +253,30 @@ pub fn build_audio_or_specialized_payload(
     }
 }
 
+pub fn build_decision_test_payload(
+    adapter: &adapters::ProviderAdapterEnum,
+    model: &core_models::Model,
+) -> (String, serde_json::Value) {
+    let url = if adapter.format() == adapters::AdapterFormat::SystemOne {
+        adapter.build_system_one_url()
+    } else {
+        let base_url = adapter.config().base_url.trim_end_matches('/');
+        format!("{base_url}/systemone")
+    };
+    let val = serde_json::json!({
+        "model": model.model_id.as_str(),
+        "state": "Health check",
+        "questions": {
+            "status": {
+                "type": "choice",
+                "instructions": "Determine if system is operational",
+                "options": ["ok"]
+            }
+        }
+    });
+    (url, val)
+}
+
 pub fn extract_kiro_meta(
     raw_account: Option<&core_accounts::Account>,
 ) -> (Option<String>, Option<String>) {

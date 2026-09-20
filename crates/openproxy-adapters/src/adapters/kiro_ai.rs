@@ -53,9 +53,7 @@ impl KiroAdapter {
             tool_calling: Some(true),
             reasoning: Some(true),
             thinking: Some(true),
-            attachment: None,
-            structured_output: None,
-            temperature: None,
+            ..Default::default()
         };
 
         Some(DiscoveredModel {

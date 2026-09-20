@@ -51,6 +51,7 @@ export const icons = {
   audio: (cls = "icon"): TemplateResult => html`<svg class="${cls}" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="2" width="5" height="7.5" rx="2.5"/><path d="M3 7v1a5 5 0 0 0 10 0V7M8 13v2M5.5 15h5"/></svg>`,
   embedding: (cls = "icon"): TemplateResult => html`<svg class="${cls}" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 14h12M2 14L14 2M6 14v-4M10 14V6M14 14V2"/></svg>`,
   video: (cls = "icon"): TemplateResult => html`<svg class="${cls}" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="9" height="10" rx="1"/><path d="M11 6.5l3.5-2.5v8l-3.5-2.5"/></svg>`,
+  decision: (cls = "icon"): TemplateResult => html`<svg class="${cls}" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4" cy="8" r="2"/><circle cx="12" cy="4" r="2"/><circle cx="12" cy="12" r="2"/><path d="M6 8h2l3-3M8 8l3 3"/></svg>`,
 
   // Navigation (sidebar) — 16×16 glyphs sized by `.nav-icon` (100%/100%).
   navHome: (cls = "icon"): TemplateResult => html`<svg class="${cls}" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><path d="M2 7 L8 2 L14 7 V14 H2 Z"/><path d="M6 14 V10 H10 V14"/></svg>`,
@@ -79,6 +80,8 @@ export function endpointIcon(kind: string, cls = "icon"): TemplateResult {
       return icons.embedding(cls);
     case "video":
       return icons.video(cls);
+    case "decision":
+      return icons.decision(cls);
     case "chat":
     default:
       return icons.chat(cls);

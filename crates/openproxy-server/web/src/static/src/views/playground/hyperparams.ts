@@ -141,3 +141,13 @@ export function renderAudioHyperparams(st: PlaygroundState): TemplateResult {
       ['json', 'json'], ['text', 'text'], ['verbose_json', 'verbose_json'], ['srt', 'srt'], ['vtt', 'vtt'],
     ], (v) => { st.audioResponseFormat = v; })}`;
 }
+
+export function renderDecisionHyperparams(_st: PlaygroundState): TemplateResult {
+  return html`
+    <div class="field">
+      <small class="text-muted" style="line-height: 1.5; display: block;">
+        System One decision models (Jev, Laya) evaluate questions (choice, score, noul) against context states with calibrated probabilities.
+      </small>
+    </div>
+  `;
+}

@@ -8,6 +8,7 @@ export interface ModelCapabilities {
   attachment: boolean | null;
   structured_output: boolean | null;
   temperature: boolean | null;
+  decisions: boolean | null;
 }
 
 export interface Model {

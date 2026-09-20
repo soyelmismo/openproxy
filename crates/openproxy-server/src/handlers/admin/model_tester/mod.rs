@@ -174,6 +174,8 @@ pub async fn run_test_for_model(
     let is_tts = is_audio && !is_stt;
     let is_embedding = effective_type == "embedding";
     let is_image = effective_type == "image";
+    let is_decision = effective_type == "decision"
+        || effective_target_format == openproxy_core::models::TargetFormat::SystemOne;
 
     let effective_proxy = if let Some((_, ref purl)) = proxy_override {
         Some(purl.clone())
@@ -191,6 +193,7 @@ pub async fn run_test_for_model(
         || is_embedding
         || is_image
         || is_tts
+        || is_decision
     {
         let (url, body_value, multipart_opt): (
             String,
@@ -198,6 +201,9 @@ pub async fn run_test_for_model(
             Option<(String, bytes::Bytes)>,
         ) = if is_stt {
             build_stt_test_payload(&adapter, &model)
+        } else if is_decision {
+            let (u, v) = build_decision_test_payload(&adapter, &model);
+            (u, v, None)
         } else {
             let (u, v) = build_audio_or_specialized_payload(
                 &adapter,
@@ -348,6 +354,12 @@ pub async fn run_test_for_model(
                     let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
                     (status, Some(truncated))
                 } else {
+                    let body = response.collect().await.unwrap_or_default();
+                    let text = String::from_utf8_lossy(&body);
+                    if let Some(dp) = debug_payload.as_mut() {
+                        dp["response_body"] = serde_json::from_str(&text)
+                            .unwrap_or_else(|_| serde_json::json!(text.to_string()));
+                    }
                     (status, None)
                 }
             }

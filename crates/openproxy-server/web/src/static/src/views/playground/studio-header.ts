@@ -47,6 +47,9 @@ export function clearPlayground(st: PlaygroundState): void {
   } else if (modality === 'audio') {
     st.audioFile = null;
     st.audioPrompt = '';
+  } else if (modality === 'decision') {
+    st.decisionState = '';
+    st.decisionQuestions = '{}';
   }
   resetExecutionState(st);
   requestUpdate();
@@ -130,6 +133,12 @@ export function renderStudioHeader(st: PlaygroundState, callbacks: StudioHeaderC
           @click=${() => switchModality('audio')}
         >
           <span class="seg-icon">${icons.audio()}</span> ${t('playground.modality.audio')}
+        </button>
+        <button
+          class="segmented-item ${st.modality === 'decision' ? 'active' : ''}"
+          @click=${() => switchModality('decision')}
+        >
+          <span class="seg-icon">${icons.decision()}</span> ${t('playground.modality.decision')}
         </button>
       </div>
 

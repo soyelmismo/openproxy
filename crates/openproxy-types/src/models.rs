@@ -97,6 +97,7 @@ pub enum ModelKind {
     Embedding,
     Audio,
     Rerank,
+    Decision,
     Other,
 }
 
@@ -108,6 +109,7 @@ impl ModelKind {
             Self::Embedding => "embedding",
             Self::Audio => "audio",
             Self::Rerank => "rerank",
+            Self::Decision => "decision",
             Self::Other => "other",
         }
     }
@@ -119,6 +121,7 @@ impl ModelKind {
             "embedding" => Self::Embedding,
             "audio" => Self::Audio,
             "rerank" => Self::Rerank,
+            "decision" => Self::Decision,
             _ => Self::Other,
         }
     }
@@ -282,6 +285,10 @@ mod tests {
         m.model_type = "embedding".into();
         assert_eq!(m.kind(), ModelKind::Embedding);
 
+        m.model_type = "decision".into();
+        assert_eq!(m.kind(), ModelKind::Decision);
+        assert_eq!(m.kind().as_str(), "decision");
+
         m.input_modalities_json = Some("[\"text\", \"image\"]".into());
         let in_mod = m.input_modalities();
         assert!(in_mod.has_text());
@@ -294,7 +301,7 @@ mod tests {
         assert!(json_str.contains("\"image\""));
 
         let summary = m.to_summary();
-        assert_eq!(summary.model_type.as_ref(), "embedding");
+        assert_eq!(summary.model_type.as_ref(), "decision");
     }
 
     #[test]

@@ -178,7 +178,7 @@ export function renderModelRow(m: Model): TemplateResult {
         <div class="model-type-row">
           <select
             class="model-type-select"
-            title="Model modality / type (Chat, Image, Embedding, Audio, Rerank)"
+            title="Model modality / type (Chat, Image, Embedding, Audio, Rerank, Decision)"
             .value=${m.model_type || 'chat'}
             @change=${(e: Event) => onChangeModelType(m.row_id, e)}
           >
@@ -187,6 +187,7 @@ export function renderModelRow(m: Model): TemplateResult {
             <option value="embedding" ?selected=${m.model_type === 'embedding'}>Embedding</option>
             <option value="audio" ?selected=${m.model_type === 'audio'}>Audio</option>
             <option value="rerank" ?selected=${m.model_type === 'rerank'}>Rerank</option>
+            <option value="decision" ?selected=${m.model_type === 'decision'}>Decision</option>
           </select>
         </div>
         <div class="model-caps-row">

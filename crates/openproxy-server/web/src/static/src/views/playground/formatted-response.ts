@@ -278,6 +278,55 @@ function renderAudioResponse(st: PlaygroundState): TemplateResult {
   `;
 }
 
+function renderDecisionResponse(st: PlaygroundState): TemplateResult {
+  const json = st.parsedResponseJson as {
+    model?: string;
+    answers?: Record<string, {
+      type?: string;
+      choice?: string;
+      score?: number;
+      noul?: number;
+      confidence?: number;
+      probabilities?: Record<string, number>;
+      response?: string;
+    }>;
+  };
+  const answers = json?.answers;
+  if (!answers || Object.keys(answers).length === 0) {
+    return html`<div class="playground-empty-response">${st.rawResponseText ? html`<pre style="white-space: pre-wrap; font-family: var(--font-mono);">${st.rawResponseText}</pre>` : t('playground.inspector.no_display')}</div>`;
+  }
+
+  return html`
+    <div class="playground-decision-results">
+      ${Object.entries(answers).map(([key, ans]) => html`
+        <div class="playground-decision-card" style="margin-bottom: var(--space-3); padding: var(--space-3); border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--color-bg-surface, var(--color-bg));">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-2);">
+            <strong style="font-size: var(--fs-md);">${key}</strong>
+            <span class="badge badge-info">${ans.type || 'decision'}</span>
+          </div>
+          ${ans.choice ? html`<div style="margin-bottom: var(--space-1);"><strong>Choice:</strong> <span class="badge badge-success">${ans.choice}</span></div>` : ''}
+          ${ans.score !== undefined ? html`<div style="margin-bottom: var(--space-1);"><strong>Score:</strong> <code>${ans.score}</code></div>` : ''}
+          ${ans.noul !== undefined ? html`<div style="margin-bottom: var(--space-1);"><strong>Noul:</strong> <code>${ans.noul}</code></div>` : ''}
+          ${ans.confidence !== undefined ? html`<div style="margin-bottom: var(--space-1);"><strong>Confidence:</strong> ${(ans.confidence * 100).toFixed(1)}%</div>` : ''}
+          ${ans.probabilities ? html`
+            <div style="margin-top: var(--space-2);">
+              <small><strong>Probabilities:</strong></small>
+              <div style="display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: 4px;">
+                ${Object.entries(ans.probabilities).map(([opt, prob]) => html`
+                  <span class="chip" style="font-size: var(--fs-xs);">
+                    ${opt}: ${(prob * 100).toFixed(1)}%
+                  </span>
+                `)}
+              </div>
+            </div>
+          ` : ''}
+          ${ans.response ? html`<div style="margin-top: var(--space-2); white-space: pre-wrap; font-size: var(--fs-sm);">${ans.response}</div>` : ''}
+        </div>
+      `)}
+    </div>
+  `;
+}
+
 // ==========
 // Public dispatcher
 // ==========
@@ -301,6 +350,10 @@ export function renderFormattedResponse(st: PlaygroundState): TemplateResult {
 
   if (st.modality === 'audio') {
     return renderAudioResponse(st);
+  }
+
+  if (st.modality === 'decision') {
+    return renderDecisionResponse(st);
   }
 
   return html`<div class="playground-empty-response">${t('playground.inspector.no_display')}</div>`;

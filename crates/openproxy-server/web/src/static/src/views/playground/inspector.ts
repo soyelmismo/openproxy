@@ -26,6 +26,7 @@ import {
   renderImageHyperparams,
   renderEmbeddingHyperparams,
   renderAudioHyperparams,
+  renderDecisionHyperparams,
 } from './hyperparams.js';
 
 function getFilteredModels(st: PlaygroundState): Array<{ id: string; name: string; type: string; provider: string; isCombo?: boolean }> {
@@ -395,7 +396,9 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
             ? renderImageHyperparams(st)
             : st.modality === 'embedding'
             ? renderEmbeddingHyperparams(st)
-            : renderAudioHyperparams(st)}
+            : st.modality === 'audio'
+            ? renderAudioHyperparams(st)
+            : renderDecisionHyperparams(st)}
         </div>
       </div>
     </div>

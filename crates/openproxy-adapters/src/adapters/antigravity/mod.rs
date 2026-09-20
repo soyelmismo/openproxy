@@ -105,8 +105,7 @@ impl AntigravityAdapter {
             reasoning: Some(supports_thinking),
             thinking: Some(supports_thinking),
             attachment: Some(supports_images),
-            structured_output: None,
-            temperature: None,
+            ..Default::default()
         }
     }
 

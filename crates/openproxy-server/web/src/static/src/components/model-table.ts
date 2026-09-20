@@ -75,6 +75,7 @@ export function renderCapabilityBadges(json: string | null | undefined, modelTyp
       if (c["thinking"]) badges.push(html`<span class="cap-badge">thinking</span>`);
       if (c["structured_output"]) badges.push(html`<span class="cap-badge">json</span>`);
       if (c["attachment"]) badges.push(html`<span class="cap-badge">attach</span>`);
+      if (c["decisions"]) badges.push(html`<span class="cap-badge">decisions</span>`);
     }
   }
   return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;

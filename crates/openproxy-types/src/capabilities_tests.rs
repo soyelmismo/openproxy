@@ -68,6 +68,19 @@ fn model_type_classification() {
         infer_model_type("accounts/fireworks/models/qwen3-reranker-8b"),
         "rerank"
     );
+    assert_eq!(infer_model_type("typesafe/jev-latest"), "decision");
+    assert_eq!(infer_model_type("convaiinnovations/laya"), "decision");
+    assert_eq!(infer_model_type("systemone-router"), "decision");
+}
+
+#[test]
+fn infer_decisions_capability() {
+    let caps = infer_capabilities("typesafe/jev-latest");
+    assert_eq!(caps.decisions, Some(true));
+    let caps_laya = infer_capabilities("convaiinnovations/laya");
+    assert_eq!(caps_laya.decisions, Some(true));
+    let caps_chat = infer_capabilities("openai/gpt-4o");
+    assert_eq!(caps_chat.decisions, None);
 }
 
 #[test]

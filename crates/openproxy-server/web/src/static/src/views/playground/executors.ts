@@ -278,3 +278,65 @@ export async function executeAudioRequest(
     throw new Error(`HTTP ${response.status}: ${text}`);
   }
 }
+
+// ==========
+// Decision / System One executor
+// ==========
+
+export async function executeDecisionRequest(
+  st: PlaygroundState,
+  key: string,
+  model: string,
+): Promise<void> {
+  const stateText = st.decisionState.trim() || 'Classify request';
+  let questions: Record<string, unknown>;
+  try {
+    questions = st.decisionQuestions.trim()
+      ? JSON.parse(st.decisionQuestions)
+      : {
+          route: {
+            type: 'choice',
+            options: ['general', 'coding'],
+          },
+        };
+  } catch (err: unknown) {
+    throw new Error('Invalid JSON in decision questions: ' + (err instanceof Error ? err.message : String(err)));
+  }
+
+  const payload: Record<string, unknown> = {
+    model: model || 'typesafe/jev-latest',
+    state: stateText,
+    questions,
+  };
+
+  const headers = buildAuthHeaders(key, st.selectedAccountId, {
+    'Content-Type': 'application/json',
+  });
+
+  const reqInit: RequestInit = {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  };
+  if (st.abortController) {
+    reqInit.signal = st.abortController.signal;
+  }
+
+  const response = await fetch('/v1/systemone', reqInit);
+  const text = await ingestResponse(response, st);
+
+  const json = safeJsonParse(text);
+  st.parsedResponseJson = json !== null ? json : text;
+  if (json && typeof json === 'object' && 'usage' in json) {
+    const usage = (json as { usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number } }).usage;
+    if (usage) {
+      st.currentMetrics.promptTokens = usage.input_tokens ?? null;
+      st.currentMetrics.completionTokens = usage.output_tokens ?? null;
+      st.currentMetrics.totalTokens = usage.total_tokens ?? null;
+    }
+  }
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${text}`);
+  }
+}

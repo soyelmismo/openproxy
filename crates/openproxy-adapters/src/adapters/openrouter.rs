@@ -243,10 +243,19 @@ fn derive_capabilities(entry: &OpenRouterModelEntry) -> openproxy_types::ModelCa
         apply_params_fallback(&mut caps);
     }
 
+    if let Some(id) = entry.id.as_deref()
+        && openproxy_types::capabilities::is_decision_model(&id.to_lowercase())
+    {
+        caps.decisions = Some(true);
+    }
+
     caps
 }
 
 fn detect_non_text_modality(arch: &OpenRouterArchitecture) -> Option<&'static str> {
+    if arch.output_modalities.iter().any(|m| m == "decision") {
+        return Some("decision");
+    }
     let has_text = arch.output_modalities.iter().any(|m| m == "text");
     if has_text {
         return None;
@@ -263,7 +272,7 @@ fn detect_non_text_modality(arch: &OpenRouterArchitecture) -> Option<&'static st
 }
 
 /// Classify a model id into a coarse `model_type` string
-/// (`"chat" | "embedding" | "image" | "audio" | "rerank"`) using both
+/// (`"chat" | "embedding" | "image" | "audio" | "rerank" | "decision"`) using both
 /// the id's name and the `architecture.output_modalities` field.
 fn infer_model_type_openrouter(id: &str, architecture: Option<&OpenRouterArchitecture>) -> String {
     let inferred = openproxy_types::capabilities::infer_model_type(id);
@@ -318,6 +327,15 @@ mod tests {
         assert_eq!(
             infer_model_type_openrouter("some-model", Some(&mixed_arch)),
             "chat"
+        );
+
+        let decision_arch = OpenRouterArchitecture {
+            input_modalities: vec![],
+            output_modalities: vec!["decision".to_string()],
+        };
+        assert_eq!(
+            infer_model_type_openrouter("some-model", Some(&decision_arch)),
+            "decision"
         );
     }
 }

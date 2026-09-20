@@ -49,6 +49,7 @@ function customModelFormTemplate(providerId: string): TemplateResult {
                 <option value="embedding">Text Embeddings</option>
                 <option value="audio">Audio Transcription</option>
                 <option value="rerank">Reranker</option>
+                <option value="decision">Decision</option>
               </select>
             </div>
             <div class="field">
@@ -56,6 +57,8 @@ function customModelFormTemplate(providerId: string): TemplateResult {
               <select id="custom-model-format" name="target_format">
                 <option value="openai" ?selected=${defaultFormat === "openai"}>openai</option>
                 <option value="anthropic" ?selected=${defaultFormat === "anthropic"}>anthropic</option>
+                <option value="gemini">gemini</option>
+                <option value="systemone">systemone</option>
               </select>
             </div>
             <div class="field">

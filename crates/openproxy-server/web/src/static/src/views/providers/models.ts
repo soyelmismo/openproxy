@@ -302,6 +302,7 @@ export function renderModelsSection(
           <button @click=${() => onBulkSetModalitySelected('image')}>${icons.image()} Tag Image</button>
           <button @click=${() => onBulkSetModalitySelected('embedding')}>${icons.embedding()} Tag Embedding</button>
           <button @click=${() => onBulkSetModalitySelected('audio')}>${icons.audio()} Tag Audio</button>
+          <button @click=${() => onBulkSetModalitySelected('decision')}>${icons.decision()} Tag Decision</button>
           <button @click=${() => onBulkTestSelected(provider.id)}>Test selected</button>
           <button class="danger" @click=${() => onBulkDeleteSelected(provider.id)}>Delete selected</button>
           <button class="link" @click=${onClearModelSelection}>Clear selection</button>

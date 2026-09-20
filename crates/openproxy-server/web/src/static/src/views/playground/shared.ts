@@ -14,7 +14,7 @@ import { showToast } from '../../components/toast.js';
 // Public types
 // ==========
 
-export type ModalityType = 'chat' | 'image' | 'embedding' | 'audio';
+export type ModalityType = 'chat' | 'image' | 'embedding' | 'audio' | 'decision';
 export type ResponseTab = 'formatted' | 'raw' | 'headers' | 'stream';
 
 export interface ChatMessage {
@@ -109,6 +109,9 @@ export interface PlaygroundState {
   audioTemperature: number;
   audioResponseFormat: string;
 
+  decisionState: string;
+  decisionQuestions: string;
+
   isLoading: boolean;
   abortController: AbortController | null;
   currentMetrics: RequestMetrics;
@@ -186,6 +189,24 @@ export function createInitialPlaygroundState(): PlaygroundState {
     audioTemperature: 0.0,
     audioResponseFormat: 'json',
 
+    decisionState:
+      'User request: Can you help me optimize this database query for high throughput?\nCombo routing targets: [coding-expert, general-chat]',
+    decisionQuestions: JSON.stringify(
+      {
+        route: {
+          type: 'choice',
+          instructions: 'Select the optimal model category for this request',
+          options: ['coding-expert', 'general-chat'],
+        },
+        complexity: {
+          type: 'score',
+          instructions: 'Score the complexity from 0 (trivial) to 1 (highly complex)',
+        },
+      },
+      null,
+      2,
+    ),
+
     isLoading: false,
     abortController: null,
     currentMetrics: {
@@ -258,6 +279,7 @@ const IMAGE_EXPLICIT = ['dall-e', 'imagen', 'flux', 'midjourney', 'sdxl', 'seedr
 const CHAT_EXCEPTIONS = ['gpt-4o-audio', 'gpt-4-audio', 'qwen-audio-chat', 'qwen2-audio-instruct', 'stepaudio-2.5-chat', 'stepaudio-2.5-realtime', 'diffusiongemma', 'sdft'];
 const AUDIO_KEYWORDS = ['whisper', 'speechify', 'melotts', 'melo-tts', 'kokoro', 'fish-audio', 'fish-speech', 'chattts', 'cosyvoice', 'openvoice', 'parler-tts', 'speechmatics', 'tts-1', 'inworld-tts', 'elevenlabs', 'eleven-labs', 'eleven_multilingual', 'stable-audio', 'musicgen', 'audioldm', 'seamless-m4t', 'sensevoice', 'voxtral-mini-tts', 'xai-tts', '-tts', '_tts', '/tts', '-tts-', '_tts_', '/tts-', 'preview-tts', '-tts-preview', '-asr', '-asr-'];
 const EMBED_KEYWORDS = ['text-embedding', 'embedding', 'embeddings', 'embedder', 'model2vec', 'bge-', '/bge-', 'bge_', 'bge.', 'embed-qa', 'embedcode', 'pplx-embed', 'mistral-embed', 'codestral-embed', 'arctic-embed', 'nomic-embed', 'voyage-embed', 'nv-embed', 'gte-', 'e5-', 'embed-v'];
+const DECISION_KEYWORDS = ['jev', 'laya', 'systemone', 'system-one', 'decision'];
 const IMAGE_KEYWORDS = ['dall-e', 'dalle', 'midjourney', 'ideogram', 'recraft', 'flux', 'sdxl', 'stable-diffusion', 'stable_diffusion', 'stablediffusion', 'stable-image', 'sd-turbo', 'sdxl-turbo', 'sd-1.5', 'sd-2.1', 'sd-3', 'sd-3.5', 'sd3', 'sd3.5', 'imagen', 'imagen-', 'imagen/', 'dreamshaper', 'pony', 'animagine', 'zavychroma', 'novafast', 'albedobase', 'edge of realism', 'zeipher female', 'mhxl', 'rag illustrious', 'mistoon anime', 'bb95 furry', 'camelliamix', 'anything v3', 'anything v5', 'perfect world', 'abyss orangemix', 'stable cascade', 'playbookxl', 'rundiffusion', 'playground-v2', 'kandinsky', 'kolors', 'auraflow', 'lumina-image', 'hunyuan-dit', 'pixart', 'cogview', 'gameart', 'art of mtg', 'duchaiten', 'duc haiten', 'nai-diffusion', 'diffusion'];
 
 export function inferModelTypeFrontend(
@@ -265,9 +287,10 @@ export function inferModelTypeFrontend(
   rawType?: string | null,
 ): ModalityType | 'rerank' {
   const s = modelId.toLowerCase();
-  if (CHAT_GUARDS.some((k) => s.includes(k)) && !AUDIO_EXPLICIT.some((k) => s.includes(k)) && !IMAGE_EXPLICIT.some((k) => s.includes(k))) return 'chat';
   const t = (rawType || '').toLowerCase();
-  if (t === 'image' || t === 'embedding' || t === 'audio' || t === 'rerank') return t as ModalityType | 'rerank';
+  if (t === 'image' || t === 'embedding' || t === 'audio' || t === 'rerank' || t === 'decision') return t as ModalityType | 'rerank';
+  if (DECISION_KEYWORDS.some((k) => s.includes(k))) return 'decision';
+  if (CHAT_GUARDS.some((k) => s.includes(k)) && !AUDIO_EXPLICIT.some((k) => s.includes(k)) && !IMAGE_EXPLICIT.some((k) => s.includes(k))) return 'chat';
   if (s.includes('deepgram')) return 'audio';
   if (CHAT_EXCEPTIONS.some((k) => s.includes(k))) return 'chat';
   if ((s.includes('telnyx-') && s.includes('tts')) || AUDIO_KEYWORDS.some((k) => s.includes(k))) return 'audio';

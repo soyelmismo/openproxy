@@ -312,7 +312,7 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
 /// `if (caps.reasoning)` work correctly.
 fn build_capabilities_object(caps: &capabilities::ModelCapabilities) -> serde_json::Value {
     let mut out = serde_json::Map::new();
-    let fields: [(&str, Option<bool>); 7] = [
+    let fields: [(&str, Option<bool>); 8] = [
         ("vision", caps.vision),
         ("tool_calling", caps.tool_calling),
         ("reasoning", caps.reasoning),
@@ -320,6 +320,7 @@ fn build_capabilities_object(caps: &capabilities::ModelCapabilities) -> serde_js
         ("attachment", caps.attachment),
         ("structured_output", caps.structured_output),
         ("temperature", caps.temperature),
+        ("decisions", caps.decisions),
     ];
     for (name, val) in fields {
         if let Some(v) = val {
@@ -521,5 +522,19 @@ mod tests {
             Some("chat"),
             "Gemini flash-lite must be categorized as chat even if DB had stale audio"
         );
+    }
+
+    #[test]
+    fn test_build_capabilities_object_includes_decisions() {
+        let caps = capabilities::ModelCapabilities {
+            decisions: Some(true),
+            vision: Some(true),
+            ..Default::default()
+        };
+
+        let obj = build_capabilities_object(&caps);
+        assert_eq!(obj.get("decisions"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(obj.get("vision"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(obj.get("thinking"), None);
     }
 }

@@ -66,9 +66,7 @@ fn map_cline_entry(entry: ClineModelEntry, is_free: bool) -> DiscoveredModel {
         tool_calling: Some(true),
         reasoning: Some(true),
         thinking: Some(true),
-        attachment: None,
-        structured_output: None,
-        temperature: None,
+        ..Default::default()
     };
     DiscoveredModel {
         model_id: ModelId::new(id),

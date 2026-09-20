@@ -19,6 +19,8 @@ pub struct ModelCapabilities {
     pub structured_output: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decisions: Option<bool>,
 }
 
 impl ModelCapabilities {
@@ -35,6 +37,7 @@ impl ModelCapabilities {
             self.attachment,
             self.structured_output,
             self.temperature,
+            self.decisions,
         ]
         .iter()
         .all(Option::is_none)
@@ -75,6 +78,18 @@ pub const STT_KEYWORDS: &[&str] = &[
     "stt",
     "audio-transcription",
 ];
+
+pub const DECISION_KEYWORDS: &[&str] = &[
+    "jev",
+    "laya",
+    "systemone",
+    "system-one",
+    "decision",
+];
+
+pub fn is_decision_model(lower: &str) -> bool {
+    DECISION_KEYWORDS.iter().any(|k| lower.contains(k))
+}
 
 pub fn infer_capabilities(model_id: &str) -> ModelCapabilities {
     let lower = to_lower_cow(model_id);
@@ -122,6 +137,10 @@ fn infer_capabilities_lower(lower: &str) -> ModelCapabilities {
     if REASONING_KW.iter().any(|k| lower.contains(k)) {
         caps.reasoning = Some(true);
         caps.thinking = Some(true);
+    }
+
+    if is_decision_model(lower) {
+        caps.decisions = Some(true);
     }
 
     caps.tool_calling = Some(true);
@@ -190,6 +209,7 @@ fn infer_input_modalities_for_model_lower(
             }
         }
         "rerank" => vec!["text"],
+        "decision" => vec!["text"],
         "image" => {
             if is_image_editing_model(lower) {
                 vec!["text", "image"]
@@ -231,6 +251,7 @@ fn infer_chat_output_modalities(lower: &str) -> Vec<&'static str> {
 
 fn infer_output_modalities_lower(lower: &str) -> Vec<&'static str> {
     match infer_model_type_lower(lower) {
+        "decision" => vec!["decision"],
         "embedding" => vec!["embedding"],
         "image" => vec!["image"],
         "audio" => infer_audio_output_modalities(lower),
@@ -513,7 +534,9 @@ fn is_image_model(lower: &str) -> bool {
 }
 
 fn infer_model_type_lower(lower: &str) -> &'static str {
-    if RERANK_KEYWORDS.iter().any(|k| lower.contains(k)) {
+    if is_decision_model(lower) {
+        "decision"
+    } else if RERANK_KEYWORDS.iter().any(|k| lower.contains(k)) {
         "rerank"
     } else if is_embedding_model(lower) {
         "embedding"

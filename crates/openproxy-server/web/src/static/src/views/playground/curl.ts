@@ -100,6 +100,20 @@ export function generateCurlCommand(st: PlaygroundState): string {
     }
     const body = JSON.stringify(payload, null, 2);
     return `curl -X POST "${host}/v1/embeddings" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${accountHeader} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+  } else if (st.modality === 'decision') {
+    let questions: Record<string, unknown>;
+    try {
+      questions = st.decisionQuestions.trim() ? JSON.parse(st.decisionQuestions) : {};
+    } catch {
+      questions = {};
+    }
+    const payload: Record<string, unknown> = {
+      model,
+      state: st.decisionState,
+      questions,
+    };
+    const body = JSON.stringify(payload, null, 2);
+    return `curl -X POST "${host}/v1/systemone" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${accountHeader} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
   } else {
     return `curl -X POST "${host}/v1/audio/transcriptions" \\\n  -H "Authorization: Bearer ${key}"${accountHeader} \\\n  -F "file=@${st.audioFile ? st.audioFile.name : 'audio.mp3'}" \\\n  -F "model=${model}"`;
   }

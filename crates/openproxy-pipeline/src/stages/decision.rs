@@ -86,8 +86,10 @@ pub async fn apply_decision_routing(
     }
 
     let mut criteria_map = HashMap::new();
+    let mut options_vec = Vec::new();
     for (id, desc) in candidates {
-        criteria_map.insert(id, desc);
+        criteria_map.insert(id.clone(), desc);
+        options_vec.push(id);
     }
 
     let question = SystemOneQuestion {
@@ -96,6 +98,7 @@ pub async fn apply_decision_routing(
             "Select the most appropriate target ID to answer this query based on complexity, domain specialization, and requirements."
                 .to_string(),
         criteria: serde_json::to_value(&criteria_map).ok(),
+        options: Some(options_vec),
     };
 
     let mut questions = std::collections::BTreeMap::new();
@@ -123,7 +126,13 @@ pub async fn apply_decision_routing(
                 .position(|rt| rt.target.id.0.to_string() == chosen_target_id_str)
             {
                 if pos > 0 {
-                    let winner = resolved_targets.remove(pos);
+                    let mut winner = resolved_targets.remove(pos);
+                    let min_prio = resolved_targets
+                        .iter()
+                        .map(|rt| rt.target.priority_order)
+                        .min()
+                        .unwrap_or(1);
+                    winner.target.priority_order = min_prio.saturating_sub(1);
                     resolved_targets.insert(0, winner);
                     tracing::info!(
                         combo_id = combo.id.0,
@@ -153,7 +162,7 @@ pub async fn apply_decision_routing(
 
 async fn execute_system_one_decision(
     ctx: &PipelineContext,
-    _decision_model: &str,
+    decision_model: &str,
     req: &SystemOneRequest,
     timeout_ms: u64,
 ) -> Result<Option<String>, openproxy_types::error::CoreError> {
@@ -161,17 +170,37 @@ async fn execute_system_one_decision(
         .map(bytes::Bytes::from)
         .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
 
-    // Look for an adapter that supports System One
+    let (prov_prefix, _) = decision_model
+        .split_once('/')
+        .unwrap_or((decision_model, ""));
+
+    // Look for an adapter that matches the decision model's provider
     let adapter = ctx
         .pipeline
         .config
         .adapters
         .iter()
-        .find(|a| a.format() == openproxy_types::ProviderFormat::SystemOne)
+        .find(|a| {
+            a.id().as_str() == prov_prefix
+                || a.config().id.as_str() == prov_prefix
+                || a.id().as_str() == decision_model
+        })
+        .or_else(|| {
+            ctx.pipeline
+                .config
+                .adapters
+                .iter()
+                .find(|a| a.format() == openproxy_types::ProviderFormat::SystemOne)
+        })
         .cloned();
 
     let (url, auth_header) = if let Some(a) = adapter {
-        let base_url = a.build_system_one_url();
+        let base_url = if a.format() == openproxy_types::ProviderFormat::SystemOne {
+            a.build_system_one_url()
+        } else {
+            let b = a.config().base_url.trim_end_matches('/');
+            format!("{b}/systemone")
+        };
         let auth = a.build_auth_header("");
         (base_url, auth)
     } else {
