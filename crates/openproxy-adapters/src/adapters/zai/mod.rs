@@ -119,12 +119,12 @@ impl ProviderAdapter for ZaiAdapter {
         None
     }
 
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
-        Ok(zai_builtin_models())
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        std::future::ready(Ok(zai_builtin_models()))
     }
 
     async fn fetch_quota(
