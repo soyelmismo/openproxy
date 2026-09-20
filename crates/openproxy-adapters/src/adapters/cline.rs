@@ -463,11 +463,16 @@ mod tests {
         };
         let discovered_paid = map_cline_entry(entry_paid, false);
         assert_eq!(discovered_paid.model_id.as_str(), "claude-3-5-sonnet");
-        assert_eq!(discovered_paid.display_name.as_deref(), Some("Claude 3.5 Sonnet"));
+        assert_eq!(
+            discovered_paid.display_name.as_deref(),
+            Some("Claude 3.5 Sonnet")
+        );
         assert_eq!(discovered_paid.target_format, TargetFormat::Openai);
         assert_eq!(discovered_paid.context_length, Some(128_000));
         assert_eq!(discovered_paid.max_output_tokens, Some(8_192));
-        let caps = discovered_paid.capabilities.expect("capabilities should be set");
+        let caps = discovered_paid
+            .capabilities
+            .expect("capabilities should be set");
         assert_eq!(caps.vision, Some(true));
         assert_eq!(caps.tool_calling, Some(true));
         assert_eq!(caps.reasoning, Some(true));
