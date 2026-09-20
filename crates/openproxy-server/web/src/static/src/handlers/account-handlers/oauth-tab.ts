@@ -489,6 +489,7 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     onSubmitManualCallback: () => void submitManualCallback(),
     onManualCallbackInput: (val: string) => {
       manualCallbackUrl = val;
+      requestRender();
     },
     onResetToIdle: () => resetToIdle(),
   });

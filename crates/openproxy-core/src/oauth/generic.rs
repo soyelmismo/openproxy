@@ -328,7 +328,7 @@ impl OAuthProvider for GenericOAuthProvider {
             ("client_id", client_id.as_str()),
             ("redirect_uri", redirect_uri),
         ];
-        if !code_verifier.is_empty() {
+        if self.spec.flow == OAuthFlow::AuthorizationCodePkce && !code_verifier.is_empty() {
             params.push(("code_verifier", code_verifier));
         }
         let secret = self.spec.client_secret();

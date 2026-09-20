@@ -37,9 +37,17 @@ fn validate_authorize_flow(
     Ok(())
 }
 
-fn get_oauth_redirect_uri() -> String {
-    let web_port = std::env::var("OPENPROXY_WEB_PORT").unwrap_or_else(|_| "8788".to_string());
-    format!("http://localhost:{web_port}/admin/callback.html")
+fn get_oauth_redirect_uri(s: &AppState) -> String {
+    if let Ok(web_port) = std::env::var("OPENPROXY_WEB_PORT") {
+        return format!("http://localhost:{web_port}/admin/callback.html");
+    }
+    let port = s
+        .config()
+        .server
+        .bind
+        .rsplit_once(':')
+        .map_or("8787", |(_, p)| p);
+    format!("http://localhost:{port}/admin/callback.html")
 }
 
 pub async fn oauth_authorize(
@@ -54,7 +62,7 @@ pub async fn oauth_authorize(
     })?;
 
     validate_authorize_flow(&provider, &provider_impl)?;
-    let redirect_uri = get_oauth_redirect_uri();
+    let redirect_uri = get_oauth_redirect_uri(&s);
     let (auth_url, code_verifier, effective_redirect_uri, state) =
         provider_impl.build_auth_url(&redirect_uri).await?;
     let redirect_uri = if effective_redirect_uri.is_empty() {
@@ -194,7 +202,13 @@ pub async fn oauth_exchange(
         .get("code_verifier")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .or_else(|| input.get("state").and_then(|v| v.as_str()))
+        .or_else(|| {
+            if provider == "zai" {
+                input.get("state").and_then(|v| v.as_str())
+            } else {
+                None
+            }
+        })
         .unwrap_or("");
     let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
     let redirect_uri = input
