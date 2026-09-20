@@ -1,5 +1,5 @@
 //! Empirical verification of compression filters (Lite filter and RTK line filter).
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openproxy_compression::lite::collapse_whitespace;
 use openproxy_compression::rtk::apply_rtk;

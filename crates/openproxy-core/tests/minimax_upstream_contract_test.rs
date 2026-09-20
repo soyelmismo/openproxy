@@ -4,6 +4,7 @@
 //! 1. Golden contract spec parity (100% offline, runs on every `cargo test`).
 //! 2. Live remote upstream contract verification against `github.com/MiniMax-AI/minimax-code/main`
 //!    via lightweight remote HTTP queries without cloning or caching git history.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openproxy_adapters::ProviderAdapter;
 use openproxy_adapters::upstream::{

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use axum::extract::{Json, State};
 use openproxy_adapters::upstream::is_private_or_reserved;
 use openproxy_server::handlers::admin::proxies::{

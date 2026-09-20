@@ -169,6 +169,20 @@ macro_rules! impl_enum_from {
     };
 }
 
+/// Helper macro to compile a literal regular expression invariant without `.expect()`.
+///
+/// Panics if the regular expression pattern is invalid, representing an unrecoverable
+/// compile-time programmer invariant violation.
+#[macro_export]
+macro_rules! static_regex {
+    ($pattern:expr $(,)?) => {
+        match ::regex::Regex::new($pattern) {
+            Ok(r) => r,
+            Err(e) => panic!("literal regex must compile: {e}"),
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     #[derive(Debug, PartialEq)]

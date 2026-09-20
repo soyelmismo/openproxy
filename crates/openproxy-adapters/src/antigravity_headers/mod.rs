@@ -133,8 +133,12 @@ static MACHINE_ID: LazyLock<String> = LazyLock::new(|| {
     out
 });
 
-static HEADER_VAL_MACHINE_ID: LazyLock<HeaderValue> =
-    LazyLock::new(|| HeaderValue::from_str(&MACHINE_ID).expect("machine_id must be valid ascii"));
+static HEADER_VAL_MACHINE_ID: LazyLock<HeaderValue> = LazyLock::new(|| {
+    match HeaderValue::from_str(&MACHINE_ID) {
+        Ok(v) => v,
+        Err(_) => HeaderValue::from_static("openproxy"),
+    }
+});
 
 #[cfg(test)]
 fn machine_id() -> &'static str {
@@ -169,8 +173,12 @@ fn hostname() -> Option<&'static str> {
 
 static SESSION_ID: LazyLock<String> = LazyLock::new(|| Uuid::new_v4().to_string());
 
-static HEADER_VAL_SESSION_ID: LazyLock<HeaderValue> =
-    LazyLock::new(|| HeaderValue::from_str(&SESSION_ID).expect("session_id must be valid ascii"));
+static HEADER_VAL_SESSION_ID: LazyLock<HeaderValue> = LazyLock::new(|| {
+    match HeaderValue::from_str(&SESSION_ID) {
+        Ok(v) => v,
+        Err(_) => HeaderValue::from_static("session"),
+    }
+});
 
 #[cfg(test)]
 fn session_id() -> &'static str {

@@ -1,5 +1,5 @@
 //! Empirical verification test suite for Milestone 1 serde contracts and consolidated structs.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use openproxy_types::combos::AddTargetInput;
 use openproxy_types::error::{CoreError, OptionExt, ResultExt};

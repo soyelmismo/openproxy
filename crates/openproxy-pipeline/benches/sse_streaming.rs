@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use openproxy_pipeline::sse::{
     AnthropicToolUseAccumulator, parse_gemini_sse_line, parse_openai_sse_line,

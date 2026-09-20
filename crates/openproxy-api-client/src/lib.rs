@@ -213,7 +213,8 @@ impl Client {
         let mut url = self.url("/admin/accounts");
         if let Some(p) = provider {
             let qs = build_query(&[("provider_id", Some(p.as_str()))]);
-            write!(&mut url, "?{qs}").expect("writing to String never fails");
+            url.push('?');
+            url.push_str(&qs);
         }
         let resp = self
             .req(openproxy_adapters::upstream::UpstreamRequest::get(url))
@@ -326,9 +327,9 @@ impl Client {
     ) -> Result<Vec<ErrorRow>, ClientError> {
         let mut qs = usage_filter_query(f);
         if !qs.is_empty() {
-            write!(&mut qs, "&limit={limit}").expect("writing to String never fails");
+            let _ = write!(&mut qs, "&limit={limit}");
         } else {
-            write!(&mut qs, "limit={limit}").expect("writing to String never fails");
+            let _ = write!(&mut qs, "limit={limit}");
         }
         let url = format!("{}?{}", self.url("/admin/usage/errors"), qs);
         let resp = self

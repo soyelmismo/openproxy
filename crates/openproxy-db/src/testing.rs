@@ -58,8 +58,13 @@ impl Drop for TempDir {
 /// return the connection. Every test gets its own DB; there is no
 /// shared state between tests and zero disk I/O.
 pub fn open_in_memory() -> Connection {
-    let mut conn = Connection::open_in_memory().expect("open in-memory db");
-    crate::migrations::run(&mut conn).expect("run migrations");
+    let mut conn = match Connection::open_in_memory() {
+        Ok(c) => c,
+        Err(e) => panic!("open in-memory db: {e}"),
+    };
+    if let Err(e) = crate::migrations::run(&mut conn) {
+        panic!("run migrations: {e}");
+    }
     conn
 }
 
@@ -68,13 +73,14 @@ pub fn open_in_memory() -> Connection {
 /// constraint declared in `migrations/000019_add_oauth_support.sql`.
 /// Tests that `INSERT INTO accounts` MUST call this first.
 pub fn seed_antigravity_provider(conn: &Connection) {
-    conn.execute(
+    if let Err(e) = conn.execute(
         "INSERT INTO providers (id, name, base_url, auth_type, format) \
          VALUES ('antigravity', 'Antigravity', 'https://example.com', \
                  'oauth', 'openai')",
         [],
-    )
-    .expect("seed antigravity provider");
+    ) {
+        panic!("seed antigravity provider: {e}");
+    }
 }
 
 /// Create a fresh isolated test pool with all migrations applied.
@@ -85,7 +91,10 @@ pub fn fresh_pool() -> (crate::conn::DbPool, PathBuf) {
 
 /// Create a fresh isolated test pool with a custom prefix.
 pub fn fresh_pool_with_prefix(prefix: &str) -> (crate::conn::DbPool, PathBuf) {
-    let pool = crate::conn::DbPool::test_pool_with_prefix(prefix).expect("open test db pool");
+    let pool = match crate::conn::DbPool::test_pool_with_prefix(prefix) {
+        Ok(p) => p,
+        Err(e) => panic!("open test db pool: {e}"),
+    };
     let path = pool.path().to_path_buf();
     (pool, path)
 }

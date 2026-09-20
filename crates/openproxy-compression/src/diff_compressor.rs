@@ -34,12 +34,12 @@ pub const TECHNIQUE: &str = "lite::diff_compressor";
 
 /// Strict hunk header regex (for detection): `^@@ -\d+,\d+ \+\d+,\d+ @@`.
 pub(crate) static HUNK_HEADER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^@@ -\d+,\d+ \+\d+,\d+ @@").expect("valid regex"));
+    LazyLock::new(|| openproxy_types::static_regex!(r"^@@ -\d+,\d+ \+\d+,\d+ @@"));
 
 /// Lenient hunk header regex (for parsing): allows optional counts
 /// (e.g. `@@ -1 +1 @@` for single-line hunks).
 static HUNK_HEADER_LENIENT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@").expect("valid regex"));
+    LazyLock::new(|| openproxy_types::static_regex!(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@"));
 
 /// A single parsed diff file.
 struct DiffFile<'a> {

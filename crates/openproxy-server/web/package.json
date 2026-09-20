@@ -11,12 +11,14 @@
     "build:watch": "node build.mjs --watch",
     "test:e2e": "rm -f tests/e2e/data-test.db* && cp tests/e2e/data-test.seed.db tests/e2e/data-test.db && playwright test",
     "test": "vitest run src/static/src",
+    "test:coverage": "vitest run --coverage",
     "lint": "oxlint --config oxlint.config.ts"
   },
   "devDependencies": {
     "@oxlint/plugins": "^1.78.0",
     "@playwright/test": "^1.63.0",
     "@types/node": "26.6.2",
+    "@vitest/coverage-v8": "^4.1.11",
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.0",
     "oxlint": "^1.78.0",

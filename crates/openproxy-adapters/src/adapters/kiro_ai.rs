@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::LazyLock;
 
 static REGION_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"[a-z]{2}-[a-z]+-[0-9]").expect("valid regex"));
+    LazyLock::new(|| openproxy_types::static_regex!(r"[a-z]{2}-[a-z]+-[0-9]"));
 
 // =====================================================================
 // Kiro AI (AWS CodeWhisperer)

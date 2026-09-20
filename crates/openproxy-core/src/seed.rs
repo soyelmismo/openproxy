@@ -77,7 +77,7 @@ fn seed_single_adapter(
 ) -> Result<bool> {
     let conf = adapter.config();
     if let Some(existing) = providers::get(conn, &conf.id)? {
-        let auth = AuthType::parse(conf.auth_type.as_str()).expect("builtin auth_type is valid");
+        let auth = conf.auth_type;
         if existing.auth_type != auth {
             conn.execute(
                 "UPDATE providers SET auth_type = ?1 WHERE id = ?2",
@@ -99,11 +99,11 @@ fn seed_single_adapter(
         return Ok(false);
     }
 
-    let auth = AuthType::parse(conf.auth_type.as_str()).expect("builtin auth_type is valid");
-    let fmt = ProviderFormat::parse(conf.format.as_str()).expect("builtin format is valid");
+    let auth = conf.auth_type;
+    let fmt = conf.format;
     let extra_headers = serialize_extra_headers(&conf.extra_headers);
-    let rate_limit_scope =
-        providers::RateLimitScope::parse(&conf.rate_limit_scope).expect("builtin scope is valid");
+    let rate_limit_scope = providers::RateLimitScope::parse(&conf.rate_limit_scope)
+        .unwrap_or(providers::RateLimitScope::Account);
 
     providers::create(
         conn,

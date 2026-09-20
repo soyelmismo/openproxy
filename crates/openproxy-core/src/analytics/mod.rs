@@ -19,7 +19,6 @@ use crate::error::{CoreError, Result};
 use crate::usage::UsageFilter;
 use rusqlite::{Connection, ToSql, params_from_iter};
 use serde::{Deserialize, Serialize};
-use std::fmt::Write as _;
 use tdigest::TDigest;
 
 /// Number of centroids per t-digest. Spec §7 prescribes 200.
@@ -183,13 +182,10 @@ pub fn latency_percentiles(conn: &Connection, f: &UsageFilter) -> Result<Latency
 
     let where_clause = format!("WHERE {}", clauses.join(" AND "));
 
-    let mut sql = String::new();
-    write!(
-        &mut sql,
+    let sql = format!(
         "SELECT connect_ms, ttft_ms, total_ms, tokens_per_sec \
-         FROM usage {where_clause}",
-    )
-    .expect("writing to String never fails");
+         FROM usage {where_clause}"
+    );
 
     let mut stmt = conn
         .prepare(&sql)

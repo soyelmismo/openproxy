@@ -44,12 +44,11 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
 
 fn apply_secret_redactions(text: String) -> String {
     static RE_SK: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
+        LazyLock::new(|| openproxy_types::static_regex!(r"sk-[A-Za-z0-9_\-]{10,}"));
     static RE_XAPIKEY: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"(?i)x-api-key:\s*\S+").expect("valid regex"));
-    static RE_BEARER: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex")
-    });
+        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)x-api-key:\s*\S+"));
+    static RE_BEARER: LazyLock<regex::Regex> =
+        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)Authorization:\s*Bearer\s+\S+"));
 
     let patterns: &[(&LazyLock<regex::Regex>, &str)] = &[
         (&RE_SK, "sk-[REDACTED]"),

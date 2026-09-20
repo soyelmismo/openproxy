@@ -76,10 +76,10 @@ struct RaceContext {
 }
 
 async fn execute_race_worker(mut req: PipelineRequest, ctx: RaceContext) {
-    let worker_token = req
-        .race_cancel
-        .clone()
-        .expect("run_race: worker must have race_cancel");
+    let Some(worker_token) = req.race_cancel.clone() else {
+        notify_worker_done!(ctx.running, ctx.all_done);
+        return;
+    };
     loop {
         if worker_token.is_cancelled() {
             notify_worker_done!(ctx.running, ctx.all_done);

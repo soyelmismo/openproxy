@@ -46,12 +46,11 @@ fn truncate_sanitized(sanitized: &str, max_len: usize) -> String {
 
 pub fn redact_error_msg(raw: &str) -> String {
     static RE_SK: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"sk-[A-Za-z0-9_\-]{10,}").expect("valid regex"));
+        LazyLock::new(|| openproxy_types::static_regex!(r"sk-[A-Za-z0-9_\-]{10,}"));
     static RE_XAPIKEY: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"(?i)x-api-key:\s*\S+").expect("valid regex"));
-    static RE_BEARER: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"(?i)Authorization:\s*Bearer\s+\S+").expect("valid regex")
-    });
+        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)x-api-key:\s*\S+"));
+    static RE_BEARER: LazyLock<regex::Regex> =
+        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)Authorization:\s*Bearer\s+\S+"));
 
     let sanitized = RE_SK.replace_all(raw, "sk-[REDACTED]");
     let sanitized = RE_XAPIKEY.replace_all(&sanitized, "x-api-key: [REDACTED]");

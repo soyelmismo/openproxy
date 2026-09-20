@@ -297,8 +297,7 @@ impl OAuthProvider for GenericOAuthProvider {
             }
 
             // Generate a random state value to prevent CSRF on the callback.
-            let mut state_buf = [0u8; 16];
-            getrandom::fill(&mut state_buf).expect("getrandom failed");
+            let state_buf: [u8; 16] = rand::random();
             let state = hex::encode(state_buf);
             params.push(("state", state.as_str()));
 
@@ -541,8 +540,7 @@ async fn call_oauth_endpoint(
 
 /// Generate a cryptographically random PKCE code verifier (43-128 chars).
 pub fn generate_code_verifier() -> String {
-    let mut buf = [0u8; 32];
-    getrandom::fill(&mut buf).expect("getrandom failed");
+    let buf: [u8; 32] = rand::random();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 

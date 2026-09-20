@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use openproxy_db::DbPool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
