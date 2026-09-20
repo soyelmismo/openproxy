@@ -340,18 +340,7 @@ fn parse_minimax_quota(
             .unwrap_or(0);
         if code != 0 {
             if code == 2062 {
-                return Ok(openproxy_types::AccountQuota {
-                    session_used: None,
-                    session_limit: None,
-                    session_reset_at: None,
-                    weekly_used: None,
-                    weekly_limit: None,
-                    weekly_reset_at: None,
-                    plan_name: Some("Free".to_string()),
-                    last_fetched_at: openproxy_types::now_unix_secs_str(),
-                    fetch_error: None,
-                    model_details: None,
-                });
+                return Ok(openproxy_types::AccountQuota::with_plan("Free"));
             }
             let msg = base_resp
                 .get("status_msg")

@@ -184,18 +184,9 @@ impl ProviderAdapter for CodexAdapter {
                     .await,
             )
         } else {
-            Some(Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some("codex requires OAuth access token".into()),
-                model_details: None,
-            }))
+            Some(Ok(openproxy_types::AccountQuota::with_error(
+                "codex requires OAuth access token",
+            )))
         }
     }
 }
@@ -269,18 +260,7 @@ fn build_codex_error_quota(status: u16, snippet: &str) -> openproxy_types::Accou
     } else {
         format!("Codex quota check failed: HTTP {status}: {snippet}")
     };
-    openproxy_types::AccountQuota {
-        session_used: None,
-        session_limit: None,
-        session_reset_at: None,
-        weekly_used: None,
-        weekly_limit: None,
-        weekly_reset_at: None,
-        plan_name: None,
-        last_fetched_at: openproxy_types::now_unix_secs_str(),
-        fetch_error: Some(fetch_error),
-        model_details: None,
-    }
+    openproxy_types::AccountQuota::with_error(fetch_error)
 }
 
 fn codex_workspace_header(provider_specific: &str) -> Option<String> {

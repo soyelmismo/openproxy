@@ -331,20 +331,9 @@ impl ProviderAdapter for AntigravityAdapter {
         if let Some(token) = access_token {
             Some(quota::fetch_antigravity_quota_local(upstream_client, token).await)
         } else {
-            Some(Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some(
-                    "missing access_token or project_id for antigravity quota".into(),
-                ),
-                model_details: None,
-            }))
+            Some(Ok(openproxy_types::AccountQuota::with_error(
+                "missing access_token or project_id for antigravity quota",
+            )))
         }
     }
 }

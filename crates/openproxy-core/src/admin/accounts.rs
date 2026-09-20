@@ -237,9 +237,49 @@ pub fn account_for_quota_refresh(
 /// `AccountQuota` with all-NULL numeric fields and a `fetch_error`
 /// string saying the provider is unsupported.
 ///
-/// `api_key` is the *plaintext* key (decrypted by the caller).
-/// `access_token` is the *plaintext* OAuth access token — only used
-/// for OAuth-based providers like Antigravity.
+/// Fetch quota for a single account using the right provider-specific fetcher,
+/// optionally passing a proxy URL for upstream auxiliary routing.
+pub async fn fetch_account_quota_with_proxy(
+    provider_id: &str,
+    upstream: &Arc<UpstreamClient>,
+    api_key: &str,
+    access_token: Option<&str>,
+    provider_specific: Option<&str>,
+    proxy_url: Option<&str>,
+) -> AccountQuota {
+    let mut result_quota = None;
+
+    let mapped_id = match provider_id {
+        "minimax-cn" => "minimax",
+        "agy" => "antigravity",
+        "zcode" | "z.ai" => "zai",
+        other => other,
+    };
+
+    let adapters = openproxy_adapters::adapters::builtin_adapters();
+    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id)
+        && let Some(res) = adapter
+            .fetch_quota_with_proxy(
+                upstream,
+                api_key,
+                access_token,
+                provider_specific,
+                proxy_url,
+            )
+            .await
+    {
+        result_quota = Some(res.unwrap_or_else(|e| AccountQuota::with_error(e.to_string())));
+    }
+
+    result_quota.unwrap_or_else(|| {
+        AccountQuota::with_error(format!(
+            "quota fetching not implemented for provider '{provider_id}'"
+        ))
+    })
+}
+
+/// Fetch quota for a single account using the right provider-specific
+/// fetcher without an explicit proxy.
 pub async fn fetch_account_quota(
     provider_id: &str,
     upstream: &Arc<UpstreamClient>,
@@ -247,65 +287,13 @@ pub async fn fetch_account_quota(
     access_token: Option<&str>,
     provider_specific: Option<&str>,
 ) -> AccountQuota {
-    let mut result_quota = None;
-
-    let mapped_id = match provider_id {
-        "minimax-cn" => "minimax",
-        "agy" => "antigravity",
-        other => other,
-    };
-
-    let adapters = openproxy_adapters::adapters::builtin_adapters();
-    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id)
-        && let Some(res) = adapter
-            .fetch_quota(upstream, api_key, access_token, provider_specific)
-            .await
-    {
-        result_quota = Some(match res {
-            Ok(q) => q,
-            Err(e) => AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: now_unix_secs_str(),
-                fetch_error: Some(e.to_string()),
-                model_details: None,
-            },
-        });
-    }
-
-    if let Some(q) = result_quota {
-        q
-    } else {
-        AccountQuota {
-            session_used: None,
-            session_limit: None,
-            session_reset_at: None,
-            weekly_used: None,
-            weekly_limit: None,
-            weekly_reset_at: None,
-            plan_name: None,
-            last_fetched_at: now_unix_secs_str(),
-            fetch_error: Some(format!(
-                "quota fetching not implemented for provider '{provider_id}'"
-            )),
-            model_details: None,
-        }
-    }
-}
-
-/// Best-effort current-time stamp for an `AccountQuota::last_fetched_at`
-/// field. Mirrors [`quota::now_unix_secs_str`] but lives here so the
-/// `fetch_account_quota` fallback path can stamp an error-only quota
-/// without crossing the `quota` module boundary just for a helper.
-pub(crate) fn now_unix_secs_str() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    secs.to_string()
+    fetch_account_quota_with_proxy(
+        provider_id,
+        upstream,
+        api_key,
+        access_token,
+        provider_specific,
+        None,
+    )
+    .await
 }

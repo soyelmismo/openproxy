@@ -156,6 +156,15 @@ fn builtin_registry_all_providers_contract() {
     assert_eq!(kiro.name(), "kiro");
     assert_eq!(kiro.flow(), OAuthFlow::DeviceCode);
 
+    // 6. Zai
+    let zai = reg.get("zai").expect("zai registered");
+    assert_eq!(zai.name(), "zai");
+    assert_eq!(zai.flow(), OAuthFlow::AuthorizationCode);
+    let zcode = reg.get("zcode").expect("zcode alias registered");
+    assert_eq!(zcode.name(), "zai");
+    let z_ai = reg.get("z.ai").expect("z.ai alias registered");
+    assert_eq!(z_ai.name(), "zai");
+
     // Unknown provider
     assert!(reg.get("nonexistent-provider").is_none());
 }

@@ -320,10 +320,11 @@ impl OAuthProvider for GenericOAuthProvider {
         upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
     ) -> Result<TokenResponse> {
+        let (actual_code, _) = crate::oauth::util::parse_oauth_callback_input(code);
         let client_id = self.spec.client_id()?;
         let mut params = vec![
             ("grant_type", "authorization_code"),
-            ("code", code),
+            ("code", actual_code.as_str()),
             ("client_id", client_id.as_str()),
             ("redirect_uri", redirect_uri),
         ];

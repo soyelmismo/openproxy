@@ -263,12 +263,21 @@ pub async fn refresh_single_account_quota(
         }
     };
 
-    let q = admin::fetch_account_quota(
+    let active_proxy = crate::free_proxies::resolve_active_proxy(
+        db_pool,
+        &crate::ids::ProviderId::new(&provider_id_str),
+        Some(account_id),
+    )
+    .await
+    .unwrap_or(None);
+
+    let q = admin::fetch_account_quota_with_proxy(
         &provider_id_str,
         upstream_client,
         &api_key,
         access_token.as_deref(),
         provider_specific.as_deref(),
+        active_proxy.as_deref(),
     )
     .await;
 
@@ -342,12 +351,13 @@ pub async fn refresh_single_account_quota(
                         .await;
                     }
                     // Retry quota fetch with the new access token
-                    admin::fetch_account_quota(
+                    admin::fetch_account_quota_with_proxy(
                         &provider_id_str,
                         upstream_client,
                         &api_key,
                         Some(&new_tokens.access_token),
                         provider_specific.as_deref(),
+                        active_proxy.as_deref(),
                     )
                     .await
                 }
@@ -433,6 +443,59 @@ pub async fn refresh_single_account_quota(
                 );
             })
             .await;
+        }
+    } else if let Some(ref err) = q.fetch_error {
+        let dedup_key = format!(
+            "{}:{}",
+            notifications::CODE_QUOTA_FETCH_FAILED,
+            account_id.0
+        );
+        let payload = serde_json::json!({
+            "code": notifications::CODE_QUOTA_FETCH_FAILED,
+            "message": format!(
+                "Account {} on {} quota fetch failed: {}",
+                account_id.0, provider_id_str, err,
+            ),
+            "provider_id": &provider_id_str,
+            "details": {
+                "account_id": account_id.0,
+                "provider_id": &provider_id_str,
+                "error": err,
+                "proxy_used": active_proxy,
+            },
+        });
+        let db_pool_notif = Arc::clone(db_pool);
+        let provider_id_notif = provider_id_str.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            let w = db_pool_notif.writer();
+            let _ = notifications::insert_and_broadcast(
+                &w,
+                notifications::KIND_SYSTEM,
+                &payload,
+                Some(&dedup_key),
+                Some(&provider_id_notif),
+            );
+        })
+        .await;
+
+        if active_proxy.is_some() {
+            let is_proxy_err = err.contains("handshake")
+                || err.contains("HTTP CONNECT")
+                || err.contains("proxy connection error")
+                || err.contains("Proxy")
+                || err.contains("402");
+            if is_proxy_err {
+                let is_connect = err.contains("handshake")
+                    || err.contains("connection error")
+                    || err.contains("timeout");
+                let _ = crate::free_proxies::report_proxy_failure(
+                    db_pool,
+                    &crate::ids::ProviderId::new(&provider_id_str),
+                    Some(account_id),
+                    is_connect,
+                )
+                .await;
+            }
         }
     }
 

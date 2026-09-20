@@ -152,6 +152,25 @@ impl UpstreamDispatcher {
             )
             .await;
 
+        let body = if let Some(ref purl) = dctx.proxy_url {
+            if body.contains(purl) {
+                body
+            } else {
+                format!("{body} (via proxy {purl})")
+            }
+        } else {
+            body
+        };
+
+        if is_proxy_rotated && let Some(ref purl) = dctx.proxy_url {
+            self.broadcast_proxy_rotated_notification(
+                target.provider_id.as_ref(),
+                purl,
+                "connection error",
+            )
+            .await;
+        }
+
         let core_err = CoreError::upstream_error(
             status,
             target.provider_id.to_string(),
@@ -211,6 +230,40 @@ impl UpstreamDispatcher {
         .ok();
     }
 
+    /// Publica una notificación `proxy_failed` en el bus cuando un proxy es rotado.
+    async fn broadcast_proxy_rotated_notification(
+        &self,
+        provider_id_str: &str,
+        bad_proxy: &str,
+        trigger_desc: &str,
+    ) {
+        let dedup_key = format!("proxy_failed:{provider_id_str}:{bad_proxy}");
+        let payload = serde_json::json!({
+            "code": "proxy_failed",
+            "message": format!(
+                "Proxy {bad_proxy} failed for {provider_id_str} ({trigger_desc}); rotated to next candidate"
+            ),
+            "provider_id": provider_id_str,
+            "details": {
+                "proxy_url": bad_proxy,
+                "provider_id": provider_id_str,
+                "trigger": trigger_desc,
+            },
+        });
+        let repo = Arc::clone(&self.tracker.repo);
+        let pid = provider_id_str.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _ = repo.insert_and_broadcast_notification(
+                "system",
+                &payload,
+                Some(&dedup_key),
+                Some(&pid),
+            );
+        })
+        .await
+        .ok();
+    }
+
     /// Maneja respuestas non-2xx: dispara rotación de proxy (por status o
     /// rate-limit), broadcast de cuenta inválida si 401/403, marcado
     /// `live_limited` si `RESOURCE_EXHAUSTED` en body, y clasificación
@@ -248,6 +301,30 @@ impl UpstreamDispatcher {
                 is_rate_limited_status.then_some(retry_ms),
             )
             .await;
+
+        if is_proxy_rotated && let Some(ref purl) = dctx.proxy_url {
+            let trigger_desc = if is_rate_limited_status {
+                "rate limited"
+            } else {
+                "upstream status error"
+            };
+            self.broadcast_proxy_rotated_notification(
+                target.provider_id.as_ref(),
+                purl,
+                trigger_desc,
+            )
+            .await;
+        }
+
+        let body_str = if let Some(ref purl) = dctx.proxy_url {
+            if body_str.contains(purl) {
+                body_str
+            } else {
+                format!("{body_str} (via proxy {purl})")
+            }
+        } else {
+            body_str
+        };
 
         if (status_code == 401 || status_code == 403)
             && let Some(aid) = target.account_id

@@ -23,7 +23,7 @@ pub use adapters::{
     kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, minimax::MiniMaxAdapter,
     nous_research::NousResearchAdapter, nvidia_nim::NvidiaNimAdapter,
     ollama_cloud::OllamaCloudAdapter, opencode_common::OpenCodeGoAdapter,
-    opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter,
+    opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter, zai::ZaiAdapter,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use upstream::load_upstream_source;

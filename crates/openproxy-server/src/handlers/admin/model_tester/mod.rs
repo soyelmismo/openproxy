@@ -74,18 +74,21 @@ pub async fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> 
 pub async fn parse_test_model_params(
     s: &AppState,
     body_bytes: &[u8],
-) -> Result<(Option<AccountId>, Option<String>), ApiError> {
+) -> Result<(Option<AccountId>, Option<(String, String)>), ApiError> {
     if body_bytes.is_empty() {
         return Ok((None, None));
     }
     let input = serde_json::from_slice::<TestModelInput>(body_bytes)
         .map_err(|e| ApiError(CoreError::Parse(format!("Invalid JSON: {e}"))))?;
     let aid = input.account_id.map(AccountId::new);
-    let purl = match input.proxy_id.as_deref() {
-        Some(pid) => resolve_proxy_url_by_id(s, pid).await,
+    let proxy_override = match input.proxy_id.as_deref() {
+        Some(pid) => {
+            let purl = resolve_proxy_url_by_id(s, pid).await;
+            purl.map(|u| (pid.to_string(), u))
+        }
         None => None,
     };
-    Ok((aid, purl))
+    Ok((aid, proxy_override))
 }
 
 pub async fn test_model(
@@ -95,13 +98,13 @@ pub async fn test_model(
     body_bytes: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
-    let (account_id, proxy_url) = parse_test_model_params(&s, &body_bytes).await?;
+    let (account_id, proxy_override) = parse_test_model_params(&s, &body_bytes).await?;
 
     let (r, debug_payload) = run_test_for_model(
         &s,
         model_row_id,
         account_id,
-        proxy_url,
+        proxy_override,
         TestOptions::default(),
         cancel_rx,
     )
@@ -119,7 +122,7 @@ pub async fn run_test_for_model(
     s: &AppState,
     model_row_id: i64,
     account_id: Option<AccountId>,
-    proxy_url: Option<String>,
+    proxy_override: Option<(String, String)>,
     opts: TestOptions,
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
 ) -> (TestResult, Option<serde_json::Value>) {
@@ -171,6 +174,18 @@ pub async fn run_test_for_model(
     let is_tts = is_audio && !is_stt;
     let is_embedding = effective_type == "embedding";
     let is_image = effective_type == "image";
+
+    let effective_proxy = if let Some((_, ref purl)) = proxy_override {
+        Some(purl.clone())
+    } else {
+        openproxy_core::free_proxies::resolve_active_proxy(
+            s.db_pool(),
+            &model.provider_id,
+            _account_id_opt,
+        )
+        .await
+        .unwrap_or(None)
+    };
 
     let (status, error_msg, elapsed_ms, debug_payload) = if is_stt
         || is_embedding
@@ -254,23 +269,7 @@ pub async fn run_test_for_model(
                 }
             }
         };
-        let effective_proxy = if let Some(ref purl) = proxy_url {
-            Some(purl.clone())
-        } else {
-            let pool = std::sync::Arc::clone(s.db_pool());
-            let pid = model.provider_id.clone();
-            let aid = _account_id_opt;
-            tokio::task::spawn_blocking(move || {
-                let r = pool.try_reader_for(std::time::Duration::from_secs(5))?;
-                openproxy_core::free_proxies::get_or_assign_provider_proxy(&r, &pid, aid.as_ref())
-                    .ok()
-                    .flatten()
-            })
-            .await
-            .ok()
-            .flatten()
-        };
-        req.proxy = effective_proxy;
+        req.proxy = effective_proxy.clone();
         for (k, v) in &headers {
             if is_stt && k.eq_ignore_ascii_case("content-type") {
                 continue;
@@ -331,6 +330,7 @@ pub async fn run_test_for_model(
                 "request_headers": req_headers,
                 "request_url": url,
                 "request_body": body_value,
+                "proxy_used": effective_proxy.clone(),
             })
         });
 
@@ -352,6 +352,29 @@ pub async fn run_test_for_model(
             }
             Err(e) => (0, Some(format!("{e:?}"))),
         };
+
+        let error_msg = error_msg.map(|msg| {
+            if let Some(ref purl) = effective_proxy {
+                if !msg.contains(purl) {
+                    format!("{msg} (via proxy {purl})")
+                } else {
+                    msg
+                }
+            } else {
+                msg
+            }
+        });
+
+        if (status >= 400 || status == 0) && effective_proxy.is_some() {
+            let is_connect = status == 0;
+            let _ = openproxy_core::free_proxies::report_proxy_failure(
+                s.db_pool(),
+                &model.provider_id,
+                _account_id_opt,
+                is_connect,
+            )
+            .await;
+        }
 
         (status, error_msg, elapsed_ms, debug_payload)
     } else {
@@ -409,7 +432,7 @@ pub async fn run_test_for_model(
             compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
             pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
             compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-            proxy_override: proxy_url.map(|purl| ("manual".to_string(), purl)),
+            proxy_override,
         };
 
         let start_req = std::time::Instant::now();
@@ -449,11 +472,19 @@ pub async fn run_test_for_model(
                 ),
                 "request_body": openai_req,
                 "response_body": response_body,
+                "proxy_used": effective_proxy.clone(),
             }))
         };
 
         (status, error_msg, elapsed_ms, debug_payload)
     };
+
+    let mut error_msg = error_msg;
+    if let (Some(err), Some(purl)) = (&mut error_msg, &effective_proxy)
+        && !err.contains(purl)
+    {
+        *err = format!("{err} (via proxy {purl})");
+    }
 
     if !opts.in_combo_fanout {
         let status_i32 = i32::from(status);

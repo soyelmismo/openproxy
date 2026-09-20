@@ -245,18 +245,9 @@ impl ProviderAdapter for CommandCodeGoAdapter {
     ) -> Option<Result<AccountQuota>> {
         let token = access_token.unwrap_or(api_key);
         if token.is_empty() {
-            return Some(Ok(AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some("commandcode requires token for quota".into()),
-                model_details: None,
-            }));
+            return Some(Ok(AccountQuota::with_error(
+                "commandcode requires token for quota",
+            )));
         }
 
         Some(fetch_commandcode_quota(upstream_client, token).await)

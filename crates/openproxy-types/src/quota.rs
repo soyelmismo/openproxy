@@ -28,6 +28,41 @@ impl AccountQuota {
     pub fn is_empty(&self) -> bool {
         self.session_used.is_none() && self.weekly_used.is_none() && self.fetch_error.is_none()
     }
+
+    pub fn empty() -> Self {
+        Self {
+            session_used: None,
+            session_limit: None,
+            session_reset_at: None,
+            weekly_used: None,
+            weekly_limit: None,
+            weekly_reset_at: None,
+            plan_name: None,
+            last_fetched_at: now_unix_secs_str(),
+            fetch_error: None,
+            model_details: None,
+        }
+    }
+
+    pub fn with_error(err: impl Into<String>) -> Self {
+        Self {
+            fetch_error: Some(err.into()),
+            ..Self::empty()
+        }
+    }
+
+    pub fn with_plan(plan_name: impl Into<String>) -> Self {
+        Self {
+            plan_name: Some(plan_name.into()),
+            ..Self::empty()
+        }
+    }
+}
+
+impl Default for AccountQuota {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 pub fn now_unix_secs_str() -> String {

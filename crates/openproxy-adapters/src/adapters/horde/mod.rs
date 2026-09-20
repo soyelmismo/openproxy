@@ -180,18 +180,7 @@ impl HordeAdapter {
                 &json,
                 &openproxy_types::quota::now_unix_secs_str(),
             )),
-            Err(err) => Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::quota::now_unix_secs_str(),
-                fetch_error: Some(err),
-                model_details: None,
-            }),
+            Err(err) => Ok(openproxy_types::AccountQuota::with_error(err)),
         }
     }
 }

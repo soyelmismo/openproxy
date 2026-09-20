@@ -94,9 +94,88 @@ pub fn extract_email_from_token(token: &TokenResponse) -> Option<String> {
     extract(&claims)
 }
 
+/// Extract a named parameter from a URL query string without external dependencies.
+pub fn extract_query_param(query: &str, param: &str) -> Option<String> {
+    for part in query.split('&') {
+        if let Some((k, v)) = part.split_once('=')
+            && k.trim() == param
+        {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Robustly extracts the authorization `code` and optional `state` from user input across all OAuth providers.
+/// Handles:
+/// 1. Raw code: `"code-12345"`
+/// 2. Fragment format: `"code-12345#state-67890"`
+/// 3. Standard HTTP/HTTPS callback URL: `"http://127.0.0.1:8787/oauth/callback?code=abc&state=xyz"`
+/// 4. Custom desktop protocol URL: `"zcode://oauth/callback?code=abc&state=xyz"`, `"cline://..."`, `"cursor://..."`
+pub fn parse_oauth_callback_input(input: &str) -> (String, Option<String>) {
+    let trimmed = input.trim();
+    if let Some((_, query)) = trimmed.split_once('?') {
+        let code_from_query = extract_query_param(query, "code")
+            .or_else(|| extract_query_param(query, "apiKey"))
+            .or_else(|| extract_query_param(query, "token"))
+            .or_else(|| extract_query_param(query, "key"));
+        let state_from_query = extract_query_param(query, "state");
+        (
+            code_from_query.unwrap_or_else(|| trimmed.to_string()),
+            state_from_query,
+        )
+    } else if let Some((c, s)) = trimmed.split_once('#') {
+        (c.trim().to_string(), Some(s.trim().to_string()))
+    } else {
+        (trimmed.to_string(), None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extract_query_param() {
+        let q = "redirect=zcode%3A%2F%2Foauth%2Fcallback&app_version=3.14.0&code=code-123&state=state-456";
+        assert_eq!(extract_query_param(q, "code").as_deref(), Some("code-123"));
+        assert_eq!(
+            extract_query_param(q, "state").as_deref(),
+            Some("state-456")
+        );
+        assert_eq!(extract_query_param(q, "notfound"), None);
+    }
+
+    #[test]
+    fn test_parse_oauth_callback_input_formats() {
+        // 1. Raw code
+        let (c1, s1) = parse_oauth_callback_input("code-raw-123");
+        assert_eq!(c1, "code-raw-123");
+        assert_eq!(s1, None);
+
+        // 2. Hash fragment
+        let (c2, s2) = parse_oauth_callback_input("code-frag#state-frag");
+        assert_eq!(c2, "code-frag");
+        assert_eq!(s2.as_deref(), Some("state-frag"));
+
+        // 3. Full HTTP callback URL
+        let (c3, s3) = parse_oauth_callback_input(
+            "https://zcode.z.ai/app/oauth/login?redirect=zcode%3A%2F%2Foauth%2Fcallback&code=code-xyz&state=state-abc",
+        );
+        assert_eq!(c3, "code-xyz");
+        assert_eq!(s3.as_deref(), Some("state-abc"));
+
+        // 4. Custom desktop protocol URI
+        let (c4, s4) =
+            parse_oauth_callback_input("zcode://oauth/callback?code=code-proto&state=state-proto");
+        assert_eq!(c4, "code-proto");
+        assert_eq!(s4.as_deref(), Some("state-proto"));
+
+        // 5. Alternate apiKey param
+        let (c5, s5) = parse_oauth_callback_input("https://example.com/callback?apiKey=key-999");
+        assert_eq!(c5, "key-999");
+        assert_eq!(s5, None);
+    }
 
     #[test]
     fn test_resolver_default_and_custom() {

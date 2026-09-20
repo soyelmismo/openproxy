@@ -625,7 +625,9 @@ fn update_account_rate_limited_until_on_result(
             let conn_clone = Arc::clone(&pipeline.conn);
             let handle = tokio::task::spawn_blocking(move || {
                 let conn = conn_clone.lock();
-                if let Err(e) = openproxy_db::accounts::set_rate_limited_until(&conn, aid, Some(&until)) {
+                if let Err(e) =
+                    openproxy_db::accounts::set_rate_limited_until(&conn, aid, Some(&until))
+                {
                     tracing::warn!(account_id = aid.0, error = %e, "failed to update rate_limited_until");
                 }
             });

@@ -291,18 +291,9 @@ impl ProviderAdapter for KiroAdapter {
                     .await,
             )
         } else {
-            Some(Ok(openproxy_types::AccountQuota {
-                session_used: None,
-                session_limit: None,
-                session_reset_at: None,
-                weekly_used: None,
-                weekly_limit: None,
-                weekly_reset_at: None,
-                plan_name: None,
-                last_fetched_at: openproxy_types::now_unix_secs_str(),
-                fetch_error: Some("kiro requires OAuth access token".into()),
-                model_details: None,
-            }))
+            Some(Ok(openproxy_types::AccountQuota::with_error(
+                "kiro requires OAuth access token",
+            )))
         }
     }
 }
@@ -415,18 +406,7 @@ async fn discover_kiro_profile_arn(
 }
 
 fn empty_kiro_quota() -> openproxy_types::AccountQuota {
-    openproxy_types::AccountQuota {
-        session_used: None,
-        session_limit: None,
-        session_reset_at: None,
-        weekly_used: None,
-        weekly_limit: None,
-        weekly_reset_at: None,
-        plan_name: Some("Kiro".to_string()),
-        last_fetched_at: openproxy_types::now_unix_secs_str(),
-        fetch_error: None,
-        model_details: None,
-    }
+    openproxy_types::AccountQuota::with_plan("Kiro")
 }
 
 fn build_kiro_usage_limits_request(

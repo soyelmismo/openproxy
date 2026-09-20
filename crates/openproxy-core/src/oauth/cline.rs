@@ -91,9 +91,10 @@ impl OAuthProvider for ClineOAuthProvider {
         upstream_client: &Arc<UpstreamClient>,
         redirect_uri: &str,
     ) -> Result<TokenResponse> {
+        let (actual_code, _) = crate::oauth::util::parse_oauth_callback_input(code);
         let body = serde_json::json!({
             "grant_type": "authorization_code",
-            "code": code,
+            "code": actual_code,
             "client_type": "extension",
             "redirect_uri": redirect_uri,
             "provider": "cline"

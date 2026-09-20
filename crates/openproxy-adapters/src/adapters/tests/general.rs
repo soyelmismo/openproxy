@@ -222,7 +222,7 @@ fn classify_zen_target_format_heuristic() {
 #[test]
 fn builtin_adapters_returns_all() {
     let v = builtin_adapters();
-    assert_eq!(v.len(), 18);
+    assert_eq!(v.len(), 19);
     let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
     assert!(ids.contains(&"atomesus"));
     assert!(ids.contains(&"cline"));
@@ -242,6 +242,7 @@ fn builtin_adapters_returns_all() {
     assert!(ids.contains(&"codex"));
     assert!(ids.contains(&"kiro"));
     assert!(ids.contains(&"vercel-gateway"));
+    assert!(ids.contains(&"zai"));
 }
 
 #[test]

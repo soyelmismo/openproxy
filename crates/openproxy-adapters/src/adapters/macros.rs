@@ -226,6 +226,29 @@ macro_rules! define_provider_adapter {
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
                 }
             }
+            pub async fn fetch_models_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                proxy_url: Option<&str>,
+            ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
+                match self {
+                    $( Self::$b_variant(inner) => inner.fetch_models_with_proxy(upstream_client, api_key, proxy_url).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_with_proxy(upstream_client, api_key, proxy_url).await, )+
+                }
+            }
+            pub async fn fetch_models_for_account_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                account_label: &str,
+                proxy_url: Option<&str>,
+            ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
+                match self {
+                    $( Self::$b_variant(inner) => inner.fetch_models_for_account_with_proxy(upstream_client, api_key, account_label, proxy_url).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_for_account_with_proxy(upstream_client, api_key, account_label, proxy_url).await, )+
+                }
+            }
             pub fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
                 match self {
                     $( Self::$b_variant(inner) => inner.normalize_openai_request(view), )+
@@ -262,9 +285,19 @@ macro_rules! define_provider_adapter {
                 access_token: Option<&str>,
                 provider_specific: Option<&str>,
             ) -> Option<openproxy_types::Result<openproxy_types::AccountQuota>> {
+                self.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, None).await
+            }
+            pub async fn fetch_quota_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                access_token: Option<&str>,
+                provider_specific: Option<&str>,
+                proxy_url: Option<&str>,
+            ) -> Option<openproxy_types::Result<openproxy_types::AccountQuota>> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+
-                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_quota(upstream_client, api_key, access_token, provider_specific).await, )+
+                    $( Self::$b_variant(inner) => inner.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url).await, )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url).await, )+
                 }
             }
         }
@@ -345,6 +378,23 @@ macro_rules! define_provider_adapter {
             ) -> impl std::future::Future<Output = openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>>> + Send {
                 self.fetch_models_for_account(upstream_client, api_key, account_label)
             }
+            fn fetch_models_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                proxy_url: Option<&str>,
+            ) -> impl std::future::Future<Output = openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>>> + Send {
+                self.fetch_models_with_proxy(upstream_client, api_key, proxy_url)
+            }
+            fn fetch_models_for_account_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                account_label: &str,
+                proxy_url: Option<&str>,
+            ) -> impl std::future::Future<Output = openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>>> + Send {
+                self.fetch_models_for_account_with_proxy(upstream_client, api_key, account_label, proxy_url)
+            }
             fn fetch_quota(
                 &self,
                 upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
@@ -353,6 +403,16 @@ macro_rules! define_provider_adapter {
                 provider_specific: Option<&str>,
             ) -> impl std::future::Future<Output = Option<openproxy_types::Result<openproxy_types::AccountQuota>>> + Send {
                 self.fetch_quota(upstream_client, api_key, access_token, provider_specific)
+            }
+            fn fetch_quota_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<$crate::upstream::UpstreamClient>,
+                api_key: &str,
+                access_token: Option<&str>,
+                provider_specific: Option<&str>,
+                proxy_url: Option<&str>,
+            ) -> impl std::future::Future<Output = Option<openproxy_types::Result<openproxy_types::AccountQuota>>> + Send {
+                self.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url)
             }
             fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
                 self.normalize_openai_request(view)

@@ -1,9 +1,9 @@
+use openproxy_types::TargetFormat;
 use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::config::CooldownMode;
 use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use openproxy_types::models::Model;
 use openproxy_types::providers::RateLimitScope;
-use openproxy_types::TargetFormat;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -344,8 +344,16 @@ async fn test_account_rotation_on_rate_limit_sequential() {
 
     assert_eq!(result.status_code, 200, "Must succeed on rotated account");
     assert!(result.error.is_none(), "Must have no error");
-    assert_eq!(count_acc1.load(Ordering::SeqCst), 1, "Account 1 must have been attempted");
-    assert_eq!(count_acc2.load(Ordering::SeqCst), 1, "Account 2 must have succeeded");
+    assert_eq!(
+        count_acc1.load(Ordering::SeqCst),
+        1,
+        "Account 1 must have been attempted"
+    );
+    assert_eq!(
+        count_acc2.load(Ordering::SeqCst),
+        1,
+        "Account 2 must have succeeded"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -494,7 +502,10 @@ async fn test_account_rotation_after_race_exhaustion() {
         .await
         .expect("pipeline execute");
 
-    assert_eq!(result.status_code, 200, "Must succeed on sequential fallback");
+    assert_eq!(
+        result.status_code, 200,
+        "Must succeed on sequential fallback"
+    );
     assert!(result.error.is_none());
     assert_eq!(count_lane1.load(Ordering::SeqCst), 1);
     assert_eq!(count_lane2.load(Ordering::SeqCst), 1);
@@ -563,10 +574,7 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
     };
 
     let mut cfg = crate::test_utils::test_config(Arc::clone(&master_key));
-    cfg.adapters = Arc::new(vec![
-        mk_mock("prov-m1", "/m1"),
-        mk_mock("prov-m2", "/m2"),
-    ]);
+    cfg.adapters = Arc::new(vec![mk_mock("prov-m1", "/m1"), mk_mock("prov-m2", "/m2")]);
 
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
 
@@ -637,5 +645,9 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
 
     assert_eq!(result.status_code, 429);
     assert_eq!(count_m1.load(Ordering::SeqCst), 1);
-    assert_eq!(count_m2.load(Ordering::SeqCst), 0, "Target 2 must be skipped due to Model rate_limit_scope");
+    assert_eq!(
+        count_m2.load(Ordering::SeqCst),
+        0,
+        "Target 2 must be skipped due to Model rate_limit_scope"
+    );
 }

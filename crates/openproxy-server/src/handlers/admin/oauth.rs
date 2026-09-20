@@ -193,6 +193,8 @@ pub async fn oauth_exchange(
     let code_verifier = input
         .get("code_verifier")
         .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| input.get("state").and_then(|v| v.as_str()))
         .unwrap_or("");
     let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
     let redirect_uri = input

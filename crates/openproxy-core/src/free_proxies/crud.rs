@@ -309,6 +309,124 @@ pub fn get_or_assign_provider_proxy(
     openproxy_db::free_proxies::get_or_assign_provider_proxy(conn, provider_id, account_id)
 }
 
+/// Unified async resolution of the active proxy for a provider / account.
+///
+/// If `use_proxies` is enabled for the provider, returns `Ok(Some(proxy_url))`.
+/// If proxies are disabled, returns `Ok(None)`.
+pub async fn resolve_active_proxy(
+    db_pool: &std::sync::Arc<openproxy_db::DbPool>,
+    provider_id: &crate::ids::ProviderId,
+    account_id: Option<crate::ids::AccountId>,
+) -> crate::error::Result<Option<String>> {
+    let pool = std::sync::Arc::clone(db_pool);
+    let pid = provider_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool
+            .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                crate::error::CoreError::Internal(
+                    "timeout waiting for db writer lock during proxy resolution".into(),
+                )
+            })?;
+        openproxy_db::free_proxies::get_or_assign_provider_proxy(&conn, &pid, account_id.as_ref())
+    })
+    .await
+    .map_err(|e| {
+        crate::error::CoreError::Internal(format!("proxy resolution task panicked: {e}"))
+    })?
+}
+
+/// Reports a proxy failure for a provider/account, triggering cooldown, clearing binding,
+/// and optionally marking the proxy dead (on connection errors).
+/// Emits a system notification with `CODE_PROXY_FAILED`.
+pub async fn report_proxy_failure(
+    db_pool: &std::sync::Arc<openproxy_db::DbPool>,
+    provider_id: &crate::ids::ProviderId,
+    account_id: Option<crate::ids::AccountId>,
+    is_connect_error: bool,
+) -> crate::error::Result<bool> {
+    let pool = std::sync::Arc::clone(db_pool);
+    let pid = provider_id.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool
+            .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
+            .ok_or_else(|| {
+                crate::error::CoreError::Internal(
+                    "timeout waiting for db writer lock during proxy failure reporting".into(),
+                )
+            })?;
+
+        let Some(provider) = openproxy_db::providers::get(&conn, &pid)? else {
+            return Ok(false);
+        };
+        if !provider.use_proxies {
+            return Ok(false);
+        }
+
+        let is_per_account = provider.proxy_rotation_mode.as_ref() == "account";
+        let bad_proxy_id = if is_per_account {
+            account_id.and_then(|aid| {
+                openproxy_db::accounts::get_current_proxy_id(&conn, aid).unwrap_or(None)
+            })
+        } else {
+            provider
+                .current_proxy_id
+                .as_deref()
+                .map(ToString::to_string)
+        };
+
+        let Some(bad_proxy) = bad_proxy_id else {
+            return Ok(false);
+        };
+
+        if is_connect_error {
+            let _ =
+                openproxy_db::free_proxies::update_proxy_status(&conn, &bad_proxy, "dead", None);
+        }
+
+        let _ = openproxy_db::cooldowns::add_provider_proxy_cooldown(
+            &conn,
+            pid.as_str(),
+            &bad_proxy,
+            std::time::Duration::from_secs(900),
+        );
+
+        if is_per_account {
+            if let Some(aid) = account_id {
+                let _ = openproxy_db::accounts::clear_current_proxy_id(&conn, aid);
+            }
+        } else {
+            let _ = openproxy_db::providers::update_current_proxy(&conn, &pid, None);
+        }
+
+        let payload = serde_json::json!({
+            "code": crate::notifications::CODE_PROXY_FAILED,
+            "message": format!(
+                "Proxy {} failed for provider {} (connect_error={}), rotating...",
+                bad_proxy, pid, is_connect_error
+            ),
+            "provider_id": pid.as_str(),
+            "details": {
+                "proxy_id": bad_proxy,
+                "provider_id": pid.as_str(),
+                "account_id": account_id.map(|a| a.0),
+                "is_connect_error": is_connect_error,
+            },
+        });
+        let _ = crate::notifications::insert_and_broadcast(
+            &conn,
+            crate::notifications::KIND_SYSTEM,
+            &payload,
+            None,
+            Some(pid.as_str()),
+        );
+
+        Ok(true)
+    })
+    .await
+    .map_err(|e| crate::error::CoreError::Internal(format!("proxy failure task panicked: {e}")))?
+}
+
 pub fn get_candidate_proxies_for_provider(
     conn: &Connection,
     provider_id: &crate::ids::ProviderId,

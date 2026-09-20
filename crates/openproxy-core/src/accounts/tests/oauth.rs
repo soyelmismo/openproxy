@@ -335,7 +335,10 @@ fn oauth_store_preserves_existing_provider_specific_when_none() {
     )
     .unwrap();
     let acc = get(&conn, id, &mk).unwrap().unwrap();
-    assert_eq!(acc.oauth_provider_specific.as_deref(), Some(initial_specific));
+    assert_eq!(
+        acc.oauth_provider_specific.as_deref(),
+        Some(initial_specific)
+    );
 
     // Token refresh passes provider_specific: None to avoid wiping out metadata
     store_oauth_tokens(
@@ -351,6 +354,8 @@ fn oauth_store_preserves_existing_provider_specific_when_none() {
     )
     .unwrap();
     let acc2 = get(&conn, id, &mk).unwrap().unwrap();
-    assert_eq!(acc2.oauth_provider_specific.as_deref(), Some(initial_specific));
+    assert_eq!(
+        acc2.oauth_provider_specific.as_deref(),
+        Some(initial_specific)
+    );
 }
-

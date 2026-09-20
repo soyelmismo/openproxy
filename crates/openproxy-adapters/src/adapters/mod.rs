@@ -44,6 +44,7 @@ pub mod ollama_cloud;
 pub mod opencode_common;
 pub mod openrouter;
 pub mod vercel_gateway;
+pub mod zai;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use mock::MockAdapter;
@@ -77,6 +78,7 @@ define_provider_adapter! {
             "opencode-zen" => OpenCodeZen(opencode_common, OpenCodeZenAdapter),
             "openrouter" => OpenRouter(openrouter, OpenRouterAdapter),
             "vercel-gateway" => VercelGateway(vercel_gateway, VercelGatewayAdapter),
+            "zai" => Zai(zai, ZaiAdapter),
         }
         custom {
             Custom(custom_adapter, CustomAdapter),

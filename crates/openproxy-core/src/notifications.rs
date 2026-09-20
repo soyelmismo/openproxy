@@ -91,6 +91,14 @@ pub const CODE_ACCOUNT_INVALID: &str = "account_invalid";
 /// Dedup: per-account (`quota_low:{account_id}`).
 pub const CODE_QUOTA_LOW: &str = "quota_low";
 
+/// An account's quota fetch attempt failed.
+/// Dedup: per-account (`quota_fetch_failed:{account_id}`).
+pub const CODE_QUOTA_FETCH_FAILED: &str = "quota_fetch_failed";
+
+/// A proxy assigned to a provider/account failed connection or was rotated.
+/// Dedup: per-provider (`proxy_failed:{provider_id}`).
+pub const CODE_PROXY_FAILED: &str = "proxy_failed";
+
 /// Process-global broadcast channel for real-time push to WS clients.
 /// Subscribed by `stream_usage_rows` in handlers/admin.rs (see F2).
 pub static NOTIF_TX: OnceLock<broadcast::Sender<NotificationEvent>> = OnceLock::new();

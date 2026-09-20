@@ -268,6 +268,27 @@ pub trait ProviderAdapter: Send + Sync {
         async move { self.fetch_models(upstream_client, api_key).await }
     }
 
+    /// Fetch models from the provider, optionally routing through a proxy.
+    fn fetch_models_with_proxy(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        _proxy_url: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        self.fetch_models(upstream_client, api_key)
+    }
+
+    /// Fetch models for an account from the provider, optionally routing through a proxy.
+    fn fetch_models_for_account_with_proxy(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        account_label: &str,
+        _proxy_url: Option<&str>,
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
+        self.fetch_models_for_account(upstream_client, api_key, account_label)
+    }
+
     /// Fetch account quota from the provider.
     fn fetch_quota(
         &self,
@@ -278,6 +299,19 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> impl std::future::Future<Output = Option<Result<openproxy_types::AccountQuota>>> + Send
     {
         std::future::ready(None)
+    }
+
+    /// Fetch account quota from the provider, optionally routing auxiliary requests through a proxy.
+    fn fetch_quota_with_proxy(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        access_token: Option<&str>,
+        provider_specific: Option<&str>,
+        _proxy_url: Option<&str>,
+    ) -> impl std::future::Future<Output = Option<Result<openproxy_types::AccountQuota>>> + Send
+    {
+        self.fetch_quota(upstream_client, api_key, access_token, provider_specific)
     }
 
     /// Normalize an OpenAI request view before serialization.

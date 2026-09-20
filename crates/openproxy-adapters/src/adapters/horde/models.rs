@@ -162,16 +162,8 @@ pub fn parse_horde_quota(
 ) -> openproxy_types::AccountQuota {
     if let Some(msg) = check_horde_quota_error(body) {
         return openproxy_types::AccountQuota {
-            session_used: None,
-            session_limit: None,
-            session_reset_at: None,
-            weekly_used: None,
-            weekly_limit: None,
-            weekly_reset_at: None,
-            plan_name: None,
             last_fetched_at: last_fetched_at.to_string(),
-            fetch_error: Some(msg.to_string()),
-            model_details: None,
+            ..openproxy_types::AccountQuota::with_error(msg)
         };
     }
 

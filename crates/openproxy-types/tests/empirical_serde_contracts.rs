@@ -387,3 +387,37 @@ fn test_result_ext_and_option_ext_empirically() {
         other => panic!("expected Validation, got {other:?}"),
     }
 }
+
+#[test]
+fn test_zai_token_response_and_metadata_serde_contract() {
+    // Simulates ZCode token response structure
+    let zcode_token_raw = r#"{
+        "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.zcode-jwt",
+        "token_type": "Bearer",
+        "expires_in": 2592000,
+        "id_token": "{\"zcode_jwt_token\":\"eyJ...\",\"zai_access_token\":\"zai-tok-123\",\"user_id\":\"u100\",\"email\":\"dev@z.ai\",\"name\":\"ZCode Developer\"}"
+    }"#;
+
+    let token_resp: TokenResponse =
+        serde_json::from_str(zcode_token_raw).expect("deserialize zcode token response");
+    assert_eq!(
+        token_resp.access_token,
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.zcode-jwt"
+    );
+    assert_eq!(token_resp.token_type, "Bearer");
+    assert_eq!(token_resp.expires_in, Some(2592000));
+
+    // Verify metadata deserialization from id_token
+    let id_tok = token_resp.id_token.expect("id_token present");
+    let meta: serde_json::Value =
+        serde_json::from_str(&id_tok).expect("deserialize zai account meta");
+    assert_eq!(meta.get("email").and_then(|v| v.as_str()), Some("dev@z.ai"));
+    assert_eq!(
+        meta.get("zai_access_token").and_then(|v| v.as_str()),
+        Some("zai-tok-123")
+    );
+    assert_eq!(
+        meta.get("name").and_then(|v| v.as_str()),
+        Some("ZCode Developer")
+    );
+}
