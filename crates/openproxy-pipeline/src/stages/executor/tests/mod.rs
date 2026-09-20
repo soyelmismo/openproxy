@@ -233,9 +233,16 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
             let c3 = Arc::clone(&c3);
 
             tokio::spawn(async move {
-                let mut buf = [0u8; 1024];
-                let n = socket.read(&mut buf).await.unwrap_or(0);
-                let req_text = String::from_utf8_lossy(&buf[..n]);
+                let mut buf = Vec::with_capacity(1024);
+                let mut chunk = [0u8; 512];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") && !buf.windows(2).any(|w| w == b"\n\n") {
+                    let n = match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let req_text = String::from_utf8_lossy(&buf);
 
                 let response = if req_text.contains("/t1") {
                     c1.fetch_add(1, Ordering::SeqCst);

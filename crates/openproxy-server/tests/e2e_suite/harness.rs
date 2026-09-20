@@ -239,11 +239,17 @@ async fn mock_systemone_handler(
     let mut answers = serde_json::Map::new();
     if let Some(q_map) = questions {
         for (q_id, q_val) in q_map {
-            let options = q_val.get("options").and_then(Value::as_array);
-            let choice = if let Some(opts) = options {
-                let chosen = opts
+            let opt_strs: Vec<&str> = if let Some(opts) = q_val.get("options").and_then(Value::as_array) {
+                opts.iter().filter_map(Value::as_str).collect()
+            } else if let Some(crit) = q_val.get("criteria").and_then(Value::as_object) {
+                crit.keys().map(String::as_str).collect()
+            } else {
+                Vec::new()
+            };
+            let choice = if !opt_strs.is_empty() {
+                let chosen = opt_strs
                     .iter()
-                    .filter_map(Value::as_str)
+                    .copied()
                     .find(|opt| {
                         let st = state_text.to_lowercase();
                         let criteria_desc = q_val
@@ -261,11 +267,14 @@ async fn mock_systemone_handler(
                         } else {
                             criteria_desc.contains("fast")
                                 || criteria_desc.contains("simple")
+                                || criteria_desc.contains("operational")
+                                || criteria_desc.contains("ok")
                                 || opt.contains('1')
                                 || opt.contains("fast")
+                                || *opt == "ok"
                         }
                     })
-                    .or_else(|| opts.first().and_then(Value::as_str))
+                    .or_else(|| opt_strs.first().copied())
                     .unwrap_or("choice_1");
                 Some(chosen.to_string())
             } else {

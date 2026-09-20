@@ -18,7 +18,7 @@ pub(super) async fn try_initial_race(
         &ctx.pipeline,
         ctx.req.clone(),
         combo,
-        to_run.to_vec(),
+        to_run[..race_n].to_vec(),
         race_n as u8,
     )
     .await;

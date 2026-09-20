@@ -270,7 +270,10 @@ pub fn build_decision_test_payload(
             "status": {
                 "type": "choice",
                 "instructions": "Determine if system is operational",
-                "options": ["ok"]
+                "criteria": {
+                    "ok": "System is operational and functioning normally",
+                    "error": "System has an error or is degraded"
+                }
             }
         }
     });

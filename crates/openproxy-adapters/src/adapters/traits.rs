@@ -209,7 +209,27 @@ pub trait ProviderAdapter: Send + Sync {
         req: &openproxy_types::systemone::SystemOneRequest,
         upstream_model: &str,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        inject_model_and_serialize(req, upstream_model)
+        let mut normalized = req.clone();
+        for q in normalized.questions.values_mut() {
+            if q.criteria.is_none()
+                && let Some(opts) = &q.options
+            {
+                match q.question_type {
+                    openproxy_types::systemone::SystemOneQuestionType::Choice => {
+                        let mut map = serde_json::Map::with_capacity(opts.len());
+                        for opt in opts {
+                            map.insert(opt.clone(), serde_json::Value::String(opt.clone()));
+                        }
+                        q.criteria = Some(serde_json::Value::Object(map));
+                    }
+                    openproxy_types::systemone::SystemOneQuestionType::Score => {
+                        q.criteria = Some(serde_json::json!(opts));
+                    }
+                    openproxy_types::systemone::SystemOneQuestionType::Noul => {}
+                }
+            }
+        }
+        inject_model_and_serialize(&normalized, upstream_model)
     }
 
     /// Build the auth header pair `(header_name, header_value)` for the given API key.
