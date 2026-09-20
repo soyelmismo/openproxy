@@ -83,6 +83,9 @@ mod tests {
         assert_eq!(adapter.id().as_str(), "laya");
         assert!(adapter.is_anonymous_fallback());
         assert_eq!(adapter.format(), AdapterFormat::SystemOne);
-        assert_eq!(adapter.build_system_one_url(), "http://localhost:8000/v1/systemone");
+        assert_eq!(
+            adapter.build_system_one_url(),
+            "http://localhost:8000/v1/systemone"
+        );
     }
 }

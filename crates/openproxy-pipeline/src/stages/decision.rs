@@ -202,7 +202,9 @@ async fn execute_system_one_decision(
                 "systemone decision timed out after {timeout_ms}ms"
             ))
         })?
-        .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(format!("{url}: {e:?}")))?;
+        .map_err(|e| {
+            openproxy_types::error::CoreError::UpstreamConnection(format!("{url}: {e:?}"))
+        })?;
 
     if resp.status != 200 {
         return Err(openproxy_types::error::CoreError::Internal(format!(
@@ -211,16 +213,12 @@ async fn execute_system_one_decision(
         )));
     }
 
-    let body_bytes = resp
-        .body
-        .collect_all()
-        .await
-        .map_err(|e| openproxy_types::error::CoreError::UpstreamConnection(format!("{url}: {e:?}")))?;
+    let body_bytes = resp.body.collect_all().await.map_err(|e| {
+        openproxy_types::error::CoreError::UpstreamConnection(format!("{url}: {e:?}"))
+    })?;
 
     let parsed: SystemOneResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
-        openproxy_types::error::CoreError::Validation(format!(
-            "invalid systemone response: {e}"
-        ))
+        openproxy_types::error::CoreError::Validation(format!("invalid systemone response: {e}"))
     })?;
 
     let choice = parsed
@@ -240,16 +238,14 @@ mod tests {
     fn test_extract_prompt_state_utf8_safe() {
         let req = openproxy_types::OpenAIRequest {
             model: "test".into(),
-            messages: vec![
-                OpenAIMessage {
-                    role: "user".into(),
-                    content: Some(serde_json::Value::String("¡Hola, mundo! 🚀".into())),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    extra: Default::default(),
-                },
-            ],
+            messages: vec![OpenAIMessage {
+                role: "user".into(),
+                content: Some(serde_json::Value::String("¡Hola, mundo! 🚀".into())),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                extra: Default::default(),
+            }],
             stream: false,
             temperature: None,
             max_tokens: None,

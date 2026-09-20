@@ -125,10 +125,11 @@ async fn dispatch_single_system_one(
 
     crate::guarded_unary_target!(record_success: circuit_breaker, target);
 
-    let parsed_response: SystemOneResponse =
-        serde_json::from_slice(&body_bytes).map_err(|e| {
-            CoreError::Internal(format!("Failed to parse SystemOne response from upstream: {e}"))
-        })?;
+    let parsed_response: SystemOneResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
+        CoreError::Internal(format!(
+            "Failed to parse SystemOne response from upstream: {e}"
+        ))
+    })?;
 
     Ok((parsed_response, response.status.as_u16()))
 }
@@ -145,13 +146,19 @@ pub async fn execute_system_one(
     let started = Instant::now();
     let req_model = req.model.as_deref().unwrap_or("jev-latest");
     let routing_plan = routing::resolve_routing(db_pool, req_model).await?;
-    let targets = resolve_system_one_targets(db_pool, routing_plan, req_model, api_key_id, started)?;
+    let targets =
+        resolve_system_one_targets(db_pool, routing_plan, req_model, api_key_id, started)?;
 
     let mut last_error = None;
     let mut attempt = 0;
 
     for target in targets {
-        if !is_target_available(db_pool, circuit_breaker, target.account_id, target.combo_target_id) {
+        if !is_target_available(
+            db_pool,
+            circuit_breaker,
+            target.account_id,
+            target.combo_target_id,
+        ) {
             continue;
         }
 
@@ -174,10 +181,10 @@ pub async fn execute_system_one(
         {
             Ok((parsed_response, status_code)) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                let (input_tokens, output_tokens) = parsed_response
-                    .usage
-                    .as_ref()
-                    .map_or((None, None), |u| (Some(u.input_tokens as u32), Some(u.output_tokens as u32)));
+                let (input_tokens, output_tokens) =
+                    parsed_response.usage.as_ref().map_or((None, None), |u| {
+                        (Some(u.input_tokens as u32), Some(u.output_tokens as u32))
+                    });
 
                 record_unary_usage(
                     db_pool,
@@ -208,5 +215,6 @@ pub async fn execute_system_one(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| CoreError::Internal("No valid SystemOne targets found".into())))
+    Err(last_error
+        .unwrap_or_else(|| CoreError::Internal("No valid SystemOne targets found".into())))
 }

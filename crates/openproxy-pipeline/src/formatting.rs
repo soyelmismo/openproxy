@@ -211,9 +211,7 @@ pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatte
         TargetFormat::Openai
         | TargetFormat::Atomesus
         | TargetFormat::CommandCodeGo
-        | TargetFormat::SystemOne => {
-            &OpenaiFormatter
-        }
+        | TargetFormat::SystemOne => &OpenaiFormatter,
         TargetFormat::Anthropic => &AnthropicFormatter,
         TargetFormat::Gemini => &GEMINI_FORMATTER,
         TargetFormat::Responses => &ResponsesFormatter,

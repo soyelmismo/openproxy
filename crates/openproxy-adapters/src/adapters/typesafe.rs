@@ -67,6 +67,9 @@ mod tests {
         let adapter = TypeSafeAdapter::new();
         assert_eq!(adapter.id().as_str(), "typesafe");
         assert_eq!(adapter.format(), AdapterFormat::SystemOne);
-        assert_eq!(adapter.build_system_one_url(), "https://api.typesafe.ai/v1/systemone");
+        assert_eq!(
+            adapter.build_system_one_url(),
+            "https://api.typesafe.ai/v1/systemone"
+        );
     }
 }
