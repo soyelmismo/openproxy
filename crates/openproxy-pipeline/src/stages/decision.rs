@@ -201,7 +201,19 @@ async fn execute_system_one_decision(
             let b = a.config().base_url.trim_end_matches('/');
             format!("{b}/systemone")
         };
-        let auth = a.build_auth_header("");
+        let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
+        let master_key = std::sync::Arc::clone(&ctx.pipeline.config.master_key);
+        let prov_id = a.id().clone();
+        let api_key = tokio::task::spawn_blocking(move || {
+            let conn = conn_arc.lock();
+            openproxy_db::accounts::list_api_keys_for_provider(&conn, &prov_id, &master_key)
+                .ok()
+                .and_then(|keys| keys.into_iter().next())
+                .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default();
+        let auth = a.build_auth_header(&api_key);
         (base_url, auth)
     } else {
         // Fallback to local Laya server

@@ -392,3 +392,98 @@ async fn test_admin_model_tester_decision_model() {
         .expect("must record /systemone request");
     assert_eq!(sys_req.body["model"], "jev-test-model");
 }
+
+#[tokio::test]
+async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
+    let harness = TestHarness::new().await;
+
+    let _model_row_id = {
+        let w = harness.db_pool.writer();
+        let mid = admin::create_custom_model(
+            &w,
+            CreateCustomModelInput {
+                provider_id: harness.provider_id.as_str().into(),
+                model_id: "jev-routed".into(),
+                display_name: Some("Jev Routed".into()),
+                target_format: "systemone".into(),
+                ttl_seconds: 3600,
+                model_type: Some("decision".into()),
+            },
+        )
+        .expect("create jev-routed model");
+
+        let combo_id = admin::create_combo(
+            &w,
+            &CreateComboInput {
+                name: "decision-combo".into(),
+                strategy: "priority".into(),
+                race_size: None,
+                priority_mode: None,
+                decision_model: None,
+                decision_timeout_ms: None,
+                cooldown_mode: None,
+                cooldown_base_secs: None,
+                cooldown_max_secs: None,
+                cooldown_factor: None,
+                lkgp_exploration_rate: None,
+                selection_window_secs: None,
+            },
+        )
+        .expect("create decision-combo");
+
+        admin::add_target_to_combo(
+            &w,
+            combo_id,
+            AddTargetInput {
+                provider_id: harness.provider_id.as_str().into(),
+                account_id: None,
+                model_row_id: Some(mid),
+                sub_combo_id: None,
+                priority_order: 1,
+                description: None,
+            },
+        )
+        .expect("add target to combo");
+
+        mid
+    };
+
+    let sample_payload = |model_name: &str| {
+        json!({
+            "model": model_name,
+            "state": "System is operational and performing tasks.",
+            "questions": {
+                "health": {
+                    "type": "choice",
+                    "instructions": "Verify health status",
+                    "criteria": {
+                        "ok": "System is operational",
+                        "error": "System has failed"
+                    }
+                }
+            }
+        })
+    };
+
+    // 1) Test provider/model resolution
+    let provider_model = format!("{}/jev-routed", harness.provider_id);
+    let (status1, resp1) = harness.client_systemone_call(sample_payload(&provider_model)).await;
+    assert_eq!(status1, StatusCode::OK, "provider/model systemone call should return 200: {resp1}");
+    assert_eq!(resp1["answers"]["health"]["choice"], "ok");
+
+    // 2) Test combo resolution
+    let (status2, resp2) = harness.client_systemone_call(sample_payload("decision-combo")).await;
+    assert_eq!(status2, StatusCode::OK, "combo systemone call should return 200: {resp2}");
+    assert_eq!(resp2["answers"]["health"]["choice"], "ok");
+
+    // Verify usage records row for combo dispatch
+    let r = harness.db_pool.reader();
+    let rows = usage::recent_desc(&r, 10).expect("fetch usage");
+    let combo_row = rows
+        .iter()
+        .find(|r| r.upstream_model_id == "jev-routed")
+        .expect("must record usage row for jev-routed");
+    assert_eq!(combo_row.status_code, 200);
+    assert_eq!(combo_row.endpoint_kind, openproxy_types::EndpointKind::SystemOne);
+}
+
