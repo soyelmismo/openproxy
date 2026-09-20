@@ -257,9 +257,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 19, "first call inserts all nineteen");
+        assert_eq!(n, 21, "first call inserts all twenty-one");
 
-        // All nineteen are present and reachable by id.
+        // All twenty-one are present and reachable by id.
         for id in [
             "atomesus",
             "openrouter",
@@ -280,6 +280,8 @@ mod tests {
             "vercel-gateway",
             "commandcodego",
             "zai",
+            "typesafe",
+            "laya",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -293,14 +295,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 19);
+        assert_eq!(first, 21);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 19, "still exactly nineteen rows");
+        assert_eq!(count, 21, "still exactly twenty-one rows");
     }
 
     #[test]
@@ -324,7 +326,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 18, "only the eighteen missing ones");
+        assert_eq!(n, 20, "only the twenty missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -410,12 +412,24 @@ mod tests {
             .unwrap();
         assert_eq!(zai.auth_type, AuthType::OAuth);
         assert_eq!(zai.format, ProviderFormat::Anthropic);
+
+        let typesafe = providers::get(&conn, &ProviderId::new("typesafe"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(typesafe.auth_type, AuthType::Bearer);
+        assert_eq!(typesafe.format, ProviderFormat::SystemOne);
+
+        let laya = providers::get(&conn, &ProviderId::new("laya"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(laya.auth_type, AuthType::None);
+        assert_eq!(laya.format, ProviderFormat::SystemOne);
     }
 
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 19);
+        assert_eq!(ids.len(), 21);
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
@@ -434,6 +448,8 @@ mod tests {
         assert!(ids.iter().any(|s| s == "vercel-gateway"));
         assert!(ids.iter().any(|s| s == "commandcodego"));
         assert!(ids.iter().any(|s| s == "zai"));
+        assert!(ids.iter().any(|s| s == "typesafe"));
+        assert!(ids.iter().any(|s| s == "laya"));
     }
 
     #[test]

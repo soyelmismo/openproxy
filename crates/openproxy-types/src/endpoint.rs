@@ -10,6 +10,7 @@ impl_string_enum! {
         Image => "image",
         Embedding => "embedding",
         Video => "video",
+        SystemOne => "systemone",
     }
     error: "endpoint kind"
 }
@@ -28,6 +29,10 @@ mod tests {
             EndpointKind::Embedding
         );
         assert_eq!(EndpointKind::parse("video").unwrap(), EndpointKind::Video);
+        assert_eq!(
+            EndpointKind::parse("systemone").unwrap(),
+            EndpointKind::SystemOne
+        );
         assert!(EndpointKind::parse("unknown").is_err());
     }
 
@@ -38,6 +43,7 @@ mod tests {
         assert_eq!(EndpointKind::Image.as_str(), "image");
         assert_eq!(EndpointKind::Embedding.as_str(), "embedding");
         assert_eq!(EndpointKind::Video.as_str(), "video");
+        assert_eq!(EndpointKind::SystemOne.as_str(), "systemone");
     }
 
     #[test]
@@ -47,5 +53,6 @@ mod tests {
         assert_eq!(EndpointKind::Image.to_string(), "image");
         assert_eq!(EndpointKind::Embedding.to_string(), "embedding");
         assert_eq!(EndpointKind::Video.to_string(), "video");
+        assert_eq!(EndpointKind::SystemOne.to_string(), "systemone");
     }
 }

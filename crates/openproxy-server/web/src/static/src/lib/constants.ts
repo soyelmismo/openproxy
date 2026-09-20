@@ -69,7 +69,7 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
 
 export const PRIORITY_MODE_LABELS = {
   strict: "Strict", lkgp: "LKGP", weighted: "Weighted",
-  least_used: "Least Used", p2c: "P2C",
+  least_used: "Least Used", p2c: "P2C", decision: "Decision (System One)",
 } satisfies Record<PriorityMode, string>;
 
 export const PRIORITY_MODE_TOOLTIPS = {
@@ -78,6 +78,7 @@ export const PRIORITY_MODE_TOOLTIPS = {
   weighted: "Weighted random selection — each target's probability is proportional to its weight. Set weights in the targets table below.",
   least_used: "Prefer the target with the fewest total requests in the selection window. Useful for distributing load evenly.",
   p2c: "Power of Two Choices — pick two random targets, choose the one with fewer recent failures. Good balance of simplicity and load distribution.",
+  decision: "System One Semantic Router — runs ultra-fast prompt classification (TypeSafe Jev or Convai Laya) to select the optimal model based on target descriptions.",
 } satisfies Record<PriorityMode, string>;
 
 export const COOLDOWN_MODE_TOOLTIPS = {

@@ -64,6 +64,7 @@ pub(crate) fn resolve_target_format(format: AdapterFormat, fallback: TargetForma
         AdapterFormat::Atomesus => TargetFormat::Atomesus,
         AdapterFormat::CommandCodeGo => TargetFormat::CommandCodeGo,
         AdapterFormat::Gemini => TargetFormat::Gemini,
+        AdapterFormat::SystemOne => TargetFormat::SystemOne,
     }
 }
 
@@ -74,6 +75,7 @@ pub(crate) fn target_format_path(target_format: TargetFormat) -> &'static str {
         TargetFormat::Responses => "/responses",
         TargetFormat::Atomesus => "/chat/atomesus",
         TargetFormat::CommandCodeGo => "/alpha/generate",
+        TargetFormat::SystemOne => "/systemone",
     }
 }
 
@@ -194,6 +196,20 @@ pub trait ProviderAdapter: Send + Sync {
     /// Build the URL for video generation.
     fn build_video_url(&self) -> String {
         format!("{}/video/generations", self.config().base_url)
+    }
+
+    /// Build the URL for System One (Jev / Laya) requests.
+    fn build_system_one_url(&self) -> String {
+        format!("{}/systemone", self.config().base_url)
+    }
+
+    /// Format a System One request.
+    fn format_system_one_request(
+        &self,
+        req: &openproxy_types::systemone::SystemOneRequest,
+        upstream_model: &str,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        inject_model_and_serialize(req, upstream_model)
     }
 
     /// Build the auth header pair `(header_name, header_value)` for the given API key.

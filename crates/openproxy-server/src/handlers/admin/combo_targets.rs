@@ -187,6 +187,7 @@ pub struct ComboTargetUpdates<'a> {
     pub cooldown_max_secs: UpdateField<u64>,
     pub cooldown_factor: UpdateField<u32>,
     pub thinking_effort: UpdateField<&'a str>,
+    pub description: UpdateField<&'a str>,
 }
 
 impl ComboTargetUpdates<'_> {
@@ -199,6 +200,7 @@ impl ComboTargetUpdates<'_> {
             && self.cooldown_max_secs.is_ignore()
             && self.cooldown_factor.is_ignore()
             && self.thinking_effort.is_ignore()
+            && self.description.is_ignore()
     }
 }
 
@@ -260,6 +262,7 @@ pub fn parse_combo_target_updates(
     let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
     let cooldown_factor = parse_nullable_u64(body, "cooldown_factor")?.map(|f| f as u32);
     let thinking_effort = parse_nullable_str(body, "thinking_effort")?;
+    let description = parse_nullable_str(body, "description")?;
 
     let updates = ComboTargetUpdates {
         priority_order,
@@ -270,6 +273,7 @@ pub fn parse_combo_target_updates(
         cooldown_max_secs,
         cooldown_factor,
         thinking_effort,
+        description,
     };
 
     if updates.is_empty() {
@@ -319,6 +323,11 @@ pub fn apply_target_db_updates(
         UpdateField::Reset => core_combos::update_target_thinking_effort(w, target_id, None)?,
         UpdateField::Ignore => {}
     }
+    match updates.description {
+        UpdateField::Set(v) => core_combos::update_target_description(w, target_id, Some(v))?,
+        UpdateField::Reset => core_combos::update_target_description(w, target_id, None)?,
+        UpdateField::Ignore => {}
+    }
     Ok(())
 }
 
@@ -339,6 +348,7 @@ pub async fn update_combo_target(
         "active": updates.active,
         "cooldown_mode": body.get("cooldown_mode"),
         "cooldown_base_secs": body.get("cooldown_base_secs"),
+        "description": body.get("description"),
     })))
 }
 
@@ -466,6 +476,7 @@ mod tests {
             sub_combo_id: None,
             sub_combo_name: None,
             thinking_effort: None,
+            description: None,
         }
     }
 

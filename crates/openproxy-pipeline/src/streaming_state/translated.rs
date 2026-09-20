@@ -50,6 +50,7 @@ pub(super) fn parse_translated_sse_line(
                 &mut state.tool_call_index_counter,
             )
         }
+        openproxy_types::TargetFormat::SystemOne => Ok(None),
     }
 }
 

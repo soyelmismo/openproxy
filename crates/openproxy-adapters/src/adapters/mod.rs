@@ -35,6 +35,7 @@ pub mod gemini;
 pub mod horde;
 pub mod kilocode;
 pub mod kiro_ai;
+pub mod laya;
 pub mod minimax;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
@@ -43,6 +44,7 @@ pub mod nvidia_nim;
 pub mod ollama_cloud;
 pub mod opencode_common;
 pub mod openrouter;
+pub mod typesafe;
 pub mod vercel_gateway;
 pub mod zai;
 
@@ -70,6 +72,7 @@ define_provider_adapter! {
             "horde" => Horde(horde, HordeAdapter),
             "kilocode" => Kilocode(kilocode, KilocodeAdapter),
             "kiro" => Kiro(kiro_ai, KiroAdapter),
+            "laya" => Laya(laya, LayaAdapter),
             "minimax" => MiniMax(minimax, MiniMaxAdapter),
             "nous-research" => NousResearch(nous_research, NousResearchAdapter),
             "nvidia-nim" => NvidiaNim(nvidia_nim, NvidiaNimAdapter),
@@ -77,6 +80,7 @@ define_provider_adapter! {
             "opencode-go" => OpenCodeGo(opencode_common, OpenCodeGoAdapter),
             "opencode-zen" => OpenCodeZen(opencode_common, OpenCodeZenAdapter),
             "openrouter" => OpenRouter(openrouter, OpenRouterAdapter),
+            "typesafe" => TypeSafe(typesafe, TypeSafeAdapter),
             "vercel-gateway" => VercelGateway(vercel_gateway, VercelGatewayAdapter),
             "zai" => Zai(zai, ZaiAdapter),
         }

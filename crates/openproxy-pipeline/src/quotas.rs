@@ -501,6 +501,7 @@ mod tests {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         };
 
         let make_target = |acc_id: i64, fraction: f64| TargetWithQuota {

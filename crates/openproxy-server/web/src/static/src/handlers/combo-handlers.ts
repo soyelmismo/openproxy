@@ -40,7 +40,7 @@ const COOLDOWN_MODE_LABELS = {
 
 /** Render the priority-mode `<option>`s with the given value preselected. */
 export function priorityModeOptions(selected: PriorityMode): TemplateResult {
-  const modes: PriorityMode[] = ["strict", "lkgp", "weighted", "least_used", "p2c"];
+  const modes: PriorityMode[] = ["strict", "lkgp", "weighted", "least_used", "p2c", "decision"];
   return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${PRIORITY_MODE_LABELS[m]}</option>`)}`;
 }
 
@@ -90,6 +90,12 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
             <div class="field" id="create-window-fields" style="display: none;">
               <label for="combo-window"><abbr title=${PARAM_TOOLTIPS.window_secs}>Window (s)</abbr></label>
               <input id="combo-window" name="selection_window_secs" type="number" min="1" value="3600">
+            </div>
+            <div class="field" id="create-decision-fields" style="display: none;">
+              <label for="combo-decision-model"><abbr title="System One model for semantic prompt classification">Decision Model</abbr></label>
+              <input id="combo-decision-model" name="decision_model" type="text" placeholder="jev-latest">
+              <label for="combo-decision-timeout" style="margin-top: 8px;"><abbr title="Classification timeout in milliseconds">Decision Timeout (ms)</abbr></label>
+              <input id="combo-decision-timeout" name="decision_timeout_ms" type="number" min="10" placeholder="150">
             </div>
             <div class="field">
               <label for="combo-cooldown-mode"><abbr title=${COOLDOWN_MODE_TOOLTIPS.flat}>Cooldown mode</abbr></label>
@@ -148,9 +154,11 @@ export function onCreatePriorityModeChange(): void {
   const mode = sel.value as PriorityMode;
   const lkgpFields = document.getElementById("create-lkgp-fields");
   const windowFields = document.getElementById("create-window-fields");
+  const decisionFields = document.getElementById("create-decision-fields");
   const label = document.querySelector('label[for="combo-priority-mode"] abbr');
   if (lkgpFields) lkgpFields.style.display = mode === "lkgp" ? "" : "none";
   if (windowFields) windowFields.style.display = (mode === "least_used" || mode === "p2c") ? "" : "none";
+  if (decisionFields) decisionFields.style.display = mode === "decision" ? "" : "none";
   if (label) label.setAttribute("title", PRIORITY_MODE_TOOLTIPS[mode]);
 }
 
@@ -206,6 +214,15 @@ export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput 
     if (winRaw !== "") {
       const win = parseInt(winRaw, 10);
       if (!Number.isNaN(win)) body.selection_window_secs = win;
+    }
+  }
+  if (priorityMode === "decision") {
+    const modelRaw = String(f.get("decision_model") || "").trim();
+    if (modelRaw !== "") body.decision_model = modelRaw;
+    const timeoutRaw = String(f.get("decision_timeout_ms") || "").trim();
+    if (timeoutRaw !== "") {
+      const timeout = parseInt(timeoutRaw, 10);
+      if (!Number.isNaN(timeout)) body.decision_timeout_ms = timeout;
     }
   }
   if (cooldownMode === "exponential") {

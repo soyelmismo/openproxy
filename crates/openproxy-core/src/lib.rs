@@ -24,6 +24,8 @@ pub use images::{
 };
 pub mod embeddings;
 pub use embeddings::execute_embeddings;
+pub mod systemone;
+pub use systemone::execute_system_one;
 pub mod unary;
 
 pub mod api_keys;

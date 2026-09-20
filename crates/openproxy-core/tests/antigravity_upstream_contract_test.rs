@@ -125,6 +125,7 @@ fn test_antigravity_golden_contract_spec_parity() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

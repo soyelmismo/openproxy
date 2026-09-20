@@ -393,6 +393,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
                 model_row_id: Some(c_row_id),
                 sub_combo_id: None,
                 priority_order: 1,
+                description: None,
             },
         )
         .expect("add_target c");
@@ -462,6 +463,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
                 model_row_id: Some(ModelRowId(new_c_id)),
                 sub_combo_id: None,
                 priority_order: 1,
+                description: None,
             },
         )
         .expect("re-add target");

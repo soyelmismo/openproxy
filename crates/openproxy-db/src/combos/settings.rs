@@ -18,6 +18,7 @@ define_column_updaters! {
     pub fn update_target_cooldown_base(base: Option<u64> => base.map(|v| v as i64)) => "cooldown_base_secs";
     pub fn update_target_cooldown_max(max: Option<u64> => max.map(|v| v as i64)) => "cooldown_max_secs";
     pub fn update_target_cooldown_factor(factor: Option<u32> => factor.map(i64::from)) => "cooldown_factor";
+    pub fn update_target_description(description: Option<&str>) => "description";
 }
 
 define_column_updaters! {
@@ -34,6 +35,8 @@ define_column_updaters! {
     pub fn update_preventive_rate_limit(enabled: bool => i64::from(enabled)) => "preventive_rate_limit";
     pub(crate) fn raw_update_combo_lkgp_rate(rate: Option<f64>) => "lkgp_exploration_rate";
     pub(crate) fn raw_update_combo_selection_window(window: Option<i64>) => "selection_window_secs";
+    pub fn update_decision_model(model: Option<&str>) => "decision_model";
+    pub fn update_decision_timeout(timeout_ms: Option<u64> => timeout_ms.map(|v| v as i64)) => "decision_timeout_ms";
 }
 
 pub fn update_target_weight(

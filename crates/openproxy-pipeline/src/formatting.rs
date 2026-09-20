@@ -208,7 +208,10 @@ static GEMINI_FORMATTER: GenericFormatter = GenericFormatter {
 
 pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatter {
     match target_format {
-        TargetFormat::Openai | TargetFormat::Atomesus | TargetFormat::CommandCodeGo => {
+        TargetFormat::Openai
+        | TargetFormat::Atomesus
+        | TargetFormat::CommandCodeGo
+        | TargetFormat::SystemOne => {
             &OpenaiFormatter
         }
         TargetFormat::Anthropic => &AnthropicFormatter,

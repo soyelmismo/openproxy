@@ -98,6 +98,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         cooldown_factor: None,
         rate_limit_scope: RateLimitScope::Account,
         thinking_effort: None,
+        ..Default::default()
     };
 
     let combo = Combo {
@@ -115,6 +116,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         lkgp_exploration_rate: None,
         selection_window_secs: Some(3600),
         preventive_rate_limit: false,
+        ..Default::default()
     };
 
     // Build the dispatcher.

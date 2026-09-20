@@ -131,7 +131,7 @@ async function onTestTarget(targetId: number, modelRowId: number | null, e: Even
 }
 
 function priorityModeOptions(selected: PriorityMode): TemplateResult {
-  const modes: PriorityMode[] = ["strict", "lkgp", "weighted", "least_used", "p2c"];
+  const modes: PriorityMode[] = ["strict", "lkgp", "weighted", "least_used", "p2c", "decision"];
   return html`${modes.map((m) => html`<option value=${m} ?selected=${m === selected}>${PRIORITY_MODE_LABELS[m]}</option>`)}`;
 }
 
@@ -149,6 +149,11 @@ function renderPriorityModeBar(combo: Combo): TemplateResult {
     params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body"><label><abbr title=${PARAM_TOOLTIPS.window_secs}>Window (s)</abbr><input type="number" min="1" .value=${combo.selection_window_secs != null ? String(combo.selection_window_secs) : ""} placeholder="3600" @change=${(e: Event) => onNumInput("selection_window_secs", e)} class="cw-input"></label></div></details>`;
   } else if (pm === "weighted") {
     params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body"><span class="muted">${t("combos.detail.weighted_hint")}</span></div></details>`;
+  } else if (pm === "decision") {
+    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
+      <label><abbr title="System One model used for real-time prompt classification and routing (e.g., jev-latest, laya)">Decision Model</abbr><input type="text" .value=${combo.decision_model || ""} placeholder="jev-latest" @change=${(e: Event) => patchCombo(detailComboId!, { decision_model: (e.target as HTMLInputElement).value.trim() || null })} class="cw-input"></label>
+      <label><abbr title="Timeout in milliseconds for the System One routing call before falling back to default priority">Timeout (ms)</abbr><input type="number" min="10" .value=${combo.decision_timeout_ms != null ? String(combo.decision_timeout_ms) : ""} placeholder="150" @change=${(e: Event) => onNumInput("decision_timeout_ms", e)} class="cw-input"></label>
+    </div></details>`;
   }
   return html`<div class="combo-settings-bar"><label><abbr title=${PRIORITY_MODE_TOOLTIPS[pm]}>${t("combos.detail.priority_mode")}</abbr><select @change=${(e: Event) => patchCombo(detailComboId!, { priority_mode: (e.target as HTMLSelectElement).value })}>${priorityModeOptions(pm)}</select></label>${params}</div>`;
 }
@@ -223,7 +228,24 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const isSub = target.sub_combo_id != null;
   const cdBadge = target.in_cooldown ? html` <span class="badge badge-cooldown">⏸</span>` : html``;
   const inactBadge = (target.provider_active === false || target.active === false) ? html` <span class="badge badge-inactive">⏸ inactive</span>` : html``;
-  const modelCell = isSub ? html`<span class="chip combo-chip">→ combo: ${target.sub_combo_name ?? "#" + target.sub_combo_id}</span>` : html`${target.model_display_name || target.model_id || "row #" + target.model_row_id}${cdBadge}${inactBadge}`;
+  const descTag = html`
+    <div class="target-desc-row" style="margin-top:3px;">
+      <input type="text"
+             class="cw-input"
+             style="font-size:0.75rem;padding:2px 5px;width:100%;max-width:220px;"
+             placeholder="Routing description..."
+             title="Semantic description / routing criteria for System One decision routing"
+             .value=${target.description ?? ""}
+             @change=${async (e: Event) => {
+               const val = (e.target as HTMLInputElement).value.trim() || null;
+               await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ description: val }) });
+               target.description = val;
+               requestUpdate();
+             }}>
+    </div>`;
+  const modelCell = isSub
+    ? html`<span class="chip combo-chip">→ combo: ${target.sub_combo_name ?? "#" + target.sub_combo_id}</span>${descTag}`
+    : html`${target.model_display_name || target.model_id || "row #" + target.model_row_id}${cdBadge}${inactBadge}${descTag}`;
   const providerCell = isSub ? html`<span class="virtual-provider">${target.provider_id}</span>` : html`<a href="#/providers/${encodeURIComponent(target.provider_id)}">${target.provider_id}</a>`;
   const accountCell = isSub ? html`<em>${t("combos.target.na")}</em>` : (target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`);
   const contextCell = isSub ? html`<em>${t("combos.target.sub_combo")}</em>` : (target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`);

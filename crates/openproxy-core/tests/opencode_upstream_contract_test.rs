@@ -258,6 +258,7 @@ fn test_opencode_zen_request_wrapping_and_aliasing() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

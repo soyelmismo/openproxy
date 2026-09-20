@@ -48,6 +48,12 @@ pub struct CreateComboInput {
     /// `None` = default 3600.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_window_secs: Option<u64>,
+    /// Decision routing model for `priority_mode = "decision"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_model: Option<String>,
+    /// Decision routing timeout in milliseconds. Default: 100ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_timeout_ms: Option<u64>,
 }
 
 impl CreateComboInput {
@@ -78,6 +84,8 @@ pub struct AddTargetInput {
     pub model_row_id: Option<ModelRowId>,
     pub sub_combo_id: Option<ComboId>,
     pub priority_order: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 fn apply_combo_overrides(
@@ -103,6 +111,12 @@ fn apply_combo_overrides(
     }
     if input.selection_window_secs.is_some() {
         combos::update_selection_window(conn, combo_id, input.selection_window_secs)?;
+    }
+    if input.decision_model.is_some() {
+        combos::update_decision_model(conn, combo_id, input.decision_model.as_deref())?;
+    }
+    if input.decision_timeout_ms.is_some() {
+        combos::update_decision_timeout(conn, combo_id, input.decision_timeout_ms)?;
     }
     Ok(())
 }
@@ -211,6 +225,7 @@ pub fn add_target_to_combo(
             model_row_id: input.model_row_id,
             sub_combo_id: input.sub_combo_id,
             priority_order: input.priority_order,
+            description: input.description,
         },
     )
 }

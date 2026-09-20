@@ -219,6 +219,16 @@ fn apply_combo_general_updates(
         UpdateField::Reset => core_combos::update_selection_window(w, id, None)?,
         UpdateField::Ignore => {}
     }
+    match parse_nullable_str(body, "decision_model")? {
+        UpdateField::Set(v) => core_combos::update_decision_model(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_decision_model(w, id, None)?,
+        UpdateField::Ignore => {}
+    }
+    match parse_nullable_u64(body, "decision_timeout_ms")? {
+        UpdateField::Set(v) => core_combos::update_decision_timeout(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_decision_timeout(w, id, None)?,
+        UpdateField::Ignore => {}
+    }
     if let Some(v) = body.get("preventive_rate_limit")
         && let Some(enabled) = v.as_bool()
     {

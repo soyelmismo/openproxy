@@ -76,6 +76,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let target_a = crate::context::ResolvedTarget {
@@ -95,6 +96,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: openproxy_types::models::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -291,6 +293,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let mk_target = |tid: i64, prov: &str, prio: i32| crate::context::ResolvedTarget {
@@ -310,6 +313,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: Model {
             row_id: ModelRowId(tid),
@@ -392,6 +396,7 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let single_target = crate::context::ResolvedTarget {
@@ -411,6 +416,7 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: openproxy_types::models::Model {
             row_id: ModelRowId(1),
@@ -517,6 +523,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let mk_target = |tid: i64, prov: &str| crate::context::ResolvedTarget {
@@ -536,6 +543,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: Model {
             row_id: ModelRowId(tid),

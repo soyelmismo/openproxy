@@ -78,9 +78,13 @@ impl PipelineStage for RouterStage {
             return Err(CoreError::NoHealthyTargets(combo.id.0));
         }
 
-        let resolved = ctx.pipeline.resolve_combo_targets_full(eligible).await;
+        let mut resolved = ctx.pipeline.resolve_combo_targets_full(eligible).await;
         if resolved.is_empty() {
             return Err(CoreError::NoHealthyTargets(combo.id.0));
+        }
+
+        if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision {
+            crate::stages::decision::apply_decision_routing(ctx, &combo, &mut resolved).await;
         }
 
         ctx.targets = resolved;

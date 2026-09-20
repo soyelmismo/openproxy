@@ -208,6 +208,8 @@ fn translate_plan_to_targets(
                     lkgp_exploration_rate: None,
                     selection_window_secs: None,
                     preventive_rate_limit: false,
+                    decision_model: None,
+                    decision_timeout_ms: None,
                 };
                 Ok((combo_id, Some(synthetic_combo), Some(targets)))
             } else if has_key_restrictions {

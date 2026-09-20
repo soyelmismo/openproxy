@@ -24,6 +24,8 @@ export interface Combo {
   lkgp_exploration_rate?: number | null;
   selection_window_secs?: number | null;
   preventive_rate_limit?: boolean;
+  decision_model?: string | null;
+  decision_timeout_ms?: number | null;
 }
 
 export interface ComboTarget {
@@ -39,6 +41,7 @@ export interface ComboTarget {
   cooldown_mode?: CooldownMode | null;
   cooldown_base_secs?: number | null;
   thinking_effort?: string | null;
+  description?: string | null;
 }
 
 export interface ComboTargetWithModel extends ComboTarget {
@@ -70,6 +73,8 @@ export interface CreateComboInput {
   lkgp_exploration_rate?: number;
   selection_window_secs?: number;
   preventive_rate_limit?: boolean;
+  decision_model?: string;
+  decision_timeout_ms?: number;
 }
 
 export interface AddTargetInput {
@@ -78,4 +83,5 @@ export interface AddTargetInput {
   model_row_id: ModelRowId | null;
   sub_combo_id: ComboId | null;
   priority_order: number;
+  description?: string;
 }

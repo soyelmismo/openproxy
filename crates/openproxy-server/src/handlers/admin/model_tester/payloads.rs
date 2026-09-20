@@ -62,6 +62,7 @@ pub fn resolve_effective_target_format(
         adapters::AdapterFormat::CommandCodeGo => {
             openproxy_core::models::TargetFormat::CommandCodeGo
         }
+        adapters::AdapterFormat::SystemOne => openproxy_core::models::TargetFormat::SystemOne,
     }
 }
 

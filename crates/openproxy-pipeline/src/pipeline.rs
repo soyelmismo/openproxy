@@ -392,6 +392,7 @@ mod tests {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            description: None,
         };
 
         // 429 on RateLimitScope::Account must NOT be considered model-wide

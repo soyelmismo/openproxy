@@ -49,7 +49,7 @@ fn execute_priority_strategy(
         .selection_window_secs
         .unwrap_or(DEFAULT_SELECTION_WINDOW_SECS);
     match combo.priority_mode {
-        PriorityMode::Strict => targets,
+        PriorityMode::Strict | PriorityMode::Decision => targets,
         PriorityMode::Lkgp => resolve_lkgp(targets, combo, selection_registry),
         PriorityMode::Weighted => resolve_weighted(targets),
         PriorityMode::LeastUsed => resolve_least_used(targets, window_secs, selection_registry),
@@ -271,6 +271,7 @@ mod tests {
             cooldown_factor: None,
             rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
             thinking_effort: None,
+            ..Default::default()
         }
     }
 
@@ -290,6 +291,7 @@ mod tests {
             lkgp_exploration_rate: Some(0.0), // Disable exploration for deterministic exploitation tests
             selection_window_secs: Some(3600),
             preventive_rate_limit: false,
+            ..Default::default()
         }
     }
 

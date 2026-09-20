@@ -31,6 +31,7 @@ async fn test_execute_sequential_targets_skips_failed_race_targets() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let make_target = |id: i64, model_row_id: i64| crate::context::ResolvedTarget {
@@ -50,6 +51,7 @@ async fn test_execute_sequential_targets_skips_failed_race_targets() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: openproxy_types::models::Model {
             row_id: ModelRowId(model_row_id),
@@ -139,6 +141,7 @@ async fn test_adversarial_model_row_failure_deduplication() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let make_target = |id: i64, model_row_id: i64, prov: &str| crate::context::ResolvedTarget {
@@ -158,6 +161,7 @@ async fn test_adversarial_model_row_failure_deduplication() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: openproxy_types::models::Model {
             row_id: ModelRowId(model_row_id),
@@ -292,6 +296,7 @@ async fn test_account_rotation_on_rate_limit_sequential() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let mk_target = |prov: &str, acc_id: i64| crate::context::ResolvedTarget {
@@ -311,6 +316,7 @@ async fn test_account_rotation_on_rate_limit_sequential() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: Model {
             row_id: ModelRowId(1736),
@@ -448,6 +454,7 @@ async fn test_account_rotation_after_race_exhaustion() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let mk_target = |prov: &str, acc_id: i64, prio: i32| crate::context::ResolvedTarget {
@@ -467,6 +474,7 @@ async fn test_account_rotation_after_race_exhaustion() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: Model {
             row_id: ModelRowId(500),
@@ -593,6 +601,7 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        ..Default::default()
     };
 
     let mk_target = |prov: &str, target_id: i64| crate::context::ResolvedTarget {
@@ -612,6 +621,7 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         },
         model: Model {
             row_id: ModelRowId(888),

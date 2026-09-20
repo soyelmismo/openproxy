@@ -397,6 +397,7 @@ pub fn build_synthetic_combo(
         cooldown_max_secs: None,
         cooldown_factor: None,
         thinking_effort: None,
+        description: None,
     };
     let combo = Combo {
         id: ComboId(SYNTHETIC_COMBO_ID),
@@ -416,6 +417,8 @@ pub fn build_synthetic_combo(
         lkgp_exploration_rate: None,
         selection_window_secs: None,
         preventive_rate_limit: false,
+        decision_model: None,
+        decision_timeout_ms: None,
     };
     (combo, vec![target])
 }

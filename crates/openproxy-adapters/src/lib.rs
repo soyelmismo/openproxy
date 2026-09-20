@@ -20,10 +20,11 @@ pub use adapters::{
     cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter, codex::CodexAdapter,
     commandcode::CommandCodeGoAdapter, commandcode::apply_commandcode_cli_headers,
     custom_adapter::CustomAdapter, gemini::GeminiAdapter, horde::HordeAdapter,
-    kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, minimax::MiniMaxAdapter,
+    kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, laya::LayaAdapter, minimax::MiniMaxAdapter,
     nous_research::NousResearchAdapter, nvidia_nim::NvidiaNimAdapter,
     ollama_cloud::OllamaCloudAdapter, opencode_common::OpenCodeGoAdapter,
-    opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter, zai::ZaiAdapter,
+    opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter, typesafe::TypeSafeAdapter,
+    zai::ZaiAdapter,
 };
 #[cfg(any(test, feature = "test-utils"))]
 pub use upstream::load_upstream_source;

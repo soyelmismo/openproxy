@@ -159,6 +159,7 @@ pub fn seed_provider_and_model(
                 TargetFormat::Responses => ProviderFormat::Responses,
                 TargetFormat::Atomesus => ProviderFormat::Atomesus,
                 TargetFormat::CommandCodeGo => ProviderFormat::CommandCodeGo,
+                TargetFormat::SystemOne => ProviderFormat::SystemOne,
             },
             extra_headers_json: None,
             auto_activate_keyword: None,
@@ -312,6 +313,7 @@ pub fn seed_solo_combo_at_url(
             account_id: Some(account_id),
             priority_order: 1,
             sub_combo_id: None,
+            description: None,
         },
     )
     .expect("add target");
@@ -391,6 +393,7 @@ pub fn seed_target_with_account(
             account_id: Some(account_id),
             priority_order: priority as i32,
             sub_combo_id: None,
+            description: None,
         },
     )
     .expect("add target");

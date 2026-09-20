@@ -12,6 +12,7 @@ impl_string_enum! {
         Responses => "responses",
         Atomesus => "atomesus",
         CommandCodeGo => "commandcodego",
+        SystemOne => "systemone",
     }
     core_error: "target_format"
 }

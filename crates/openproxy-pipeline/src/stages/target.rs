@@ -243,6 +243,9 @@ fn resolve_target_format(
         openproxy_adapters::adapters::AdapterFormat::CommandCodeGo => {
             openproxy_types::TargetFormat::CommandCodeGo
         }
+        openproxy_adapters::adapters::AdapterFormat::SystemOne => {
+            openproxy_types::TargetFormat::SystemOne
+        }
     }
 }
 

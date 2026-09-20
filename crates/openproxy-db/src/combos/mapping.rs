@@ -12,7 +12,7 @@ crate::def_table_select!(
     "id, name, strategy, race_size, created_at, context_window, \
      priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
      cooldown_factor, lkgp_exploration_rate, selection_window_secs, \
-     COALESCE(preventive_rate_limit, 0)"
+     COALESCE(preventive_rate_limit, 0), decision_model, decision_timeout_ms"
 );
 pub(crate) use combo_select;
 
@@ -22,7 +22,7 @@ crate::def_table_select!(
     "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
      ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
      ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor, \
-     ct.thinking_effort"
+     ct.thinking_effort, ct.description"
 );
 pub(crate) use combo_target_select;
 
@@ -58,7 +58,8 @@ crate::def_table_select!(
      ct.cooldown_base_secs, \
      ct.cooldown_max_secs, \
      ct.cooldown_factor, \
-     ct.thinking_effort"
+     ct.thinking_effort, \
+     ct.description"
 );
 pub(crate) use combo_target_with_model_select;
 
@@ -112,6 +113,8 @@ pub(crate) fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         lkgp_exploration_rate: 11,
         selection_window_secs: @opt_u64(12),
         preventive_rate_limit: @bool(13),
+        decision_model: 14,
+        decision_timeout_ms: @opt_u64(15),
     })
 }
 
@@ -132,6 +135,7 @@ pub(crate) fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         cooldown_max_secs: @opt_u64(12),
         cooldown_factor: @opt_u32(13),
         thinking_effort: 14,
+        description: 15,
     })
 }
 
@@ -160,6 +164,7 @@ pub(crate) fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboT
         cooldown_max_secs: @opt_u64(20),
         cooldown_factor: @opt_u32(21),
         thinking_effort: @opt_box_str(22),
+        description: @opt_box_str(23),
     })
 }
 

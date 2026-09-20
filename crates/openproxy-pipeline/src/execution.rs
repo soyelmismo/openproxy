@@ -208,6 +208,8 @@ impl Pipeline {
             cooldown_factor: None,
             lkgp_exploration_rate: None,
             selection_window_secs: None,
+            decision_model: None,
+            decision_timeout_ms: None,
         };
 
         let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();

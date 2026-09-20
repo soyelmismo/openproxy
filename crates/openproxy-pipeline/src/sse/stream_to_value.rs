@@ -134,7 +134,7 @@ pub fn parse_sse_stream_to_openai_response(
                 }
             }
         }
-        TargetFormat::CommandCodeGo => unreachable!(),
+        TargetFormat::CommandCodeGo | TargetFormat::SystemOne => unreachable!(),
     }
 
     let val = acc.finish(chunk_id, created, model_name);

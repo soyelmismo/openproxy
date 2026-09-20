@@ -198,6 +198,7 @@ fn test_add_target_input_flat_and_subcombo_serde() {
         model_row_id: Some(ModelRowId::from(42)),
         sub_combo_id: None,
         priority_order: 1,
+        description: Some("Complex reasoning tasks".to_string()),
     };
 
     let flat_json = serde_json::to_string(&flat_target).expect("serialize flat target");
@@ -212,6 +213,7 @@ fn test_add_target_input_flat_and_subcombo_serde() {
         model_row_id: None,
         sub_combo_id: Some(ComboId::from(99)),
         priority_order: -5,
+        description: None,
     };
 
     let combo_json = serde_json::to_string(&combo_target).expect("serialize combo target");
@@ -230,6 +232,7 @@ fn test_add_target_input_priority_boundaries() {
             model_row_id: Some(ModelRowId::from(1)),
             sub_combo_id: None,
             priority_order: priority,
+            description: None,
         };
         let s = serde_json::to_string(&target).unwrap();
         let d: AddTargetInput = serde_json::from_str(&s).unwrap();

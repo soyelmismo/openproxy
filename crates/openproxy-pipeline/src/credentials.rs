@@ -419,6 +419,7 @@ mod tests {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            ..Default::default()
         };
 
         let mut models_map = HashMap::new();

@@ -25,6 +25,7 @@ impl_string_enum! {
         Weighted => "weighted",
         LeastUsed => "least_used",
         P2c => "p2c",
+        Decision => "decision",
     }
     error: "priority_mode"
 }
@@ -54,6 +55,10 @@ pub struct Combo {
     pub lkgp_exploration_rate: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_window_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_timeout_ms: Option<u64>,
 }
 
 fn default_target_weight() -> i32 {
@@ -89,6 +94,54 @@ pub struct ComboTarget {
     pub cooldown_factor: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl Default for ComboTarget {
+    fn default() -> Self {
+        Self {
+            id: ComboTargetId(0),
+            combo_id: ComboId(0),
+            provider_id: ProviderId::new(""),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 1,
+            active: true,
+            rate_limit_scope: crate::providers::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+        }
+    }
+}
+
+impl Default for Combo {
+    fn default() -> Self {
+        Self {
+            id: ComboId(0),
+            name: String::new(),
+            strategy: Strategy::Priority,
+            race_size: 1,
+            preventive_rate_limit: false,
+            created_at: String::new(),
+            context_window: None,
+            priority_mode: PriorityMode::Strict,
+            cooldown_mode: CooldownMode::Flat,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: None,
+            selection_window_secs: None,
+            decision_model: None,
+            decision_timeout_ms: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -176,6 +229,8 @@ pub struct ComboTargetWithModel {
     pub cooldown_factor: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_effort: Option<Box<str>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<Box<str>>,
 }
 
 /// Input for adding a target to a combo.
@@ -190,6 +245,8 @@ pub struct AddTargetInput {
     pub model_row_id: Option<ModelRowId>,
     pub sub_combo_id: Option<ComboId>,
     pub priority_order: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl Combo {
@@ -249,6 +306,7 @@ mod tests {
             Ok(PriorityMode::LeastUsed)
         );
         assert_eq!(PriorityMode::parse("p2c"), Ok(PriorityMode::P2c));
+        assert_eq!(PriorityMode::parse("decision"), Ok(PriorityMode::Decision));
         assert!(PriorityMode::parse("unknown").is_err());
     }
 
@@ -259,6 +317,7 @@ mod tests {
         assert_eq!(PriorityMode::Weighted.as_str(), "weighted");
         assert_eq!(PriorityMode::LeastUsed.as_str(), "least_used");
         assert_eq!(PriorityMode::P2c.as_str(), "p2c");
+        assert_eq!(PriorityMode::Decision.as_str(), "decision");
     }
 
     #[test]
@@ -279,6 +338,7 @@ mod tests {
             cooldown_max_secs: None,
             cooldown_factor: None,
             thinking_effort: None,
+            description: None,
         };
 
         let mut combo = Combo {
@@ -296,6 +356,8 @@ mod tests {
             cooldown_factor: None,
             lkgp_exploration_rate: None,
             selection_window_secs: None,
+            decision_model: None,
+            decision_timeout_ms: None,
         };
 
         // Default: inherits combo (Flat 60s) -> not disabled

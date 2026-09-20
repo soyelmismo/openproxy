@@ -81,6 +81,10 @@ function addTargetTemplate(
                 <label for="target-priority">Priority</label>
                 <input id="target-priority" name="priority_order" type="number" value="100" required>
               </div>
+              <div class="field">
+                <label for="target-sub-combo-desc">Routing Criteria / Description</label>
+                <input id="target-sub-combo-desc" name="description" type="text" placeholder="Routing description (optional)">
+              </div>
             </div>
           </div>
           <div class="modal-footer">
@@ -147,6 +151,12 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
                  min="1"
                  step="1"
                  title="Priority (lower = preferred)">
+          <input class="target-per-model-description cw-input"
+                 name="target_description_${rowId}"
+                 data-model-row=${String(rowId)}
+                 type="text"
+                 placeholder="Routing description (optional)..."
+                 title="Semantic routing criteria / description for decision mode">
         </div>
       </div>
     `;
@@ -389,13 +399,25 @@ export function deselectAllModelsInModal(): void {
  *  against it via `toEqual`. */
 export function buildSubComboTargetBodyFromForm(form: HTMLFormElement) {
   const f = new FormData(form);
-  return {
+  const desc = String(f.get("description") || "").trim();
+  const body: {
+    provider_id: string;
+    account_id: null;
+    model_row_id: null;
+    sub_combo_id: number;
+    priority_order: number;
+    description?: string;
+  } = {
     provider_id: "combo",
     account_id: null,
     model_row_id: null,
     sub_combo_id: parseInt(String(f.get("sub_combo_id"))),
     priority_order: parseInt(String(f.get("priority_order"))),
   };
+  if (desc) {
+    body.description = desc;
+  }
+  return body;
 }
 
 export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement): Promise<void> {
@@ -444,9 +466,11 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
     const item = cb.closest(".model-checkbox-item") as HTMLElement | null;
     const accountSel = item?.querySelector(".target-per-model-account") as HTMLSelectElement | null;
     const priorityInput = item?.querySelector(".target-per-model-priority") as HTMLInputElement | null;
+    const descInput = item?.querySelector(".target-per-model-description") as HTMLInputElement | null;
     const accountIdRaw = accountSel && accountSel.value ? parseInt(accountSel.value, 10) : NaN;
     const accountId: number | null = Number.isNaN(accountIdRaw) ? null : accountIdRaw;
     const priorityOrder = priorityInput ? (parseInt(priorityInput.value, 10) || 100) : 100;
+    const description = descInput && descInput.value.trim() ? descInput.value.trim() : null;
     const providerForModel = rowIdToProvider.get(modelRowId) ?? "";
     if (!providerForModel) {
       errors.push(`Model row #${modelRowId}: could not determine provider — ensure the model exists in the models cache.`);
@@ -458,6 +482,7 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
       model_row_id: modelRowId,
       sub_combo_id: null,
       priority_order: priorityOrder,
+      description,
     };
     try {
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });

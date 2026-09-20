@@ -21,6 +21,8 @@ fn ci(name: &str, strategy: &str) -> CreateComboInput {
         cooldown_factor: None,
         lkgp_exploration_rate: None,
         selection_window_secs: None,
+        decision_model: None,
+        decision_timeout_ms: None,
     }
 }
 
@@ -31,6 +33,7 @@ fn ati(pid: &str, mid: ModelRowId, prio: i32) -> AddTargetInput {
         model_row_id: Some(mid),
         sub_combo_id: None,
         priority_order: prio,
+        description: None,
     }
 }
 

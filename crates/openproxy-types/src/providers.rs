@@ -51,6 +51,7 @@ impl_string_enum! {
         Responses => "responses",
         Atomesus => "atomesus",
         CommandCodeGo => "commandcodego",
+        SystemOne => "systemone",
     }
     error: "provider format"
 }
@@ -65,6 +66,7 @@ impl ProviderFormat {
             Self::Responses => TargetFormat::Responses,
             Self::Atomesus => TargetFormat::Atomesus,
             Self::CommandCodeGo => TargetFormat::CommandCodeGo,
+            Self::SystemOne => TargetFormat::SystemOne,
             Self::Openai | Self::Mixed => TargetFormat::Openai,
         }
     }

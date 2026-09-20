@@ -176,6 +176,22 @@ macro_rules! define_provider_adapter {
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_image_request(req, upstream_model), )+
                 }
             }
+            pub fn build_system_one_url(&self) -> String {
+                match self {
+                    $( Self::$b_variant(inner) => inner.build_system_one_url(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_system_one_url(), )+
+                }
+            }
+            pub fn format_system_one_request(
+                &self,
+                req: &openproxy_types::systemone::SystemOneRequest,
+                upstream_model: &str,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                match self {
+                    $( Self::$b_variant(inner) => inner.format_system_one_request(req, upstream_model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_system_one_request(req, upstream_model), )+
+                }
+            }
             pub fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
                 match self {
                     $( Self::$b_variant(inner) => inner.build_auth_header(api_key), )+

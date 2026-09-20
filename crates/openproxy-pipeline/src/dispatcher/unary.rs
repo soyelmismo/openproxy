@@ -110,6 +110,10 @@ pub(super) fn translate_non_streaming_body(
             <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
                 .map_err(|e| CoreError::Parse(format!("parse commandcode response: {e}")))
         }
+        openproxy_types::TargetFormat::SystemOne => {
+            <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
+                .map_err(|e| CoreError::Parse(format!("parse systemone response: {e}")))
+        }
     }
 }
 

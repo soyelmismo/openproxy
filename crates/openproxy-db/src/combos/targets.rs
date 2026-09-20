@@ -219,8 +219,8 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     let upstream_model_id = fetch_upstream_model_id(conn, input.model_row_id)?;
 
     conn.execute(
-        "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order, description) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             input.combo_id.0,
             input.provider_id.as_str(),
@@ -229,6 +229,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
             input.sub_combo_id.map(|c| c.0),
             upstream_model_id,
             input.priority_order,
+            input.description,
         ],
     )
     .map_err(|e| map_add_target_error(&input, e))?;

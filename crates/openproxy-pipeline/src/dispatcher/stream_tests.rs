@@ -115,6 +115,7 @@ async fn dispatch_upstream_streaming_errors_without_sink() {
         cooldown_factor: None,
         rate_limit_scope: RateLimitScope::Account,
         thinking_effort: None,
+        ..Default::default()
     };
 
     let combo = Combo {
@@ -132,6 +133,7 @@ async fn dispatch_upstream_streaming_errors_without_sink() {
         lkgp_exploration_rate: None,
         selection_window_secs: Some(3600),
         preventive_rate_limit: false,
+        ..Default::default()
     };
 
     let (_tx, rx) = tokio::sync::watch::channel::<Option<CancelReason>>(None);
@@ -283,6 +285,7 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
         cooldown_factor: None,
         rate_limit_scope: RateLimitScope::Account,
         thinking_effort: None,
+        ..Default::default()
     };
     let combo = Combo {
         id: openproxy_types::ids::ComboId(1),
@@ -299,6 +302,7 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
         lkgp_exploration_rate: None,
         selection_window_secs: Some(3600),
         preventive_rate_limit: false,
+        ..Default::default()
     };
 
     let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(16);
@@ -447,6 +451,7 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
         cooldown_factor: None,
         rate_limit_scope: RateLimitScope::Account,
         thinking_effort: None,
+        ..Default::default()
     };
     let combo = Combo {
         id: openproxy_types::ids::ComboId(1),
@@ -463,6 +468,7 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
         lkgp_exploration_rate: None,
         selection_window_secs: Some(3600),
         preventive_rate_limit: false,
+        ..Default::default()
     };
 
     let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(16);
@@ -611,6 +617,7 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
         cooldown_factor: None,
         rate_limit_scope: RateLimitScope::Account,
         thinking_effort: None,
+        ..Default::default()
     };
     let combo = Combo {
         id: openproxy_types::ids::ComboId(1),
@@ -627,6 +634,7 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
         lkgp_exploration_rate: None,
         selection_window_secs: Some(3600),
         preventive_rate_limit: false,
+        ..Default::default()
     };
 
     let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(16);
