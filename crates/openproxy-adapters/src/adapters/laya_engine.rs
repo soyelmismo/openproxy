@@ -176,11 +176,7 @@ pub fn resolve_model_path(opt: Option<&str>) -> String {
             "model-fp32.onnx",
             "model-int8.onnx",
         ],
-        &[
-            "/root/code/laya-playground/model-fp32/model.onnx",
-            "/root/code/laya-playground/model-int8/model.onnx",
-            "/root/code/laya-playground/model-onnx/model.onnx",
-        ],
+        &[],
     )
 }
 
@@ -190,10 +186,7 @@ pub fn resolve_tokenizer_path(opt: Option<&str>) -> String {
         "OPENPROXY_LAYA_TOKENIZER",
         "tokenizer.json",
         &["tokenizer/tokenizer.json"],
-        &[
-            "/root/code/laya-playground/model-onnx/tokenizer/tokenizer.json",
-            "/root/code/laya-playground/tokenizer/tokenizer.json",
-        ],
+        &[],
     )
 }
 
@@ -203,7 +196,7 @@ pub fn resolve_config_path(opt: Option<&str>) -> String {
         "OPENPROXY_LAYA_CONFIG",
         "rl_agent_config.json",
         &["onnx_config.json"],
-        &["/root/code/laya-playground/model-onnx/rl_agent_config.json"],
+        &[],
     )
 }
 
