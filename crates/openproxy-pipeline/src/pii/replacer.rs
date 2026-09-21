@@ -366,8 +366,7 @@ impl StreamingChunkStage for PiiRestorationStage {
                                     }
                                 }
                             }
-                            if let Some(text) = delta.get_mut("text").and_then(|c| c.as_str())
-                            {
+                            if let Some(text) = delta.get_mut("text").and_then(|c| c.as_str()) {
                                 let restored = self.content_replacer.process(text);
                                 delta.insert(
                                     "text".to_string(),
