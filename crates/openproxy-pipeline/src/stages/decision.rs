@@ -7,6 +7,7 @@
 use crate::context::{PipelineContext, ResolvedTarget};
 use openproxy_adapters::upstream::UpstreamRequest;
 use openproxy_types::combos::Combo;
+use openproxy_types::ids::ComboTargetId;
 use openproxy_types::systemone::{
     SystemOneQuestion, SystemOneQuestionType, SystemOneRequest, SystemOneResponse,
 };
@@ -48,13 +49,30 @@ pub fn extract_prompt_state(req: &openproxy_types::OpenAIRequest, max_chars: usi
 }
 
 /// Apply decision routing to candidate targets if this combo uses `PriorityMode::Decision`.
+/// Supports elastic session scaling (upscale/downscale with damping towards `current_pinned`).
 pub async fn apply_decision_routing(
     ctx: &mut PipelineContext,
     combo: &Combo,
     resolved_targets: &mut Vec<ResolvedTarget>,
+    current_pinned: Option<ComboTargetId>,
 ) {
     if resolved_targets.len() < 2 {
         return;
+    }
+
+    // Baseline: if an active target is pinned, pre-promote it to position 0
+    // so that failures/timeouts in JEV preserve the pinned model.
+    if let Some(pinned_id) = current_pinned
+        && let Some(pos) = resolved_targets.iter().position(|rt| rt.target.id == pinned_id)
+    {
+        let min_prio = resolved_targets
+            .iter()
+            .map(|rt| rt.target.priority_order)
+            .min()
+            .unwrap_or(1);
+        let mut winner = resolved_targets.remove(pos);
+        winner.target.priority_order = min_prio.saturating_sub(1);
+        resolved_targets.insert(0, winner);
     }
 
     // Collect targets that have descriptions
@@ -92,11 +110,21 @@ pub async fn apply_decision_routing(
         options_vec.push(id);
     }
 
+    let instructions = if let Some(pinned_id) = current_pinned {
+        format!(
+            "The current session is actively pinned to target ID '{pinned_id}'. \
+            Evaluate the recent query requirements: \
+            Prefer to keep '{pinned_id}' if it adequately fulfills the query (preserve session continuity and KV-cache). \
+            Only select a different target ID if there is a clear necessity to ESCALATE (significantly higher complexity/code/reasoning required) \
+            or DOWNSCALE (pure casual conversation with no technical dependency on previous context)."
+        )
+    } else {
+        "Select the most appropriate target ID to answer this query based on complexity, domain specialization, and requirements.".to_string()
+    };
+
     let question = SystemOneQuestion {
         question_type: SystemOneQuestionType::Choice,
-        instructions:
-            "Select the most appropriate target ID to answer this query based on complexity, domain specialization, and requirements."
-                .to_string(),
+        instructions,
         criteria: serde_json::to_value(&criteria_map).ok(),
         options: Some(options_vec),
     };
@@ -125,7 +153,39 @@ pub async fn apply_decision_routing(
                 .iter()
                 .position(|rt| rt.target.id.0.to_string() == chosen_target_id_str)
             {
-                if pos > 0 {
+                let chosen_target_id = resolved_targets[pos].target.id;
+                if current_pinned == Some(chosen_target_id) {
+                    tracing::info!(
+                        combo_id = combo.id.0,
+                        target_id = %chosen_target_id_str,
+                        "decision router confirmed active session target (inertia/keep)"
+                    );
+                    ctx.combo_walk_log
+                        .push(format!("decision_router:keep={chosen_target_id_str}"));
+                } else {
+                    // Safety check 1: Context length validation for downscale/switch
+                    let total_chars: usize = ctx
+                        .req
+                        .openai_request
+                        .messages
+                        .iter()
+                        .map(|m| m.extract_text_cow().len())
+                        .sum();
+                    let est_tokens = (total_chars / 3) as i64;
+
+                    if let Some(ctx_len) = resolved_targets[pos].model.context_length
+                        && est_tokens > (ctx_len * 85 / 100)
+                    {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            target = %chosen_target_id_str,
+                            est_tokens = est_tokens,
+                            context_length = ctx_len,
+                            "elastic switch rejected: estimated context tokens exceed target capacity; keeping current target"
+                        );
+                        return;
+                    }
+
                     let mut winner = resolved_targets.remove(pos);
                     let min_prio = resolved_targets
                         .iter()
@@ -134,14 +194,16 @@ pub async fn apply_decision_routing(
                         .unwrap_or(1);
                     winner.target.priority_order = min_prio.saturating_sub(1);
                     resolved_targets.insert(0, winner);
+
                     tracing::info!(
                         combo_id = combo.id.0,
-                        chosen_target = %chosen_target_id_str,
-                        "decision router promoted winning target to first priority"
+                        from_target = ?current_pinned.map(|t| t.0),
+                        to_target = %chosen_target_id_str,
+                        "decision router elastic switch: updated session target"
                     );
+                    ctx.combo_walk_log
+                        .push(format!("decision_router:elastic_switch={chosen_target_id_str}"));
                 }
-                ctx.combo_walk_log
-                    .push(format!("decision_router:winner={chosen_target_id_str}"));
             }
         }
         Ok(None) => {

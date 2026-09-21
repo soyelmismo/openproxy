@@ -87,7 +87,7 @@ impl PipelineStage for RouterStage {
             let should_reset = crate::session_affinity::SessionAffinityRegistry::should_reset(&ctx.req);
             let session_hash = crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req);
 
-            let mut affinity_hit = false;
+            let mut current_pinned_id = None;
             if !should_reset
                 && let Some(hash) = session_hash
             {
@@ -96,22 +96,9 @@ impl PipelineStage for RouterStage {
                     combo_id: combo.id,
                 };
                 if let Some(pinned_id) = ctx.pipeline.session_affinity.get(key) {
-                    if let Some(pos) = resolved.iter().position(|rt| rt.target.id == pinned_id) {
-                        let min_prio = resolved
-                            .iter()
-                            .map(|rt| rt.target.priority_order)
-                            .min()
-                            .unwrap_or(1);
-                        let mut winner = resolved.remove(pos);
-                        winner.target.priority_order = min_prio.saturating_sub(1);
-                        resolved.insert(0, winner);
-                        affinity_hit = true;
-                        tracing::info!(
-                            combo_id = combo.id.0,
-                            pinned_target = pinned_id.0,
-                            "session affinity hit: pinning multi-turn session target"
-                        );
-                        ctx.combo_walk_log.push(format!("session_affinity:pinned={}", pinned_id.0));
+                    if resolved.iter().any(|rt| rt.target.id == pinned_id) {
+                        current_pinned_id = Some(pinned_id);
+                        ctx.combo_walk_log.push(format!("session_affinity:active={}", pinned_id.0));
                     } else {
                         ctx.pipeline.session_affinity.invalidate(&key);
                         tracing::warn!(
@@ -123,9 +110,12 @@ impl PipelineStage for RouterStage {
                 }
             }
 
-            if !affinity_hit {
-                crate::stages::decision::apply_decision_routing(ctx, &combo, &mut resolved).await;
-            }
+            crate::stages::decision::apply_decision_routing(
+                ctx,
+                &combo,
+                &mut resolved,
+                current_pinned_id,
+            ).await;
         }
 
         ctx.targets = resolved;
