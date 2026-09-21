@@ -226,9 +226,7 @@ pub fn init(
                 .ok()
                 .and_then(|v| v.parse().ok())
         })
-        .unwrap_or_else(|| {
-            std::thread::available_parallelism().map_or(4, |n| n.get().clamp(1, 4))
-        });
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get().clamp(1, 4)));
 
     tracing::info!(
         model = %model_path,
@@ -237,8 +235,11 @@ pub fn init(
         "Initializing Laya internal C FFI engine"
     );
 
-    let tokenizer = Tokenizer::from_file(&tokenizer_path)
-        .map_err(|e| CoreError::Internal(format!("Failed to load tokenizer from {tokenizer_path}: {e}")))?;
+    let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+        CoreError::Internal(format!(
+            "Failed to load tokenizer from {tokenizer_path}: {e}"
+        ))
+    })?;
 
     let pad_id = tokenizer.token_to_id("<pad>").unwrap_or(0);
     let cls_id = tokenizer
@@ -335,7 +336,12 @@ pub(crate) fn render_options(q: &SystemOneQuestion) -> Vec<(String, String)> {
                 return arr
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| (format!("{i}"), format!("level {i}: {}", render_criterion(c))))
+                    .map(|(i, c)| {
+                        (
+                            format!("{i}"),
+                            format!("level {i}: {}", render_criterion(c)),
+                        )
+                    })
                     .collect();
             }
             vec![]

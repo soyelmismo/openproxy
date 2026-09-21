@@ -235,14 +235,19 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
             tokio::spawn(async move {
                 let mut buf = Vec::with_capacity(1024);
                 let mut chunk = [0u8; 512];
-                while !buf.windows(4).any(|w| w == b"\r\n\r\n") && !buf.windows(2).any(|w| w == b"\n\n") {
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n")
+                    && !buf.windows(2).any(|w| w == b"\n\n")
+                {
                     let n = match socket.read(&mut chunk).await {
                         Ok(0) | Err(_) => break,
                         Ok(n) => n,
                     };
                     buf.extend_from_slice(&chunk[..n]);
                 }
-                let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                let header_end = buf
+                    .windows(4)
+                    .position(|w| w == b"\r\n\r\n")
+                    .map(|p| p + 4)
                     .or_else(|| buf.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))
                     .unwrap_or(buf.len());
                 let req_text = String::from_utf8_lossy(&buf[..header_end]);

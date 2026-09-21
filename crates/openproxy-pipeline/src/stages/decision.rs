@@ -65,7 +65,9 @@ pub async fn apply_decision_routing(
     // Baseline: if an active target is pinned, pre-promote it to position 0
     // so that failures/timeouts in JEV preserve the pinned model.
     if let Some(pinned_id) = current_pinned
-        && let Some(pos) = resolved_targets.iter().position(|rt| rt.target.id == pinned_id)
+        && let Some(pos) = resolved_targets
+            .iter()
+            .position(|rt| rt.target.id == pinned_id)
     {
         let min_prio = resolved_targets
             .iter()
@@ -178,8 +180,10 @@ pub async fn apply_decision_routing(
                     // Elastic Hysteresis: if session is already pinned, require significant margin or confidence
                     if let Some(pinned_id) = current_pinned {
                         let should_switch = if let Some(ref probs) = answer.probabilities {
-                            let prob_chosen = probs.get(chosen_target_id_str).copied().unwrap_or(0.0);
-                            let prob_pinned = probs.get(&pinned_id.0.to_string()).copied().unwrap_or(0.0);
+                            let prob_chosen =
+                                probs.get(chosen_target_id_str).copied().unwrap_or(0.0);
+                            let prob_pinned =
+                                probs.get(&pinned_id.0.to_string()).copied().unwrap_or(0.0);
                             let margin = prob_chosen - prob_pinned;
                             if margin < ELASTIC_HYSTERESIS_MARGIN {
                                 tracing::info!(
@@ -259,8 +263,9 @@ pub async fn apply_decision_routing(
                         to_target = %chosen_target_id_str,
                         "decision router elastic switch: updated session target"
                     );
-                    ctx.combo_walk_log
-                        .push(format!("decision_router:elastic_switch={chosen_target_id_str}"));
+                    ctx.combo_walk_log.push(format!(
+                        "decision_router:elastic_switch={chosen_target_id_str}"
+                    ));
                 }
             }
         }
@@ -285,7 +290,8 @@ async fn execute_system_one_decision(
     decision_model: &str,
     req: &SystemOneRequest,
     timeout_ms: u64,
-) -> Result<Option<openproxy_types::systemone::SystemOneAnswer>, openproxy_types::error::CoreError> {
+) -> Result<Option<openproxy_types::systemone::SystemOneAnswer>, openproxy_types::error::CoreError>
+{
     let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
     let decision_model_owned = decision_model.to_string();
     let (resolved_prov, upstream_model) = tokio::task::spawn_blocking(move || {

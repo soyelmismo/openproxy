@@ -315,7 +315,8 @@ fn iso_z(dt: chrono::DateTime<chrono::Utc>) -> String {
 
 fn midnight_iso(y: i32, m: u32, d: u32) -> String {
     use chrono::{NaiveDate, TimeZone, Utc};
-    let Some(naive) = NaiveDate::from_ymd_opt(y, m, d).and_then(|dt| dt.and_hms_opt(0, 0, 0)) else {
+    let Some(naive) = NaiveDate::from_ymd_opt(y, m, d).and_then(|dt| dt.and_hms_opt(0, 0, 0))
+    else {
         return String::new();
     };
     iso_z(Utc.from_utc_datetime(&naive))

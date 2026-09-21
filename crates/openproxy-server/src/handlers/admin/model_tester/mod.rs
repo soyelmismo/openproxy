@@ -189,353 +189,355 @@ pub async fn run_test_for_model(
         .unwrap_or(None)
     };
 
-    let (status, error_msg, elapsed_ms, debug_payload) = if is_stt
-        || is_embedding
-        || is_image
-        || is_tts
-        || is_decision
-    {
-        let (url, body_value, multipart_opt): (
-            String,
-            serde_json::Value,
-            Option<(String, bytes::Bytes)>,
-        ) = if is_stt {
-            build_stt_test_payload(&adapter, &model)
-        } else if is_decision {
-            let (u, v) = build_decision_test_payload(&adapter, &model);
-            (u, v, None)
-        } else {
-            let (u, v) = build_audio_or_specialized_payload(
-                &adapter,
-                &model,
-                is_embedding,
-                is_image,
-                is_tts,
+    let (status, error_msg, elapsed_ms, debug_payload) =
+        if is_stt || is_embedding || is_image || is_tts || is_decision {
+            let (url, body_value, multipart_opt): (
+                String,
+                serde_json::Value,
+                Option<(String, bytes::Bytes)>,
+            ) = if is_stt {
+                build_stt_test_payload(&adapter, &model)
+            } else if is_decision {
+                let (u, v) = build_decision_test_payload(&adapter, &model);
+                (u, v, None)
+            } else {
+                let (u, v) = build_audio_or_specialized_payload(
+                    &adapter,
+                    &model,
+                    is_embedding,
+                    is_image,
+                    is_tts,
+                );
+                (u, v, None)
+            };
+
+            let custom_meta = build_custom_provider_meta(
+                model.provider_id.as_str(),
+                raw_account_opt.as_ref(),
+                &api_key,
             );
-            (u, v, None)
-        };
+            let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
 
-        let custom_meta = build_custom_provider_meta(
-            model.provider_id.as_str(),
-            raw_account_opt.as_ref(),
-            &api_key,
-        );
-        let headers = adapter.build_headers(&api_key, effective_target_format, &model.model_id);
+            let dummy_target = openproxy_types::context::ResolvedTarget {
+                target: openproxy_types::combos::ComboTarget {
+                    id: openproxy_types::ids::ComboTargetId(0),
+                    combo_id: openproxy_types::ids::ComboId(0),
+                    provider_id: openproxy_types::ids::ProviderId::new(model.provider_id.as_str()),
+                    account_id: _account_id_opt,
+                    model_row_id: Some(model.row_id),
+                    sub_combo_id: None,
+                    priority_order: 0,
+                    weight: 1,
+                    active: true,
+                    rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+                    cooldown_mode: None,
+                    cooldown_base_secs: None,
+                    cooldown_max_secs: None,
+                    cooldown_factor: None,
+                    thinking_effort: None,
+                    description: None,
+                },
+                model: model.clone(),
+                api_key: api_key.clone(),
+                api_key_label: Some(account_label.clone()),
+                custom_meta,
+            };
 
-        let dummy_target = openproxy_types::context::ResolvedTarget {
-            target: openproxy_types::combos::ComboTarget {
-                id: openproxy_types::ids::ComboTargetId(0),
-                combo_id: openproxy_types::ids::ComboId(0),
-                provider_id: openproxy_types::ids::ProviderId::new(model.provider_id.as_str()),
-                account_id: _account_id_opt,
-                model_row_id: Some(model.row_id),
-                sub_combo_id: None,
-                priority_order: 0,
-                weight: 1,
-                active: true,
-                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-                cooldown_mode: None,
-                cooldown_base_secs: None,
-                cooldown_max_secs: None,
-                cooldown_factor: None,
-                thinking_effort: None,
-                description: None,
-            },
-            model: model.clone(),
-            api_key: api_key.clone(),
-            api_key_label: Some(account_label.clone()),
-            custom_meta,
-        };
+            let mut req = if let Some((content_type, body_bytes)) = multipart_opt {
+                openproxy_adapters::upstream::UpstreamRequest::post_multipart(
+                    &url,
+                    &content_type,
+                    body_bytes,
+                )
+            } else {
+                let wrapped_res = serde_json::to_vec(&body_value)
+                    .map_err(|e| format!("failed to serialize request: {e}"))
+                    .and_then(|b| {
+                        adapter
+                            .wrap_request_body(
+                                bytes::Bytes::from(b),
+                                effective_target_format,
+                                &dummy_target.model.model_id,
+                                &dummy_target,
+                            )
+                            .map_err(|e| format!("failed to wrap request: {e}"))
+                    });
 
-        let mut req = if let Some((content_type, body_bytes)) = multipart_opt {
-            openproxy_adapters::upstream::UpstreamRequest::post_multipart(
-                &url,
-                &content_type,
-                body_bytes,
-            )
-        } else {
-            let wrapped_res = serde_json::to_vec(&body_value)
-                .map_err(|e| format!("failed to serialize request: {e}"))
-                .and_then(|b| {
-                    adapter
-                        .wrap_request_body(
-                            bytes::Bytes::from(b),
-                            effective_target_format,
-                            &dummy_target.model.model_id,
-                            &dummy_target,
-                        )
-                        .map_err(|e| format!("failed to wrap request: {e}"))
-                });
-
-            match wrapped_res {
-                Ok(wrapped) => {
-                    openproxy_adapters::upstream::UpstreamRequest::post_json(&url, wrapped)
+                match wrapped_res {
+                    Ok(wrapped) => {
+                        openproxy_adapters::upstream::UpstreamRequest::post_json(&url, wrapped)
+                    }
+                    Err(err_msg) => {
+                        return (test_error_result(model_row_id, 500, &err_msg), None);
+                    }
                 }
-                Err(err_msg) => {
-                    return (test_error_result(model_row_id, 500, &err_msg), None);
+            };
+            req.proxy = effective_proxy.clone();
+            for (k, v) in &headers {
+                if is_stt && k.eq_ignore_ascii_case("content-type") {
+                    continue;
+                }
+                if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
+                    && let Ok(hv) = axum::http::HeaderValue::from_str(v)
+                {
+                    req.headers.insert(hn, hv);
                 }
             }
-        };
-        req.proxy = effective_proxy.clone();
-        for (k, v) in &headers {
-            if is_stt && k.eq_ignore_ascii_case("content-type") {
-                continue;
-            }
-            if let Ok(hn) = axum::http::HeaderName::from_bytes(k.as_bytes())
-                && let Ok(hv) = axum::http::HeaderValue::from_str(v)
-            {
-                req.headers.insert(hn, hv);
-            }
-        }
 
-        let request_headers_map = if opts.in_combo_fanout {
-            None
-        } else {
-            Some(
-                req.headers
-                    .iter()
-                    .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-                    .collect::<std::collections::HashMap<_, _>>(),
-            )
-        };
+            let request_headers_map = if opts.in_combo_fanout {
+                None
+            } else {
+                Some(
+                    req.headers
+                        .iter()
+                        .map(|(k, v)| {
+                            (k.as_str().to_string(), v.to_str().unwrap_or("").to_string())
+                        })
+                        .collect::<std::collections::HashMap<_, _>>(),
+                )
+            };
 
-        let cancel = openproxy_adapters::upstream::CancellationToken::new();
-        if let Some(mut rx) = cancel_rx {
-            let rx_cancel = openproxy_adapters::upstream::CancellationToken::clone(&cancel);
-            tokio::spawn(async move {
-                if rx.borrow().is_some() {
-                    rx_cancel.cancel();
-                    return;
-                }
-                while rx.changed().await.is_ok() {
+            let cancel = openproxy_adapters::upstream::CancellationToken::new();
+            if let Some(mut rx) = cancel_rx {
+                let rx_cancel = openproxy_adapters::upstream::CancellationToken::clone(&cancel);
+                tokio::spawn(async move {
                     if rx.borrow().is_some() {
                         rx_cancel.cancel();
                         return;
                     }
-                }
-            });
-        }
+                    while rx.changed().await.is_ok() {
+                        if rx.borrow().is_some() {
+                            rx_cancel.cancel();
+                            return;
+                        }
+                    }
+                });
+            }
 
-        let profile = openproxy_adapters::upstream::TimeoutProfile::Custom(
-            openproxy_adapters::upstream::ResolvedTimeouts {
-                dns_ms: 2000,
-                dial_ms: 5000,
-                tls_ms: 5000,
-                write_ms: 5000,
-                headers_ms: 15000,
-                body_chunk_ms: 5000,
-                total_ms: 15000,
-            },
-        );
+            let profile = openproxy_adapters::upstream::TimeoutProfile::Custom(
+                openproxy_adapters::upstream::ResolvedTimeouts {
+                    dns_ms: 2000,
+                    dial_ms: 5000,
+                    tls_ms: 5000,
+                    write_ms: 5000,
+                    headers_ms: 15000,
+                    body_chunk_ms: 5000,
+                    total_ms: 15000,
+                },
+            );
 
-        #[cfg(feature = "laya-engine")]
-        let laya_inprocess = is_decision
-            && model.provider_id.as_str() == "laya"
-            && openproxy_adapters::laya_engine::is_available();
-        #[cfg(not(feature = "laya-engine"))]
-        let laya_inprocess = false;
-
-        let (status, error_msg, elapsed_ms, debug_payload) = if laya_inprocess {
             #[cfg(feature = "laya-engine")]
-            {
-                let start_req = std::time::Instant::now();
-                let req_res = serde_json::from_value::<openproxy_types::systemone::SystemOneRequest>(
-                    body_value.clone(),
-                );
-                let eval_res = match req_res {
-                    Ok(s1_req) => {
-                        tokio::task::spawn_blocking(move || {
+            let laya_inprocess = is_decision
+                && model.provider_id.as_str() == "laya"
+                && openproxy_adapters::laya_engine::is_available();
+            #[cfg(not(feature = "laya-engine"))]
+            let laya_inprocess = false;
+
+            let (status, error_msg, elapsed_ms, debug_payload) = if laya_inprocess {
+                #[cfg(feature = "laya-engine")]
+                {
+                    let start_req = std::time::Instant::now();
+                    let req_res = serde_json::from_value::<
+                        openproxy_types::systemone::SystemOneRequest,
+                    >(body_value.clone());
+                    let eval_res = match req_res {
+                        Ok(s1_req) => tokio::task::spawn_blocking(move || {
                             openproxy_adapters::laya_engine::execute_decision(&s1_req)
                         })
                         .await
                         .map_err(|e| e.to_string())
-                        .and_then(|res| res.map_err(|e| e.to_string()))
-                    }
-                    Err(e) => Err(e.to_string()),
-                };
-                let elapsed_ms = start_req.elapsed().as_millis() as u64;
-                let (status, error_msg, resp_val) = match eval_res {
-                    Ok(resp) => (200, None, serde_json::to_value(&resp).ok()),
-                    Err(e) => (500, Some(e.clone()), Some(serde_json::json!({ "error": e }))),
-                };
-                let debug_payload = Some(serde_json::json!({
-                    "engine": "in-process (C FFI)",
-                    "request_body": body_value,
-                    "response_body": resp_val,
-                }));
-                (status, error_msg, elapsed_ms, debug_payload)
-            }
-            #[cfg(not(feature = "laya-engine"))]
-            {
-                unreachable!()
-            }
-        } else {
-            let start_req = std::time::Instant::now();
-            let result = s.upstream_client().call(req, profile, cancel).await;
-            let elapsed_ms = start_req.elapsed().as_millis() as u64;
-
-            let mut debug_payload = request_headers_map.map(|req_headers| {
-                serde_json::json!({
-                    "request_headers": req_headers,
-                    "request_url": url,
-                    "request_body": body_value,
-                    "proxy_used": effective_proxy.clone(),
-                })
-            });
-
-            let (status, error_msg) = match result {
-                Ok(response) => {
-                    let status = response.status.as_u16();
-                    if status >= 400 {
-                        let body = response.collect().await.unwrap_or_default();
-                        let text = String::from_utf8_lossy(&body);
-                        if let Some(dp) = debug_payload.as_mut() {
-                            dp["response_body"] = serde_json::from_str(&text)
-                                .unwrap_or_else(|_| serde_json::json!(text.to_string()));
-                        }
-                        let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
-                        (status, Some(truncated))
-                    } else {
-                        let body = response.collect().await.unwrap_or_default();
-                        let text = String::from_utf8_lossy(&body);
-                        if let Some(dp) = debug_payload.as_mut() {
-                            dp["response_body"] = serde_json::from_str(&text)
-                                .unwrap_or_else(|_| serde_json::json!(text.to_string()));
-                        }
-                        (status, None)
-                    }
+                        .and_then(|res| res.map_err(|e| e.to_string())),
+                        Err(e) => Err(e.to_string()),
+                    };
+                    let elapsed_ms = start_req.elapsed().as_millis() as u64;
+                    let (status, error_msg, resp_val) = match eval_res {
+                        Ok(resp) => (200, None, serde_json::to_value(&resp).ok()),
+                        Err(e) => (
+                            500,
+                            Some(e.clone()),
+                            Some(serde_json::json!({ "error": e })),
+                        ),
+                    };
+                    let debug_payload = Some(serde_json::json!({
+                        "engine": "in-process (C FFI)",
+                        "request_body": body_value,
+                        "response_body": resp_val,
+                    }));
+                    (status, error_msg, elapsed_ms, debug_payload)
                 }
-                Err(e) => (0, Some(format!("{e:?}"))),
-            };
-            (status, error_msg, elapsed_ms, debug_payload)
-        };
+                #[cfg(not(feature = "laya-engine"))]
+                {
+                    unreachable!()
+                }
+            } else {
+                let start_req = std::time::Instant::now();
+                let result = s.upstream_client().call(req, profile, cancel).await;
+                let elapsed_ms = start_req.elapsed().as_millis() as u64;
 
-        let error_msg = error_msg.map(|msg| {
-            if let Some(ref purl) = effective_proxy {
-                if !msg.contains(purl) {
-                    format!("{msg} (via proxy {purl})")
+                let mut debug_payload = request_headers_map.map(|req_headers| {
+                    serde_json::json!({
+                        "request_headers": req_headers,
+                        "request_url": url,
+                        "request_body": body_value,
+                        "proxy_used": effective_proxy.clone(),
+                    })
+                });
+
+                let (status, error_msg) = match result {
+                    Ok(response) => {
+                        let status = response.status.as_u16();
+                        if status >= 400 {
+                            let body = response.collect().await.unwrap_or_default();
+                            let text = String::from_utf8_lossy(&body);
+                            if let Some(dp) = debug_payload.as_mut() {
+                                dp["response_body"] = serde_json::from_str(&text)
+                                    .unwrap_or_else(|_| serde_json::json!(text.to_string()));
+                            }
+                            let truncated: String =
+                                text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
+                            (status, Some(truncated))
+                        } else {
+                            let body = response.collect().await.unwrap_or_default();
+                            let text = String::from_utf8_lossy(&body);
+                            if let Some(dp) = debug_payload.as_mut() {
+                                dp["response_body"] = serde_json::from_str(&text)
+                                    .unwrap_or_else(|_| serde_json::json!(text.to_string()));
+                            }
+                            (status, None)
+                        }
+                    }
+                    Err(e) => (0, Some(format!("{e:?}"))),
+                };
+                (status, error_msg, elapsed_ms, debug_payload)
+            };
+
+            let error_msg = error_msg.map(|msg| {
+                if let Some(ref purl) = effective_proxy {
+                    if !msg.contains(purl) {
+                        format!("{msg} (via proxy {purl})")
+                    } else {
+                        msg
+                    }
                 } else {
                     msg
                 }
-            } else {
-                msg
+            });
+
+            if (status >= 400 || status == 0) && effective_proxy.is_some() {
+                let is_connect = status == 0;
+                let _ = openproxy_core::free_proxies::report_proxy_failure(
+                    s.db_pool(),
+                    &model.provider_id,
+                    _account_id_opt,
+                    is_connect,
+                )
+                .await;
             }
-        });
 
-        if (status >= 400 || status == 0) && effective_proxy.is_some() {
-            let is_connect = status == 0;
-            let _ = openproxy_core::free_proxies::report_proxy_failure(
-                s.db_pool(),
-                &model.provider_id,
-                _account_id_opt,
-                is_connect,
-            )
-            .await;
-        }
-
-        (status, error_msg, elapsed_ms, debug_payload)
-    } else {
-        let custom_meta = build_custom_provider_meta(
-            model.provider_id.as_str(),
-            raw_account_opt.as_ref(),
-            &api_key,
-        );
-
-        let dummy_target = openproxy_types::context::ResolvedTarget {
-            target: openproxy_types::combos::ComboTarget {
-                id: openproxy_types::ids::ComboTargetId(0),
-                combo_id: openproxy_types::ids::ComboId(0),
-                provider_id: openproxy_types::ids::ProviderId::new(model.provider_id.as_str()),
-                account_id: _account_id_opt,
-                model_row_id: Some(model.row_id),
-                sub_combo_id: None,
-                priority_order: 0,
-                weight: 1,
-                active: true,
-                rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-                cooldown_mode: None,
-                cooldown_base_secs: None,
-                cooldown_max_secs: None,
-                cooldown_factor: None,
-                thinking_effort: None,
-                description: None,
-            },
-            model: model.clone(),
-            api_key: api_key.clone(),
-            api_key_label: Some(account_label.clone()),
-            custom_meta,
-        };
-
-        let mut req_headers = std::collections::BTreeMap::new();
-        req_headers.insert("user-agent".to_string(), "openproxy-tester".to_string());
-
-        let (_dummy_tx, dummy_rx) = tokio::sync::watch::channel(None);
-        let client_disconnected = cancel_rx.unwrap_or(dummy_rx);
-
-        let pipeline_req = openproxy_pipeline::PipelineRequest {
-            request_id: openproxy_types::ids::RequestId::new(),
-            trace_id: openproxy_types::ids::TraceId::new(),
-            combo_id: openproxy_types::ids::ComboId(0),
-            openai_request: std::sync::Arc::new(openai_req.clone()),
-            client_disconnected,
-            stream_sink: None,
-            api_key_id: None,
-            race_cancel: None,
-            combo_override: None,
-            targets_override: None,
-            request_headers: req_headers.clone(),
-            request_body_json: None,
-            race_cancelled: false,
-            endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-            compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
-            pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-            compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-            proxy_override,
-        };
-
-        let start_req = std::time::Instant::now();
-        let pipeline = crate::services::pipeline_runner::PipelineRunner::build_pipeline(s);
-        let pipeline_res = pipeline
-            .execute_test_target(pipeline_req, dummy_target)
-            .await;
-        let elapsed_ms = start_req.elapsed().as_millis() as u64;
-
-        let (status, error_msg) = if matches!(pipeline_res.error, Some(CoreError::Cancelled(_))) {
-            (0, Some("Cancel".to_string()))
-        } else if let Some(ref err) = pipeline_res.error {
-            let status = err.http_status();
-            let err_str = err.to_string();
-            let truncated: String = err_str.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
-            (status, Some(truncated))
+            (status, error_msg, elapsed_ms, debug_payload)
         } else {
-            (pipeline_res.status_code, None)
-        };
+            let custom_meta = build_custom_provider_meta(
+                model.provider_id.as_str(),
+                raw_account_opt.as_ref(),
+                &api_key,
+            );
 
-        let debug_payload = if opts.in_combo_fanout {
-            None
-        } else {
-            let response_body = if let Some(ref resp) = pipeline_res.final_response {
-                serde_json::to_value(resp).unwrap_or_default()
-            } else if let Some(ref err) = pipeline_res.error {
-                serde_json::json!({ "error": err.to_string() })
-            } else {
-                serde_json::Value::Null
+            let dummy_target = openproxy_types::context::ResolvedTarget {
+                target: openproxy_types::combos::ComboTarget {
+                    id: openproxy_types::ids::ComboTargetId(0),
+                    combo_id: openproxy_types::ids::ComboId(0),
+                    provider_id: openproxy_types::ids::ProviderId::new(model.provider_id.as_str()),
+                    account_id: _account_id_opt,
+                    model_row_id: Some(model.row_id),
+                    sub_combo_id: None,
+                    priority_order: 0,
+                    weight: 1,
+                    active: true,
+                    rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+                    cooldown_mode: None,
+                    cooldown_base_secs: None,
+                    cooldown_max_secs: None,
+                    cooldown_factor: None,
+                    thinking_effort: None,
+                    description: None,
+                },
+                model: model.clone(),
+                api_key: api_key.clone(),
+                api_key_label: Some(account_label.clone()),
+                custom_meta,
             };
-            Some(serde_json::json!({
-                "request_headers": req_headers,
-                "request_url": adapter.build_chat_url_for_account(
-                    effective_target_format,
-                    &model.model_id,
-                    &account_label,
-                ),
-                "request_body": openai_req,
-                "response_body": response_body,
-                "proxy_used": effective_proxy.clone(),
-            }))
-        };
 
-        (status, error_msg, elapsed_ms, debug_payload)
-    };
+            let mut req_headers = std::collections::BTreeMap::new();
+            req_headers.insert("user-agent".to_string(), "openproxy-tester".to_string());
+
+            let (_dummy_tx, dummy_rx) = tokio::sync::watch::channel(None);
+            let client_disconnected = cancel_rx.unwrap_or(dummy_rx);
+
+            let pipeline_req = openproxy_pipeline::PipelineRequest {
+                request_id: openproxy_types::ids::RequestId::new(),
+                trace_id: openproxy_types::ids::TraceId::new(),
+                combo_id: openproxy_types::ids::ComboId(0),
+                openai_request: std::sync::Arc::new(openai_req.clone()),
+                client_disconnected,
+                stream_sink: None,
+                api_key_id: None,
+                race_cancel: None,
+                combo_override: None,
+                targets_override: None,
+                request_headers: req_headers.clone(),
+                request_body_json: None,
+                race_cancelled: false,
+                endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+                compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+                pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+                compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+                proxy_override,
+            };
+
+            let start_req = std::time::Instant::now();
+            let pipeline = crate::services::pipeline_runner::PipelineRunner::build_pipeline(s);
+            let pipeline_res = pipeline
+                .execute_test_target(pipeline_req, dummy_target)
+                .await;
+            let elapsed_ms = start_req.elapsed().as_millis() as u64;
+
+            let (status, error_msg) = if matches!(pipeline_res.error, Some(CoreError::Cancelled(_)))
+            {
+                (0, Some("Cancel".to_string()))
+            } else if let Some(ref err) = pipeline_res.error {
+                let status = err.http_status();
+                let err_str = err.to_string();
+                let truncated: String = err_str.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
+                (status, Some(truncated))
+            } else {
+                (pipeline_res.status_code, None)
+            };
+
+            let debug_payload = if opts.in_combo_fanout {
+                None
+            } else {
+                let response_body = if let Some(ref resp) = pipeline_res.final_response {
+                    serde_json::to_value(resp).unwrap_or_default()
+                } else if let Some(ref err) = pipeline_res.error {
+                    serde_json::json!({ "error": err.to_string() })
+                } else {
+                    serde_json::Value::Null
+                };
+                Some(serde_json::json!({
+                    "request_headers": req_headers,
+                    "request_url": adapter.build_chat_url_for_account(
+                        effective_target_format,
+                        &model.model_id,
+                        &account_label,
+                    ),
+                    "request_body": openai_req,
+                    "response_body": response_body,
+                    "proxy_used": effective_proxy.clone(),
+                }))
+            };
+
+            (status, error_msg, elapsed_ms, debug_payload)
+        };
 
     let mut error_msg = error_msg;
     if let (Some(err), Some(purl)) = (&mut error_msg, &effective_proxy)

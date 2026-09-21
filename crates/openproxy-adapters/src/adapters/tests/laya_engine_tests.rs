@@ -2,9 +2,7 @@ use crate::adapters::laya_engine::{
     confidence_from_probs, execute_decision, init, is_available, is_model_installed,
     render_options, shutdown,
 };
-use openproxy_types::systemone::{
-    SystemOneQuestion, SystemOneQuestionType, SystemOneRequest,
-};
+use openproxy_types::systemone::{SystemOneQuestion, SystemOneQuestionType, SystemOneRequest};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[test]
@@ -18,7 +16,10 @@ fn test_confidence_from_probs_boundary_cases() {
 
     // Certain distribution with k=2: zero entropy -> confidence = 1.0
     let conf_certain_2 = confidence_from_probs(&[1.0, 0.0], 2);
-    assert!((conf_certain_2 - 1.0).abs() < 1e-4, "Expected ~1.0, got {conf_certain_2}");
+    assert!(
+        (conf_certain_2 - 1.0).abs() < 1e-4,
+        "Expected ~1.0, got {conf_certain_2}"
+    );
 
     // Uniform distribution with k=4: maximum entropy -> confidence = 0.0
     let conf_uniform_4 = confidence_from_probs(&[0.25, 0.25, 0.25, 0.25], 4);
@@ -84,8 +85,14 @@ fn test_render_options_all_types() {
     };
     let noul_opts = render_options(&q_noul);
     assert_eq!(noul_opts.len(), 2);
-    assert_eq!(noul_opts[0], ("false".into(), "false: statement is false".into()));
-    assert_eq!(noul_opts[1], ("true".into(), "true: statement is true".into()));
+    assert_eq!(
+        noul_opts[0],
+        ("false".into(), "false: statement is false".into())
+    );
+    assert_eq!(
+        noul_opts[1],
+        ("true".into(), "true: statement is true".into())
+    );
 
     // 5. Noul with default criteria
     let q_noul_def = SystemOneQuestion {
@@ -96,8 +103,17 @@ fn test_render_options_all_types() {
     };
     let noul_def_opts = render_options(&q_noul_def);
     assert_eq!(noul_def_opts.len(), 2);
-    assert_eq!(noul_def_opts[0], ("false".into(), "false: no, the statement does not hold".into()));
-    assert_eq!(noul_def_opts[1], ("true".into(), "true: yes, the statement holds".into()));
+    assert_eq!(
+        noul_def_opts[0],
+        (
+            "false".into(),
+            "false: no, the statement does not hold".into()
+        )
+    );
+    assert_eq!(
+        noul_def_opts[1],
+        ("true".into(), "true: yes, the statement holds".into())
+    );
 }
 
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -198,7 +214,12 @@ fn test_laya_engine_multi_question_types_inference() {
     assert_eq!(topic.question_type, SystemOneQuestionType::Choice);
     assert_eq!(topic.choice.as_deref(), Some("coding"));
     assert!(topic.confidence.unwrap_or(0.0) > 0.0);
-    assert!(topic.probabilities.as_ref().is_some_and(|p| p.contains_key("coding")));
+    assert!(
+        topic
+            .probabilities
+            .as_ref()
+            .is_some_and(|p| p.contains_key("coding"))
+    );
 
     // Score validation
     let urgency = resp.answers.get("urgency").expect("urgency answer");
@@ -211,7 +232,10 @@ fn test_laya_engine_multi_question_types_inference() {
     assert_eq!(is_code.question_type, SystemOneQuestionType::Noul);
     let noul = is_code.noul.expect("noul prob present");
     assert!((0.0..=1.0).contains(&noul));
-    assert!(noul > 0.5, "Expected high probability for code query, got {noul}");
+    assert!(
+        noul > 0.5,
+        "Expected high probability for code query, got {noul}"
+    );
 
     // Usage tokens validation
     assert!(resp.usage.is_some_and(|u| u.input_tokens > 0));

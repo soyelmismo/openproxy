@@ -150,7 +150,11 @@ async fn save_oauth_token_and_notify(
                     email: email.as_deref(),
                 },
             )?;
-            openproxy_core::accounts::set_health(&w, account_id, openproxy_types::HealthStatus::Healthy)?;
+            openproxy_core::accounts::set_health(
+                &w,
+                account_id,
+                openproxy_types::HealthStatus::Healthy,
+            )?;
             Ok(())
         }
     })

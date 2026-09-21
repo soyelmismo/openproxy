@@ -46,7 +46,11 @@ async fn test_systemone_direct_call_success_and_records_usage() {
     });
 
     let (status, resp) = harness.client_systemone_call(payload).await;
-    assert_eq!(status, StatusCode::OK, "direct systemone call should return 200: {resp}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "direct systemone call should return 200: {resp}"
+    );
 
     assert!(resp.get("answers").is_some());
     let answers = resp["answers"].as_object().expect("answers map");
@@ -63,7 +67,10 @@ async fn test_systemone_direct_call_success_and_records_usage() {
     // Verify usage row is recorded in database
     let r = harness.db_pool.reader();
     let rows = usage::recent_desc(&r, 10).expect("query recent usage");
-    assert!(!rows.is_empty(), "a usage row should be recorded for systemone");
+    assert!(
+        !rows.is_empty(),
+        "a usage row should be recorded for systemone"
+    );
     let last = &rows[0];
     assert_eq!(last.status_code, 200);
     assert_eq!(last.upstream_model_id, "mock-jev");
@@ -119,9 +126,10 @@ async fn test_systemone_upstream_error_handling() {
         .expect("create mock-jev-err model");
     }
 
-    harness
-        .mock_handle
-        .set_error(StatusCode::BAD_GATEWAY, Some("{\"error\": \"mock gateway error\"}"));
+    harness.mock_handle.set_error(
+        StatusCode::BAD_GATEWAY,
+        Some("{\"error\": \"mock gateway error\"}"),
+    );
 
     let payload = json!({
         "model": "mock-jev-err",
@@ -136,7 +144,10 @@ async fn test_systemone_upstream_error_handling() {
     });
 
     let (status, _) = harness.client_systemone_call(payload).await;
-    assert!(status.is_server_error() || status.is_client_error(), "should return error status");
+    assert!(
+        status.is_server_error() || status.is_client_error(),
+        "should return error status"
+    );
 
     harness.mock_handle.clear_error();
 }
@@ -241,14 +252,24 @@ async fn test_combo_decision_routing_simple_vs_complex() {
     let (status, resp) = harness
         .client_chat_call("smart-combo", "Hello, how is your day?", false)
         .await;
-    assert_eq!(status, StatusCode::OK, "chat call to combo should succeed: {resp}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "chat call to combo should succeed: {resp}"
+    );
     assert_eq!(resp["object"], "chat.completion");
 
     let rec = harness.mock_handle.recorded_requests();
-    let chat_reqs: Vec<_> = rec.iter().filter(|r| r.path.contains("chat/completions")).collect();
+    let chat_reqs: Vec<_> = rec
+        .iter()
+        .filter(|r| r.path.contains("chat/completions"))
+        .collect();
     assert!(!chat_reqs.is_empty(), "must record chat upstream request");
     let model_dispatched = chat_reqs.last().unwrap().body["model"].as_str().unwrap();
-    assert_eq!(model_dispatched, "mock-fast", "simple prompt must route to mock-fast");
+    assert_eq!(
+        model_dispatched, "mock-fast",
+        "simple prompt must route to mock-fast"
+    );
 
     harness.mock_handle.clear_recorded_requests();
 
@@ -256,14 +277,24 @@ async fn test_combo_decision_routing_simple_vs_complex() {
     let (status, resp) = harness
         .client_chat_call("smart-combo", "Write a complex async parser in Rust", false)
         .await;
-    assert_eq!(status, StatusCode::OK, "chat call to combo should succeed: {resp}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "chat call to combo should succeed: {resp}"
+    );
     assert_eq!(resp["object"], "chat.completion");
 
     let rec2 = harness.mock_handle.recorded_requests();
-    let chat_reqs2: Vec<_> = rec2.iter().filter(|r| r.path.contains("chat/completions")).collect();
+    let chat_reqs2: Vec<_> = rec2
+        .iter()
+        .filter(|r| r.path.contains("chat/completions"))
+        .collect();
     assert!(!chat_reqs2.is_empty(), "must record chat upstream request");
     let model_dispatched2 = chat_reqs2.last().unwrap().body["model"].as_str().unwrap();
-    assert_eq!(model_dispatched2, "mock-deep", "complex prompt must route to mock-deep");
+    assert_eq!(
+        model_dispatched2, "mock-deep",
+        "complex prompt must route to mock-deep"
+    );
 }
 
 #[tokio::test]
@@ -374,12 +405,21 @@ async fn test_admin_model_tester_decision_model() {
         .admin_post(&format!("/admin/api/models/{model_row_id}/test"), json!({}))
         .await;
 
-    assert_eq!(status, StatusCode::OK, "test endpoint should return 200: {resp}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "test endpoint should return 200: {resp}"
+    );
     assert_eq!(resp["status"], 200);
 
     // Verify debug_payload contains the real System One request and response
     let debug = &resp["debug_payload"];
-    assert!(debug["request_url"].as_str().unwrap().contains("/systemone"));
+    assert!(
+        debug["request_url"]
+            .as_str()
+            .unwrap()
+            .contains("/systemone")
+    );
     assert_eq!(debug["request_body"]["model"], "jev-test-model");
     assert!(debug["request_body"]["questions"]["status"].is_object());
     assert_eq!(debug["response_body"]["answers"]["status"]["choice"], "ok");
@@ -467,13 +507,25 @@ async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
 
     // 1) Test provider/model resolution
     let provider_model = format!("{}/jev-routed", harness.provider_id);
-    let (status1, resp1) = harness.client_systemone_call(sample_payload(&provider_model)).await;
-    assert_eq!(status1, StatusCode::OK, "provider/model systemone call should return 200: {resp1}");
+    let (status1, resp1) = harness
+        .client_systemone_call(sample_payload(&provider_model))
+        .await;
+    assert_eq!(
+        status1,
+        StatusCode::OK,
+        "provider/model systemone call should return 200: {resp1}"
+    );
     assert_eq!(resp1["answers"]["health"]["choice"], "ok");
 
     // 2) Test combo resolution
-    let (status2, resp2) = harness.client_systemone_call(sample_payload("decision-combo")).await;
-    assert_eq!(status2, StatusCode::OK, "combo systemone call should return 200: {resp2}");
+    let (status2, resp2) = harness
+        .client_systemone_call(sample_payload("decision-combo"))
+        .await;
+    assert_eq!(
+        status2,
+        StatusCode::OK,
+        "combo systemone call should return 200: {resp2}"
+    );
     assert_eq!(resp2["answers"]["health"]["choice"], "ok");
 
     // Verify usage records row for combo dispatch
@@ -484,6 +536,8 @@ async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
         .find(|r| r.upstream_model_id == "jev-routed")
         .expect("must record usage row for jev-routed");
     assert_eq!(combo_row.status_code, 200);
-    assert_eq!(combo_row.endpoint_kind, openproxy_types::EndpointKind::SystemOne);
+    assert_eq!(
+        combo_row.endpoint_kind,
+        openproxy_types::EndpointKind::SystemOne
+    );
 }
-

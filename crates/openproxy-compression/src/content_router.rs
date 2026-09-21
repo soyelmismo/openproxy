@@ -82,7 +82,9 @@ static SEARCH_RESULT_RE: LazyLock<Regex> =
 
 /// Source-code structural keywords: `fn `, `func `, `def `, `class `, etc.
 static SOURCE_KEYWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    openproxy_types::static_regex!(r"(fn |func |def |class |struct |enum |interface |public |private |protected )")
+    openproxy_types::static_regex!(
+        r"(fn |func |def |class |struct |enum |interface |public |private |protected )"
+    )
 });
 
 /// Source-code import-like first line: `import `, `from `, `use `,

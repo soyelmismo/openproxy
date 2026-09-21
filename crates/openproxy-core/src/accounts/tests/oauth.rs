@@ -381,7 +381,10 @@ fn oauth_store_resets_unhealthy_status_and_errors() {
     .unwrap();
 
     let updated = get(&conn, id, &mk).unwrap().unwrap();
-    assert_eq!(updated.health_status, openproxy_types::HealthStatus::Healthy);
+    assert_eq!(
+        updated.health_status,
+        openproxy_types::HealthStatus::Healthy
+    );
     assert!(updated.rate_limited_until.is_none());
     assert!(updated.quota_fetch_error.is_none());
 }

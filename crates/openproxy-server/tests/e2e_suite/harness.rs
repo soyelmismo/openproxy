@@ -239,13 +239,14 @@ async fn mock_systemone_handler(
     let mut answers = serde_json::Map::new();
     if let Some(q_map) = questions {
         for (q_id, q_val) in q_map {
-            let opt_strs: Vec<&str> = if let Some(opts) = q_val.get("options").and_then(Value::as_array) {
-                opts.iter().filter_map(Value::as_str).collect()
-            } else if let Some(crit) = q_val.get("criteria").and_then(Value::as_object) {
-                crit.keys().map(String::as_str).collect()
-            } else {
-                Vec::new()
-            };
+            let opt_strs: Vec<&str> =
+                if let Some(opts) = q_val.get("options").and_then(Value::as_array) {
+                    opts.iter().filter_map(Value::as_str).collect()
+                } else if let Some(crit) = q_val.get("criteria").and_then(Value::as_object) {
+                    crit.keys().map(String::as_str).collect()
+                } else {
+                    Vec::new()
+                };
             let choice = if !opt_strs.is_empty() {
                 let chosen = opt_strs
                     .iter()

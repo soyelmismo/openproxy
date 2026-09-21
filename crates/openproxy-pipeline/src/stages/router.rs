@@ -84,13 +84,13 @@ impl PipelineStage for RouterStage {
         }
 
         if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision {
-            let should_reset = crate::session_affinity::SessionAffinityRegistry::should_reset(&ctx.req);
-            let session_hash = crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req);
+            let should_reset =
+                crate::session_affinity::SessionAffinityRegistry::should_reset(&ctx.req);
+            let session_hash =
+                crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req);
 
             let mut current_pinned_id = None;
-            if !should_reset
-                && let Some(hash) = session_hash
-            {
+            if !should_reset && let Some(hash) = session_hash {
                 let key = crate::session_affinity::SessionAffinityKey {
                     session_hash: hash,
                     combo_id: combo.id,
@@ -98,7 +98,8 @@ impl PipelineStage for RouterStage {
                 if let Some(pinned_id) = ctx.pipeline.session_affinity.get(key) {
                     if resolved.iter().any(|rt| rt.target.id == pinned_id) {
                         current_pinned_id = Some(pinned_id);
-                        ctx.combo_walk_log.push(format!("session_affinity:active={}", pinned_id.0));
+                        ctx.combo_walk_log
+                            .push(format!("session_affinity:active={}", pinned_id.0));
                     } else {
                         ctx.pipeline.session_affinity.invalidate(&key);
                         tracing::warn!(
@@ -115,7 +116,8 @@ impl PipelineStage for RouterStage {
                 &combo,
                 &mut resolved,
                 current_pinned_id,
-            ).await;
+            )
+            .await;
         }
 
         ctx.targets = resolved;
@@ -124,7 +126,8 @@ impl PipelineStage for RouterStage {
         if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision
             && res.error.is_none()
             && matches!(res.status_code, 200..=299)
-            && let Some(hash) = crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req)
+            && let Some(hash) =
+                crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req)
         {
             let successful_target_id = res
                 .usage_tuple

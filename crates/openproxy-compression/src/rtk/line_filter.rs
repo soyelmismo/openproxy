@@ -184,9 +184,8 @@ macro_rules! compiled_filter {
 // `filter_stderr_prefixes` was previously compiling this regex on every
 // call. Phase B already moved `strip_ansi` to memchr; this finishes the
 // job for the stderr-prefix path.
-static STDERR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    openproxy_types::static_regex!(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*")
-});
+static STDERR_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| openproxy_types::static_regex!(r"(?m)^\s*(?:stderr|err)\s*(?:\||:)\s*"));
 
 fn filter_stderr_prefixes(text: &str) -> String {
     STDERR_RE.replace_all(text, "").into_owned()

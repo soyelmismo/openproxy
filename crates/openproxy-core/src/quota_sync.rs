@@ -407,11 +407,9 @@ pub async fn refresh_single_account_quota(
         })
         .await;
         clear_live_limited_after_refresh(db_pool, account_id).await;
-    } else if q
-        .fetch_error
-        .as_deref()
-        .is_some_and(|e| e.contains("401") || e.contains("Unauthorized") || e.contains("Authentication failed"))
-    {
+    } else if q.fetch_error.as_deref().is_some_and(|e| {
+        e.contains("401") || e.contains("Unauthorized") || e.contains("Authentication failed")
+    }) {
         let db_pool_health = Arc::clone(db_pool);
         let _ = tokio::task::spawn_blocking(move || {
             let conn = db_pool_health.writer();

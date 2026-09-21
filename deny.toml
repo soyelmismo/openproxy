@@ -6,6 +6,10 @@ targets = []
 
 [advisories]
 yanked = "warn"
+ignore = [
+    # paste is unmaintained, pulled transitively by tokenizers (huggingface)
+    "RUSTSEC-2024-0436",
+]
 
 [licenses]
 confidence-threshold = 0.8
@@ -43,6 +47,7 @@ skip = [
     # httpmock 0.8.3 uses headers 0.3 which pulls base64 0.22,
     # while the rest of the workspace uses base64 0.23.
     # Will be removed once httpmock updates to headers 0.4 / base64 0.23.
+    { crate = "base64@0.13.1", reason = "tokenizers -> spm_precompiled -> base64 0.13 transitively while workspace uses 0.23" },
     { crate = "base64@0.22.1", reason = "httpmock -> headers -> base64 0.22 transitively while workspace uses 0.23" },
     { crate = "block-buffer@0.10.4", reason = "transitive dependency from rustcrypto ecosystem" },
     { crate = "cpufeatures@0.2.17", reason = "transitive dependency from rustcrypto ecosystem" },

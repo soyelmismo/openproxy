@@ -71,7 +71,8 @@ pub struct SystemOneUsage {
 
 impl SystemOneUsage {
     pub fn total(&self) -> u64 {
-        self.total_tokens.unwrap_or(self.input_tokens + self.output_tokens)
+        self.total_tokens
+            .unwrap_or(self.input_tokens + self.output_tokens)
     }
 }
 

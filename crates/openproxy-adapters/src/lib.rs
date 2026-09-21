@@ -13,6 +13,8 @@ pub use spoofer::{
 
 #[cfg(any(test, feature = "test-utils"))]
 pub use adapters::MockAdapter;
+#[cfg(feature = "laya-engine")]
+pub use adapters::laya_engine;
 pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,
@@ -26,8 +28,6 @@ pub use adapters::{
     opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter, typesafe::TypeSafeAdapter,
     zai::ZaiAdapter,
 };
-#[cfg(feature = "laya-engine")]
-pub use adapters::laya_engine;
 #[cfg(any(test, feature = "test-utils"))]
 pub use upstream::load_upstream_source;
 

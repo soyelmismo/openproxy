@@ -79,13 +79,7 @@ pub const STT_KEYWORDS: &[&str] = &[
     "audio-transcription",
 ];
 
-pub const DECISION_KEYWORDS: &[&str] = &[
-    "jev",
-    "laya",
-    "systemone",
-    "system-one",
-    "decision",
-];
+pub const DECISION_KEYWORDS: &[&str] = &["jev", "laya", "systemone", "system-one", "decision"];
 
 pub fn is_decision_model(lower: &str) -> bool {
     DECISION_KEYWORDS.iter().any(|k| lower.contains(k))

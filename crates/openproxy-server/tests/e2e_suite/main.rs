@@ -9,8 +9,8 @@
 //! - Tier 4: Real-World Application Scenarios (Multi-turn conversations, Discovery sync, Multi-client analytics, Races, Admin lifecycle)
 
 pub mod harness;
+pub mod systemone_tests;
 pub mod tier1_features;
 pub mod tier2_boundaries;
 pub mod tier3_combinations;
 pub mod tier4_scenarios;
-pub mod systemone_tests;
