@@ -24,7 +24,7 @@ RUN case "${TARGETARCH}" in \
     esac && \
     mkdir -p /opt/onnxruntime && \
     curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ONNXRUNTIME_VERSION}.tgz" | \
-    tar -xz --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
+    tar -xz --wildcards --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
 
 FROM gcr.io/distroless/cc:nonroot AS runtime
 
