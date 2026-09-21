@@ -85,3 +85,45 @@ pub struct SystemOneResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<SystemOneUsage>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_systemone_usage_total() {
+        let usage_fallback = SystemOneUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: None,
+        };
+        assert_eq!(usage_fallback.total(), 150);
+
+        let usage_explicit = SystemOneUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            total_tokens: Some(200),
+        };
+        assert_eq!(usage_explicit.total(), 200);
+    }
+
+    #[test]
+    fn test_systemone_question_type_serde() {
+        assert_eq!(
+            serde_json::to_string(&SystemOneQuestionType::Choice).expect("serialize"),
+            "\"choice\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SystemOneQuestionType::Score).expect("serialize"),
+            "\"score\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SystemOneQuestionType::Noul).expect("serialize"),
+            "\"noul\""
+        );
+
+        let q_type: SystemOneQuestionType =
+            serde_json::from_str("\"choice\"").expect("deserialize");
+        assert_eq!(q_type, SystemOneQuestionType::Choice);
+    }
+}
