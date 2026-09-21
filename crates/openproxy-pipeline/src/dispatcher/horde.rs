@@ -111,7 +111,7 @@ impl UpstreamDispatcher {
             .map_or(0, |d| d.as_secs());
         let completion_tokens = (caption.len() / 4).max(1) as u32;
         let prompt_tokens = 10u32;
-        let openai_response = OpenAIResponse {
+        let mut openai_response = OpenAIResponse {
             id: response_id.clone(),
             object: "chat.completion".to_string(),
             created,
@@ -186,6 +186,14 @@ impl UpstreamDispatcher {
         } else {
             None
         };
+
+        if self.config.pii_config.pii_enabled
+            && self.config.pii_config.pii_reversible
+            && let Some(ref session) = *req.pii_session.lock()
+        {
+            session.restore_openai_response(&mut openai_response);
+        }
+
         let resp_json = serde_json::to_value(&openai_response).unwrap_or_default();
         let usage_tuple =
             match crate::usage_tracker::UsageRecordBuilder::new(&self.tracker, req, combo, target)

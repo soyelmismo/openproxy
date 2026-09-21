@@ -234,3 +234,66 @@ fn test_person_placeholder_clean_names_and_reverse_deanonymization() {
         "Hello Alex Vance"
     );
 }
+
+#[test]
+fn test_person_restoration_handles_first_name_only_and_casing_variations() {
+    let mut session = PiiSession::new(true);
+
+    // "Miguel" maps to "Alex Vance"
+    let p = session.get_or_create_placeholder(PiiEntity::Person, "Miguel");
+    assert_eq!(p, "Alex Vance");
+
+    // 1. LLM addresses user by first name only: "Hola Alex!" -> "Hola Miguel!"
+    assert_eq!(
+        session.restore_text("¡Hola Alex! ¿Cómo puedo ayudarte hoy?"),
+        "¡Hola Miguel! ¿Cómo puedo ayudarte hoy?"
+    );
+
+    // 2. LLM addresses user by full synthetic name: "Hola Alex Vance!" -> "Hola Miguel!"
+    assert_eq!(
+        session.restore_text("¡Hola Alex Vance! ¿Cómo puedo ayudarte hoy?"),
+        "¡Hola Miguel! ¿Cómo puedo ayudarte hoy?"
+    );
+
+    // 3. Case-insensitive matching: "hola alex" or "ALEX"
+    assert_eq!(
+        session.restore_text("hola alex, bienvenido."),
+        "hola Miguel, bienvenido."
+    );
+    assert_eq!(
+        session.restore_text("ALEX es el usuario."),
+        "Miguel es el usuario."
+    );
+
+    // 4. Last name reference: "Estimado Sr. Vance" -> "Estimado Sr. Miguel"
+    assert_eq!(
+        session.restore_text("Estimado Sr. Vance"),
+        "Estimado Sr. Miguel"
+    );
+}
+
+#[test]
+fn test_multi_word_person_name_restores_first_last_and_full() {
+    let mut session = PiiSession::new(true);
+
+    let p = session.get_or_create_placeholder(PiiEntity::Person, "Miguel Hernández");
+    assert_eq!(p, "Alex Vance");
+
+    // Full name restoration
+    assert_eq!(
+        session.restore_text("Bienvenido Alex Vance a la plataforma."),
+        "Bienvenido Miguel Hernández a la plataforma."
+    );
+
+    // First name only restoration
+    assert_eq!(
+        session.restore_text("Hola Alex, un gusto."),
+        "Hola Miguel, un gusto."
+    );
+
+    // Last name only restoration
+    assert_eq!(
+        session.restore_text("Sr. Vance, su solicitud fue procesada."),
+        "Sr. Hernández, su solicitud fue procesada."
+    );
+}

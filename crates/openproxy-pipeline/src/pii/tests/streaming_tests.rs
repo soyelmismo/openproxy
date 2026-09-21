@@ -162,3 +162,40 @@ fn test_stream_eof_without_done_sentinel_preserves_buffer() {
     let flush = sse.flush_residual_frame();
     assert!(flush.is_some() && flush.unwrap().contains(prefix));
 }
+
+#[test]
+fn test_streaming_person_name_restoration_first_and_full() {
+    let mut session = PiiSession::new(true);
+    let p = session.get_or_create_placeholder(PiiEntity::Person, "Miguel");
+    assert_eq!(p, "Alex Vance");
+
+    let mut sse = PiiRestorationStage::new(&session);
+
+    // 1. First name only in streaming: "¡Hola " + "Alex" + "! ¿Cómo estás?"
+    assert_eq!(
+        sse.process_frame("data: {\"choices\":[{\"delta\":{\"content\":\"¡Hola \"}}]}\n\n"),
+        "data: {\"choices\":[{\"delta\":{\"content\":\"¡Hola \"}}]}\n\n"
+    );
+    assert_eq!(
+        sse.process_frame("data: {\"choices\":[{\"delta\":{\"content\":\"Alex\"}}]}\n\n"),
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"
+    );
+    assert_eq!(
+        sse.process_frame("data: {\"choices\":[{\"delta\":{\"content\":\"! ¿Cómo estás?\"}}]}\n\n"),
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Miguel! ¿Cómo estás?\"}}]}\n\n"
+    );
+
+    // 2. Full name across chunks: "Alex" + " Vance"
+    assert_eq!(
+        sse.process_frame("data: {\"choices\":[{\"delta\":{\"content\":\"Bienvenido \"}}]}\n\n"),
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Bienvenido \"}}]}\n\n"
+    );
+    assert_eq!(
+        sse.process_frame("data: {\"choices\":[{\"delta\":{\"content\":\"Alex\"}}]}\n\n"),
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"
+    );
+    assert_eq!(
+        sse.process_frame("data: {\"choices\":[{\"delta\":{\"content\":\" Vance.\"}}]}\n\n"),
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Miguel.\"}}]}\n\n"
+    );
+}

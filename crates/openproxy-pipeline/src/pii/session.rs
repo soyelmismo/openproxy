@@ -255,6 +255,14 @@ impl PiiSession {
             {
                 self.reverse
                     .insert(placeholder.clone(), original.to_string());
+                if let Some((first_ph, last_ph)) = placeholder.split_once(' ') {
+                    let orig_first = original.split_whitespace().next().unwrap_or(original);
+                    let orig_last = original.split_whitespace().last().unwrap_or(original);
+                    self.reverse
+                        .insert(first_ph.to_string(), orig_first.to_string());
+                    self.reverse
+                        .insert(last_ph.to_string(), orig_last.to_string());
+                }
             }
             return placeholder;
         }
@@ -410,6 +418,22 @@ impl PiiSession {
             .insert(original.to_string(), placeholder.clone());
         self.reverse
             .insert(placeholder.clone(), original.to_string());
+
+        if entity == PiiEntity::Person
+            && let Some((first_ph, last_ph)) = placeholder.split_once(' ')
+        {
+            let orig_first = original.split_whitespace().next().unwrap_or(original);
+            let orig_last = original.split_whitespace().last().unwrap_or(original);
+
+            self.reverse
+                .entry(first_ph.to_string())
+                .or_insert_with(|| orig_first.to_string());
+
+            self.reverse
+                .entry(last_ph.to_string())
+                .or_insert_with(|| orig_last.to_string());
+        }
+
         placeholder
     }
 
@@ -428,6 +452,7 @@ impl PiiSession {
         let replacements: Vec<&str> = pairs.iter().map(|(_, v)| v.as_str()).collect();
 
         match AhoCorasick::builder()
+            .ascii_case_insensitive(true)
             .match_kind(MatchKind::LeftmostLongest)
             .build(&patterns)
         {

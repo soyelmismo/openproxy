@@ -48,12 +48,13 @@ impl StreamingWindowReplacer {
         for pat in &patterns {
             for (byte_idx, _) in pat.char_indices() {
                 if byte_idx > 0 {
-                    prefixes.insert(pat[..byte_idx].to_string());
+                    prefixes.insert(pat[..byte_idx].to_ascii_lowercase());
                 }
             }
         }
 
         let automaton = AhoCorasick::builder()
+            .ascii_case_insensitive(true)
             .match_kind(MatchKind::LeftmostLongest)
             .build(&patterns)
             .ok();
@@ -133,7 +134,7 @@ impl StreamingWindowReplacer {
             // If match touches the very trailing edge of chunk and could be a prefix of a longer pattern
             if mat.end() == len {
                 let candidate = &input[mat.start()..];
-                if self.prefixes.contains(candidate) {
+                if self.prefixes.contains(&candidate.to_ascii_lowercase()) {
                     out.push_str(&input[last_end..mat.start()]);
                     self.pending = candidate.to_string();
                     return out;
@@ -155,7 +156,7 @@ impl StreamingWindowReplacer {
         let mut split_point = None;
         for (byte_offset, _) in trailing.char_indices() {
             let suffix = &trailing[byte_offset..];
-            if suffix.len() < self.max_len && self.prefixes.contains(suffix) {
+            if suffix.len() < self.max_len && self.prefixes.contains(&suffix.to_ascii_lowercase()) {
                 split_point = Some(byte_offset);
                 break;
             }
@@ -364,6 +365,21 @@ impl StreamingChunkStage for PiiRestorationStage {
                                         changed = true;
                                     }
                                 }
+                            }
+                            if let Some(text) = delta.get_mut("text").and_then(|c| c.as_str())
+                            {
+                                let restored = self.content_replacer.process(text);
+                                delta.insert(
+                                    "text".to_string(),
+                                    serde_json::Value::String(restored),
+                                );
+                                changed = true;
+                            }
+                        } else if let Some(text) = choice.get_mut("text").and_then(|t| t.as_str()) {
+                            let restored = self.content_replacer.process(text);
+                            if let Some(obj) = choice.as_object_mut() {
+                                obj.insert("text".to_string(), serde_json::Value::String(restored));
+                                changed = true;
                             }
                         }
                     }
