@@ -114,7 +114,7 @@
   color: var(--color-warn); font-size: var(--fs-sm); font-weight: 500;
 }
 
-/* Combo grid */
+/* Combo grid (legacy) */
 .combo-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: var(--space-3); margin-top: var(--space-3);
@@ -125,6 +125,147 @@
 }
 .combo-card h3 { margin: 0 0 var(--space-1); font-size: var(--fs-md); }
 .combo-card .provider-meta { font-size: var(--fs-xs); color: var(--color-text-muted); }
+
+/* ----- Combos Table & Sections ----- */
+.combos-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.combos-section .section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.combos-section .section-header h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.combos-table {
+  width: 100%;
+}
+
+.combo-table-name-wrap {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.combo-table-name-link {
+  text-decoration: none;
+  color: var(--color-primary);
+  font-size: var(--fs-sm);
+}
+
+.combo-table-name-link:hover {
+  text-decoration: underline;
+}
+
+.combo-name-title {
+  font-weight: 600;
+}
+
+.combo-id-badge {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.combo-race-badge {
+  display: inline-block;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.chip-rl {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border: 1px solid var(--color-warn);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+}
+
+.combo-table-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.combos-search-wrap {
+  display: flex;
+  align-items: center;
+}
+
+.combos-search-input {
+  width: 220px;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-sm);
+}
+
+/* Auto-combos collapsible section */
+.auto-combos-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.auto-combos-accordion {
+  width: 100%;
+}
+
+.auto-combos-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-2);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.auto-combos-summary:hover {
+  background: var(--color-surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.auto-combos-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.auto-combos-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  width: 16px;
+  height: 16px;
+}
+
+.auto-combos-hint {
+  font-size: var(--fs-xs);
+}
+
+.auto-combos-content {
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
 
 /* Targets table columns */
 .combo-targets-table { width: 100%; }

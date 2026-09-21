@@ -6,7 +6,7 @@ import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
-import { showCreateCombo, testAllTargets } from "../handlers/combo-handlers.js";
+import { testAllTargets } from "../handlers/combo-handlers.js";
 import { showAddTarget } from "../handlers/combo-target-handlers/index.js";
 import { icons } from "../lib/icons.js";
 import { t } from "../i18n/index.js";
@@ -20,6 +20,7 @@ import {
   getSubComboData,
   loadSubComboData,
 } from "./combos/subcombo-group.js";
+import { renderCombosList } from "./combos/combos-list.js";
 
 const PARAM_TOOLTIPS = {
   exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo are more likely to be explored. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
@@ -476,15 +477,6 @@ function renderComboDetail(): TemplateResult {
     </section>`;
 }
 
-function renderComboGrid(): TemplateResult {
-  const list = state.combos || [];
-  return html`<div class="page-header"><h2>${t("combos.grid.title")}</h2><div class="actions"><button class="primary" @click=${() => showCreateCombo()}>${icons.plus()} ${t("combos.grid.create")}</button></div></div>
-    ${list.length === 0 ? html`<p class="empty">${t("combos.grid.empty")}</p>` : html`<div class="combo-grid">${list.map((c) => {
-      const pm = priorityModeOf(c);
-      return html`<a class="combo-card" href="#/combos/${c.id}"><h3>${c.name}</h3><div class="provider-meta"><span class="chip">${c.strategy}</span>${pm !== "strict" ? html` · <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>` : html``} · race ${c.race_size}</div></a>`;
-    })}</div>`}`;
-}
-
 export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
   if (opts.detailId) {
     detailComboId = opts.detailId; detailCombo = null; detailTargets = [];
@@ -513,7 +505,7 @@ export async function mountCombos(opts: { detailId?: number } = {}): Promise<(()
   return createView<Combo[]>({
     loader: () => api("/combos") as Promise<Combo[]>,
     onLoaded: (combos) => { state.combos = combos; },
-    render: () => renderComboGrid(),
+    render: () => renderCombosList(),
     loading: () => html`<div class="loading">${t("common.loading")}</div>`,
     empty: () => false,
     error: (err) => html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`,
