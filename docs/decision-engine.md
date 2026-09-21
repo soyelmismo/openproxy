@@ -311,11 +311,13 @@ The engine resolves ONNX symbols via `dlopen` at runtime rather than link-time:
 - Remote proxying and HTTP upstream decision routing (Jev) operate with zero local dependencies.
 - When `libonnxruntime` and model weights are mounted, the engine initializes and serves in-process classifications.
 
-### 6.3 Docker Deployment Patterns
+### 6.3 Docker Deployment
 
-#### Pattern A: Volume Mounting (Lightweight Image)
+The official Docker image (`ghcr.io/soyelmismo/openproxy`) bundles ONNX Runtime libraries for both `linux/amd64` and `linux/arm64` out of the box via multi-stage build. You do not need to install or mount any runtime libraries from the host.
 
-Keep the default container image small (~40 MB distroless) and mount models and libraries from the host:
+#### Running with In-Process Laya Decision Routing
+
+Mount your model weights folder into the container working directory (`/var/lib/openproxy/models/laya`):
 
 ```yaml
 services:
@@ -325,29 +327,11 @@ services:
       - "8787:8787"
     volumes:
       - ./config.toml:/etc/openproxy/config.toml:ro
+      - openproxy-data:/var/lib/openproxy
+      # Mount model weights folder (model.onnx, tokenizer.json, rl_agent_config.json)
       - ./models/laya:/var/lib/openproxy/models/laya:ro
-      - /usr/local/lib/libonnxruntime.so:/usr/local/lib/libonnxruntime.so:ro
     environment:
       - OPENPROXY_CONFIG=/etc/openproxy/config.toml
 ```
 
-#### Pattern B: Multi-Stage Container with Bundled Runtime
-
-To bundle ONNX Runtime directly for multi-arch images (`linux/amd64` and `linux/arm64`):
-
-```dockerfile
-FROM alpine:latest AS onnx-fetcher
-ARG TARGETARCH
-RUN apk add --no-cache curl tar
-RUN case "${TARGETARCH}" in \
-      amd64) ORT_ARCH="x64" ;; \
-      arm64) ORT_ARCH="aarch64" ;; \
-      *) echo "Unsupported: ${TARGETARCH}"; exit 1 ;; \
-    esac && \
-    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-${ORT_ARCH}-1.20.1.tgz" | \
-    tar -xz --strip-components=2 -C /tmp "*/lib/libonnxruntime.so*"
-
-FROM gcr.io/distroless/cc:nonroot AS runtime
-COPY --from=onnx-fetcher /tmp/libonnxruntime.so* /usr/local/lib/
-# Standard openproxy entrypoint
-```
+OpenProxy scans `/var/lib/openproxy/models/laya` on startup and enables native in-process inference immediately. If no models are mounted, OpenProxy runs headless with zero memory overhead.

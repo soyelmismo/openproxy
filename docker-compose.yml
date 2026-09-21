@@ -24,6 +24,8 @@ services:
     volumes:
       - ./config.toml:/etc/openproxy/config.toml:ro
       - openproxy-data:/var/lib/openproxy
+      # Optional: mount model weights for in-process Laya decision routing
+      # - ./models/laya:/var/lib/openproxy/models/laya:ro
     environment:
       # Override the config path if you mount it somewhere else.
       - OPENPROXY_CONFIG=/etc/openproxy/config.toml
