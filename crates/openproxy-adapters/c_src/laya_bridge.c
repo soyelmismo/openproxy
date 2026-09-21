@@ -30,6 +30,9 @@ static const char* candidate_paths[] = {
     "/usr/lib/aarch64-linux-gnu/libonnxruntime.so",
     "libonnxruntime.so",
     "libonnxruntime.so.1",
+    "/opt/homebrew/lib/libonnxruntime.dylib",
+    "/usr/local/lib/libonnxruntime.dylib",
+    "libonnxruntime.dylib",
     "/root/code/laya-playground/.venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime.so.1.30.0",
     NULL
 };

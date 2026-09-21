@@ -288,3 +288,66 @@ Test engine status and measure latency directly:
 curl -s -X POST http://localhost:8787/admin/api/models/<ROW_ID>/test \
   -H "Authorization: Bearer <ADMIN_KEY>"
 ```
+
+---
+
+## 6. Container Deployment & Architecture Compatibility
+
+### 6.1 Hardware Architecture Matrix
+
+The Laya engine pairs pure Rust tokenization with dynamic runtime bindings to `libonnxruntime`. The ONNX model format is architecture-neutral: the same weights file runs across all target architectures.
+
+| Architecture | Platform | Vector Acceleration | ONNX Runtime Library |
+| :--- | :--- | :--- | :--- |
+| **x86_64 (`amd64`)** | Linux / Windows | AVX2, AVX-512, VNNI | `libonnxruntime.so` (Linux), `onnxruntime.dll` (Win) |
+| **aarch64 (`arm64`)** | Linux (Graviton, Ampere, Pi 5) | ARM NEON, ARMv8.2-A `asimddp` | `libonnxruntime.so` |
+| **Apple Silicon (`arm64`)** | macOS (M1 through M4) | ARM NEON, Accelerate | `libonnxruntime.dylib` |
+| **x86_64 (`amd64`)** | macOS | AVX2 | `libonnxruntime.dylib` |
+
+### 6.2 Zero-Breakage Dynamic Linking
+
+The engine resolves ONNX symbols via `dlopen` at runtime rather than link-time:
+- If `libonnxruntime` is absent from the container, OpenProxy starts up in under 5 ms without crash or error.
+- Remote proxying and HTTP upstream decision routing (Jev) operate with zero local dependencies.
+- When `libonnxruntime` and model weights are mounted, the engine initializes and serves in-process classifications.
+
+### 6.3 Docker Deployment Patterns
+
+#### Pattern A: Volume Mounting (Lightweight Image)
+
+Keep the default container image small (~40 MB distroless) and mount models and libraries from the host:
+
+```yaml
+services:
+  openproxy:
+    image: ghcr.io/soyelmismo/openproxy:latest
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./config.toml:/etc/openproxy/config.toml:ro
+      - ./models/laya:/var/lib/openproxy/models/laya:ro
+      - /usr/local/lib/libonnxruntime.so:/usr/local/lib/libonnxruntime.so:ro
+    environment:
+      - OPENPROXY_CONFIG=/etc/openproxy/config.toml
+```
+
+#### Pattern B: Multi-Stage Container with Bundled Runtime
+
+To bundle ONNX Runtime directly for multi-arch images (`linux/amd64` and `linux/arm64`):
+
+```dockerfile
+FROM alpine:latest AS onnx-fetcher
+ARG TARGETARCH
+RUN apk add --no-cache curl tar
+RUN case "${TARGETARCH}" in \
+      amd64) ORT_ARCH="x64" ;; \
+      arm64) ORT_ARCH="aarch64" ;; \
+      *) echo "Unsupported: ${TARGETARCH}"; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-${ORT_ARCH}-1.20.1.tgz" | \
+    tar -xz --strip-components=2 -C /tmp "*/lib/libonnxruntime.so*"
+
+FROM gcr.io/distroless/cc:nonroot AS runtime
+COPY --from=onnx-fetcher /tmp/libonnxruntime.so* /usr/local/lib/
+# Standard openproxy entrypoint
+```
