@@ -56,6 +56,7 @@ pub struct AppState {
     selection_registry: Arc<openproxy_types::SelectionRegistry>,
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
     predictive_limiter: Arc<openproxy_pipeline::PredictiveRateLimiter>,
+    session_affinity: Arc<openproxy_pipeline::SessionAffinityRegistry>,
     maintenance_cell: Arc<RwLock<openproxy_types::config::MaintenanceConfig>>,
     vacuum_status: Arc<RwLock<VacuumStatus>>,
     #[allow(dead_code)]
@@ -349,6 +350,10 @@ impl AppState {
 
     pub fn predictive_limiter(&self) -> Arc<openproxy_pipeline::PredictiveRateLimiter> {
         Arc::clone(&self.predictive_limiter)
+    }
+
+    pub fn session_affinity(&self) -> Arc<openproxy_pipeline::SessionAffinityRegistry> {
+        Arc::clone(&self.session_affinity)
     }
 
     pub fn background_tx(

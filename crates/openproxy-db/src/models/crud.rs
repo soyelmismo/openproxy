@@ -147,7 +147,7 @@ pub fn strip_proxy_prefix<'a>(conn: &Connection, model_str: &'a str) -> (&'a str
             rusqlite::params![prefix],
             |row| row.get::<_, i64>(0),
         )
-        .map_or(false, |v| v != 0);
+        .is_ok_and(|v| v != 0);
     if exists {
         (rest, Some(prefix))
     } else {
@@ -171,7 +171,7 @@ pub fn resolve_model_identity(
         return Ok((Some(ProviderId::new(prefix)), stripped.to_string()));
     }
     if let Some(model) = find_active_by_name(conn, stripped)? {
-        return Ok((Some(model.provider_id), model.model_id.0.to_string()));
+        return Ok((Some(model.provider_id), model.model_id.0));
     }
     Ok((None, model_str.to_string()))
 }

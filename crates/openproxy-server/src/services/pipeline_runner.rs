@@ -67,6 +67,7 @@ impl PipelineRunner {
             state.selection_registry(),
             state.circuit_breaker(),
             state.predictive_limiter(),
+            state.session_affinity(),
         )
     }
 

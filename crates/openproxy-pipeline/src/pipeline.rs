@@ -112,6 +112,7 @@ pub struct Pipeline {
     pub(crate) selection_registry: Arc<SelectionRegistry>,
     pub(crate) record_bodies_and_headers: Arc<AtomicBool>,
     pub predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
+    pub session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
     pub tracker: crate::usage_tracker::UsageTracker,
     pub dispatcher: crate::upstream_dispatcher::UpstreamDispatcher,
     pub(crate) repo: Arc<dyn crate::repository::PipelineRepository>,
@@ -141,6 +142,7 @@ impl Pipeline {
                 unhealthy_duration_ms: 60_000,
             }),
             Arc::new(crate::predictive_rate_limit::PredictiveRateLimiter::new()),
+            Arc::new(crate::session_affinity::SessionAffinityRegistry::new()),
         )
     }
 
@@ -151,6 +153,7 @@ impl Pipeline {
         selection_registry: Arc<SelectionRegistry>,
         circuit_breaker: CircuitBreakerRegistry,
         predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
+        session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
     ) -> Self {
         let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
             Arc::clone(&conn),
@@ -179,6 +182,7 @@ impl Pipeline {
             selection_registry,
             record_bodies_and_headers,
             predictive_limiter,
+            session_affinity,
             tracker,
             dispatcher,
             repo,

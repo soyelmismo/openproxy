@@ -36,6 +36,8 @@ pub use pii::{PiiEngine, PiiRestorationStage, PiiSession, StreamingWindowReplace
 pub mod redact;
 pub mod sse;
 pub mod sse_accumulator;
+pub mod session_affinity;
+pub use session_affinity::{SessionAffinityKey, SessionAffinityRegistry};
 pub mod stage;
 pub mod stages;
 pub mod streaming;

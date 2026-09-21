@@ -84,10 +84,73 @@ impl PipelineStage for RouterStage {
         }
 
         if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision {
-            crate::stages::decision::apply_decision_routing(ctx, &combo, &mut resolved).await;
+            let should_reset = crate::session_affinity::SessionAffinityRegistry::should_reset(&ctx.req);
+            let session_hash = crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req);
+
+            let mut affinity_hit = false;
+            if !should_reset
+                && let Some(hash) = session_hash
+            {
+                let key = crate::session_affinity::SessionAffinityKey {
+                    session_hash: hash,
+                    combo_id: combo.id,
+                };
+                if let Some(pinned_id) = ctx.pipeline.session_affinity.get(key) {
+                    if let Some(pos) = resolved.iter().position(|rt| rt.target.id == pinned_id) {
+                        let min_prio = resolved
+                            .iter()
+                            .map(|rt| rt.target.priority_order)
+                            .min()
+                            .unwrap_or(1);
+                        let mut winner = resolved.remove(pos);
+                        winner.target.priority_order = min_prio.saturating_sub(1);
+                        resolved.insert(0, winner);
+                        affinity_hit = true;
+                        tracing::info!(
+                            combo_id = combo.id.0,
+                            pinned_target = pinned_id.0,
+                            "session affinity hit: pinning multi-turn session target"
+                        );
+                        ctx.combo_walk_log.push(format!("session_affinity:pinned={}", pinned_id.0));
+                    } else {
+                        ctx.pipeline.session_affinity.invalidate(&key);
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            pinned_target = pinned_id.0,
+                            "session affinity invalidated: pinned target is unhealthy or absent"
+                        );
+                    }
+                }
+            }
+
+            if !affinity_hit {
+                crate::stages::decision::apply_decision_routing(ctx, &combo, &mut resolved).await;
+            }
         }
 
         ctx.targets = resolved;
-        next.execute(ctx).await
+        let res = next.execute(ctx).await?;
+
+        if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision
+            && res.error.is_none()
+            && matches!(res.status_code, 200..=299)
+            && let Some(hash) = crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req)
+        {
+            let successful_target_id = res
+                .usage_tuple
+                .as_ref()
+                .map(|(_, _, tid)| *tid)
+                .or_else(|| ctx.targets.first().map(|rt| rt.target.id));
+
+            if let Some(tid) = successful_target_id {
+                let key = crate::session_affinity::SessionAffinityKey {
+                    session_hash: hash,
+                    combo_id: combo.id,
+                };
+                ctx.pipeline.session_affinity.set(key, tid);
+            }
+        }
+
+        Ok(res)
     }
 }
