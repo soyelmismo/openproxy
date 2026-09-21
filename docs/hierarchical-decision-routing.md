@@ -1,41 +1,41 @@
-# Especificación de Arquitectura: Enrutamiento Jerárquico por Decisión (Hierarchical Decision Routing)
+# Hierarchical Decision Routing
 
-**Documento:** `docs/specs/hierarchical-decision-routing.md`  
-**Estado:** Propuesta de Diseño / Especificación Técnica  
-**Fecha:** 21 de Septiembre de 2026  
-**Autores:** OpenProxy Core Team  
+**Document:** `docs/hierarchical-decision-routing.md`  
+**Status:** Design Proposal / Technical Specification  
+**Date:** September 21, 2026  
+**Authors:** OpenProxy Core Team  
 
 ---
 
-## 1. Resumen Ejecutivo y Motivación
+## 1. Executive Summary and Motivation
 
-OpenProxy actualmente soporta enrutamiento semántico en tiempo real mediante **System One** (modelos de decisión rápida como `jev-1.13` o `laya`) a través del modo `priority_mode = "decision"`. Sin embargo, la resolución actual de sub-combos (`sub_combo_id`) se ejecuta de manera **estática y aplanada** (`flatten_sub_combos` en `execution.rs`), expandiendo todos los sub-combos en modelos hoja antes de que el motor de enrutamiento evalúe cualquier prioridad.
+OpenProxy currently supports real-time semantic routing via **System One** (fast decision models such as `jev-1.13` or `laya`) through the `priority_mode = "decision"` mode. However, the current sub-combo resolution (`sub_combo_id`) executes **statically and flattened** (`flatten_sub_combos` in `execution.rs`), expanding all sub-combos into leaf models before the routing engine evaluates any priority.
 
-Esta limitación impide arquitecturas de enrutamiento en cascada ("Árbol de Decisión Semántico"), como:
+This limitation prevents cascading routing architectures ("Semantic Decision Trees"), such as:
 ```text
-Cliente → Pregunta: "¿Cómo calculo el VAN de una inversión?"
+Client → Question: "How do I calculate the NPV of an investment?"
            ↓
-    Combo "Topics" (Jev Router Nivel 1)
-           ├─ combo:finance   ("Preguntas financieras, balances, inversiones, VAN/TIR")  <-- [GANADOR]
-           ├─ combo:health    ("Consultas médicas y diagnósticos")
-           ├─ combo:chat      ("Conversación casual, saludos")
-           └─ combo:politics  ("Noticias de actualidad y política")
+    Combo "Topics" (Jev Router Level 1)
+           ├─ combo:finance   ("Financial questions, balance sheets, investments, NPV/IRR")  <-- [WINNER]
+           ├─ combo:health    ("Medical inquiries and diagnostics")
+           ├─ combo:chat      ("Casual conversation, greetings")
+           └─ combo:politics  ("Current events and politics")
            ↓
-    Combo "Finance" (Jev Router Nivel 2)
-           ├─ claude-3-5-sonnet ("Cálculos financieros complejos y formulación matemática") <-- [GANADOR]
-           └─ gpt-4o-mini       ("Conceptos básicos y definiciones simples")
+    Combo "Finance" (Jev Router Level 2)
+           ├─ claude-3-5-sonnet ("Complex financial calculations and mathematical formulation") <-- [WINNER]
+           └─ gpt-4o-mini       ("Basic concepts and simple definitions")
            ↓
-    Ejecución del upstream con Claude 3.5 Sonnet
+    Upstream execution with Claude 3.5 Sonnet
 ```
 
-El objetivo de esta especificación es definir la arquitectura necesaria para soportar **enrutamiento jerárquico recursivo**, donde cada nivel del árbol de combos puede actuar como un clasificador semántico independiente antes de descender al siguiente nivel.
+The goal of this specification is to define the architecture required to support **recursive hierarchical routing**, where each level of the combo tree can act as an independent semantic classifier before descending to the next level.
 
 ---
 
-## 2. Diagnóstico del Estado Actual
+## 2. Current State Diagnosis
 
-### 2.1 Aplanamiento Estático Prematuro
-En `crates/openproxy-pipeline/src/stages/router.rs`:
+### 2.1 Premature Static Flattening
+In `crates/openproxy-pipeline/src/stages/router.rs`:
 ```rust
 async fn resolve_initial_targets(
     ctx: &PipelineContext,
@@ -48,51 +48,51 @@ async fn resolve_initial_targets(
     ctx.pipeline.flatten_targets(&combo.id, targets).await
 }
 ```
-* `flatten_targets` llama a `repo.resolve_combo_to_targets(sub_id, ...)`.
-* Esto sustituye inmediatamente el `ComboTarget` del sub-combo (que contenía `description = "Preguntas financieras..."`) por la lista plana de modelos dentro de ese sub-combo.
-* **Consecuencia:** La descripción del sub-combo se pierde y el combo padre nunca clasifica entre sub-combos.
+* `flatten_targets` calls `repo.resolve_combo_to_targets(sub_id, ...)`.
+* This immediately replaces the sub-combo's `ComboTarget` (which contained `description = "Financial questions..."`) with the flat list of models inside that sub-combo.
+* **Consequence:** The sub-combo description is lost, and the parent combo never classifies between sub-combos.
 
-### 2.2 Desacoplamiento de Políticas del Sub-Combo
-Al aplanar la lista a modelos individuales:
-* El combo hijo nunca se evalúa como una entidad con su propia estrategia (`priority`, `round_robin`, `decision`, etc.).
-* La propiedad `priority_mode: Decision` del combo hijo nunca se ejecuta.
+### 2.2 Decoupled Sub-Combo Policies
+When flattening the list to individual models:
+* The child combo is never evaluated as an entity with its own strategy (`priority`, `round_robin`, `decision`, etc.).
+* The child combo's `priority_mode: Decision` property is never executed.
 
 ---
 
-## 3. Arquitectura del Enrutamiento Jerárquico
+## 3. Hierarchical Routing Architecture
 
-### 3.1 Flujo de Ejecución por Etapas Recursivas
+### 3.1 Recursive Stage-Based Execution Flow
 
 ```mermaid
 flowchart TD
-    Req[Petición entrante: prompt] --> RStage[RouterStage: Cargar Combo Raíz]
-    RStage --> CheckMode{Combo tiene priority_mode == Decision?}
+    Req["Incoming request: prompt"] --> RStage["RouterStage: Load Root Combo"]
+    RStage --> CheckMode{"Combo has priority_mode == Decision?"}
     
-    CheckMode -- Sí --> EvalDecision[Evaluar Jev entre Targets del Nivel Actual\n(Modelos directos o Sub-combos con description)]
-    CheckMode -- No --> EvalStandard[Ordenar por prioridad / estrategia estándar]
+    CheckMode -- Yes --> EvalDecision["Evaluate Jev across Current Level Targets\n(Direct models or Sub-combos with description)"]
+    CheckMode -- No --> EvalStandard["Sort by priority / standard strategy"]
     
-    EvalDecision --> Winner[Identificar Target Ganador]
+    EvalDecision --> Winner["Identify Winning Target"]
     EvalStandard --> Winner
     
-    Winner --> IsSubCombo{¿El Target ganador es un Sub-Combo?}
+    Winner --> IsSubCombo{"Is the winning target a Sub-Combo?"}
     
-    IsSubCombo -- Sí --> CheckDepth{depth < MAX_SUB_COMBO_DEPTH?}
-    CheckDepth -- Sí --> Descend[Descender a Sub-Combo:\nCargar definición y targets del hijo]
-    CheckDepth -- No --> ErrDepth[Error: Recursión excedida]
+    IsSubCombo -- Yes --> CheckDepth{"depth < MAX_SUB_COMBO_DEPTH?"}
+    CheckDepth -- Yes --> Descend["Descend into Sub-Combo:\nLoad child definition and targets"]
+    CheckDepth -- No --> ErrDepth["Error: Recursion depth exceeded"]
     
     Descend --> CheckMode
     
-    IsSubCombo -- No --> Leaf[Target Hoja Resuelto: Modelo Upstream + Credenciales]
-    Leaf --> UpstreamExec[UpstreamExecutorStage]
+    IsSubCombo -- No --> Leaf["Resolved Leaf Target: Upstream Model + Credentials"]
+    Leaf --> UpstreamExec["UpstreamExecutorStage"]
 ```
 
-### 3.2 Reglas de Parada y Resiliencia
-1. **Límite de Profundidad:** Máximo 5 niveles (`MAX_SUB_COMBO_DEPTH = 5`). La detección de ciclos previene bucles infinitos en tiempo de ejecución.
-2. **Fallback por Timeout o Error de Jev:** Si la llamada a Jev en cualquier nivel supera `decision_timeout_ms` (por defecto 150ms) o falla, el enrutador de ese nivel utiliza el orden de prioridad estático predeterminado y continúa el flujo sin interrumpir la petición del usuario.
-3. **Poda de Sub-Combos No Saludables:** Un sub-combo solo es elegible para la clasificación de Jev si tiene al menos un modelo saludable en el `CircuitBreaker`. Si un sub-combo está completamente degradado, se omite de las opciones pasadas a Jev.
+### 3.2 Stop Rules and Resilience
+1. **Depth Limit:** Maximum 5 levels (`MAX_SUB_COMBO_DEPTH = 5`). Cycle detection prevents infinite loops at runtime.
+2. **Timeout or Jev Error Fallback:** If the Jev call at any level exceeds `decision_timeout_ms` (default 150ms) or fails, the router at that level falls back to the default static priority order and continues the flow without disrupting the user's request.
+3. **Unhealthy Sub-Combo Pruning:** A sub-combo is only eligible for Jev classification if it has at least one healthy model in the `CircuitBreaker`. If a sub-combo is fully degraded, it is omitted from the options passed to Jev.
 
-### 3.3 Traza de Auditoría y Telemetría (`combo_walk_log`)
-El contexto de la petición (`PipelineContext`) acumula el camino de decisión para observabilidad completa en los logs del dashboard:
+### 3.3 Audit Trail and Telemetry (`combo_walk_log`)
+The request context (`PipelineContext`) accumulates the decision path for full observability in the dashboard logs:
 ```json
 [
   "decision_router:combo=topics:winner=sub_combo:finance (elapsed=42ms)",
@@ -102,17 +102,17 @@ El contexto de la petición (`PipelineContext`) acumula el camino de decisión p
 
 ---
 
-## 4. Plan de Implementación por Fases
+## 4. Implementation Plan (Phased)
 
-| Fase | Ámbito | Descripción |
+| Phase | Scope | Description |
 | :--- | :--- | :--- |
-| **Fase 1** | **Frontend SPA** | Refactorizar la visualización de combos en el Dashboard: agrupar sub-combos en bloques desplegables (accordion) con color distintivo, inspección de modelos internos y edición en el lugar. |
-| **Fase 2** | **Core & Pipeline** | Modificar `RouterStage` para reemplazar el aplanamiento ciego inicial por resolución jerárquica con evaluación de `PriorityMode::Decision` a nivel de sub-combo. |
-| **Fase 3** | **Observabilidad** | Exponer en el log en tiempo real y en la pestaña de Analytics el desglose de los saltos de decisión jerárquicos realizados por Jev. |
+| **Phase 1** | **Frontend SPA** | Refactor combo visualization in the Dashboard: group sub-combos into collapsible accordion blocks with distinct colors, internal model inspection, and inline editing. |
+| **Phase 2** | **Core & Pipeline** | Modify `RouterStage` to replace blind initial flattening with hierarchical resolution and `PriorityMode::Decision` evaluation at the sub-combo level. |
+| **Phase 3** | **Observability** | Expose hierarchical decision jump breakdowns in the real-time log and the Analytics tab. |
 
 ---
 
-## 5. Invariantes de Calidad
-* Cero regresiones en el modo plano actual (`flatten_targets`).
-* Cumplimiento del límite de 800 LOC por archivo modular.
-* Latencia añadida de Jev en sub-combos contenida en $\le 50\text{--}100\text{ ms}$ por salto mediante llamadas paralelas/optimizadas en formato binario System One.
+## 5. Quality Invariants
+* Zero regressions in the current flat mode (`flatten_targets`).
+* Compliance with the 800 LOC per file modular limit.
+* Added Jev latency for sub-combos contained within $\le 50\text{--}100\text{ ms}$ per hop via parallel/optimized System One binary-format calls.
