@@ -129,7 +129,14 @@ pub fn init(
     let model_path = model_path_opt
         .map(ToString::to_string)
         .or_else(|| std::env::var("OPENPROXY_LAYA_MODEL").ok())
-        .unwrap_or_else(|| "/root/code/laya-playground/model-onnx/model.onnx".to_string());
+        .unwrap_or_else(|| {
+            let fp32_path = "/root/code/laya-playground/model-fp32/model.onnx";
+            if std::path::Path::new(fp32_path).exists() {
+                fp32_path.to_string()
+            } else {
+                "/root/code/laya-playground/model-onnx/model.onnx".to_string()
+            }
+        });
 
     let tokenizer_path = tokenizer_path_opt
         .map(ToString::to_string)
