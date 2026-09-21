@@ -99,14 +99,15 @@ test.describe('Combos CRUD', () => {
       //    in the grid WITHOUT any reload — `createCombo` re-fetches
       //    GET /combos into `state.combos` before the re-render, so the
       //    card appears in place, immediately after the modal closes.
-      const card = page.locator('a.combo-card').filter({ hasText: name });
-      await expect(card).toHaveCount(1);
-      // The card renders the strategy chip and "race N" in its meta row.
-      await expect(card).toContainText(createdStrategy);
-      await expect(card).toContainText(`race ${initialRaceSize}`);
-      // Capture the id from the card's hash so cleanup uses the same value
+      const row = page.locator('tr').filter({ hasText: name });
+      await expect(row).toHaveCount(1);
+      // The row renders the strategy chip and "race N" in its columns.
+      await expect(row).toContainText(createdStrategy);
+      await expect(row).toContainText(`race ${initialRaceSize}`);
+      // Capture the id from the link's hash so cleanup uses the same value
       // the UI sees (defends against any client-side id remap).
-      const href = await card.getAttribute('href');
+      const link = row.locator('a[href^="#/combos/"]').first();
+      const href = await link.getAttribute('href');
       expect(href).toBeTruthy();
       const m = /#\/combos\/(\d+)$/.exec(href ?? '');
       expect(m).not.toBeNull();
@@ -204,9 +205,9 @@ test.describe('Combos CRUD', () => {
       await expect(confirmDialog).toContainText(name);
       await confirmDialog.getByRole('button', { name: 'Delete' }).click();
 
-      // 7. The router navigates back to #/combos and the card is gone.
+      // 7. The router navigates back to #/combos and the row is gone.
       await expect(page).toHaveURL(/#\/combos$/);
-      await expect(page.locator('a.combo-card').filter({ hasText: name })).toHaveCount(0);
+      await expect(page.locator('tr').filter({ hasText: name })).toHaveCount(0);
 
       // 8. Contract: GET for the deleted id answers 404 with the
       //    not_found envelope the server actually emits.
