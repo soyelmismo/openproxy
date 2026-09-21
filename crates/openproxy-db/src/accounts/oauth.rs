@@ -113,7 +113,10 @@ pub fn store_oauth_tokens(
                 oauth_scope = COALESCE(?5, oauth_scope), \
                 oauth_provider_specific = COALESCE(?6, oauth_provider_specific), \
                 email = COALESCE(?7, email), \
-                label = COALESCE(NULLIF(label, ''), ?7) \
+                label = COALESCE(NULLIF(label, ''), ?7), \
+                health_status = 'healthy', \
+                rate_limited_until = NULL, \
+                quota_fetch_error = NULL \
              WHERE id = ?8",
             params![
                 access_blob,

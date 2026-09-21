@@ -275,6 +275,14 @@ fn update_api_key_roundtrip() {
         CoreError::Validation(_)
     ));
 
+    set_health(&conn, id, HealthStatus::Unhealthy).expect("set unhealthy");
+    set_rate_limited_until(&conn, id, Some("2026-06-13T12:34:56Z")).expect("set rate limit");
+    update_api_key(&conn, id, Some("sk-recovered"), &mk).expect("update key");
+    let acc = get(&conn, id, &mk).expect("get").unwrap();
+    assert_eq!(acc.health_status, HealthStatus::Healthy);
+    assert!(acc.rate_limited_until.is_none());
+    assert!(acc.quota_fetch_error.is_none());
+
     assert!(matches!(
         update_api_key(&conn, AccountId(99999), Some("x"), &mk).expect_err("missing"),
         CoreError::AccountNotFound(99999)

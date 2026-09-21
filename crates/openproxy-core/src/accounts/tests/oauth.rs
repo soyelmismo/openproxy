@@ -359,3 +359,29 @@ fn oauth_store_preserves_existing_provider_specific_when_none() {
         Some(initial_specific)
     );
 }
+
+#[test]
+fn oauth_store_resets_unhealthy_status_and_errors() {
+    let (pool, _path, mk, id) = setup_account();
+    let conn = pool.writer();
+    set_health(&conn, id, openproxy_types::HealthStatus::Unhealthy).unwrap();
+    let acc = get(&conn, id, &mk).unwrap().unwrap();
+    assert_eq!(acc.health_status, openproxy_types::HealthStatus::Unhealthy);
+
+    store_oauth_tokens(
+        &conn,
+        id,
+        &mk,
+        StoreOAuthTokensParams {
+            access_token: "t_fresh",
+            token_type: "Bearer",
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let updated = get(&conn, id, &mk).unwrap().unwrap();
+    assert_eq!(updated.health_status, openproxy_types::HealthStatus::Healthy);
+    assert!(updated.rate_limited_until.is_none());
+    assert!(updated.quota_fetch_error.is_none());
+}

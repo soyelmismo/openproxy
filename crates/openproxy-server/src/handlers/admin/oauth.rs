@@ -149,7 +149,9 @@ async fn save_oauth_token_and_notify(
                     provider_specific: provider_specific.as_deref(),
                     email: email.as_deref(),
                 },
-            )
+            )?;
+            openproxy_core::accounts::set_health(&w, account_id, openproxy_types::HealthStatus::Healthy)?;
+            Ok(())
         }
     })
     .await

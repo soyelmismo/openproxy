@@ -399,10 +399,25 @@ pub async fn refresh_single_account_quota(
     // racing with this refresh is not silently wiped (see
     // `docs/specs/antigravity-gaps-p2.md` §4.4 "Race condition").
     //
-    // The Writer is acquired and released entirely inside `spawn_blocking`
-    // — no guard is held across `.await` (AGENTS.md §4.3).
     if q.fetch_error.is_none() {
+        let db_pool_health = Arc::clone(db_pool);
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = db_pool_health.writer();
+            let _ = accounts::set_health(&conn, account_id, accounts::HealthStatus::Healthy);
+        })
+        .await;
         clear_live_limited_after_refresh(db_pool, account_id).await;
+    } else if q
+        .fetch_error
+        .as_deref()
+        .is_some_and(|e| e.contains("401") || e.contains("Unauthorized") || e.contains("Authentication failed"))
+    {
+        let db_pool_health = Arc::clone(db_pool);
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = db_pool_health.writer();
+            let _ = accounts::set_health(&conn, account_id, accounts::HealthStatus::Unhealthy);
+        })
+        .await;
     }
 
     if q.fetch_error.is_none() {

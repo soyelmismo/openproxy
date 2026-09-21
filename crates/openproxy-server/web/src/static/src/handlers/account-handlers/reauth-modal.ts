@@ -58,18 +58,29 @@ export function showReauthAccount(accountId: number): void {
     hasDeviceCode,
     onSuccess: () => {
       close();
+      const acc = (state.accounts || []).find((a) => a.id === accountId);
+      if (acc) {
+        acc.health_status = "healthy";
+        acc.rate_limited_until = null;
+        acc.quota_fetch_error = null;
+      }
       requestUpdate();
       pollForDiscoveredModels(providerId);
-      if (provider?.metadata?.supports_quota) {
-        void api(`/accounts/${accountId}/refresh-quota`, { method: "POST" })
-          .then(async () => {
-            state.accounts = (await api("/accounts")) as typeof state.accounts;
-            requestUpdate();
-          })
-          .catch((e: unknown) => {
+      void (async () => {
+        if (provider?.metadata?.supports_quota) {
+          try {
+            await api(`/accounts/${accountId}/refresh-quota`, { method: "POST" });
+          } catch (e: unknown) {
             console.warn("Auto refresh quota after reauth:", e);
-          });
-      }
+          }
+        }
+        try {
+          state.accounts = (await api("/accounts")) as typeof state.accounts;
+          requestUpdate();
+        } catch (e: unknown) {
+          console.warn("Failed to refetch accounts after reauth:", e);
+        }
+      })();
     },
     requestRender: () => renderModal(),
     isClosed: () => closed,

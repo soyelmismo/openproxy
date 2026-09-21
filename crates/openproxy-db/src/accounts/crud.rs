@@ -224,13 +224,20 @@ pub fn update_api_key(
     } else {
         None
     };
-    let affected = crate::db_update_field!(
-        conn,
-        "accounts",
-        api_key_encrypted = blob,
-        WHERE id = id.0,
-        format!("update api_key for account {}", id.0)
-    )?;
+    let affected = conn
+        .execute(
+            "UPDATE accounts SET \
+                api_key_encrypted = ?1, \
+                health_status = 'healthy', \
+                rate_limited_until = NULL, \
+                quota_fetch_error = NULL \
+             WHERE id = ?2",
+            params![blob, id.0],
+        )
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "update api_key for account {}",
+            id.0
+        )))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
