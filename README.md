@@ -50,6 +50,7 @@
 - **🔌 Multi-Provider Support:** Built-in adapters for OpenRouter, MiniMax, OpenCode (Zen & Go), Ollama Cloud, Nous Research, NVIDIA NIM, Kilocode, Gemini (AI Studio + Cloud Code), Antigravity (+ CLI), Kiro, Cloudflare Workers AI, and custom endpoints.
 - **🏁 Parallel Races:** Launch $N$ targets concurrently. First token wins; losing requests abort within configurable grace periods.
 - **🔄 Combos & Load Balancing:** Group providers, models, and accounts into virtual models with weighted routing, power-of-two-choices (`p2c`), and nested sub-combos.
+- **🧠 Semantic Decision Engine (Jev & Laya):** In-process prompt classification and hierarchical combo routing via native Rust C FFI (`libonnxruntime.so`) and Jev HTTP upstreams. See [Decision Engine Guide](docs/decision-engine.md).
 - **🛡️ Circuit Breakers & Cooldowns:** Fault detection with configurable per-account and per-target backoff cooldowns.
 - **🌐 Proxy Rotation & Rate-Limit Isolation:** Proxy health tracking and isolated per-provider cooldowns on HTTP 429 responses.
 - **📊 Embedded Dashboard:** Web UI (TypeScript + Lit + uPlot) bundled in the binary at `/admin`. Live WebSocket feed, throughput metrics, latency percentiles ($p50/p95/p99$), and cost tracking.
