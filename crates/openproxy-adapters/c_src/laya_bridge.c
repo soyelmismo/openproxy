@@ -24,11 +24,13 @@ static void set_error(char* err_buf, size_t err_buf_len, const char* msg) {
 }
 
 static const char* candidate_paths[] = {
-    "/root/code/laya-playground/.venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime.so.1.30.0",
     "/usr/local/lib/libonnxruntime.so",
     "/usr/lib/libonnxruntime.so",
+    "/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
+    "/usr/lib/aarch64-linux-gnu/libonnxruntime.so",
     "libonnxruntime.so",
     "libonnxruntime.so.1",
+    "/root/code/laya-playground/.venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime.so.1.30.0",
     NULL
 };
 

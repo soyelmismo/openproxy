@@ -62,38 +62,73 @@ Combos can nest other combos as targets. In this topology, the top-level combo e
 
 ## 3. Native Laya Engine Setup
 
-OpenProxy implements the Laya engine in Rust using C FFI bindings to `libonnxruntime.so` and pure Rust tokenizers. It requires no Python interpreter, daemon processes, or external services.
+OpenProxy implements the Laya engine in Rust using C FFI bindings to `libonnxruntime.so` and tokenizers. It requires no Python interpreter, daemon processes, or external services.
 
 ### 3.1 Prerequisites
 
 1. **ONNX Runtime:**
-   Install `libonnxruntime.so` (version 1.20 or newer). OpenProxy scans standard paths (`/usr/lib`, `/usr/local/lib`) and discovers Python virtual environment installations in `/root/code/laya-playground/.venv/lib/`.
+   Install `libonnxruntime.so` (version 1.20 or newer). OpenProxy scans standard dynamic linker paths (`/usr/lib`, `/usr/local/lib`, `/usr/lib/x86_64-linux-gnu`, `/usr/lib/aarch64-linux-gnu`) or the location specified by `OPENPROXY_ONNX_LIB`.
 2. **Cargo Feature:**
    The `openproxy-adapters`, `openproxy-core`, `openproxy-pipeline`, and `openproxy-server` crates enable `laya-engine` by default.
 
-### 3.2 Model Checkpoints
+### 3.2 Hugging Face Checkpoints & Download
 
-OpenProxy supports three model precision tiers:
+OpenProxy runs Laya weights published on Hugging Face:
+- **ONNX Checkpoint:** [`mizchi/laya-multilingual-onnx`](https://huggingface.co/mizchi/laya-multilingual-onnx) (contains `model.onnx`, `tokenizer/tokenizer.json`, `rl_agent_config.json`)
+- **PyTorch Base Checkpoint:** [`convaiinnovations/laya-multilingual`](https://huggingface.co/convaiinnovations/laya-multilingual) (contains `model.safetensors`, mmBERT architecture)
 
-| Checkpoint | Path | Precision | Disk/RAM | CPU Latency | Application |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **FP32 Native** *(Default)* | `model-fp32/model.onnx` | Float32 | 1.29 GB | 550 to 650 ms | Default for CPU. Uses ARM NEON instructions. Retains full accuracy. |
-| **INT8 Selective** | `model-int8/model.onnx` | QInt8 | 325 MB | 250 to 300 ms | Uses ARMv8.2-A `asimddp` hardware dot-product instructions (`sdot`/`udot`). |
-| **FP16 WebGPU** | `model-onnx/model.onnx` | Float16 | 617 MB | ~3,900 ms | Exported for WebGPU. CPUs lack native FP16 execution without GPU hardware and emulate operations in software. Avoid on CPU. |
+#### Standard Directory Layout
 
-### 3.3 Configuration Variables
+OpenProxy detects files stored in `~/.openproxy/models/laya/` or `./models/laya/`:
 
-Set these environment variables in your environment file or shell:
+```text
+~/.openproxy/models/laya/
+├── model.onnx              # Target model (FP32 or INT8)
+├── tokenizer.json          # HuggingFace Fast Tokenizer
+└── rl_agent_config.json    # Decision temperatures and calibrated thresholds
+```
+
+#### Download via huggingface-cli
+
+```bash
+mkdir -p ~/.openproxy/models/laya
+huggingface-cli download mizchi/laya-multilingual-onnx \
+  --local-dir ~/.openproxy/models/laya \
+  --include "model.onnx" "tokenizer/*" "rl_agent_config.json"
+```
+
+#### Download via curl
+
+```bash
+mkdir -p ~/.openproxy/models/laya
+HF_BASE="https://huggingface.co/mizchi/laya-multilingual-onnx/resolve/main"
+
+curl -L -o ~/.openproxy/models/laya/model.onnx "$HF_BASE/model.onnx"
+curl -L -o ~/.openproxy/models/laya/tokenizer.json "$HF_BASE/tokenizer/tokenizer.json"
+curl -L -o ~/.openproxy/models/laya/rl_agent_config.json "$HF_BASE/rl_agent_config.json"
+```
+
+### 3.3 Precision Tiers and CPU Latency
+
+| Precision Tier | Format | RAM / Disk | CPU Latency | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| **FP32 (Recommended for CPU)** | Float32 | 1.29 GB | 550 to 650 ms | Runs on ARM NEON and x86 AVX2 vector units. Retains full classification fidelity. |
+| **INT8 Quantized** | QInt8 | 325 MB | 250 to 300 ms | Executes via ARMv8.2-A `asimddp` instructions (`sdot`/`udot`) or x86 VNNI instructions. |
+| **FP16 (WebGPU Export)** | Float16 | 617 MB | ~3,900 ms | The default checkpoint in `mizchi/laya-multilingual-onnx` targets WebGPU. CPUs lack native FP16 compute pipelines and emulate half-precision in software. Convert weights to Float32 for CPU deployment. |
+
+### 3.4 Configuration Variables (Optional)
+
+If model files reside in `~/.openproxy/models/laya/` or `./models/laya/`, the engine detects them automatically. Use these environment variables to override default paths:
 
 ```bash
 # Path to ONNX model file
-OPENPROXY_LAYA_MODEL=/root/code/laya-playground/model-fp32/model.onnx
+OPENPROXY_LAYA_MODEL=~/.openproxy/models/laya/model.onnx
 
 # Path to tokenizer.json
-OPENPROXY_LAYA_TOKENIZER=/root/code/laya-playground/model-onnx/tokenizer/tokenizer.json
+OPENPROXY_LAYA_TOKENIZER=~/.openproxy/models/laya/tokenizer.json
 
 # Path to calibration temperature config
-OPENPROXY_LAYA_CONFIG=/root/code/laya-playground/model-onnx/rl_agent_config.json
+OPENPROXY_LAYA_CONFIG=~/.openproxy/models/laya/rl_agent_config.json
 
 # Intra-op thread count (defaults to CPU cores, clamped to 1..4)
 OPENPROXY_LAYA_THREADS=4

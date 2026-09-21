@@ -1,5 +1,6 @@
 use crate::adapters::laya_engine::{
-    confidence_from_probs, execute_decision, init, is_available, render_options, shutdown,
+    confidence_from_probs, execute_decision, init, is_available, is_model_installed,
+    render_options, shutdown,
 };
 use openproxy_types::systemone::{
     SystemOneQuestion, SystemOneQuestionType, SystemOneRequest,
@@ -102,11 +103,11 @@ fn test_render_options_all_types() {
 static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn has_model() -> bool {
-    let model_path = "/root/code/laya-playground/model-onnx/model.onnx";
-    std::path::Path::new(model_path).exists()
+    is_model_installed()
 }
 
 #[test]
+#[ignore = "requires local Laya ONNX model weights"]
 fn test_laya_engine_lifecycle_and_idempotency() {
     let _lock = TEST_MUTEX.lock().unwrap();
     if !has_model() {
@@ -141,6 +142,7 @@ fn test_laya_engine_lifecycle_and_idempotency() {
 }
 
 #[test]
+#[ignore = "requires local Laya ONNX model weights"]
 fn test_laya_engine_multi_question_types_inference() {
     let _lock = TEST_MUTEX.lock().unwrap();
     if !has_model() {
@@ -218,6 +220,7 @@ fn test_laya_engine_multi_question_types_inference() {
 }
 
 #[test]
+#[ignore = "requires local Laya ONNX model weights"]
 fn test_laya_engine_multithreaded_concurrency() {
     let _lock = TEST_MUTEX.lock().unwrap();
     if !has_model() {
@@ -266,6 +269,7 @@ fn test_laya_engine_multithreaded_concurrency() {
 }
 
 #[test]
+#[ignore = "requires local Laya ONNX model weights"]
 fn test_laya_engine_multibyte_utf8_and_long_prompt() {
     let _lock = TEST_MUTEX.lock().unwrap();
     if !has_model() {

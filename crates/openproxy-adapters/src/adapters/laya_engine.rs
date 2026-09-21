@@ -115,6 +115,103 @@ pub fn shutdown() {
     }
 }
 
+fn resolve_candidate_path(
+    explicit: Option<&str>,
+    env_var: &str,
+    filename: &str,
+    extra_subpaths: &[&str],
+    dev_fallbacks: &[&str],
+) -> String {
+    if let Some(p) = explicit.filter(|s| !s.is_empty()) {
+        return p.to_string();
+    }
+    if let Some(p) = std::env::var(env_var).ok().filter(|s| !s.is_empty()) {
+        return p;
+    }
+
+    let mut candidates = Vec::new();
+
+    // 1. ~/.openproxy/models/laya/<subpath>
+    if let Ok(home) = std::env::var("HOME") {
+        let base = format!("{home}/.openproxy/models/laya");
+        candidates.push(format!("{base}/{filename}"));
+        for sub in extra_subpaths {
+            candidates.push(format!("{base}/{sub}"));
+        }
+    }
+
+    // 2. ./models/laya/<subpath>
+    candidates.push(format!("./models/laya/{filename}"));
+    for sub in extra_subpaths {
+        candidates.push(format!("./models/laya/{sub}"));
+    }
+
+    // 3. Dev fallbacks
+    for cand in dev_fallbacks {
+        candidates.push((*cand).to_string());
+    }
+
+    for cand in &candidates {
+        if std::path::Path::new(cand).exists() {
+            return cand.clone();
+        }
+    }
+
+    // Default canonical path if none exist yet
+    if let Ok(home) = std::env::var("HOME") {
+        format!("{home}/.openproxy/models/laya/{filename}")
+    } else {
+        format!("./models/laya/{filename}")
+    }
+}
+
+pub fn resolve_model_path(opt: Option<&str>) -> String {
+    resolve_candidate_path(
+        opt,
+        "OPENPROXY_LAYA_MODEL",
+        "model.onnx",
+        &[
+            "model-fp32/model.onnx",
+            "model-int8/model.onnx",
+            "model-fp32.onnx",
+            "model-int8.onnx",
+        ],
+        &[
+            "/root/code/laya-playground/model-fp32/model.onnx",
+            "/root/code/laya-playground/model-int8/model.onnx",
+            "/root/code/laya-playground/model-onnx/model.onnx",
+        ],
+    )
+}
+
+pub fn resolve_tokenizer_path(opt: Option<&str>) -> String {
+    resolve_candidate_path(
+        opt,
+        "OPENPROXY_LAYA_TOKENIZER",
+        "tokenizer.json",
+        &["tokenizer/tokenizer.json"],
+        &[
+            "/root/code/laya-playground/model-onnx/tokenizer/tokenizer.json",
+            "/root/code/laya-playground/tokenizer/tokenizer.json",
+        ],
+    )
+}
+
+pub fn resolve_config_path(opt: Option<&str>) -> String {
+    resolve_candidate_path(
+        opt,
+        "OPENPROXY_LAYA_CONFIG",
+        "rl_agent_config.json",
+        &["onnx_config.json"],
+        &["/root/code/laya-playground/model-onnx/rl_agent_config.json"],
+    )
+}
+
+pub fn is_model_installed() -> bool {
+    let p = resolve_model_path(None);
+    std::path::Path::new(&p).exists()
+}
+
 pub fn init(
     model_path_opt: Option<&str>,
     tokenizer_path_opt: Option<&str>,
@@ -126,31 +223,9 @@ pub fn init(
         return Ok(());
     }
 
-    let model_path = model_path_opt
-        .map(ToString::to_string)
-        .or_else(|| std::env::var("OPENPROXY_LAYA_MODEL").ok())
-        .unwrap_or_else(|| {
-            let fp32_path = "/root/code/laya-playground/model-fp32/model.onnx";
-            if std::path::Path::new(fp32_path).exists() {
-                fp32_path.to_string()
-            } else {
-                "/root/code/laya-playground/model-onnx/model.onnx".to_string()
-            }
-        });
-
-    let tokenizer_path = tokenizer_path_opt
-        .map(ToString::to_string)
-        .or_else(|| std::env::var("OPENPROXY_LAYA_TOKENIZER").ok())
-        .unwrap_or_else(|| {
-            "/root/code/laya-playground/model-onnx/tokenizer/tokenizer.json".to_string()
-        });
-
-    let config_path = config_path_opt
-        .map(ToString::to_string)
-        .or_else(|| std::env::var("OPENPROXY_LAYA_CONFIG").ok())
-        .unwrap_or_else(|| {
-            "/root/code/laya-playground/model-onnx/rl_agent_config.json".to_string()
-        });
+    let model_path = resolve_model_path(model_path_opt);
+    let tokenizer_path = resolve_tokenizer_path(tokenizer_path_opt);
+    let config_path = resolve_config_path(config_path_opt);
 
     let num_threads = num_threads_opt
         .or_else(|| {
