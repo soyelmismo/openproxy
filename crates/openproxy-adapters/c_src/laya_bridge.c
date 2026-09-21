@@ -5,8 +5,22 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#define DL_OPEN(path) (void*)LoadLibraryA(path)
+#define DL_SYM(handle, sym) (void*)GetProcAddress((HMODULE)(handle), (sym))
+#define DL_CLOSE(handle) FreeLibrary((HMODULE)(handle))
+#define DL_ERROR() "LoadLibrary failed"
+#else
 #include <dlfcn.h>
 #include <unistd.h>
+#define DL_OPEN(path) dlopen(path, RTLD_NOW | RTLD_GLOBAL)
+#define DL_SYM(handle, sym) dlsym(handle, sym)
+#define DL_CLOSE(handle) dlclose(handle)
+#define DL_ERROR() (dlerror() ? dlerror() : "failed to load dynamic library")
+#endif
 
 struct LayaSession {
     void* dl_handle;
@@ -33,6 +47,8 @@ static const char* candidate_paths[] = {
     "/opt/homebrew/lib/libonnxruntime.dylib",
     "/usr/local/lib/libonnxruntime.dylib",
     "libonnxruntime.dylib",
+    "onnxruntime.dll",
+    "libonnxruntime.dll",
     NULL
 };
 
@@ -47,34 +63,34 @@ LayaSession* laya_session_create(
     const char* env_path = getenv("OPENPROXY_ONNX_LIB");
 
     if (onnx_lib_path && onnx_lib_path[0] != '\0') {
-        handle = dlopen(onnx_lib_path, RTLD_NOW | RTLD_GLOBAL);
+        handle = DL_OPEN(onnx_lib_path);
     }
     if (!handle && env_path && env_path[0] != '\0') {
-        handle = dlopen(env_path, RTLD_NOW | RTLD_GLOBAL);
+        handle = DL_OPEN(env_path);
     }
     if (!handle) {
         for (int i = 0; candidate_paths[i] != NULL; ++i) {
-            handle = dlopen(candidate_paths[i], RTLD_NOW | RTLD_GLOBAL);
+            handle = DL_OPEN(candidate_paths[i]);
             if (handle) break;
         }
     }
 
     if (!handle) {
-        set_error(err_buf, err_buf_len, dlerror() ? dlerror() : "failed to load libonnxruntime.so");
+        set_error(err_buf, err_buf_len, DL_ERROR());
         return NULL;
     }
 
-    OrtApiBase* (*get_api_base)(void) = (OrtApiBase* (*)(void))dlsym(handle, "OrtGetApiBase");
+    OrtApiBase* (*get_api_base)(void) = (OrtApiBase* (*)(void))DL_SYM(handle, "OrtGetApiBase");
     if (!get_api_base) {
-        set_error(err_buf, err_buf_len, "dlsym OrtGetApiBase failed");
-        dlclose(handle);
+        set_error(err_buf, err_buf_len, "dlsym / GetProcAddress OrtGetApiBase failed");
+        DL_CLOSE(handle);
         return NULL;
     }
 
     const OrtApiBase* base = get_api_base();
     if (!base) {
         set_error(err_buf, err_buf_len, "OrtGetApiBase returned NULL");
-        dlclose(handle);
+        DL_CLOSE(handle);
         return NULL;
     }
 
@@ -82,14 +98,14 @@ LayaSession* laya_session_create(
     const OrtApi* ort = base->GetApi(20);
     if (!ort) {
         set_error(err_buf, err_buf_len, "OrtApi version 20 not supported by runtime");
-        dlclose(handle);
+        DL_CLOSE(handle);
         return NULL;
     }
 
     LayaSession* s = (LayaSession*)calloc(1, sizeof(LayaSession));
     if (!s) {
         set_error(err_buf, err_buf_len, "out of memory allocating LayaSession");
-        dlclose(handle);
+        DL_CLOSE(handle);
         return NULL;
     }
     s->dl_handle = handle;
@@ -116,7 +132,13 @@ LayaSession* laya_session_create(
     }
     ort->SetSessionGraphOptimizationLevel(s->opts, ORT_ENABLE_ALL);
 
+#ifdef _WIN32
+    wchar_t w_model_path[1024];
+    MultiByteToWideChar(CP_UTF8, 0, model_path, -1, w_model_path, 1024);
+    status = ort->CreateSession(s->env, w_model_path, s->opts, &s->session);
+#else
     status = ort->CreateSession(s->env, model_path, s->opts, &s->session);
+#endif
     if (status) {
         set_error(err_buf, err_buf_len, ort->GetErrorMessage(status));
         ort->ReleaseStatus(status);
@@ -156,7 +178,7 @@ void laya_session_destroy(LayaSession* session) {
         }
     }
     if (session->dl_handle) {
-        dlclose(session->dl_handle);
+        DL_CLOSE(session->dl_handle);
         session->dl_handle = NULL;
     }
     free(session);
