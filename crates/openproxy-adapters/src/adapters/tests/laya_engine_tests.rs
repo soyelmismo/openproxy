@@ -336,3 +336,24 @@ fn test_laya_engine_multibyte_utf8_and_long_prompt() {
 
     shutdown();
 }
+
+#[test]
+fn test_resolve_paths_explicit_and_defaults() {
+    use crate::adapters::laya_engine::{
+        resolve_config_path, resolve_model_path, resolve_tokenizer_path,
+    };
+
+    // Explicit path override always wins
+    assert_eq!(
+        resolve_model_path(Some("/custom/model.onnx")),
+        "/custom/model.onnx"
+    );
+    assert_eq!(
+        resolve_tokenizer_path(Some("/custom/tokenizer.json")),
+        "/custom/tokenizer.json"
+    );
+    assert_eq!(
+        resolve_config_path(Some("/custom/config.json")),
+        "/custom/config.json"
+    );
+}

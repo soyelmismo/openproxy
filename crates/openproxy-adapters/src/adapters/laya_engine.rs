@@ -146,7 +146,14 @@ fn resolve_candidate_path(
         candidates.push(format!("./models/laya/{sub}"));
     }
 
-    // 3. Dev fallbacks
+    // 3. /var/lib/openproxy/models/laya/<subpath> (Docker container volume mount)
+    let container_base = "/var/lib/openproxy/models/laya";
+    candidates.push(format!("{container_base}/{filename}"));
+    for sub in extra_subpaths {
+        candidates.push(format!("{container_base}/{sub}"));
+    }
+
+    // 4. Dev fallbacks
     for cand in dev_fallbacks {
         candidates.push((*cand).to_string());
     }

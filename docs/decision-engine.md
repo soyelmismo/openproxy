@@ -43,16 +43,15 @@ OpenProxy supports two backends for decision routing:
 
 ### 2.1 Route Evaluation Workflow
 
-When you set `decision_model` on a combo (such as `laya/laya-multilingual` or `jev-latest`), the router executes these steps:
-
-1. **Target extraction:** The router inspects targets assigned to the combo and filters those with a `description` field.
-2. **Sequence construction:** The pipeline pairs the prompt with candidate target descriptions into a single choice question:
+1. **Target extraction & Pre-filtering:** The router inspects targets assigned to the combo and prunes any targets currently in cooldown (rate limit backoffs or circuit breaker), disabled targets, or targets flagged by predictive skip. Only healthy targets with a `description` field are considered.
+2. **Reputation scoring:** Surviving targets are weighted by their live reputation metrics (success rate, timeout frequency, and latency percentiles).
+3. **Sequence construction:** The pipeline pairs the prompt with candidate target descriptions into a single choice question:
    ```text
    [CLS] choice question: <instructions> [SEP] [MASK] <desc_0> [MASK] <desc_1> ... [SEP] <prompt> [SEP]
    ```
-3. **Calibrated evaluation:** The model calculates logits for each target marker, applies temperature scaling, and normalizes output through softmax.
-4. **Elastic hysteresis:** If a session is already pinned to a target, switching requires a confidence difference of at least 0.15 ($\Delta p \ge 0.15$). This prevents route oscillations and preserves upstream KV-cache.
-5. **Target reordering:** The pipeline swaps the winning target to index `0` for immediate dispatch.
+4. **Calibrated evaluation:** The model calculates logits for each target marker, applies temperature scaling, and normalizes output through softmax.
+5. **Elastic hysteresis:** If a session is already pinned to a target, switching requires a confidence difference of at least 0.15 ($\Delta p \ge 0.15$). This prevents route oscillations and preserves upstream KV-cache.
+6. **Target reordering:** The pipeline swaps the winning target to index `0` for immediate dispatch.
 
 ### 2.2 Hierarchical Sub-Combos
 
@@ -79,21 +78,28 @@ OpenProxy uses CPU-optimized Laya checkpoints published on Hugging Face:
 
 #### Standard Directory Layout
 
-OpenProxy detects files stored in `~/.openproxy/models/laya/` or `./models/laya/`:
+OpenProxy automatically detects files stored in `~/.openproxy/models/laya/`, `./models/laya/`, or container path `/var/lib/openproxy/models/laya/`:
 
 ```text
-~/.openproxy/models/laya/
-├── model.onnx              # Target model (INT8 by default, or FP32)
-├── tokenizer.json          # Fast Tokenizer
-└── rl_agent_config.json    # Decision temperatures and calibrated thresholds
+~/.openproxy/models/laya/ (or ./models/laya/)
+├── model.onnx              # Target model (INT8 by default, ~325 MB)
+├── tokenizer.json          # Fast Tokenizer (~34 MB)
+└── rl_agent_config.json    # Decision temperatures and calibrated thresholds (473 B)
 ```
 
 #### Download via huggingface-cli
 
 ```bash
+# Global user directory:
 mkdir -p ~/.openproxy/models/laya
 huggingface-cli download soyelmismo/laya-multilingual-onnx \
   --local-dir ~/.openproxy/models/laya \
+  --include "model.onnx" "tokenizer.json" "rl_agent_config.json"
+
+# Or local project directory (for Docker Compose):
+mkdir -p ./models/laya
+huggingface-cli download soyelmismo/laya-multilingual-onnx \
+  --local-dir ./models/laya \
   --include "model.onnx" "tokenizer.json" "rl_agent_config.json"
 ```
 
@@ -112,9 +118,9 @@ curl -L -o ~/.openproxy/models/laya/rl_agent_config.json "$HF_BASE/rl_agent_conf
 
 | Precision Tier | Format | RAM / Disk | CPU Latency | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **FP32 (Recommended for CPU)** | Float32 | 1.29 GB | 550 to 650 ms | Runs on ARM NEON and x86 AVX2 vector units. Retains full classification fidelity. |
-| **INT8 Quantized** | QInt8 | 325 MB | 250 to 300 ms | Executes via ARMv8.2-A `asimddp` instructions (`sdot`/`udot`) or x86 VNNI instructions. |
-| **FP16 (WebGPU Export)** | Float16 | 617 MB | ~3,900 ms | The default checkpoint in `mizchi/laya-multilingual-onnx` targets WebGPU. CPUs lack native FP16 compute pipelines and emulate half-precision in software. Convert weights to Float32 for CPU deployment. |
+| **INT8 Quantized (Recommended / Default)** | QInt8 | **325 MB** | **250 to 300 ms** | Default `model.onnx`. Executes via ARMv8.2-A `asimddp` instructions (`sdot`/`udot`) or x86 VNNI instructions. 4x smaller, 2x faster, with preserved accuracy. |
+| **FP32 (Full Precision / Unquantized)** | Float32 | 1.29 GB | 550 to 650 ms | Full-precision `model-fp32.onnx`. Runs on ARM NEON and x86 AVX2 vector units. Bit-exact parity with PyTorch base checkpoint. |
+| **FP16 (WebGPU Export)** | Float16 | 617 MB | ~3,900 ms | The default checkpoint in `mizchi/laya-multilingual-onnx` targets WebGPU. CPUs lack native FP16 compute pipelines and emulate half-precision in software. Convert weights to Float32 or INT8 for CPU deployment. |
 
 ### 3.4 Configuration Variables (Optional)
 
@@ -329,9 +335,10 @@ services:
       - ./config.toml:/etc/openproxy/config.toml:ro
       - openproxy-data:/var/lib/openproxy
       # Mount model weights folder (model.onnx, tokenizer.json, rl_agent_config.json)
+      # Use either local directory `./models/laya` or host `~/.openproxy/models/laya`
       - ./models/laya:/var/lib/openproxy/models/laya:ro
     environment:
       - OPENPROXY_CONFIG=/etc/openproxy/config.toml
 ```
 
-OpenProxy scans `/var/lib/openproxy/models/laya` on startup and enables native in-process inference immediately. If no models are mounted, OpenProxy runs headless with zero memory overhead.
+OpenProxy automatically scans `/var/lib/openproxy/models/laya` (as well as `~/.openproxy/models/laya` and `./models/laya`) on startup and enables native in-process inference immediately. If no models are mounted, OpenProxy runs headless with zero memory overhead.
