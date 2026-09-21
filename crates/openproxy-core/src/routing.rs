@@ -318,47 +318,7 @@ fn provider_active_and_scope(
     }
 }
 
-/// Strip the proxy-level `<provider>/` prefix from `model_str` if the
-/// segment before the first `/` matches a known provider id.
-///
-/// Why the provider lookup is necessary: upstream model ids can
-/// themselves contain `/` (e.g. `openai/gpt-4o` is a valid model id
-/// from the upstream's perspective, and is what the OpenRouter
-/// adapter surfaces for `openai/gpt-4o`). Stripping on the *first*
-/// `/` would mangle that into a different (and likely missing)
-/// upstream id.
-///
-/// The lookup is intentionally cheap: a single indexed `SELECT id`
-/// against the small `providers` table. We also short-circuit when
-/// the input does not contain a `/` (it cannot be a prefixed id).
-///
-/// The `combo:` prefix is preserved verbatim; combo names are not
-/// provider-prefixed.
-fn strip_proxy_prefix<'a>(conn: &Connection, model_str: &'a str) -> (&'a str, Option<&'a str>) {
-    if model_str.starts_with("combo:") {
-        return (model_str, None);
-    }
-    let Some((prefix, rest)) = model_str.split_once('/') else {
-        return (model_str, None);
-    };
-    if prefix.is_empty() {
-        return (model_str, None);
-    }
-    let candidate = ProviderId::new(prefix);
-    let exists: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM providers WHERE id = ?1)",
-            rusqlite::params![candidate.as_str()],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .is_ok_and(|v| v.unwrap_or(0) != 0);
-    if exists {
-        (rest, Some(prefix))
-    } else {
-        (model_str, None)
-    }
-}
+pub use openproxy_db::models::strip_proxy_prefix;
 
 /// Build a synthetic in-memory `Combo` plus its single `ComboTarget`
 /// for a direct-model dispatch.

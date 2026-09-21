@@ -129,6 +129,53 @@ pub fn find_active_by_provider_and_name(
     )
 }
 
+/// Strip the proxy-level `<provider>/` prefix from `model_str` if the
+/// segment before the first `/` matches a known provider id.
+pub fn strip_proxy_prefix<'a>(conn: &Connection, model_str: &'a str) -> (&'a str, Option<&'a str>) {
+    if model_str.starts_with("combo:") {
+        return (model_str, None);
+    }
+    let Some((prefix, rest)) = model_str.split_once('/') else {
+        return (model_str, None);
+    };
+    if prefix.is_empty() {
+        return (model_str, None);
+    }
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM providers WHERE id = ?1)",
+            rusqlite::params![prefix],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_or(false, |v| v != 0);
+    if exists {
+        (rest, Some(prefix))
+    } else {
+        (model_str, None)
+    }
+}
+
+/// Canonical resolution of a model identifier into its `(Option<ProviderId>, UpstreamModelId)`.
+///
+/// 1. If a known provider prefix is present (e.g. `typesafe/jev-latest`), strips it
+///    and returns `(Some(ProviderId("typesafe")), "jev-latest")`.
+/// 2. If no provider prefix is present, queries `models` to find any active model by name
+///    (e.g. `jev-latest` -> `(Some(ProviderId("typesafe")), "jev-latest")`).
+/// 3. If neither matches, returns `(None, model_str)`.
+pub fn resolve_model_identity(
+    conn: &Connection,
+    model_str: &str,
+) -> Result<(Option<ProviderId>, String)> {
+    let (stripped, provider_prefix) = strip_proxy_prefix(conn, model_str);
+    if let Some(prefix) = provider_prefix {
+        return Ok((Some(ProviderId::new(prefix)), stripped.to_string()));
+    }
+    if let Some(model) = find_active_by_name(conn, stripped)? {
+        return Ok((Some(model.provider_id), model.model_id.0.to_string()));
+    }
+    Ok((None, model_str.to_string()))
+}
+
 pub fn set_test_status(conn: &Connection, id: ModelRowId, status: i32) -> Result<()> {
     conn.execute(
         "UPDATE models \

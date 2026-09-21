@@ -166,24 +166,28 @@ async fn execute_system_one_decision(
     req: &SystemOneRequest,
     timeout_ms: u64,
 ) -> Result<Option<String>, openproxy_types::error::CoreError> {
-    let body_bytes = serde_json::to_vec(req)
-        .map(bytes::Bytes::from)
-        .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
+    let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
+    let decision_model_owned = decision_model.to_string();
+    let (resolved_prov, upstream_model) = tokio::task::spawn_blocking(move || {
+        let conn = conn_arc.lock();
+        openproxy_db::models::resolve_model_identity(&conn, &decision_model_owned)
+            .unwrap_or((None, decision_model_owned))
+    })
+    .await
+    .unwrap_or((None, decision_model.to_string()));
 
-    let (prov_prefix, _) = decision_model
-        .split_once('/')
-        .unwrap_or((decision_model, ""));
-
-    // Look for an adapter that matches the decision model's provider
+    // Look for an adapter that matches the resolved provider or model
     let adapter = ctx
         .pipeline
         .config
         .adapters
         .iter()
         .find(|a| {
-            a.id().as_str() == prov_prefix
-                || a.config().id.as_str() == prov_prefix
-                || a.id().as_str() == decision_model
+            if let Some(ref p) = resolved_prov {
+                a.id() == p || a.config().id == *p
+            } else {
+                a.id().as_str() == decision_model
+            }
         })
         .or_else(|| {
             ctx.pipeline
@@ -194,7 +198,7 @@ async fn execute_system_one_decision(
         })
         .cloned();
 
-    let (url, auth_header) = if let Some(a) = adapter {
+    let (url, auth_header, body_bytes) = if let Some(a) = adapter {
         let base_url = if a.format() == openproxy_types::ProviderFormat::SystemOne {
             a.build_system_one_url()
         } else {
@@ -214,10 +218,14 @@ async fn execute_system_one_decision(
         .await
         .unwrap_or_default();
         let auth = a.build_auth_header(&api_key);
-        (base_url, auth)
+        let formatted = a.format_system_one_request(req, &upstream_model)?;
+        (base_url, auth, formatted)
     } else {
         // Fallback to local Laya server
-        ("http://localhost:8000/v1/systemone".to_string(), None)
+        let raw = serde_json::to_vec(req)
+            .map(bytes::Bytes::from)
+            .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
+        ("http://localhost:8000/v1/systemone".to_string(), None, raw)
     };
 
     let mut upstream_req = UpstreamRequest::post_json(&url, body_bytes);
