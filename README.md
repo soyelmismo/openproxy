@@ -32,11 +32,13 @@
 ## Why openproxy?
 
 - **Parallel Racing:** Query multiple providers in parallel. Stream the first valid response to your client and cancel losing requests.
-- **Combos (Fallback Routing):** Chain models and accounts (`strict`, `round_robin`, `p2c`, `least_used`). If provider A hits rate limits or errors, openproxy fails over to provider B.
-- **Self-Hosted:** Single binary with embedded SQLite and a web dashboard. No external databases, cloud accounts, or telemetry.
-- **Protocol Translation:** Translates requests and SSE streams between OpenAI (`/chat/completions`), Anthropic (`/messages`), and Google Gemini formats.
+- **Combos (Fallback Routing):** Chain models and accounts (`strict`, `round_robin`, `p2c`, `least_used`, `decision`). If provider A hits rate limits or errors, openproxy fails over to provider B.
+- **Adaptive Target Reputation:** Self-healing routing tracks real-time success rates, timeouts, and latency percentiles to auto-penalize degraded models and predictively prune bad targets before routing.
+- **Zero-Leak PII Privacy:** In-flight anonymization replaces sensitive data (names, emails, phone numbers, IPs, API keys) with synthetic placeholders, reconstituting them seamlessly in responses (unary & streaming SSE).
+- **Self-Hosted & In-Process Inference:** Single binary with embedded SQLite, web dashboard, and optional native in-process ONNX decision router (Laya). No external databases, daemons, or telemetry.
+- **Protocol Translation:** Translates requests and SSE streams between OpenAI (`/chat/completions`, `/responses`), Anthropic (`/messages`), and Google Gemini formats.
 - **Proxy Engine & Cooldowns:** Scrapes upstream proxies, runs health checks, and enforces persistent per-provider rate-limit backoffs.
-- **Drop-in Compatibility:** Point any OpenAI-compatible client (**Cursor, Cline, Roo Code, Continue, Claude Code, LiteLLM, LangChain**) to openproxy by updating the base URL.
+- **Drop-in Compatibility:** Point any OpenAI-compatible client (**Cursor, Cline, Roo Code, Continue, Claude Code, Antigravity CLI, LiteLLM, LangChain**) to openproxy by updating the base URL.
 
 ---
 
@@ -46,12 +48,14 @@
 
 ## Key Features
 
-- **⚡ OpenAI-Compatible API:** `POST /v1/chat/completions` (streaming SSE and non-streaming) and `GET /v1/models`.
+- **⚡ OpenAI & Responses API:** Full support for `POST /v1/chat/completions` (streaming SSE and non-streaming), `POST /v1/responses`, and `GET /v1/models`.
 - **🔌 Multi-Provider Support:** Built-in adapters for OpenRouter, MiniMax, OpenCode (Zen & Go), Ollama Cloud, Nous Research, NVIDIA NIM, Kilocode, Gemini (AI Studio + Cloud Code), Antigravity (+ CLI), Kiro, Cloudflare Workers AI, and custom endpoints.
 - **🏁 Parallel Races:** Launch $N$ targets concurrently. First token wins; losing requests abort within configurable grace periods.
 - **🔄 Combos & Load Balancing:** Group providers, models, and accounts into virtual models with weighted routing, power-of-two-choices (`p2c`), and nested sub-combos.
-- **🧠 Semantic Decision Engine (Jev & Laya):** In-process prompt classification and hierarchical combo routing via native Rust C FFI (`libonnxruntime.so`) and Jev HTTP upstreams. See [Decision Engine Guide](docs/decision-engine.md).
-- **🛡️ Circuit Breakers & Cooldowns:** Fault detection with configurable per-account and per-target backoff cooldowns.
+- **🧠 Semantic Decision Engine (Laya & Jev):** Sub-300ms prompt routing using CPU-optimized INT8 ONNX models ([`soyelmismo/laya-multilingual-onnx`](https://huggingface.co/soyelmismo/laya-multilingual-onnx)) with in-process C FFI (`libonnxruntime.so`), zero external daemons, and dynamic memory release. See [Decision Engine Guide](docs/decision-engine.md).
+- **📈 Adaptive Reputation & Predictive Skip:** Real-time provider reliability scoring ($p50/p95/p99$ latency, timeout penalties, error rates) that dynamically re-ranks combo targets and skips failing models ahead of time.
+- **🔒 Zero-Leak PII Redaction & Restoration:** Reversible pseudonymization of emails, phone numbers, IP addresses, secrets/API keys, and person names with streaming Aho-Corasick reconstitution across chunk boundaries.
+- **🛡️ Quota Protection & Circuit Breakers:** Automated quota threshold monitoring, account rotation, and fault detection with configurable per-account and per-target backoffs.
 - **🌐 Proxy Rotation & Rate-Limit Isolation:** Proxy health tracking and isolated per-provider cooldowns on HTTP 429 responses.
 - **📊 Embedded Dashboard:** Web UI (TypeScript + Lit + uPlot) bundled in the binary at `/admin`. Live WebSocket feed, throughput metrics, latency percentiles ($p50/p95/p99$), and cost tracking.
 - **🔔 Notifications:** Alerts for discovered models, auto-activation rules, and drag-and-drop assignment to combos.
@@ -149,6 +153,8 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 | Tool | Base URL Configuration |
 | :--- | :--- |
 | **Cursor / Cline / Roo Code** | `http://127.0.0.1:8787/v1` |
+| **Claude Code** | `ANTHROPIC_BASE_URL="http://127.0.0.1:8787"` |
+| **Antigravity CLI** | `OPENAI_BASE_URL="http://127.0.0.1:8787/v1"` |
 | **Continue.dev** | `http://127.0.0.1:8787/v1` |
 | **OpenAI Python SDK** | `client = OpenAI(base_url="http://127.0.0.1:8787/v1", api_key="...")` |
 | **LangChain / LlamaIndex** | `openai_api_base="http://127.0.0.1:8787/v1"` |
@@ -157,6 +163,8 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 ## Documentation
 
+- [`docs/decision-engine.md`](docs/decision-engine.md): Semantic decision routing, System One protocol, and CPU-optimized native Laya ONNX engine.
+- [`docs/hierarchical-decision-routing.md`](docs/hierarchical-decision-routing.md): Hierarchical sub-combo tree evaluation and cascading classifiers.
 - [`docs/architecture.md`](docs/architecture.md): System architecture, routing pipeline, and internals.
 - [`docs/mvp-spec.md`](docs/mvp-spec.md): Endpoint specifications, schema, and security models.
 - [`docs/roadmap.md`](docs/roadmap.md): Post-MVP roadmap and planned capabilities.
