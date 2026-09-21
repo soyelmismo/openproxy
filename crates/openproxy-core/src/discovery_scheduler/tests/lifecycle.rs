@@ -176,12 +176,15 @@ async fn cancelled_scheduler_stops_within_one_tick() {
         },
     );
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while counters.iter().any(|c| c.load(Ordering::SeqCst) == 0) {
         if std::time::Instant::now() >= deadline {
             break;
         }
-        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(50)).await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
     }
     for (pid, c) in provider_ids.iter().zip(counters.iter()) {
         let n = c.load(Ordering::SeqCst);

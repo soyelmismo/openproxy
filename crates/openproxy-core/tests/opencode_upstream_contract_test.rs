@@ -50,6 +50,10 @@ fn test_opencode_zen_golden_contract_spec_parity() {
         adapter.build_chat_url(TargetFormat::Gemini, &model),
         "https://opencode.ai/zen/v1/models/test-model:streamGenerateContent?alt=sse"
     );
+    assert_eq!(
+        adapter.build_chat_url(TargetFormat::SystemOne, &model),
+        "https://opencode.ai/zen/v1/systemone"
+    );
 
     // 3. Auth and identity headers branching (PAID key)
     let headers_paid = adapter.build_headers("zen_sk_test123", TargetFormat::Anthropic, &model);
@@ -195,6 +199,14 @@ fn test_opencode_zen_golden_contract_spec_parity() {
     assert_eq!(
         classify_opencode_target_format(OpenCodeFlavor::Zen, "gemini-3.1-pro"),
         TargetFormat::Gemini
+    );
+    assert_eq!(
+        classify_opencode_target_format(OpenCodeFlavor::Zen, "jev-1.13"),
+        TargetFormat::SystemOne
+    );
+    assert_eq!(
+        classify_opencode_target_format(OpenCodeFlavor::Zen, "jev-1.13-free"),
+        TargetFormat::SystemOne
     );
 }
 

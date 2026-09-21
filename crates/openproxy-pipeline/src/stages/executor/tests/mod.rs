@@ -242,7 +242,26 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
                     };
                     buf.extend_from_slice(&chunk[..n]);
                 }
-                let req_text = String::from_utf8_lossy(&buf);
+                let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                    .or_else(|| buf.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))
+                    .unwrap_or(buf.len());
+                let req_text = String::from_utf8_lossy(&buf[..header_end]);
+                let mut content_len = 0usize;
+                for line in req_text.lines() {
+                    if let Some((k, v)) = line.split_once(':')
+                        && k.trim().eq_ignore_ascii_case("content-length")
+                    {
+                        content_len = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body_read = buf.len().saturating_sub(header_end);
+                while body_read < content_len {
+                    let n = match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    body_read += n;
+                }
 
                 let response = if req_text.contains("/t1") {
                     c1.fetch_add(1, Ordering::SeqCst);

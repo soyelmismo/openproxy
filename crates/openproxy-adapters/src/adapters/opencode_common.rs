@@ -63,7 +63,9 @@ pub fn classify_opencode_target_format(flavor: OpenCodeFlavor, id: &str) -> Targ
 
 /// Substring heuristic used when no exact-ID override matches.
 fn family_target_format(lower: &str) -> TargetFormat {
-    if lower.contains("claude") || lower.contains("minimax") || lower.contains("qwen") {
+    if lower.contains("jev") || lower.contains("systemone") {
+        TargetFormat::SystemOne
+    } else if lower.contains("claude") || lower.contains("minimax") || lower.contains("qwen") {
         TargetFormat::Anthropic
     } else if lower.contains("gemini") {
         TargetFormat::Gemini
@@ -219,7 +221,18 @@ impl OpenCodeAdapter {
             return Ok(body);
         }
 
-        if body.is_empty() {
+        if target_format == TargetFormat::SystemOne {
+            if let Ok(mut val) = serde_json::from_slice::<serde_json::Value>(&body)
+                && let Some(obj) = val.as_object_mut()
+                && let Some(m_val) = obj.get_mut("model")
+                && let Some(m_str) = m_val.as_str()
+                && m_str.eq_ignore_ascii_case("jev-1.13")
+            {
+                *m_val = serde_json::Value::String("jev-1.13-free".to_string());
+                if let Ok(re_encoded) = serde_json::to_vec(&val) {
+                    return Ok(bytes::Bytes::from(re_encoded));
+                }
+            }
             return Ok(body);
         }
 
