@@ -96,6 +96,23 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(async {
         let config = load_server_config()?;
         let state = openproxy_server::state::AppState::new(config)?;
+
+        #[cfg(feature = "laya-engine")]
+        {
+            let pool = std::sync::Arc::clone(state.db_pool());
+            tokio::task::spawn_blocking(move || {
+                let conn = pool.writer();
+                let is_laya_active = openproxy_core::providers::get(
+                    &conn,
+                    &openproxy_types::ProviderId::new("laya"),
+                )
+                .is_ok_and(|p_opt| p_opt.is_some_and(|p| p.active));
+                if is_laya_active {
+                    openproxy_adapters::laya_engine::spawn_init_background();
+                }
+            });
+        }
+
         unsafe {
             libmimalloc_sys::mi_collect(true);
         }

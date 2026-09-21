@@ -10,10 +10,11 @@ authors.workspace = true
 workspace = true
 
 [features]
-default = ["upstream-hyper"]
+default = ["upstream-hyper", "laya-engine"]
 upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
 test-utils = []
 ssrf-bypass = []
+laya-engine = ["dep:tokenizers"]
 
 [dependencies]
 base64.workspace = true
@@ -47,3 +48,7 @@ rustls = { version = "0.23", default-features = false, features = ["logging", "s
 rustls-pki-types = { version = "1", optional = true }
 webpki-roots = { version = "1", optional = true }
 itoa = "1.0.18"
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"], optional = true }
+
+[build-dependencies]
+cc = "1.0"

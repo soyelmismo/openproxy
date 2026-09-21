@@ -296,6 +296,36 @@ async fn execute_system_one_decision(
     .await
     .unwrap_or((None, decision_model.to_string()));
 
+    #[cfg(feature = "laya-engine")]
+    {
+        let is_laya = resolved_prov.as_deref() == Some("laya")
+            || decision_model.to_ascii_lowercase().contains("laya");
+
+        if is_laya && openproxy_adapters::laya_engine::is_available() {
+            let req_clone = req.clone();
+            let res = tokio::task::spawn_blocking(move || {
+                openproxy_adapters::laya_engine::execute_decision(&req_clone)
+            })
+            .await;
+
+            match res {
+                Ok(Ok(mut resp)) => {
+                    let answer = resp
+                        .answers
+                        .remove("action")
+                        .or_else(|| resp.answers.into_values().next());
+                    return Ok(answer);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "Laya in-process inference failed, falling back to HTTP");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Laya spawn_blocking join error, falling back to HTTP");
+                }
+            }
+        }
+    }
+
     // Look for an adapter that matches the resolved provider or model
     let adapter = ctx
         .pipeline
@@ -433,8 +463,8 @@ mod tests {
 
     #[test]
     fn test_hysteresis_damping_constants() {
-        assert!(ELASTIC_HYSTERESIS_MARGIN > 0.0);
-        assert!(ELASTIC_CONFIDENCE_THRESHOLD > 0.0);
+        const { assert!(ELASTIC_HYSTERESIS_MARGIN > 0.0) };
+        const { assert!(ELASTIC_CONFIDENCE_THRESHOLD > 0.0) };
 
         // Simulation: ambiguous prompt (margin 3.31% < 5%) -> switch rejected
         let prob_chosen = 0.1369;

@@ -78,6 +78,23 @@ async fn dispatch_single_system_one(
     target: &UnaryTarget,
     req: &SystemOneRequest,
 ) -> Result<(SystemOneResponse, u16)> {
+    #[cfg(feature = "laya-engine")]
+    if target.provider.as_str() == "laya" && openproxy_adapters::laya_engine::is_available() {
+        let mut req_clone = req.clone();
+        if req_clone.model.is_none() {
+            req_clone.model = Some(target.upstream_model.clone());
+        }
+        let parsed_response = tokio::task::spawn_blocking(move || {
+            openproxy_adapters::laya_engine::execute_decision(&req_clone)
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("laya_engine join error: {e}")))?
+        .map_err(|e| CoreError::Internal(format!("laya_engine execution error: {e}")))?;
+
+        crate::guarded_unary_target!(record_success: circuit_breaker, target);
+        return Ok((parsed_response, 200));
+    }
+
     let upstream_url = adapter.build_system_one_url();
     let api_key = resolve_api_key(db_pool, master_key, target.account_id, &target.provider)?;
 

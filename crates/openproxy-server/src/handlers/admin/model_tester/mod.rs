@@ -328,42 +328,86 @@ pub async fn run_test_for_model(
             },
         );
 
-        let start_req = std::time::Instant::now();
-        let result = s.upstream_client().call(req, profile, cancel).await;
-        let elapsed_ms = start_req.elapsed().as_millis() as u64;
+        #[cfg(feature = "laya-engine")]
+        let laya_inprocess = is_decision
+            && model.provider_id.as_str() == "laya"
+            && openproxy_adapters::laya_engine::is_available();
+        #[cfg(not(feature = "laya-engine"))]
+        let laya_inprocess = false;
 
-        let mut debug_payload = request_headers_map.map(|req_headers| {
-            serde_json::json!({
-                "request_headers": req_headers,
-                "request_url": url,
-                "request_body": body_value,
-                "proxy_used": effective_proxy.clone(),
-            })
-        });
-
-        let (status, error_msg) = match result {
-            Ok(response) => {
-                let status = response.status.as_u16();
-                if status >= 400 {
-                    let body = response.collect().await.unwrap_or_default();
-                    let text = String::from_utf8_lossy(&body);
-                    if let Some(dp) = debug_payload.as_mut() {
-                        dp["response_body"] = serde_json::from_str(&text)
-                            .unwrap_or_else(|_| serde_json::json!(text.to_string()));
+        let (status, error_msg, elapsed_ms, debug_payload) = if laya_inprocess {
+            #[cfg(feature = "laya-engine")]
+            {
+                let start_req = std::time::Instant::now();
+                let req_res = serde_json::from_value::<openproxy_types::systemone::SystemOneRequest>(
+                    body_value.clone(),
+                );
+                let eval_res = match req_res {
+                    Ok(s1_req) => {
+                        tokio::task::spawn_blocking(move || {
+                            openproxy_adapters::laya_engine::execute_decision(&s1_req)
+                        })
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|res| res.map_err(|e| e.to_string()))
                     }
-                    let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
-                    (status, Some(truncated))
-                } else {
-                    let body = response.collect().await.unwrap_or_default();
-                    let text = String::from_utf8_lossy(&body);
-                    if let Some(dp) = debug_payload.as_mut() {
-                        dp["response_body"] = serde_json::from_str(&text)
-                            .unwrap_or_else(|_| serde_json::json!(text.to_string()));
-                    }
-                    (status, None)
-                }
+                    Err(e) => Err(e.to_string()),
+                };
+                let elapsed_ms = start_req.elapsed().as_millis() as u64;
+                let (status, error_msg, resp_val) = match eval_res {
+                    Ok(resp) => (200, None, serde_json::to_value(&resp).ok()),
+                    Err(e) => (500, Some(e.clone()), Some(serde_json::json!({ "error": e }))),
+                };
+                let debug_payload = Some(serde_json::json!({
+                    "engine": "in-process (C FFI)",
+                    "request_body": body_value,
+                    "response_body": resp_val,
+                }));
+                (status, error_msg, elapsed_ms, debug_payload)
             }
-            Err(e) => (0, Some(format!("{e:?}"))),
+            #[cfg(not(feature = "laya-engine"))]
+            {
+                unreachable!()
+            }
+        } else {
+            let start_req = std::time::Instant::now();
+            let result = s.upstream_client().call(req, profile, cancel).await;
+            let elapsed_ms = start_req.elapsed().as_millis() as u64;
+
+            let mut debug_payload = request_headers_map.map(|req_headers| {
+                serde_json::json!({
+                    "request_headers": req_headers,
+                    "request_url": url,
+                    "request_body": body_value,
+                    "proxy_used": effective_proxy.clone(),
+                })
+            });
+
+            let (status, error_msg) = match result {
+                Ok(response) => {
+                    let status = response.status.as_u16();
+                    if status >= 400 {
+                        let body = response.collect().await.unwrap_or_default();
+                        let text = String::from_utf8_lossy(&body);
+                        if let Some(dp) = debug_payload.as_mut() {
+                            dp["response_body"] = serde_json::from_str(&text)
+                                .unwrap_or_else(|_| serde_json::json!(text.to_string()));
+                        }
+                        let truncated: String = text.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
+                        (status, Some(truncated))
+                    } else {
+                        let body = response.collect().await.unwrap_or_default();
+                        let text = String::from_utf8_lossy(&body);
+                        if let Some(dp) = debug_payload.as_mut() {
+                            dp["response_body"] = serde_json::from_str(&text)
+                                .unwrap_or_else(|_| serde_json::json!(text.to_string()));
+                        }
+                        (status, None)
+                    }
+                }
+                Err(e) => (0, Some(format!("{e:?}"))),
+            };
+            (status, error_msg, elapsed_ms, debug_payload)
         };
 
         let error_msg = error_msg.map(|msg| {

@@ -223,6 +223,16 @@ pub async fn set_provider_active(
     with_adapter_reload!(s, id.as_str(), "set_provider_active", |w| {
         core_admin::set_provider_active(&w, &provider_id, active)
     });
+
+    #[cfg(feature = "laya-engine")]
+    if id == "laya" {
+        if active {
+            openproxy_adapters::laya_engine::spawn_init_background();
+        } else {
+            openproxy_adapters::laya_engine::shutdown();
+        }
+    }
+
     Ok(Json(serde_json::json!({ "id": id, "active": active })))
 }
 

@@ -26,6 +26,8 @@ pub use adapters::{
     opencode_common::OpenCodeZenAdapter, openrouter::OpenRouterAdapter, typesafe::TypeSafeAdapter,
     zai::ZaiAdapter,
 };
+#[cfg(feature = "laya-engine")]
+pub use adapters::laya_engine;
 #[cfg(any(test, feature = "test-utils"))]
 pub use upstream::load_upstream_source;
 

@@ -9,6 +9,14 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["laya-engine"]
+laya-engine = [
+    "openproxy-adapters/laya-engine",
+    "openproxy-pipeline/laya-engine",
+    "openproxy-core/laya-engine",
+]
+
 [[bin]]
 name = "openproxy"
 path = "src/main.rs"

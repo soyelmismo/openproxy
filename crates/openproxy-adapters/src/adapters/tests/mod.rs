@@ -11,5 +11,7 @@ pub(crate) fn has_header(headers: &[(String, String)], name: &str) -> bool {
 
 mod custom;
 mod general;
+#[cfg(feature = "laya-engine")]
+mod laya_engine_tests;
 mod opencode;
 mod providers;

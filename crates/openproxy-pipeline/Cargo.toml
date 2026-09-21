@@ -9,6 +9,10 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["laya-engine"]
+laya-engine = ["openproxy-adapters/laya-engine"]
+
 [dev-dependencies]
 criterion = "0.5"
 

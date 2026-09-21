@@ -36,6 +36,8 @@ pub mod horde;
 pub mod kilocode;
 pub mod kiro_ai;
 pub mod laya;
+#[cfg(feature = "laya-engine")]
+pub mod laya_engine;
 pub mod minimax;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
