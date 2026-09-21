@@ -24,7 +24,7 @@ import { navigate, rerenderCurrentView, forceRerenderCurrentView } from "../stat
 //   * For self-only closures (closeKeyForm, etc.) the listener
 //     passes the bound element (data-arg1="self") as the arg.
 
-import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey } from "./account-handlers.js";
+import { showCreateAccount, createAccount, closeCreateAccount, deleteAccount, showUpdateAccountKey, updateAccountKey, closeUpdateAccountKey, showReauthAccount } from "./account-handlers.js";
 import {
   showCreateCombo, createCombo, closeCreateCombo, deleteCombo, updateRaceSize, updateContextWindow, testAllTargets,
   onCreatePriorityModeChange, onCreateCooldownModeChange,
@@ -106,6 +106,7 @@ export const HANDLERS = {
   showUpdateAccountKey,
   updateAccountKey,     // signature: (id, e)          — submit handler
   closeUpdateAccountKey,
+  showReauthAccount,
 
   // Combos
   showCreateCombo,

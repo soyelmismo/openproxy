@@ -14,6 +14,8 @@ export interface OAuthViewProps {
   error: string | null;
   provider: Provider | undefined;
   providerId: string;
+  accountId?: number | undefined;
+  isReauth?: boolean | undefined;
   hasPkce: boolean;
   hasDeviceCode: boolean;
   deviceInfo: { verificationUri: string; userCode: string; deviceCode: string } | null;
@@ -42,14 +44,14 @@ export function renderOAuthContent(p: OAuthViewProps): TemplateResult {
       ${p.status === "idle"
         ? html`
             <div style="font-size: var(--fs-sm); color: var(--color-text-muted); margin-bottom: var(--space-3);">
-              Authenticate with <strong>${p.provider?.name || p.providerId}</strong> using official OAuth.
+              ${p.isReauth ? "Re-authenticate" : "Authenticate with"} <strong>${p.provider?.name || p.providerId}</strong> using official OAuth.
             </div>
             <div class="oauth-buttons" style="display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3);">
               ${p.hasPkce
-                ? html`<button type="button" class="primary" @click=${p.onStartPkce}>Log in with ${p.provider?.name || p.providerId}</button>`
+                ? html`<button type="button" class="primary" @click=${p.onStartPkce}>${p.isReauth ? "Re-authenticate with" : "Log in with"} ${p.provider?.name || p.providerId}</button>`
                 : html``}
               ${p.hasDeviceCode
-                ? html`<button type="button" class=${p.hasPkce ? "btn-secondary" : "primary"} @click=${p.onStartDeviceCode}>Log in via Device Code</button>`
+                ? html`<button type="button" class=${p.hasPkce ? "btn-secondary" : "primary"} @click=${p.onStartDeviceCode}>${p.isReauth ? "Re-authenticate via Device Code" : "Log in via Device Code"}</button>`
                 : html``}
             </div>
             ${p.hasPkce
@@ -67,7 +69,7 @@ export function renderOAuthContent(p: OAuthViewProps): TemplateResult {
             <div class="oauth-status-card" style="padding: var(--space-3); background: var(--color-surface-2); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); text-align: center;">
               <div style="font-weight: 600; font-size: var(--fs-sm); margin-bottom: var(--space-1);">Waiting for browser authorization...</div>
               <p style="font-size: var(--fs-xs); color: var(--color-text-muted); margin-bottom: var(--space-3);">
-                Complete the login in the opened window. Your account will be added automatically.
+                Complete the login in the opened window. ${p.isReauth ? "Your account credentials will be updated automatically." : "Your account will be added automatically."}
               </p>
               <div style="display: flex; gap: var(--space-2); justify-content: center;">
                 <button type="button" class="btn-secondary small" @click=${() => { window.open(p.currentAuthUrl, "oauth popup", "width=600,height=700,top=100,left=100"); }}>Reopen window</button>

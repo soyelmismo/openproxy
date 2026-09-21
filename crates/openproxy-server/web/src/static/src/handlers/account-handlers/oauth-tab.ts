@@ -16,6 +16,7 @@ export type { OAuthTabStatus };
 export interface OAuthTabContext {
   providerId: string;
   provider: Provider | undefined;
+  accountId?: number | undefined;
   hasPkce: boolean;
   hasDeviceCode: boolean;
   onSuccess: () => void;
@@ -38,6 +39,7 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
   const {
     providerId,
     provider,
+    accountId,
     hasPkce,
     hasDeviceCode,
     onSuccess,
@@ -215,22 +217,31 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
       status = "submitting";
       requestRender();
 
+      const exchangePayload: Record<string, unknown> = {
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+      };
+      if (accountId != null) {
+        exchangePayload["account_id"] = accountId;
+      }
       const exchangeResp = (await api(
         `/oauth/${encodeURIComponent(providerId)}/exchange`,
         {
           method: "POST",
-          body: JSON.stringify({
-            code,
-            redirect_uri: redirectUri,
-            code_verifier: codeVerifier,
-          }),
+          body: JSON.stringify(exchangePayload),
         },
       )) as { error?: string };
 
       if (exchangeResp.error) throw new Error(exchangeResp.error);
 
       stop();
-      showToast(`Logged in with ${provider?.name || providerId}`, "success");
+      showToast(
+        accountId != null
+          ? `Re-authenticated account #${accountId}`
+          : `Logged in with ${provider?.name || providerId}`,
+        "success",
+      );
       state.accounts = (await api("/accounts")) as typeof state.accounts;
       onSuccess();
     } catch (err: unknown) {
@@ -324,17 +335,28 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
 
       devicePollInterval = setInterval(async () => {
         try {
+          const pollPayload: Record<string, unknown> = {
+            device_code: resp.device_code,
+          };
+          if (accountId != null) {
+            pollPayload["account_id"] = accountId;
+          }
           const pollResp = (await api(
             `/oauth/${encodeURIComponent(providerId)}/device-poll`,
             {
               method: "POST",
-              body: JSON.stringify({ device_code: resp.device_code }),
+              body: JSON.stringify(pollPayload),
             },
           )) as { status?: string };
 
           if (pollResp.status === "complete" || pollResp.status === "ok") {
             stop();
-            showToast(`Logged in with ${provider?.name || providerId}`, "success");
+            showToast(
+              accountId != null
+                ? `Re-authenticated account #${accountId}`
+                : `Logged in with ${provider?.name || providerId}`,
+              "success",
+            );
             state.accounts = (await api("/accounts")) as typeof state.accounts;
             onSuccess();
           } else if (pollResp.status === "expired") {
@@ -445,23 +467,32 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     requestRender();
 
     try {
+      const exchangePayload: Record<string, unknown> = {
+        code,
+        redirect_uri: manualAuthData.redirectUri,
+        code_verifier: manualAuthData.codeVerifier,
+        state: callbackState || manualAuthData.state,
+      };
+      if (accountId != null) {
+        exchangePayload["account_id"] = accountId;
+      }
       const exchangeResp = (await api(
         `/oauth/${encodeURIComponent(providerId)}/exchange`,
         {
           method: "POST",
-          body: JSON.stringify({
-            code,
-            redirect_uri: manualAuthData.redirectUri,
-            code_verifier: manualAuthData.codeVerifier,
-            state: callbackState || manualAuthData.state,
-          }),
+          body: JSON.stringify(exchangePayload),
         },
       )) as { error?: string };
 
       if (exchangeResp.error) throw new Error(exchangeResp.error);
 
       stop();
-      showToast(`Logged in with ${provider?.name || providerId}`, "success");
+      showToast(
+        accountId != null
+          ? `Re-authenticated account #${accountId}`
+          : `Logged in with ${provider?.name || providerId}`,
+        "success",
+      );
       state.accounts = (await api("/accounts")) as typeof state.accounts;
       onSuccess();
     } catch (err: unknown) {
@@ -477,6 +508,8 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     error,
     provider,
     providerId,
+    accountId,
+    isReauth: accountId != null,
     hasPkce,
     hasDeviceCode,
     deviceInfo,

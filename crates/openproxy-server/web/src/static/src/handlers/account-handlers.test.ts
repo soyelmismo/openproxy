@@ -4,6 +4,7 @@ import {
   cleanApiKeyToken,
   looksLikeApiKey,
   isGenericLabel,
+  showReauthAccount,
 } from "./account-handlers.js";
 
 describe("helpers", () => {
@@ -244,5 +245,63 @@ futureai-1234567890abcdef1234567890
       "cpk_chutes_1234567890abcdef",
       "pk-MockPawanKeyOnlyLettersMixedCaseExampleString",
     ]);
+  });
+});
+
+describe("showReauthAccount", () => {
+  it("opens reauth modal for an existing oauth account", async () => {
+    const { state } = await import("../state/index.js");
+    state.accounts = [
+      {
+        id: 42,
+        provider_id: "minimax",
+        label: "MiniMax Test",
+        priority: 10,
+        extra_config_json: null,
+        health_status: "healthy",
+        rate_limited_until: null,
+        quota_session_used: null,
+        quota_session_limit: null,
+        quota_session_reset_at: null,
+        quota_weekly_used: null,
+        quota_weekly_limit: null,
+        quota_weekly_reset_at: null,
+        quota_plan_name: null,
+        quota_last_fetched_at: null,
+        quota_fetch_error: null,
+        auth_type: "oauth",
+        email: "test@example.com",
+        oauth_scope: null,
+        oauth_provider_specific: null,
+        expires_at: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+    ];
+    state.providers = [
+      {
+        id: "minimax",
+        name: "MiniMax",
+        base_url: "https://api.minimax.io",
+        auth_type: "bearer",
+        format: "openai",
+        extra_headers_json: null,
+        auto_activate_keyword: null,
+        active: true,
+        created_at: "2026-01-01T00:00:00Z",
+        use_proxies: false,
+        current_proxy_id: null,
+        proxy_rotation_errors: "",
+        proxy_rotation_mode: "round_robin",
+        oauth_flows: ["device"],
+      },
+    ];
+
+    document.body.innerHTML = '<div id="modal-root"></div>';
+    showReauthAccount(42);
+
+    const root = document.getElementById("modal-root");
+    expect(root?.querySelector(".modal-bg")).toBeTruthy();
+    expect(root?.textContent).toContain("Re-authenticate MiniMax");
+    expect(root?.textContent).toContain("Re-authenticate via Device Code");
   });
 });

@@ -21,6 +21,7 @@ import { icons } from '../../lib/icons.js';
 import {
   showCreateAccount,
   showUpdateAccountKey,
+  showReauthAccount,
   updateAccountLabel,
   copyAccountApiKey,
 } from '../../handlers/account-handlers.js';
@@ -136,6 +137,10 @@ function onShowUpdateAccountKey(id: number): void {
   showUpdateAccountKey(id);
 }
 
+function onShowReauthAccount(id: number): void {
+  showReauthAccount(id);
+}
+
 async function onDeleteAccount(id: number): Promise<void> {
   try {
     await api('/accounts/' + id, { method: 'DELETE' });
@@ -182,6 +187,7 @@ export function renderConnectionsSection(
       : html`<div class="table-wrap"><table class="accounts-table responsive-card-table">
           <thead><tr><th>Label</th><th>Priority</th><th>Health</th><th>Quota</th><th>Created</th><th>Actions</th></tr></thead>
           <tbody>${accounts.map((a) => {
+            const isOAuth = a.auth_type === 'oauth' || provider.auth_type === 'oauth';
             const quotaCell: TemplateResult = hasQuota
               ? html`<td class="col-account-quota" data-label="Quota">${renderQuotaCell(a)}</td>`
               : html`<td class="col-account-quota" data-label="Quota"><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
@@ -213,7 +219,9 @@ export function renderConnectionsSection(
                   ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>${icons.refresh()} Quota</button>` : html``}
                   ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>${icons.desktop()} Apply Local</button>` : html``}
                   <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>${icons.copy()} Copy</button>
-                  <button class="small" @click=${() => onShowUpdateAccountKey(a.id)}>${icons.key()} Key</button>
+                  ${isOAuth
+                    ? html`<button class="small" title="Re-authenticate OAuth account" @click=${() => onShowReauthAccount(a.id)}>${icons.refresh()} Reauth</button>`
+                    : html`<button class="small" title="Update API key" @click=${() => onShowUpdateAccountKey(a.id)}>${icons.key()} Key</button>`}
                   <button class="small danger" @click=${() => onDeleteAccount(a.id)}>Delete</button>
                 </div>
               </td>
