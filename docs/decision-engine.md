@@ -1,116 +1,120 @@
-# Decision Engine & Semantic Router (Jev & Laya Native)
+# Decision Engine & Semantic Router
 
-OpenProxy features a low-latency **Semantic Decision Engine** designed for real-time prompt classification, dynamic intent routing, and hierarchical combo execution. 
+The decision engine classifies incoming prompts and routes requests across targets using System One models. These models perform non-autoregressive sequence classification and calibrate probabilities using entropy-based confidence scoring:
 
-The engine operates on the **System One** decision paradigm: fast, non-autoregressive sequence classification calibrated with entropy-based confidence scoring ($1 - H / \ln k$), executed before dispatching requests to large generative LLMs.
+$$\text{confidence} = 1 - \frac{H(p)}{\ln k}$$
+
+where $H(p) = -\sum_{i=1}^k p_i \ln p_i$ and $k$ represents the number of candidates.
 
 ---
 
-## 1. Overview & Supported Backends
+## 1. Supported Backends
 
-OpenProxy supports two complementary decision backends:
+OpenProxy supports two backends for decision routing:
 
 ```text
-                       Incoming Client Prompt
-                                 │
-                                 ▼
-                     ┌───────────────────────┐
-                     │ Combo Decision Stage  │
-                     │  (Target Evaluation)  │
-                     └───────────┬───────────┘
-                                 │
-               ┌─────────────────┴─────────────────┐
-               ▼                                   ▼
-    [ Jev (External HTTP) ]             [ Laya (Native In-Process) ]
-    • Upstream HTTP API                 • Rust C FFI (libonnxruntime.so)
-    • Remote/self-hosted cluster        • Pure Rust HuggingFace Tokenizer
-    • Zero local CPU/RAM overhead       • Zero network hops (0.0 ms network)
-    • Fallback when Laya is inactive    • Dynamic lifecycle (0 MB when disabled)
+                       Incoming Prompt
+                              │
+                              ▼
+                  ┌───────────────────────┐
+                  │ Combo Decision Stage  │
+                  └───────────┬───────────┘
+                              │
+            ┌─────────────────┴─────────────────┐
+            ▼                                   ▼
+ [ Jev (HTTP Upstream) ]             [ Laya (In-Process C FFI) ]
+ • Remote HTTP upstream              • Native C FFI (libonnxruntime.so)
+ • Offloads compute to server        • Local memory inference (0 ms network)
+ • 0 MB local model memory           • Dynamic lifecycle (0 MB when inactive)
 ```
 
-| Feature | Jev (HTTP Upstream) | Laya Native (In-Process C FFI) |
+| Property | Jev (HTTP Upstream) | Laya Native (In-Process) |
 | :--- | :--- | :--- |
-| **Execution Mode** | Remote / External HTTP | In-Process (Shared Memory, Native Threads) |
-| **Network Overhead** | 20 – 150 ms network hop | **0.0 ms** (in-memory evaluation) |
-| **Memory Footprint** | 0 MB local RAM | Configurable (325 MB INT8 / 1.29 GB FP32) |
-| **Lifecycle** | Stateless HTTP client | Dynamic (unloaded to 0 MB when deactivated) |
-| **Hardware Acceleration** | Remote GPU / TPU | Local CPU (ARM NEON / AVX2 / `asimddp`) |
-| **Configuration** | Upstream URL & API key in Provider | Built-in provider toggle in dashboard |
+| **Execution** | Remote HTTP service | In-process native thread |
+| **Network Hop** | 20 to 150 ms | 0 ms |
+| **RAM Usage** | 0 MB local model memory | 325 MB (INT8) or 1.29 GB (FP32) |
+| **Lifecycle** | Stateless HTTP client | Unloads to 0 MB when deactivated |
+| **Hardware** | Remote GPU or server | Local CPU (ARM NEON, AVX2, or `asimddp`) |
+| **Configuration** | Provider URL and API key | Built-in provider toggle in dashboard |
 
 ---
 
-## 2. Architecture & Decision Routing
+## 2. Combo Decision Routing
 
-### 2.1 How Combo Decision Routing Works
+### 2.1 Route Evaluation Workflow
 
-When a combo configures `decision_model` (e.g., `laya/laya-multilingual` or `jev-latest`):
-1. **Candidate Extraction:** Targets in the combo that have a non-empty `description` field are collected as categorical choices.
-2. **Batch Sequence Formulation:** The user's prompt (state) and the candidate target descriptions are packaged into a single `choice` evaluation.
-3. **Calibrated Inference:** The decision model computes raw logits, scales them with temperature, and normalizes them through softmax to generate probabilities and confidence scores.
-4. **Elastic Hysteresis:** If the conversation session is already pinned to a target, the engine requires a confidence margin ($\Delta p \ge 0.15$) before switching targets, preventing cache thrashing and preserving upstream KV-cache.
-5. **Target Promotion:** The winning target is reordered to position `0` in the candidate list for immediate dispatch.
+When you set `decision_model` on a combo (such as `laya/laya-multilingual` or `jev-latest`), the router executes these steps:
 
-### 2.2 Hierarchical Decision Routing (Sub-Combos)
+1. **Target extraction:** The router inspects targets assigned to the combo and filters those with a `description` field.
+2. **Sequence construction:** The pipeline pairs the prompt with candidate target descriptions into a single choice question:
+   ```text
+   [CLS] choice question: <instructions> [SEP] [MASK] <desc_0> [MASK] <desc_1> ... [SEP] <prompt> [SEP]
+   ```
+3. **Calibrated evaluation:** The model calculates logits for each target marker, applies temperature scaling, and normalizes output through softmax.
+4. **Elastic hysteresis:** If a session is already pinned to a target, switching requires a confidence difference of at least 0.15 ($\Delta p \ge 0.15$). This prevents route oscillations and preserves upstream KV-cache.
+5. **Target reordering:** The pipeline swaps the winning target to index `0` for immediate dispatch.
 
-Combos can nest other combos as targets. When a top-level combo (e.g., `topics`) evaluates choices across sub-combos (`finance`, `health`, `coding`, `chat`), the decision engine selects the appropriate domain sub-combo, which can then perform a second-level selection among specialized models.
+### 2.2 Hierarchical Sub-Combos
+
+Combos can nest other combos as targets. In this topology, the top-level combo evaluates domain targets (`finance`, `health`, `coding`, `chat`). Once selected, the child combo resolves its internal targets based on model-specific criteria.
 
 ---
 
 ## 3. Native Laya Engine Setup
 
-The native Laya engine is implemented in pure Rust (`openproxy-adapters`) using C FFI directly to the official ONNX Runtime C API (`libonnxruntime.so`) and native Hugging Face `tokenizers`. It requires **zero external daemons, zero Python runtime, and zero external crate bloat**.
+OpenProxy implements the Laya engine in Rust using C FFI bindings to `libonnxruntime.so` and pure Rust tokenizers. It requires no Python interpreter, daemon processes, or external services.
 
 ### 3.1 Prerequisites
 
-1. **ONNX Runtime Shared Library:**
-   `libonnxruntime.so` (version 1.20+) must be present in standard library paths or specified in `LD_LIBRARY_PATH`:
-   - Ubuntu / Debian: `/usr/lib/libonnxruntime.so` or `/usr/local/lib/libonnxruntime.so`
-   - Python venvs or custom paths are auto-discovered from `/root/code/laya-playground/.venv/lib/python*/site-packages/onnxruntime/capi/`.
+1. **ONNX Runtime:**
+   Install `libonnxruntime.so` (version 1.20 or newer). OpenProxy scans standard paths (`/usr/lib`, `/usr/local/lib`) and discovers Python virtual environment installations in `/root/code/laya-playground/.venv/lib/`.
+2. **Cargo Feature:**
+   The `openproxy-adapters`, `openproxy-core`, `openproxy-pipeline`, and `openproxy-server` crates enable `laya-engine` by default.
 
-2. **Cargo Feature Gate:**
-   The feature `laya-engine` is enabled by default in `Cargo.toml`:
-   ```toml
-   [dependencies]
-   openproxy-adapters = { path = "../openproxy-adapters", features = ["laya-engine"] }
-   ```
+### 3.2 Model Checkpoints
 
-### 3.2 Model Checkpoints & Quantization
+OpenProxy supports three model precision tiers:
 
-OpenProxy automatically selects the optimal model path based on hardware compatibility:
-
-| Checkpoint | Path | Precision | Size | CPU Latency | Best Use Case |
+| Checkpoint | Path | Precision | Disk/RAM | CPU Latency | Application |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **FP32 Native** *(Default)* | `model-fp32/model.onnx` | Float32 | 1.29 GB | ~550 – 650 ms | **Production Default:** 100% semantic accuracy, native ARM NEON SIMD. |
-| **INT8 Selective** | `model-int8/model.onnx` | QInt8 (Per-Channel) | 325 MB | ~250 – 300 ms | **Low-Memory / High-Throughput:** Accelerated by hardware `asimddp` instructions. |
-| **FP16 WebGPU** | `model-onnx/model.onnx` | Float16 | 617 MB | ~3,900 ms | *Not recommended for CPU:* Lacks native CPU vector instructions; causes emulation overhead. |
+| **FP32 Native** *(Default)* | `model-fp32/model.onnx` | Float32 | 1.29 GB | 550 to 650 ms | Default for CPU. Uses ARM NEON instructions. Retains full accuracy. |
+| **INT8 Selective** | `model-int8/model.onnx` | QInt8 | 325 MB | 250 to 300 ms | Uses ARMv8.2-A `asimddp` hardware dot-product instructions (`sdot`/`udot`). |
+| **FP16 WebGPU** | `model-onnx/model.onnx` | Float16 | 617 MB | ~3,900 ms | Exported for WebGPU. CPUs lack native FP16 execution without GPU hardware and emulate operations in software. Avoid on CPU. |
 
-### 3.3 Environment Variables
+### 3.3 Configuration Variables
 
-| Variable | Default Value | Description |
-| :--- | :--- | :--- |
-| `OPENPROXY_LAYA_MODEL` | `/root/code/laya-playground/model-fp32/model.onnx` | Path to the ONNX model file. |
-| `OPENPROXY_LAYA_TOKENIZER` | `/root/code/laya-playground/model-onnx/tokenizer/tokenizer.json` | Path to the Hugging Face `tokenizer.json`. |
-| `OPENPROXY_LAYA_CONFIG` | `/root/code/laya-playground/model-onnx/rl_agent_config.json` | Path to the calibration temperature configuration. |
-| `OPENPROXY_LAYA_THREADS` | Available CPU cores (clamped to 1..4) | Number of intra-op threads for ONNX Runtime. |
+Set these environment variables in your environment file or shell:
+
+```bash
+# Path to ONNX model file
+OPENPROXY_LAYA_MODEL=/root/code/laya-playground/model-fp32/model.onnx
+
+# Path to tokenizer.json
+OPENPROXY_LAYA_TOKENIZER=/root/code/laya-playground/model-onnx/tokenizer/tokenizer.json
+
+# Path to calibration temperature config
+OPENPROXY_LAYA_CONFIG=/root/code/laya-playground/model-onnx/rl_agent_config.json
+
+# Intra-op thread count (defaults to CPU cores, clamped to 1..4)
+OPENPROXY_LAYA_THREADS=4
+```
 
 ---
 
-## 4. Lifecycle Management & Zero Memory Footprint
+## 4. Lifecycle and Memory Management
 
-To ensure OpenProxy remains ultra-lightweight when operators only want to use Jev or standard LLMs, the Laya engine implements an **explicit dynamic lifecycle**.
+When you route through Jev or standard LLMs, disable Laya to release all allocated memory.
 
-### 4.1 Inactive Provider: 0 MB Overhead
+### 4.1 Memory Footprint
 
-When the `laya` provider is marked inactive:
-- No background threads run.
-- The ONNX session, memory arena, and tokenizers are completely dropped from RAM.
-- OpenProxy's base memory footprint drops back to **< 50 MB**.
+- **Inactive:** Drops ONNX sessions, allocators, and tokenizer handles. Memory footprint drops to 0 MB.
+- **Active:** Loads weights into memory and reserves worker threads.
 
-### 4.2 Activating & Deactivating via REST API
+### 4.2 Toggling via REST API
 
-You can toggle the Laya engine on or off dynamically without restarting OpenProxy:
+Toggle the engine state at runtime without restarting the server:
 
-#### Deactivate (Release all memory to 0 MB):
+#### Deactivate (unloads model and frees RAM):
 ```bash
 curl -s -X POST http://localhost:8787/admin/api/providers/laya/active \
   -H "Authorization: Bearer <ADMIN_KEY>" \
@@ -118,12 +122,12 @@ curl -s -X POST http://localhost:8787/admin/api/providers/laya/active \
   -d '{"active": false}'
 ```
 
-*Server log confirmation:*
-```text
+Log entry:
+```json
 {"level":"INFO","message":"Laya internal engine shutdown (memory released)"}
 ```
 
-#### Activate (Load in background thread without blocking proxy traffic):
+#### Activate (initializes session on background thread):
 ```bash
 curl -s -X POST http://localhost:8787/admin/api/providers/laya/active \
   -H "Authorization: Bearer <ADMIN_KEY>" \
@@ -131,28 +135,25 @@ curl -s -X POST http://localhost:8787/admin/api/providers/laya/active \
   -d '{"active": true}'
 ```
 
-*Server log confirmation:*
-```text
-{"level":"INFO","message":"Initializing Laya internal C FFI engine"}
+Log entry:
+```json
 {"level":"INFO","message":"Laya ONNX internal engine ready for in-process inference"}
 ```
 
-### 4.3 Activating & Deactivating via Admin Web Dashboard
+### 4.3 Toggling via Web Dashboard
 
-1. Open the OpenProxy Dashboard at `http://<host>:8787/admin`.
-2. Navigate to the **Providers** tab.
-3. Locate **Laya (Self-Hosted)**.
-4. Toggle the **Active** switch.
-   - Deactivating immediately triggers `shutdown()` and frees memory.
-   - Activating spawns a non-blocking background initialization thread.
+1. Navigate to `/admin` in your browser.
+2. Select the **Providers** tab.
+3. Find **Laya (Self-Hosted)** in the provider list.
+4. Toggle the **Active** switch. The server updates the database and releases or loads model memory.
 
 ---
 
-## 5. API Usage & Protocol Contracts
+## 5. API Contracts
 
-### 5.1 Public Decision Protocol (`POST /v1/systemone`)
+### 5.1 Public Decision Endpoint (`POST /v1/systemone`)
 
-Any client can evaluate decisions directly via the OpenAI-compatible System One contract:
+Submit classification requests using the System One contract:
 
 ```bash
 curl -s -X POST http://localhost:8787/v1/systemone \
@@ -160,31 +161,31 @@ curl -s -X POST http://localhost:8787/v1/systemone \
   -H "Content-Type: application/json" \
   -d '{
     "model": "laya-multilingual",
-    "state": "The user is asking about quarterly EBITDA and net income calculations",
+    "state": "The user asks for quarterly EBITDA and net income formulas",
     "questions": {
       "domain": {
         "type": "choice",
-        "instructions": "Identify the primary topic domain",
-        "options": ["finance", "health", "technology", "general"]
+        "instructions": "Select the topic domain",
+        "options": ["finance", "health", "technology", "chat"]
       },
       "urgency": {
         "type": "score",
-        "instructions": "Determine priority level",
+        "instructions": "Rate inquiry urgency",
         "criteria": ["low", "medium", "high"]
       },
       "is_business": {
         "type": "noul",
-        "instructions": "Is this inquiry business or enterprise related?",
+        "instructions": "Relates to enterprise finance",
         "criteria": {
-          "true": "yes, related to business finance",
-          "false": "no, personal or unrelated topic"
+          "true": "business finance topic",
+          "false": "unrelated topic"
         }
       }
     }
   }'
 ```
 
-**Response:**
+Response payload:
 ```json
 {
   "model": "laya-multilingual",
@@ -196,7 +197,7 @@ curl -s -X POST http://localhost:8787/v1/systemone \
       "probabilities": {
         "finance": 0.9421,
         "technology": 0.0450,
-        "general": 0.0120,
+        "chat": 0.0120,
         "health": 0.0009
       }
     },
@@ -221,7 +222,7 @@ curl -s -X POST http://localhost:8787/v1/systemone \
 
 ### 5.2 Model Catalog (`GET /v1/models`)
 
-When active, Laya models appear in the standard catalog with enriched decision metadata:
+Active Laya models surface in the model catalog:
 
 ```json
 {
@@ -244,13 +245,11 @@ When active, Laya models appear in the standard catalog with enriched decision m
 }
 ```
 
-### 5.3 Automated Model Health Verification
+### 5.3 Health Check
 
-The dashboard and admin API can verify in-process engine health without network calls:
+Test engine status and measure latency directly:
 
 ```bash
 curl -s -X POST http://localhost:8787/admin/api/models/<ROW_ID>/test \
   -H "Authorization: Bearer <ADMIN_KEY>"
 ```
-
-Returns `status: 200`, execution latency in milliseconds, and the diagnostic classification payload.
