@@ -15,10 +15,13 @@
 //     NaN pass-through (the caller validates NaN before POST).
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { render } from "lit-html";
 import {
   buildSubComboTargetBodyFromForm,
   modelMatchesSearch,
   buildGlobalSearchGroups,
+  subComboOptionsTemplate,
+  subComboHelpTemplate,
 } from "./add-target-modal.js";
 
 function makeSubComboForm(fields: {
@@ -226,5 +229,44 @@ describe("buildGlobalSearchGroups", () => {
   it("skips inactive models", () => {
     const groups = buildGlobalSearchGroups("inactive-model", models, new Set());
     expect(groups.size).toBe(0);
+  });
+});
+
+describe("subComboOptionsTemplate and subComboHelpTemplate", () => {
+  function renderToText(tpl: unknown): string {
+    const el = document.createElement("div");
+    render(tpl as any, el);
+    return el.textContent || "";
+  }
+
+  it("renders empty state when no other combos exist", () => {
+    const optionsText = renderToText(subComboOptionsTemplate([], 0));
+    expect(optionsText).toContain("No other combos exist to nest");
+
+    const helpText = renderToText(subComboHelpTemplate(0, 0, 501));
+    expect(helpText).toContain("No other combos exist yet");
+    expect(helpText).toContain("Create another combo first");
+  });
+
+  it("renders cycle warning when all other combos create a cycle", () => {
+    const optionsText = renderToText(subComboOptionsTemplate([], 2));
+    expect(optionsText).toContain("All existing combos would create a cycle");
+
+    const helpText = renderToText(subComboHelpTemplate(0, 2, 501));
+    expect(helpText).toContain("All existing combos (2) are already part of this combo's hierarchy and would create a cycle with combo 501");
+  });
+
+  it("renders valid sub-combos and standard hint when valid sub-combos exist", () => {
+    const valid = [
+      { id: 10, name: "Fast chat" },
+      { id: 20, name: "Heavy reasoning" },
+    ];
+    const optionsText = renderToText(subComboOptionsTemplate(valid, 2));
+    expect(optionsText).toContain("Fast chat (id 10)");
+    expect(optionsText).toContain("Heavy reasoning (id 20)");
+    expect(optionsText).toContain("— select a sub-combo —");
+
+    const helpText = renderToText(subComboHelpTemplate(valid.length, 2, 501));
+    expect(helpText).toContain("Only combos that won't close a cycle with combo 501 are listed");
   });
 });

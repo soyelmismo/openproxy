@@ -6,7 +6,7 @@
 import { state } from "../../state/index.js";
 import { api } from "../../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
-import type { Account, Model, ComboSummary, ComboTargetWithModel } from "../../lib/types/api.js";
+import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel } from "../../lib/types/api.js";
 import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../../components/toast.js";
 import { ensureModalRoot, showApiError } from "../../lib/ui-utils.js";
@@ -24,16 +24,33 @@ let existingTargetModelRowIds: Set<number> = new Set();
 
 // ---- Templates ----
 
-function subComboOptionsTemplate(subCombos: ComboSummary[]): TemplateResult {
+export function subComboOptionsTemplate(subCombos: ComboSummary[], totalOtherCombos: number): TemplateResult {
   if (subCombos.length === 0) {
-    return html`<option disabled>No other combos exist (or every other combo would create a cycle).</option>`;
+    if (totalOtherCombos === 0) {
+      return html`<option value="" disabled selected>No other combos exist to nest</option>`;
+    }
+    return html`<option value="" disabled selected>All existing combos would create a cycle</option>`;
   }
-  return html`${subCombos.map((c) => html`<option value=${c.id}>${c.name} (id ${c.id})</option>`)}`;
+  return html`
+    <option value="" disabled selected>— select a sub-combo —</option>
+    ${subCombos.map((c) => html`<option value=${c.id}>${c.name} (id ${c.id})</option>`)}
+  `;
+}
+
+export function subComboHelpTemplate(subCombosCount: number, totalOtherCombos: number, comboId: number): TemplateResult {
+  if (subCombosCount === 0) {
+    if (totalOtherCombos === 0) {
+      return html`<small class="hint" style="color: var(--color-warn);">No other combos exist yet. Create another combo first before you can nest it as a sub-combo.</small>`;
+    }
+    return html`<small class="hint" style="color: var(--color-warn);">All existing combos (${totalOtherCombos}) are already part of this combo's hierarchy and would create a cycle with combo ${comboId}.</small>`;
+  }
+  return html`<small>Only combos that won't close a cycle with combo ${comboId} are listed.</small>`;
 }
 
 function addTargetTemplate(
   comboId: number,
   validSubCombos: ComboSummary[],
+  totalOtherCombos: number,
   wrapper: HTMLElement,
 ): TemplateResult {
   return html`
@@ -47,16 +64,16 @@ function addTargetTemplate(
         <form @submit=${(e: Event) => { e.preventDefault(); void addTarget(comboId, e, wrapper); }}>
           <div class="modal-body">
             <div class="field">
-              <label>Target type</label>
+              <label>Target Type</label>
               <div class="radio-group">
-                <label><input type="radio" name="target_kind" value="model" checked @change=${() => onTargetKindChange()}> Model</label>
-                <label><input type="radio" name="target_kind" value="combo" @change=${() => onTargetKindChange()}> Sub-combo</label>
+                <label><input type="radio" name="target_kind" value="model" checked @change=${onTargetKindChange}> Model</label>
+                <label><input type="radio" name="target_kind" value="combo" @change=${onTargetKindChange}> Sub-combo</label>
               </div>
             </div>
             <div id="model-fields">
               <div class="field">
-                <label>Models <small>(select one or more — set account + priority per row)</small></label>
-                <div class="model-search-wrap">
+                <label for="target-model-search">Search Models</label>
+                <div class="model-search-bar">
                   <input type="text" id="target-model-search" placeholder="Search all models across providers (e.g. gpt)…" @input=${onTargetModelSearch}>
                   <small class="model-search-hint">Empty search shows all active models from all providers, grouped by provider.</small>
                 </div>
@@ -70,12 +87,19 @@ function addTargetTemplate(
               </div>
             </div>
             <div id="combo-fields" style="display: none">
+              ${validSubCombos.length === 0 ? html`
+                <div class="banner banner-info" style="margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3); font-size: var(--fs-sm);">
+                  ${totalOtherCombos === 0
+                    ? "No other combos exist in the system. Create another combo first to use it as a sub-combo."
+                    : `All existing combos (${totalOtherCombos}) would create a cycle with combo ${comboId}.`}
+                </div>
+              ` : ""}
               <div class="field">
                 <label for="target-sub-combo">Sub-combo</label>
-                <select id="target-sub-combo" name="sub_combo_id" disabled>
-                  ${subComboOptionsTemplate(validSubCombos)}
+                <select id="target-sub-combo" name="sub_combo_id" ?disabled=${validSubCombos.length === 0} @change=${updateAddButtonLabel}>
+                  ${subComboOptionsTemplate(validSubCombos, totalOtherCombos)}
                 </select>
-                <small>Only combos that won't close a cycle with combo ${comboId} are listed.</small>
+                ${subComboHelpTemplate(validSubCombos.length, totalOtherCombos, comboId)}
               </div>
               <div class="field">
                 <label for="target-priority">Priority</label>
@@ -257,8 +281,13 @@ function updateAddButtonLabel(): void {
   );
   const kind = (document.querySelector('input[name="target_kind"]:checked') as HTMLInputElement)?.value;
   if (kind === "combo") {
+    const subComboSelect = document.getElementById("target-sub-combo") as HTMLSelectElement | null;
+    const isSubComboDisabled = Boolean(subComboSelect?.disabled);
+    const hasSelection = Boolean(subComboSelect?.value);
+    btn.disabled = isSubComboDisabled || !hasSelection;
     btn.textContent = "Add";
   } else {
+    btn.disabled = false;
     btn.textContent = checked.length > 0 ? `Add ${checked.length} target${checked.length > 1 ? "s" : ""}` : "Add";
   }
 }
@@ -286,8 +315,15 @@ export async function showAddTarget(comboId: number): Promise<void> {
     state.modelsComplete = true;
   }
   state.accounts = await api("/accounts") as Account[];
-  const sResp = await api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as ComboSummary[];
+  const [sResp, allCombosResp] = await Promise.all([
+    api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as Promise<ComboSummary[]>,
+    api("/combos").catch(() => [] as Combo[]) as Promise<Combo[]>,
+  ]);
   const validSubCombos: ComboSummary[] = sResp;
+  if (Array.isArray(allCombosResp) && allCombosResp.length > 0) {
+    state.combos = allCombosResp;
+  }
+  const totalOtherCombos = (allCombosResp || []).filter((c) => c && c.id !== comboId).length;
   try {
     const existing: unknown = await api(`/combos/${comboId}/targets`);
     existingTargetModelRowIds = new Set(
@@ -300,7 +336,7 @@ export async function showAddTarget(comboId: number): Promise<void> {
   }
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
-  render(addTargetTemplate(comboId, validSubCombos, wrapper), wrapper);
+  render(addTargetTemplate(comboId, validSubCombos, totalOtherCombos, wrapper), wrapper);
   renderInitialModelList();
 }
 
