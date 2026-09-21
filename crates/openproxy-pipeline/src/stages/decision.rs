@@ -75,12 +75,14 @@ pub async fn apply_decision_routing(
         resolved_targets.insert(0, winner);
     }
 
-    // Collect targets that have descriptions
+    // Collect targets that have descriptions, deduplicating identical descriptions
+    // to avoid confusing the decision model with redundant identical options.
+    let mut seen_descriptions = std::collections::HashSet::new();
     let candidates: Vec<(String, String)> = resolved_targets
         .iter()
         .filter_map(|rt| {
             let desc = rt.target.description.as_deref()?.trim();
-            if !desc.is_empty() {
+            if !desc.is_empty() && seen_descriptions.insert(desc) {
                 Some((rt.target.id.0.to_string(), desc.to_string()))
             } else {
                 None
@@ -287,7 +289,7 @@ async fn execute_system_one_decision(
         let raw = serde_json::to_vec(req)
             .map(bytes::Bytes::from)
             .map_err(|e| openproxy_types::error::CoreError::Validation(e.to_string()))?;
-        ("http://localhost:8000/v1/systemone".to_string(), None, raw)
+        ("http://localhost:8770/v1/systemone".to_string(), None, raw)
     };
 
     let mut upstream_req = UpstreamRequest::post_json(&url, body_bytes);

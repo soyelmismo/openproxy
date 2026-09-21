@@ -15,9 +15,16 @@ fn flatten_sub_combos(
 ) -> Result<Vec<ComboTarget>> {
     let mut out = Vec::with_capacity(targets.len());
     let mut visited: Vec<ComboId> = vec![root_combo_id];
-    for t in targets {
+    for mut t in targets {
         if let Some(sub_id) = t.sub_combo_id {
-            let sub_flat = repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
+            let mut sub_flat = repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
+            if let Some(parent_desc) = t.description.take() {
+                for st in &mut sub_flat {
+                    if st.description.is_none() {
+                        st.description = Some(parent_desc.clone());
+                    }
+                }
+            }
             out.extend(sub_flat);
         } else {
             out.push(t);

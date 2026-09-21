@@ -17,7 +17,7 @@ impl LayaAdapter {
                 name: "Laya (Self-Hosted)".into(),
                 anonymous_fallback: true,
                 rate_limit_scope: "account".into(),
-                base_url: "http://localhost:8000/v1".into(),
+                base_url: "http://localhost:8770/v1".into(),
                 auth_type: AdapterAuthType::None,
                 format: AdapterFormat::SystemOne,
                 extra_headers: vec![],
@@ -85,7 +85,7 @@ mod tests {
         assert_eq!(adapter.format(), AdapterFormat::SystemOne);
         assert_eq!(
             adapter.build_system_one_url(),
-            "http://localhost:8000/v1/systemone"
+            "http://localhost:8770/v1/systemone"
         );
     }
 }
