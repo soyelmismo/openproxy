@@ -233,6 +233,26 @@ async function executeTargetReorder(draggedId: number, dropTargetId: number): Pr
   } catch (err: unknown) { showToast(t("combos.toast.reorder_failed", { message: err instanceof Error ? err.message : String(err) }), "error"); }
 }
 
+function onTargetDragStart(targetId: number, e: DragEvent): void {
+  const targetEl = e.target as HTMLElement | null;
+  if (
+    targetEl &&
+    (targetEl.closest("input, select, textarea, button, a, .target-desc-row, .cw-input, .weight-input") ||
+     targetEl.tagName === "INPUT" ||
+     targetEl.tagName === "SELECT" ||
+     targetEl.tagName === "BUTTON")
+  ) {
+    e.preventDefault();
+    return;
+  }
+  e.dataTransfer?.setData("text/plain", String(targetId));
+  (e.currentTarget as HTMLElement).classList.add("dragging");
+}
+
+function onTargetDragEnd(e: DragEvent): void {
+  (e.currentTarget as HTMLElement).classList.remove("dragging");
+}
+
 function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): TemplateResult {
   const isSub = target.sub_combo_id != null;
   const cdBadge = target.in_cooldown ? html` <span class="badge badge-cooldown">⏸</span>` : html``;
@@ -248,11 +268,13 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     const descTag = html`
       <div class="target-desc-row" style="margin-top:4px;">
         <input type="text"
+               draggable="false"
                class="cw-input"
                style="font-size:0.75rem;padding:2px 6px;width:100%;max-width:280px;"
                placeholder="Routing description for Decision router..."
                title="Semantic description / routing criteria for System One decision routing"
                .value=${target.description ?? ""}
+               @dragstart=${(e: DragEvent) => e.stopPropagation()}
                @change=${async (e: Event) => {
                  const val = (e.target as HTMLInputElement).value.trim() || null;
                  await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ description: val }) });
@@ -322,8 +344,8 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
 
     return html`
       <tr draggable="true" data-drag-id=${String(target.id)} class="combo-target-card-row subcombo-group-row ${isExpanded ? "subcombo-expanded" : ""}"
-        @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(target.id)); (e.target as HTMLElement).classList.add("dragging"); }}
-        @dragend=${(e: DragEvent) => (e.target as HTMLElement).classList.remove("dragging")}
+        @dragstart=${(e: DragEvent) => onTargetDragStart(target.id, e)}
+        @dragend=${onTargetDragEnd}
         @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("drag-over"); }}
         @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("drag-over")}
         @drop=${async (e: DragEvent) => {
@@ -350,11 +372,13 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const descTag = html`
     <div class="target-desc-row" style="margin-top:3px;">
       <input type="text"
+             draggable="false"
              class="cw-input"
              style="font-size:0.75rem;padding:2px 5px;width:100%;max-width:220px;"
              placeholder="Routing description..."
              title="Semantic description / routing criteria for System One decision routing"
              .value=${target.description ?? ""}
+             @dragstart=${(e: DragEvent) => e.stopPropagation()}
              @change=${async (e: Event) => {
                const val = (e.target as HTMLInputElement).value.trim() || null;
                await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ description: val }) });
@@ -366,7 +390,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const providerCell = html`<a href="#/providers/${encodeURIComponent(target.provider_id)}">${target.provider_id}</a>`;
   const accountCell = target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`;
   const contextCell = target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`;
-  const weightCell = showWeight ? html`<td class="col-target-weight"><input type="number" min="1" .value=${String(target.weight ?? 1)} @change=${async (e: Event) => {
+  const weightCell = showWeight ? html`<td class="col-target-weight"><input type="number" min="1" draggable="false" @dragstart=${(e: DragEvent) => e.stopPropagation()} .value=${String(target.weight ?? 1)} @change=${async (e: Event) => {
     const val = parseInt((e.target as HTMLInputElement).value, 10) || 1;
     await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ weight: val }) });
     target.weight = val; requestUpdate();
@@ -400,8 +424,8 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const lastTestCell = !tr ? html`<span class="muted">—</span>` : (tr.skipped ? html`<span class="status-pill off">skipped</span>` : html`<span class=${"status-pill " + statusPillClass(tr.status)}>${String(tr.status)}</span>${tr.elapsed_ms != null ? html` <small>${tr.elapsed_ms}ms</small>` : html``}`);
 
   return html`<tr draggable="true" data-drag-id=${String(target.id)} class="combo-target-card-row"
-    @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(target.id)); (e.target as HTMLElement).classList.add("dragging"); }}
-    @dragend=${(e: DragEvent) => (e.target as HTMLElement).classList.remove("dragging")}
+    @dragstart=${(e: DragEvent) => onTargetDragStart(target.id, e)}
+    @dragend=${onTargetDragEnd}
     @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("drag-over"); }}
     @dragleave=${(e: DragEvent) => (e.currentTarget as HTMLElement).classList.remove("drag-over")}
     @drop=${async (e: DragEvent) => {

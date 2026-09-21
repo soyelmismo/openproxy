@@ -37,6 +37,7 @@ export interface SubComboCacheEntry {
 
 const subComboCache = new Map<number, SubComboCacheEntry>();
 const expandedSubCombos = new Set<number>();
+const inFlightRequests = new Map<number, Promise<void>>();
 
 export function isSubComboExpanded(targetId: number): boolean {
   return expandedSubCombos.has(targetId);
@@ -52,6 +53,12 @@ export async function loadSubComboData(subComboId: number, onUpdate: () => void)
     return;
   }
 
+  const existingInFlight = inFlightRequests.get(subComboId);
+  if (existingInFlight) {
+    await existingInFlight;
+    return;
+  }
+
   subComboCache.set(subComboId, {
     combo: current?.combo ?? null,
     targets: current?.targets ?? [],
@@ -60,26 +67,33 @@ export async function loadSubComboData(subComboId: number, onUpdate: () => void)
   });
   onUpdate();
 
-  try {
-    const [combo, targets] = await Promise.all([
-      api(`/combos/${subComboId}`) as Promise<Combo>,
-      api(`/combos/${subComboId}/targets`) as Promise<ComboTargetWithModel[]>,
-    ]);
-    subComboCache.set(subComboId, {
-      combo,
-      targets: targets || [],
-      loading: false,
-      error: null,
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    subComboCache.set(subComboId, {
-      combo: null,
-      targets: [],
-      loading: false,
-      error: msg,
-    });
-  }
+  const promise = (async () => {
+    try {
+      const [combo, targets] = await Promise.all([
+        api(`/combos/${subComboId}`) as Promise<Combo>,
+        api(`/combos/${subComboId}/targets`) as Promise<ComboTargetWithModel[]>,
+      ]);
+      subComboCache.set(subComboId, {
+        combo,
+        targets: targets || [],
+        loading: false,
+        error: null,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      subComboCache.set(subComboId, {
+        combo: null,
+        targets: [],
+        loading: false,
+        error: msg,
+      });
+    } finally {
+      inFlightRequests.delete(subComboId);
+    }
+  })();
+
+  inFlightRequests.set(subComboId, promise);
+  await promise;
   onUpdate();
 }
 
@@ -93,6 +107,7 @@ export async function toggleSubCombo(
     onUpdate();
   } else {
     expandedSubCombos.add(targetId);
+    onUpdate();
     await loadSubComboData(subComboId, onUpdate);
   }
 }
