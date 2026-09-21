@@ -16,6 +16,8 @@ use std::time::Duration;
 
 pub const DEFAULT_DECISION_TIMEOUT_MS: u64 = 100;
 pub const MAX_PROMPT_CHARS: usize = 2000;
+pub const ELASTIC_HYSTERESIS_MARGIN: f64 = 0.05;
+pub const ELASTIC_CONFIDENCE_THRESHOLD: f64 = 0.05;
 
 /// Safely extract prompt text for System One decision evaluation,
 /// respecting character boundaries.
@@ -150,7 +152,15 @@ pub async fn apply_decision_routing(
         .unwrap_or(DEFAULT_DECISION_TIMEOUT_MS);
 
     match execute_system_one_decision(ctx, &decision_model, &sys_req, timeout_ms).await {
-        Ok(Some(chosen_target_id_str)) => {
+        Ok(Some(answer)) => {
+            let Some(chosen_target_id_str) = answer.choice.as_deref() else {
+                tracing::debug!(
+                    combo_id = combo.id.0,
+                    "decision router produced no choice answer; keeping default order"
+                );
+                return;
+            };
+
             if let Some(pos) = resolved_targets
                 .iter()
                 .position(|rt| rt.target.id.0.to_string() == chosen_target_id_str)
@@ -165,6 +175,52 @@ pub async fn apply_decision_routing(
                     ctx.combo_walk_log
                         .push(format!("decision_router:keep={chosen_target_id_str}"));
                 } else {
+                    // Elastic Hysteresis: if session is already pinned, require significant margin or confidence
+                    if let Some(pinned_id) = current_pinned {
+                        let should_switch = if let Some(ref probs) = answer.probabilities {
+                            let prob_chosen = probs.get(chosen_target_id_str).copied().unwrap_or(0.0);
+                            let prob_pinned = probs.get(&pinned_id.0.to_string()).copied().unwrap_or(0.0);
+                            let margin = prob_chosen - prob_pinned;
+                            if margin < ELASTIC_HYSTERESIS_MARGIN {
+                                tracing::info!(
+                                    combo_id = combo.id.0,
+                                    current_pinned = pinned_id.0,
+                                    candidate_target = %chosen_target_id_str,
+                                    prob_chosen = prob_chosen,
+                                    prob_pinned = prob_pinned,
+                                    margin = margin,
+                                    threshold = ELASTIC_HYSTERESIS_MARGIN,
+                                    "elastic switch rejected by hysteresis damping: margin below threshold; keeping pinned target"
+                                );
+                                false
+                            } else {
+                                true
+                            }
+                        } else if let Some(confidence) = answer.confidence {
+                            if confidence < ELASTIC_CONFIDENCE_THRESHOLD {
+                                tracing::info!(
+                                    combo_id = combo.id.0,
+                                    current_pinned = pinned_id.0,
+                                    candidate_target = %chosen_target_id_str,
+                                    confidence = confidence,
+                                    threshold = ELASTIC_CONFIDENCE_THRESHOLD,
+                                    "elastic switch rejected by hysteresis damping: confidence below threshold; keeping pinned target"
+                                );
+                                false
+                            } else {
+                                true
+                            }
+                        } else {
+                            true
+                        };
+
+                        if !should_switch {
+                            ctx.combo_walk_log
+                                .push(format!("decision_router:hysteresis_keep={}", pinned_id.0));
+                            return;
+                        }
+                    }
+
                     // Safety check 1: Context length validation for downscale/switch
                     let total_chars: usize = ctx
                         .req
@@ -229,7 +285,7 @@ async fn execute_system_one_decision(
     decision_model: &str,
     req: &SystemOneRequest,
     timeout_ms: u64,
-) -> Result<Option<String>, openproxy_types::error::CoreError> {
+) -> Result<Option<openproxy_types::systemone::SystemOneAnswer>, openproxy_types::error::CoreError> {
     let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
     let decision_model_owned = decision_model.to_string();
     let (resolved_prov, upstream_model) = tokio::task::spawn_blocking(move || {
@@ -330,16 +386,12 @@ async fn execute_system_one_decision(
         openproxy_types::error::CoreError::UpstreamConnection(format!("{url}: {e:?}"))
     })?;
 
-    let parsed: SystemOneResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
+    let mut parsed: SystemOneResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
         openproxy_types::error::CoreError::Validation(format!("invalid systemone response: {e}"))
     })?;
 
-    let choice = parsed
-        .answers
-        .get("target_selection")
-        .and_then(|a| a.choice.clone());
-
-    Ok(choice)
+    let answer = parsed.answers.remove("target_selection");
+    Ok(answer)
 }
 
 #[cfg(test)]
@@ -377,5 +429,23 @@ mod tests {
         // Truncation should not break UTF-8 boundary
         let short = extract_prompt_state(&req, 5);
         assert!(std::str::from_utf8(short.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_hysteresis_damping_constants() {
+        assert!(ELASTIC_HYSTERESIS_MARGIN > 0.0);
+        assert!(ELASTIC_CONFIDENCE_THRESHOLD > 0.0);
+
+        // Simulation: ambiguous prompt (margin 3.31% < 5%) -> switch rejected
+        let prob_chosen = 0.1369;
+        let prob_pinned = 0.1038;
+        let margin = prob_chosen - prob_pinned;
+        assert!(margin < ELASTIC_HYSTERESIS_MARGIN);
+
+        // Simulation: clear escalation (margin 7.62% >= 5%) -> switch accepted
+        let prob_chosen = 0.1460;
+        let prob_pinned = 0.0698;
+        let margin = prob_chosen - prob_pinned;
+        assert!(margin >= ELASTIC_HYSTERESIS_MARGIN);
     }
 }
