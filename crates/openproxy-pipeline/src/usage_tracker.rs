@@ -700,14 +700,24 @@ impl UsageRecordBuilder<'_> {
     }
 
     fn update_selection_registry(&self) {
+        let latency_ms = self.total_ms;
         if self.err.is_none() {
             self.tracker
                 .selection_registry
-                .record_success(self.target.id);
+                .record_success_with_latency(self.target.id, latency_ms);
         } else {
+            let is_timeout = self.err.as_ref().is_some_and(|e| {
+                matches!(
+                    e,
+                    openproxy_types::CoreError::UpstreamTimeout { .. }
+                        | openproxy_types::CoreError::Cancelled(
+                            openproxy_types::error::CancelReason::WatchdogTimeout
+                        )
+                )
+            });
             self.tracker
                 .selection_registry
-                .record_failure(self.target.id);
+                .record_failure_with_kind(self.target.id, is_timeout);
         }
     }
 

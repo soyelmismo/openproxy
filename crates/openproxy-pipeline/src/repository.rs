@@ -57,6 +57,10 @@ pub trait PipelineRepository: Send + Sync {
     ) -> Result<()>;
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()>;
     fn prune_expired_cooldowns(&self) -> Result<usize>;
+    fn get_active_cooldown_targets(
+        &self,
+        combo_id: ComboId,
+    ) -> Result<std::collections::HashSet<ComboTargetId>>;
     fn record_cooldown(
         &self,
         target_id: ComboTargetId,
@@ -260,6 +264,13 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()> {
         openproxy_db::cooldowns::clear_cooldown(&self.conn.lock(), target_id)
+    }
+
+    fn get_active_cooldown_targets(
+        &self,
+        combo_id: ComboId,
+    ) -> Result<std::collections::HashSet<ComboTargetId>> {
+        openproxy_db::combos::get_active_cooldown_target_ids(&self.conn.lock(), combo_id)
     }
 
     fn record_cooldown(

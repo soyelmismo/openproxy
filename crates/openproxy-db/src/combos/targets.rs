@@ -469,3 +469,39 @@ pub fn reorder_targets(
     tx.commit().map_err(crate::error::map_db_error)?;
     Ok(())
 }
+
+pub fn get_active_cooldown_target_ids(
+    conn: &Connection,
+    combo_id: ComboId,
+) -> Result<std::collections::HashSet<ComboTargetId>> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT ct.id \
+             FROM combo_targets ct \
+             LEFT JOIN target_cooldowns tc ON tc.combo_target_id = ct.id \
+             LEFT JOIN ( \
+                 SELECT ct2.model_row_id, MAX(tc2.cooldown_until) as model_cooldown_until \
+                 FROM target_cooldowns tc2 \
+                 INNER JOIN combo_targets ct2 ON ct2.id = tc2.combo_target_id \
+                 WHERE ct2.model_row_id IS NOT NULL \
+                   AND datetime(tc2.cooldown_until) > datetime('now') \
+                 GROUP BY ct2.model_row_id \
+             ) mc ON mc.model_row_id = ct.model_row_id \
+             WHERE ct.combo_id = ?1 \
+               AND ( \
+                   (tc.cooldown_until IS NOT NULL AND datetime(tc.cooldown_until) > datetime('now')) \
+                   OR mc.model_cooldown_until IS NOT NULL \
+               )",
+        )
+        .map_err(crate::error::map_db_error)?;
+
+    let rows = stmt
+        .query_map(params![combo_id.0], |r| r.get::<_, i64>(0))
+        .map_err(crate::error::map_db_error)?;
+
+    let mut set = std::collections::HashSet::new();
+    for r in rows.flatten() {
+        set.insert(ComboTargetId(r));
+    }
+    Ok(set)
+}

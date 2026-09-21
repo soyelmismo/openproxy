@@ -119,7 +119,11 @@ fn handle_record_attempt(
     if params.error_msg.is_none() {
         selection_registry.record_success(params.target_id);
     } else {
-        selection_registry.record_failure(params.target_id);
+        let is_timeout = params
+            .error_msg
+            .as_deref()
+            .is_some_and(|m| m.contains("timeout") || m.contains("timed out"));
+        selection_registry.record_failure_with_kind(params.target_id, is_timeout);
     }
 
     update_cooldown(repo, params);

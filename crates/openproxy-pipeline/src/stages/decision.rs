@@ -50,6 +50,91 @@ pub fn extract_prompt_state(req: &openproxy_types::OpenAIRequest, max_chars: usi
     state
 }
 
+/// Filters candidate targets for Laya decision routing, skipping:
+/// - Inactive targets or models
+/// - Targets in active cooldown (unless cooldown is disabled on the target/combo)
+/// - Targets saturated by predictive rate limit (when predictive skip is active and healthy alternatives exist)
+pub fn filter_decision_candidates(
+    resolved_targets: &[ResolvedTarget],
+    combo: &Combo,
+    active_cooldowns: &std::collections::HashSet<ComboTargetId>,
+    predictive_limiter: &crate::predictive_rate_limit::PredictiveRateLimiter,
+    now_ms: u64,
+) -> Vec<(String, String)> {
+    let has_any_predictive_healthy = if combo.preventive_rate_limit {
+        resolved_targets.iter().any(|rt| {
+            if !rt.target.active || !rt.model.active {
+                return false;
+            }
+            if !rt.target.is_cooldown_disabled(combo) && active_cooldowns.contains(&rt.target.id) {
+                return false;
+            }
+            if rt.target.is_cooldown_disabled(combo) {
+                return true;
+            }
+            let key =
+                crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&rt.target);
+            !predictive_limiter.evaluate_key(key, now_ms).is_saturated()
+        })
+    } else {
+        false
+    };
+
+    let mut seen_descriptions = std::collections::HashSet::new();
+    resolved_targets
+        .iter()
+        .filter_map(|rt| {
+            // Exclude disabled targets or models
+            if !rt.target.active || !rt.model.active {
+                tracing::debug!(
+                    combo_id = combo.id.0,
+                    target_id = rt.target.id.0,
+                    "decision routing: candidate excluded (target or model inactive)"
+                );
+                return None;
+            }
+
+            // Exclude targets in active cooldown (unless cooldown is disabled for this target/combo)
+            if !rt.target.is_cooldown_disabled(combo) && active_cooldowns.contains(&rt.target.id) {
+                tracing::debug!(
+                    combo_id = combo.id.0,
+                    target_id = rt.target.id.0,
+                    "decision routing: candidate excluded (target in active cooldown)"
+                );
+                return None;
+            }
+
+            // Predictive rate limit skip: exclude saturated target if at least one healthy alternative exists
+            if combo.preventive_rate_limit
+                && !rt.target.is_cooldown_disabled(combo)
+                && has_any_predictive_healthy
+            {
+                let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(
+                    &rt.target,
+                );
+                if predictive_limiter.evaluate_key(key, now_ms).is_saturated() {
+                    tracing::info!(
+                        combo_id = combo.id.0,
+                        target_id = rt.target.id.0,
+                        provider = %rt.target.provider_id,
+                        account_id = ?rt.target.account_id,
+                        model_row_id = ?rt.target.model_row_id,
+                        "decision routing: candidate excluded due to predictive rate limit saturation"
+                    );
+                    return None;
+                }
+            }
+
+            let desc = rt.target.description.as_deref()?.trim();
+            if !desc.is_empty() && seen_descriptions.insert(desc) {
+                Some((rt.target.id.0.to_string(), desc.to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
 /// Apply decision routing to candidate targets if this combo uses `PriorityMode::Decision`.
 /// Supports elastic session scaling (upscale/downscale with damping towards `current_pinned`).
 pub async fn apply_decision_routing(
@@ -62,8 +147,42 @@ pub async fn apply_decision_routing(
         return;
     }
 
-    // Baseline: if an active target is pinned, pre-promote it to position 0
+    // Query active cooldown targets from DB if cooldowns are enabled
+    let active_cooldowns = if combo.is_cooldown_disabled() {
+        std::collections::HashSet::new()
+    } else {
+        let repo = ctx.pipeline.repo();
+        let combo_id = combo.id;
+        tokio::task::spawn_blocking(move || repo.get_active_cooldown_targets(combo_id))
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    combo_id = combo_id.0,
+                    "failed to query cooldowns for decision routing: {e}"
+                );
+                Ok(std::collections::HashSet::new())
+            })
+            .unwrap_or_default()
+    };
+
+    let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
+
+    // Baseline: if an active, healthy target is pinned, pre-promote it to position 0
     // so that failures/timeouts in JEV preserve the pinned model.
+    let pinned_is_available = current_pinned.is_some_and(|pid| {
+        resolved_targets.iter().any(|rt| {
+            rt.target.id == pid
+                && rt.target.active
+                && rt.model.active
+                && (rt.target.is_cooldown_disabled(combo) || !active_cooldowns.contains(&pid))
+        })
+    });
+    let current_pinned = if pinned_is_available {
+        current_pinned
+    } else {
+        None
+    };
+
     if let Some(pinned_id) = current_pinned
         && let Some(pos) = resolved_targets
             .iter()
@@ -79,27 +198,20 @@ pub async fn apply_decision_routing(
         resolved_targets.insert(0, winner);
     }
 
-    // Collect targets that have descriptions, deduplicating identical descriptions
-    // to avoid confusing the decision model with redundant identical options.
-    let mut seen_descriptions = std::collections::HashSet::new();
-    let candidates: Vec<(String, String)> = resolved_targets
-        .iter()
-        .filter_map(|rt| {
-            let desc = rt.target.description.as_deref()?.trim();
-            if !desc.is_empty() && seen_descriptions.insert(desc) {
-                Some((rt.target.id.0.to_string(), desc.to_string()))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let candidates = filter_decision_candidates(
+        resolved_targets,
+        combo,
+        &active_cooldowns,
+        &ctx.pipeline.predictive_limiter,
+        now_ms,
+    );
 
-    // Need at least 2 described targets to formulate a categorical choice
+    // Need at least 2 described, eligible targets to formulate a categorical choice
     if candidates.len() < 2 {
         tracing::debug!(
             combo_id = combo.id.0,
             candidates = candidates.len(),
-            "decision routing skipped: fewer than 2 targets have descriptions"
+            "decision routing skipped: fewer than 2 eligible targets have descriptions"
         );
         return;
     }
@@ -163,25 +275,104 @@ pub async fn apply_decision_routing(
                 return;
             };
 
+            let window_secs = combo
+                .selection_window_secs
+                .unwrap_or(crate::load_balancing::DEFAULT_SELECTION_WINDOW_SECS);
+
+            // Operational Reputation weighting:
+            // Combine semantic model affinity with real-time operational health (success rate, timeouts, latency).
+            let effective_choice_str: String = if let Some(ref probs) = answer.probabilities {
+                let mut best_target_id = chosen_target_id_str.to_string();
+                let mut best_score = -1.0;
+
+                for rt in resolved_targets.iter() {
+                    let tid_str = rt.target.id.0.to_string();
+                    if let Some(&p_sem) = probs.get(&tid_str) {
+                        let rep = ctx
+                            .pipeline
+                            .selection_registry
+                            .reputation_score(rt.target.id, window_secs);
+                        let score = p_sem * rep;
+                        if score > best_score {
+                            best_score = score;
+                            best_target_id = tid_str;
+                        }
+                    }
+                }
+
+                if best_target_id != chosen_target_id_str {
+                    tracing::info!(
+                        combo_id = combo.id.0,
+                        laya_choice = %chosen_target_id_str,
+                        reputation_winner = %best_target_id,
+                        "decision router reputation re-rank: promoted healthy candidate over degraded choice"
+                    );
+                    ctx.combo_walk_log.push(format!(
+                        "decision_router:reputation_rerank={best_target_id}<orig={chosen_target_id_str}"
+                    ));
+                }
+
+                best_target_id
+            } else {
+                let chosen_tid =
+                    openproxy_types::ids::ComboTargetId(chosen_target_id_str.parse().unwrap_or(0));
+                let rep = ctx
+                    .pipeline
+                    .selection_registry
+                    .reputation_score(chosen_tid, window_secs);
+
+                if rep < 0.40 {
+                    let healthy_alt = resolved_targets
+                        .iter()
+                        .find(|rt| {
+                            rt.target.id != chosen_tid
+                                && ctx
+                                    .pipeline
+                                    .selection_registry
+                                    .reputation_score(rt.target.id, window_secs)
+                                    >= 0.70
+                        })
+                        .map(|rt| rt.target.id.0.to_string());
+
+                    if let Some(alt_id) = healthy_alt {
+                        tracing::warn!(
+                            combo_id = combo.id.0,
+                            degraded_target = %chosen_target_id_str,
+                            degraded_reputation = rep,
+                            promoted_target = %alt_id,
+                            "decision router reputation guard: candidate target degraded; failing over to healthy alternative"
+                        );
+                        ctx.combo_walk_log.push(format!(
+                            "decision_router:reputation_guard_failover={alt_id}<degraded={chosen_target_id_str}"
+                        ));
+                        alt_id
+                    } else {
+                        chosen_target_id_str.to_string()
+                    }
+                } else {
+                    chosen_target_id_str.to_string()
+                }
+            };
+
             if let Some(pos) = resolved_targets
                 .iter()
-                .position(|rt| rt.target.id.0.to_string() == chosen_target_id_str)
+                .position(|rt| rt.target.id.0.to_string() == effective_choice_str)
             {
                 let chosen_target_id = resolved_targets[pos].target.id;
                 if current_pinned == Some(chosen_target_id) {
                     tracing::info!(
                         combo_id = combo.id.0,
-                        target_id = %chosen_target_id_str,
+                        target_id = %effective_choice_str,
                         "decision router confirmed active session target (inertia/keep)"
                     );
                     ctx.combo_walk_log
-                        .push(format!("decision_router:keep={chosen_target_id_str}"));
+                        .push(format!("decision_router:keep={effective_choice_str}"));
                 } else {
                     // Elastic Hysteresis: if session is already pinned, require significant margin or confidence
                     if let Some(pinned_id) = current_pinned {
                         let should_switch = if let Some(ref probs) = answer.probabilities {
                             let prob_chosen =
-                                probs.get(chosen_target_id_str).copied().unwrap_or(0.0);
+                                probs.get(&effective_choice_str).copied().unwrap_or(0.0);
                             let prob_pinned =
                                 probs.get(&pinned_id.0.to_string()).copied().unwrap_or(0.0);
                             let margin = prob_chosen - prob_pinned;
@@ -189,7 +380,7 @@ pub async fn apply_decision_routing(
                                 tracing::info!(
                                     combo_id = combo.id.0,
                                     current_pinned = pinned_id.0,
-                                    candidate_target = %chosen_target_id_str,
+                                    candidate_target = %effective_choice_str,
                                     prob_chosen = prob_chosen,
                                     prob_pinned = prob_pinned,
                                     margin = margin,
@@ -205,7 +396,7 @@ pub async fn apply_decision_routing(
                                 tracing::info!(
                                     combo_id = combo.id.0,
                                     current_pinned = pinned_id.0,
-                                    candidate_target = %chosen_target_id_str,
+                                    candidate_target = %effective_choice_str,
                                     confidence = confidence,
                                     threshold = ELASTIC_CONFIDENCE_THRESHOLD,
                                     "elastic switch rejected by hysteresis damping: confidence below threshold; keeping pinned target"
@@ -240,7 +431,7 @@ pub async fn apply_decision_routing(
                     {
                         tracing::warn!(
                             combo_id = combo.id.0,
-                            target = %chosen_target_id_str,
+                            target = %effective_choice_str,
                             est_tokens = est_tokens,
                             context_length = ctx_len,
                             "elastic switch rejected: estimated context tokens exceed target capacity; keeping current target"
@@ -260,11 +451,11 @@ pub async fn apply_decision_routing(
                     tracing::info!(
                         combo_id = combo.id.0,
                         from_target = ?current_pinned.map(|t| t.0),
-                        to_target = %chosen_target_id_str,
+                        to_target = %effective_choice_str,
                         "decision router elastic switch: updated session target"
                     );
                     ctx.combo_walk_log.push(format!(
-                        "decision_router:elastic_switch={chosen_target_id_str}"
+                        "decision_router:elastic_switch={effective_choice_str}"
                     ));
                 }
             }
@@ -431,57 +622,4 @@ async fn execute_system_one_decision(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use openproxy_types::message::OpenAIMessage;
-
-    #[test]
-    fn test_extract_prompt_state_utf8_safe() {
-        let req = openproxy_types::OpenAIRequest {
-            model: "test".into(),
-            messages: vec![OpenAIMessage {
-                role: "user".into(),
-                content: Some(serde_json::Value::String("¡Hola, mundo! 🚀".into())),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                extra: Default::default(),
-            }],
-            stream: false,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            top_k: None,
-            user: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            extra: Default::default(),
-        };
-
-        let state = extract_prompt_state(&req, 100);
-        assert_eq!(state, "¡Hola, mundo! 🚀");
-
-        // Truncation should not break UTF-8 boundary
-        let short = extract_prompt_state(&req, 5);
-        assert!(std::str::from_utf8(short.as_bytes()).is_ok());
-    }
-
-    #[test]
-    fn test_hysteresis_damping_constants() {
-        const { assert!(ELASTIC_HYSTERESIS_MARGIN > 0.0) };
-        const { assert!(ELASTIC_CONFIDENCE_THRESHOLD > 0.0) };
-
-        // Simulation: ambiguous prompt (margin 3.31% < 5%) -> switch rejected
-        let prob_chosen = 0.1369;
-        let prob_pinned = 0.1038;
-        let margin = prob_chosen - prob_pinned;
-        assert!(margin < ELASTIC_HYSTERESIS_MARGIN);
-
-        // Simulation: clear escalation (margin 7.62% >= 5%) -> switch accepted
-        let prob_chosen = 0.1460;
-        let prob_pinned = 0.0698;
-        let margin = prob_chosen - prob_pinned;
-        assert!(margin >= ELASTIC_HYSTERESIS_MARGIN);
-    }
-}
+mod tests;
