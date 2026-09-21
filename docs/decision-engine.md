@@ -73,8 +73,8 @@ OpenProxy implements the Laya engine in Rust using C FFI bindings to `libonnxrun
 
 ### 3.2 Hugging Face Checkpoints & Download
 
-OpenProxy runs Laya weights published on Hugging Face:
-- **ONNX Checkpoint:** [`mizchi/laya-multilingual-onnx`](https://huggingface.co/mizchi/laya-multilingual-onnx) (contains `model.onnx`, `tokenizer/tokenizer.json`, `rl_agent_config.json`)
+OpenProxy uses CPU-optimized Laya checkpoints published on Hugging Face:
+- **CPU-Optimized ONNX Checkpoint (Recommended):** [`soyelmismo/laya-multilingual-onnx`](https://huggingface.co/soyelmismo/laya-multilingual-onnx) (contains CPU-calibrated `model.onnx` [INT8], `model-fp32.onnx` [FP32], `tokenizer.json`, `rl_agent_config.json`)
 - **PyTorch Base Checkpoint:** [`convaiinnovations/laya-multilingual`](https://huggingface.co/convaiinnovations/laya-multilingual) (contains `model.safetensors`, mmBERT architecture)
 
 #### Standard Directory Layout
@@ -83,8 +83,8 @@ OpenProxy detects files stored in `~/.openproxy/models/laya/` or `./models/laya/
 
 ```text
 ~/.openproxy/models/laya/
-├── model.onnx              # Target model (FP32 or INT8)
-├── tokenizer.json          # HuggingFace Fast Tokenizer
+├── model.onnx              # Target model (INT8 by default, or FP32)
+├── tokenizer.json          # Fast Tokenizer
 └── rl_agent_config.json    # Decision temperatures and calibrated thresholds
 ```
 
@@ -92,19 +92,19 @@ OpenProxy detects files stored in `~/.openproxy/models/laya/` or `./models/laya/
 
 ```bash
 mkdir -p ~/.openproxy/models/laya
-huggingface-cli download mizchi/laya-multilingual-onnx \
+huggingface-cli download soyelmismo/laya-multilingual-onnx \
   --local-dir ~/.openproxy/models/laya \
-  --include "model.onnx" "tokenizer/*" "rl_agent_config.json"
+  --include "model.onnx" "tokenizer.json" "rl_agent_config.json"
 ```
 
 #### Download via curl
 
 ```bash
 mkdir -p ~/.openproxy/models/laya
-HF_BASE="https://huggingface.co/mizchi/laya-multilingual-onnx/resolve/main"
+HF_BASE="https://huggingface.co/soyelmismo/laya-multilingual-onnx/resolve/main"
 
 curl -L -o ~/.openproxy/models/laya/model.onnx "$HF_BASE/model.onnx"
-curl -L -o ~/.openproxy/models/laya/tokenizer.json "$HF_BASE/tokenizer/tokenizer.json"
+curl -L -o ~/.openproxy/models/laya/tokenizer.json "$HF_BASE/tokenizer.json"
 curl -L -o ~/.openproxy/models/laya/rl_agent_config.json "$HF_BASE/rl_agent_config.json"
 ```
 
