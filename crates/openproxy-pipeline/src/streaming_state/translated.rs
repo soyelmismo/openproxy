@@ -69,7 +69,19 @@ impl ChunkProcessor<'_> {
         if chunk.stop_reason.is_some() {
             self.state.stop_reason = chunk.stop_reason.take();
         }
+        // If normalizer stage has residual buffered content or tool call, flush before the finish chunk
+        if let Some(residual) = self.state.normalizer.finalize() {
+            let sse_bytes = crate::sse::build_sse_frame(&residual);
+            let _ = self.send_to_sink(ctx, sse_bytes).await;
+        }
+
         let json_str = chunk.into_json_string();
+
+        let norm_action = self.state.normalizer.process_chunk(&json_str);
+        let normalized_json = match &norm_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => &json_str,
+        };
 
         if let Some(a) = self.state.acc.as_mut() {
             if let Some(u) = &self.state.usage {
@@ -78,7 +90,7 @@ impl ChunkProcessor<'_> {
             if let Some(sr) = &self.state.stop_reason {
                 a.set_stop_reason(sr);
             }
-            a.append_openai_raw(&json_str);
+            a.append_openai_raw(normalized_json);
         }
 
         if let Some(cancel) = self.check_race_cancelled(ctx) {
@@ -86,12 +98,12 @@ impl ChunkProcessor<'_> {
         }
 
         let pii_action = match &mut self.state.pii_stage {
-            Some(stage) => stage.process_chunk(&json_str),
+            Some(stage) => stage.process_chunk(normalized_json),
             None => StreamAction::Passthrough,
         };
         let final_json = match &pii_action {
             StreamAction::Mutate(s) => s.as_str(),
-            _ => &json_str,
+            _ => normalized_json,
         };
 
         let sse_frame = crate::sse::build_sse_frame(final_json);
@@ -100,12 +112,6 @@ impl ChunkProcessor<'_> {
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
             )));
-        }
-
-        // If normalizer stage has residual buffered content, flush before [DONE]
-        if let Some(residual) = self.state.normalizer.finalize() {
-            let sse_bytes = crate::sse::build_sse_frame(&residual);
-            let _ = self.send_to_sink(ctx, sse_bytes).await;
         }
 
         // If PII stage has residual buffered content, flush before [DONE]

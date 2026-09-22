@@ -73,7 +73,7 @@ impl ChunkProcessor<'_> {
         &mut self,
         mut chunk: crate::sse::UpstreamSseChunk,
         json_payload: &str,
-    ) -> Option<String> {
+    ) -> (Option<String>, bool) {
         if let Some(new_usage) = chunk.usage.take() {
             self.state.usage = Some(match self.state.usage.take() {
                 Some(existing) => merge_usage(existing, new_usage),
@@ -84,12 +84,14 @@ impl ChunkProcessor<'_> {
             self.state.stop_reason = chunk.stop_reason.take();
         }
 
-        let effective_payload = match self.state.normalizer.process_chunk(json_payload) {
+        let norm_action = self.state.normalizer.process_chunk(json_payload);
+        let is_skip = matches!(norm_action, StreamAction::Skip);
+        let effective_payload = match norm_action {
             StreamAction::Mutate(s) => Some(s),
             _ => None,
         };
         let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
-        if let Some(a) = self.state.acc.as_mut() {
+        if !is_skip && let Some(a) = self.state.acc.as_mut() {
             if let Some(u) = &self.state.usage {
                 a.set_usage(u.to_owned());
             }
@@ -99,7 +101,7 @@ impl ChunkProcessor<'_> {
             a.process_chunk(payload_str);
             let _ = chunk.delta_reasoning.take();
         }
-        effective_payload
+        (effective_payload, is_skip)
     }
 
     pub(super) async fn process_openai_metadata_chunk(
@@ -123,10 +125,15 @@ impl ChunkProcessor<'_> {
         };
 
         let has_content = chunk.has_content;
-        let effective_payload = self.update_state_and_acc_from_metadata_chunk(chunk, json_payload);
+        let (effective_payload, is_skip) =
+            self.update_state_and_acc_from_metadata_chunk(chunk, json_payload);
 
         if let Some(event) = self.check_race_cancelled(ctx) {
             return Ok(event);
+        }
+
+        if is_skip {
+            return Ok(crate::streaming::ChunkEvent::Skip);
         }
 
         if has_content {
@@ -162,6 +169,9 @@ impl ChunkProcessor<'_> {
         line_bytes: &[u8],
     ) -> bytes::Bytes {
         let norm_action = self.state.normalizer.process_chunk(json_payload);
+        if matches!(norm_action, StreamAction::Skip) {
+            return bytes::Bytes::new();
+        }
         let normalized_payload = match &norm_action {
             StreamAction::Mutate(s) => s.as_str(),
             _ => json_payload,
@@ -181,6 +191,7 @@ impl ChunkProcessor<'_> {
             StreamAction::Skip => bytes::Bytes::new(),
             _ => match norm_action {
                 StreamAction::Mutate(modified) => crate::sse::build_sse_frame(&modified),
+                StreamAction::Skip => bytes::Bytes::new(),
                 _ => {
                     let mut frame = bytes::BytesMut::from(line_bytes);
                     frame.extend_from_slice(b"\n\n");
@@ -198,6 +209,9 @@ impl ChunkProcessor<'_> {
         line_bytes: &[u8],
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
         let sse_bytes = self.prepare_content_chunk_bytes(json_payload, line_bytes);
+        if sse_bytes.is_empty() {
+            return Ok(crate::streaming::ChunkEvent::Skip);
+        }
 
         if let Some(event) = self.check_race_cancelled(ctx) {
             return Ok(event);

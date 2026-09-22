@@ -333,3 +333,320 @@ fn test_anthropic_native_tool_use_response_translation() {
     let args: Value = serde_json::from_str(tc[0]["function"]["arguments"].as_str().unwrap()).unwrap();
     assert_eq!(args["city"], "Tokyo");
 }
+
+#[test]
+fn test_xml_entities_and_cdata() {
+    let input = r#"<tool_call>
+<invoke name="fetch_web_page">
+<url>https://example.com/api?a=1&amp;b=2&amp;c=3</url>
+<content><![CDATA[if (a < b && c > d) { return "ok"; }]]></content>
+</invoke>
+</tool_call>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.tool_calls.len(), 1);
+    let args: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert_eq!(args["url"], "https://example.com/api?a=1&b=2&c=3");
+    assert_eq!(args["content"], r#"if (a < b && c > d) { return "ok"; }"#);
+}
+
+#[test]
+fn test_attribute_whitespace_and_variants() {
+    let input = r#"<function name = "search_tool" id = 'custom_call_99'>
+<query>test search</query>
+</function>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.tool_calls.len(), 1);
+    assert_eq!(extracted.tool_calls[0].name, "search_tool");
+    assert_eq!(extracted.tool_calls[0].id, "custom_call_99");
+    let args: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert_eq!(args["query"], "test search");
+}
+
+#[test]
+fn test_consecutive_hermes_json_objects() {
+    let input = r#"<tool_call>
+{"name": "fetch_one", "arguments": {"x": 1}}
+{"name": "fetch_two", "arguments": {"y": 2}}
+</tool_call>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.tool_calls.len(), 2);
+    assert_eq!(extracted.tool_calls[0].name, "fetch_one");
+    assert_eq!(extracted.tool_calls[1].name, "fetch_two");
+}
+
+#[test]
+fn test_streaming_tag_prefix_split_across_chunks() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    // Chunk 1: ends with partial prefix "<tool_"
+    let chunk1 = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "Checking data: <tool_" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res1 = extractor.process_chunk(&chunk1);
+    // Should emit "Checking data: " and buffer "<tool_"
+    match res1 {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(val["choices"][0]["delta"]["content"], "Checking data: ");
+        }
+        other => panic!("expected Mutate with content before, got {other:?}"),
+    }
+
+    // Chunk 2: completes tag and invoke
+    let chunk2 = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "call>\n<invoke name=\"fetch_web_page\"><url>https://example.com</url></invoke>\n</tool_call>" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res2 = extractor.process_chunk(&chunk2);
+    match res2 {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let tc = &val["choices"][0]["delta"]["tool_calls"];
+            assert_eq!(tc[0]["function"]["name"], "fetch_web_page");
+        }
+        other => panic!("expected Mutate with tool_calls, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_streaming_multi_invoke_split_across_chunks() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    // Chunk 1: Opens <tool_call> and contains first invoke with its closing tag </invoke>
+    let chunk1 = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "<tool_call>\n<invoke name=\"f1\"><url>u1</url></invoke>\n" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res1 = extractor.process_chunk(&chunk1);
+    // Should NOT close early at </invoke>; must stay buffering
+    assert_eq!(res1, StreamAction::Skip);
+
+    // Chunk 2: Second invoke and closing </tool_call>
+    let chunk2 = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "<invoke name=\"f2\"><url>u2</url></invoke>\n</tool_call>" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res2 = extractor.process_chunk(&chunk2);
+    match res2 {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let tc = &val["choices"][0]["delta"]["tool_calls"];
+            assert_eq!(tc.as_array().unwrap().len(), 2);
+            assert_eq!(tc[0]["function"]["name"], "f1");
+            assert_eq!(tc[1]["function"]["name"], "f2");
+        }
+        other => panic!("expected Mutate with 2 tool_calls, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_streaming_text_before_and_after_single_chunk() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    let chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "Before text <tool_call><invoke name=\"ping\"><host>1.1.1.1</host></invoke></tool_call> After text" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res = extractor.process_chunk(&chunk);
+    match res {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let delta = &val["choices"][0]["delta"];
+            assert_eq!(delta["content"], "Before text After text");
+            assert_eq!(delta["tool_calls"][0]["function"]["name"], "ping");
+        }
+        other => panic!("expected Mutate with content and tool_calls, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_self_closing_invoke_with_attributes() {
+    let input = r#"Starting fetch:
+<invoke name="fetch_web_page" url="https://example.com" timeout="30"/>
+Done initiating fetch."#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.clean_content, "Starting fetch:\nDone initiating fetch.");
+    assert_eq!(extracted.tool_calls.len(), 1);
+    assert_eq!(extracted.tool_calls[0].name, "fetch_web_page");
+    let args: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert_eq!(args["url"], "https://example.com");
+    assert_eq!(args["timeout"], 30);
+}
+
+#[test]
+fn test_multiple_self_closing_invokes() {
+    let input = r#"<invoke name="cmd1" cmd="ls"/>
+<invoke name="cmd2" cmd="pwd"/>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.clean_content, "");
+    assert_eq!(extracted.tool_calls.len(), 2);
+    assert_eq!(extracted.tool_calls[0].name, "cmd1");
+    let args0: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert_eq!(args0["cmd"], "ls");
+
+    assert_eq!(extracted.tool_calls[1].name, "cmd2");
+    let args1: Value = serde_json::from_str(&extracted.tool_calls[1].arguments).unwrap();
+    assert_eq!(args1["cmd"], "pwd");
+}
+
+#[test]
+fn test_long_tag_prefix_split_across_streaming_chunks() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    // Chunk 1: Ends with opening tag > 20 chars without closing '>'
+    let chunk1 = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "Querying system: <invoke name=\"fetch_detailed_system_telemetry\"" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res1 = extractor.process_chunk(&chunk1);
+    match res1 {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(val["choices"][0]["delta"]["content"], "Querying system: ");
+        }
+        other => panic!("expected Mutate with text before, got {other:?}"),
+    }
+
+    // Chunk 2: Closes '>' and body
+    let chunk2 = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "><node>primary</node></invoke>" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res2 = extractor.process_chunk(&chunk2);
+    match res2 {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let tc = &val["choices"][0]["delta"]["tool_calls"];
+            assert_eq!(tc[0]["function"]["name"], "fetch_detailed_system_telemetry");
+            let args: Value = serde_json::from_str(tc[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["node"], "primary");
+        }
+        other => panic!("expected Mutate with tool_calls, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_multiple_tool_calls_in_single_streaming_chunk() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    let chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "<tool_call><invoke name=\"t1\"><x>1</x></invoke></tool_call> middle <tool_call><invoke name=\"t2\"><y>2</y></invoke></tool_call>" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res = extractor.process_chunk(&chunk);
+    match res {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let delta = &val["choices"][0]["delta"];
+            assert_eq!(delta["content"], "middle");
+            let tc = delta["tool_calls"].as_array().unwrap();
+            assert_eq!(tc.len(), 2);
+            assert_eq!(tc[0]["function"]["name"], "t1");
+            assert_eq!(tc[1]["function"]["name"], "t2");
+        }
+        other => panic!("expected Mutate with 2 tool_calls and middle text, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_streaming_chunk_with_both_tool_call_and_stop_finish_reason() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    let chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "<tool_call><invoke name=\"final_action\"><done>true</done></invoke></tool_call>" },
+            "finish_reason": "stop"
+        }]
+    }).to_string();
+    let res = extractor.process_chunk(&chunk);
+    match res {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            assert_eq!(val["choices"][0]["finish_reason"], "tool_calls");
+            let tc = &val["choices"][0]["delta"]["tool_calls"];
+            assert_eq!(tc[0]["function"]["name"], "final_action");
+        }
+        other => panic!("expected Mutate with tool_calls and finish_reason: tool_calls, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_multibyte_utf8_adjacent_to_tags() {
+    let input = "¡Hola! 🚀<tool_call><invoke name=\"translate\"><text>hola</text></invoke></tool_call>✨ Adiós mundo 🌍";
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.clean_content, "¡Hola! 🚀✨ Adiós mundo 🌍");
+    assert_eq!(extracted.tool_calls.len(), 1);
+    assert_eq!(extracted.tool_calls[0].name, "translate");
+}
+
+#[test]
+fn test_hermes_json_top_level_arguments() {
+    let input = r#"<tool_call>
+{"name": "calculator", "operation": "multiply", "a": 6, "b": 7}
+</tool_call>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(extracted.tool_calls.len(), 1);
+    assert_eq!(extracted.tool_calls[0].name, "calculator");
+    let args: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert_eq!(args["operation"], "multiply");
+    assert_eq!(args["a"], 6);
+    assert_eq!(args["b"], 7);
+}
+
+#[test]
+fn test_bare_self_closing_invoke_in_stream() {
+    let mut extractor = InlineToolStreamExtractor::new();
+
+    let chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "Checking ping: <invoke name=\"ping\" host=\"1.1.1.1\"/>" },
+            "finish_reason": null
+        }]
+    }).to_string();
+    let res = extractor.process_chunk(&chunk);
+    match res {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let delta = &val["choices"][0]["delta"];
+            assert_eq!(delta["content"], "Checking ping:");
+            let tc = &delta["tool_calls"];
+            assert_eq!(tc[0]["function"]["name"], "ping");
+            let args: Value = serde_json::from_str(tc[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert_eq!(args["host"], "1.1.1.1");
+        }
+        other => panic!("expected Mutate with ping tool_call, got {other:?}"),
+    }
+}

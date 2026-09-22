@@ -186,6 +186,10 @@ impl ReasoningNormalizer {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn finalize(&mut self) -> Option<String> {
+        <Self as StreamingChunkStage>::finalize(self)
+    }
 }
 
 impl StreamingChunkStage for ReasoningNormalizer {

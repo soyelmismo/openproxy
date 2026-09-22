@@ -29,22 +29,21 @@ impl InlineToolParser for HermesJsonParser {
         let trimmed = block.trim();
         let cleaned = strip_markdown_codeblock(trimmed);
 
-        if cleaned.starts_with('[') && cleaned.ends_with(']') {
-            let v = serde_json::from_str::<Value>(cleaned).ok()?;
-            let arr = v.as_array()?;
-            let mut calls = Vec::new();
-            for item in arr {
-                if let Some(call) = parse_single_json_tool_call(item) {
-                    calls.push(call);
+        let stream_deser = serde_json::Deserializer::from_str(cleaned).into_iter::<Value>();
+        let mut calls = Vec::new();
+        for item in stream_deser.flatten() {
+            if let Some(call) = parse_single_json_tool_call(&item) {
+                calls.push(call);
+            } else if let Some(arr) = item.as_array() {
+                for sub in arr {
+                    if let Some(call) = parse_single_json_tool_call(sub) {
+                        calls.push(call);
+                    }
                 }
             }
-            if calls.is_empty() { None } else { Some(calls) }
-        } else if cleaned.starts_with('{') && cleaned.ends_with('}') {
-            let v = serde_json::from_str::<Value>(cleaned).ok()?;
-            parse_single_json_tool_call(&v).map(|c| vec![c])
-        } else {
-            None
         }
+
+        if calls.is_empty() { None } else { Some(calls) }
     }
 }
 
@@ -77,7 +76,29 @@ fn parse_single_json_tool_call(val: &Value) -> Option<ParsedToolCall> {
         .and_then(Value::as_str)
         .map_or_else(generate_tool_call_id, ToString::to_string);
 
-    let arguments = match args_val {
+    let top_level_args = if args_val.is_none() {
+        let remaining: serde_json::Map<String, Value> = obj
+            .iter()
+            .filter(|(k, _)| {
+                !k.eq_ignore_ascii_case("name")
+                    && !k.eq_ignore_ascii_case("id")
+                    && !k.eq_ignore_ascii_case("call_id")
+                    && !k.eq_ignore_ascii_case("type")
+                    && !k.eq_ignore_ascii_case("function")
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !remaining.is_empty() {
+            Some(Value::Object(remaining))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let effective_args = args_val.or(top_level_args.as_ref());
+
+    let arguments = match effective_args {
         Some(Value::String(s)) => s.clone(),
         Some(val @ (Value::Object(_) | Value::Array(_))) => {
             serde_json::to_string(val).unwrap_or_else(|_| "{}".to_string())

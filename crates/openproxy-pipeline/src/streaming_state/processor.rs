@@ -112,6 +112,11 @@ impl ChunkProcessor<'_> {
         if let Some(event) = self.check_race_cancelled(ctx) {
             return Ok(event);
         }
+        // If normalizer stage has residual buffered content or tool call, flush before [DONE]
+        if let Some(residual) = self.state.normalizer.finalize() {
+            let sse_bytes = crate::sse::build_sse_frame(&residual);
+            let _ = self.send_to_sink(ctx, sse_bytes).await;
+        }
         // If PII stage has residual buffered content, flush before [DONE]
         if let Some(residual) = self.state.pii_stage.as_mut().and_then(|s| s.finalize()) {
             let sse_bytes = crate::sse::build_sse_frame(&residual);

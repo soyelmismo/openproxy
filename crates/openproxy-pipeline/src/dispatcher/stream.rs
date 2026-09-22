@@ -246,9 +246,13 @@ impl UpstreamDispatcher {
             });
         }
 
-        // If stream ended without [DONE], flush any pending PII restoration stage buffer to client,
+        // If stream ended without [DONE], flush any pending normalizer/PII restoration stage buffer to client,
         // and unconditionally emit terminal [DONE] for this successfully completed stream.
         if !state.done_sent {
+            if let Some(residual_json) = state.normalizer.finalize() {
+                let sse_bytes = crate::sse::build_sse_frame(&residual_json);
+                let _ = sink.send(sse_bytes).await;
+            }
             if let Some(residual_json) = state.pii_stage.as_mut().and_then(|s| s.finalize()) {
                 let sse_bytes = crate::sse::build_sse_frame(&residual_json);
                 let _ = sink.send(sse_bytes).await;

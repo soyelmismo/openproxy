@@ -29,15 +29,15 @@ impl InlineToolParser for MiniMaxXmlParser {
     }
 }
 
-/// Parses all `<invoke ...>...</invoke>` and `<function_call ...>...</function_call>`
-/// tags within the provided block.
+/// Parses all `<invoke ...>...</invoke>`, `<function ...>...</function>`, `<call ...>...</call>`,
+/// and `<function_call ...>...</function_call>` tags within the provided block.
 pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
     let mut calls = Vec::new();
     let mut cursor = 0;
 
     while cursor < text.len() {
         let remainder = &text[cursor..];
-        let Some((tag_start, _tag_name, is_invoke)) = find_next_invoke_tag(remainder) else {
+        let Some((tag_start, close_tag)) = find_next_invoke_tag(remainder) else {
             break;
         };
 
@@ -50,19 +50,27 @@ pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
         let open_tag_content = &text[abs_tag_start..tag_body_start];
         let func_name = extract_xml_attribute(open_tag_content, "name")
             .or_else(|| extract_xml_attribute(open_tag_content, "function"));
-        let explicit_id = extract_xml_attribute(open_tag_content, "id");
+        let explicit_id = extract_xml_attribute(open_tag_content, "id")
+            .or_else(|| extract_xml_attribute(open_tag_content, "call_id"));
 
-        let close_tag = if is_invoke { "</invoke>" } else { "</function_call>" };
-        let after_body = &text[tag_body_start..];
-        let (body, next_cursor) = match find_ignore_ascii_case(after_body, close_tag) {
-            Some(close_pos) => {
-                let body = &after_body[..close_pos];
-                let next = tag_body_start + close_pos + close_tag.len();
-                (body, next)
-            }
-            None => {
-                // If closing tag is missing (e.g. at end of stream), take remainder of block
-                (after_body, text.len())
+        let is_self_closing = open_tag_content[..open_tag_content.len().saturating_sub(1)]
+            .trim_end()
+            .ends_with('/');
+
+        let (body, next_cursor) = if is_self_closing {
+            ("", tag_body_start)
+        } else {
+            let after_body = &text[tag_body_start..];
+            match find_ignore_ascii_case(after_body, close_tag) {
+                Some(close_pos) => {
+                    let body = &after_body[..close_pos];
+                    let next = tag_body_start + close_pos + close_tag.len();
+                    (body, next)
+                }
+                None => {
+                    // If closing tag is missing (e.g. at end of stream), take remainder of block
+                    (after_body, text.len())
+                }
             }
         };
 
@@ -70,7 +78,7 @@ pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
             && !name.trim().is_empty()
         {
             let id = explicit_id.unwrap_or_else(generate_tool_call_id);
-            let arguments = parse_invoke_body_to_json_arguments(body);
+            let arguments = parse_invoke_to_json_arguments(open_tag_content, body);
             calls.push(ParsedToolCall {
                 id,
                 name: name.trim().to_string(),
@@ -78,47 +86,291 @@ pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
             });
         }
 
-        cursor = next_cursor.max(cursor + 1);
+        cursor = advance_cursor(text, cursor, next_cursor);
     }
 
     calls
 }
 
-/// Finds the next `<invoke` or `<function_call` tag start in `s`.
-fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str, bool)> {
-    let invoke_idx = find_ignore_ascii_case(s, "<invoke");
-    let func_idx = find_ignore_ascii_case(s, "<function_call");
+/// Finds the next `<invoke`, `<function_call`, `<function`, `<call`, or `<action` tag start in `s`.
+fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
+    let candidates = [
+        ("<invoke", "</invoke>"),
+        ("<function_call", "</function_call>"),
+        ("<function", "</function>"),
+        ("<call", "</call>"),
+        ("<action", "</action>"),
+    ];
 
-    match (invoke_idx, func_idx) {
-        (Some(i), Some(f)) if i <= f => Some((i, "invoke", true)),
-        (Some(_), Some(f)) => Some((f, "function_call", false)),
-        (Some(i), None) => Some((i, "invoke", true)),
-        (None, Some(f)) => Some((f, "function_call", false)),
-        (None, None) => None,
+    let mut best: Option<(usize, &'static str)> = None;
+    for (open, close) in candidates {
+        let mut cursor = 0;
+        while let Some(pos) = find_ignore_ascii_case(&s[cursor..], open) {
+            let abs_pos = cursor + pos;
+            let after_tag = abs_pos + open.len();
+            // Validate boundary after tag name: must be whitespace, '>' or '/'
+            let next_byte = s.as_bytes().get(after_tag);
+            let is_boundary = next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            if is_boundary {
+                if best.is_none_or(|(p, _)| abs_pos < p) {
+                    best = Some((abs_pos, close));
+                }
+                break;
+            }
+            cursor = abs_pos + 1;
+        }
+    }
+    best
+}
+
+/// Extract all attribute (name, value) pairs from an opening XML tag.
+pub fn extract_all_attributes(tag_str: &str) -> Vec<(String, String)> {
+    let mut attributes = Vec::new();
+    let bytes = tag_str.as_bytes();
+    let len = bytes.len();
+    if len == 0 {
+        return attributes;
+    }
+
+    // Skip tag name if starting with '<' or if tag name is present
+    let mut i = 0;
+    if bytes[0] == b'<' {
+        i = 1;
+        while i < len && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' && bytes[i] != b'/' {
+            i += 1;
+        }
+    } else {
+        let first_eq = tag_str.find('=');
+        let first_ws = tag_str.find(char::is_whitespace);
+        if let Some(ws) = first_ws
+            && first_eq.is_none_or(|eq| ws < eq)
+        {
+            i = ws;
+        }
+    }
+
+    while i < len {
+        // Skip whitespace
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len || bytes[i] == b'>' || bytes[i] == b'/' {
+            break;
+        }
+
+        // Read attribute name
+        let key_start = i;
+        while i < len
+            && !bytes[i].is_ascii_whitespace()
+            && bytes[i] != b'='
+            && bytes[i] != b'>'
+            && bytes[i] != b'/'
+        {
+            i += 1;
+        }
+        let key = tag_str[key_start..i].to_string();
+        if key.is_empty() {
+            break;
+        }
+
+        // Skip whitespace
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+
+        let val = if i < len && bytes[i] == b'=' {
+            i += 1; // skip '='
+            while i < len && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < len {
+                let quote = bytes[i];
+                if quote == b'"' || quote == b'\'' {
+                    i += 1; // skip opening quote
+                    let val_start = i;
+                    while i < len && bytes[i] != quote {
+                        i += 1;
+                    }
+                    let raw_val = &tag_str[val_start..i];
+                    if i < len && bytes[i] == quote {
+                        i += 1; // skip closing quote
+                    }
+                    decode_xml_entities(raw_val)
+                } else {
+                    let val_start = i;
+                    while i < len
+                        && !bytes[i].is_ascii_whitespace()
+                        && bytes[i] != b'>'
+                        && bytes[i] != b'/'
+                    {
+                        i += 1;
+                    }
+                    let raw_val = &tag_str[val_start..i];
+                    decode_xml_entities(raw_val)
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            "true".to_string()
+        };
+
+        attributes.push((key, val));
+    }
+
+    attributes
+}
+
+/// Extract an XML attribute value from an opening tag string (e.g. `name="fetch_web_page"` or `name = '...'`).
+pub fn extract_xml_attribute(tag_str: &str, attr_name: &str) -> Option<String> {
+    extract_all_attributes(tag_str)
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(attr_name))
+        .map(|(_, v)| v)
+}
+
+fn extract_extra_attributes(tag_str: &str) -> Vec<(String, String)> {
+    extract_all_attributes(tag_str)
+        .into_iter()
+        .filter(|(k, _)| {
+            !k.eq_ignore_ascii_case("name")
+                && !k.eq_ignore_ascii_case("function")
+                && !k.eq_ignore_ascii_case("id")
+                && !k.eq_ignore_ascii_case("call_id")
+        })
+        .collect()
+}
+
+pub(crate) fn advance_cursor(s: &str, current: usize, next: usize) -> usize {
+    if next > current && next <= s.len() && s.is_char_boundary(next) {
+        next
+    } else {
+        s[current..]
+            .chars()
+            .next()
+            .map_or(s.len(), |c| current + c.len_utf8())
     }
 }
 
-/// Extract an XML attribute value from an opening tag string (e.g. `name="fetch_web_page"`).
-fn extract_xml_attribute(tag_str: &str, attr_name: &str) -> Option<String> {
-    let mut search_key = String::with_capacity(attr_name.len() + 1);
-    search_key.push_str(attr_name);
-    search_key.push('=');
+/// Decode common XML entities (&amp;, &lt;, &gt;, &quot;, &apos;, and numeric entities).
+pub fn decode_xml_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            let mut entity = String::with_capacity(8);
+            let mut matched = false;
+            while let Some(&next_c) = chars.peek() {
+                if next_c == ';' {
+                    chars.next();
+                    matched = true;
+                    break;
+                }
+                if (next_c.is_alphanumeric() || next_c == '#')
+                    && let Some(ch) = chars.next()
+                {
+                    entity.push(ch);
+                    if entity.len() > 10 {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if matched {
+                match entity.as_str() {
+                    "amp" => out.push('&'),
+                    "lt" => out.push('<'),
+                    "gt" => out.push('>'),
+                    "quot" => out.push('"'),
+                    "apos" => out.push('\''),
+                    s if s.starts_with("#x") || s.starts_with("#X") => {
+                        if let Ok(code) = u32::from_str_radix(&s[2..], 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            out.push(ch);
+                        } else {
+                            out.push('&');
+                            out.push_str(&entity);
+                            out.push(';');
+                        }
+                    }
+                    s if s.starts_with('#') => {
+                        if let Ok(code) = s[1..].parse::<u32>()
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            out.push(ch);
+                        } else {
+                            out.push('&');
+                            out.push_str(&entity);
+                            out.push(';');
+                        }
+                    }
+                    _ => {
+                        out.push('&');
+                        out.push_str(&entity);
+                        out.push(';');
+                    }
+                }
+            } else {
+                out.push('&');
+                out.push_str(&entity);
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
-    let key_pos = find_ignore_ascii_case(tag_str, &search_key)?;
-    let after_equal = tag_str.get(key_pos + search_key.len()..)?.trim_start();
-    let mut chars = after_equal.chars();
-    let quote = chars.next()?;
+/// Strips CDATA wrappers (`<![CDATA[...]]>`) from a string.
+fn strip_cdata(s: &str) -> String {
+    if !s.contains("<![CDATA[") {
+        return s.to_string();
+    }
+    let mut result = s.to_string();
+    while let Some(start) = result.find("<![CDATA[") {
+        if let Some(end) = result[start + 9..].find("]]>") {
+            let abs_end = start + 9 + end;
+            let inner = result[start + 9..abs_end].to_string();
+            result.replace_range(start..abs_end + 3, &inner);
+        } else {
+            break;
+        }
+    }
+    result
+}
 
-    if quote == '"' || quote == '\'' {
-        let end_quote_idx = after_equal[quote.len_utf8()..].find(quote)?;
-        Some(after_equal[quote.len_utf8()..quote.len_utf8() + end_quote_idx].to_string())
+fn parse_invoke_to_json_arguments(open_tag_content: &str, body: &str) -> String {
+    let extra_attrs = extract_extra_attributes(open_tag_content);
+    let trimmed_body = body.trim();
+
+    if trimmed_body.is_empty() {
+        if extra_attrs.is_empty() {
+            return "{}".to_string();
+        }
+        let mut map = Map::new();
+        for (k, v) in extra_attrs {
+            map.insert(k, parse_scalar_value(&v));
+        }
+        return Value::Object(map).to_string();
+    }
+
+    let body_json = parse_invoke_body_to_json_arguments(trimmed_body);
+    if extra_attrs.is_empty() {
+        return body_json;
+    }
+
+    if let Ok(Value::Object(mut map)) = serde_json::from_str::<Value>(&body_json) {
+        for (k, v) in extra_attrs {
+            map.entry(k).or_insert_with(|| parse_scalar_value(&v));
+        }
+        Value::Object(map).to_string()
     } else {
-        // Unquoted attribute value
-        let val: String = after_equal
-            .chars()
-            .take_while(|c| !c.is_whitespace() && *c != '>' && *c != '/')
-            .collect();
-        if val.is_empty() { None } else { Some(val) }
+        body_json
     }
 }
 
@@ -209,8 +461,10 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
             }
         };
 
-        // If Anthropic style: <parameter name="key">value</parameter>
-        let key = if raw_tag_name.eq_ignore_ascii_case("parameter") {
+        // If Anthropic style: <parameter name="key">value</parameter> or <param name="key">
+        let key = if raw_tag_name.eq_ignore_ascii_case("parameter")
+            || raw_tag_name.eq_ignore_ascii_case("param")
+        {
             extract_xml_attribute(open_tag_header, "name").unwrap_or_else(|| "parameter".to_string())
         } else {
             raw_tag_name.to_string()
@@ -231,25 +485,26 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
 
 /// Convert scalar content text to JSON Value (bool, number, null, JSON, or String).
 fn parse_scalar_value(text: &str) -> Value {
-    if text.is_empty() {
+    let un_cdata = strip_cdata(text);
+    let decoded = decode_xml_entities(&un_cdata);
+    let trimmed = decoded.trim();
+    if trimmed.is_empty() {
         return Value::String(String::new());
     }
 
     // Direct literals
-    if text.eq_ignore_ascii_case("true") {
+    if trimmed.eq_ignore_ascii_case("true") {
         return Value::Bool(true);
     }
-    if text.eq_ignore_ascii_case("false") {
+    if trimmed.eq_ignore_ascii_case("false") {
         return Value::Bool(false);
     }
-    if text.eq_ignore_ascii_case("null") {
+    if trimmed.eq_ignore_ascii_case("null") {
         return Value::Null;
     }
 
     // Try parsing as valid JSON (numbers, arrays, nested objects)
-    // Note: Numbers with leading zeros like "0123" or strings like URLs with '?'
-    // will fail serde_json::from_str and safely become Value::String.
-    if let Ok(val) = serde_json::from_str::<Value>(text) {
+    if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
         match val {
             Value::Number(_) | Value::Array(_) | Value::Object(_) => return val,
             Value::String(_) => return val,
@@ -257,7 +512,7 @@ fn parse_scalar_value(text: &str) -> Value {
         }
     }
 
-    Value::String(text.to_string())
+    Value::String(trimmed.to_string())
 }
 
 /// Strips an outer wrapper tag like `<parameters>...</parameters>`.
