@@ -82,10 +82,22 @@ impl StreamingChunkStage for InlineToolStreamExtractor {
             {
                 return StreamAction::Mutate(
                     payload
-                        .replace("\"finish_reason\":\"stop\"", "\"finish_reason\":\"tool_calls\"")
-                        .replace("\"finish_reason\": \"stop\"", "\"finish_reason\": \"tool_calls\"")
-                        .replace("\"finish_reason\":\"end_turn\"", "\"finish_reason\":\"tool_calls\"")
-                        .replace("\"finish_reason\": \"end_turn\"", "\"finish_reason\": \"tool_calls\""),
+                        .replace(
+                            "\"finish_reason\":\"stop\"",
+                            "\"finish_reason\":\"tool_calls\"",
+                        )
+                        .replace(
+                            "\"finish_reason\": \"stop\"",
+                            "\"finish_reason\": \"tool_calls\"",
+                        )
+                        .replace(
+                            "\"finish_reason\":\"end_turn\"",
+                            "\"finish_reason\":\"tool_calls\"",
+                        )
+                        .replace(
+                            "\"finish_reason\": \"end_turn\"",
+                            "\"finish_reason\": \"tool_calls\"",
+                        ),
                 );
             }
             return StreamAction::Passthrough;
@@ -349,7 +361,8 @@ fn find_earliest_tool_tag(input: &str) -> Option<(usize, usize, &'static str)> {
             let abs_pos = cursor + pos;
             let after_tag = abs_pos + open.len();
             let next_byte = input.as_bytes().get(after_tag);
-            let is_boundary = next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            let is_boundary =
+                next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
             if is_boundary {
                 if let Some(tag_end) = input[abs_pos..].find('>') {
                     let full_open_end = abs_pos + tag_end + 1;
@@ -403,7 +416,8 @@ fn extract_trailing_partial_tag_prefix(s: &str) -> (&str, &str) {
                 if suffix_lower.starts_with(&open_lower) {
                     let after_tag = &suffix[open.len()..];
                     let next_b = after_tag.as_bytes().first();
-                    return next_b.is_none_or(|&b| b.is_ascii_whitespace() || b == b'/' || b == b'>');
+                    return next_b
+                        .is_none_or(|&b| b.is_ascii_whitespace() || b == b'/' || b == b'>');
                 }
                 false
             }) || {

@@ -360,9 +360,13 @@ pub fn list_targets_with_model(
     for t in &mut targets {
         if let Some(sub_id) = t.sub_combo_id {
             if t.context_length.is_none() || t.context_length <= Some(0) {
-                t.context_length = compute_effective_context_window(conn, sub_id).ok().flatten();
+                t.context_length = compute_effective_context_window(conn, sub_id)
+                    .ok()
+                    .flatten();
             }
-        } else if (t.context_length.is_none() || t.context_length <= Some(0)) && !t.model_id.is_empty() {
+        } else if (t.context_length.is_none() || t.context_length <= Some(0))
+            && !t.model_id.is_empty()
+        {
             t.context_length = openproxy_types::infer_context_length(&t.model_id);
         }
     }

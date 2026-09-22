@@ -365,7 +365,10 @@ fn test_models_dev_canonical_ids() {
     assert_eq!(opencode_go.models_dev_canonical_ids(), &["opencode-go"]);
 
     let codebuddy = ProviderAdapterEnum::from_provider_id("codebuddy").unwrap();
-    assert_eq!(codebuddy.models_dev_canonical_ids(), &["codebuddy", "tencent"]);
+    assert_eq!(
+        codebuddy.models_dev_canonical_ids(),
+        &["codebuddy", "tencent"]
+    );
 }
 
 #[test]

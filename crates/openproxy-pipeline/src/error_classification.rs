@@ -15,7 +15,8 @@ use openproxy_types::CoreError;
 pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
     // 1. Structured CodeBuddy / Tencent Cloud Copilot business error code classification
     if let Some(code) = openproxy_adapters::adapters::codebuddy::parse_codebuddy_error_code(body)
-        && let Some(cb_err) = openproxy_adapters::adapters::codebuddy::CodeBuddyErrorCode::from_code(code)
+        && let Some(cb_err) =
+            openproxy_adapters::adapters::codebuddy::CodeBuddyErrorCode::from_code(code)
     {
         let class = cb_err.to_upstream_error_class();
         if class != UpstreamErrorClass::Generic {
@@ -508,11 +509,11 @@ mod adversarial_tests {
             UpstreamErrorClass::Generic
         );
 
-        let body_invalid_val = r#"{"error":{"message":"Invalid value for max_tokens: 6000","code":400}}"#;
+        let body_invalid_val =
+            r#"{"error":{"message":"Invalid value for max_tokens: 6000","code":400}}"#;
         assert_eq!(
             classify_upstream_error(400, body_invalid_val),
             UpstreamErrorClass::InvalidPayload
         );
     }
 }
-

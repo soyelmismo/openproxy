@@ -4,22 +4,22 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use axum::Router;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use axum::Router;
 use bytes::Bytes;
 use tokio::net::TcpListener;
 
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_core::oauth::codebuddy::{
-    CODEBUDDY_REFRESH_PATH, CODEBUDDY_STATE_PATH, CODEBUDDY_TOKEN_PATH,
-    CodeBuddyOAuthProvider, LOGIN_TOKEN_PENDING_CODE,
+    CODEBUDDY_REFRESH_PATH, CODEBUDDY_STATE_PATH, CODEBUDDY_TOKEN_PATH, CodeBuddyOAuthProvider,
+    LOGIN_TOKEN_PENDING_CODE,
 };
 use openproxy_core::oauth::{
-    decrypt_access_token, decrypt_refresh_token, store_oauth_tokens, DbRef, OAuthFlow,
-    OAuthProvider, OAuthRefreshParams, StoreOAuthTokensParams, TokenRefreshCoordinator,
+    DbRef, OAuthFlow, OAuthProvider, OAuthRefreshParams, StoreOAuthTokensParams,
+    TokenRefreshCoordinator, decrypt_access_token, decrypt_refresh_token, store_oauth_tokens,
 };
 use openproxy_db::secrets::MasterKey;
 
@@ -70,7 +70,9 @@ async fn mock_codebuddy_state_handler(
         Some("application/json")
     );
     assert_eq!(
-        headers.get("x-no-authorization").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-no-authorization")
+            .and_then(|v| v.to_str().ok()),
         Some("true")
     );
     assert_eq!(
@@ -112,7 +114,9 @@ async fn mock_codebuddy_token_handler(
         Some("application/json")
     );
     assert_eq!(
-        headers.get("x-no-authorization").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-no-authorization")
+            .and_then(|v| v.to_str().ok()),
         Some("true")
     );
 
@@ -169,7 +173,9 @@ async fn mock_codebuddy_refresh_handler(
         Some("cb_refresh_token_wire_def")
     );
     assert_eq!(
-        headers.get("x-auth-refresh-source").and_then(|v| v.to_str().ok()),
+        headers
+            .get("x-auth-refresh-source")
+            .and_then(|v| v.to_str().ok()),
         Some("plugin")
     );
 
@@ -314,10 +320,7 @@ async fn test_codebuddy_oauth_full_device_code_wire_mock() {
     };
 
     assert_eq!(decrypted_at, "cb_access_token_wire_abc");
-    assert_eq!(
-        decrypted_rt.as_deref(),
-        Some("cb_refresh_token_wire_def")
-    );
+    assert_eq!(decrypted_rt.as_deref(), Some("cb_refresh_token_wire_def"));
 
     // 7. TokenRefreshCoordinator refresh
     let refreshed = TokenRefreshCoordinator::global()
@@ -350,7 +353,9 @@ async fn test_codebuddy_oauth_full_device_code_wire_mock() {
     assert_eq!(new_rt.as_deref(), Some("cb_refresh_token_new_888"));
 
     // 8. Refresh failure handling
-    mock_state.simulate_refresh_error.store(true, Ordering::SeqCst);
+    mock_state
+        .simulate_refresh_error
+        .store(true, Ordering::SeqCst);
     let err = provider
         .refresh_token(
             "cb_refresh_token_wire_def",

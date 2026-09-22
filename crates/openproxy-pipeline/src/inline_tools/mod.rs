@@ -39,7 +39,9 @@ pub fn extract_inline_tools(content: &str) -> ExtractedInlineTools {
     let mut cursor = 0;
     while cursor < content.len() {
         let remainder = &content[cursor..];
-        let Some((open_tag_start, open_tag_end, close_tag)) = find_earliest_enclosing_block(remainder) else {
+        let Some((open_tag_start, open_tag_end, close_tag)) =
+            find_earliest_enclosing_block(remainder)
+        else {
             break;
         };
 
@@ -232,7 +234,8 @@ fn find_earliest_enclosing_block(s: &str) -> Option<(usize, usize, &'static str)
             let abs_pos = cursor + pos;
             let after_tag = abs_pos + open.len();
             let next_byte = s.as_bytes().get(after_tag);
-            let is_boundary = next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            let is_boundary =
+                next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
             if is_boundary {
                 // Find closing '>' of opening tag
                 if let Some(tag_end) = s[abs_pos..].find('>') {
@@ -264,7 +267,8 @@ fn find_bare_invoke_span(s: &str) -> Option<(usize, &'static str)> {
             let abs_pos = cursor + pos;
             let after_tag = abs_pos + open.len();
             let next_byte = s.as_bytes().get(after_tag);
-            let is_boundary = next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            let is_boundary =
+                next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
             if is_boundary {
                 if best.is_none_or(|(p, _)| abs_pos < p) {
                     best = Some((abs_pos, close));

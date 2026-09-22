@@ -44,10 +44,6 @@ impl ExtractedInlineTools {
 /// Generates a standardized OpenAI-compatible tool call ID.
 pub fn generate_tool_call_id() -> String {
     let raw = uuid::Uuid::new_v4().simple().to_string();
-    let suffix = if raw.len() >= 16 {
-        &raw[..16]
-    } else {
-        &raw
-    };
+    let suffix = if raw.len() >= 16 { &raw[..16] } else { &raw };
     format!("call_{suffix}")
 }

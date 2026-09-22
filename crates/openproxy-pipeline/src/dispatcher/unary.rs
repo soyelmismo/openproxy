@@ -108,8 +108,7 @@ pub(super) fn translate_non_streaming_body(
             req.openai_request.model.clone(),
         )),
         openproxy_types::TargetFormat::CommandCodeGo => {
-            if let Ok(resp) =
-                <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
+            if let Ok(resp) = <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
             {
                 Ok(resp)
             } else {

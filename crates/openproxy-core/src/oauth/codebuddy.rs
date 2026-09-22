@@ -412,9 +412,7 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             .get("accessToken")
             .or_else(|| data.get("access_token"))
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                CoreError::Parse("codebuddy refresh missing 'accessToken'".into())
-            })?;
+            .ok_or_else(|| CoreError::Parse("codebuddy refresh missing 'accessToken'".into()))?;
 
         let new_refresh_token = data
             .get("refreshToken")
@@ -586,7 +584,9 @@ pub fn update_codebuddy_credit_balance(
         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
         rusqlite::params![encrypted, account_id.0],
     )
-    .map_err(openproxy_db::error::map_db_error_ctx("update codebuddy credit_balance"))?;
+    .map_err(openproxy_db::error::map_db_error_ctx(
+        "update codebuddy credit_balance",
+    ))?;
 
     Ok(())
 }

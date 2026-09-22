@@ -32,7 +32,10 @@ pub fn calculate_next_midnight_cst_unix_secs() -> u64 {
         return (now_utc.timestamp() + 86_400).max(0) as u64;
     };
     let now_cst = now_utc.with_timezone(&cst);
-    let tomorrow_cst = now_cst.date_naive().succ_opt().unwrap_or(now_cst.date_naive());
+    let tomorrow_cst = now_cst
+        .date_naive()
+        .succ_opt()
+        .unwrap_or(now_cst.date_naive());
     let next_midnight_naive = tomorrow_cst.and_hms_opt(0, 0, 0).unwrap_or_default();
     if let Some(cst_dt) = next_midnight_naive.and_local_timezone(cst).single() {
         cst_dt.to_utc().timestamp().max(0) as u64
@@ -100,11 +103,7 @@ pub fn parse_cst_datetime_to_unix_secs(s: &str) -> Option<u64> {
     let cst = chrono::FixedOffset::east_opt(8 * 3600)?;
     let cst_dt = naive.and_local_timezone(cst).single()?;
     let ts = cst_dt.to_utc().timestamp();
-    if ts > 0 {
-        Some(ts as u64)
-    } else {
-        None
-    }
+    if ts > 0 { Some(ts as u64) } else { None }
 }
 
 /// Parses the `/billing/meter/get-user-resource` or `/billing/meter/get-user-resource-summary`
@@ -123,7 +122,10 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
         .and_then(serde_json::Value::as_array)
     {
         for acc in accounts {
-            let status = acc.get("Status").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let status = acc
+                .get("Status")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0);
             if status != 0 {
                 continue;
             }
@@ -245,8 +247,11 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
 
     let reset_at_secs = candidate_resets.into_iter().min();
     let reset_at_str = reset_at_secs.map(|ts| ts.to_string());
-    let model_details =
-        build_codebuddy_quota_model_details(total_capacity, effective_used, reset_at_str.as_deref());
+    let model_details = build_codebuddy_quota_model_details(
+        total_capacity,
+        effective_used,
+        reset_at_str.as_deref(),
+    );
 
     Some(AccountQuota {
         session_used: Some(effective_used),
@@ -277,8 +282,11 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
 
     let first_account = accounts_arr
         .and_then(|arr| {
-            arr.iter()
-                .find(|acc| acc.get("pluginEnabled").and_then(serde_json::Value::as_bool).unwrap_or(true))
+            arr.iter().find(|acc| {
+                acc.get("pluginEnabled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true)
+            })
         })
         .or_else(|| accounts_arr.and_then(|arr| arr.first()))
         .or_else(|| val.get("data"));
@@ -309,7 +317,13 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
         // Check for explicit credit balances
         let parsed_limit = extract_numeric_field(
             acc,
-            &["total_credits", "credit_limit", "initial_credits", "total", "daily_credits"],
+            &[
+                "total_credits",
+                "credit_limit",
+                "initial_credits",
+                "total",
+                "daily_credits",
+            ],
         );
         if let Some(l) = parsed_limit
             && l > 0.0
@@ -319,7 +333,14 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
 
         let parsed_rem = extract_numeric_field(
             acc,
-            &["credits", "credit_balance", "remaining_credits", "remains", "balance", "remaining"],
+            &[
+                "credits",
+                "credit_balance",
+                "remaining_credits",
+                "remains",
+                "balance",
+                "remaining",
+            ],
         );
         if let Some(rem) = parsed_rem {
             let rem_clamped = rem.max(0.0);
@@ -327,8 +348,7 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
         }
     }
 
-    let model_details =
-        build_codebuddy_quota_model_details(session_limit, session_used, None);
+    let model_details = build_codebuddy_quota_model_details(session_limit, session_used, None);
 
     AccountQuota {
         session_used: Some(session_used),
@@ -447,7 +467,10 @@ pub async fn fetch_codebuddy_quota_unified(
         proxy_url,
     );
     let cancel = CancellationToken::new();
-    if let Ok(response) = upstream.call(req_summary, TimeoutProfile::Quota, cancel).await {
+    if let Ok(response) = upstream
+        .call(req_summary, TimeoutProfile::Quota, cancel)
+        .await
+    {
         if response.status == http::StatusCode::UNAUTHORIZED {
             return Err(CoreError::UpstreamConnection(format!(
                 "{CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL}: HTTP status 401 (token expired)"
@@ -466,5 +489,3 @@ pub async fn fetch_codebuddy_quota_unified(
         "failed to fetch CodeBuddy quota from billing meter endpoints".into(),
     ))
 }
-
-

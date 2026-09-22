@@ -21,11 +21,7 @@ impl MiniMaxXmlParser {
 impl InlineToolParser for MiniMaxXmlParser {
     fn parse_block(&self, block: &str) -> Option<Vec<ParsedToolCall>> {
         let calls = parse_xml_invokes(block);
-        if calls.is_empty() {
-            None
-        } else {
-            Some(calls)
-        }
+        if calls.is_empty() { None } else { Some(calls) }
     }
 }
 
@@ -110,7 +106,8 @@ fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
             let after_tag = abs_pos + open.len();
             // Validate boundary after tag name: must be whitespace, '>' or '/'
             let next_byte = s.as_bytes().get(after_tag);
-            let is_boundary = next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            let is_boundary =
+                next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
             if is_boundary {
                 if best.is_none_or(|(p, _)| abs_pos < p) {
                     best = Some((abs_pos, close));
@@ -379,7 +376,8 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
     let trimmed = body.trim();
 
     // Case 1: Body is already a JSON object
-    if trimmed.starts_with('{') && trimmed.ends_with('}')
+    if trimmed.starts_with('{')
+        && trimmed.ends_with('}')
         && let Ok(v) = serde_json::from_str::<Value>(trimmed)
         && v.is_object()
     {
@@ -393,7 +391,8 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
 
     // If unwrapped body is a JSON object:
     let inner_trimmed = inner_body.trim();
-    if inner_trimmed.starts_with('{') && inner_trimmed.ends_with('}')
+    if inner_trimmed.starts_with('{')
+        && inner_trimmed.ends_with('}')
         && let Ok(v) = serde_json::from_str::<Value>(inner_trimmed)
         && v.is_object()
     {
@@ -449,23 +448,25 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
         }
 
         let close_tag = format!("</{raw_tag_name}>");
-        let (content, next_cursor) = match find_ignore_ascii_case(&inner_body[content_start..], &close_tag) {
-            Some(close_pos) => {
-                let c = &inner_body[content_start..content_start + close_pos];
-                let next = content_start + close_pos + close_tag.len();
-                (c, next)
-            }
-            None => {
-                let c = &inner_body[content_start..];
-                (c, inner_body.len())
-            }
-        };
+        let (content, next_cursor) =
+            match find_ignore_ascii_case(&inner_body[content_start..], &close_tag) {
+                Some(close_pos) => {
+                    let c = &inner_body[content_start..content_start + close_pos];
+                    let next = content_start + close_pos + close_tag.len();
+                    (c, next)
+                }
+                None => {
+                    let c = &inner_body[content_start..];
+                    (c, inner_body.len())
+                }
+            };
 
         // If Anthropic style: <parameter name="key">value</parameter> or <param name="key">
         let key = if raw_tag_name.eq_ignore_ascii_case("parameter")
             || raw_tag_name.eq_ignore_ascii_case("param")
         {
-            extract_xml_attribute(open_tag_header, "name").unwrap_or_else(|| "parameter".to_string())
+            extract_xml_attribute(open_tag_header, "name")
+                .unwrap_or_else(|| "parameter".to_string())
         } else {
             raw_tag_name.to_string()
         };

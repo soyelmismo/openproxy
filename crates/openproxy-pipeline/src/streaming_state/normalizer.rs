@@ -203,7 +203,10 @@ impl StreamingChunkStage for ReasoningNormalizer {
             None => std::borrow::Cow::Borrowed(payload),
         };
 
-        match self.inline_tool_extractor.process_chunk(&payload_after_reasoning) {
+        match self
+            .inline_tool_extractor
+            .process_chunk(&payload_after_reasoning)
+        {
             StreamAction::Skip => StreamAction::Skip,
             StreamAction::Mutate(s) => StreamAction::Mutate(s),
             StreamAction::Done => StreamAction::Done,

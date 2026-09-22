@@ -53,7 +53,10 @@ fn parse_single_json_tool_call(val: &Value) -> Option<ParsedToolCall> {
 
     // Standard format: {"name": "...", "arguments": {...}}
     let mut name = obj.get("name").and_then(Value::as_str);
-    let mut args_val = obj.get("arguments").or_else(|| obj.get("parameters")).or_else(|| obj.get("input"));
+    let mut args_val = obj
+        .get("arguments")
+        .or_else(|| obj.get("parameters"))
+        .or_else(|| obj.get("input"));
 
     // Nested function format: {"function": {"name": "...", "arguments": ...}}
     if name.is_none()
@@ -61,7 +64,9 @@ fn parse_single_json_tool_call(val: &Value) -> Option<ParsedToolCall> {
     {
         name = func_obj.get("name").and_then(Value::as_str);
         if args_val.is_none() {
-            args_val = func_obj.get("arguments").or_else(|| func_obj.get("parameters"));
+            args_val = func_obj
+                .get("arguments")
+                .or_else(|| func_obj.get("parameters"));
         }
     }
 

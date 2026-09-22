@@ -429,13 +429,22 @@ fn test_openai_formatter_strips_cache_control_from_messages_tools_and_extra() {
 
     // 1. Message extra does not contain cache_control
     let msgs = val.get("messages").unwrap().as_array().unwrap();
-    assert!(msgs[0].get("cache_control").is_none(), "cache_control must be stripped from message");
+    assert!(
+        msgs[0].get("cache_control").is_none(),
+        "cache_control must be stripped from message"
+    );
 
     // 2. Tool does not contain cache_control
     let tools = val.get("tools").unwrap().as_array().unwrap();
-    assert!(tools[0].get("cache_control").is_none(), "cache_control must be stripped from tool");
+    assert!(
+        tools[0].get("cache_control").is_none(),
+        "cache_control must be stripped from tool"
+    );
 
     // 3. Top-level extra does not contain cache_control, but keeps custom_allowed
-    assert!(val.get("cache_control").is_none(), "cache_control must be stripped from top-level extra");
+    assert!(
+        val.get("cache_control").is_none(),
+        "cache_control must be stripped from top-level extra"
+    );
     assert_eq!(val.get("custom_allowed").unwrap(), "ok");
 }

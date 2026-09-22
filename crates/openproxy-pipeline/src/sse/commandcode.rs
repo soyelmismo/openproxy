@@ -66,7 +66,11 @@ pub fn parse_commandcode_sse_line(
     if event_type == "error" || val.get("error").is_some() {
         let err_obj = val.get("error");
         let msg = err_obj
-            .and_then(|e| e.get("message").and_then(Value::as_str).or_else(|| e.as_str()))
+            .and_then(|e| {
+                e.get("message")
+                    .and_then(Value::as_str)
+                    .or_else(|| e.as_str())
+            })
             .or_else(|| val.get("message").and_then(Value::as_str))
             .unwrap_or("commandcode error");
         return Err(CoreError::upstream_error(
@@ -267,37 +271,45 @@ pub fn parse_commandcode_sse_line(
                 .and_then(Value::as_str)
                 .map(map_commandcode_finish_reason);
 
-            let usage = val.get("totalUsage").or_else(|| val.get("usage")).map(|u| {
-                let prompt = u
-                    .get("promptTokens")
-                    .or_else(|| u.get("prompt_tokens"))
-                    .or_else(|| u.get("inputTokens"))
-                    .and_then(Value::as_u64);
-                let completion = u
-                    .get("completionTokens")
-                    .or_else(|| u.get("completion_tokens"))
-                    .or_else(|| u.get("outputTokens"))
-                    .and_then(Value::as_u64);
-                let total = u
-                    .get("totalTokens")
-                    .or_else(|| u.get("total_tokens"))
-                    .and_then(Value::as_u64)
-                    .or_else(|| match (prompt, completion) {
-                        (Some(p), Some(c)) => Some(p + c),
-                        (Some(p), None) => Some(p),
-                        (None, Some(c)) => Some(c),
-                        _ => None,
-                    });
-                let cached = u
-                    .get("cachedInputTokens")
-                    .or_else(|| u.get("inputTokenDetails").and_then(|d| d.get("cacheReadTokens")))
-                    .and_then(Value::as_u64)
-                    .and_then(|c| u32::try_from(c).ok());
-                let prompt_details = cached.map(|c| openproxy_types::message::PromptTokensDetails {
-                    cached_tokens: Some(c),
-                });
-                super::build_openai_usage(prompt, completion, total, prompt_details)
-            }).or_else(|| state.last_finish_step_usage.take());
+            let usage = val
+                .get("totalUsage")
+                .or_else(|| val.get("usage"))
+                .map(|u| {
+                    let prompt = u
+                        .get("promptTokens")
+                        .or_else(|| u.get("prompt_tokens"))
+                        .or_else(|| u.get("inputTokens"))
+                        .and_then(Value::as_u64);
+                    let completion = u
+                        .get("completionTokens")
+                        .or_else(|| u.get("completion_tokens"))
+                        .or_else(|| u.get("outputTokens"))
+                        .and_then(Value::as_u64);
+                    let total = u
+                        .get("totalTokens")
+                        .or_else(|| u.get("total_tokens"))
+                        .and_then(Value::as_u64)
+                        .or_else(|| match (prompt, completion) {
+                            (Some(p), Some(c)) => Some(p + c),
+                            (Some(p), None) => Some(p),
+                            (None, Some(c)) => Some(c),
+                            _ => None,
+                        });
+                    let cached = u
+                        .get("cachedInputTokens")
+                        .or_else(|| {
+                            u.get("inputTokenDetails")
+                                .and_then(|d| d.get("cacheReadTokens"))
+                        })
+                        .and_then(Value::as_u64)
+                        .and_then(|c| u32::try_from(c).ok());
+                    let prompt_details =
+                        cached.map(|c| openproxy_types::message::PromptTokensDetails {
+                            cached_tokens: Some(c),
+                        });
+                    super::build_openai_usage(prompt, completion, total, prompt_details)
+                })
+                .or_else(|| state.last_finish_step_usage.take());
 
             if let Some(step_reason) = state.last_finish_step_reason.take()
                 && (finish_reason.is_none()
@@ -366,12 +378,16 @@ pub fn parse_commandcode_sse_line(
                     });
                 let cached = u
                     .get("cachedInputTokens")
-                    .or_else(|| u.get("inputTokenDetails").and_then(|d| d.get("cacheReadTokens")))
+                    .or_else(|| {
+                        u.get("inputTokenDetails")
+                            .and_then(|d| d.get("cacheReadTokens"))
+                    })
                     .and_then(Value::as_u64)
                     .and_then(|c| u32::try_from(c).ok());
-                let prompt_details = cached.map(|c| openproxy_types::message::PromptTokensDetails {
-                    cached_tokens: Some(c),
-                });
+                let prompt_details =
+                    cached.map(|c| openproxy_types::message::PromptTokensDetails {
+                        cached_tokens: Some(c),
+                    });
                 super::build_openai_usage(prompt, completion, total, prompt_details)
             });
 
@@ -665,10 +681,15 @@ mod tests {
                       {\"type\":\"finish-step\",\"finishReason\":\"length\",\"usage\":{\"inputTokens\":7312,\"outputTokens\":16,\"totalTokens\":7328}}\n\
                       {\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":7312,\"outputTokens\":16,\"totalTokens\":7328}}\n\
                       {\"type\":\"provider-metadata\",\"providerMetadata\":{}}\n";
-        let resp = parse_commandcode_sse_to_unary(stream, "meta/muse-spark-1.3-contributor").unwrap();
+        let resp =
+            parse_commandcode_sse_to_unary(stream, "meta/muse-spark-1.3-contributor").unwrap();
         assert_eq!(resp.model, "meta/muse-spark-1.3-contributor");
         assert_eq!(
-            resp.choices[0].message.content.as_ref().and_then(Value::as_str),
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(Value::as_str),
             Some("Hey, I'm here. What are we working on?")
         );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("length"));
@@ -697,7 +718,11 @@ mod tests {
         let resp = parse_commandcode_sse_to_unary(stream, "muse-spark").unwrap();
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("length"));
         assert_eq!(
-            resp.choices[0].message.content.as_ref().and_then(Value::as_str),
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(Value::as_str),
             Some("")
         );
     }
@@ -706,13 +731,17 @@ mod tests {
     fn test_parse_commandcode_streaming_finish_step_then_finish_single_terminal() {
         let mut state = CommandCodeSseState::default();
         let step_line = "{\"type\":\"finish-step\",\"finishReason\":\"length\",\"usage\":{\"inputTokens\":100,\"outputTokens\":16}}";
-        let chunk_step = parse_commandcode_sse_line(step_line, "c1", 1000, "muse-spark", &mut state).unwrap();
+        let chunk_step =
+            parse_commandcode_sse_line(step_line, "c1", 1000, "muse-spark", &mut state).unwrap();
         // finish-step must NOT emit a finish frame in streaming mode
         assert!(chunk_step.is_none());
         assert_eq!(state.last_finish_step_reason.as_deref(), Some("length"));
 
         let finish_line = "{\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":16}}";
-        let chunk_finish = parse_commandcode_sse_line(finish_line, "c1", 1000, "muse-spark", &mut state).unwrap().unwrap();
+        let chunk_finish =
+            parse_commandcode_sse_line(finish_line, "c1", 1000, "muse-spark", &mut state)
+                .unwrap()
+                .unwrap();
         // finish MUST emit the single terminal done frame with finish_reason
         assert!(chunk_finish.done);
         assert_eq!(chunk_finish.stop_reason.as_deref(), Some("length"));
@@ -742,7 +771,11 @@ mod tests {
         // Without any content or finish event, finish_reason must be None so is_empty_response catches it
         assert_eq!(resp.choices[0].finish_reason, None);
         assert_eq!(
-            resp.choices[0].message.content.as_ref().and_then(Value::as_str),
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .and_then(Value::as_str),
             Some("")
         );
         assert!(crate::dispatcher::unary::is_empty_response(&resp));

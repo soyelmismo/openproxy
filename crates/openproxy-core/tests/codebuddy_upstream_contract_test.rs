@@ -30,7 +30,9 @@ use std::path::Path;
 
 #[test]
 fn test_codebuddy_spoofer_verified_headers() {
-    let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = CODEBUDDY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     reset_dynamic_codebuddy_overrides();
 
     let mut req = UpstreamRequest::get("https://www.codebuddy.ai/v2/chat/completions");
@@ -57,7 +59,9 @@ fn test_codebuddy_spoofer_verified_headers() {
 
 #[test]
 fn test_codebuddy_dynamic_spoofer_overrides() {
-    let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = CODEBUDDY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
     reset_dynamic_codebuddy_overrides();
 
     assert_eq!(current_codebuddy_version(), "2.156.0");
@@ -118,11 +122,20 @@ fn test_codebuddy_adapter_spec_parity() {
     assert!(adapter.models_url().is_none());
 
     // Canonical IDs for models.dev
-    assert_eq!(adapter.models_dev_canonical_ids(), &["codebuddy", "tencent"]);
+    assert_eq!(
+        adapter.models_dev_canonical_ids(),
+        &["codebuddy", "tencent"]
+    );
 
     // Headers include both auth and spoofing
-    let headers = adapter.build_headers("my-api-key", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    let find = |k: &str| headers.iter().find(|(hk, _)| hk.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str());
+    let headers =
+        adapter.build_headers("my-api-key", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
     assert_eq!(find("Authorization"), Some("Bearer my-api-key"));
     assert_eq!(find("x-ide-type"), Some("CLI"));
     assert_eq!(find("x-codebuddy-request"), Some("1"));
@@ -134,18 +147,30 @@ async fn test_codebuddy_static_models_and_product_json_parity() {
     assert_eq!(models.len(), 35, "Must have exactly 35 models");
 
     // Check key models
-    let gpt55 = models.iter().find(|m| m.model_id.as_str() == "gpt-5.5").expect("gpt-5.5");
+    let gpt55 = models
+        .iter()
+        .find(|m| m.model_id.as_str() == "gpt-5.5")
+        .expect("gpt-5.5");
     assert_eq!(gpt55.context_length, Some(1_000_000));
     assert_eq!(gpt55.max_output_tokens, Some(72_000));
 
-    let minimax_m3 = models.iter().find(|m| m.model_id.as_str() == "minimax-m3").expect("minimax-m3");
+    let minimax_m3 = models
+        .iter()
+        .find(|m| m.model_id.as_str() == "minimax-m3")
+        .expect("minimax-m3");
     assert_eq!(minimax_m3.context_length, Some(512_000));
     assert_eq!(minimax_m3.max_output_tokens, Some(128_000));
 
-    let hy3 = models.iter().find(|m| m.model_id.as_str() == "hy3").expect("hy3");
+    let hy3 = models
+        .iter()
+        .find(|m| m.model_id.as_str() == "hy3")
+        .expect("hy3");
     assert_eq!(hy3.context_length, Some(192_000));
 
-    let kimi_k3 = models.iter().find(|m| m.model_id.as_str() == "kimi-k3").expect("kimi-k3");
+    let kimi_k3 = models
+        .iter()
+        .find(|m| m.model_id.as_str() == "kimi-k3")
+        .expect("kimi-k3");
     assert_eq!(kimi_k3.context_length, Some(1_000_000));
 
     // Check parity against local product.json if available
@@ -220,7 +245,8 @@ fn test_codebuddy_error_mappings() {
     assert_eq!(parse_codebuddy_error_code(json_body), Some(14014));
 
     // Nested JSON-RPC shell error where outer code is -32603 and data has real code
-    let nested_rpc = r#"{"status": 400, "error": {"code": -32603, "data": {"code": 14018, "statusCode": 403}}}"#;
+    let nested_rpc =
+        r#"{"status": 400, "error": {"code": -32603, "data": {"code": 14018, "statusCode": 403}}}"#;
     assert_eq!(parse_codebuddy_error_code(nested_rpc), Some(14018));
 
     // HTTP status code 400 without business code
@@ -230,7 +256,10 @@ fn test_codebuddy_error_mappings() {
 
 #[test]
 fn test_codebuddy_builtin_seed_and_registration() {
-    assert!(is_builtin("codebuddy"), "codebuddy must be recognized as builtin");
+    assert!(
+        is_builtin("codebuddy"),
+        "codebuddy must be recognized as builtin"
+    );
 
     let pool = DbPool::test_pool_with_prefix("openproxy-codebuddy-test").expect("open pool");
     let conn = pool.writer();
@@ -251,7 +280,9 @@ fn test_codebuddy_builtin_seed_and_registration() {
     // Verify presence in builtin_adapters registry
     let builtins = builtin_adapters();
     assert!(
-        builtins.iter().any(|a| a.config().id.as_str() == "codebuddy"),
+        builtins
+            .iter()
+            .any(|a| a.config().id.as_str() == "codebuddy"),
         "codebuddy must be registered in builtin_adapters"
     );
 }
@@ -325,7 +356,9 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
         );
         assert_eq!(find_hdr("x-ide-version"), Some(new_ver.as_str()));
     } else {
-        eprintln!("[CodeBuddyLiveTest] Offline or NPM unreachable, skipping live auto-update check");
+        eprintln!(
+            "[CodeBuddyLiveTest] Offline or NPM unreachable, skipping live auto-update check"
+        );
     }
 
     reset_dynamic_codebuddy_overrides();
@@ -366,7 +399,10 @@ async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
     let client = std::sync::Arc::new(UpstreamClient::new());
     let adapter = CodeBuddyAdapter::new();
 
-    let models = adapter.fetch_models(&client, "dummy-key").await.expect("fetch models");
+    let models = adapter
+        .fetch_models(&client, "dummy-key")
+        .await
+        .expect("fetch models");
     assert_eq!(models.len(), 35);
 
     // Give background task a moment to complete

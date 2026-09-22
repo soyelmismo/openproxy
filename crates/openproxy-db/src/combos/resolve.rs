@@ -105,7 +105,9 @@ fn aggregate_target_context_windows(
 
     let mut min_window: Option<i64> = None;
     while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
-        if let Some(cw) = extract_and_resolve_window(conn, row, visited, depth)?.filter(|&cw| cw > 0) {
+        if let Some(cw) =
+            extract_and_resolve_window(conn, row, visited, depth)?.filter(|&cw| cw > 0)
+        {
             min_window = Some(min_window.map_or(cw, |min| std::cmp::min(min, cw)));
         }
     }

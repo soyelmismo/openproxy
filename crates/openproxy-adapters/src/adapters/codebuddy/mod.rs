@@ -4,9 +4,12 @@ use super::{
 };
 use crate::upstream::{CancellationToken, TimeoutProfile};
 
+pub mod models;
 pub mod quota;
 #[cfg(test)]
 mod tests;
+
+pub use models::{CODEBUDDY_MODELS, CodeBuddyModelDef, codebuddy_static_models};
 
 pub use crate::spoofer::{
     CODEBUDDY_SPOOFING_HEADERS, DEFAULT_CODEBUDDY_VERSION, current_codebuddy_ua,
@@ -147,84 +150,6 @@ impl CodeBuddyAdapter {
 
 crate::adapters::derive_default_from_new!(CodeBuddyAdapter);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CodeBuddyModelDef {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub context_length: u32,
-    pub max_output: u32,
-    pub tools: bool,
-    pub images: bool,
-    pub reasoning: bool,
-    pub model_type: &'static str,
-    pub credit_cost: f64,
-}
-
-pub const CODEBUDDY_MODELS: &[CodeBuddyModelDef] = &[
-    CodeBuddyModelDef { id: "default-model", name: "Auto", context_length: 176_000, max_output: 24_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.79 },
-    CodeBuddyModelDef { id: "default-model-lite", name: "Default-Lite", context_length: 176_000, max_output: 24_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.67 },
-    CodeBuddyModelDef { id: "fast-model", name: "Fast", context_length: 200_000, max_output: 32_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.34 },
-    CodeBuddyModelDef { id: "balanced-model", name: "Balanced", context_length: 256_000, max_output: 32_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.59 },
-    CodeBuddyModelDef { id: "primary-model", name: "Primary", context_length: 272_000, max_output: 72_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 3.31 },
-    CodeBuddyModelDef { id: "deep-model", name: "Deep", context_length: 176_000, max_output: 24_000, tools: true, images: true, reasoning: false, model_type: "chat", credit_cost: 3.33 },
-    CodeBuddyModelDef { id: "gpt-5.5", name: "GPT-5.5", context_length: 1_000_000, max_output: 72_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 3.31 },
-    CodeBuddyModelDef { id: "gpt-5.4", name: "GPT-5.4", context_length: 272_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 1.65 },
-    CodeBuddyModelDef { id: "gpt-5.3-codex", name: "GPT-5.3-Codex", context_length: 272_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 1.25 },
-    CodeBuddyModelDef { id: "gpt-5.1-codex", name: "GPT-5.1-Codex", context_length: 272_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.90 },
-    CodeBuddyModelDef { id: "gpt-5.1-codex-mini", name: "GPT-5.1-Codex-Mini", context_length: 272_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.18 },
-    CodeBuddyModelDef { id: "gemini-3.1-pro", name: "Gemini-3.1-Pro", context_length: 400_000, max_output: 64_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 1.32 },
-    CodeBuddyModelDef { id: "gemini-3.0-flash", name: "Gemini-3.0-Flash", context_length: 400_000, max_output: 64_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.33 },
-    CodeBuddyModelDef { id: "gemini-3.5-flash", name: "Gemini-3.5-Flash", context_length: 1_000_000, max_output: 65_536, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.99 },
-    CodeBuddyModelDef { id: "gemini-2.5-flash", name: "Gemini-2.5-Flash", context_length: 400_000, max_output: 64_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.22 },
-    CodeBuddyModelDef { id: "gemini-3.1-flash-lite", name: "Gemini-3.1-flash-lite", context_length: 200_000, max_output: 65_536, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.17 },
-    CodeBuddyModelDef { id: "gemini-2.5-pro", name: "Gemini-2.5-Pro", context_length: 400_000, max_output: 64_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.90 },
-    CodeBuddyModelDef { id: "deepseek-v3-2-volc", name: "DeepSeek-V3.2", context_length: 96_000, max_output: 32_000, tools: true, images: false, reasoning: true, model_type: "chat", credit_cost: 0.29 },
-    CodeBuddyModelDef { id: "glm-5.0", name: "GLM-5.0", context_length: 200_000, max_output: 48_000, tools: true, images: false, reasoning: true, model_type: "chat", credit_cost: 0.80 },
-    CodeBuddyModelDef { id: "kimi-k2.5", name: "Kimi-K2.5", context_length: 164_000, max_output: 32_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.45 },
-    CodeBuddyModelDef { id: "gemini-3.0-pro-image", name: "Gemini-3.0-Pro-Image", context_length: 0, max_output: 0, tools: false, images: false, reasoning: false, model_type: "image", credit_cost: 4.96 },
-    CodeBuddyModelDef { id: "gemini-3.1-flash-image", name: "Gemini-3.1-Flash-Image", context_length: 0, max_output: 0, tools: false, images: false, reasoning: false, model_type: "image", credit_cost: 1.78 },
-    CodeBuddyModelDef { id: "gemini-2.5-flash-image", name: "Gemini-2.5-Flash-Image", context_length: 0, max_output: 0, tools: false, images: false, reasoning: false, model_type: "image", credit_cost: 1.14 },
-    CodeBuddyModelDef { id: "hunyuan-image-v3.0", name: "Hunyuan-Image-V3", context_length: 0, max_output: 0, tools: false, images: false, reasoning: false, model_type: "image", credit_cost: 5.00 },
-    CodeBuddyModelDef { id: "hunyuan-image-v2.0-general-edit", name: "Hunyuan-Image-Edit", context_length: 0, max_output: 0, tools: false, images: false, reasoning: false, model_type: "image", credit_cost: 5.00 },
-    CodeBuddyModelDef { id: "hunyuan-video-art", name: "Hunyuan-Video-Art", context_length: 0, max_output: 0, tools: false, images: false, reasoning: false, model_type: "video", credit_cost: 10.00 },
-    CodeBuddyModelDef { id: "gpt-5.6-sol", name: "GPT-5.6-Sol", context_length: 1_000_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 3.47 },
-    CodeBuddyModelDef { id: "gpt-5.6-terra", name: "GPT-5.6-Terra", context_length: 1_000_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 1.39 },
-    CodeBuddyModelDef { id: "gpt-5.6-luna", name: "GPT-5.6-Luna", context_length: 1_000_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.14 },
-    CodeBuddyModelDef { id: "glm-5.3", name: "GLM-5.3", context_length: 1_000_000, max_output: 48_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.79 },
-    CodeBuddyModelDef { id: "glm-5.2", name: "GLM-5.2", context_length: 1_000_000, max_output: 48_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.79 },
-    CodeBuddyModelDef { id: "hy3", name: "Hy3", context_length: 192_000, max_output: 64_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.00 },
-    CodeBuddyModelDef { id: "kimi-k3", name: "Kimi-K3", context_length: 1_000_000, max_output: 32_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 1.62 },
-    CodeBuddyModelDef { id: "kimi-k2.6", name: "Kimi-K2.6", context_length: 256_000, max_output: 32_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.52 },
-    CodeBuddyModelDef { id: "minimax-m3", name: "MiniMax-M3", context_length: 512_000, max_output: 128_000, tools: true, images: true, reasoning: true, model_type: "chat", credit_cost: 0.25 },
-];
-
-pub fn codebuddy_static_models() -> Vec<DiscoveredModel> {
-    CODEBUDDY_MODELS
-        .iter()
-        .map(|def| {
-            let caps = openproxy_types::ModelCapabilities {
-                vision: Some(def.images),
-                tool_calling: Some(def.tools),
-                reasoning: Some(def.reasoning),
-                thinking: Some(def.reasoning),
-                ..Default::default()
-            };
-            DiscoveredModel {
-                model_id: ModelId::new(def.id),
-                display_name: Some(def.name.to_string()),
-                target_format: TargetFormat::Openai,
-                context_length: if def.context_length > 0 { Some(i64::from(def.context_length)) } else { None },
-                max_output_tokens: if def.max_output > 0 { Some(i64::from(def.max_output)) } else { None },
-                input_modalities: None,
-                output_modalities: None,
-                model_type: Some(def.model_type.to_string()),
-                family: None,
-                capabilities: Some(caps),
-            }
-        })
-        .collect()
-}
-
 impl ProviderAdapter for CodeBuddyAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -306,8 +231,14 @@ impl ProviderAdapter for CodeBuddyAdapter {
         access_token: Option<&str>,
         provider_specific: Option<&str>,
     ) -> Option<Result<openproxy_types::AccountQuota>> {
-        self.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, None)
-            .await
+        self.fetch_quota_with_proxy(
+            upstream_client,
+            api_key,
+            access_token,
+            provider_specific,
+            None,
+        )
+        .await
     }
 
     async fn fetch_quota_with_proxy(
@@ -326,13 +257,8 @@ impl ProviderAdapter for CodeBuddyAdapter {
         }
 
         Some(
-            fetch_codebuddy_quota_unified(
-                upstream_client,
-                token,
-                provider_specific,
-                proxy_url,
-            )
-            .await,
+            fetch_codebuddy_quota_unified(upstream_client, token, provider_specific, proxy_url)
+                .await,
         )
     }
     fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
@@ -370,7 +296,9 @@ impl ProviderAdapter for CodeBuddyAdapter {
             if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut())
                 && (messages.is_empty()
                     || messages[0].get("role").and_then(|r| r.as_str()) != Some("system")
-                    || messages.iter().any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer")))
+                    || messages
+                        .iter()
+                        .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer")))
             {
                 ensure_codebuddy_system_prompt_json(messages);
                 changed = true;
@@ -391,7 +319,8 @@ impl ProviderAdapter for CodeBuddyAdapter {
     }
 }
 
-pub const DEFAULT_CODEBUDDY_SYSTEM_PROMPT: &str = "You are CodeBuddy, a helpful AI coding assistant.";
+pub const DEFAULT_CODEBUDDY_SYSTEM_PROMPT: &str =
+    "You are CodeBuddy, a helpful AI coding assistant.";
 
 /// Ensures that `messages` in `OpenAIRequestView` starts with a system prompt message.
 ///
@@ -405,7 +334,9 @@ pub fn ensure_codebuddy_system_prompt_in_view(view: &mut openproxy_types::OpenAI
     if messages.is_empty() {
         messages.push(openproxy_types::OpenAIMessage {
             role: "system".to_string(),
-            content: Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string())),
+            content: Some(serde_json::Value::String(
+                DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string(),
+            )),
             name: None,
             tool_call_id: None,
             tool_calls: None,
@@ -426,7 +357,9 @@ pub fn ensure_codebuddy_system_prompt_in_view(view: &mut openproxy_types::OpenAI
             _ => false,
         };
         if is_empty {
-            messages[0].content = Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()));
+            messages[0].content = Some(serde_json::Value::String(
+                DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string(),
+            ));
         }
         for m in messages.iter_mut().skip(1) {
             if m.role == "developer" {
@@ -436,14 +369,19 @@ pub fn ensure_codebuddy_system_prompt_in_view(view: &mut openproxy_types::OpenAI
         return;
     }
 
-    messages.insert(0, openproxy_types::OpenAIMessage {
-        role: "system".to_string(),
-        content: Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string())),
-        name: None,
-        tool_call_id: None,
-        tool_calls: None,
-        extra: serde_json::Map::default(),
-    });
+    messages.insert(
+        0,
+        openproxy_types::OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(
+                DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string(),
+            )),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::default(),
+        },
+    );
 
     for m in messages.iter_mut().skip(1) {
         if m.role == "developer" {
@@ -462,21 +400,25 @@ pub fn ensure_codebuddy_system_prompt_json(messages: &mut Vec<serde_json::Value>
         return;
     }
 
-    let first_role = messages[0].get("role").and_then(|r| r.as_str()).unwrap_or("");
+    let first_role = messages[0]
+        .get("role")
+        .and_then(|r| r.as_str())
+        .unwrap_or("");
     if first_role == "system" || first_role == "developer" {
         if first_role == "developer"
             && let Some(obj) = messages[0].as_object_mut()
         {
-            obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
+            obj.insert(
+                "role".to_string(),
+                serde_json::Value::String("system".to_string()),
+            );
         }
         let content_empty = messages[0].get("content").is_none_or(|c| {
             c.is_null()
                 || (c.is_string() && c.as_str().unwrap_or("").trim().is_empty())
                 || (c.is_array() && c.as_array().is_some_and(|a| a.is_empty()))
         });
-        if content_empty
-            && let Some(obj) = messages[0].as_object_mut()
-        {
+        if content_empty && let Some(obj) = messages[0].as_object_mut() {
             obj.insert(
                 "content".to_string(),
                 serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()),
@@ -486,22 +428,31 @@ pub fn ensure_codebuddy_system_prompt_json(messages: &mut Vec<serde_json::Value>
             if m.get("role").and_then(|r| r.as_str()) == Some("developer")
                 && let Some(obj) = m.as_object_mut()
             {
-                obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
+                obj.insert(
+                    "role".to_string(),
+                    serde_json::Value::String("system".to_string()),
+                );
             }
         }
         return;
     }
 
-    messages.insert(0, serde_json::json!({
-        "role": "system",
-        "content": DEFAULT_CODEBUDDY_SYSTEM_PROMPT,
-    }));
+    messages.insert(
+        0,
+        serde_json::json!({
+            "role": "system",
+            "content": DEFAULT_CODEBUDDY_SYSTEM_PROMPT,
+        }),
+    );
 
     for m in messages.iter_mut().skip(1) {
         if m.get("role").and_then(|r| r.as_str()) == Some("developer")
             && let Some(obj) = m.as_object_mut()
         {
-            obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
+            obj.insert(
+                "role".to_string(),
+                serde_json::Value::String("system".to_string()),
+            );
         }
     }
 }

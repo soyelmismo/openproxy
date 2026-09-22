@@ -292,7 +292,11 @@ fn test_translate_non_streaming_body_commandcode_raw_chunk_and_full_response() {
     )
     .expect("must translate raw CommandCode chunk");
     assert_eq!(
-        res.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str),
+        res.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(serde_json::Value::as_str),
         Some("Hello world from CommandCode")
     );
 
@@ -318,7 +322,11 @@ fn test_translate_non_streaming_body_commandcode_raw_chunk_and_full_response() {
     )
     .expect("must deserialize valid OpenAI shape");
     assert_eq!(
-        res2.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str),
+        res2.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(serde_json::Value::as_str),
         Some("Full response")
     );
 }

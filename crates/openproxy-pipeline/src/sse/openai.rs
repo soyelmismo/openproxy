@@ -76,11 +76,17 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
         let cached = u
             .prompt_tokens_details
             .as_ref()
-            .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens).or(d.prompt_cache_hit_tokens))
+            .and_then(|d| {
+                d.cached_tokens
+                    .or(d.cache_read_input_tokens)
+                    .or(d.prompt_cache_hit_tokens)
+            })
             .or_else(|| {
-                u.input_tokens_details
-                    .as_ref()
-                    .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens).or(d.prompt_cache_hit_tokens))
+                u.input_tokens_details.as_ref().and_then(|d| {
+                    d.cached_tokens
+                        .or(d.cache_read_input_tokens)
+                        .or(d.prompt_cache_hit_tokens)
+                })
             })
             .or(u.prompt_cache_hit_tokens)
             .or(u.cached_tokens)

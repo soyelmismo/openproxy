@@ -437,7 +437,5 @@ pub fn propagate_codebuddy_headers(
     upsert_header(headers, "x-conversation-id", session_val);
 }
 
-
-
 #[cfg(test)]
 mod tests;

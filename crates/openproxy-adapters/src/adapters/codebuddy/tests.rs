@@ -21,7 +21,10 @@ fn test_codebuddy_adapter_metadata_quota_support() {
     assert!(meta.built_in);
     assert!(!meta.deletable);
     assert!(meta.supports_quota, "codebuddy must support quota tracking");
-    assert!(meta.quota_refresh_supported, "codebuddy must support quota refresh");
+    assert!(
+        meta.quota_refresh_supported,
+        "codebuddy must support quota refresh"
+    );
     assert!(meta.requires_oauth);
     assert_eq!(meta.oauth_refresh_lead_seconds, Some(300));
 }
@@ -29,7 +32,11 @@ fn test_codebuddy_adapter_metadata_quota_support() {
 #[test]
 fn test_codebuddy_static_models_count_and_content() {
     let models = codebuddy_static_models();
-    assert_eq!(models.len(), 35, "must contain exactly 35 models from product.json");
+    assert_eq!(
+        models.len(),
+        35,
+        "must contain exactly 35 models from product.json"
+    );
 
     let find_model = |id: &str| models.iter().find(|m| m.model_id.as_str() == id);
 
@@ -92,7 +99,10 @@ fn test_codebuddy_error_code_classification() {
     );
 
     let err_11128 = CodeBuddyErrorCode::from_code(11128).expect("11128 valid");
-    assert_eq!(err_11128.error_subcategory(), "first_message_not_system_prompt");
+    assert_eq!(
+        err_11128.error_subcategory(),
+        "first_message_not_system_prompt"
+    );
     assert_eq!(
         err_11128.to_upstream_error_class(),
         openproxy_types::UpstreamErrorClass::InvalidPayload
@@ -101,7 +111,8 @@ fn test_codebuddy_error_code_classification() {
     let body = r#"{"code": 14014, "message": "Enterprise usage exhausted"}"#;
     assert_eq!(parse_codebuddy_error_code(body), Some(14014));
 
-    let body_11101 = r#"{"code": 11101, "msg": "Non-stream chat request is currently not supported"}"#;
+    let body_11101 =
+        r#"{"code": 11101, "msg": "Non-stream chat request is currently not supported"}"#;
     assert_eq!(parse_codebuddy_error_code(body_11101), Some(11101));
 
     let body_11128 = r#"{"code": 11128, "msg": "first message is not system prompt"}"#;
@@ -111,11 +122,13 @@ fn test_codebuddy_error_code_classification() {
     assert_eq!(parse_codebuddy_error_code(body2), Some(6001));
 
     // Nested JSON-RPC shell where outer code is -32603 and inner business code is 11115 (ContextTooLong)
-    let body_jsonrpc = r#"{"status": 400, "error": {"code": -32603, "data": {"code": 11115, "statusCode": 400}}}"#;
+    let body_jsonrpc =
+        r#"{"status": 400, "error": {"code": -32603, "data": {"code": 11115, "statusCode": 400}}}"#;
     assert_eq!(parse_codebuddy_error_code(body_jsonrpc), Some(11115));
 
     // HTTP status code 400 without business code is ignored
-    let body_generic = r#"{"error": {"code": 400, "message": "Invalid argument: max_tokens 6000"}}"#;
+    let body_generic =
+        r#"{"error": {"code": 400, "message": "Invalid argument: max_tokens 6000"}}"#;
     assert_eq!(parse_codebuddy_error_code(body_generic), None);
 }
 
@@ -180,10 +193,14 @@ fn test_codebuddy_forces_stream_in_normalize_and_wrap() {
     let mut view = openproxy_types::OpenAIRequestView::new(&req, "hy3", &[], false);
     assert!(!view.stream);
     adapter.normalize_openai_request(&mut view);
-    assert!(view.stream, "must force stream = true for CodeBuddy upstream");
+    assert!(
+        view.stream,
+        "must force stream = true for CodeBuddy upstream"
+    );
 
     // 2. wrap_request_body injects stream = true into json body
-    let raw_unary_json = r#"{"model":"hy3","messages":[{"role":"user","content":"hello"}],"stream":false}"#;
+    let raw_unary_json =
+        r#"{"model":"hy3","messages":[{"role":"user","content":"hello"}],"stream":false}"#;
     let resolved_target = dummy_codebuddy_resolved_target();
     let wrapped = adapter
         .wrap_request_body(
@@ -195,18 +212,39 @@ fn test_codebuddy_forces_stream_in_normalize_and_wrap() {
         .expect("wrap succeeds");
     let wrapped_val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
     assert_eq!(
-        wrapped_val.get("stream").and_then(serde_json::Value::as_bool),
+        wrapped_val
+            .get("stream")
+            .and_then(serde_json::Value::as_bool),
         Some(true),
         "wrapped body must enforce stream: true"
     );
 
     // 3. wrap_request_body guarantees first message is system prompt
-    let messages = wrapped_val.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    let messages = wrapped_val
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
     assert_eq!(messages.len(), 2);
-    assert_eq!(messages[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
-    assert_eq!(messages[0].get("content").and_then(serde_json::Value::as_str), Some(DEFAULT_CODEBUDDY_SYSTEM_PROMPT));
-    assert_eq!(messages[1].get("role").and_then(serde_json::Value::as_str), Some("user"));
-    assert_eq!(messages[1].get("content").and_then(serde_json::Value::as_str), Some("hello"));
+    assert_eq!(
+        messages[0].get("role").and_then(serde_json::Value::as_str),
+        Some("system")
+    );
+    assert_eq!(
+        messages[0]
+            .get("content")
+            .and_then(serde_json::Value::as_str),
+        Some(DEFAULT_CODEBUDDY_SYSTEM_PROMPT)
+    );
+    assert_eq!(
+        messages[1].get("role").and_then(serde_json::Value::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        messages[1]
+            .get("content")
+            .and_then(serde_json::Value::as_str),
+        Some("hello")
+    );
 }
 
 #[test]
@@ -226,13 +264,31 @@ fn test_codebuddy_system_prompt_handling_scenarios() {
         )
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
-    let msgs = val.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    let msgs = val
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
     assert_eq!(msgs.len(), 3);
-    assert_eq!(msgs[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
-    assert_eq!(msgs[0].get("content").and_then(serde_json::Value::as_str), Some(DEFAULT_CODEBUDDY_SYSTEM_PROMPT));
-    assert_eq!(msgs[1].get("role").and_then(serde_json::Value::as_str), Some("user"));
-    assert_eq!(msgs[2].get("role").and_then(serde_json::Value::as_str), Some("system"));
-    assert_eq!(msgs[2].get("content").and_then(serde_json::Value::as_str), Some("custom instructions"));
+    assert_eq!(
+        msgs[0].get("role").and_then(serde_json::Value::as_str),
+        Some("system")
+    );
+    assert_eq!(
+        msgs[0].get("content").and_then(serde_json::Value::as_str),
+        Some(DEFAULT_CODEBUDDY_SYSTEM_PROMPT)
+    );
+    assert_eq!(
+        msgs[1].get("role").and_then(serde_json::Value::as_str),
+        Some("user")
+    );
+    assert_eq!(
+        msgs[2].get("role").and_then(serde_json::Value::as_str),
+        Some("system")
+    );
+    assert_eq!(
+        msgs[2].get("content").and_then(serde_json::Value::as_str),
+        Some("custom instructions")
+    );
 
     // Scenario B: Developer role is converted to system role at index 0
     let json_with_developer = r#"{"model":"hy3","messages":[{"role":"developer","content":"rules"},{"role":"user","content":"help"}],"stream":true}"#;
@@ -245,9 +301,20 @@ fn test_codebuddy_system_prompt_handling_scenarios() {
         )
         .unwrap();
     let val_dev: serde_json::Value = serde_json::from_slice(&wrapped_dev).unwrap();
-    let msgs_dev = val_dev.get("messages").and_then(serde_json::Value::as_array).unwrap();
-    assert_eq!(msgs_dev[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
-    assert_eq!(msgs_dev[0].get("content").and_then(serde_json::Value::as_str), Some("rules"));
+    let msgs_dev = val_dev
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
+    assert_eq!(
+        msgs_dev[0].get("role").and_then(serde_json::Value::as_str),
+        Some("system")
+    );
+    assert_eq!(
+        msgs_dev[0]
+            .get("content")
+            .and_then(serde_json::Value::as_str),
+        Some("rules")
+    );
 
     // Scenario C: Empty messages array gets default system prompt
     let json_empty = r#"{"model":"hy3","messages":[],"stream":true}"#;
@@ -260,15 +327,27 @@ fn test_codebuddy_system_prompt_handling_scenarios() {
         )
         .unwrap();
     let val_empty: serde_json::Value = serde_json::from_slice(&wrapped_empty).unwrap();
-    let msgs_empty = val_empty.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    let msgs_empty = val_empty
+        .get("messages")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
     assert_eq!(msgs_empty.len(), 1);
-    assert_eq!(msgs_empty[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
+    assert_eq!(
+        msgs_empty[0]
+            .get("role")
+            .and_then(serde_json::Value::as_str),
+        Some("system")
+    );
 }
 
 #[test]
 fn test_codebuddy_headers_generation() {
     let adapter = CodeBuddyAdapter::new();
-    let headers = adapter.build_headers("test-token-123", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
+    let headers = adapter.build_headers(
+        "test-token-123",
+        TargetFormat::Openai,
+        &ModelId::new("gpt-5.5"),
+    );
     let find = |key: &str| {
         headers
             .iter()
@@ -393,8 +472,14 @@ async fn test_codebuddy_refresh_version_dist_tags_and_auth() {
             let mut buf = [0u8; 1024];
             let n = stream.read(&mut buf).await.unwrap_or(0);
             let req_text = String::from_utf8_lossy(&buf[..n]);
-            assert!(req_text.contains("authorization: Bearer my-npm-token") || req_text.contains("Authorization: Bearer my-npm-token"));
-            assert!(req_text.contains("accept: application/json") || req_text.contains("Accept: application/json"));
+            assert!(
+                req_text.contains("authorization: Bearer my-npm-token")
+                    || req_text.contains("Authorization: Bearer my-npm-token")
+            );
+            assert!(
+                req_text.contains("accept: application/json")
+                    || req_text.contains("Accept: application/json")
+            );
 
             let body = r#"{"name":"@tencent-ai/codebuddy-code","dist-tags":{"latest":"2.205.0"}}"#;
             let resp = format!(
@@ -441,7 +526,8 @@ async fn test_codebuddy_refresh_version_failures_graceful() {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut buf = [0u8; 1024];
             let _ = stream.read(&mut buf).await;
-            let resp = "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let resp =
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes()).await;
         }
         // Second request: 200 with invalid json
@@ -574,7 +660,9 @@ fn test_parse_codebuddy_resource_quota_summary_fallback() {
     assert_eq!(quota.session_used, Some(0));
     assert_eq!(
         quota.plan_name.as_deref(),
-        Some("CodeBuddy: TCACA_code_006_DbXS0lrypC (250 credits) + TCACA_code_035_ArVxJcGDsm (100 credits)")
+        Some(
+            "CodeBuddy: TCACA_code_006_DbXS0lrypC (250 credits) + TCACA_code_035_ArVxJcGDsm (100 credits)"
+        )
     );
 }
 
@@ -597,10 +685,7 @@ fn test_parse_codebuddy_accounts_quota_default() {
     let quota = parse_codebuddy_accounts_quota(&val);
     assert_eq!(quota.session_limit, Some(0));
     assert_eq!(quota.session_used, Some(0));
-    assert_eq!(
-        quota.plan_name.as_deref(),
-        Some("CodeBuddy Account")
-    );
+    assert_eq!(quota.plan_name.as_deref(), Some("CodeBuddy Account"));
     assert!(quota.session_reset_at.is_none());
     assert!(quota.model_details.is_some());
 }
@@ -614,11 +699,19 @@ fn test_build_codebuddy_resource_request_headers() {
     );
     assert_eq!(req.proxy.as_deref(), Some("http://proxy.local:8080"));
     assert_eq!(
-        req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
+        req.headers
+            .get(http::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "Bearer test-token-456"
     );
     assert_eq!(
-        req.headers.get(http::header::CONTENT_TYPE).unwrap().to_str().unwrap(),
+        req.headers
+            .get(http::header::CONTENT_TYPE)
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "application/json"
     );
     assert_eq!(
