@@ -37,6 +37,24 @@ impl TargetFormatter for OpenaiFormatter {
                 view.messages.iter().map(normalize_openai_message).collect(),
             );
         }
+        if let Some(ref tools) = view.tools
+            && tools.iter().any(|t| t.get("cache_control").is_some())
+        {
+            let sanitized_tools: Vec<Value> = tools
+                .iter()
+                .map(|t| {
+                    if let Some(obj) = t.as_object()
+                        && obj.contains_key("cache_control")
+                    {
+                        let mut clean = obj.clone();
+                        clean.remove("cache_control");
+                        return Value::Object(clean);
+                    }
+                    t.clone()
+                })
+                .collect();
+            view.tools = Some(std::borrow::Cow::Owned(sanitized_tools));
+        }
         const OPENAI_CHAT_DISALLOWED_EXTRA: &[&str] = &[
             "disabled",
             "prompt_cache_key",
@@ -47,6 +65,7 @@ impl TargetFormatter for OpenaiFormatter {
             "store",
             "background",
             "truncation",
+            "cache_control",
         ];
         for key in OPENAI_CHAT_DISALLOWED_EXTRA {
             if view.extra.contains_key(*key) {
@@ -62,6 +81,9 @@ impl TargetFormatter for OpenaiFormatter {
 }
 
 fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
+    if m.extra.contains_key("cache_control") {
+        return true;
+    }
     if m.role == "developer" {
         return true;
     }
@@ -108,6 +130,7 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
 
 fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
     let mut patched = m.clone();
+    patched.extra.remove("cache_control");
     if patched.role == "developer" {
         patched.role = "system".to_string();
     }

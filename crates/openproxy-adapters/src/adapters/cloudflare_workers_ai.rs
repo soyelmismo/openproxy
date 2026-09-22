@@ -223,7 +223,6 @@ mod tests {
         extra_map.insert("extra_valid".to_string(), json!(1));
 
         let stop = None;
-        let tools = None;
         let tool_choice = None;
         let user = None;
 
@@ -241,7 +240,7 @@ mod tests {
             max_tokens: None,
             top_p: None,
             stop: &stop,
-            tools: &tools,
+            tools: None,
             tool_choice: &tool_choice,
             top_k: None,
             user: &user,

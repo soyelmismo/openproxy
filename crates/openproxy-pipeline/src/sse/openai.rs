@@ -28,6 +28,8 @@ struct OpenAiUsageProbe {
     #[serde(default)]
     input_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
     #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
+    #[serde(default)]
     cached_tokens: Option<u64>,
     #[serde(default)]
     cache_read_input_tokens: Option<u64>,
@@ -39,6 +41,8 @@ struct OpenAiPromptTokensDetailsProbe {
     cached_tokens: Option<u64>,
     #[serde(default)]
     cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -72,12 +76,13 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
         let cached = u
             .prompt_tokens_details
             .as_ref()
-            .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens))
+            .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens).or(d.prompt_cache_hit_tokens))
             .or_else(|| {
                 u.input_tokens_details
                     .as_ref()
-                    .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens))
+                    .and_then(|d| d.cached_tokens.or(d.cache_read_input_tokens).or(d.prompt_cache_hit_tokens))
             })
+            .or(u.prompt_cache_hit_tokens)
             .or(u.cached_tokens)
             .or(u.cache_read_input_tokens)
             .and_then(|c| u32::try_from(c).ok());
@@ -299,6 +304,21 @@ mod tests {
                 .as_ref()
                 .and_then(|d| d.cached_tokens),
             Some(1000)
+        );
+    }
+
+    #[test]
+    fn openai_sse_parses_prompt_cache_hit_tokens() {
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":9669,"completion_tokens":1820,"total_tokens":11489,"prompt_cache_hit_tokens":5120,"cached_tokens":0}}"#;
+        let chunk = parse_openai_sse_line(line).unwrap().unwrap();
+        let usage = chunk.usage.expect("usage should be parsed");
+        assert_eq!(usage.prompt_tokens, 9669);
+        assert_eq!(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
+            Some(5120)
         );
     }
 }

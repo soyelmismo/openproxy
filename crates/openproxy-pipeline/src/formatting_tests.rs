@@ -374,3 +374,68 @@ fn test_openai_formatter_sanitizes_user_output_text_and_media() {
     assert!(parts[0].get("annotations").is_none());
     assert_eq!(parts[1].get("type").unwrap(), "image_url");
 }
+
+#[test]
+fn test_openai_formatter_strips_cache_control_from_messages_tools_and_extra() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let mut msg_extra = serde_json::Map::new();
+    msg_extra.insert("cache_control".into(), json!({"type": "ephemeral"}));
+
+    let mut req_extra = serde_json::Map::new();
+    req_extra.insert("cache_control".into(), json!({"type": "ephemeral"}));
+    req_extra.insert("custom_allowed".into(), json!("ok"));
+
+    let messages = vec![
+        OpenAIMessage {
+            role: "user".into(),
+            content: Some(Value::String("hello".into())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: msg_extra,
+        },
+        OpenAIMessage {
+            role: "assistant".into(),
+            content: Some(Value::String("world".into())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        },
+    ];
+
+    let tool_with_cache = json!({
+        "type": "function",
+        "cache_control": {"type": "ephemeral"},
+        "function": {
+            "name": "search",
+            "description": "web search",
+            "parameters": {}
+        }
+    });
+
+    let req = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: messages.clone(),
+        tools: Some(vec![tool_with_cache]),
+        extra: req_extra,
+        ..Default::default()
+    });
+
+    let formatted = OpenaiFormatter
+        .format_request(&req, &test_model(), &messages, false, &adapter)
+        .expect("ok");
+    let val: Value = serde_json::from_slice(&formatted).unwrap();
+
+    // 1. Message extra does not contain cache_control
+    let msgs = val.get("messages").unwrap().as_array().unwrap();
+    assert!(msgs[0].get("cache_control").is_none(), "cache_control must be stripped from message");
+
+    // 2. Tool does not contain cache_control
+    let tools = val.get("tools").unwrap().as_array().unwrap();
+    assert!(tools[0].get("cache_control").is_none(), "cache_control must be stripped from tool");
+
+    // 3. Top-level extra does not contain cache_control, but keeps custom_allowed
+    assert!(val.get("cache_control").is_none(), "cache_control must be stripped from top-level extra");
+    assert_eq!(val.get("custom_allowed").unwrap(), "ok");
+}

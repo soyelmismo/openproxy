@@ -246,7 +246,7 @@ pub struct OpenAIRequestView<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: &'a Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: &'a Option<Vec<serde_json::Value>>,
+    pub tools: Option<std::borrow::Cow<'a, [serde_json::Value]>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: &'a Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,7 +272,7 @@ impl<'a> OpenAIRequestView<'a> {
             max_tokens: req.max_tokens,
             top_p: req.top_p,
             stop: &req.stop,
-            tools: &req.tools,
+            tools: req.tools.as_deref().map(std::borrow::Cow::Borrowed),
             tool_choice: &req.tool_choice,
             top_k: req.top_k,
             user: &req.user,

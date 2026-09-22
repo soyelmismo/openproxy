@@ -214,7 +214,8 @@ fn test_codebuddy_system_prompt_handling_scenarios() {
     let adapter = CodeBuddyAdapter::new();
     let resolved_target = dummy_codebuddy_resolved_target();
 
-    // Scenario A: Existing custom system message at index 1 is moved to index 0
+    // Scenario A: When index 0 is not system, default system prompt is prepended at index 0
+    // and subsequent conversation history is kept intact to guarantee prefix KV cache invariance.
     let json_with_later_system = r#"{"model":"hy3","messages":[{"role":"user","content":"help"},{"role":"system","content":"custom instructions"}],"stream":true}"#;
     let wrapped = adapter
         .wrap_request_body(
@@ -226,10 +227,12 @@ fn test_codebuddy_system_prompt_handling_scenarios() {
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
     let msgs = val.get("messages").and_then(serde_json::Value::as_array).unwrap();
-    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs.len(), 3);
     assert_eq!(msgs[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
-    assert_eq!(msgs[0].get("content").and_then(serde_json::Value::as_str), Some("custom instructions"));
+    assert_eq!(msgs[0].get("content").and_then(serde_json::Value::as_str), Some(DEFAULT_CODEBUDDY_SYSTEM_PROMPT));
     assert_eq!(msgs[1].get("role").and_then(serde_json::Value::as_str), Some("user"));
+    assert_eq!(msgs[2].get("role").and_then(serde_json::Value::as_str), Some("system"));
+    assert_eq!(msgs[2].get("content").and_then(serde_json::Value::as_str), Some("custom instructions"));
 
     // Scenario B: Developer role is converted to system role at index 0
     let json_with_developer = r#"{"model":"hy3","messages":[{"role":"developer","content":"rules"},{"role":"user","content":"help"}],"stream":true}"#;

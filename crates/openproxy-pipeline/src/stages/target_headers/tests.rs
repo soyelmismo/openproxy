@@ -444,7 +444,21 @@ use super::*;
         req_headers.insert("user-agent".into(), "CodeBuddy/2.170.0 (Darwin; x64)".into());
         req_headers.insert("x-codebuddy-session-id".into(), "cb-sess-99".into());
 
-        propagate_codebuddy_headers(&mut headers, &req_headers);
+        let openai_req = openproxy_types::OpenAIRequest {
+            model: "hy3".into(),
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            stream: false,
+            tools: None,
+            tool_choice: None,
+            extra: Default::default(),
+            top_k: None,
+            user: None,
+        };
+        propagate_codebuddy_headers(&mut headers, &req_headers, &openai_req);
 
         let find = |key: &str| {
             headers
@@ -460,4 +474,63 @@ use super::*;
         assert_eq!(find("Authorization"), Some("Bearer secret"));
         assert_eq!(find("User-Agent"), Some("CodeBuddy/2.170.0 (Darwin; x64)"));
         assert_eq!(find("x-conversation-id"), Some("cb-sess-99"));
+
+        // Verify fallback derives stable deterministic UUID from root user message
+        let mut headers_fallback = vec![];
+        let empty_headers = std::collections::BTreeMap::new();
+        let openai_req_with_user = openproxy_types::OpenAIRequest {
+            model: "hy3".into(),
+            messages: vec![openproxy_types::OpenAIMessage {
+                role: "user".into(),
+                content: Some(serde_json::json!("Hello, analyze this repo")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            }],
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            stream: false,
+            tools: None,
+            tool_choice: None,
+            extra: Default::default(),
+            top_k: None,
+            user: None,
+        };
+        propagate_codebuddy_headers(&mut headers_fallback, &empty_headers, &openai_req_with_user);
+        let conv_id = headers_fallback
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-conversation-id"))
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert!(!conv_id.is_empty());
+
+        // Subsequent turn with same root user message produces the exact same X-Conversation-ID
+        let mut headers_turn2 = vec![];
+        let mut openai_req_turn2 = openai_req_with_user.clone();
+        openai_req_turn2.messages.push(openproxy_types::OpenAIMessage {
+            role: "assistant".into(),
+            content: Some(serde_json::json!("Here is the analysis")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        });
+        openai_req_turn2.messages.push(openproxy_types::OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!("Now run tests")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        });
+        propagate_codebuddy_headers(&mut headers_turn2, &empty_headers, &openai_req_turn2);
+        let conv_id_turn2 = headers_turn2
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("x-conversation-id"))
+            .map(|(_, v)| v.as_str())
+            .unwrap();
+        assert_eq!(conv_id, conv_id_turn2, "multi-turn conversation must share same X-Conversation-ID");
     }

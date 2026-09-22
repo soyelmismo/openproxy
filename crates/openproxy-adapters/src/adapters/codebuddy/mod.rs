@@ -358,14 +358,27 @@ impl ProviderAdapter for CodeBuddyAdapter {
             ))
         })?;
 
+        let mut changed = false;
         if let Some(obj) = val.as_object_mut() {
             // Guarantee stream: true for CodeBuddy upstream chat completions
-            obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+            if obj.get("stream") != Some(&serde_json::Value::Bool(true)) {
+                obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+                changed = true;
+            }
 
             // Guarantee first message is system prompt for CodeBuddy security policy (code 11128)
-            if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut()) {
+            if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut())
+                && (messages.is_empty()
+                    || messages[0].get("role").and_then(|r| r.as_str()) != Some("system")
+                    || messages.iter().any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer")))
+            {
                 ensure_codebuddy_system_prompt_json(messages);
+                changed = true;
             }
+        }
+
+        if !changed {
+            return Ok(body);
         }
 
         let re_encoded = serde_json::to_vec(&val).map_err(|e| {
@@ -381,6 +394,12 @@ impl ProviderAdapter for CodeBuddyAdapter {
 pub const DEFAULT_CODEBUDDY_SYSTEM_PROMPT: &str = "You are CodeBuddy, a helpful AI coding assistant.";
 
 /// Ensures that `messages` in `OpenAIRequestView` starts with a system prompt message.
+///
+/// If message 0 is already system/developer, it is preserved (filling default if empty).
+/// If message 0 is NOT system, `DEFAULT_CODEBUDDY_SYSTEM_PROMPT` is prepended at index 0.
+/// Crucially, later messages in the conversation history are NEVER plucked or reordered,
+/// ensuring that the prefix token sequence across multi-turn requests remains completely
+/// invariant for upstream automatic KV prompt caching.
 pub fn ensure_codebuddy_system_prompt_in_view(view: &mut openproxy_types::OpenAIRequestView) {
     let messages = view.messages.to_mut();
     if messages.is_empty() {
@@ -409,32 +428,27 @@ pub fn ensure_codebuddy_system_prompt_in_view(view: &mut openproxy_types::OpenAI
         if is_empty {
             messages[0].content = Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()));
         }
+        for m in messages.iter_mut().skip(1) {
+            if m.role == "developer" {
+                m.role = "system".to_string();
+            }
+        }
         return;
     }
 
-    if let Some(sys_idx) = messages.iter().position(|m| m.role == "system" || m.role == "developer") {
-        let mut sys_msg = messages.remove(sys_idx);
-        sys_msg.role = "system".to_string();
-        let is_empty = match &sys_msg.content {
-            None => true,
-            Some(serde_json::Value::Null) => true,
-            Some(serde_json::Value::String(s)) => s.trim().is_empty(),
-            Some(serde_json::Value::Array(a)) => a.is_empty(),
-            _ => false,
-        };
-        if is_empty {
-            sys_msg.content = Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()));
+    messages.insert(0, openproxy_types::OpenAIMessage {
+        role: "system".to_string(),
+        content: Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string())),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: serde_json::Map::default(),
+    });
+
+    for m in messages.iter_mut().skip(1) {
+        if m.role == "developer" {
+            m.role = "system".to_string();
         }
-        messages.insert(0, sys_msg);
-    } else {
-        messages.insert(0, openproxy_types::OpenAIMessage {
-            role: "system".to_string(),
-            content: Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string())),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-            extra: serde_json::Map::default(),
-        });
     }
 }
 
@@ -468,34 +482,27 @@ pub fn ensure_codebuddy_system_prompt_json(messages: &mut Vec<serde_json::Value>
                 serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()),
             );
         }
+        for m in messages.iter_mut().skip(1) {
+            if m.get("role").and_then(|r| r.as_str()) == Some("developer")
+                && let Some(obj) = m.as_object_mut()
+            {
+                obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
+            }
+        }
         return;
     }
 
-    if let Some(sys_idx) = messages.iter().position(|m| {
-        let r = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        r == "system" || r == "developer"
-    }) {
-        let mut sys_msg = messages.remove(sys_idx);
-        if let Some(obj) = sys_msg.as_object_mut() {
+    messages.insert(0, serde_json::json!({
+        "role": "system",
+        "content": DEFAULT_CODEBUDDY_SYSTEM_PROMPT,
+    }));
+
+    for m in messages.iter_mut().skip(1) {
+        if m.get("role").and_then(|r| r.as_str()) == Some("developer")
+            && let Some(obj) = m.as_object_mut()
+        {
             obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
-            let content_empty = obj.get("content").is_none_or(|c| {
-                c.is_null()
-                    || (c.is_string() && c.as_str().unwrap_or("").trim().is_empty())
-                    || (c.is_array() && c.as_array().is_some_and(|a| a.is_empty()))
-            });
-            if content_empty {
-                obj.insert(
-                    "content".to_string(),
-                    serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()),
-                );
-            }
         }
-        messages.insert(0, sys_msg);
-    } else {
-        messages.insert(0, serde_json::json!({
-            "role": "system",
-            "content": DEFAULT_CODEBUDDY_SYSTEM_PROMPT,
-        }));
     }
 }
 

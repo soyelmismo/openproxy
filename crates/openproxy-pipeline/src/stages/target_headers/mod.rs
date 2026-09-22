@@ -362,7 +362,7 @@ pub fn propagate_provider_target_headers(
     } else if matches("commandcode") || provider_id == "cmd" || adapter_id == "cmd" {
         propagate_commandcode_headers(headers, req_headers);
     } else if matches("codebuddy") {
-        propagate_codebuddy_headers(headers, req_headers);
+        propagate_codebuddy_headers(headers, req_headers, openai_req);
     }
 }
 
@@ -370,10 +370,13 @@ pub fn propagate_provider_target_headers(
 ///
 /// Forwards `x-codebuddy-*`, `codebuddy-*`, and client identity headers
 /// (`x-ide-type`, `x-ide-name`, `x-ide-version`, `x-product`, `x-agent-intent`, `x-codebuddy-request`).
-/// Preserves downstream CodeBuddy User-Agent and extracts session continuity.
+/// Preserves downstream CodeBuddy User-Agent and extracts or derives session continuity
+/// (`X-Conversation-ID`) to ensure Tencent Cloud load balances multi-turn conversations
+/// to the same GPU worker node for automatic prefix KV cache hits.
 pub fn propagate_codebuddy_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
+    openai_req: &openproxy_types::OpenAIRequest,
 ) {
     propagate_matching_headers(headers, request_headers, |k| {
         starts_with_ignore_ascii_case(k, "x-codebuddy-")
@@ -390,16 +393,48 @@ pub fn propagate_codebuddy_headers(
         upsert_header(headers, "User-Agent", ua.to_string());
     }
 
-    let session_val = get_header_val(request_headers, "x-codebuddy-session-id")
+    let downstream_session = get_header_val(request_headers, "x-codebuddy-session-id")
         .or_else(|| get_header_val(request_headers, "x-conversation-id"))
         .or_else(|| get_header_val(request_headers, "x-session-id"))
-        .or_else(|| get_header_val(request_headers, "session-id"));
+        .or_else(|| get_header_val(request_headers, "session-id"))
+        .or_else(|| get_header_val(request_headers, "x-session-affinity"))
+        .or(openai_req.user.as_deref())
+        .or_else(|| {
+            openai_req
+                .extra
+                .get("session_id")
+                .or_else(|| openai_req.extra.get("conversation_id"))
+                .and_then(|v| v.as_str())
+        });
 
-    if let Some(session_id) = session_val
-        && !session_id.trim().is_empty()
+    let session_val = if let Some(raw) = downstream_session
+        && !raw.trim().is_empty()
     {
-        upsert_header(headers, "x-conversation-id", session_id.trim().to_string());
-    }
+        raw.trim().to_string()
+    } else if let Some(existing) = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-conversation-id"))
+        .map(|(_, v)| v.clone())
+    {
+        existing
+    } else if let Some(first_user) = openai_req.messages.iter().find(|m| m.role == "user") {
+        let text = first_user.extract_text_cow();
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            use std::hash::{DefaultHasher, Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            trimmed.hash(&mut hasher);
+            let h = hasher.finish();
+            let u128_val = ((h as u128) << 64) | (h as u128 ^ 0xa5a5_a5a5_a5a5_a5a5);
+            uuid::Uuid::from_u128(u128_val).to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        }
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+
+    upsert_header(headers, "x-conversation-id", session_val);
 }
 
 
