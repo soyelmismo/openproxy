@@ -146,6 +146,7 @@ where
 
 pub mod antigravity;
 pub mod cline;
+pub mod codebuddy;
 pub mod codex;
 pub mod commandcode;
 pub mod kilocode;
@@ -155,6 +156,7 @@ pub mod opencode;
 
 pub use antigravity::*;
 pub use cline::*;
+pub use codebuddy::*;
 pub use codex::*;
 pub use commandcode::*;
 pub use kilocode::*;
@@ -164,3 +166,4 @@ pub use opencode::*;
 
 #[cfg(test)]
 mod tests;
+

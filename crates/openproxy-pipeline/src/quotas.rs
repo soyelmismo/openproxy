@@ -94,6 +94,7 @@ fn get_credit_balance_info(
 }
 
 const MINIMAX_DEFAULT_CREDIT_BASELINE: f64 = 1_000_000.0;
+const CODEBUDDY_DEFAULT_CREDIT_BASELINE: f64 = 30.0;
 
 fn get_credit_balance_fraction(account: &openproxy_types::accounts::Account) -> Option<f64> {
     let (rem, total_opt) = get_credit_balance_info(account)?;
@@ -107,6 +108,9 @@ fn get_credit_balance_fraction(account: &openproxy_types::accounts::Account) -> 
     }
     if account.provider_id.0.eq_ignore_ascii_case("minimax") {
         return Some((rem / MINIMAX_DEFAULT_CREDIT_BASELINE).clamp(0.0, 1.0));
+    }
+    if account.provider_id.0.eq_ignore_ascii_case("codebuddy") {
+        return Some((rem / CODEBUDDY_DEFAULT_CREDIT_BASELINE).clamp(0.0, 1.0));
     }
     if let Some(limit) = account.quota_session_limit
         && limit > 0

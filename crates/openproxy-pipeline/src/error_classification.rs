@@ -13,6 +13,30 @@ use openproxy_types::CoreError;
 
 #[must_use]
 pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
+    // 1. Structured CodeBuddy / Tencent Cloud Copilot business error code classification
+    if let Some(code) = openproxy_adapters::adapters::codebuddy::parse_codebuddy_error_code(body)
+        && let Some(cb_err) = openproxy_adapters::adapters::codebuddy::CodeBuddyErrorCode::from_code(code)
+    {
+        let class = cb_err.to_upstream_error_class();
+        if class != UpstreamErrorClass::Generic {
+            return class;
+        }
+    }
+
+    // 2. Text marker fallback for CodeBuddy specific exception classes
+    if body.contains("UsageLimitEnterpriseExhausted")
+        || body.contains("UsageLimitUserExhausted")
+        || body.contains("UsageLimitExceeded")
+    {
+        return UpstreamErrorClass::ResourceExhausted;
+    }
+    if body.contains("UsageLimitLicenseExpired")
+        || body.contains("UsageLimitEnterpriseNotActivated")
+        || body.contains("UsageLimitUserNotActivated")
+    {
+        return UpstreamErrorClass::PermissionDenied;
+    }
+
     if status == 400 {
         if body.contains("2013") || body.contains("function name or parameters is empty") {
             return UpstreamErrorClass::MalformedToolCall;
@@ -433,4 +457,62 @@ mod adversarial_tests {
         assert!(UpstreamErrorClass::MalformedToolCall.is_hard_skip());
         assert!(!UpstreamErrorClass::Generic.is_hard_skip());
     }
+
+    #[test]
+    fn test_codebuddy_error_classification() {
+        for code in ["6000", "6001", "6005", "6008"] {
+            let body = format!(r#"{{"code": {code}, "message": "rate limited"}}"#);
+            assert_eq!(
+                classify_upstream_error(429, &body),
+                UpstreamErrorClass::ResourceExhausted
+            );
+        }
+
+        let body_14014 = r#"{"code": 14014, "message": "UsageLimitEnterpriseExhausted"}"#;
+        assert_eq!(
+            classify_upstream_error(400, body_14014),
+            UpstreamErrorClass::ResourceExhausted
+        );
+
+        let body_14018 = r#"{"code": 14018, "message": "UsageLimitUserExhausted"}"#;
+        assert_eq!(
+            classify_upstream_error(403, body_14018),
+            UpstreamErrorClass::ResourceExhausted
+        );
+
+        let body_auth = r#"{"code": 14015, "message": "license expired"}"#;
+        assert_eq!(
+            classify_upstream_error(401, body_auth),
+            UpstreamErrorClass::PermissionDenied
+        );
+
+        // Nested JSON-RPC shell where outer code is -32603 and inner business code is 11115 (ContextTooLong)
+        let body_nested = r#"{"status": 400, "error": {"code": -32603, "data": {"code": 11115, "statusCode": 400}}}"#;
+        assert_eq!(
+            classify_upstream_error(400, body_nested),
+            UpstreamErrorClass::InvalidPayload
+        );
+    }
+
+    #[test]
+    fn test_no_false_positive_on_unrelated_numbers() {
+        // A 400 error from an unrelated upstream that happens to mention "6000" in its text (e.g. token limit or port).
+        // With naive `body.contains("6000")`, this would falsely return `ResourceExhausted` and trip the circuit breaker.
+        let body = r#"{"error":{"message":"Invalid parameter: max_tokens 6000 exceeds maximum allowable value","code":400}}"#;
+        assert_ne!(
+            classify_upstream_error(400, body),
+            UpstreamErrorClass::ResourceExhausted
+        );
+        assert_eq!(
+            classify_upstream_error(400, body),
+            UpstreamErrorClass::Generic
+        );
+
+        let body_invalid_val = r#"{"error":{"message":"Invalid value for max_tokens: 6000","code":400}}"#;
+        assert_eq!(
+            classify_upstream_error(400, body_invalid_val),
+            UpstreamErrorClass::InvalidPayload
+        );
+    }
 }
+

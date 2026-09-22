@@ -583,6 +583,13 @@ fn test_oauth_registry_and_refresh_lead_times() {
         ("minimax-coding", "minimax", OAuthFlow::DeviceCode),
         ("minimax-cn", "minimax", OAuthFlow::DeviceCode),
         ("kiro", "kiro", OAuthFlow::DeviceCode),
+        ("codebuddy", "codebuddy", OAuthFlow::DeviceCode),
+        ("codebuddy-code", "codebuddy", OAuthFlow::DeviceCode),
+        (
+            "@tencent-ai/codebuddy-code",
+            "codebuddy",
+            OAuthFlow::DeviceCode,
+        ),
     ];
 
     for (lookup_key, expected_name, expected_flow) in keys {

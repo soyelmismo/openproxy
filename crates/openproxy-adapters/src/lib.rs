@@ -7,7 +7,7 @@ pub mod spoofer;
 pub mod upstream;
 
 pub use spoofer::{
-    AntigravitySpoofer, ClientSpoofer, ClineSpoofer, CodexSpoofer, CommandCodeSpoofer,
+    AntigravitySpoofer, ClientSpoofer, ClineSpoofer, CodeBuddySpoofer, CodexSpoofer, CommandCodeSpoofer,
     KilocodeSpoofer, KiroSpoofer, MiniMaxSpoofer, OpenCodeSpoofer,
 };
 
@@ -19,7 +19,8 @@ pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,
     ProviderAdapterEnum, antigravity::AntigravityAdapter, atomesus::AtomesusAdapter,
     build_discovered_model_full, build_discovered_model_with, builtin_adapters,
-    cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter, codex::CodexAdapter,
+    cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter,
+    codebuddy::CodeBuddyAdapter, codebuddy::apply_codebuddy_spoofing_headers, codex::CodexAdapter,
     commandcode::CommandCodeGoAdapter, commandcode::apply_commandcode_cli_headers,
     custom_adapter::CustomAdapter, gemini::GeminiAdapter, horde::HordeAdapter,
     kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, laya::LayaAdapter, minimax::MiniMaxAdapter,

@@ -660,3 +660,58 @@ fn test_commandcode_dynamic_version_and_extra_headers() {
     assert_eq!(current_commandcode_version(), "1.54.0");
     assert_eq!(current_commandcode_ua(), "cli");
 }
+
+#[test]
+fn test_codebuddy_spoofer() {
+    let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
+    reset_dynamic_codebuddy_overrides();
+    let spoofer = CodeBuddySpoofer;
+    let mut req = UpstreamRequest::get("https://dummy.url");
+    spoofer.apply_to_request(&mut req);
+
+    for &(k, v) in CODEBUDDY_SPOOFING_HEADERS {
+        let header_val = req.headers.get(k).expect("header missing");
+        if k.eq_ignore_ascii_case("user-agent") {
+            assert_eq!(header_val, current_codebuddy_ua().as_str());
+        } else if k.eq_ignore_ascii_case("x-ide-version") {
+            assert_eq!(header_val, current_codebuddy_version().as_str());
+        } else {
+            assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
+        }
+    }
+}
+
+#[test]
+fn test_codebuddy_dynamic_version_and_extra_headers() {
+    let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
+    reset_dynamic_codebuddy_overrides();
+
+    assert_eq!(current_codebuddy_version(), "2.156.0");
+    assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+
+    set_dynamic_codebuddy_version("3.0.0");
+    assert_eq!(current_codebuddy_version(), "3.0.0");
+    assert_eq!(current_codebuddy_ua(), "CLI/3.0.0 CodeBuddy/3.0.0");
+
+    set_dynamic_codebuddy_extra_header("x-custom-tenant", "tencent-corp");
+
+    let headers = CodeBuddySpoofer.headers();
+    let find = |key: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    };
+
+    assert_eq!(find("User-Agent"), Some("CLI/3.0.0 CodeBuddy/3.0.0"));
+    assert_eq!(find("X-IDE-Version"), Some("3.0.0"));
+    assert_eq!(find("x-custom-tenant"), Some("tencent-corp"));
+    assert_eq!(find("X-IDE-Type"), Some("CLI"));
+    assert_eq!(find("X-IDE-Name"), Some("CLI"));
+    assert_eq!(find("X-Product"), Some("SaaS"));
+    assert_eq!(find("X-Agent-Intent"), Some("craft"));
+    assert_eq!(find("x-codebuddy-request"), Some("1"));
+
+    reset_dynamic_codebuddy_overrides();
+    assert_eq!(current_codebuddy_version(), "2.156.0");
+}

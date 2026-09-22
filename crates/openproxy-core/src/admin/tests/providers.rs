@@ -56,6 +56,7 @@ fn test_quota_capability_anti_drift() {
         "horde",
         "commandcodego",
         "zai",
+        "codebuddy",
     ];
     for adapter in adapters {
         let id = adapter.id().as_str();

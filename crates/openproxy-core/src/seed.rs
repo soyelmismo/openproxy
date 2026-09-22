@@ -257,9 +257,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 21, "first call inserts all twenty-one");
+        assert_eq!(n, 22, "first call inserts all twenty-two");
 
-        // All twenty-one are present and reachable by id.
+        // All twenty-two are present and reachable by id.
         for id in [
             "atomesus",
             "openrouter",
@@ -277,6 +277,7 @@ mod tests {
             "kiro",
             "cloudflare-workers-ai",
             "cline",
+            "codebuddy",
             "vercel-gateway",
             "commandcodego",
             "zai",
@@ -295,14 +296,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 21);
+        assert_eq!(first, 22);
 
         // Idempotent: running again must not insert more rows.
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 21, "still exactly twenty-one rows");
+        assert_eq!(count, 22, "still exactly twenty-two rows");
     }
 
     #[test]
@@ -326,7 +327,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 20, "only the twenty missing ones");
+        assert_eq!(n, 21, "only the twenty-one missing ones");
 
         // The pre-seeded row's name was *not* overwritten.
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -424,12 +425,18 @@ mod tests {
             .unwrap();
         assert_eq!(laya.auth_type, AuthType::None);
         assert_eq!(laya.format, ProviderFormat::SystemOne);
+
+        let codebuddy = providers::get(&conn, &ProviderId::new("codebuddy"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(codebuddy.auth_type, AuthType::OAuth);
+        assert_eq!(codebuddy.format, ProviderFormat::Openai);
     }
 
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 21);
+        assert_eq!(ids.len(), 22);
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));
@@ -445,6 +452,7 @@ mod tests {
         assert!(ids.iter().any(|s| s == "kiro"));
         assert!(ids.iter().any(|s| s == "cloudflare-workers-ai"));
         assert!(ids.iter().any(|s| s == "cline"));
+        assert!(ids.iter().any(|s| s == "codebuddy"));
         assert!(ids.iter().any(|s| s == "vercel-gateway"));
         assert!(ids.iter().any(|s| s == "commandcodego"));
         assert!(ids.iter().any(|s| s == "zai"));

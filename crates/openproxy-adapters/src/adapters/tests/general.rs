@@ -222,10 +222,11 @@ fn classify_zen_target_format_heuristic() {
 #[test]
 fn builtin_adapters_returns_all() {
     let v = builtin_adapters();
-    assert_eq!(v.len(), 21);
+    assert_eq!(v.len(), 22);
     let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
     assert!(ids.contains(&"atomesus"));
     assert!(ids.contains(&"cline"));
+    assert!(ids.contains(&"codebuddy"));
     assert!(ids.contains(&"commandcodego"));
     assert!(ids.contains(&"openrouter"));
     assert!(ids.contains(&"minimax"));
@@ -362,6 +363,9 @@ fn test_models_dev_canonical_ids() {
 
     let opencode_go = ProviderAdapterEnum::from_provider_id("opencode-go").unwrap();
     assert_eq!(opencode_go.models_dev_canonical_ids(), &["opencode-go"]);
+
+    let codebuddy = ProviderAdapterEnum::from_provider_id("codebuddy").unwrap();
+    assert_eq!(codebuddy.models_dev_canonical_ids(), &["codebuddy", "tencent"]);
 }
 
 #[test]

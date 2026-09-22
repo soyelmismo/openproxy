@@ -165,6 +165,19 @@ fn builtin_registry_all_providers_contract() {
     let z_ai = reg.get("z.ai").expect("z.ai alias registered");
     assert_eq!(z_ai.name(), "zai");
 
+    // 7. CodeBuddy
+    let cb = reg.get("codebuddy").expect("codebuddy registered");
+    assert_eq!(cb.name(), "codebuddy");
+    assert_eq!(cb.flow(), OAuthFlow::DeviceCode);
+    let cb_cli = reg
+        .get("codebuddy-code")
+        .expect("codebuddy-code alias registered");
+    assert_eq!(cb_cli.name(), "codebuddy");
+    let cb_npm = reg
+        .get("@tencent-ai/codebuddy-code")
+        .expect("@tencent-ai/codebuddy-code alias registered");
+    assert_eq!(cb_npm.name(), "codebuddy");
+
     // Unknown provider
     assert!(reg.get("nonexistent-provider").is_none());
 }

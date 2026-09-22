@@ -27,6 +27,7 @@ pub mod antigravity;
 pub mod atomesus;
 pub mod cline;
 pub mod cloudflare_workers_ai;
+pub mod codebuddy;
 pub mod codex;
 pub mod commandcode;
 pub mod custom_adapter;
@@ -68,6 +69,7 @@ define_provider_adapter! {
             "atomesus" => Atomesus(atomesus, AtomesusAdapter),
             "cline" => Cline(cline, ClineAdapter),
             "cloudflare-workers-ai" => CloudflareWorkersAI(cloudflare_workers_ai, CloudflareWorkersAIAdapter),
+            "codebuddy" => CodeBuddy(codebuddy, CodeBuddyAdapter),
             "codex" => Codex(codex, CodexAdapter),
             "commandcodego" => CommandCodeGo(commandcode, CommandCodeGoAdapter),
             "gemini" => Gemini(gemini, GeminiAdapter),
