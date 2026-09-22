@@ -84,8 +84,18 @@ fn test_codebuddy_error_code_classification() {
         openproxy_types::UpstreamErrorClass::PermissionDenied
     );
 
+    let err_11101 = CodeBuddyErrorCode::from_code(11101).expect("11101 valid");
+    assert_eq!(err_11101.error_subcategory(), "non_stream_not_supported");
+    assert_eq!(
+        err_11101.to_upstream_error_class(),
+        openproxy_types::UpstreamErrorClass::InvalidPayload
+    );
+
     let body = r#"{"code": 14014, "message": "Enterprise usage exhausted"}"#;
     assert_eq!(parse_codebuddy_error_code(body), Some(14014));
+
+    let body_11101 = r#"{"code": 11101, "msg": "Non-stream chat request is currently not supported"}"#;
+    assert_eq!(parse_codebuddy_error_code(body_11101), Some(11101));
 
     let body2 = r#"{"error": {"code": 6001, "message": "TPS limit exceeded"}}"#;
     assert_eq!(parse_codebuddy_error_code(body2), Some(6001));
@@ -97,6 +107,88 @@ fn test_codebuddy_error_code_classification() {
     // HTTP status code 400 without business code is ignored
     let body_generic = r#"{"error": {"code": 400, "message": "Invalid argument: max_tokens 6000"}}"#;
     assert_eq!(parse_codebuddy_error_code(body_generic), None);
+}
+
+fn dummy_codebuddy_resolved_target() -> openproxy_types::context::ResolvedTarget {
+    openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ComboTargetId(1),
+            combo_id: openproxy_types::ComboId(1),
+            provider_id: openproxy_types::ProviderId::new("codebuddy"),
+            account_id: None,
+            model_row_id: Some(openproxy_types::ModelRowId(1)),
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 100,
+            active: true,
+            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+        },
+        model: openproxy_types::Model {
+            row_id: openproxy_types::ModelRowId(1),
+            provider_id: openproxy_types::ProviderId::new("codebuddy"),
+            target_format: openproxy_types::TargetFormat::Openai,
+            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+            expires_at: None,
+            model_id: openproxy_types::ModelId::new("hy3"),
+            display_name: None,
+            context_length: None,
+            max_output_tokens: None,
+            model_type: "chat".into(),
+            family: None,
+            input_modalities_json: None,
+            output_modalities_json: None,
+            capabilities_json: None,
+            timeout_overrides_json: None,
+            active: true,
+            last_test_status: None,
+            last_test_at: None,
+            custom: false,
+            ..Default::default()
+        },
+        api_key: "test-token".to_string(),
+        api_key_label: None,
+        custom_meta: None,
+    }
+}
+
+#[test]
+fn test_codebuddy_forces_stream_in_normalize_and_wrap() {
+    let adapter = CodeBuddyAdapter::new();
+
+    // 1. normalize_openai_request sets stream = true
+    let req = openproxy_types::OpenAIRequest {
+        model: "hy3".into(),
+        stream: false,
+        ..Default::default()
+    };
+    let mut view = openproxy_types::OpenAIRequestView::new(&req, "hy3", &[], false);
+    assert!(!view.stream);
+    adapter.normalize_openai_request(&mut view);
+    assert!(view.stream, "must force stream = true for CodeBuddy upstream");
+
+    // 2. wrap_request_body injects stream = true into json body
+    let raw_unary_json = r#"{"model":"hy3","messages":[{"role":"user","content":"hello"}],"stream":false}"#;
+    let resolved_target = dummy_codebuddy_resolved_target();
+    let wrapped = adapter
+        .wrap_request_body(
+            bytes::Bytes::from(raw_unary_json),
+            TargetFormat::Openai,
+            &ModelId::new("hy3"),
+            &resolved_target,
+        )
+        .expect("wrap succeeds");
+    let wrapped_val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    assert_eq!(
+        wrapped_val.get("stream").and_then(serde_json::Value::as_bool),
+        Some(true),
+        "wrapped body must enforce stream: true"
+    );
 }
 
 #[test]
@@ -301,4 +393,158 @@ async fn test_codebuddy_refresh_version_failures_graceful() {
     unsafe {
         std::env::remove_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL");
     }
+}
+
+#[test]
+fn test_calculate_next_midnight_cst() {
+    let ts = calculate_next_midnight_cst_unix_secs();
+    let now = chrono::Utc::now().timestamp() as u64;
+    assert!(ts > now, "next midnight CST must be in the future");
+    assert!(
+        ts <= now + 86_400 + 3_600,
+        "next midnight CST must be within 25 hours"
+    );
+}
+
+#[test]
+fn test_parse_cst_datetime_to_unix_secs() {
+    let ts = parse_cst_datetime_to_unix_secs("2026-09-30 23:59:59").expect("valid cst date");
+    assert_eq!(ts, 1790783999);
+}
+
+#[test]
+fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
+    let val = serde_json::json!({
+        "code": 0,
+        "msg": "OK",
+        "data": {
+            "Response": {
+                "Data": {
+                    "TotalCount": 2,
+                    "TotalDosage": 350,
+                    "Accounts": [
+                        {
+                            "PackageCode": "TCACA_code_006_DbXS0lrypC",
+                            "PackageName": "Bonus Pack",
+                            "CapacitySize": 250,
+                            "CapacityRemain": 250,
+                            "CapacityUsed": 0,
+                            "CycleStartTime": "2026-09-22 22:53:45",
+                            "CycleEndTime": "2026-10-06 22:53:44",
+                            "DeductionEndTime": 1791298424000_i64,
+                            "Status": 0
+                        },
+                        {
+                            "PackageCode": "TCACA_code_035_ArVxJcGDsm",
+                            "PackageName": "Free Plan Subscription",
+                            "CapacitySize": 100,
+                            "CapacityRemain": 100,
+                            "CapacityUsed": 0,
+                            "CycleStartTime": "2026-09-01 00:00:00",
+                            "CycleEndTime": "2026-09-30 23:59:59",
+                            "DeductionEndTime": 2050412025000_i64,
+                            "Status": 0
+                        }
+                    ]
+                }
+            }
+        }
+    });
+
+    let quota = parse_codebuddy_resource_quota(&val).expect("parsed resource quota");
+    assert_eq!(quota.session_limit, Some(350));
+    assert_eq!(quota.session_used, Some(0));
+    assert_eq!(
+        quota.plan_name.as_deref(),
+        Some("CodeBuddy Free (100 credits + 250 bonus)")
+    );
+    assert_eq!(quota.session_reset_at.as_deref(), Some("1790783999"));
+
+    let details = quota.model_details.unwrap();
+    // minimax-m3: 350 / 0.25 = 1400 calls
+    let m3 = details.iter().find(|d| d.model_id == "minimax-m3").unwrap();
+    assert_eq!(m3.session_limit, 1400);
+    assert_eq!(m3.session_used, 0);
+    assert_eq!(m3.remaining_fraction, 1.0);
+}
+
+#[test]
+fn test_parse_codebuddy_resource_quota_summary_fallback() {
+    let val = serde_json::json!({
+        "code": 0,
+        "msg": "OK",
+        "data": {
+            "Packages": [
+                {
+                    "PackageCode": "TCACA_code_006_DbXS0lrypC",
+                    "CycleTotalCapacity": "250",
+                    "CycleRemainCapacity": "250",
+                    "CycleUsedCapacity": "0"
+                },
+                {
+                    "PackageCode": "TCACA_code_035_ArVxJcGDsm",
+                    "CycleTotalCapacity": "100",
+                    "CycleRemainCapacity": "100",
+                    "CycleUsedCapacity": "0"
+                }
+            ]
+        }
+    });
+
+    let quota = parse_codebuddy_resource_quota(&val).expect("parsed summary quota");
+    assert_eq!(quota.session_limit, Some(350));
+    assert_eq!(quota.session_used, Some(0));
+    assert_eq!(
+        quota.plan_name.as_deref(),
+        Some("CodeBuddy Free (100 credits + 250 bonus)")
+    );
+}
+
+#[test]
+fn test_parse_codebuddy_accounts_quota_default() {
+    let val = serde_json::json!({
+        "code": 0,
+        "msg": "ok",
+        "data": {
+            "accounts": [
+                {
+                    "uid": "user_12345",
+                    "type": "personal",
+                    "pluginEnabled": true
+                }
+            ]
+        }
+    });
+
+    let quota = parse_codebuddy_accounts_quota(&val);
+    assert_eq!(quota.session_limit, Some(100));
+    assert_eq!(quota.session_used, Some(0));
+    assert_eq!(
+        quota.plan_name.as_deref(),
+        Some("CodeBuddy Free (100 credits)")
+    );
+    assert!(quota.session_reset_at.is_some());
+    assert!(quota.model_details.is_some());
+}
+
+#[test]
+fn test_build_codebuddy_resource_request_headers() {
+    let req = build_codebuddy_resource_request(
+        CODEBUDDY_GET_USER_RESOURCE_URL,
+        "test-token-456",
+        Some("http://proxy.local:8080"),
+    );
+    assert_eq!(req.proxy.as_deref(), Some("http://proxy.local:8080"));
+    assert_eq!(
+        req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
+        "Bearer test-token-456"
+    );
+    assert_eq!(
+        req.headers.get(http::header::CONTENT_TYPE).unwrap().to_str().unwrap(),
+        "application/json"
+    );
+    assert_eq!(
+        req.headers.get("x-ide-type").unwrap().to_str().unwrap(),
+        "CLI"
+    );
 }

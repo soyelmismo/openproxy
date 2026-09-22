@@ -158,6 +158,9 @@ export function renderQuotaCell(a: Account): TemplateResult {
     ? Math.round(monthlyDetail.session_used / monthlyDetail.session_limit * 100) : null;
   const monthlyColor = getQuotaColor(monthlyPct);
   const monthlyText = monthlyDetail ? getQuotaText(monthlyDetail.session_used, monthlyDetail.session_limit) : "";
+  const sessionLabel = (a.provider_id === "claude" || a.provider_id === "anthropic")
+    ? "5h Window"
+    : (a.provider_id === "codebuddy" ? "Credits" : "Session Window");
 
   return html`<div class="quota-cell">
     <div class="quota-plan-row">
@@ -165,13 +168,14 @@ export function renderQuotaCell(a: Account): TemplateResult {
     </div>
     <div class="quota-bar ${sessionColor}">
       <div class="quota-bar-header">
-        <span class="quota-bar-label-left">5h Window</span>
+        <span class="quota-bar-label-left">${sessionLabel}</span>
         <span class="quota-bar-label-right">${sessionText}${resetHint(a.quota_session_reset_at)}</span>
       </div>
       <div class="quota-bar-track">
         <div class="quota-bar-fill" style="width: ${sessionPct == null ? 0 : Math.min(100, sessionPct)}%"></div>
       </div>
     </div>
+    ${(a.quota_weekly_used != null || a.quota_weekly_limit != null) ? html`
     <div class="quota-bar ${weeklyColor}">
       <div class="quota-bar-header">
         <span class="quota-bar-label-left">Weekly Window</span>
@@ -180,7 +184,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
       <div class="quota-bar-track">
         <div class="quota-bar-fill" style="width: ${weeklyPct == null ? 0 : Math.min(100, weeklyPct)}%"></div>
       </div>
-    </div>
+    </div>` : null}
     ${monthlyDetail ? html`
     <div class="quota-bar ${monthlyColor}">
       <div class="quota-bar-header">

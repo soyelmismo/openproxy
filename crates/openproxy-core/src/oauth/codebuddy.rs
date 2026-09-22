@@ -22,6 +22,7 @@ use crate::ids::AccountId;
 use crate::oauth::{
     DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
 };
+use rusqlite::OptionalExtension;
 
 pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
 pub const CODEBUDDY_STATE_PATH: &str = "/plugin/auth/state?platform=CLI";
@@ -468,24 +469,15 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
         }
         meta.insert(
             "credit_balance".to_string(),
-            serde_json::Value::Number(30.into()),
+            serde_json::Value::Number(100.into()),
         );
         meta.insert(
-            "daily_credits".to_string(),
-            serde_json::Value::Number(30.into()),
+            "total_credits".to_string(),
+            serde_json::Value::Number(100.into()),
         );
         meta.insert(
             "provider".to_string(),
             serde_json::Value::String("codebuddy".to_string()),
-        );
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-        meta.insert(
-            "last_checkin_date".to_string(),
-            serde_json::Value::String(today),
-        );
-        meta.insert(
-            "streak_days".to_string(),
-            serde_json::Value::Number(1.into()),
         );
         serde_json::to_string(&meta).ok()
     }
@@ -517,13 +509,84 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
         .await;
 
         let pool = Arc::clone(db_pool);
+        let key = master_key.clone();
+        let quota_clone = quota.clone();
         tokio::task::spawn_blocking(move || {
             let conn = pool.writer();
-            openproxy_db::accounts::set_quota(&conn, account_id, &quota)
+            openproxy_db::accounts::set_quota(&conn, account_id, &quota_clone)?;
+            if let Some(limit) = quota_clone.session_limit {
+                let used = quota_clone.session_used.unwrap_or(0);
+                let balance = (limit - used).max(0);
+                update_codebuddy_credit_balance(&conn, account_id, balance, limit, &key)?;
+            }
+            Ok::<(), CoreError>(())
         })
         .await
         .map_err(|e| CoreError::Internal(e.to_string()))??;
 
         Ok(())
     }
+}
+
+/// Updates `oauth_provider_specific` with real credit balances and strips legacy checkin fields.
+pub fn update_codebuddy_credit_balance(
+    conn: &rusqlite::Connection,
+    account_id: AccountId,
+    balance: i64,
+    total: i64,
+    master_key: &MasterKey,
+) -> Result<()> {
+    let raw_meta: Option<String> = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(openproxy_db::error::map_db_error_ctx("get codebuddy meta"))?
+        .flatten();
+
+    let mut map: serde_json::Map<String, serde_json::Value> = if let Some(ref enc) = raw_meta {
+        if let Some(decrypted) =
+            openproxy_db::accounts::decrypt_oauth_provider_specific(Some(enc.as_str()), master_key)
+        {
+            serde_json::from_str(&decrypted).unwrap_or_default()
+        } else if let Ok(parsed) = serde_json::from_str(enc) {
+            parsed
+        } else {
+            serde_json::Map::new()
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    // Remove legacy fake checkin fields
+    map.remove("last_checkin_date");
+    map.remove("streak_days");
+
+    map.insert(
+        "credit_balance".into(),
+        serde_json::Value::Number(balance.into()),
+    );
+    map.insert(
+        "total_credits".into(),
+        serde_json::Value::Number(total.into()),
+    );
+    map.insert(
+        "provider".into(),
+        serde_json::Value::String("codebuddy".into()),
+    );
+
+    let updated_json = serde_json::to_string(&map)
+        .map_err(|e| CoreError::Parse(format!("serialize meta: {e}")))?;
+    let encrypted =
+        openproxy_db::accounts::encrypt_oauth_provider_specific(&updated_json, master_key)?;
+
+    conn.execute(
+        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+        rusqlite::params![encrypted, account_id.0],
+    )
+    .map_err(openproxy_db::error::map_db_error_ctx("update codebuddy credit_balance"))?;
+
+    Ok(())
 }

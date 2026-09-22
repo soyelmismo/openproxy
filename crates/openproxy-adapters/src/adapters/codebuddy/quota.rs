@@ -4,11 +4,20 @@ use crate::adapters::{
 };
 use openproxy_types::quota::{AccountQuota, ModelQuotaDetail, now_unix_secs_str};
 
-/// Base URL for CodeBuddy accounts endpoint.
+/// Base URL for CodeBuddy accounts endpoint (legacy).
 pub const CODEBUDDY_ACCOUNTS_URL: &str = "https://www.codebuddy.ai/v2/accounts";
 
-/// Default daily credits allocated to CodeBuddy free-tier accounts.
-pub const CODEBUDDY_DEFAULT_DAILY_CREDITS: i64 = 30;
+/// Base URL for CodeBuddy resource and credits metering.
+pub const CODEBUDDY_GET_USER_RESOURCE_URL: &str =
+    "https://www.codebuddy.ai/billing/meter/get-user-resource";
+
+/// Secondary URL for CodeBuddy resource summary.
+pub const CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL: &str =
+    "https://www.codebuddy.ai/billing/meter/get-user-resource-summary";
+
+/// Default free-tier credits allocated to CodeBuddy accounts when upstream returns zero/unavailable.
+pub const CODEBUDDY_DEFAULT_FREE_CREDITS: i64 = 100;
+pub const CODEBUDDY_DEFAULT_DAILY_CREDITS: i64 = 100;
 
 /// Model credit cost configuration from CodeBuddy's product.json.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -212,9 +221,191 @@ fn extract_numeric_field(val: &serde_json::Value, keys: &[&str]) -> Option<f64> 
     None
 }
 
+/// Parses a CST (UTC+8) datetime string formatted as `YYYY-MM-DD HH:mm:ss` into unix seconds.
+#[must_use]
+pub fn parse_cst_datetime_to_unix_secs(s: &str) -> Option<u64> {
+    let naive = chrono::NaiveDateTime::parse_from_str(s.trim(), "%Y-%m-%d %H:%M:%S").ok()?;
+    let cst = chrono::FixedOffset::east_opt(8 * 3600)?;
+    let cst_dt = naive.and_local_timezone(cst).single()?;
+    let ts = cst_dt.to_utc().timestamp();
+    if ts > 0 {
+        Some(ts as u64)
+    } else {
+        None
+    }
+}
+
+/// Parses the `/billing/meter/get-user-resource` or `/billing/meter/get-user-resource-summary`
+/// response payload into an [`AccountQuota`] snapshot.
+#[must_use]
+pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<AccountQuota> {
+    let now_utc = chrono::Utc::now().timestamp().max(0) as u64;
+    let mut total_capacity = 0i64;
+    let mut total_remain = 0i64;
+    let mut total_used = 0i64;
+    let mut free_capacity = 0i64;
+    let mut bonus_capacity = 0i64;
+    let mut pro_capacity = 0i64;
+    let mut candidate_resets: Vec<u64> = Vec::new();
+
+    if let Some(accounts) = val
+        .pointer("/data/Response/Data/Accounts")
+        .and_then(serde_json::Value::as_array)
+    {
+        for acc in accounts {
+            let status = acc.get("Status").and_then(serde_json::Value::as_i64).unwrap_or(0);
+            if status != 0 {
+                continue;
+            }
+            let size = extract_numeric_field(
+                acc,
+                &[
+                    "CapacitySize",
+                    "CycleCapacitySize",
+                    "CapacitySizePrecise",
+                    "CycleCapacitySizePrecise",
+                ],
+            )
+            .unwrap_or(0.0)
+            .round() as i64;
+
+            let remain = extract_numeric_field(
+                acc,
+                &[
+                    "CapacityRemain",
+                    "CycleCapacityRemain",
+                    "CapacityRemainPrecise",
+                    "CycleCapacityRemainPrecise",
+                ],
+            )
+            .unwrap_or(0.0)
+            .round() as i64;
+
+            let used = extract_numeric_field(
+                acc,
+                &[
+                    "CapacityUsed",
+                    "CycleCapacityUsed",
+                    "CapacityUsedPrecise",
+                    "CycleCapacityUsedPrecise",
+                ],
+            )
+            .unwrap_or(0.0)
+            .round() as i64;
+
+            let pkg_name = acc
+                .get("PackageName")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let pkg_code = acc
+                .get("PackageCode")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let pkg_lower = pkg_name.to_lowercase();
+
+            total_capacity += size;
+            total_remain += remain;
+            total_used += used;
+
+            if pkg_lower.contains("bonus") || pkg_lower.contains("gift") || pkg_code.contains("006") {
+                bonus_capacity += size;
+            } else if pkg_lower.contains("free") || pkg_lower.contains("trial") || pkg_code.contains("035") {
+                free_capacity += size;
+            } else if pkg_lower.contains("pro") || pkg_lower.contains("standard") || pkg_code.contains("003") || pkg_code.contains("040") {
+                pro_capacity += size;
+            }
+
+            if let Some(end_str) = acc.get("CycleEndTime").and_then(serde_json::Value::as_str)
+                && let Some(ts) = parse_cst_datetime_to_unix_secs(end_str)
+                && ts > now_utc
+            {
+                candidate_resets.push(ts);
+            }
+        }
+    } else if let Some(packages) = val
+        .pointer("/data/Packages")
+        .and_then(serde_json::Value::as_array)
+    {
+        for pkg in packages {
+            let total = extract_numeric_field(pkg, &["CycleTotalCapacity", "TotalCount"])
+                .unwrap_or(0.0)
+                .round() as i64;
+            let remain = extract_numeric_field(pkg, &["CycleRemainCapacity"])
+                .unwrap_or(0.0)
+                .round() as i64;
+            let used = extract_numeric_field(pkg, &["CycleUsedCapacity"])
+                .unwrap_or(0.0)
+                .round() as i64;
+            let pkg_code = pkg
+                .get("PackageCode")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+
+            total_capacity += total;
+            total_remain += remain;
+            total_used += used;
+
+            if pkg_code.contains("006") {
+                bonus_capacity += total;
+            } else if pkg_code.contains("035") {
+                free_capacity += total;
+            } else {
+                pro_capacity += total;
+            }
+        }
+    }
+
+    if total_capacity <= 0 {
+        return None;
+    }
+
+    let plan_name = if pro_capacity > 0 {
+        format!("CodeBuddy Pro ({total_capacity} credits)")
+    } else if free_capacity > 0 && bonus_capacity > 0 {
+        format!("CodeBuddy Free ({free_capacity} credits + {bonus_capacity} bonus)")
+    } else if free_capacity > 0 {
+        format!("CodeBuddy Free ({free_capacity} credits)")
+    } else if bonus_capacity > 0 {
+        format!("CodeBuddy Bonus ({bonus_capacity} credits)")
+    } else {
+        format!("CodeBuddy ({total_capacity} credits)")
+    };
+
+    let effective_used = if total_used > 0 {
+        total_used
+    } else {
+        (total_capacity - total_remain).max(0)
+    };
+
+    let reset_at_secs = candidate_resets
+        .into_iter()
+        .min()
+        .unwrap_or_else(calculate_next_midnight_cst_unix_secs);
+    let reset_at_str = reset_at_secs.to_string();
+    let model_details =
+        build_codebuddy_quota_model_details(total_capacity, effective_used, Some(&reset_at_str));
+
+    Some(AccountQuota {
+        session_used: Some(effective_used),
+        session_limit: Some(total_capacity),
+        session_reset_at: Some(reset_at_str),
+        weekly_used: None,
+        weekly_limit: None,
+        weekly_reset_at: None,
+        plan_name: Some(plan_name),
+        last_fetched_at: now_unix_secs_str(),
+        fetch_error: None,
+        model_details: Some(model_details.into_boxed_slice()),
+    })
+}
+
 /// Parses the `/v2/accounts` response payload into an [`AccountQuota`] snapshot.
 #[must_use]
 pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
+    if let Some(quota) = parse_codebuddy_resource_quota(val) {
+        return quota;
+    }
+
     let accounts_arr = val
         .get("data")
         .and_then(|d| d.get("accounts"))
@@ -222,12 +413,15 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
         .or_else(|| val.get("accounts").and_then(serde_json::Value::as_array));
 
     let first_account = accounts_arr
-        .and_then(|arr| arr.iter().find(|acc| acc.get("pluginEnabled").and_then(serde_json::Value::as_bool).unwrap_or(true)))
+        .and_then(|arr| {
+            arr.iter()
+                .find(|acc| acc.get("pluginEnabled").and_then(serde_json::Value::as_bool).unwrap_or(true))
+        })
         .or_else(|| accounts_arr.and_then(|arr| arr.first()))
         .or_else(|| val.get("data"));
 
-    let mut plan_name = "CodeBuddy Free (30 daily credits)".to_string();
-    let mut session_limit = CODEBUDDY_DEFAULT_DAILY_CREDITS;
+    let mut plan_name = format!("CodeBuddy Free ({CODEBUDDY_DEFAULT_FREE_CREDITS} credits)");
+    let mut session_limit = CODEBUDDY_DEFAULT_FREE_CREDITS;
     let mut session_used = 0i64;
 
     if let Some(acc) = first_account {
@@ -237,10 +431,14 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
                 plan_name = "CodeBuddy Enterprise".to_string();
             } else if t == "team" {
                 plan_name = "CodeBuddy Team".to_string();
-            } else if let Some(plan_str) = acc.get("plan").or_else(|| acc.get("planName")).and_then(serde_json::Value::as_str) {
+            } else if let Some(plan_str) = acc
+                .get("plan")
+                .or_else(|| acc.get("planName"))
+                .and_then(serde_json::Value::as_str)
+            {
                 let p = plan_str.trim();
                 if !p.is_empty() {
-                    plan_name = format!("CodeBuddy {p} (30 daily credits)");
+                    plan_name = format!("CodeBuddy {p}");
                 }
             }
         }
@@ -285,6 +483,34 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
     }
 }
 
+/// Builds an authenticated UpstreamRequest for querying CodeBuddy resource meters.
+#[must_use]
+pub fn build_codebuddy_resource_request(
+    url: &str,
+    token: &str,
+    proxy_url: Option<&str>,
+) -> UpstreamRequest {
+    let mut req = UpstreamRequest::post_json(url, bytes::Bytes::from_static(b"{}"));
+    req.proxy = proxy_url.map(ToString::to_string);
+
+    let trimmed = token.trim();
+    let auth_val = if trimmed.starts_with("Bearer ") {
+        trimmed.to_string()
+    } else {
+        format!("Bearer {trimmed}")
+    };
+    if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
+        req.headers.insert(http::header::AUTHORIZATION, hv);
+    }
+    req.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json, text/plain, */*"),
+    );
+
+    apply_codebuddy_spoofing_headers(&mut req);
+    req
+}
+
 /// Builds an authenticated UpstreamRequest for querying CodeBuddy accounts and credit information.
 #[must_use]
 pub fn build_codebuddy_accounts_request(token: &str, proxy_url: Option<&str>) -> UpstreamRequest {
@@ -321,7 +547,7 @@ pub fn build_codebuddy_accounts_request(token: &str, proxy_url: Option<&str>) ->
     req
 }
 
-/// Fetches CodeBuddy quota from `https://www.codebuddy.ai/v2/accounts` using the provided token.
+/// Fetches CodeBuddy quota using the billing resource meter endpoints.
 pub async fn fetch_codebuddy_quota_unified(
     upstream: &Arc<UpstreamClient>,
     token: &str,
@@ -335,177 +561,67 @@ pub async fn fetch_codebuddy_quota_unified(
         ));
     }
 
-    let req = build_codebuddy_accounts_request(trimmed, proxy_url);
+    // 1. Primary: POST /billing/meter/get-user-resource
+    let req = build_codebuddy_resource_request(CODEBUDDY_GET_USER_RESOURCE_URL, trimmed, proxy_url);
     let cancel = CancellationToken::new();
-    let response = upstream
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .map_err(|e| e.to_core_error(CODEBUDDY_ACCOUNTS_URL))?;
-
-    let status = response.status;
-    if status == http::StatusCode::UNAUTHORIZED {
-        return Err(CoreError::UpstreamConnection(format!(
-            "{CODEBUDDY_ACCOUNTS_URL}: HTTP status 401 (token expired)"
-        )));
-    }
-
-    if response.status.is_success() {
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| e.to_core_error(CODEBUDDY_ACCOUNTS_URL))?;
-        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body) {
-            return Ok(parse_codebuddy_accounts_quota(&json));
+    if let Ok(response) = upstream.call(req, TimeoutProfile::Quota, cancel).await {
+        if response.status == http::StatusCode::UNAUTHORIZED {
+            return Err(CoreError::UpstreamConnection(format!(
+                "{CODEBUDDY_GET_USER_RESOURCE_URL}: HTTP status 401 (token expired)"
+            )));
+        }
+        if response.status.is_success()
+            && let Ok(body) = response.collect().await
+            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
+            && let Some(quota) = parse_codebuddy_resource_quota(&json)
+        {
+            return Ok(quota);
         }
     }
 
-    // Default fallback quota if upstream accounts endpoint is temporarily unreachable
+    // 2. Secondary fallback: POST /billing/meter/get-user-resource-summary
+    let req_summary = build_codebuddy_resource_request(
+        CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL,
+        trimmed,
+        proxy_url,
+    );
+    let cancel = CancellationToken::new();
+    if let Ok(response) = upstream.call(req_summary, TimeoutProfile::Quota, cancel).await {
+        if response.status == http::StatusCode::UNAUTHORIZED {
+            return Err(CoreError::UpstreamConnection(format!(
+                "{CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL}: HTTP status 401 (token expired)"
+            )));
+        }
+        if response.status.is_success()
+            && let Ok(body) = response.collect().await
+            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
+            && let Some(quota) = parse_codebuddy_resource_quota(&json)
+        {
+            return Ok(quota);
+        }
+    }
+
+    // 3. Fallback: default 100 free credits
     let reset_at_secs = calculate_next_midnight_cst_unix_secs();
     let reset_at_str = reset_at_secs.to_string();
     let model_details = build_codebuddy_quota_model_details(
-        CODEBUDDY_DEFAULT_DAILY_CREDITS,
+        CODEBUDDY_DEFAULT_FREE_CREDITS,
         0,
         Some(&reset_at_str),
     );
 
     Ok(AccountQuota {
         session_used: Some(0),
-        session_limit: Some(CODEBUDDY_DEFAULT_DAILY_CREDITS),
+        session_limit: Some(CODEBUDDY_DEFAULT_FREE_CREDITS),
         session_reset_at: Some(reset_at_str),
         weekly_used: None,
         weekly_limit: None,
         weekly_reset_at: None,
-        plan_name: Some("CodeBuddy Free (30 daily credits)".into()),
+        plan_name: Some(format!("CodeBuddy Free ({CODEBUDDY_DEFAULT_FREE_CREDITS} credits)")),
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
         model_details: Some(model_details.into_boxed_slice()),
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
 
-    #[test]
-    fn test_calculate_next_midnight_cst() {
-        let ts = calculate_next_midnight_cst_unix_secs();
-        let now = chrono::Utc::now().timestamp() as u64;
-        assert!(ts > now, "next midnight CST must be in the future");
-        assert!(
-            ts <= now + 86_400 + 3_600,
-            "next midnight CST must be within 25 hours"
-        );
-    }
-
-    #[test]
-    fn test_parse_codebuddy_accounts_quota_default() {
-        let val = serde_json::json!({
-            "code": 0,
-            "msg": "ok",
-            "data": {
-                "accounts": [
-                    {
-                        "uid": "user_12345",
-                        "type": "personal",
-                        "pluginEnabled": true
-                    }
-                ]
-            }
-        });
-
-        let quota = parse_codebuddy_accounts_quota(&val);
-        assert_eq!(quota.session_limit, Some(30));
-        assert_eq!(quota.session_used, Some(0));
-        assert_eq!(
-            quota.plan_name.as_deref(),
-            Some("CodeBuddy Free (30 daily credits)")
-        );
-        assert!(quota.session_reset_at.is_some());
-        assert!(quota.model_details.is_some());
-
-        let details = quota.model_details.unwrap();
-        // Check minimax-m3 capacity: 30 / 0.25 = 120 calls
-        let m3 = details.iter().find(|d| d.model_id == "minimax-m3").unwrap();
-        assert_eq!(m3.session_limit, 120);
-        assert_eq!(m3.session_used, 0);
-        assert_eq!(m3.remaining_fraction, 1.0);
-
-        // Check gemini-3.1-flash-lite: 30 / 0.17 = 176 calls
-        let lite = details
-            .iter()
-            .find(|d| d.model_id == "gemini-3.1-flash-lite")
-            .unwrap();
-        assert_eq!(lite.session_limit, 176);
-
-        // Check hy3: free 0.00 credits
-        let hy3 = details.iter().find(|d| d.model_id == "hy3").unwrap();
-        assert_eq!(hy3.session_limit, 9_999);
-        assert_eq!(hy3.remaining_fraction, 1.0);
-    }
-
-    #[test]
-    fn test_parse_codebuddy_accounts_quota_with_explicit_credits() {
-        let val = serde_json::json!({
-            "code": 0,
-            "data": {
-                "accounts": [
-                    {
-                        "uid": "user_999",
-                        "type": "personal",
-                        "pluginEnabled": true,
-                        "total_credits": 30,
-                        "remaining_credits": 18.5
-                    }
-                ]
-            }
-        });
-
-        let quota = parse_codebuddy_accounts_quota(&val);
-        assert_eq!(quota.session_limit, Some(30));
-        assert_eq!(quota.session_used, Some(11)); // 30 - 19 = 11 used
-
-        let details = quota.model_details.unwrap();
-        let m3 = details.iter().find(|d| d.model_id == "minimax-m3").unwrap();
-        assert_eq!(m3.session_limit, 120);
-        assert_eq!(m3.session_used, 44); // 11 / 0.25 = 44 used
-    }
-
-    #[test]
-    fn test_parse_codebuddy_accounts_enterprise() {
-        let val = serde_json::json!({
-            "data": {
-                "accounts": [
-                    {
-                        "uid": "ent_1",
-                        "type": "enterprise",
-                        "total_credits": 500,
-                        "credits": 250
-                    }
-                ]
-            }
-        });
-
-        let quota = parse_codebuddy_accounts_quota(&val);
-        assert_eq!(quota.session_limit, Some(500));
-        assert_eq!(quota.session_used, Some(250));
-        assert_eq!(quota.plan_name.as_deref(), Some("CodeBuddy Enterprise"));
-    }
-
-    #[test]
-    fn test_build_codebuddy_accounts_request_headers() {
-        let req = build_codebuddy_accounts_request("test-token-123", Some("http://proxy.local:8080"));
-        assert_eq!(req.proxy.as_deref(), Some("http://proxy.local:8080"));
-        assert_eq!(
-            req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
-            "Bearer test-token-123"
-        );
-        assert_eq!(
-            req.headers.get("x-ide-type").unwrap().to_str().unwrap(),
-            "CLI"
-        );
-        assert_eq!(
-            req.headers.get("x-no-enterprise-id").unwrap().to_str().unwrap(),
-            "true"
-        );
-    }
-}

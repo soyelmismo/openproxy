@@ -393,6 +393,26 @@ pub async fn refresh_single_account_quota(
         res?;
     }
 
+    if provider_id_str == "codebuddy"
+        && let Some(limit) = q.session_limit
+    {
+        let used = q.session_used.unwrap_or(0);
+        let balance = (limit - used).max(0);
+        let db_pool_meta = Arc::clone(db_pool);
+        let master_key_meta = Arc::clone(master_key);
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = db_pool_meta.writer();
+            crate::oauth::codebuddy::update_codebuddy_credit_balance(
+                &conn,
+                account_id,
+                balance,
+                limit,
+                master_key_meta.as_ref(),
+            )
+        })
+        .await;
+    }
+
     // GAP-6: after a healthy quota refresh, prune any per-(account, model)
     // "live-limited" sentinels. The TTL-bounded filter (`until_ts <= now`)
     // is applied inside `clear_for_account` so an in-flight `mark_limited`

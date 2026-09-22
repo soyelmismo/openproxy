@@ -15,10 +15,13 @@ pub use crate::spoofer::{
 };
 use crate::spoofer::{ClientSpoofer, CodeBuddySpoofer};
 pub use quota::{
-    CODEBUDDY_ACCOUNTS_URL, CODEBUDDY_DEFAULT_DAILY_CREDITS, CODEBUDDY_MODEL_CREDIT_COSTS,
-    CodeBuddyModelCreditCost, build_codebuddy_accounts_request,
-    build_codebuddy_quota_model_details, calculate_next_midnight_cst_unix_secs,
-    fetch_codebuddy_quota_unified, parse_codebuddy_accounts_quota,
+    CODEBUDDY_ACCOUNTS_URL, CODEBUDDY_DEFAULT_DAILY_CREDITS, CODEBUDDY_DEFAULT_FREE_CREDITS,
+    CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL, CODEBUDDY_GET_USER_RESOURCE_URL,
+    CODEBUDDY_MODEL_CREDIT_COSTS, CodeBuddyModelCreditCost, build_codebuddy_accounts_request,
+    build_codebuddy_quota_model_details, build_codebuddy_resource_request,
+    calculate_next_midnight_cst_unix_secs, fetch_codebuddy_quota_unified,
+    parse_codebuddy_accounts_quota, parse_codebuddy_resource_quota,
+    parse_cst_datetime_to_unix_secs,
 };
 
 pub fn apply_codebuddy_spoofing_headers(req: &mut UpstreamRequest) {
@@ -331,11 +334,46 @@ impl ProviderAdapter for CodeBuddyAdapter {
             .await,
         )
     }
+    fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
+        // CodeBuddy upstream rejects non-streaming chat requests with error 11101.
+        // Forcing stream = true allows the pipeline unary dispatcher to accumulate
+        // the SSE stream into a unary OpenAIResponse seamlessly for non-streaming clients.
+        view.stream = true;
+    }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let mut val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!(
+                "failed to parse request body for codebuddy wrapping: {e}"
+            ))
+        })?;
+
+        if let Some(obj) = val.as_object_mut() {
+            // Guarantee stream: true for CodeBuddy upstream chat completions
+            obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+        }
+
+        let re_encoded = serde_json::to_vec(&val).map_err(|e| {
+            openproxy_types::error::CoreError::Parse(format!(
+                "failed to re-encode request body for codebuddy wrapping: {e}"
+            ))
+        })?;
+
+        Ok(bytes::Bytes::from(re_encoded))
+    }
 }
 
 /// Known business error codes from CodeBuddy / Tencent Cloud Copilot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeBuddyErrorCode {
+    // Protocol constraints
+    NonStreamNotSupported = 11101,
     // 6000..=6008 rate limits
     CraftRateLimit = 6000,
     CraftRateTPSLimit = 6001,
@@ -396,6 +434,7 @@ impl CodeBuddyErrorCode {
             14019 => Some(Self::UsageLimitNoTokenBudget),
             10105 => Some(Self::ConversationLimitExceeded),
             15001 => Some(Self::WebSearchRateLimit),
+            11101 => Some(Self::NonStreamNotSupported),
             11115 => Some(Self::ContextTooLong),
             11140 => Some(Self::AuthForbidden1),
             11141 => Some(Self::ModelBehaviorError),
@@ -470,6 +509,7 @@ impl CodeBuddyErrorCode {
             }
             Self::ConversationLimitExceeded => "quota_active_session",
             Self::WebSearchRateLimit => "quota_web_search",
+            Self::NonStreamNotSupported => "non_stream_not_supported",
             Self::ContextTooLong => "model_input_too_long",
             Self::AuthForbidden1 | Self::AuthForbidden2 => "auth_forbidden",
             Self::ModelBehaviorError => "model_behavior_error",
@@ -481,7 +521,7 @@ impl CodeBuddyErrorCode {
             openproxy_types::UpstreamErrorClass::ResourceExhausted
         } else if self.is_auth_error() {
             openproxy_types::UpstreamErrorClass::PermissionDenied
-        } else if self == Self::ContextTooLong {
+        } else if self == Self::ContextTooLong || self == Self::NonStreamNotSupported {
             openproxy_types::UpstreamErrorClass::InvalidPayload
         } else {
             openproxy_types::UpstreamErrorClass::Generic
