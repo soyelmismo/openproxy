@@ -39,6 +39,13 @@ function getQuotaColor(pct: number | null): string {
   return "ok";
 }
 
+function getRemainingColor(remPct: number | null): string {
+  if (remPct == null) return "unknown";
+  if (remPct <= 20) return "danger";
+  if (remPct <= 50) return "warn";
+  return "ok";
+}
+
 function getQuotaText(used: number | null, limit: number | null): string {
   if (used == null) return "—";
   if (limit === 100) return `${used}% used`;
@@ -68,9 +75,10 @@ function renderModelQuotaRows(details: ModelQuotaDetail[], providerId?: string):
           } else {
             labelText = `${remCalls.toLocaleString()} / ${d.session_limit.toLocaleString()} calls`;
           }
-          // The bar visually expands to show the model's call capacity relative to the highest capacity model
-          barPct = Math.round((remCalls / maxLimit) * 100);
-          color = "ok";
+          // Normalized to 100% of each model's own capacity (full green bar when unused)
+          const remPct = d.session_limit > 0 ? Math.round((remCalls / d.session_limit) * 100) : 100;
+          barPct = remPct;
+          color = getRemainingColor(remPct);
         } else if (d.session_limit === 100 || d.session_limit === 1000) {
           // Normalized percentage scales (e.g. Antigravity 1000, CommandCode 100)
           const pct = d.session_limit > 0 ? Math.round((d.session_used / d.session_limit) * 100) : 0;
