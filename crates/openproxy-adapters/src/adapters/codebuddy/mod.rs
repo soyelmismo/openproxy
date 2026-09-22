@@ -340,6 +340,9 @@ impl ProviderAdapter for CodeBuddyAdapter {
         // Forcing stream = true allows the pipeline unary dispatcher to accumulate
         // the SSE stream into a unary OpenAIResponse seamlessly for non-streaming clients.
         view.stream = true;
+
+        // CodeBuddy upstream security policy requires first message to be role: "system" (error 11128).
+        ensure_codebuddy_system_prompt_in_view(view);
     }
 
     fn wrap_request_body(
@@ -358,6 +361,11 @@ impl ProviderAdapter for CodeBuddyAdapter {
         if let Some(obj) = val.as_object_mut() {
             // Guarantee stream: true for CodeBuddy upstream chat completions
             obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+
+            // Guarantee first message is system prompt for CodeBuddy security policy (code 11128)
+            if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                ensure_codebuddy_system_prompt_json(messages);
+            }
         }
 
         let re_encoded = serde_json::to_vec(&val).map_err(|e| {
@@ -370,11 +378,133 @@ impl ProviderAdapter for CodeBuddyAdapter {
     }
 }
 
+pub const DEFAULT_CODEBUDDY_SYSTEM_PROMPT: &str = "You are CodeBuddy, a helpful AI coding assistant.";
+
+/// Ensures that `messages` in `OpenAIRequestView` starts with a system prompt message.
+pub fn ensure_codebuddy_system_prompt_in_view(view: &mut openproxy_types::OpenAIRequestView) {
+    let messages = view.messages.to_mut();
+    if messages.is_empty() {
+        messages.push(openproxy_types::OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::default(),
+        });
+        return;
+    }
+
+    if messages[0].role == "system" || messages[0].role == "developer" {
+        if messages[0].role == "developer" {
+            messages[0].role = "system".to_string();
+        }
+        let is_empty = match &messages[0].content {
+            None => true,
+            Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+            Some(serde_json::Value::Array(a)) => a.is_empty(),
+            _ => false,
+        };
+        if is_empty {
+            messages[0].content = Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()));
+        }
+        return;
+    }
+
+    if let Some(sys_idx) = messages.iter().position(|m| m.role == "system" || m.role == "developer") {
+        let mut sys_msg = messages.remove(sys_idx);
+        sys_msg.role = "system".to_string();
+        let is_empty = match &sys_msg.content {
+            None => true,
+            Some(serde_json::Value::Null) => true,
+            Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+            Some(serde_json::Value::Array(a)) => a.is_empty(),
+            _ => false,
+        };
+        if is_empty {
+            sys_msg.content = Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()));
+        }
+        messages.insert(0, sys_msg);
+    } else {
+        messages.insert(0, openproxy_types::OpenAIMessage {
+            role: "system".to_string(),
+            content: Some(serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::default(),
+        });
+    }
+}
+
+/// Ensures that a raw JSON `messages` array starts with a system prompt message.
+pub fn ensure_codebuddy_system_prompt_json(messages: &mut Vec<serde_json::Value>) {
+    if messages.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "system",
+            "content": DEFAULT_CODEBUDDY_SYSTEM_PROMPT,
+        }));
+        return;
+    }
+
+    let first_role = messages[0].get("role").and_then(|r| r.as_str()).unwrap_or("");
+    if first_role == "system" || first_role == "developer" {
+        if first_role == "developer"
+            && let Some(obj) = messages[0].as_object_mut()
+        {
+            obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
+        }
+        let content_empty = messages[0].get("content").is_none_or(|c| {
+            c.is_null()
+                || (c.is_string() && c.as_str().unwrap_or("").trim().is_empty())
+                || (c.is_array() && c.as_array().is_some_and(|a| a.is_empty()))
+        });
+        if content_empty
+            && let Some(obj) = messages[0].as_object_mut()
+        {
+            obj.insert(
+                "content".to_string(),
+                serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()),
+            );
+        }
+        return;
+    }
+
+    if let Some(sys_idx) = messages.iter().position(|m| {
+        let r = m.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        r == "system" || r == "developer"
+    }) {
+        let mut sys_msg = messages.remove(sys_idx);
+        if let Some(obj) = sys_msg.as_object_mut() {
+            obj.insert("role".to_string(), serde_json::Value::String("system".to_string()));
+            let content_empty = obj.get("content").is_none_or(|c| {
+                c.is_null()
+                    || (c.is_string() && c.as_str().unwrap_or("").trim().is_empty())
+                    || (c.is_array() && c.as_array().is_some_and(|a| a.is_empty()))
+            });
+            if content_empty {
+                obj.insert(
+                    "content".to_string(),
+                    serde_json::Value::String(DEFAULT_CODEBUDDY_SYSTEM_PROMPT.to_string()),
+                );
+            }
+        }
+        messages.insert(0, sys_msg);
+    } else {
+        messages.insert(0, serde_json::json!({
+            "role": "system",
+            "content": DEFAULT_CODEBUDDY_SYSTEM_PROMPT,
+        }));
+    }
+}
+
 /// Known business error codes from CodeBuddy / Tencent Cloud Copilot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeBuddyErrorCode {
     // Protocol constraints
     NonStreamNotSupported = 11101,
+    FirstMessageNotSystemPrompt = 11128,
     // 6000..=6008 rate limits
     CraftRateLimit = 6000,
     CraftRateTPSLimit = 6001,
@@ -436,6 +566,7 @@ impl CodeBuddyErrorCode {
             10105 => Some(Self::ConversationLimitExceeded),
             15001 => Some(Self::WebSearchRateLimit),
             11101 => Some(Self::NonStreamNotSupported),
+            11128 => Some(Self::FirstMessageNotSystemPrompt),
             11115 => Some(Self::ContextTooLong),
             11140 => Some(Self::AuthForbidden1),
             11141 => Some(Self::ModelBehaviorError),
@@ -511,6 +642,7 @@ impl CodeBuddyErrorCode {
             Self::ConversationLimitExceeded => "quota_active_session",
             Self::WebSearchRateLimit => "quota_web_search",
             Self::NonStreamNotSupported => "non_stream_not_supported",
+            Self::FirstMessageNotSystemPrompt => "first_message_not_system_prompt",
             Self::ContextTooLong => "model_input_too_long",
             Self::AuthForbidden1 | Self::AuthForbidden2 => "auth_forbidden",
             Self::ModelBehaviorError => "model_behavior_error",
@@ -522,7 +654,10 @@ impl CodeBuddyErrorCode {
             openproxy_types::UpstreamErrorClass::ResourceExhausted
         } else if self.is_auth_error() {
             openproxy_types::UpstreamErrorClass::PermissionDenied
-        } else if self == Self::ContextTooLong || self == Self::NonStreamNotSupported {
+        } else if self == Self::ContextTooLong
+            || self == Self::NonStreamNotSupported
+            || self == Self::FirstMessageNotSystemPrompt
+        {
             openproxy_types::UpstreamErrorClass::InvalidPayload
         } else {
             openproxy_types::UpstreamErrorClass::Generic

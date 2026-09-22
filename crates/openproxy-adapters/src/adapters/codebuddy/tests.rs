@@ -91,11 +91,21 @@ fn test_codebuddy_error_code_classification() {
         openproxy_types::UpstreamErrorClass::InvalidPayload
     );
 
+    let err_11128 = CodeBuddyErrorCode::from_code(11128).expect("11128 valid");
+    assert_eq!(err_11128.error_subcategory(), "first_message_not_system_prompt");
+    assert_eq!(
+        err_11128.to_upstream_error_class(),
+        openproxy_types::UpstreamErrorClass::InvalidPayload
+    );
+
     let body = r#"{"code": 14014, "message": "Enterprise usage exhausted"}"#;
     assert_eq!(parse_codebuddy_error_code(body), Some(14014));
 
     let body_11101 = r#"{"code": 11101, "msg": "Non-stream chat request is currently not supported"}"#;
     assert_eq!(parse_codebuddy_error_code(body_11101), Some(11101));
+
+    let body_11128 = r#"{"code": 11128, "msg": "first message is not system prompt"}"#;
+    assert_eq!(parse_codebuddy_error_code(body_11128), Some(11128));
 
     let body2 = r#"{"error": {"code": 6001, "message": "TPS limit exceeded"}}"#;
     assert_eq!(parse_codebuddy_error_code(body2), Some(6001));
@@ -189,6 +199,67 @@ fn test_codebuddy_forces_stream_in_normalize_and_wrap() {
         Some(true),
         "wrapped body must enforce stream: true"
     );
+
+    // 3. wrap_request_body guarantees first message is system prompt
+    let messages = wrapped_val.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
+    assert_eq!(messages[0].get("content").and_then(serde_json::Value::as_str), Some(DEFAULT_CODEBUDDY_SYSTEM_PROMPT));
+    assert_eq!(messages[1].get("role").and_then(serde_json::Value::as_str), Some("user"));
+    assert_eq!(messages[1].get("content").and_then(serde_json::Value::as_str), Some("hello"));
+}
+
+#[test]
+fn test_codebuddy_system_prompt_handling_scenarios() {
+    let adapter = CodeBuddyAdapter::new();
+    let resolved_target = dummy_codebuddy_resolved_target();
+
+    // Scenario A: Existing custom system message at index 1 is moved to index 0
+    let json_with_later_system = r#"{"model":"hy3","messages":[{"role":"user","content":"help"},{"role":"system","content":"custom instructions"}],"stream":true}"#;
+    let wrapped = adapter
+        .wrap_request_body(
+            bytes::Bytes::from(json_with_later_system),
+            TargetFormat::Openai,
+            &ModelId::new("hy3"),
+            &resolved_target,
+        )
+        .unwrap();
+    let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    let msgs = val.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
+    assert_eq!(msgs[0].get("content").and_then(serde_json::Value::as_str), Some("custom instructions"));
+    assert_eq!(msgs[1].get("role").and_then(serde_json::Value::as_str), Some("user"));
+
+    // Scenario B: Developer role is converted to system role at index 0
+    let json_with_developer = r#"{"model":"hy3","messages":[{"role":"developer","content":"rules"},{"role":"user","content":"help"}],"stream":true}"#;
+    let wrapped_dev = adapter
+        .wrap_request_body(
+            bytes::Bytes::from(json_with_developer),
+            TargetFormat::Openai,
+            &ModelId::new("hy3"),
+            &resolved_target,
+        )
+        .unwrap();
+    let val_dev: serde_json::Value = serde_json::from_slice(&wrapped_dev).unwrap();
+    let msgs_dev = val_dev.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    assert_eq!(msgs_dev[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
+    assert_eq!(msgs_dev[0].get("content").and_then(serde_json::Value::as_str), Some("rules"));
+
+    // Scenario C: Empty messages array gets default system prompt
+    let json_empty = r#"{"model":"hy3","messages":[],"stream":true}"#;
+    let wrapped_empty = adapter
+        .wrap_request_body(
+            bytes::Bytes::from(json_empty),
+            TargetFormat::Openai,
+            &ModelId::new("hy3"),
+            &resolved_target,
+        )
+        .unwrap();
+    let val_empty: serde_json::Value = serde_json::from_slice(&wrapped_empty).unwrap();
+    let msgs_empty = val_empty.get("messages").and_then(serde_json::Value::as_array).unwrap();
+    assert_eq!(msgs_empty.len(), 1);
+    assert_eq!(msgs_empty[0].get("role").and_then(serde_json::Value::as_str), Some("system"));
 }
 
 #[test]
@@ -264,7 +335,6 @@ fn test_codebuddy_npm_metadata_url_override() {
 
 #[tokio::test]
 async fn test_codebuddy_refresh_version_mock_server() {
-    let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
     let _lock = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
@@ -308,7 +378,6 @@ async fn test_codebuddy_refresh_version_mock_server() {
 
 #[tokio::test]
 async fn test_codebuddy_refresh_version_dist_tags_and_auth() {
-    let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
     let _lock = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
@@ -357,7 +426,6 @@ async fn test_codebuddy_refresh_version_dist_tags_and_auth() {
 
 #[tokio::test]
 async fn test_codebuddy_refresh_version_failures_graceful() {
-    let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
     let _lock = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
