@@ -230,6 +230,18 @@ describe("buildGlobalSearchGroups", () => {
     const groups = buildGlobalSearchGroups("inactive-model", models, new Set());
     expect(groups.size).toBe(0);
   });
+
+  it("skips models belonging to deactivated providers", () => {
+    const providers = [
+      { id: "hcnsec", name: "HCNSEC", active: false } as any,
+      { id: "openai", name: "OpenAI", active: true } as any,
+    ];
+    const groups = buildGlobalSearchGroups("", models, new Set(), providers);
+    expect(groups.has("hcnsec")).toBe(false);
+    expect(groups.has("openai")).toBe(true);
+    expect(groups.get("openai")?.length).toBe(1);
+    expect(groups.get("openai")?.[0]?.model_id).toBe("gpt-4o");
+  });
 });
 
 describe("subComboOptionsTemplate and subComboHelpTemplate", () => {

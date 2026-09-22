@@ -6,7 +6,7 @@
 import { state } from "../../state/index.js";
 import { api } from "../../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
-import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel } from "../../lib/types/api.js";
+import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel, Provider } from "../../lib/types/api.js";
 import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../../components/toast.js";
 import { ensureModalRoot, showApiError } from "../../lib/ui-utils.js";
@@ -253,10 +253,22 @@ export function buildGlobalSearchGroups(
   query: string,
   models: ModelWithFallbacks[] = (state.models || []) as ModelWithFallbacks[],
   excludedRowIds: Set<number> = existingTargetModelRowIds,
+  providers: Provider[] = (state.providers || []) as Provider[],
 ): Map<string, ModelWithFallbacks[]> {
+  const activeProviders = new Set<string>();
+  const hasProvidersList = Array.isArray(providers) && providers.length > 0;
+  if (hasProvidersList) {
+    for (const p of providers) {
+      if (p.active !== false) {
+        activeProviders.add(p.id);
+      }
+    }
+  }
+
   const groups = new Map<string, ModelWithFallbacks[]>();
   for (const m of models) {
     if (!m.active) continue;
+    if (hasProvidersList && !activeProviders.has(m.provider_id)) continue;
     if (m.row_id != null && excludedRowIds.has(m.row_id)) continue;
     if (!modelMatchesSearch(m, query)) continue;
     const p: string = m.provider_id;
@@ -311,15 +323,17 @@ function renderInitialModelList(): void {
 // ---- Exported handlers ----
 
 export async function showAddTarget(comboId: number): Promise<void> {
-  if (!state.modelsComplete) {
-    state.models = await api("/models") as typeof state.models;
-    state.modelsComplete = true;
-  }
-  state.accounts = await api("/accounts") as Account[];
-  const [sResp, allCombosResp] = await Promise.all([
+  const [modelsResp, accountsResp, providersResp, sResp, allCombosResp] = await Promise.all([
+    state.modelsComplete ? Promise.resolve(state.models) : (api("/models") as Promise<typeof state.models>),
+    api("/accounts").catch(() => [] as Account[]) as Promise<Account[]>,
+    api("/providers").catch(() => [] as Provider[]) as Promise<Provider[]>,
     api(`/combos/${comboId}/targets/valid-sub-combos`).catch(() => [] as ComboSummary[]) as Promise<ComboSummary[]>,
     api("/combos").catch(() => [] as Combo[]) as Promise<Combo[]>,
   ]);
+  state.models = modelsResp;
+  state.modelsComplete = true;
+  state.accounts = accountsResp;
+  state.providers = providersResp;
   const validSubCombos: ComboSummary[] = sResp;
   if (Array.isArray(allCombosResp) && allCombosResp.length > 0) {
     state.combos = allCombosResp;

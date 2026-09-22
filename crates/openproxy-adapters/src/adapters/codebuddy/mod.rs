@@ -205,11 +205,11 @@ impl ProviderAdapter for CodeBuddyAdapter {
         format!("{}/chat/completions", self.config.base_url)
     }
 
-    async fn fetch_models(
+    fn fetch_models(
         &self,
         upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
-    ) -> Result<Vec<DiscoveredModel>> {
+    ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
         // Opportunistically trigger a background refresh of the CLI version from npm registry
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             let client_clone = Arc::clone(upstream_client);
@@ -217,7 +217,7 @@ impl ProviderAdapter for CodeBuddyAdapter {
                 let _ = refresh_codebuddy_version(&client_clone).await;
             });
         }
-        Ok(codebuddy_static_models())
+        std::future::ready(Ok(codebuddy_static_models()))
     }
 
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {

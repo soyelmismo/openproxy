@@ -49,6 +49,20 @@ fn validate_flat_target(
         )));
     }
 
+    let provider_active: bool = conn
+        .query_row(
+            "SELECT active FROM providers WHERE id = ?1",
+            params![provider_id.as_str()],
+            |r| r.get::<_, i64>(0),
+        )
+        .map_or(true, |act| act == 1);
+
+    if !provider_active {
+        return Err(CoreError::Validation(format!(
+            "provider '{provider_id}' is deactivated; reactivate it before adding it as a combo target"
+        )));
+    }
+
     Ok(())
 }
 
