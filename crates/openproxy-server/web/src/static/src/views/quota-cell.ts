@@ -45,21 +45,56 @@ function getQuotaText(used: number | null, limit: number | null): string {
   return `${used} / ${limit ?? "—"}`;
 }
 
-function renderModelQuotaRows(details: ModelQuotaDetail[]): TemplateResult {
+function renderModelQuotaRows(details: ModelQuotaDetail[], providerId?: string): TemplateResult {
+  const isCodeBuddy = providerId === "codebuddy";
+  const limits = details.map((d) => d.session_limit);
+  const maxLimit = Math.max(...limits, 1);
+  const minLimit = Math.min(...limits);
+  const hasVariableDiscreteLimits = isCodeBuddy || (maxLimit > 1000 && maxLimit !== minLimit);
+
   return html`<details class="quota-model-details">
     <summary>Models (${details.length})</summary>
     <div class="quota-model-list">
       ${details.map((d) => {
-        const pct = d.session_limit > 0 ? Math.round(d.session_used / d.session_limit * 100) : 0;
-        const color = getQuotaColor(pct);
+        let labelText: string;
+        let barPct: number;
+        let color: string;
+
+        if (hasVariableDiscreteLimits) {
+          // Discrete call limits per model (e.g. CodeBuddy: minimax-m3=1,400, gpt-5.5=443)
+          const remCalls = Math.max(0, d.session_limit - d.session_used);
+          if (d.session_used === 0) {
+            labelText = `${d.session_limit.toLocaleString()} max calls`;
+          } else {
+            labelText = `${remCalls.toLocaleString()} / ${d.session_limit.toLocaleString()} calls`;
+          }
+          // The bar visually expands to show the model's call capacity relative to the highest capacity model
+          barPct = Math.round((remCalls / maxLimit) * 100);
+          color = "ok";
+        } else if (d.session_limit === 100 || d.session_limit === 1000) {
+          // Normalized percentage scales (e.g. Antigravity 1000, CommandCode 100)
+          const pct = d.session_limit > 0 ? Math.round((d.session_used / d.session_limit) * 100) : 0;
+          labelText = `${pct}% used`;
+          barPct = pct;
+          color = getQuotaColor(pct);
+        } else {
+          // Uniform discrete request counts (e.g. Zai 500)
+          const pct = d.session_limit > 0 ? Math.round((d.session_used / d.session_limit) * 100) : 0;
+          labelText = d.session_used > 0
+            ? `${d.session_used} / ${d.session_limit} (${pct}%)`
+            : `${d.session_limit.toLocaleString()} max calls`;
+          barPct = pct;
+          color = getQuotaColor(pct);
+        }
+
         return html`<div class="quota-model-row">
           <div class="quota-model-header">
-            <span class="quota-model-name">${d.model_id}</span>
-            <span class="quota-model-text">${pct}% used${resetHint(d.session_reset_at)}</span>
+            <span class="quota-model-name" title="${d.model_id}">${d.model_id}</span>
+            <span class="quota-model-text">${labelText}${resetHint(d.session_reset_at)}</span>
           </div>
           <div class="quota-bar mini ${color}">
             <div class="quota-bar-track">
-              <div class="quota-bar-fill" style="width: ${Math.min(100, pct)}%"></div>
+              <div class="quota-bar-fill" style="width: ${Math.min(100, Math.max(0, barPct))}%"></div>
             </div>
           </div>
         </div>`;
@@ -195,7 +230,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
         <div class="quota-bar-fill" style="width: ${monthlyPct == null ? 0 : Math.min(100, monthlyPct)}%"></div>
       </div>
     </div>` : null}
-    ${otherModels && otherModels.length > 0 ? renderModelQuotaRows(otherModels) : null}
+    ${otherModels && otherModels.length > 0 ? renderModelQuotaRows(otherModels, a.provider_id) : null}
     ${badgesResult}
   </div>`;
 }

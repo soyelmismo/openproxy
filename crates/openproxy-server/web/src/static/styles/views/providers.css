@@ -223,7 +223,7 @@
 .health-select.degraded  { color: var(--color-warn);    border-color: var(--color-warn); }
 .health-select.unhealthy { color: var(--color-error);   border-color: var(--color-error); }
 
-.quota-cell { display: flex; flex-direction: column; gap: 0.15rem; min-width: 140px; }
+.quota-cell { display: flex; flex-direction: column; gap: 0.15rem; min-width: 175px; }
 .quota-cell.muted { color: var(--color-text-muted); }
 .quota-cell.error { color: var(--color-error); }
 .quota-cell .quota-plan { color: var(--color-text-muted); font-size: 0.7rem; }
@@ -253,6 +253,7 @@
 .quota-model-details {
   margin-top: var(--space-2);
   font-size: var(--fs-xs);
+  min-width: 175px;
 }
 .quota-model-details summary {
   cursor: pointer;
@@ -279,14 +280,17 @@
 }
 .quota-model-name {
   font-family: var(--font-mono);
-  max-width: 140px;
+  max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .quota-model-text {
   color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .auto-activate-bar {
