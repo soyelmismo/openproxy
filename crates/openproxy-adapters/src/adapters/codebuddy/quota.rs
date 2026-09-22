@@ -15,141 +15,13 @@ pub const CODEBUDDY_GET_USER_RESOURCE_URL: &str =
 pub const CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL: &str =
     "https://www.codebuddy.ai/billing/meter/get-user-resource-summary";
 
-/// Default free-tier credits allocated to CodeBuddy accounts when upstream returns zero/unavailable.
-pub const CODEBUDDY_DEFAULT_FREE_CREDITS: i64 = 100;
-pub const CODEBUDDY_DEFAULT_DAILY_CREDITS: i64 = 100;
+pub use super::{CODEBUDDY_MODELS, CodeBuddyModelDef};
 
-/// Model credit cost configuration from CodeBuddy's product.json.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CodeBuddyModelCreditCost {
-    pub model_id: &'static str,
-    pub display_name: &'static str,
-    pub credit_cost: f64,
-}
+/// Type alias for backward compatibility with existing tests.
+pub type CodeBuddyModelCreditCost = CodeBuddyModelDef;
 
 /// Known model credit multipliers extracted directly from product.json.
-pub const CODEBUDDY_MODEL_CREDIT_COSTS: &[CodeBuddyModelCreditCost] = &[
-    CodeBuddyModelCreditCost {
-        model_id: "minimax-m3",
-        display_name: "MiniMax-M3",
-        credit_cost: 0.25,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gemini-3.1-flash-lite",
-        display_name: "Gemini-3.1-flash-lite",
-        credit_cost: 0.17,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gemini-3.0-flash",
-        display_name: "Gemini-3.0-Flash",
-        credit_cost: 0.33,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gemini-2.5-flash",
-        display_name: "Gemini-2.5-Flash",
-        credit_cost: 0.22,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "fast-model",
-        display_name: "Fast",
-        credit_cost: 0.21,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "balanced-model",
-        display_name: "Balanced",
-        credit_cost: 0.65,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "deep-model",
-        display_name: "Deep",
-        credit_cost: 1.20,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gpt-5.1-codex-mini",
-        display_name: "GPT-5.1-Codex-Mini",
-        credit_cost: 0.18,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "deepseek-v3-2-volc",
-        display_name: "DeepSeek-V3.2",
-        credit_cost: 0.29,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "kimi-k2.5",
-        display_name: "Kimi-K2.5",
-        credit_cost: 0.45,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "kimi-k2.6",
-        display_name: "Kimi-K2.6",
-        credit_cost: 0.52,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "glm-5.0",
-        display_name: "GLM-5.0",
-        credit_cost: 0.80,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "glm-5.2",
-        display_name: "GLM-5.2",
-        credit_cost: 0.79,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "glm-5.3",
-        display_name: "GLM-5.3",
-        credit_cost: 0.79,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gpt-5.1-codex",
-        display_name: "GPT-5.1-Codex",
-        credit_cost: 0.90,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gpt-5.3-codex",
-        display_name: "GPT-5.3-Codex",
-        credit_cost: 1.25,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gemini-2.5-pro",
-        display_name: "Gemini-2.5-Pro",
-        credit_cost: 0.90,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gemini-3.5-flash",
-        display_name: "Gemini-3.5-Flash",
-        credit_cost: 0.99,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gemini-3.1-pro",
-        display_name: "Gemini-3.1-Pro",
-        credit_cost: 1.32,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gpt-5.4",
-        display_name: "GPT-5.4",
-        credit_cost: 1.65,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "kimi-k3",
-        display_name: "Kimi-K3",
-        credit_cost: 1.62,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gpt-5.5",
-        display_name: "GPT-5.5",
-        credit_cost: 3.31,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "gpt-5.6-sol",
-        display_name: "GPT-5.6-Sol",
-        credit_cost: 3.47,
-    },
-    CodeBuddyModelCreditCost {
-        model_id: "hy3",
-        display_name: "Hy3",
-        credit_cost: 0.00,
-    },
-];
+pub const CODEBUDDY_MODEL_CREDIT_COSTS: &[CodeBuddyModelDef] = CODEBUDDY_MODELS;
 
 /// Calculates the exact unix timestamp in seconds for the next 12:00 AM CST (China Standard Time, UTC+8),
 /// matching Tencent CodeBuddy's daily quota reset policy.
@@ -169,16 +41,16 @@ pub fn calculate_next_midnight_cst_unix_secs() -> u64 {
     }
 }
 
-/// Builds breakdown of model capacities and remaining fractions based on CodeBuddy 30 daily credits.
+/// Builds breakdown of model capacities and remaining fractions based on CodeBuddy credit balance.
 #[must_use]
 pub fn build_codebuddy_quota_model_details(
     session_limit: i64,
     session_used: i64,
     reset_at: Option<&str>,
 ) -> Vec<ModelQuotaDetail> {
-    let mut details = Vec::with_capacity(CODEBUDDY_MODEL_CREDIT_COSTS.len());
+    let mut details = Vec::with_capacity(CODEBUDDY_MODELS.len());
 
-    for def in CODEBUDDY_MODEL_CREDIT_COSTS {
+    for def in CODEBUDDY_MODELS {
         let (model_limit, model_used, rem_frac) = if def.credit_cost > 0.0 {
             let m_limit = ((session_limit as f64) / def.credit_cost).floor() as i64;
             let m_used = ((session_used as f64) / def.credit_cost).floor() as i64;
@@ -194,7 +66,7 @@ pub fn build_codebuddy_quota_model_details(
         };
 
         details.push(ModelQuotaDetail {
-            model_id: def.model_id.to_string(),
+            model_id: def.id.to_string(),
             session_used: model_used,
             session_limit: model_limit,
             session_reset_at: reset_at.map(ToString::to_string),
@@ -243,9 +115,7 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
     let mut total_capacity = 0i64;
     let mut total_remain = 0i64;
     let mut total_used = 0i64;
-    let mut free_capacity = 0i64;
-    let mut bonus_capacity = 0i64;
-    let mut pro_capacity = 0i64;
+    let mut packages_info: Vec<(String, i64)> = Vec::new();
     let mut candidate_resets: Vec<u64> = Vec::new();
 
     if let Some(accounts) = val
@@ -296,24 +166,15 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
             let pkg_name = acc
                 .get("PackageName")
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let pkg_code = acc
-                .get("PackageCode")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let pkg_lower = pkg_name.to_lowercase();
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Resource Package");
 
             total_capacity += size;
             total_remain += remain;
             total_used += used;
 
-            if pkg_lower.contains("bonus") || pkg_lower.contains("gift") || pkg_code.contains("006") {
-                bonus_capacity += size;
-            } else if pkg_lower.contains("free") || pkg_lower.contains("trial") || pkg_code.contains("035") {
-                free_capacity += size;
-            } else if pkg_lower.contains("pro") || pkg_lower.contains("standard") || pkg_code.contains("003") || pkg_code.contains("040") {
-                pro_capacity += size;
-            }
+            packages_info.push((pkg_name.to_string(), size));
 
             if let Some(end_str) = acc.get("CycleEndTime").and_then(serde_json::Value::as_str)
                 && let Some(ts) = parse_cst_datetime_to_unix_secs(end_str)
@@ -336,22 +197,29 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
             let used = extract_numeric_field(pkg, &["CycleUsedCapacity"])
                 .unwrap_or(0.0)
                 .round() as i64;
-            let pkg_code = pkg
-                .get("PackageCode")
+            let pkg_name = pkg
+                .get("PackageName")
+                .or_else(|| pkg.get("PackageCode"))
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Package");
 
             total_capacity += total;
             total_remain += remain;
             total_used += used;
 
-            if pkg_code.contains("006") {
-                bonus_capacity += total;
-            } else if pkg_code.contains("035") {
-                free_capacity += total;
-            } else {
-                pro_capacity += total;
-            }
+            packages_info.push((pkg_name.to_string(), total));
+        }
+    }
+
+    if let Some(total_dosage) = val
+        .pointer("/data/Response/Data/TotalDosage")
+        .and_then(|v| extract_numeric_field(v, &[]).or_else(|| v.as_i64().map(|n| n as f64)))
+    {
+        let dosage_int = total_dosage.round() as i64;
+        if dosage_int > 0 {
+            total_capacity = dosage_int;
         }
     }
 
@@ -359,14 +227,12 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
         return None;
     }
 
-    let plan_name = if pro_capacity > 0 {
-        format!("CodeBuddy Pro ({total_capacity} credits)")
-    } else if free_capacity > 0 && bonus_capacity > 0 {
-        format!("CodeBuddy Free ({free_capacity} credits + {bonus_capacity} bonus)")
-    } else if free_capacity > 0 {
-        format!("CodeBuddy Free ({free_capacity} credits)")
-    } else if bonus_capacity > 0 {
-        format!("CodeBuddy Bonus ({bonus_capacity} credits)")
+    let plan_name = if !packages_info.is_empty() {
+        let parts: Vec<String> = packages_info
+            .iter()
+            .map(|(name, size)| format!("{name} ({size} credits)"))
+            .collect();
+        format!("CodeBuddy: {}", parts.join(" + "))
     } else {
         format!("CodeBuddy ({total_capacity} credits)")
     };
@@ -377,18 +243,15 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
         (total_capacity - total_remain).max(0)
     };
 
-    let reset_at_secs = candidate_resets
-        .into_iter()
-        .min()
-        .unwrap_or_else(calculate_next_midnight_cst_unix_secs);
-    let reset_at_str = reset_at_secs.to_string();
+    let reset_at_secs = candidate_resets.into_iter().min();
+    let reset_at_str = reset_at_secs.map(|ts| ts.to_string());
     let model_details =
-        build_codebuddy_quota_model_details(total_capacity, effective_used, Some(&reset_at_str));
+        build_codebuddy_quota_model_details(total_capacity, effective_used, reset_at_str.as_deref());
 
     Some(AccountQuota {
         session_used: Some(effective_used),
         session_limit: Some(total_capacity),
-        session_reset_at: Some(reset_at_str),
+        session_reset_at: reset_at_str,
         weekly_used: None,
         weekly_limit: None,
         weekly_reset_at: None,
@@ -420,8 +283,8 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
         .or_else(|| accounts_arr.and_then(|arr| arr.first()))
         .or_else(|| val.get("data"));
 
-    let mut plan_name = format!("CodeBuddy Free ({CODEBUDDY_DEFAULT_FREE_CREDITS} credits)");
-    let mut session_limit = CODEBUDDY_DEFAULT_FREE_CREDITS;
+    let mut plan_name = "CodeBuddy Account".to_string();
+    let mut session_limit = 0i64;
     let mut session_used = 0i64;
 
     if let Some(acc) = first_account {
@@ -464,15 +327,13 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
         }
     }
 
-    let reset_at_secs = calculate_next_midnight_cst_unix_secs();
-    let reset_at_str = reset_at_secs.to_string();
     let model_details =
-        build_codebuddy_quota_model_details(session_limit, session_used, Some(&reset_at_str));
+        build_codebuddy_quota_model_details(session_limit, session_used, None);
 
     AccountQuota {
         session_used: Some(session_used),
         session_limit: Some(session_limit),
-        session_reset_at: Some(reset_at_str),
+        session_reset_at: None,
         weekly_used: None,
         weekly_limit: None,
         weekly_reset_at: None,
@@ -601,27 +462,9 @@ pub async fn fetch_codebuddy_quota_unified(
         }
     }
 
-    // 3. Fallback: default 100 free credits
-    let reset_at_secs = calculate_next_midnight_cst_unix_secs();
-    let reset_at_str = reset_at_secs.to_string();
-    let model_details = build_codebuddy_quota_model_details(
-        CODEBUDDY_DEFAULT_FREE_CREDITS,
-        0,
-        Some(&reset_at_str),
-    );
-
-    Ok(AccountQuota {
-        session_used: Some(0),
-        session_limit: Some(CODEBUDDY_DEFAULT_FREE_CREDITS),
-        session_reset_at: Some(reset_at_str),
-        weekly_used: None,
-        weekly_limit: None,
-        weekly_reset_at: None,
-        plan_name: Some(format!("CodeBuddy Free ({CODEBUDDY_DEFAULT_FREE_CREDITS} credits)")),
-        last_fetched_at: now_unix_secs_str(),
-        fetch_error: None,
-        model_details: Some(model_details.into_boxed_slice()),
-    })
+    Err(CoreError::UpstreamConnection(
+        "failed to fetch CodeBuddy quota from billing meter endpoints".into(),
+    ))
 }
 
 

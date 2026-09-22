@@ -240,8 +240,12 @@ fn test_codebuddy_dynamic_version_helpers() {
 
 #[test]
 fn test_codebuddy_npm_metadata_url_override() {
-    assert_eq!(codebuddy_npm_metadata_url(), NPM_CODEBUDDY_METADATA_URL);
     let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
+    let _async_guard = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.blocking_lock();
+    unsafe {
+        std::env::remove_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL");
+    }
+    assert_eq!(codebuddy_npm_metadata_url(), NPM_CODEBUDDY_METADATA_URL);
     unsafe {
         std::env::set_var(
             "OPENPROXY_CODEBUDDY_NPM_METADATA_URL",
@@ -260,6 +264,7 @@ fn test_codebuddy_npm_metadata_url_override() {
 
 #[tokio::test]
 async fn test_codebuddy_refresh_version_mock_server() {
+    let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
     let _lock = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
@@ -303,6 +308,7 @@ async fn test_codebuddy_refresh_version_mock_server() {
 
 #[tokio::test]
 async fn test_codebuddy_refresh_version_dist_tags_and_auth() {
+    let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
     let _lock = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
@@ -351,6 +357,7 @@ async fn test_codebuddy_refresh_version_dist_tags_and_auth() {
 
 #[tokio::test]
 async fn test_codebuddy_refresh_version_failures_graceful() {
+    let _guard = crate::spoofer::CODEBUDDY_TEST_LOCK.lock().unwrap();
     let _lock = crate::spoofer::CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
@@ -456,7 +463,7 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
     assert_eq!(quota.session_used, Some(0));
     assert_eq!(
         quota.plan_name.as_deref(),
-        Some("CodeBuddy Free (100 credits + 250 bonus)")
+        Some("CodeBuddy: Bonus Pack (250 credits) + Free Plan Subscription (100 credits)")
     );
     assert_eq!(quota.session_reset_at.as_deref(), Some("1790783999"));
 
@@ -496,7 +503,7 @@ fn test_parse_codebuddy_resource_quota_summary_fallback() {
     assert_eq!(quota.session_used, Some(0));
     assert_eq!(
         quota.plan_name.as_deref(),
-        Some("CodeBuddy Free (100 credits + 250 bonus)")
+        Some("CodeBuddy: TCACA_code_006_DbXS0lrypC (250 credits) + TCACA_code_035_ArVxJcGDsm (100 credits)")
     );
 }
 
@@ -517,13 +524,13 @@ fn test_parse_codebuddy_accounts_quota_default() {
     });
 
     let quota = parse_codebuddy_accounts_quota(&val);
-    assert_eq!(quota.session_limit, Some(100));
+    assert_eq!(quota.session_limit, Some(0));
     assert_eq!(quota.session_used, Some(0));
     assert_eq!(
         quota.plan_name.as_deref(),
-        Some("CodeBuddy Free (100 credits)")
+        Some("CodeBuddy Account")
     );
-    assert!(quota.session_reset_at.is_some());
+    assert!(quota.session_reset_at.is_none());
     assert!(quota.model_details.is_some());
 }
 
