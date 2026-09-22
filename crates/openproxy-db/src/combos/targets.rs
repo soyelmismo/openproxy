@@ -12,6 +12,7 @@ use super::mapping::{
     combo_target_ids_select, combo_target_select, combo_target_with_model_select,
     model_provider_id_select, model_upstream_id_select, row_to_target, row_to_target_with_model,
 };
+use super::resolve::compute_effective_context_window;
 
 fn validate_flat_target(
     conn: &Connection,
@@ -346,7 +347,7 @@ pub fn list_targets_with_model(
     conn: &Connection,
     combo_id: ComboId,
 ) -> Result<Vec<ComboTargetWithModel>> {
-    crate::db_query_all!(
+    let mut targets = crate::db_query_all!(
         conn,
         combo_target_with_model_select!(
             "WHERE ct.combo_id = ?1 \
@@ -355,7 +356,17 @@ pub fn list_targets_with_model(
         params![combo_id.0],
         row_to_target_with_model,
         "list targets with model"
-    )
+    )?;
+    for t in &mut targets {
+        if let Some(sub_id) = t.sub_combo_id {
+            if t.context_length.is_none() || t.context_length <= Some(0) {
+                t.context_length = compute_effective_context_window(conn, sub_id).ok().flatten();
+            }
+        } else if (t.context_length.is_none() || t.context_length <= Some(0)) && !t.model_id.is_empty() {
+            t.context_length = openproxy_types::infer_context_length(&t.model_id);
+        }
+    }
+    Ok(targets)
 }
 
 pub fn get_target(conn: &Connection, id: ComboTargetId) -> Result<Option<ComboTarget>> {

@@ -129,13 +129,13 @@ pub async fn list_models(
     let mut data: Vec<serde_json::Value> =
         rows.into_iter().map(|m| build_model_entry(&m)).collect();
     for c in &combo_rows {
-        let effective_cw = c.context_window.or_else(|| {
-            state
-                .services()
-                .combos
-                .compute_effective_context_window(c.id)
-                .unwrap_or(None)
-        });
+        let effective_cw = state
+            .services()
+            .combos
+            .compute_effective_context_window(c.id)
+            .ok()
+            .flatten()
+            .or(c.context_window);
         data.push(build_combo_entry(c, effective_cw));
     }
 

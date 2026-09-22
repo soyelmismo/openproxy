@@ -8,7 +8,6 @@ use rusqlite::params;
 
 use super::mapping::{
     account_healthy_ids_select, combo_context_window_select, combo_target_model_sub_select,
-    model_context_length_select,
 };
 use super::targets::list_targets;
 
@@ -16,6 +15,8 @@ fn resolve_target_context_window(
     conn: &rusqlite::Connection,
     model_row_id: Option<i64>,
     sub_combo_id: Option<i64>,
+    model_cw: Option<i64>,
+    model_id: &str,
     visited: &mut Vec<openproxy_types::ComboId>,
     depth: u32,
 ) -> openproxy_types::error::Result<Option<i64>> {
@@ -26,17 +27,15 @@ fn resolve_target_context_window(
             visited,
             depth + 1,
         )
-    } else if let Some(row_id) = model_row_id {
-        let model_cw: Option<i64> = conn
-            .query_row(
-                model_context_length_select!("WHERE id = ?1"),
-                rusqlite::params![row_id],
-                |row| row.get(0),
-            )
-            .map_err(crate::error::map_db_error_ctx(format!(
-                "get context_length for model {row_id}"
-            )))?;
-        Ok(model_cw)
+    } else if model_row_id.is_some() {
+        let cw = model_cw.filter(|&c| c > 0).or_else(|| {
+            if model_id.is_empty() {
+                None
+            } else {
+                openproxy_types::infer_context_length(model_id)
+            }
+        });
+        Ok(cw)
     } else {
         Ok(None)
     }
@@ -69,9 +68,21 @@ fn extract_and_resolve_window(
     visited: &mut Vec<ComboId>,
     depth: u32,
 ) -> Result<Option<i64>> {
-    let (model_row_id, sub_combo_id): (Option<i64>, Option<i64>) =
-        crate::map_row_tuple!(row => (0, 1)).map_err(crate::error::map_db_error)?;
-    resolve_target_context_window(conn, model_row_id, sub_combo_id, visited, depth)
+    let (model_row_id, sub_combo_id, model_cw, model_id): (
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        String,
+    ) = crate::map_row_tuple!(row => (0, 1, 2, 3)).map_err(crate::error::map_db_error)?;
+    resolve_target_context_window(
+        conn,
+        model_row_id,
+        sub_combo_id,
+        model_cw,
+        &model_id,
+        visited,
+        depth,
+    )
 }
 
 fn aggregate_target_context_windows(
@@ -81,7 +92,12 @@ fn aggregate_target_context_windows(
     depth: u32,
 ) -> Result<Option<i64>> {
     let mut stmt = conn
-        .prepare(combo_target_model_sub_select!("WHERE ct.combo_id = ?1"))
+        .prepare(combo_target_model_sub_select!(
+            "WHERE ct.combo_id = ?1 \
+             AND ct.active = 1 \
+             AND (ct.sub_combo_id IS NOT NULL OR (COALESCE(p.active, 0) = 1 AND m.id IS NOT NULL AND m.active = 1)) \
+             AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL)"
+        ))
         .map_err(crate::error::map_db_error)?;
     let mut rows = stmt
         .query(rusqlite::params![combo_id.0])
@@ -89,7 +105,7 @@ fn aggregate_target_context_windows(
 
     let mut min_window: Option<i64> = None;
     while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
-        if let Some(cw) = extract_and_resolve_window(conn, row, visited, depth)? {
+        if let Some(cw) = extract_and_resolve_window(conn, row, visited, depth)?.filter(|&cw| cw > 0) {
             min_window = Some(min_window.map_or(cw, |min| std::cmp::min(min, cw)));
         }
     }
@@ -115,10 +131,12 @@ fn compute_effective_context_window_recursive(
             combo_id.0
         )))?;
 
-    let res = if cw.is_some() {
-        Ok(cw)
-    } else {
-        aggregate_target_context_windows(conn, combo_id, visited, depth)
+    let natural = aggregate_target_context_windows(conn, combo_id, visited, depth)?;
+
+    let res = match (cw, natural) {
+        (Some(o), Some(n)) => Ok(Some(std::cmp::min(o, n))),
+        (Some(o), None) => Ok(Some(o)),
+        (None, n) => Ok(n),
     };
 
     visited.pop();

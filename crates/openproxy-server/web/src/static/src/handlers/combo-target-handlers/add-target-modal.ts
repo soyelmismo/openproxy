@@ -10,6 +10,7 @@ import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel } from "
 import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../../components/toast.js";
 import { ensureModalRoot, showApiError } from "../../lib/ui-utils.js";
+import { invalidateSubCombo } from "../../views/combos/subcombo-group.js";
 
 // Local helper type for the model shape that the add-target modal
 // deals with.
@@ -467,6 +468,7 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
     if (!body.sub_combo_id) { showToast("Select a sub-combo first.", "error"); return; }
     try {
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });
+      invalidateSubCombo(comboId);
       if (wrapper) wrapper.remove(); else closeAddTarget();
       requestUpdate();
     } catch (err: unknown) {
@@ -540,6 +542,7 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
   }
 
   if (added > 0 && comboId) {
+    invalidateSubCombo(comboId);
     const { forceRerenderCurrentView } = await import("../../state/router.js");
     forceRerenderCurrentView();
   }

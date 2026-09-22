@@ -19,6 +19,8 @@ import {
   renderSubComboAccordion,
   getSubComboData,
   loadSubComboData,
+  resolveTargetEffectiveCw,
+  clearSubComboCache,
 } from "./combos/subcombo-group.js";
 import { renderCombosList } from "./combos/combos-list.js";
 
@@ -358,7 +360,17 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
         <td class="col-target-provider"><span class="virtual-provider">${target.provider_id}</span></td>
         <td class="col-target-account"><em>${t("combos.target.na")}</em></td>
         <td class="col-target-model"><div class="target-model-title">${modelCell}</div></td>
-        <td class="col-target-context"><em>${t("combos.target.sub_combo")}</em></td>
+        <td class="col-target-context">${(() => {
+          if (target.sub_combo_id != null) {
+            const subCw = resolveTargetEffectiveCw(target);
+            return subCw != null
+              ? html`<span title=${String(subCw)}>${formatTokens(subCw)}</span> <small class="muted">(${t("combos.target.sub_combo")})</small>`
+              : html`<em>${t("combos.target.sub_combo")}</em>`;
+          }
+          return target.context_length
+            ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>`
+            : html`<span class="muted">—</span>`;
+        })()}</td>
         ${showWeight ? html`<td class="col-target-weight"><em>${t("combos.target.na")}</em></td>` : html``}
         <td class="col-target-thinking"><em>${t("combos.target.na")}</em></td>
         <td class="col-target-cooldown"><em>${t("combos.target.sub_combo")}</em></td>
@@ -460,11 +472,14 @@ function renderComboDetail(): TemplateResult {
   const pm = priorityModeOf(combo);
   const showWeight = pm === "weighted";
   const targets = [...detailTargets].sort((a, b) => a.priority_order - b.priority_order);
-  const knownCtx = targets.map((t) => t.context_length).filter((c): c is number => c != null && c > 0);
+  const activeTargets = targets.filter((t) => t.active !== false && t.provider_active !== false);
+  const knownCtx = activeTargets
+    .map((t) => resolveTargetEffectiveCw(t))
+    .filter((c): c is number => c != null && c > 0);
   const autoCw = knownCtx.length > 0 ? Math.min(...knownCtx) : null;
   const autoCwLabel = autoCw != null ? formatTokens(autoCw) : "—";
   const overrideCw = combo.context_window ?? null;
-  const effectiveCw = overrideCw ?? autoCw;
+  const effectiveCw = overrideCw != null && autoCw != null ? Math.min(overrideCw, autoCw) : (overrideCw ?? autoCw);
   const effectiveCwLabel = effectiveCw != null ? formatTokens(effectiveCw) : "—";
   const cds = targets.filter((t) => t.in_cooldown);
   const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>${t("combos.detail.col.weight")}</abbr></th>` : html``;
@@ -515,9 +530,10 @@ export async function mountCombos(opts: { detailId?: number } = {}): Promise<(()
       onLoaded: (data) => {
         detailCombo = data.combo;
         detailTargets = data.targets;
+        clearSubComboCache();
         for (const tgt of data.targets) {
           if (tgt.sub_combo_id != null) {
-            void loadSubComboData(tgt.sub_combo_id, () => requestUpdate());
+            void loadSubComboData(tgt.sub_combo_id, () => requestUpdate(), true);
           }
         }
       },

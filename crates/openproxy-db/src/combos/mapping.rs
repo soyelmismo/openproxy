@@ -69,9 +69,6 @@ pub(crate) use model_provider_id_select;
 crate::def_table_select!(model_upstream_id_select, "models", "model_id");
 pub(crate) use model_upstream_id_select;
 
-crate::def_table_select!(model_context_length_select, "models", "context_length");
-pub(crate) use model_context_length_select;
-
 crate::def_table_select!(combo_context_window_select, "combos", "context_window");
 pub(crate) use combo_context_window_select;
 
@@ -80,8 +77,10 @@ pub(crate) use combo_target_ids_select;
 
 crate::def_table_select!(
     combo_target_model_sub_select,
-    "combo_targets ct",
-    "ct.model_row_id, ct.sub_combo_id"
+    "combo_targets ct \
+     LEFT JOIN providers p ON p.id = ct.provider_id \
+     LEFT JOIN models m ON m.id = ct.model_row_id",
+    "ct.model_row_id, ct.sub_combo_id, m.context_length, COALESCE(m.model_id, '')"
 );
 pub(crate) use combo_target_model_sub_select;
 

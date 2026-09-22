@@ -47,9 +47,48 @@ export function getSubComboData(subComboId: number): SubComboCacheEntry | undefi
   return subComboCache.get(subComboId);
 }
 
-export async function loadSubComboData(subComboId: number, onUpdate: () => void): Promise<void> {
+export function invalidateSubCombo(subComboId: number): void {
+  subComboCache.delete(subComboId);
+}
+
+export function clearSubComboCache(): void {
+  subComboCache.clear();
+}
+
+export function setSubComboCacheForTest(subComboId: number, entry: SubComboCacheEntry): void {
+  subComboCache.set(subComboId, entry);
+}
+
+export function resolveTargetEffectiveCw(target: ComboTargetWithModel, visited = new Set<number>()): number | null {
+  if (target.sub_combo_id != null) {
+    if (visited.has(target.sub_combo_id)) {
+      return target.context_length != null && target.context_length > 0 ? target.context_length : null;
+    }
+    visited.add(target.sub_combo_id);
+    const subData = getSubComboData(target.sub_combo_id);
+    if (subData?.combo && !subData.loading && !subData.error) {
+      const subKnown = (subData.targets || [])
+        .filter((st) => st.active !== false && st.provider_active !== false)
+        .map((st) => resolveTargetEffectiveCw(st, new Set(visited)))
+        .filter((c): c is number => c != null && c > 0);
+      const subAuto = subKnown.length > 0 ? Math.min(...subKnown) : null;
+      const subOverride = subData.combo.context_window ?? null;
+      const eff = subOverride != null && subAuto != null
+        ? Math.min(subOverride, subAuto)
+        : (subOverride ?? subAuto);
+      return eff != null && eff > 0 ? eff : null;
+    }
+  }
+  return target.context_length != null && target.context_length > 0 ? target.context_length : null;
+}
+
+export async function loadSubComboData(
+  subComboId: number,
+  onUpdate: () => void,
+  force = false,
+): Promise<void> {
   const current = subComboCache.get(subComboId);
-  if (current && !current.error && current.combo) {
+  if (!force && current && !current.error && current.combo) {
     return;
   }
 
@@ -79,6 +118,11 @@ export async function loadSubComboData(subComboId: number, onUpdate: () => void)
         loading: false,
         error: null,
       });
+      for (const st of targets || []) {
+        if (st.sub_combo_id != null) {
+          void loadSubComboData(st.sub_combo_id, onUpdate, force);
+        }
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       subComboCache.set(subComboId, {
@@ -531,6 +575,14 @@ export function renderSubComboAccordion(
   const sub = entry.combo;
   const subTargets = entry.targets;
   const pm = (sub.priority_mode ?? "strict") as PriorityMode;
+  const subKnownCtx = subTargets
+    .filter((t) => t.active !== false && t.provider_active !== false)
+    .map((t) => resolveTargetEffectiveCw(t))
+    .filter((c): c is number => c != null && c > 0);
+  const subAutoCw = subKnownCtx.length > 0 ? Math.min(...subKnownCtx) : null;
+  const subEffectiveCw = sub.context_window != null && subAutoCw != null
+    ? Math.min(sub.context_window, subAutoCw)
+    : (sub.context_window ?? subAutoCw);
 
   return html`
     <tr class="subcombo-accordion-row">
@@ -548,6 +600,7 @@ export function renderSubComboAccordion(
                 : html``}
               <span class="subcombo-meta-pill" title="Race lanes">Race: <strong>${sub.race_size || 1}</strong></span>
               <span class="subcombo-meta-pill" title="Target count">Models: <strong>${subTargets.length}</strong></span>
+              <span class="subcombo-meta-pill" title="Effective Context Window">Context: <strong>${subEffectiveCw != null ? formatTokens(subEffectiveCw) : "—"}</strong></span>
             </div>
             <div class="subcombo-header-actions">
               <button
