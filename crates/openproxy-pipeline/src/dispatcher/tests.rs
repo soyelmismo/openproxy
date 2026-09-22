@@ -242,3 +242,83 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         Some(openproxy_types::UpstreamErrorClass::ValidationRequired)
     );
 }
+
+#[test]
+fn test_translate_non_streaming_body_commandcode_raw_chunk_and_full_response() {
+    let (_dummy_tx, dummy_rx) = tokio::sync::watch::channel(None);
+    let pipeline_req = crate::PipelineRequest {
+        request_id: openproxy_types::RequestId::new(),
+        trace_id: openproxy_types::TraceId::new(),
+        combo_id: openproxy_types::ComboId(0),
+        openai_request: std::sync::Arc::new(openproxy_types::OpenAIRequest {
+            model: "meta/muse-spark-1.3-contributor".to_string(),
+            messages: vec![],
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
+            extra: serde_json::Map::new(),
+        }),
+        client_disconnected: dummy_rx,
+        stream_sink: None,
+        api_key_id: None,
+        combo_override: None,
+        targets_override: None,
+        request_headers: std::collections::BTreeMap::new(),
+        request_body_json: None,
+        race_cancelled: false,
+        race_cancel: None,
+        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+        compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+        pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+        compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
+        proxy_override: None,
+    };
+
+    // 1. Raw CommandCode chunk
+    let raw_chunk = serde_json::json!({
+        "type": "text-delta",
+        "text": "Hello world from CommandCode"
+    });
+    let res = super::unary::translate_non_streaming_body(
+        openproxy_types::TargetFormat::CommandCodeGo,
+        &raw_chunk,
+        &pipeline_req,
+    )
+    .expect("must translate raw CommandCode chunk");
+    assert_eq!(
+        res.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str),
+        Some("Hello world from CommandCode")
+    );
+
+    // 2. Full OpenAI response shape
+    let full_openai = serde_json::json!({
+        "id": "chatcmpl_test",
+        "object": "chat.completion",
+        "created": 1234567,
+        "model": "meta/muse-spark-1.3-contributor",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Full response"
+            },
+            "finish_reason": "stop"
+        }]
+    });
+    let res2 = super::unary::translate_non_streaming_body(
+        openproxy_types::TargetFormat::CommandCodeGo,
+        &full_openai,
+        &pipeline_req,
+    )
+    .expect("must deserialize valid OpenAI shape");
+    assert_eq!(
+        res2.choices[0].message.content.as_ref().and_then(serde_json::Value::as_str),
+        Some("Full response")
+    );
+}

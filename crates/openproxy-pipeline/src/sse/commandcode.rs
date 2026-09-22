@@ -8,7 +8,7 @@ use super::{
     parse_provider_json,
 };
 use openproxy_types::error::{CoreError, Result};
-use openproxy_types::{OpenAIChoice, OpenAIMessage, OpenAIResponse};
+use openproxy_types::{OpenAIChoice, OpenAIMessage, OpenAIResponse, OpenAIUsage};
 use serde_json::{Value, json};
 
 pub(crate) const MAX_COMMANDCODE_TOOL_CALLS: usize = 128;
@@ -17,6 +17,8 @@ pub(crate) const MAX_COMMANDCODE_TOOL_CALLS: usize = 128;
 pub struct CommandCodeSseState {
     pub tool_call_ids: Vec<String>,
     pub tool_calls_streamed: Vec<bool>,
+    pub last_finish_step_reason: Option<String>,
+    pub last_finish_step_usage: Option<OpenAIUsage>,
 }
 
 fn map_commandcode_finish_reason(reason: &str) -> String {
@@ -59,11 +61,13 @@ pub fn parse_commandcode_sse_line(
 
     let val: Value = parse_provider_json(data_str, "commandcodego")?;
 
-    if let Some(err) = val.get("error") {
-        let msg = err
-            .get("message")
-            .and_then(Value::as_str)
-            .or_else(|| err.as_str())
+    let event_type = val.get("type").and_then(Value::as_str).unwrap_or("");
+
+    if event_type == "error" || val.get("error").is_some() {
+        let err_obj = val.get("error");
+        let msg = err_obj
+            .and_then(|e| e.get("message").and_then(Value::as_str).or_else(|| e.as_str()))
+            .or_else(|| val.get("message").and_then(Value::as_str))
             .unwrap_or("commandcode error");
         return Err(CoreError::upstream_error(
             500,
@@ -74,10 +78,8 @@ pub fn parse_commandcode_sse_line(
         ));
     }
 
-    let event_type = val.get("type").and_then(Value::as_str).unwrap_or("");
-
     match event_type {
-        "text-delta" => {
+        "text-delta" | "text" => {
             let text = val
                 .get("text")
                 .or_else(|| val.get("textDelta"))
@@ -89,7 +91,7 @@ pub fn parse_commandcode_sse_line(
                 chunk_id, created, model_name, text, false,
             )))
         }
-        "reasoning-delta" => {
+        "reasoning-delta" | "reasoning" => {
             let reasoning = val
                 .get("text")
                 .or_else(|| val.get("reasoningDelta"))
@@ -258,12 +260,12 @@ pub fn parse_commandcode_sse_line(
             }))
         }
         "finish" => {
-            let finish_reason = val
+            let mut finish_reason = val
                 .get("rawFinishReason")
                 .or_else(|| val.get("finishReason"))
                 .or_else(|| val.get("finish_reason"))
                 .and_then(Value::as_str)
-                .map_or_else(|| "stop".to_string(), map_commandcode_finish_reason);
+                .map(map_commandcode_finish_reason);
 
             let usage = val.get("totalUsage").or_else(|| val.get("usage")).map(|u| {
                 let prompt = u
@@ -286,8 +288,24 @@ pub fn parse_commandcode_sse_line(
                         (None, Some(c)) => Some(c),
                         _ => None,
                     });
-                super::build_openai_usage(prompt, completion, total, None)
-            });
+                let cached = u
+                    .get("cachedInputTokens")
+                    .or_else(|| u.get("inputTokenDetails").and_then(|d| d.get("cacheReadTokens")))
+                    .and_then(Value::as_u64)
+                    .and_then(|c| u32::try_from(c).ok());
+                let prompt_details = cached.map(|c| openproxy_types::message::PromptTokensDetails {
+                    cached_tokens: Some(c),
+                });
+                super::build_openai_usage(prompt, completion, total, prompt_details)
+            }).or_else(|| state.last_finish_step_usage.take());
+
+            if let Some(step_reason) = state.last_finish_step_reason.take()
+                && (finish_reason.is_none()
+                    || (finish_reason.as_deref() == Some("stop") && step_reason != "stop"))
+            {
+                finish_reason = Some(step_reason);
+            }
+            let finish_reason = finish_reason.unwrap_or_else(|| "stop".to_string());
 
             let payload = json!({
                 "id": chunk_id,
@@ -317,8 +335,58 @@ pub fn parse_commandcode_sse_line(
                 has_content: false,
             }))
         }
-        "ping" | "heartbeat" | "start" | "start-step" | "reasoning-start" | "reasoning-end"
-        | "provider-metadata" | "tool-result" => Ok(None),
+        "finish-step" | "step-finish" => {
+            let finish_reason = val
+                .get("rawFinishReason")
+                .or_else(|| val.get("finishReason"))
+                .or_else(|| val.get("finish_reason"))
+                .and_then(Value::as_str)
+                .map(map_commandcode_finish_reason);
+
+            let usage = val.get("totalUsage").or_else(|| val.get("usage")).map(|u| {
+                let prompt = u
+                    .get("promptTokens")
+                    .or_else(|| u.get("prompt_tokens"))
+                    .or_else(|| u.get("inputTokens"))
+                    .and_then(Value::as_u64);
+                let completion = u
+                    .get("completionTokens")
+                    .or_else(|| u.get("completion_tokens"))
+                    .or_else(|| u.get("outputTokens"))
+                    .and_then(Value::as_u64);
+                let total = u
+                    .get("totalTokens")
+                    .or_else(|| u.get("total_tokens"))
+                    .and_then(Value::as_u64)
+                    .or_else(|| match (prompt, completion) {
+                        (Some(p), Some(c)) => Some(p + c),
+                        (Some(p), None) => Some(p),
+                        (None, Some(c)) => Some(c),
+                        _ => None,
+                    });
+                let cached = u
+                    .get("cachedInputTokens")
+                    .or_else(|| u.get("inputTokenDetails").and_then(|d| d.get("cacheReadTokens")))
+                    .and_then(Value::as_u64)
+                    .and_then(|c| u32::try_from(c).ok());
+                let prompt_details = cached.map(|c| openproxy_types::message::PromptTokensDetails {
+                    cached_tokens: Some(c),
+                });
+                super::build_openai_usage(prompt, completion, total, prompt_details)
+            });
+
+            if let Some(r) = finish_reason {
+                state.last_finish_step_reason = Some(r);
+            }
+            if let Some(u) = usage {
+                state.last_finish_step_usage = Some(u);
+            }
+
+            Ok(None)
+        }
+        "ping" | "heartbeat" | "start" | "start-step" | "step-start" | "text-start"
+        | "text-end" | "reasoning-start" | "reasoning-end" | "provider-metadata"
+        | "tool-result" => Ok(None),
         _ => Ok(None),
     }
 }
@@ -388,6 +456,22 @@ pub fn parse_commandcode_sse_to_unary(body_str: &str, model_name: &str) -> Resul
         }
     }
 
+    if finish_reason.is_none() {
+        finish_reason = state.last_finish_step_reason.take();
+    }
+    if usage.is_none() {
+        usage = state.last_finish_step_usage.take();
+    }
+
+    let has_any_data = !content.is_empty() || !tool_calls.is_empty() || reasoning_content.is_some();
+    let resolved_finish_reason = finish_reason.or_else(|| {
+        if has_any_data {
+            Some("stop".to_string())
+        } else {
+            None
+        }
+    });
+
     let mut extra = serde_json::Map::new();
     if let Some(r) = reasoning_content {
         extra.insert("reasoning_content".to_string(), json!(r));
@@ -418,7 +502,7 @@ pub fn parse_commandcode_sse_to_unary(body_str: &str, model_name: &str) -> Resul
         choices: vec![OpenAIChoice {
             index: 0,
             message,
-            finish_reason: finish_reason.or_else(|| Some("stop".to_string())),
+            finish_reason: resolved_finish_reason,
         }],
         usage,
     })
@@ -568,5 +652,99 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 5);
         assert_eq!(usage.total_tokens, 15);
+    }
+
+    #[test]
+    fn test_parse_commandcode_real_world_muse_spark_stream() {
+        let stream = "{\"type\":\"start\"}\n\
+                      {\"type\":\"start-step\",\"request\":{\"body\":{\"model\":\"meta/muse-spark-1.3-contributor\"}}}\n\
+                      {\"type\":\"text-start\"}\n\
+                      {\"type\":\"text-delta\",\"text\":\"Hey, I'm here. What\"}\n\
+                      {\"type\":\"text-delta\",\"text\":\" are we working on?\"}\n\
+                      {\"type\":\"text-end\"}\n\
+                      {\"type\":\"finish-step\",\"finishReason\":\"length\",\"usage\":{\"inputTokens\":7312,\"outputTokens\":16,\"totalTokens\":7328}}\n\
+                      {\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":7312,\"outputTokens\":16,\"totalTokens\":7328}}\n\
+                      {\"type\":\"provider-metadata\",\"providerMetadata\":{}}\n";
+        let resp = parse_commandcode_sse_to_unary(stream, "meta/muse-spark-1.3-contributor").unwrap();
+        assert_eq!(resp.model, "meta/muse-spark-1.3-contributor");
+        assert_eq!(
+            resp.choices[0].message.content.as_ref().and_then(Value::as_str),
+            Some("Hey, I'm here. What are we working on?")
+        );
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("length"));
+        let usage = resp.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 7312);
+        assert_eq!(usage.completion_tokens, 16);
+        assert_eq!(usage.total_tokens, 7328);
+    }
+
+    #[test]
+    fn test_parse_commandcode_finish_step_only() {
+        let stream = "{\"type\":\"start\"}\n\
+                      {\"type\":\"text-delta\",\"text\":\"Short text\"}\n\
+                      {\"type\":\"finish-step\",\"finishReason\":\"stop\",\"usage\":{\"promptTokens\":5,\"completionTokens\":2,\"totalTokens\":7}}\n";
+        let resp = parse_commandcode_sse_to_unary(stream, "claude").unwrap();
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
+        let usage = resp.usage.unwrap();
+        assert_eq!(usage.total_tokens, 7);
+    }
+
+    #[test]
+    fn test_parse_commandcode_empty_content_with_length_finish() {
+        let stream = "{\"type\":\"start\"}\n\
+                      {\"type\":\"finish-step\",\"finishReason\":\"length\",\"usage\":{\"inputTokens\":100,\"outputTokens\":16}}\n\
+                      {\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":16}}\n";
+        let resp = parse_commandcode_sse_to_unary(stream, "muse-spark").unwrap();
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("length"));
+        assert_eq!(
+            resp.choices[0].message.content.as_ref().and_then(Value::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn test_parse_commandcode_streaming_finish_step_then_finish_single_terminal() {
+        let mut state = CommandCodeSseState::default();
+        let step_line = "{\"type\":\"finish-step\",\"finishReason\":\"length\",\"usage\":{\"inputTokens\":100,\"outputTokens\":16}}";
+        let chunk_step = parse_commandcode_sse_line(step_line, "c1", 1000, "muse-spark", &mut state).unwrap();
+        // finish-step must NOT emit a finish frame in streaming mode
+        assert!(chunk_step.is_none());
+        assert_eq!(state.last_finish_step_reason.as_deref(), Some("length"));
+
+        let finish_line = "{\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":16}}";
+        let chunk_finish = parse_commandcode_sse_line(finish_line, "c1", 1000, "muse-spark", &mut state).unwrap().unwrap();
+        // finish MUST emit the single terminal done frame with finish_reason
+        assert!(chunk_finish.done);
+        assert_eq!(chunk_finish.stop_reason.as_deref(), Some("length"));
+        assert_eq!(
+            chunk_finish.payload["choices"][0]["finish_reason"].as_str(),
+            Some("length")
+        );
+    }
+
+    #[test]
+    fn test_parse_commandcode_error_event() {
+        let mut state = CommandCodeSseState::default();
+        let err_line = "{\"type\":\"error\",\"message\":\"Rate limit exceeded\"}";
+        let res = parse_commandcode_sse_line(err_line, "c1", 1000, "claude", &mut state);
+        let Err(err) = res else {
+            panic!("expected error result");
+        };
+        let err_str = err.to_string();
+        assert!(err_str.contains("Rate limit exceeded"));
+    }
+
+    #[test]
+    fn test_parse_commandcode_truly_empty_stream_has_none_finish_reason() {
+        let stream = "{\"type\":\"start\"}\n\
+                      {\"type\":\"start-step\"}\n";
+        let resp = parse_commandcode_sse_to_unary(stream, "empty-model").unwrap();
+        // Without any content or finish event, finish_reason must be None so is_empty_response catches it
+        assert_eq!(resp.choices[0].finish_reason, None);
+        assert_eq!(
+            resp.choices[0].message.content.as_ref().and_then(Value::as_str),
+            Some("")
+        );
+        assert!(crate::dispatcher::unary::is_empty_response(&resp));
     }
 }

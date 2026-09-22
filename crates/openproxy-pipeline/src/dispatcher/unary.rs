@@ -107,8 +107,14 @@ pub(super) fn translate_non_streaming_body(
             req.openai_request.model.clone(),
         )),
         openproxy_types::TargetFormat::CommandCodeGo => {
-            <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-                .map_err(|e| CoreError::Parse(format!("parse commandcode response: {e}")))
+            if let Ok(resp) =
+                <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
+            {
+                Ok(resp)
+            } else {
+                let body_str = serde_json::to_string(response_body_raw).unwrap_or_default();
+                crate::sse::parse_commandcode_sse_to_unary(&body_str, &req.openai_request.model)
+            }
         }
         openproxy_types::TargetFormat::SystemOne => {
             <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
@@ -120,7 +126,7 @@ pub(super) fn translate_non_streaming_body(
 /// `true` cuando la respuesta 200 no tiene contenido útil: `content=null`,
 /// `finish_reason=null`/vacío, sin `tool_calls`, sin `reasoning_content`.
 /// Tratamos esto como error para forzar retry.
-pub(super) fn is_empty_response(resp: &OpenAIResponse) -> bool {
+pub(crate) fn is_empty_response(resp: &OpenAIResponse) -> bool {
     resp.choices.first().is_some_and(|c| {
         let msg = &c.message;
         let content_empty = msg
@@ -506,15 +512,17 @@ impl UpstreamDispatcher {
                 (raw, resp)
             }
             Err(e) => {
-                if let Ok(body_str) = std::str::from_utf8(&body_bytes)
-                    && (body_str.starts_with("data:")
-                        || body_str.starts_with("event:")
-                        || body_str.contains("\ndata:")
-                        || body_str.contains("\nevent:"))
+                let body_str = String::from_utf8_lossy(&body_bytes);
+                if params.target_format == openproxy_types::TargetFormat::CommandCodeGo
+                    || body_str.starts_with("data:")
+                    || body_str.starts_with("event:")
+                    || body_str.contains("\ndata:")
+                    || body_str.contains("\nevent:")
+                    || (body_str.trim_start().starts_with('{') && body_str.contains('\n'))
                 {
                     match crate::sse::parse_sse_stream_to_openai_response(
                         params.target_format,
-                        body_str,
+                        &body_str,
                         &params.req.openai_request.model,
                     ) {
                         Ok(resp) => {
