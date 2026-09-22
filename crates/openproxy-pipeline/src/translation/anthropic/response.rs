@@ -17,6 +17,26 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
         .collect::<Vec<_>>()
         .join("");
 
+    let mut tool_calls = Vec::new();
+    for b in &resp.content {
+        if b.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+            && let (Some(id), Some(name), Some(input)) = (
+                b.get("id").and_then(|v| v.as_str()),
+                b.get("name").and_then(|v| v.as_str()),
+                b.get("input"),
+            )
+        {
+            tool_calls.push(serde_json::json!({
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
+                }
+            }));
+        }
+    }
+
     let cache_read = resp.usage.cache_read_input_tokens.unwrap_or(0);
     let cache_creation = resp.usage.cache_creation_input_tokens.unwrap_or(0);
     let prompt_tokens = resp
@@ -27,19 +47,32 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     let completion_tokens = resp.usage.output_tokens;
     let total_tokens = prompt_tokens.saturating_add(completion_tokens);
 
+    let has_tools = !tool_calls.is_empty();
+    let content = if combined.is_empty() && has_tools {
+        None
+    } else {
+        Some(Value::String(combined))
+    };
+
     let message = OpenAIMessage {
         role: "assistant".to_string(),
-        content: Some(Value::String(combined)),
+        content,
         name: None,
         tool_call_id: None,
-        tool_calls: None,
+        tool_calls: if has_tools { Some(tool_calls) } else { None },
         extra: serde_json::Map::new(),
+    };
+
+    let finish_reason = if has_tools {
+        Some("tool_calls".to_string())
+    } else {
+        resp.stop_reason.as_deref().map(map_finish_reason)
     };
 
     let choice = OpenAIChoice {
         index: 0,
         message,
-        finish_reason: resp.stop_reason.as_deref().map(map_finish_reason),
+        finish_reason,
     };
 
     OpenAIResponse {

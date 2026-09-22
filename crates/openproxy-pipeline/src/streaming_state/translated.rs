@@ -102,6 +102,12 @@ impl ChunkProcessor<'_> {
             )));
         }
 
+        // If normalizer stage has residual buffered content, flush before [DONE]
+        if let Some(residual) = self.state.normalizer.finalize() {
+            let sse_bytes = crate::sse::build_sse_frame(&residual);
+            let _ = self.send_to_sink(ctx, sse_bytes).await;
+        }
+
         // If PII stage has residual buffered content, flush before [DONE]
         if let Some(residual) = self.state.pii_stage.as_mut().and_then(|s| s.finalize()) {
             let sse_bytes = crate::sse::build_sse_frame(&residual);
@@ -142,6 +148,18 @@ impl ChunkProcessor<'_> {
         let chunk_has_content = chunk.has_content;
         let json_str = chunk.into_json_string();
 
+        let norm_action = self.state.normalizer.process_chunk(&json_str);
+        if matches!(norm_action, StreamAction::Skip) {
+            if chunk_has_content {
+                stream.note_content_chunk();
+            }
+            return Ok(crate::streaming::ChunkEvent::Skip);
+        }
+        let normalized_json = match &norm_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => &json_str,
+        };
+
         if let Some(a) = self.state.acc.as_mut() {
             if let Some(u) = &self.state.usage {
                 a.set_usage(u.to_owned());
@@ -154,16 +172,16 @@ impl ChunkProcessor<'_> {
             {
                 a.append_reasoning(dr);
             }
-            a.append_openai_raw(&json_str);
+            a.append_openai_raw(normalized_json);
         }
 
         let pii_action = match &mut self.state.pii_stage {
-            Some(stage) => stage.process_chunk(&json_str),
+            Some(stage) => stage.process_chunk(normalized_json),
             None => StreamAction::Passthrough,
         };
         let final_json = match &pii_action {
             StreamAction::Mutate(s) => s.as_str(),
-            _ => &json_str,
+            _ => normalized_json,
         };
 
         let sse_frame = crate::sse::build_sse_frame(final_json);

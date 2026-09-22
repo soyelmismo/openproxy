@@ -6,6 +6,7 @@
 use super::types::{DispatchContext, DispatchParams, NonStreamingSuccessArgs};
 use super::{Dispatcher, UpstreamDispatcher};
 use crate::PipelineResult;
+use crate::inline_tools::extract_inline_tools_from_response;
 use crate::think_extractor::extract_think_from_response;
 use crate::translation::OpenAIResponse;
 use openproxy_adapters::ProviderAdapter;
@@ -494,7 +495,10 @@ impl UpstreamDispatcher {
             Ok(raw) => {
                 let resp =
                     match translate_non_streaming_body(params.target_format, &raw, &params.req) {
-                        Ok(r) => extract_think_from_response(r),
+                        Ok(r) => {
+                            let think_extracted = extract_think_from_response(r);
+                            extract_inline_tools_from_response(think_extracted)
+                        }
                         Err(err) => {
                             return self.record_and_fail(
                                 params.req,
@@ -527,7 +531,8 @@ impl UpstreamDispatcher {
                     ) {
                         Ok(resp) => {
                             let raw = serde_json::to_value(&resp).unwrap_or_default();
-                            (raw, extract_think_from_response(resp))
+                            let think_extracted = extract_think_from_response(resp);
+                            (raw, extract_inline_tools_from_response(think_extracted))
                         }
                         Err(err) => {
                             return self.record_and_fail(

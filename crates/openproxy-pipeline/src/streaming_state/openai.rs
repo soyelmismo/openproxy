@@ -73,7 +73,7 @@ impl ChunkProcessor<'_> {
         &mut self,
         mut chunk: crate::sse::UpstreamSseChunk,
         json_payload: &str,
-    ) {
+    ) -> Option<String> {
         if let Some(new_usage) = chunk.usage.take() {
             self.state.usage = Some(match self.state.usage.take() {
                 Some(existing) => merge_usage(existing, new_usage),
@@ -99,6 +99,7 @@ impl ChunkProcessor<'_> {
             a.process_chunk(payload_str);
             let _ = chunk.delta_reasoning.take();
         }
+        effective_payload
     }
 
     pub(super) async fn process_openai_metadata_chunk(
@@ -122,7 +123,7 @@ impl ChunkProcessor<'_> {
         };
 
         let has_content = chunk.has_content;
-        self.update_state_and_acc_from_metadata_chunk(chunk, json_payload);
+        let effective_payload = self.update_state_and_acc_from_metadata_chunk(chunk, json_payload);
 
         if let Some(event) = self.check_race_cancelled(ctx) {
             return Ok(event);
@@ -132,10 +133,6 @@ impl ChunkProcessor<'_> {
             stream.note_content_chunk();
         }
 
-        let effective_payload = match self.state.normalizer.process_chunk(json_payload) {
-            StreamAction::Mutate(s) => Some(s),
-            _ => None,
-        };
         let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
 
         let pii_action = match &mut self.state.pii_stage {

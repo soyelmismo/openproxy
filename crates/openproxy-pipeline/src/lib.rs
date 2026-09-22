@@ -18,6 +18,7 @@ pub mod credentials;
 pub mod error_classification;
 pub mod execution;
 pub mod formatting;
+pub mod inline_tools;
 pub mod load_balancing;
 pub mod oauth;
 pub mod predictive_rate_limit;

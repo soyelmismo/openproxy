@@ -173,11 +173,13 @@ pub(crate) fn apply_reasoning_normalizations(
 }
 
 /// Modular streaming stage that normalizes non-standard reasoning fields,
-/// extracts `<think>` blocks into `reasoning_content`, and normalizes tool call arguments.
+/// extracts `<think>` blocks into `reasoning_content`, extracts inline tool calls,
+/// and normalizes tool call arguments.
 #[derive(Default)]
 pub struct ReasoningNormalizer {
     pub think_extractor: ThinkStreamExtractor,
     pub tool_call_acc: ToolCallAccumulator,
+    pub inline_tool_extractor: crate::inline_tools::InlineToolStreamExtractor,
 }
 
 impl ReasoningNormalizer {
@@ -188,17 +190,30 @@ impl ReasoningNormalizer {
 
 impl StreamingChunkStage for ReasoningNormalizer {
     fn process_chunk(&mut self, payload: &str) -> StreamAction {
-        match apply_reasoning_normalizations(
+        let payload_after_reasoning = match apply_reasoning_normalizations(
             payload,
             &mut self.think_extractor,
             &mut self.tool_call_acc,
         ) {
-            Some(modified) => StreamAction::Mutate(modified),
-            None => StreamAction::Passthrough,
+            Some(modified) => std::borrow::Cow::Owned(modified),
+            None => std::borrow::Cow::Borrowed(payload),
+        };
+
+        match self.inline_tool_extractor.process_chunk(&payload_after_reasoning) {
+            StreamAction::Skip => StreamAction::Skip,
+            StreamAction::Mutate(s) => StreamAction::Mutate(s),
+            StreamAction::Done => StreamAction::Done,
+            StreamAction::Passthrough => match payload_after_reasoning {
+                std::borrow::Cow::Owned(m) => StreamAction::Mutate(m),
+                std::borrow::Cow::Borrowed(_) => StreamAction::Passthrough,
+            },
         }
     }
 
     fn finalize(&mut self) -> Option<String> {
+        if let Some(tool_chunk) = self.inline_tool_extractor.finalize() {
+            return Some(tool_chunk);
+        }
         let (clean_content, _) = self.think_extractor.flush();
         if clean_content.is_empty() {
             None
