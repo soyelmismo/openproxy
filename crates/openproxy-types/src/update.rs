@@ -47,3 +47,35 @@ impl<T> UpdateField<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_field_methods() {
+        let ignore: UpdateField<i32> = UpdateField::Ignore;
+        let reset: UpdateField<i32> = UpdateField::Reset;
+        let set: UpdateField<i32> = UpdateField::Set(42);
+
+        // is_ignore
+        assert!(ignore.is_ignore());
+        assert!(!reset.is_ignore());
+        assert!(!set.is_ignore());
+
+        // as_ref
+        assert_eq!(ignore.as_ref(), UpdateField::Ignore);
+        assert_eq!(reset.as_ref(), UpdateField::Reset);
+        assert_eq!(set.as_ref(), UpdateField::Set(&42));
+
+        // map
+        assert_eq!(ignore.map(|x| x * 2), UpdateField::Ignore);
+        assert_eq!(reset.map(|x| x * 2), UpdateField::Reset);
+        assert_eq!(set.map(|x| x * 2), UpdateField::Set(84));
+
+        // into_option
+        assert_eq!(ignore.into_option(), None);
+        assert_eq!(reset.into_option(), Some(None));
+        assert_eq!(set.into_option(), Some(Some(42)));
+    }
+}
