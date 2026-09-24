@@ -118,9 +118,15 @@ fn test_wrap_request_body_enforces_stream_true() {
         Some(true),
         "Codex must ALWAYS enforce stream: true on request payload"
     );
-    assert!(val.get("temperature").is_none(), "Codex must strip temperature");
+    assert!(
+        val.get("temperature").is_none(),
+        "Codex must strip temperature"
+    );
     assert!(val.get("top_p").is_none(), "Codex must strip top_p");
-    assert!(val.get("max_tokens").is_none(), "Codex must strip max_tokens");
+    assert!(
+        val.get("max_tokens").is_none(),
+        "Codex must strip max_tokens"
+    );
     assert!(val.get("stop").is_none(), "Codex must strip stop");
     assert_eq!(val["reasoning"]["effort"], "high");
 }
@@ -243,10 +249,14 @@ fn test_codex_hardcoded_models_parity() {
 
 #[test]
 fn test_has_valid_codex_version() {
-    assert!(has_valid_codex_version("codex-cli/0.156.1 (Windows 10.0.26200; x64)"));
+    assert!(has_valid_codex_version(
+        "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
+    ));
     assert!(has_valid_codex_version("codex-cli/0.158.0"));
     assert!(has_valid_codex_version("codex/1.0.0"));
-    assert!(!has_valid_codex_version("codex-cli/0.144.0 (Windows 10.0.26200; x64)"));
+    assert!(!has_valid_codex_version(
+        "codex-cli/0.144.0 (Windows 10.0.26200; x64)"
+    ));
     assert!(!has_valid_codex_version("curl/7.68.0"));
     assert!(!has_valid_codex_version(""));
 }
@@ -270,12 +280,22 @@ fn test_codex_spoofer_preserves_valid_and_upgrades_invalid_ua() {
     CodexSpoofer.apply_to_header_map(&mut headers);
 
     assert_eq!(
-        headers.get(http::header::USER_AGENT).unwrap().to_str().unwrap(),
+        headers
+            .get(http::header::USER_AGENT)
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
     );
     assert_eq!(headers.get("version").unwrap().to_str().unwrap(), "0.156.1");
-    assert_eq!(headers.get("origin").unwrap().to_str().unwrap(), "https://chatgpt.com");
-    assert_eq!(headers.get("originator").unwrap().to_str().unwrap(), "codex_cli_rs");
+    assert_eq!(
+        headers.get("origin").unwrap().to_str().unwrap(),
+        "https://chatgpt.com"
+    );
+    assert_eq!(
+        headers.get("originator").unwrap().to_str().unwrap(),
+        "codex_cli_rs"
+    );
 
     // 2. Preserve modern User-Agent >= 0.156.0
     let mut headers_modern = http::HeaderMap::new();
@@ -291,10 +311,17 @@ fn test_codex_spoofer_preserves_valid_and_upgrades_invalid_ua() {
     CodexSpoofer.apply_to_header_map(&mut headers_modern);
 
     assert_eq!(
-        headers_modern.get(http::header::USER_AGENT).unwrap().to_str().unwrap(),
+        headers_modern
+            .get(http::header::USER_AGENT)
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "codex-cli/0.158.0 (Linux x86_64)"
     );
-    assert_eq!(headers_modern.get("version").unwrap().to_str().unwrap(), "0.158.0");
+    assert_eq!(
+        headers_modern.get("version").unwrap().to_str().unwrap(),
+        "0.158.0"
+    );
 }
 
 #[test]
@@ -341,6 +368,9 @@ fn test_merge_codex_models_preserves_base_and_adds_backend() {
         .iter()
         .find(|m| m.model_id.as_str() == "gpt-5.6-luna")
         .unwrap();
-    assert_eq!(updated_luna.display_name.as_deref(), Some("GPT-5.6 Luna Updated"));
+    assert_eq!(
+        updated_luna.display_name.as_deref(),
+        Some("GPT-5.6 Luna Updated")
+    );
     assert_eq!(updated_luna.context_length, Some(300_000));
 }

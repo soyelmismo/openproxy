@@ -67,9 +67,7 @@ impl CodexAdapter {
         }
     }
 
-    pub fn build_hardcoded_codex_model(
-        t: (&str, &str, i64, i64, bool),
-    ) -> DiscoveredModel {
+    pub fn build_hardcoded_codex_model(t: (&str, &str, i64, i64, bool)) -> DiscoveredModel {
         models::build_hardcoded_codex_model(t)
     }
 

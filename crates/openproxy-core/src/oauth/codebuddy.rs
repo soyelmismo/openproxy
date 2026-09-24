@@ -109,7 +109,10 @@ impl CodeBuddyOAuthProvider {
             CN_CODEBUDDY_BASE_URL,
             MIRROR_CODEBUDDY_BASE_URL,
         ] {
-            if !list.iter().any(|u| u.trim_end_matches('/') == fallback.trim_end_matches('/')) {
+            if !list
+                .iter()
+                .any(|u| u.trim_end_matches('/') == fallback.trim_end_matches('/'))
+            {
                 list.push(fallback.to_string());
             }
         }
@@ -189,7 +192,10 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
             let cancel = CancellationToken::new();
-            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+            let response = match upstream_client
+                .call(req, TimeoutProfile::OAuth, cancel)
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     last_err = Some(map_upstream_err(e, "codebuddy device state request"));
@@ -203,38 +209,40 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 .await
                 .map_err(|e| map_upstream_err(e, "codebuddy device state body read"))?;
 
-        super::check_oauth_status(status, "codebuddy", &body)?;
+            super::check_oauth_status(status, "codebuddy", &body)?;
 
-        let json: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Parse(format!("codebuddy device state parse: {e}")))?;
+            let json: serde_json::Value = serde_json::from_slice(&body)
+                .map_err(|e| CoreError::Parse(format!("codebuddy device state parse: {e}")))?;
 
-        if let Some(code) = read_envelope_code(&json)
-            && code != 0
-        {
-            let msg = json
-                .get("msg")
-                .or_else(|| json.get("message"))
+            if let Some(code) = read_envelope_code(&json)
+                && code != 0
+            {
+                let msg = json
+                    .get("msg")
+                    .or_else(|| json.get("message"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown error");
+                return Err(CoreError::upstream_error(
+                    status.as_u16(),
+                    "codebuddy",
+                    "<oauth>",
+                    format!("codebuddy device state failed [code {code}]: {msg}"),
+                    false,
+                ));
+            }
+
+            let data = json.get("data").unwrap_or(&json);
+            let state = data
+                .get("state")
                 .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown error");
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "codebuddy",
-                "<oauth>",
-                format!("codebuddy device state failed [code {code}]: {msg}"),
-                false,
-            ));
-        }
-
-        let data = json.get("data").unwrap_or(&json);
-        let state = data
-            .get("state")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CoreError::Parse("codebuddy device state missing 'state'".into()))?;
-        let auth_url = data
-            .get("authUrl")
-            .or_else(|| data.get("auth_url"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CoreError::Parse("codebuddy device state missing 'authUrl'".into()))?;
+                .ok_or_else(|| CoreError::Parse("codebuddy device state missing 'state'".into()))?;
+            let auth_url = data
+                .get("authUrl")
+                .or_else(|| data.get("auth_url"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    CoreError::Parse("codebuddy device state missing 'authUrl'".into())
+                })?;
 
             return Ok(DeviceAuthorizationResponse {
                 device_code: state.to_string(),
@@ -287,7 +295,10 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
             let cancel = CancellationToken::new();
-            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+            let response = match upstream_client
+                .call(req, TimeoutProfile::OAuth, cancel)
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     last_err = Some(map_upstream_err(e, "codebuddy device token poll"));
@@ -431,12 +442,16 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 && let Some(host) = uri.host()
                 && let Ok(val) = http::HeaderValue::from_str(host)
             {
-                req.headers.insert(http::HeaderName::from_static("x-domain"), val);
+                req.headers
+                    .insert(http::HeaderName::from_static("x-domain"), val);
             }
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
             let cancel = CancellationToken::new();
-            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+            let response = match upstream_client
+                .call(req, TimeoutProfile::OAuth, cancel)
+                .await
+            {
                 Ok(resp) => resp,
                 Err(e) => {
                     last_err = Some(map_upstream_err(e, "codebuddy token refresh"));
@@ -467,7 +482,9 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             let json: serde_json::Value = match serde_json::from_slice(&body) {
                 Ok(j) => j,
                 Err(e) => {
-                    last_err = Some(CoreError::Parse(format!("codebuddy token refresh parse: {e}")));
+                    last_err = Some(CoreError::Parse(format!(
+                        "codebuddy token refresh parse: {e}"
+                    )));
                     continue;
                 }
             };
@@ -500,7 +517,9 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 .or_else(|| data.get("access_token"))
                 .and_then(serde_json::Value::as_str)
             else {
-                last_err = Some(CoreError::Parse("codebuddy refresh missing 'accessToken'".into()));
+                last_err = Some(CoreError::Parse(
+                    "codebuddy refresh missing 'accessToken'".into(),
+                ));
                 continue;
             };
 
