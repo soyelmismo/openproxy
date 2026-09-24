@@ -15,6 +15,114 @@ pub const CODEBUDDY_GET_USER_RESOURCE_URL: &str =
 pub const CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL: &str =
     "https://www.codebuddy.ai/billing/meter/get-user-resource-summary";
 
+/// Default CodeBuddy base URL.
+pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
+
+/// Mirror CodeBuddy base URL (Tencent Cloud mainland China gateway).
+pub const MIRROR_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.cn/v2";
+
+/// Resolve canonical base URL for CodeBuddy API calls.
+/// Respects `OPENPROXY_CODEBUDDY_BASE_URL` or `OPENPROXY_CODEBUDDY_AUTH_BASE_URL` env vars if set.
+#[must_use]
+pub fn codebuddy_base_url() -> String {
+    std::env::var("OPENPROXY_CODEBUDDY_BASE_URL")
+        .or_else(|_| std::env::var("OPENPROXY_CODEBUDDY_AUTH_BASE_URL"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CODEBUDDY_BASE_URL.to_string())
+}
+
+/// Normalizes base URL into origin host (e.g. `https://www.codebuddy.ai/v2` -> `https://www.codebuddy.ai`).
+#[must_use]
+pub fn codebuddy_origin_from_base_url(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    if let Some(prefix) = trimmed.strip_suffix("/v2") {
+        prefix.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Returns prioritized list of candidate origins for CodeBuddy API communication,
+/// supporting automated fallback between `.ai` and `.cn` gateways.
+#[must_use]
+pub fn codebuddy_candidate_origins() -> Vec<String> {
+    let configured_origin = codebuddy_origin_from_base_url(&codebuddy_base_url());
+    let mut origins = vec![configured_origin.clone()];
+
+    if configured_origin.contains("127.0.0.1") || configured_origin.contains("localhost") {
+        return origins;
+    }
+
+    if configured_origin.contains("codebuddy.ai") {
+        let mirror = configured_origin.replace("codebuddy.ai", "codebuddy.cn");
+        if !origins.contains(&mirror) {
+            origins.push(mirror);
+        }
+    } else if configured_origin.contains("codebuddy.cn") {
+        let mirror = configured_origin.replace("codebuddy.cn", "codebuddy.ai");
+        if !origins.contains(&mirror) {
+            origins.push(mirror);
+        }
+    } else if !origins.iter().any(|o| o.contains("codebuddy.cn")) {
+        origins.push("https://www.codebuddy.cn".to_string());
+    }
+
+    origins
+}
+
+/// Extracts `(credit_balance, total_credits)` from `oauth_provider_specific` JSON string if present.
+#[must_use]
+pub fn parse_codebuddy_provider_specific(
+    provider_specific: Option<&str>,
+) -> (Option<i64>, Option<i64>) {
+    let Some(raw) = provider_specific else {
+        return (None, None);
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (None, None);
+    };
+    let total = json.get("total_credits").and_then(serde_json::Value::as_i64);
+    let balance = json.get("credit_balance").and_then(serde_json::Value::as_i64);
+    (balance, total)
+}
+
+/// Checks if an upstream response envelope signals an authentication or token expiration error.
+#[must_use]
+pub fn is_codebuddy_auth_error(json: &serde_json::Value) -> bool {
+    let code = json
+        .get("code")
+        .and_then(serde_json::Value::as_i64)
+        .or_else(|| {
+            json.get("response")
+                .and_then(|r| r.get("code").or_else(|| r.pointer("/data/code")))
+                .and_then(serde_json::Value::as_i64)
+        });
+
+    if let Some(c) = code
+        && matches!(c, 14015 | 11140 | 11142 | 10001)
+    {
+        return true;
+    }
+
+    if let Some(msg) = json
+        .get("msg")
+        .or_else(|| json.get("message"))
+        .and_then(serde_json::Value::as_str)
+    {
+        let lower = msg.to_ascii_lowercase();
+        if lower.contains("token expired")
+            || lower.contains("invalid token")
+            || lower.contains("unauthorized")
+            || lower.contains("refreshtoken is empty")
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 pub use super::{CODEBUDDY_MODELS, CodeBuddyModelDef};
 
 /// Type alias for backward compatibility with existing tests.
@@ -117,10 +225,21 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
     let mut packages_info: Vec<(String, i64)> = Vec::new();
     let mut candidate_resets: Vec<u64> = Vec::new();
 
-    if let Some(accounts) = val
+    let accounts = val
         .pointer("/data/Response/Data/Accounts")
-        .and_then(serde_json::Value::as_array)
-    {
+        .or_else(|| val.pointer("/Response/Data/Accounts"))
+        .or_else(|| val.pointer("/data/Accounts"))
+        .or_else(|| val.pointer("/Accounts"))
+        .and_then(serde_json::Value::as_array);
+
+    let packages = val
+        .pointer("/data/Packages")
+        .or_else(|| val.pointer("/Packages"))
+        .and_then(serde_json::Value::as_array);
+
+    let accounts_or_packages_present = accounts.is_some() || packages.is_some();
+
+    if let Some(accounts) = accounts {
         for acc in accounts {
             let status = acc
                 .get("Status")
@@ -185,10 +304,7 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
                 candidate_resets.push(ts);
             }
         }
-    } else if let Some(packages) = val
-        .pointer("/data/Packages")
-        .and_then(serde_json::Value::as_array)
-    {
+    } else if let Some(packages) = packages {
         for pkg in packages {
             let total = extract_numeric_field(pkg, &["CycleTotalCapacity", "TotalCount"])
                 .unwrap_or(0.0)
@@ -217,6 +333,9 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
 
     if let Some(total_dosage) = val
         .pointer("/data/Response/Data/TotalDosage")
+        .or_else(|| val.pointer("/Response/Data/TotalDosage"))
+        .or_else(|| val.pointer("/data/TotalDosage"))
+        .or_else(|| val.pointer("/TotalDosage"))
         .and_then(|v| extract_numeric_field(v, &[]).or_else(|| v.as_i64().map(|n| n as f64)))
     {
         let dosage_int = total_dosage.round() as i64;
@@ -225,7 +344,7 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
         }
     }
 
-    if total_capacity <= 0 {
+    if total_capacity <= 0 && !accounts_or_packages_present {
         return None;
     }
 
@@ -392,10 +511,14 @@ pub fn build_codebuddy_resource_request(
     req
 }
 
-/// Builds an authenticated UpstreamRequest for querying CodeBuddy accounts and credit information.
+/// Builds an authenticated UpstreamRequest for querying CodeBuddy accounts using a custom URL.
 #[must_use]
-pub fn build_codebuddy_accounts_request(token: &str, proxy_url: Option<&str>) -> UpstreamRequest {
-    let mut req = UpstreamRequest::get(CODEBUDDY_ACCOUNTS_URL);
+pub fn build_codebuddy_accounts_request_with_url(
+    url: &str,
+    token: &str,
+    proxy_url: Option<&str>,
+) -> UpstreamRequest {
+    let mut req = UpstreamRequest::get(url);
     req.proxy = proxy_url.map(ToString::to_string);
 
     let trimmed = token.trim();
@@ -428,11 +551,25 @@ pub fn build_codebuddy_accounts_request(token: &str, proxy_url: Option<&str>) ->
     req
 }
 
-/// Fetches CodeBuddy quota using the billing resource meter endpoints.
+/// Builds an authenticated UpstreamRequest for querying CodeBuddy accounts and credit information.
+#[must_use]
+pub fn build_codebuddy_accounts_request(token: &str, proxy_url: Option<&str>) -> UpstreamRequest {
+    build_codebuddy_accounts_request_with_url(CODEBUDDY_ACCOUNTS_URL, token, proxy_url)
+}
+
+fn append_quota_error(dst: &mut String, err: &str) {
+    if !dst.is_empty() {
+        dst.push_str("; ");
+    }
+    dst.push_str(err);
+}
+
+/// Fetches CodeBuddy quota using billing resource meters with automatic domain fallback
+/// (.ai <-> .cn mirrors), accounts endpoint fallback, and cached credit recovery.
 pub async fn fetch_codebuddy_quota_unified(
     upstream: &Arc<UpstreamClient>,
     token: &str,
-    _provider_specific: Option<&str>,
+    provider_specific: Option<&str>,
     proxy_url: Option<&str>,
 ) -> Result<AccountQuota> {
     let trimmed = token.trim();
@@ -442,50 +579,194 @@ pub async fn fetch_codebuddy_quota_unified(
         ));
     }
 
-    // 1. Primary: POST /billing/meter/get-user-resource
-    let req = build_codebuddy_resource_request(CODEBUDDY_GET_USER_RESOURCE_URL, trimmed, proxy_url);
-    let cancel = CancellationToken::new();
-    if let Ok(response) = upstream.call(req, TimeoutProfile::Quota, cancel).await {
-        if response.status == http::StatusCode::UNAUTHORIZED {
-            return Err(CoreError::UpstreamConnection(format!(
-                "{CODEBUDDY_GET_USER_RESOURCE_URL}: HTTP status 401 (token expired)"
-            )));
+    let candidate_origins = codebuddy_candidate_origins();
+    let mut last_err = String::new();
+
+    for origin in &candidate_origins {
+        let resource_url = format!("{origin}/billing/meter/get-user-resource");
+        let summary_url = format!("{origin}/billing/meter/get-user-resource-summary");
+        let accounts_url = format!("{origin}/v2/accounts");
+
+        // 1 & 2. Meter endpoints: get-user-resource and get-user-resource-summary
+        for meter_url in [&resource_url, &summary_url] {
+            let req = build_codebuddy_resource_request(meter_url, trimmed, proxy_url);
+            let cancel = CancellationToken::new();
+            match upstream.call(req, TimeoutProfile::Quota, cancel).await {
+                Ok(response) => {
+                    let status = response.status;
+                    if status == http::StatusCode::UNAUTHORIZED {
+                        return Err(CoreError::UpstreamConnection(format!(
+                            "{meter_url}: HTTP status 401 (token expired)"
+                        )));
+                    }
+                    if status.is_success()
+                        && let Ok(body) = response.collect().await
+                        && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
+                    {
+                        if is_codebuddy_auth_error(&json) {
+                            return Err(CoreError::UpstreamConnection(format!(
+                                "{meter_url}: HTTP status 401 (token expired)"
+                            )));
+                        }
+                        if let Some(quota) = parse_codebuddy_resource_quota(&json) {
+                            return Ok(quota);
+                        }
+                    }
+                    append_quota_error(
+                        &mut last_err,
+                        &format!("{meter_url}: status {}", status.as_u16()),
+                    );
+                }
+                Err(e) => {
+                    append_quota_error(&mut last_err, &format!("{meter_url}: {e}"));
+                }
+            }
         }
-        if response.status.is_success()
-            && let Ok(body) = response.collect().await
-            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
-            && let Some(quota) = parse_codebuddy_resource_quota(&json)
-        {
-            return Ok(quota);
+
+        // 3. Tertiary fallback: GET /v2/accounts
+        let req_accounts =
+            build_codebuddy_accounts_request_with_url(&accounts_url, trimmed, proxy_url);
+        let cancel = CancellationToken::new();
+        match upstream.call(req_accounts, TimeoutProfile::Quota, cancel).await {
+            Ok(response) => {
+                let status = response.status;
+                if status == http::StatusCode::UNAUTHORIZED {
+                    return Err(CoreError::UpstreamConnection(format!(
+                        "{accounts_url}: HTTP status 401 (token expired)"
+                    )));
+                }
+                if status.is_success()
+                    && let Ok(body) = response.collect().await
+                    && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
+                {
+                    if is_codebuddy_auth_error(&json) {
+                        return Err(CoreError::UpstreamConnection(format!(
+                            "{accounts_url}: HTTP status 401 (token expired)"
+                        )));
+                    }
+                    let mut quota = parse_codebuddy_accounts_quota(&json);
+                    if quota.session_limit.unwrap_or(0) == 0 {
+                        let (cached_bal, cached_tot) =
+                            parse_codebuddy_provider_specific(provider_specific);
+                        if let Some(tot) = cached_tot
+                            && tot > 0
+                        {
+                            let bal = cached_bal.unwrap_or(tot);
+                            let used = (tot - bal).max(0);
+                            quota.session_limit = Some(tot);
+                            quota.session_used = Some(used);
+                            let reset_at_secs = calculate_next_midnight_cst_unix_secs();
+                            let reset_at_str = reset_at_secs.to_string();
+                            quota.session_reset_at = Some(reset_at_str.clone());
+                            quota.model_details = Some(
+                                build_codebuddy_quota_model_details(tot, used, Some(&reset_at_str))
+                                    .into_boxed_slice(),
+                            );
+                        }
+                    }
+                    return Ok(quota);
+                }
+                append_quota_error(
+                    &mut last_err,
+                    &format!("{accounts_url}: status {}", status.as_u16()),
+                );
+            }
+            Err(e) => {
+                append_quota_error(&mut last_err, &format!("{accounts_url}: {e}"));
+            }
         }
     }
 
-    // 2. Secondary fallback: POST /billing/meter/get-user-resource-summary
-    let req_summary = build_codebuddy_resource_request(
-        CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL,
-        trimmed,
-        proxy_url,
-    );
-    let cancel = CancellationToken::new();
-    if let Ok(response) = upstream
-        .call(req_summary, TimeoutProfile::Quota, cancel)
-        .await
+    // 4. Quaternary fallback: Recover from cached credit balances in `provider_specific`
+    let (cached_bal, cached_tot) = parse_codebuddy_provider_specific(provider_specific);
+    if let Some(tot) = cached_tot
+        && tot > 0
     {
-        if response.status == http::StatusCode::UNAUTHORIZED {
-            return Err(CoreError::UpstreamConnection(format!(
-                "{CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL}: HTTP status 401 (token expired)"
-            )));
-        }
-        if response.status.is_success()
-            && let Ok(body) = response.collect().await
-            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
-            && let Some(quota) = parse_codebuddy_resource_quota(&json)
-        {
-            return Ok(quota);
-        }
+        let bal = cached_bal.unwrap_or(tot);
+        let used = (tot - bal).max(0);
+        let reset_at_secs = calculate_next_midnight_cst_unix_secs();
+        let reset_at_str = reset_at_secs.to_string();
+        let model_details = build_codebuddy_quota_model_details(tot, used, Some(&reset_at_str));
+
+        return Ok(AccountQuota {
+            session_used: Some(used),
+            session_limit: Some(tot),
+            session_reset_at: Some(reset_at_str),
+            weekly_used: None,
+            weekly_limit: None,
+            weekly_reset_at: None,
+            plan_name: Some(format!("CodeBuddy (cached: {tot} credits)")),
+            last_fetched_at: now_unix_secs_str(),
+            fetch_error: Some(format!(
+                "upstream connection error: failed to fetch CodeBuddy quota from billing meter endpoints ({last_err})"
+            )),
+            model_details: Some(model_details.into_boxed_slice()),
+        });
     }
 
     Err(CoreError::UpstreamConnection(
-        "failed to fetch CodeBuddy quota from billing meter endpoints".into(),
+        if last_err.is_empty() {
+            "failed to fetch CodeBuddy quota from billing meter endpoints".into()
+        } else {
+            format!("failed to fetch CodeBuddy quota from billing meter endpoints: {last_err}")
+        },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_codebuddy_candidate_origins_default_and_custom() {
+        let origins = codebuddy_candidate_origins();
+        assert!(origins.contains(&"https://www.codebuddy.ai".to_string()));
+        assert!(origins.contains(&"https://www.codebuddy.cn".to_string()));
+        assert_eq!(codebuddy_origin_from_base_url("https://www.codebuddy.ai/v2"), "https://www.codebuddy.ai");
+        assert_eq!(codebuddy_origin_from_base_url("https://www.codebuddy.cn/v2/"), "https://www.codebuddy.cn");
+    }
+
+    #[test]
+    fn test_parse_codebuddy_provider_specific() {
+        let meta = r#"{"credit_balance":85,"total_credits":100,"provider":"codebuddy"}"#;
+        let (bal, tot) = parse_codebuddy_provider_specific(Some(meta));
+        assert_eq!(bal, Some(85));
+        assert_eq!(tot, Some(100));
+
+        let empty: Option<&str> = None;
+        assert_eq!(parse_codebuddy_provider_specific(empty), (None, None));
+    }
+
+    #[test]
+    fn test_is_codebuddy_auth_error() {
+        let json_expired = serde_json::json!({"code": 14015, "msg": "License expired"});
+        assert!(is_codebuddy_auth_error(&json_expired));
+
+        let json_forbidden = serde_json::json!({"code": 11140, "msg": "Auth forbidden"});
+        assert!(is_codebuddy_auth_error(&json_forbidden));
+
+        let json_msg = serde_json::json!({"code": 500, "msg": "Token expired, please login again"});
+        assert!(is_codebuddy_auth_error(&json_msg));
+
+        let json_ok = serde_json::json!({"code": 0, "msg": "OK"});
+        assert!(!is_codebuddy_auth_error(&json_ok));
+    }
+
+    #[test]
+    fn test_build_codebuddy_accounts_request_with_url() {
+        let req = build_codebuddy_accounts_request_with_url(
+            "https://www.codebuddy.cn/v2/accounts",
+            "test-token-cn",
+            Some("http://proxy.local:8080"),
+        );
+        assert_eq!(req.proxy.as_deref(), Some("http://proxy.local:8080"));
+        assert_eq!(
+            req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
+            "Bearer test-token-cn"
+        );
+        assert_eq!(
+            req.headers.get("x-no-enterprise-id").unwrap().to_str().unwrap(),
+            "true"
+        );
+    }
 }

@@ -1,5 +1,6 @@
 use super::first_header;
 use crate::adapters::*;
+use crate::parse_codex_models_json;
 use crate::upstream::UpstreamClient;
 use openproxy_types::{CoreError, ModelId, TargetFormat};
 use std::sync::Arc;
@@ -294,4 +295,65 @@ fn antigravity_builds_bearer_auth() {
 fn antigravity_has_no_models_url() {
     let a = AntigravityAdapter::new();
     assert!(a.models_url().is_none());
+}
+
+// ---- Codex ---------------------------------------------------------
+
+#[test]
+fn codex_models_url_points_to_backend_api() {
+    let a = CodexAdapter::new();
+    assert_eq!(
+        a.models_url().as_deref(),
+        Some("https://chatgpt.com/backend-api/codex/models")
+    );
+}
+
+#[test]
+fn codex_parse_models_json_handles_dynamic_payload_and_priorities() {
+    let payload = serde_json::json!({
+        "models": [
+            {
+                "slug": "gpt-custom-b",
+                "display_name": "Custom Model B",
+                "context_window": 500_000,
+                "priority": 2,
+                "input_modalities": ["text"]
+            },
+            {
+                "slug": "gpt-custom-a",
+                "display_name": "Custom Model A",
+                "context_window": 300_000,
+                "priority": 1,
+                "input_modalities": ["text", "image"]
+            },
+            {
+                "slug": "codex-auto-review",
+                "display_name": "Auto Review",
+                "context_window": 272_000,
+                "priority": 99,
+                "input_modalities": ["text"]
+            }
+        ]
+    });
+    let bytes = serde_json::to_vec(&payload).unwrap();
+    let discovered = parse_codex_models_json(&bytes).expect("parse models");
+    assert_eq!(discovered.len(), 2, "codex-auto-review must be filtered out");
+    assert_eq!(discovered[0].model_id.as_str(), "gpt-custom-a", "must sort by priority");
+    assert_eq!(discovered[1].model_id.as_str(), "gpt-custom-b");
+    assert_eq!(discovered[0].context_length, Some(300_000));
+    assert_eq!(discovered[1].context_length, Some(500_000));
+    assert_eq!(discovered[0].capabilities.as_ref().unwrap().vision, Some(true));
+    assert_eq!(discovered[1].capabilities.as_ref().unwrap().vision, Some(false));
+}
+
+#[tokio::test]
+async fn codex_fetch_models_discovers_dynamic_upstream_catalog() {
+    let adapter = CodexAdapter::new();
+    let upstream = Arc::new(UpstreamClient::new());
+    let models = adapter.fetch_models(&upstream, "").await.expect("fetch models");
+    assert!(models.len() >= 10);
+    let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
+    assert!(ids.contains(&"gpt-6-astra"));
+    assert!(ids.contains(&"gpt-6-sol"));
+    assert!(ids.contains(&"gpt-6-luna"));
 }

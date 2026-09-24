@@ -83,6 +83,29 @@ impl CodeBuddyOAuthProvider {
         }
         codebuddy_base_url()
     }
+
+    pub fn candidate_base_urls(&self) -> Vec<String> {
+        if let Some(ref base) = self.custom_base_url {
+            return vec![base.clone()];
+        }
+        let base = codebuddy_base_url();
+        let mut list = vec![base.clone()];
+        if base.contains("127.0.0.1") || base.contains("localhost") {
+            return list;
+        }
+        if base.contains("codebuddy.ai") {
+            let mirror = base.replace("codebuddy.ai", "codebuddy.cn");
+            if !list.contains(&mirror) {
+                list.push(mirror);
+            }
+        } else if base.contains("codebuddy.cn") {
+            let mirror = base.replace("codebuddy.cn", "codebuddy.ai");
+            if !list.contains(&mirror) {
+                list.push(mirror);
+            }
+        }
+        list
+    }
 }
 
 impl OAuthProvider for CodeBuddyOAuthProvider {
@@ -123,48 +146,53 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
         &self,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<DeviceAuthorizationResponse> {
-        let base = self.base_url();
-        let trimmed_base = base.trim_end_matches('/');
-        let url = format!("{trimmed_base}{CODEBUDDY_STATE_PATH}");
+        let mut last_err = None;
 
-        let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"));
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-authorization"),
-            http::HeaderValue::from_static("true"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-user-id"),
-            http::HeaderValue::from_static("true"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-enterprise-id"),
-            http::HeaderValue::from_static("true"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-department-info"),
-            http::HeaderValue::from_static("true"),
-        );
-        openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
+        for base in self.candidate_base_urls() {
+            let trimmed_base = base.trim_end_matches('/');
+            let url = format!("{trimmed_base}{CODEBUDDY_STATE_PATH}");
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "codebuddy device state request"))?;
+            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"));
+            req.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            req.headers.insert(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/json"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-authorization"),
+                http::HeaderValue::from_static("true"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-user-id"),
+                http::HeaderValue::from_static("true"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-enterprise-id"),
+                http::HeaderValue::from_static("true"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-department-info"),
+                http::HeaderValue::from_static("true"),
+            );
+            openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codebuddy device state body read"))?;
+            let cancel = CancellationToken::new();
+            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = Some(map_upstream_err(e, "codebuddy device state request"));
+                    continue;
+                }
+            };
+
+            let status = response.status;
+            let body = response
+                .collect()
+                .await
+                .map_err(|e| map_upstream_err(e, "codebuddy device state body read"))?;
 
         super::check_oauth_status(status, "codebuddy", &body)?;
 
@@ -199,14 +227,19 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| CoreError::Parse("codebuddy device state missing 'authUrl'".into()))?;
 
-        Ok(DeviceAuthorizationResponse {
-            device_code: state.to_string(),
-            user_code: state.to_string(),
-            verification_uri: auth_url.to_string(),
-            verification_uri_complete: Some(auth_url.to_string()),
-            expires_in: Some(300),
-            interval: Some(2),
-        })
+            return Ok(DeviceAuthorizationResponse {
+                device_code: state.to_string(),
+                user_code: state.to_string(),
+                verification_uri: auth_url.to_string(),
+                verification_uri_complete: Some(auth_url.to_string()),
+                expires_in: Some(300),
+                interval: Some(2),
+            });
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            CoreError::UpstreamConnection("all codebuddy base urls failed".into())
+        }))
     }
 
     async fn poll_device_token(
@@ -214,100 +247,227 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
         device_code: &str,
         upstream_client: &Arc<UpstreamClient>,
     ) -> Result<Option<TokenResponse>> {
-        let base = self.base_url();
-        let trimmed_base = base.trim_end_matches('/');
-        let encoded_state = urlencoding::encode(device_code);
-        let url = format!("{trimmed_base}{CODEBUDDY_TOKEN_PATH}?state={encoded_state}");
+        let mut last_err = None;
 
-        let mut req = UpstreamRequest::get(&url);
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-authorization"),
-            http::HeaderValue::from_static("true"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-user-id"),
-            http::HeaderValue::from_static("true"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-enterprise-id"),
-            http::HeaderValue::from_static("true"),
-        );
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-no-department-info"),
-            http::HeaderValue::from_static("true"),
-        );
-        openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
+        for base in self.candidate_base_urls() {
+            let trimmed_base = base.trim_end_matches('/');
+            let encoded_state = urlencoding::encode(device_code);
+            let url = format!("{trimmed_base}{CODEBUDDY_TOKEN_PATH}?state={encoded_state}");
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "codebuddy device token poll"))?;
+            let mut req = UpstreamRequest::get(&url);
+            req.headers.insert(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/json"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-authorization"),
+                http::HeaderValue::from_static("true"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-user-id"),
+                http::HeaderValue::from_static("true"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-enterprise-id"),
+                http::HeaderValue::from_static("true"),
+            );
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-no-department-info"),
+                http::HeaderValue::from_static("true"),
+            );
+            openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codebuddy device token poll read"))?;
-
-        // 404 or 428 standard pending response
-        if status.as_u16() == 404 || status.as_u16() == 428 {
-            return Ok(None);
-        }
-
-        let json_res: std::result::Result<serde_json::Value, _> = serde_json::from_slice(&body);
-        if let Ok(json) = json_res {
-            if let Some(code) = read_envelope_code(&json) {
-                if code == LOGIN_TOKEN_PENDING_CODE || code == LOGIN_ACCOUNT_PENDING_CODE {
-                    return Ok(None);
+            let cancel = CancellationToken::new();
+            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = Some(map_upstream_err(e, "codebuddy device token poll"));
+                    continue;
                 }
-                if code != 0 {
-                    let msg = json
-                        .get("msg")
-                        .or_else(|| json.get("message"))
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown error");
-                    return Err(CoreError::upstream_error(
-                        status.as_u16(),
-                        "codebuddy",
-                        "<oauth>",
-                        format!("codebuddy login poll failed [code {code}]: {msg}"),
-                        false,
-                    ));
-                }
-            } else if let Some(msg) = json.get("msg").and_then(serde_json::Value::as_str)
-                && msg.contains("login ing")
-            {
+            };
+
+            let status = response.status;
+            let body = response
+                .collect()
+                .await
+                .map_err(|e| map_upstream_err(e, "codebuddy device token poll read"))?;
+
+            // 404 or 428 standard pending response
+            if status.as_u16() == 404 || status.as_u16() == 428 {
                 return Ok(None);
             }
 
-            super::check_oauth_status(status, "codebuddy", &body)?;
-
-            let data = json.get("data").unwrap_or(&json);
-            let Some(access_token) = data
-                .get("accessToken")
-                .or_else(|| data.get("access_token"))
-                .and_then(serde_json::Value::as_str)
-            else {
-                if let Some(msg) = json.get("msg").and_then(serde_json::Value::as_str)
+            let json_res: std::result::Result<serde_json::Value, _> = serde_json::from_slice(&body);
+            if let Ok(json) = json_res {
+                if let Some(code) = read_envelope_code(&json) {
+                    if code == LOGIN_TOKEN_PENDING_CODE || code == LOGIN_ACCOUNT_PENDING_CODE {
+                        return Ok(None);
+                    }
+                    if code != 0 {
+                        let msg = json
+                            .get("msg")
+                            .or_else(|| json.get("message"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("unknown error");
+                        return Err(CoreError::upstream_error(
+                            status.as_u16(),
+                            "codebuddy",
+                            "<oauth>",
+                            format!("codebuddy login poll failed [code {code}]: {msg}"),
+                            false,
+                        ));
+                    }
+                } else if let Some(msg) = json.get("msg").and_then(serde_json::Value::as_str)
                     && msg.contains("login ing")
                 {
                     return Ok(None);
                 }
-                return Err(CoreError::Parse(
-                    "codebuddy token response missing 'accessToken'".into(),
-                ));
+
+                super::check_oauth_status(status, "codebuddy", &body)?;
+
+                let data = json.get("data").unwrap_or(&json);
+                let Some(access_token) = data
+                    .get("accessToken")
+                    .or_else(|| data.get("access_token"))
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    if let Some(msg) = json.get("msg").and_then(serde_json::Value::as_str)
+                        && msg.contains("login ing")
+                    {
+                        return Ok(None);
+                    }
+                    return Err(CoreError::Parse(
+                        "codebuddy token response missing 'accessToken'".into(),
+                    ));
+                };
+
+                let refresh_token = data
+                    .get("refreshToken")
+                    .or_else(|| data.get("refresh_token"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string);
+
+                let expires_in = data
+                    .get("expiresIn")
+                    .or_else(|| data.get("expires_in"))
+                    .and_then(serde_json::Value::as_u64);
+
+                let token_type = data
+                    .get("tokenType")
+                    .or_else(|| data.get("token_type"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Bearer")
+                    .to_string();
+
+                let id_token = data
+                    .get("idToken")
+                    .or_else(|| data.get("id_token"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string);
+
+                return Ok(Some(TokenResponse {
+                    access_token: access_token.to_string(),
+                    token_type,
+                    expires_in,
+                    refresh_token,
+                    scope: None,
+                    id_token,
+                }));
+            }
+
+            super::check_oauth_status(status, "codebuddy", &body)?;
+            return Err(CoreError::Parse("codebuddy poll invalid JSON".into()));
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            CoreError::UpstreamConnection("all codebuddy base urls failed".into())
+        }))
+    }
+
+    async fn refresh_token(
+        &self,
+        refresh_token: &str,
+        upstream_client: &Arc<UpstreamClient>,
+        _account_id: AccountId,
+        _db: DbRef<'_>,
+    ) -> Result<TokenResponse> {
+        let mut last_err = None;
+
+        for base in self.candidate_base_urls() {
+            let trimmed_base = base.trim_end_matches('/');
+            let url = format!("{trimmed_base}{CODEBUDDY_REFRESH_PATH}");
+
+            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"));
+            req.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            req.headers.insert(
+                http::header::ACCEPT,
+                http::HeaderValue::from_static("application/json"),
+            );
+            if let Ok(val) = http::HeaderValue::from_str(refresh_token) {
+                req.headers.insert(
+                    http::header::HeaderName::from_static("x-refresh-token"),
+                    val,
+                );
+            }
+            req.headers.insert(
+                http::header::HeaderName::from_static("x-auth-refresh-source"),
+                http::HeaderValue::from_static("plugin"),
+            );
+            openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
+
+            let cancel = CancellationToken::new();
+            let response = match upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    last_err = Some(map_upstream_err(e, "codebuddy token refresh"));
+                    continue;
+                }
             };
 
-            let refresh_token = data
+            let status = response.status;
+            let body = response
+                .collect()
+                .await
+                .map_err(|e| map_upstream_err(e, "codebuddy token refresh read"))?;
+
+            super::check_oauth_status(status, "codebuddy", &body)?;
+
+            let json: serde_json::Value = serde_json::from_slice(&body)
+                .map_err(|e| CoreError::Parse(format!("codebuddy token refresh parse: {e}")))?;
+
+            if let Some(code) = read_envelope_code(&json)
+                && code != 0
+            {
+                let msg = json
+                    .get("msg")
+                    .or_else(|| json.get("message"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown error");
+                return Err(CoreError::upstream_error(
+                    status.as_u16(),
+                    "codebuddy",
+                    "<oauth-refresh>",
+                    format!("codebuddy refresh failed [code {code}]: {msg}"),
+                    false,
+                ));
+            }
+
+            let data = json.get("data").unwrap_or(&json);
+            let access_token = data
+                .get("accessToken")
+                .or_else(|| data.get("access_token"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| CoreError::Parse("codebuddy refresh missing 'accessToken'".into()))?;
+
+            let new_refresh_token = data
                 .get("refreshToken")
                 .or_else(|| data.get("refresh_token"))
                 .and_then(serde_json::Value::as_str)
-                .map(ToString::to_string);
+                .map(ToString::to_string)
+                .or_else(|| Some(refresh_token.to_string()));
 
             let expires_in = data
                 .get("expiresIn")
@@ -327,126 +487,19 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 .and_then(serde_json::Value::as_str)
                 .map(ToString::to_string);
 
-            return Ok(Some(TokenResponse {
+            return Ok(TokenResponse {
                 access_token: access_token.to_string(),
                 token_type,
                 expires_in,
-                refresh_token,
+                refresh_token: new_refresh_token,
                 scope: None,
                 id_token,
-            }));
+            });
         }
 
-        super::check_oauth_status(status, "codebuddy", &body)?;
-        Err(CoreError::Parse("codebuddy poll invalid JSON".into()))
-    }
-
-    async fn refresh_token(
-        &self,
-        refresh_token: &str,
-        upstream_client: &Arc<UpstreamClient>,
-        _account_id: AccountId,
-        _db: DbRef<'_>,
-    ) -> Result<TokenResponse> {
-        let base = self.base_url();
-        let trimmed_base = base.trim_end_matches('/');
-        let url = format!("{trimmed_base}{CODEBUDDY_REFRESH_PATH}");
-
-        let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"));
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-        if let Ok(val) = http::HeaderValue::from_str(refresh_token) {
-            req.headers.insert(
-                http::header::HeaderName::from_static("x-refresh-token"),
-                val,
-            );
-        }
-        req.headers.insert(
-            http::header::HeaderName::from_static("x-auth-refresh-source"),
-            http::HeaderValue::from_static("plugin"),
-        );
-        openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
-
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "codebuddy token refresh"))?;
-
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codebuddy token refresh read"))?;
-
-        super::check_oauth_status(status, "codebuddy", &body)?;
-
-        let json: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Parse(format!("codebuddy token refresh parse: {e}")))?;
-
-        if let Some(code) = read_envelope_code(&json)
-            && code != 0
-        {
-            let msg = json
-                .get("msg")
-                .or_else(|| json.get("message"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("unknown error");
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "codebuddy",
-                "<oauth-refresh>",
-                format!("codebuddy refresh failed [code {code}]: {msg}"),
-                false,
-            ));
-        }
-
-        let data = json.get("data").unwrap_or(&json);
-        let access_token = data
-            .get("accessToken")
-            .or_else(|| data.get("access_token"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CoreError::Parse("codebuddy refresh missing 'accessToken'".into()))?;
-
-        let new_refresh_token = data
-            .get("refreshToken")
-            .or_else(|| data.get("refresh_token"))
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string)
-            .or_else(|| Some(refresh_token.to_string()));
-
-        let expires_in = data
-            .get("expiresIn")
-            .or_else(|| data.get("expires_in"))
-            .and_then(serde_json::Value::as_u64);
-
-        let token_type = data
-            .get("tokenType")
-            .or_else(|| data.get("token_type"))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("Bearer")
-            .to_string();
-
-        let id_token = data
-            .get("idToken")
-            .or_else(|| data.get("id_token"))
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
-
-        Ok(TokenResponse {
-            access_token: access_token.to_string(),
-            token_type,
-            expires_in,
-            refresh_token: new_refresh_token,
-            scope: None,
-            id_token,
-        })
+        Err(last_err.unwrap_or_else(|| {
+            CoreError::UpstreamConnection("all codebuddy base urls failed".into())
+        }))
     }
 
     fn email_from_token(&self, token: &TokenResponse) -> Option<String> {

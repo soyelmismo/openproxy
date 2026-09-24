@@ -20,10 +20,13 @@ use crate::spoofer::{ClientSpoofer, CodeBuddySpoofer};
 pub use quota::{
     CODEBUDDY_ACCOUNTS_URL, CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL,
     CODEBUDDY_GET_USER_RESOURCE_URL, CODEBUDDY_MODEL_CREDIT_COSTS, CodeBuddyModelCreditCost,
-    build_codebuddy_accounts_request, build_codebuddy_quota_model_details,
-    build_codebuddy_resource_request, calculate_next_midnight_cst_unix_secs,
-    fetch_codebuddy_quota_unified, parse_codebuddy_accounts_quota, parse_codebuddy_resource_quota,
-    parse_cst_datetime_to_unix_secs,
+    DEFAULT_CODEBUDDY_BASE_URL, MIRROR_CODEBUDDY_BASE_URL,
+    build_codebuddy_accounts_request, build_codebuddy_accounts_request_with_url,
+    build_codebuddy_quota_model_details, build_codebuddy_resource_request,
+    calculate_next_midnight_cst_unix_secs, codebuddy_base_url, codebuddy_candidate_origins,
+    codebuddy_origin_from_base_url, fetch_codebuddy_quota_unified, is_codebuddy_auth_error,
+    parse_codebuddy_accounts_quota, parse_codebuddy_provider_specific,
+    parse_codebuddy_resource_quota, parse_cst_datetime_to_unix_secs,
 };
 
 pub fn apply_codebuddy_spoofing_headers(req: &mut UpstreamRequest) {
@@ -139,7 +142,7 @@ impl CodeBuddyAdapter {
                 name: "CodeBuddy".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
-                base_url: "https://www.codebuddy.ai/v2".into(),
+                base_url: codebuddy_base_url(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,
                 extra_headers: vec![],

@@ -7,7 +7,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use openproxy_adapters::load_upstream_source;
+use openproxy_adapters::{codex_static_models, load_upstream_source};
 use openproxy_adapters::spoofer::{
     CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer, ClineSpoofer,
     CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua, current_cline_version,
@@ -311,6 +311,50 @@ async fn test_codex_remote_upstream_repo_code_drift_detection() {
         codex_ts.contains("refreshBufferMs: 5 * 60 * 1000"),
         "Upstream codex.ts refresh lead time diverged from 300s"
     );
+}
+
+#[tokio::test]
+async fn test_codex_remote_upstream_models_json_drift_detection() {
+    let client = UpstreamClient::new();
+    let cancel = CancellationToken::new();
+
+    let models_url =
+        "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json";
+    let req = UpstreamRequest::get(models_url);
+    let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
+        Ok(r) if r.status.is_success() => r,
+        Ok(r) => {
+            eprintln!(
+                "[CodexModelsDrift] Upstream GitHub probe HTTP {}, skipping live check",
+                r.status
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("[CodexModelsDrift] Offline or GitHub unreachable ({e}), skipping live check");
+            return;
+        }
+    };
+
+    let body_bytes = resp.collect().await.expect("read models.json body");
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse models.json");
+    let models_array = json["models"].as_array().expect("models array in models.json");
+
+    let static_models = codex_static_models();
+    let static_ids: std::collections::HashSet<&str> =
+        static_models.iter().map(|m| m.model_id.as_str()).collect();
+
+    // Assert every visible (visibility == "list") model from upstream is in our catalog
+    for m in models_array {
+        let slug = m["slug"].as_str().expect("slug");
+        let visibility = m["visibility"].as_str().unwrap_or_default();
+        if visibility == "list" {
+            assert!(
+                static_ids.contains(slug),
+                "Upstream codex added new visible model '{slug}' not in OpenProxy catalog!"
+            );
+        }
+    }
 }
 
 #[tokio::test]

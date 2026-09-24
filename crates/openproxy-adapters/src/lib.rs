@@ -21,6 +21,7 @@ pub use adapters::{
     build_discovered_model_full, build_discovered_model_with, builtin_adapters,
     cline::ClineAdapter, cloudflare_workers_ai::CloudflareWorkersAIAdapter,
     codebuddy::CodeBuddyAdapter, codebuddy::apply_codebuddy_spoofing_headers, codex::CodexAdapter,
+    codex::codex_static_models, codex::parse_codex_models_json,
     commandcode::CommandCodeGoAdapter, commandcode::apply_commandcode_cli_headers,
     custom_adapter::CustomAdapter, gemini::GeminiAdapter, horde::HordeAdapter,
     kilocode::KilocodeAdapter, kiro_ai::KiroAdapter, laya::LayaAdapter, minimax::MiniMaxAdapter,
