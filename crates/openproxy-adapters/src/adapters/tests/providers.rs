@@ -89,6 +89,20 @@ fn ollama_cloud_headers() {
     );
 }
 
+#[test]
+fn nvidia_nim_metadata_and_config() {
+    let a = NvidiaNimAdapter::new();
+    let cfg = a.config();
+    assert_eq!(cfg.id.as_str(), "nvidia-nim");
+    assert_eq!(cfg.name, "NVIDIA NIM");
+    assert_eq!(cfg.base_url, "https://integrate.api.nvidia.com/v1");
+
+    let meta = a.metadata();
+    assert!(meta.built_in);
+    assert!(!meta.deletable);
+    assert!(!meta.requires_oauth);
+}
+
 // ---- Nous Research ------------------------------------------------
 
 #[test]
