@@ -412,7 +412,7 @@ fn test_propagate_provider_target_headers_dispatch() {
     );
 
     // CodeBuddy dispatch
-    let mut cb_headers = vec![("User-Agent".into(), "CLI/2.156.0 CodeBuddy/2.156.0".into())];
+    let mut cb_headers = vec![("User-Agent".into(), "CLI/2.157.0 CodeBuddy/2.157.0".into())];
     let mut cb_req_headers = std::collections::BTreeMap::new();
     cb_req_headers.insert("x-codebuddy-task-id".into(), "cb-task-99".into());
     propagate_provider_target_headers(

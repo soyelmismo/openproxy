@@ -25,12 +25,23 @@ use crate::oauth::{
 use rusqlite::OptionalExtension;
 
 pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
+pub const CN_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.cn/v2";
+pub const MIRROR_CODEBUDDY_BASE_URL: &str = "https://copilot.tencent.com/v2";
+pub const LEGACY_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
 pub const CODEBUDDY_STATE_PATH: &str = "/plugin/auth/state?platform=CLI";
 pub const CODEBUDDY_TOKEN_PATH: &str = "/plugin/auth/token";
 pub const CODEBUDDY_REFRESH_PATH: &str = "/plugin/auth/token/refresh";
 
 pub const LOGIN_TOKEN_PENDING_CODE: i64 = 11217;
 pub const LOGIN_ACCOUNT_PENDING_CODE: i64 = 12151;
+
+/// Maximum time-to-live before proactive token refresh in seconds (20 hours).
+/// CodeBuddy upstream returns an astronomical expiresIn (e.g. 1 year ~ 31536000s),
+/// but Tencent Keycloak SSO session idle timeout revokes the session if not refreshed
+/// within 24 hours (as codified in @tencent-ai/codebuddy-code's 24h refresh timer).
+/// Clamping effective expires_in to 20 hours (72,000s) guarantees proactive background
+/// refresh well before the 24h session idle deadline.
+pub const CODEBUDDY_MAX_EXPIRES_IN_SECS: u64 = 72_000;
 
 /// Resolve canonical base URL for CodeBuddy API calls.
 /// Respects `OPENPROXY_CODEBUDDY_BASE_URL` or `OPENPROXY_CODEBUDDY_AUTH_BASE_URL` env vars if set.
@@ -93,15 +104,13 @@ impl CodeBuddyOAuthProvider {
         if base.contains("127.0.0.1") || base.contains("localhost") {
             return list;
         }
-        if base.contains("codebuddy.ai") {
-            let mirror = base.replace("codebuddy.ai", "codebuddy.cn");
-            if !list.contains(&mirror) {
-                list.push(mirror);
-            }
-        } else if base.contains("codebuddy.cn") {
-            let mirror = base.replace("codebuddy.cn", "codebuddy.ai");
-            if !list.contains(&mirror) {
-                list.push(mirror);
+        for fallback in [
+            DEFAULT_CODEBUDDY_BASE_URL,
+            CN_CODEBUDDY_BASE_URL,
+            MIRROR_CODEBUDDY_BASE_URL,
+        ] {
+            if !list.iter().any(|u| u.trim_end_matches('/') == fallback.trim_end_matches('/')) {
+                list.push(fallback.to_string());
             }
         }
         list
@@ -350,7 +359,9 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 let expires_in = data
                     .get("expiresIn")
                     .or_else(|| data.get("expires_in"))
-                    .and_then(serde_json::Value::as_u64);
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
+                    .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
 
                 let token_type = data
                     .get("tokenType")
@@ -416,6 +427,12 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 http::header::HeaderName::from_static("x-auth-refresh-source"),
                 http::HeaderValue::from_static("plugin"),
             );
+            if let Ok(uri) = url.parse::<http::Uri>()
+                && let Some(host) = uri.host()
+                && let Ok(val) = http::HeaderValue::from_str(host)
+            {
+                req.headers.insert(http::HeaderName::from_static("x-domain"), val);
+            }
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
             let cancel = CancellationToken::new();
@@ -428,15 +445,32 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             };
 
             let status = response.status;
-            let body = response
-                .collect()
-                .await
-                .map_err(|e| map_upstream_err(e, "codebuddy token refresh read"))?;
+            let body = match response.collect().await {
+                Ok(b) => b,
+                Err(e) => {
+                    last_err = Some(map_upstream_err(e, "codebuddy token refresh read"));
+                    continue;
+                }
+            };
 
-            super::check_oauth_status(status, "codebuddy", &body)?;
+            if let Err(e) = super::check_oauth_status(status, "codebuddy", &body) {
+                if status == http::StatusCode::BAD_REQUEST
+                    || status == http::StatusCode::UNAUTHORIZED
+                    || status == http::StatusCode::FORBIDDEN
+                {
+                    return Err(e);
+                }
+                last_err = Some(e);
+                continue;
+            }
 
-            let json: serde_json::Value = serde_json::from_slice(&body)
-                .map_err(|e| CoreError::Parse(format!("codebuddy token refresh parse: {e}")))?;
+            let json: serde_json::Value = match serde_json::from_slice(&body) {
+                Ok(j) => j,
+                Err(e) => {
+                    last_err = Some(CoreError::Parse(format!("codebuddy token refresh parse: {e}")));
+                    continue;
+                }
+            };
 
             if let Some(code) = read_envelope_code(&json)
                 && code != 0
@@ -446,21 +480,29 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                     .or_else(|| json.get("message"))
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("unknown error");
-                return Err(CoreError::upstream_error(
+                let err = CoreError::upstream_error(
                     status.as_u16(),
                     "codebuddy",
                     "<oauth-refresh>",
                     format!("codebuddy refresh failed [code {code}]: {msg}"),
                     false,
-                ));
+                );
+                if code == 12153 || code == 11140 || code == 14015 {
+                    return Err(err);
+                }
+                last_err = Some(err);
+                continue;
             }
 
             let data = json.get("data").unwrap_or(&json);
-            let access_token = data
+            let Some(access_token) = data
                 .get("accessToken")
                 .or_else(|| data.get("access_token"))
                 .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| CoreError::Parse("codebuddy refresh missing 'accessToken'".into()))?;
+            else {
+                last_err = Some(CoreError::Parse("codebuddy refresh missing 'accessToken'".into()));
+                continue;
+            };
 
             let new_refresh_token = data
                 .get("refreshToken")
@@ -472,7 +514,9 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             let expires_in = data
                 .get("expiresIn")
                 .or_else(|| data.get("expires_in"))
-                .and_then(serde_json::Value::as_u64);
+                .and_then(serde_json::Value::as_u64)
+                .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
+                .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
 
             let token_type = data
                 .get("tokenType")

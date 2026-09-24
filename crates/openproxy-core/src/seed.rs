@@ -96,6 +96,15 @@ fn seed_single_adapter(
                 "update builtin base_url",
             ))?;
         }
+        if conf.id.as_str() == "codebuddy" && existing.base_url.contains("codebuddy.ai") {
+            conn.execute(
+                "UPDATE providers SET base_url = ?1 WHERE id = ?2",
+                rusqlite::params![conf.base_url.as_str(), conf.id.as_str()],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "update builtin base_url",
+            ))?;
+        }
         return Ok(false);
     }
 
@@ -129,6 +138,21 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
             seeded += 1;
         }
     }
+    // Ensure CodeBuddy provider points to international worldwide edition (codebuddy.ai).
+    let _ = conn.execute(
+        "UPDATE providers SET base_url = 'https://www.codebuddy.ai/v2' \
+         WHERE id = 'codebuddy' \
+           AND (base_url = 'https://www.codebuddy.cn/v2' OR base_url = 'https://www.codebuddy.cn')",
+        [],
+    );
+    // Normalize any legacy CodeBuddy accounts whose token expiry was saved as 1 year
+    // into the future (preventing proactive background refresh before Keycloak's 24h idle timeout).
+    let _ = conn.execute(
+        "UPDATE accounts SET expires_at = datetime('now') \
+         WHERE provider_id = 'codebuddy' \
+           AND (expires_at IS NULL OR expires_at > datetime('now', '+86400 seconds'))",
+        [],
+    );
     Ok(seeded)
 }
 

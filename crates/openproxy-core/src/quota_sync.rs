@@ -367,7 +367,15 @@ pub async fn refresh_single_account_quota(
                         error = %e,
                         "on-demand oauth refresh failed during quota sync"
                     );
-                    q // return original error
+                    let db_pool = Arc::clone(db_pool);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let w = db_pool.writer();
+                        let _ = crate::accounts::set_health(&w, account_id, crate::accounts::HealthStatus::Unhealthy);
+                    })
+                    .await;
+                    AccountQuota::with_error(format!(
+                        "OAuth token expired and refresh failed: re-authentication required ({e})"
+                    ))
                 }
             }
         } else {

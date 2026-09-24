@@ -15,11 +15,17 @@ pub const CODEBUDDY_GET_USER_RESOURCE_URL: &str =
 pub const CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL: &str =
     "https://www.codebuddy.ai/billing/meter/get-user-resource-summary";
 
-/// Default CodeBuddy base URL.
+/// Default CodeBuddy base URL (Worldwide / International edition with Google login).
 pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
 
-/// Mirror CodeBuddy base URL (Tencent Cloud mainland China gateway).
-pub const MIRROR_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.cn/v2";
+/// Domestic Mainland China CodeBuddy base URL.
+pub const CN_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.cn/v2";
+
+/// Mirror CodeBuddy base URL (Internal Tencent Copilot endpoint).
+pub const MIRROR_CODEBUDDY_BASE_URL: &str = "https://copilot.tencent.com/v2";
+
+/// Legacy CodeBuddy base URL (.ai domain alias).
+pub const LEGACY_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
 
 /// Resolve canonical base URL for CodeBuddy API calls.
 /// Respects `OPENPROXY_CODEBUDDY_BASE_URL` or `OPENPROXY_CODEBUDDY_AUTH_BASE_URL` env vars if set.
@@ -44,7 +50,7 @@ pub fn codebuddy_origin_from_base_url(base: &str) -> String {
 }
 
 /// Returns prioritized list of candidate origins for CodeBuddy API communication,
-/// supporting automated fallback between `.ai` and `.cn` gateways.
+/// supporting automated fallback between `.ai`, `.cn`, and `copilot.tencent.com` gateways.
 #[must_use]
 pub fn codebuddy_candidate_origins() -> Vec<String> {
     let configured_origin = codebuddy_origin_from_base_url(&codebuddy_base_url());
@@ -54,18 +60,14 @@ pub fn codebuddy_candidate_origins() -> Vec<String> {
         return origins;
     }
 
-    if configured_origin.contains("codebuddy.ai") {
-        let mirror = configured_origin.replace("codebuddy.ai", "codebuddy.cn");
-        if !origins.contains(&mirror) {
-            origins.push(mirror);
+    for fallback in [
+        "https://www.codebuddy.ai",
+        "https://www.codebuddy.cn",
+        "https://copilot.tencent.com",
+    ] {
+        if !origins.iter().any(|o| o == fallback) {
+            origins.push(fallback.to_string());
         }
-    } else if configured_origin.contains("codebuddy.cn") {
-        let mirror = configured_origin.replace("codebuddy.cn", "codebuddy.ai");
-        if !origins.contains(&mirror) {
-            origins.push(mirror);
-        }
-    } else if !origins.iter().any(|o| o.contains("codebuddy.cn")) {
-        origins.push("https://www.codebuddy.cn".to_string());
     }
 
     origins
@@ -506,6 +508,12 @@ pub fn build_codebuddy_resource_request(
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json, text/plain, */*"),
     );
+    if let Ok(uri) = url.parse::<http::Uri>()
+        && let Some(host) = uri.host()
+        && let Ok(val) = http::HeaderValue::from_str(host)
+    {
+        req.headers.insert(http::HeaderName::from_static("x-domain"), val);
+    }
 
     apply_codebuddy_spoofing_headers(&mut req);
     req
@@ -534,18 +542,15 @@ pub fn build_codebuddy_accounts_request_with_url(
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json"),
     );
-    req.headers.insert(
-        http::HeaderName::from_static("x-no-enterprise-id"),
-        http::HeaderValue::from_static("true"),
-    );
-    req.headers.insert(
-        http::HeaderName::from_static("x-no-user-id"),
-        http::HeaderValue::from_static("true"),
-    );
-    req.headers.insert(
-        http::HeaderName::from_static("x-no-department-info"),
-        http::HeaderValue::from_static("true"),
-    );
+    req.headers.insert(http::HeaderName::from_static("x-no-enterprise-id"), http::HeaderValue::from_static("true"));
+    req.headers.insert(http::HeaderName::from_static("x-no-user-id"), http::HeaderValue::from_static("true"));
+    req.headers.insert(http::HeaderName::from_static("x-no-department-info"), http::HeaderValue::from_static("true"));
+    if let Ok(uri) = url.parse::<http::Uri>()
+        && let Some(host) = uri.host()
+        && let Ok(val) = http::HeaderValue::from_str(host)
+    {
+        req.headers.insert(http::HeaderName::from_static("x-domain"), val);
+    }
 
     apply_codebuddy_spoofing_headers(&mut req);
     req
@@ -722,6 +727,7 @@ mod tests {
         let origins = codebuddy_candidate_origins();
         assert!(origins.contains(&"https://www.codebuddy.ai".to_string()));
         assert!(origins.contains(&"https://www.codebuddy.cn".to_string()));
+        assert!(origins.contains(&"https://copilot.tencent.com".to_string()));
         assert_eq!(codebuddy_origin_from_base_url("https://www.codebuddy.ai/v2"), "https://www.codebuddy.ai");
         assert_eq!(codebuddy_origin_from_base_url("https://www.codebuddy.cn/v2/"), "https://www.codebuddy.cn");
     }

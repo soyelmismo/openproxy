@@ -1,15 +1,16 @@
 use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 
-pub const DEFAULT_CODEBUDDY_VERSION: &str = "2.156.0";
+pub const DEFAULT_CODEBUDDY_VERSION: &str = "2.157.0";
 
 pub const CODEBUDDY_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("X-IDE-Type", "CLI"),
     ("X-IDE-Name", "CLI"),
-    ("X-IDE-Version", "2.156.0"),
+    ("X-IDE-Version", "2.157.0"),
     ("X-Product", "SaaS"),
     ("X-Agent-Intent", "craft"),
     ("x-codebuddy-request", "1"),
-    ("User-Agent", "CLI/2.156.0 CodeBuddy/2.156.0"),
+    ("X-Domain", "www.codebuddy.ai"),
+    ("User-Agent", "CLI/2.157.0 CodeBuddy/2.157.0"),
 ];
 
 static CODEBUDDY_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
@@ -121,8 +122,8 @@ mod tests {
         let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
         reset_dynamic_codebuddy_overrides();
 
-        assert_eq!(current_codebuddy_version(), "2.156.0");
-        assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+        assert_eq!(current_codebuddy_version(), "2.157.0");
+        assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
 
         set_dynamic_codebuddy_version("3.0.0");
         assert_eq!(current_codebuddy_version(), "3.0.0");
@@ -146,9 +147,10 @@ mod tests {
         assert_eq!(find("x-product"), Some("SaaS"));
         assert_eq!(find("x-agent-intent"), Some("craft"));
         assert_eq!(find("x-codebuddy-request"), Some("1"));
+        assert_eq!(find("x-domain"), Some("www.codebuddy.ai"));
 
         reset_dynamic_codebuddy_overrides();
-        assert_eq!(current_codebuddy_version(), "2.156.0");
+        assert_eq!(current_codebuddy_version(), "2.157.0");
     }
 
     #[test]
@@ -156,7 +158,7 @@ mod tests {
         let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
         reset_dynamic_codebuddy_overrides();
 
-        assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+        assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
 
         set_dynamic_codebuddy_ua("CustomCodeBuddyCLI/1.0");
         assert_eq!(current_codebuddy_ua(), "CustomCodeBuddyCLI/1.0");
@@ -169,7 +171,7 @@ mod tests {
         assert_eq!(ua, Some("CustomCodeBuddyCLI/1.0"));
 
         reset_dynamic_codebuddy_overrides();
-        assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+        assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
 
         unsafe {
             std::env::set_var("OPENPROXY_CODEBUDDY_USER_AGENT", "EnvCodeBuddy/9.9.9");
@@ -178,6 +180,6 @@ mod tests {
         unsafe {
             std::env::remove_var("OPENPROXY_CODEBUDDY_USER_AGENT");
         }
-        assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+        assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
     }
 }

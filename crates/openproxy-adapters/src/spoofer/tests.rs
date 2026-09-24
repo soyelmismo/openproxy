@@ -686,8 +686,8 @@ fn test_codebuddy_dynamic_version_and_extra_headers() {
     let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(current_codebuddy_version(), "2.156.0");
-    assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+    assert_eq!(current_codebuddy_version(), "2.157.0");
+    assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
 
     set_dynamic_codebuddy_version("3.0.0");
     assert_eq!(current_codebuddy_version(), "3.0.0");
@@ -711,7 +711,8 @@ fn test_codebuddy_dynamic_version_and_extra_headers() {
     assert_eq!(find("X-Product"), Some("SaaS"));
     assert_eq!(find("X-Agent-Intent"), Some("craft"));
     assert_eq!(find("x-codebuddy-request"), Some("1"));
+    assert_eq!(find("X-Domain"), Some("www.codebuddy.ai"));
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(current_codebuddy_version(), "2.156.0");
+    assert_eq!(current_codebuddy_version(), "2.157.0");
 }

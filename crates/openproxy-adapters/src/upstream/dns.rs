@@ -98,7 +98,15 @@ pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<Socket
         return Ok(cached);
     }
 
-    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+    let mut addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+    if (host == "www.codebuddy.ai" || host == "codebuddy.ai")
+        && (addrs.is_empty() || addrs.iter().all(|a| a.ip().to_string() == "0.0.0.1"))
+    {
+        addrs = vec![
+            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(43, 175, 213, 92)), port),
+            SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(43, 168, 224, 173)), port),
+        ];
+    }
     if !allow_private {
         for addr in &addrs {
             if is_private_or_reserved(&addr.ip()) {

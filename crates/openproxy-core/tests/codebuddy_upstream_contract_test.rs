@@ -47,13 +47,14 @@ fn test_codebuddy_spoofer_verified_headers() {
 
     assert_eq!(get_header("x-ide-type"), Some("CLI".into()));
     assert_eq!(get_header("x-ide-name"), Some("CLI".into()));
-    assert_eq!(get_header("x-ide-version"), Some("2.156.0".into()));
+    assert_eq!(get_header("x-ide-version"), Some("2.157.0".into()));
     assert_eq!(get_header("x-product"), Some("SaaS".into()));
     assert_eq!(get_header("x-agent-intent"), Some("craft".into()));
     assert_eq!(get_header("x-codebuddy-request"), Some("1".into()));
+    assert_eq!(get_header("x-domain"), Some("www.codebuddy.ai".into()));
     assert_eq!(
         get_header("user-agent"),
-        Some("CLI/2.156.0 CodeBuddy/2.156.0".into())
+        Some("CLI/2.157.0 CodeBuddy/2.157.0".into())
     );
 }
 
@@ -64,8 +65,8 @@ fn test_codebuddy_dynamic_spoofer_overrides() {
         .unwrap_or_else(|p| p.into_inner());
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(current_codebuddy_version(), "2.156.0");
-    assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+    assert_eq!(current_codebuddy_version(), "2.157.0");
+    assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
 
     set_dynamic_codebuddy_version("2.160.0");
     set_dynamic_codebuddy_extra_header("x-codebuddy-tenant", "tencent-cloud");
@@ -101,9 +102,9 @@ fn test_codebuddy_dynamic_spoofer_overrides() {
     assert_eq!(current_codebuddy_version(), "2.170.0");
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(current_codebuddy_version(), "2.156.0");
-    assert_eq!(get_codebuddy_version(), "2.156.0");
-    assert_eq!(current_codebuddy_ua(), "CLI/2.156.0 CodeBuddy/2.156.0");
+    assert_eq!(current_codebuddy_version(), "2.157.0");
+    assert_eq!(get_codebuddy_version(), "2.157.0");
+    assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
 }
 
 #[test]
@@ -293,6 +294,7 @@ fn test_codebuddy_builtin_seed_and_registration() {
 
 #[tokio::test]
 async fn test_codebuddy_remote_upstream_live_contract_parity() {
+    let _lock = CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     let client = std::sync::Arc::new(UpstreamClient::new());
 
     // 1. Probe official NPM package registry for CodeBuddy CLI metadata (@tencent-ai/codebuddy-code)
@@ -329,11 +331,10 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
     }
 
     // 2. Test in-memory auto-update via refresh_codebuddy_version
-    let _lock = CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(current_codebuddy_version(), "2.156.0");
-    assert_eq!(get_codebuddy_version(), "2.156.0");
+    assert_eq!(current_codebuddy_version(), "2.157.0");
+    assert_eq!(get_codebuddy_version(), "2.157.0");
 
     if let Some(new_ver) = refresh_codebuddy_version(&client).await {
         assert_eq!(current_codebuddy_version(), new_ver);
@@ -362,7 +363,7 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
     }
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(current_codebuddy_version(), "2.156.0");
+    assert_eq!(current_codebuddy_version(), "2.157.0");
 }
 
 #[tokio::test]
@@ -370,7 +371,7 @@ async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
     let _lock = CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(get_codebuddy_version(), "2.156.0");
+    assert_eq!(get_codebuddy_version(), "2.157.0");
 
     // Spin up an ephemeral local HTTP mock registry
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -424,5 +425,5 @@ async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
     assert_eq!(current_codebuddy_ua(), "CLI/2.188.0 CodeBuddy/2.188.0");
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(get_codebuddy_version(), "2.156.0");
+    assert_eq!(get_codebuddy_version(), "2.157.0");
 }
