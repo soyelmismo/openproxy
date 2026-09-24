@@ -453,4 +453,36 @@ mod tests {
             Some(current_cline_version().as_str())
         );
     }
+
+    #[test]
+    fn test_map_cline_entry() {
+        let entry_paid = ClineModelEntry {
+            id: "claude-3-5-sonnet".to_string(),
+            name: "Claude 3.5 Sonnet".to_string(),
+        };
+        let discovered_paid = map_cline_entry(entry_paid, false);
+        assert_eq!(discovered_paid.model_id.as_str(), "claude-3-5-sonnet");
+        assert_eq!(
+            discovered_paid.display_name.as_deref(),
+            Some("Claude 3.5 Sonnet")
+        );
+        assert_eq!(discovered_paid.target_format, TargetFormat::Openai);
+        assert_eq!(discovered_paid.context_length, Some(128_000));
+        assert_eq!(discovered_paid.max_output_tokens, Some(8_192));
+        let caps = discovered_paid
+            .capabilities
+            .expect("capabilities should be set");
+        assert_eq!(caps.vision, Some(true));
+        assert_eq!(caps.tool_calling, Some(true));
+        assert_eq!(caps.reasoning, Some(true));
+        assert_eq!(caps.thinking, Some(true));
+
+        let entry_free = ClineModelEntry {
+            id: "gpt-4o".to_string(),
+            name: "GPT-4o Free".to_string(),
+        };
+        let discovered_free = map_cline_entry(entry_free, true);
+        assert_eq!(discovered_free.model_id.as_str(), "gpt-4o:free");
+        assert_eq!(discovered_free.display_name.as_deref(), Some("GPT-4o Free"));
+    }
 }
