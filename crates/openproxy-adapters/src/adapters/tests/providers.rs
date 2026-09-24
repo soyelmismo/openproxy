@@ -351,20 +351,37 @@ fn codex_parse_models_json_handles_dynamic_payload_and_priorities() {
     });
     let bytes = serde_json::to_vec(&payload).unwrap();
     let discovered = parse_codex_models_json(&bytes).expect("parse models");
-    assert_eq!(discovered.len(), 2, "codex-auto-review must be filtered out");
-    assert_eq!(discovered[0].model_id.as_str(), "gpt-custom-a", "must sort by priority");
+    assert_eq!(
+        discovered.len(),
+        2,
+        "codex-auto-review must be filtered out"
+    );
+    assert_eq!(
+        discovered[0].model_id.as_str(),
+        "gpt-custom-a",
+        "must sort by priority"
+    );
     assert_eq!(discovered[1].model_id.as_str(), "gpt-custom-b");
     assert_eq!(discovered[0].context_length, Some(300_000));
     assert_eq!(discovered[1].context_length, Some(500_000));
-    assert_eq!(discovered[0].capabilities.as_ref().unwrap().vision, Some(true));
-    assert_eq!(discovered[1].capabilities.as_ref().unwrap().vision, Some(false));
+    assert_eq!(
+        discovered[0].capabilities.as_ref().unwrap().vision,
+        Some(true)
+    );
+    assert_eq!(
+        discovered[1].capabilities.as_ref().unwrap().vision,
+        Some(false)
+    );
 }
 
 #[tokio::test]
 async fn codex_fetch_models_discovers_dynamic_upstream_catalog() {
     let adapter = CodexAdapter::new();
     let upstream = Arc::new(UpstreamClient::new());
-    let models = adapter.fetch_models(&upstream, "").await.expect("fetch models");
+    let models = adapter
+        .fetch_models(&upstream, "")
+        .await
+        .expect("fetch models");
     assert!(models.len() >= 10);
     let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
     assert!(ids.contains(&"gpt-6-astra"));

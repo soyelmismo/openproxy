@@ -223,3 +223,18 @@ fn test_resolve_effective_model_type() {
         );
     }
 }
+
+#[test]
+fn test_contains_delimited_token() {
+    assert!(contains_delimited_token("o1", "o1"));
+    assert!(contains_delimited_token("openai/o1", "o1"));
+    assert!(contains_delimited_token("o1-preview", "o1"));
+    assert!(contains_delimited_token("model_o1_v1", "o1"));
+    assert!(contains_delimited_token("model.o1.v1", "o1"));
+    assert!(contains_delimited_token("model:o1:v1", "o1"));
+    assert!(contains_delimited_token("model o1 v1", "o1"));
+
+    assert!(!contains_delimited_token("mono1", "o1"));
+    assert!(!contains_delimited_token("o10", "o1"));
+    assert!(!contains_delimited_token("solo123", "o1"));
+}
