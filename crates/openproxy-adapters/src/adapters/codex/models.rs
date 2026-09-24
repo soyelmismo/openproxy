@@ -52,8 +52,20 @@ pub fn hardcoded_models() -> Vec<DiscoveredModel> {
         ("gpt-5.6-sol", "GPT-5.6-Sol", 272_000, 872_000, true),
         ("gpt-5.6-terra", "GPT-5.6-Terra", 272_000, 872_000, true),
         ("gpt-5.6-luna", "GPT-5.6-Luna", 272_000, 872_000, true),
-        ("gpt-daybreak-blue-latest", "Daybreak Blue", 272_000, 872_000, true),
-        ("gpt-daybreak-red-latest", "Daybreak Red", 372_000, 372_000, true),
+        (
+            "gpt-daybreak-blue-latest",
+            "Daybreak Blue",
+            272_000,
+            872_000,
+            true,
+        ),
+        (
+            "gpt-daybreak-red-latest",
+            "Daybreak Red",
+            372_000,
+            372_000,
+            true,
+        ),
         ("gpt-5.5", "GPT-5.5", 272_000, 272_000, true),
         ("gpt-5.4", "GPT-5.4", 272_000, 1_000_000, true),
     ]
@@ -93,7 +105,9 @@ pub fn parse_codex_models_json(bytes: &[u8]) -> Result<Vec<DiscoveredModel>> {
         .collect();
 
     if discovered.is_empty() {
-        return Err(CoreError::Parse("codex models empty after filtering".into()));
+        return Err(CoreError::Parse(
+            "codex models empty after filtering".into(),
+        ));
     }
 
     Ok(discovered)
@@ -183,7 +197,10 @@ pub async fn try_fetch_backend_models(
     upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Option<Vec<DiscoveredModel>> {
-    let url = format!("{CODEX_MODELS_URL}?client_version={}", current_codex_version());
+    let url = format!(
+        "{CODEX_MODELS_URL}?client_version={}",
+        current_codex_version()
+    );
     let mut req = UpstreamRequest::get(&url);
     if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
         req.headers.insert(http::header::AUTHORIZATION, v);

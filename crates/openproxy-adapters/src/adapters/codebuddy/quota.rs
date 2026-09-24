@@ -84,8 +84,12 @@ pub fn parse_codebuddy_provider_specific(
     let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) else {
         return (None, None);
     };
-    let total = json.get("total_credits").and_then(serde_json::Value::as_i64);
-    let balance = json.get("credit_balance").and_then(serde_json::Value::as_i64);
+    let total = json
+        .get("total_credits")
+        .and_then(serde_json::Value::as_i64);
+    let balance = json
+        .get("credit_balance")
+        .and_then(serde_json::Value::as_i64);
     (balance, total)
 }
 
@@ -512,7 +516,8 @@ pub fn build_codebuddy_resource_request(
         && let Some(host) = uri.host()
         && let Ok(val) = http::HeaderValue::from_str(host)
     {
-        req.headers.insert(http::HeaderName::from_static("x-domain"), val);
+        req.headers
+            .insert(http::HeaderName::from_static("x-domain"), val);
     }
 
     apply_codebuddy_spoofing_headers(&mut req);
@@ -542,14 +547,24 @@ pub fn build_codebuddy_accounts_request_with_url(
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json"),
     );
-    req.headers.insert(http::HeaderName::from_static("x-no-enterprise-id"), http::HeaderValue::from_static("true"));
-    req.headers.insert(http::HeaderName::from_static("x-no-user-id"), http::HeaderValue::from_static("true"));
-    req.headers.insert(http::HeaderName::from_static("x-no-department-info"), http::HeaderValue::from_static("true"));
+    req.headers.insert(
+        http::HeaderName::from_static("x-no-enterprise-id"),
+        http::HeaderValue::from_static("true"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-no-user-id"),
+        http::HeaderValue::from_static("true"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-no-department-info"),
+        http::HeaderValue::from_static("true"),
+    );
     if let Ok(uri) = url.parse::<http::Uri>()
         && let Some(host) = uri.host()
         && let Ok(val) = http::HeaderValue::from_str(host)
     {
-        req.headers.insert(http::HeaderName::from_static("x-domain"), val);
+        req.headers
+            .insert(http::HeaderName::from_static("x-domain"), val);
     }
 
     apply_codebuddy_spoofing_headers(&mut req);
@@ -632,7 +647,10 @@ pub async fn fetch_codebuddy_quota_unified(
         let req_accounts =
             build_codebuddy_accounts_request_with_url(&accounts_url, trimmed, proxy_url);
         let cancel = CancellationToken::new();
-        match upstream.call(req_accounts, TimeoutProfile::Quota, cancel).await {
+        match upstream
+            .call(req_accounts, TimeoutProfile::Quota, cancel)
+            .await
+        {
             Ok(response) => {
                 let status = response.status;
                 if status == http::StatusCode::UNAUTHORIZED {
@@ -709,13 +727,11 @@ pub async fn fetch_codebuddy_quota_unified(
         });
     }
 
-    Err(CoreError::UpstreamConnection(
-        if last_err.is_empty() {
-            "failed to fetch CodeBuddy quota from billing meter endpoints".into()
-        } else {
-            format!("failed to fetch CodeBuddy quota from billing meter endpoints: {last_err}")
-        },
-    ))
+    Err(CoreError::UpstreamConnection(if last_err.is_empty() {
+        "failed to fetch CodeBuddy quota from billing meter endpoints".into()
+    } else {
+        format!("failed to fetch CodeBuddy quota from billing meter endpoints: {last_err}")
+    }))
 }
 
 #[cfg(test)]
@@ -728,8 +744,14 @@ mod tests {
         assert!(origins.contains(&"https://www.codebuddy.ai".to_string()));
         assert!(origins.contains(&"https://www.codebuddy.cn".to_string()));
         assert!(origins.contains(&"https://copilot.tencent.com".to_string()));
-        assert_eq!(codebuddy_origin_from_base_url("https://www.codebuddy.ai/v2"), "https://www.codebuddy.ai");
-        assert_eq!(codebuddy_origin_from_base_url("https://www.codebuddy.cn/v2/"), "https://www.codebuddy.cn");
+        assert_eq!(
+            codebuddy_origin_from_base_url("https://www.codebuddy.ai/v2"),
+            "https://www.codebuddy.ai"
+        );
+        assert_eq!(
+            codebuddy_origin_from_base_url("https://www.codebuddy.cn/v2/"),
+            "https://www.codebuddy.cn"
+        );
     }
 
     #[test]
@@ -767,11 +789,19 @@ mod tests {
         );
         assert_eq!(req.proxy.as_deref(), Some("http://proxy.local:8080"));
         assert_eq!(
-            req.headers.get(http::header::AUTHORIZATION).unwrap().to_str().unwrap(),
+            req.headers
+                .get(http::header::AUTHORIZATION)
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "Bearer test-token-cn"
         );
         assert_eq!(
-            req.headers.get("x-no-enterprise-id").unwrap().to_str().unwrap(),
+            req.headers
+                .get("x-no-enterprise-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "true"
         );
     }

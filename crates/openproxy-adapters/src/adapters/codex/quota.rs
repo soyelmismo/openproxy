@@ -2,7 +2,10 @@ use crate::adapters::codex::apply_codex_spoofing_headers;
 use crate::upstream::UpstreamRequest;
 use openproxy_types::{AccountQuota, CoreError, Result};
 
-pub fn build_codex_quota_request(access_token: &str, workspace_id: Option<&str>) -> UpstreamRequest {
+pub fn build_codex_quota_request(
+    access_token: &str,
+    workspace_id: Option<&str>,
+) -> UpstreamRequest {
     let url = "https://chatgpt.com/backend-api/wham/usage";
     let mut req = UpstreamRequest::get(url);
     req.headers.insert(

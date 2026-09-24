@@ -7,7 +7,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use openproxy_adapters::{codex_static_models, load_upstream_source};
 use openproxy_adapters::spoofer::{
     CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_ASYNC_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer,
     ClineSpoofer, CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua,
@@ -18,6 +17,7 @@ use openproxy_adapters::spoofer::{
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
+use openproxy_adapters::{codex_static_models, load_upstream_source};
 use openproxy_core::oauth::cline::{
     CLINE_AUTH_AUTHORIZE_PATH, CLINE_AUTH_REFRESH_PATH, CLINE_AUTH_TOKEN_PATH,
     CLINE_DEFAULT_BASE_URL,
@@ -332,14 +332,18 @@ async fn test_codex_remote_upstream_models_json_drift_detection() {
             return;
         }
         Err(e) => {
-            eprintln!("[CodexModelsDrift] Offline or GitHub unreachable ({e}), skipping live check");
+            eprintln!(
+                "[CodexModelsDrift] Offline or GitHub unreachable ({e}), skipping live check"
+            );
             return;
         }
     };
 
     let body_bytes = resp.collect().await.expect("read models.json body");
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).expect("parse models.json");
-    let models_array = json["models"].as_array().expect("models array in models.json");
+    let models_array = json["models"]
+        .as_array()
+        .expect("models array in models.json");
 
     let static_models = codex_static_models();
     let static_ids: std::collections::HashSet<&str> =
@@ -498,10 +502,14 @@ async fn test_codex_dynamic_version_remote_refresh_and_header_validation() {
     reset_dynamic_codex_overrides();
 
     // 1. Version validation predicate parity
-    assert!(has_valid_codex_version("codex-cli/0.156.1 (Windows 10.0.26200; x64)"));
+    assert!(has_valid_codex_version(
+        "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
+    ));
     assert!(has_valid_codex_version("codex-cli/0.158.0"));
     assert!(has_valid_codex_version("codex/1.0.0"));
-    assert!(!has_valid_codex_version("codex-cli/0.144.0 (Windows 10.0.26200; x64)"));
+    assert!(!has_valid_codex_version(
+        "codex-cli/0.144.0 (Windows 10.0.26200; x64)"
+    ));
     assert!(!has_valid_codex_version("curl/7.68.0"));
 
     // 2. Header map upgrade vs preservation
