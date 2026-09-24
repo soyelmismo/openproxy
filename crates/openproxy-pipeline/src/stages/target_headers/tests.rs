@@ -68,7 +68,7 @@ fn test_propagate_codex_headers() {
     let mut headers = vec![
         (
             "User-Agent".into(),
-            "codex-cli/0.144.0 (Windows 10.0.26200; x64)".into(),
+            "codex-cli/0.156.1 (Windows 10.0.26200; x64)".into(),
         ),
         ("origin".into(), "https://chatgpt.com".into()),
         ("originator".into(), "codex_cli_rs".into()),

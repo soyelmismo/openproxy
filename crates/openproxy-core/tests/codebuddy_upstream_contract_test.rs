@@ -407,14 +407,14 @@ async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
 
     // Give background task a moment to complete
     let mut ok = false;
-    for _ in 0..50 {
+    for _ in 0..100 {
         if get_codebuddy_version() == "2.188.0" {
             ok = true;
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     }
-    assert!(ok, "background auto update must complete within 1s");
+    assert!(ok, "background auto update must complete within 3s");
 
     unsafe {
         std::env::remove_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL");

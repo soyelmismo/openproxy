@@ -9,9 +9,10 @@
 
 use openproxy_adapters::{codex_static_models, load_upstream_source};
 use openproxy_adapters::spoofer::{
-    CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer, ClineSpoofer,
-    CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua, current_cline_version,
-    current_codex_ua, current_codex_version, current_kilocode_ua, current_kilocode_version,
+    CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_ASYNC_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer,
+    ClineSpoofer, CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua,
+    current_cline_version, current_codex_ua, current_codex_version, current_kilocode_ua,
+    current_kilocode_version, has_valid_codex_version, refresh_codex_version,
     reset_dynamic_cline_overrides, reset_dynamic_codex_overrides, reset_dynamic_kilocode_overrides,
 };
 use openproxy_adapters::upstream::{
@@ -489,6 +490,82 @@ fn test_cline_codex_kilocode_dynamic_spoofer_overrides() {
     assert_eq!(find_kilo("x-client-version"), Some("0.18.0"));
     assert_eq!(find_kilo("x-kilocode-session"), Some("sess-kilo-123"));
     reset_dynamic_kilocode_overrides();
+}
+
+#[tokio::test]
+async fn test_codex_dynamic_version_remote_refresh_and_header_validation() {
+    let _guard = CODEX_ASYNC_TEST_LOCK.lock().await;
+    reset_dynamic_codex_overrides();
+
+    // 1. Version validation predicate parity
+    assert!(has_valid_codex_version("codex-cli/0.156.1 (Windows 10.0.26200; x64)"));
+    assert!(has_valid_codex_version("codex-cli/0.158.0"));
+    assert!(has_valid_codex_version("codex/1.0.0"));
+    assert!(!has_valid_codex_version("codex-cli/0.144.0 (Windows 10.0.26200; x64)"));
+    assert!(!has_valid_codex_version("curl/7.68.0"));
+
+    // 2. Header map upgrade vs preservation
+    let mut hdrs_outdated = http::HeaderMap::new();
+    hdrs_outdated.insert(
+        http::header::USER_AGENT,
+        http::HeaderValue::from_static("codex-cli/0.144.0 (Windows 10.0.26200; x64)"),
+    );
+    hdrs_outdated.insert(
+        http::header::HeaderName::from_static("version"),
+        http::HeaderValue::from_static("0.144.0"),
+    );
+    CodexSpoofer.apply_to_header_map(&mut hdrs_outdated);
+    assert_eq!(
+        hdrs_outdated
+            .get(http::header::USER_AGENT)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
+    );
+    assert_eq!(
+        hdrs_outdated.get("version").unwrap().to_str().unwrap(),
+        "0.156.1"
+    );
+
+    // 3. Remote live auto-refresh simulation via local HTTP mock
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        if let Ok((mut stream, _)) = listener.accept().await {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let body = r#"{"tag_name":"rust-v0.162.0","name":"0.162.0"}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+        }
+    });
+
+    let mock_url = format!("http://{addr}/releases/latest");
+    unsafe {
+        std::env::set_var("OPENPROXY_CODEX_LATEST_RELEASE_URL", &mock_url);
+    }
+
+    let client = std::sync::Arc::new(UpstreamClient::new());
+    let refreshed = refresh_codex_version(&client).await;
+    assert_eq!(refreshed.as_deref(), Some("0.162.0"));
+    assert_eq!(current_codex_version(), "0.162.0");
+    assert_eq!(
+        current_codex_ua(),
+        "codex-cli/0.162.0 (Windows 10.0.26200; x64)"
+    );
+
+    unsafe {
+        std::env::remove_var("OPENPROXY_CODEX_LATEST_RELEASE_URL");
+    }
+    reset_dynamic_codex_overrides();
+    assert_eq!(current_codex_version(), "0.156.1");
 }
 
 #[test]

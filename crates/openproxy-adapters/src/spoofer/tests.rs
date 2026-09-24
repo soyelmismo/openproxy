@@ -127,17 +127,17 @@ fn test_codex_dynamic_version_and_extra_headers() {
     let _guard = CODEX_TEST_LOCK.lock().unwrap();
     reset_dynamic_codex_overrides();
 
-    assert_eq!(current_codex_version(), "0.144.0");
+    assert_eq!(current_codex_version(), "0.156.1");
     assert_eq!(
         current_codex_ua(),
-        "codex-cli/0.144.0 (Windows 10.0.26200; x64)"
+        "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
     );
 
-    set_dynamic_codex_version("0.150.0");
-    assert_eq!(current_codex_version(), "0.150.0");
+    set_dynamic_codex_version("0.160.0");
+    assert_eq!(current_codex_version(), "0.160.0");
     assert_eq!(
         current_codex_ua(),
-        "codex-cli/0.150.0 (Windows 10.0.26200; x64)"
+        "codex-cli/0.160.0 (Windows 10.0.26200; x64)"
     );
 
     set_dynamic_codex_extra_header("x-codex-feature", "subzero");
@@ -152,13 +152,13 @@ fn test_codex_dynamic_version_and_extra_headers() {
 
     assert_eq!(
         find("user-agent"),
-        Some("codex-cli/0.150.0 (Windows 10.0.26200; x64)")
+        Some("codex-cli/0.160.0 (Windows 10.0.26200; x64)")
     );
-    assert_eq!(find("version"), Some("0.150.0"));
+    assert_eq!(find("version"), Some("0.160.0"));
     assert_eq!(find("x-codex-feature"), Some("subzero"));
 
     reset_dynamic_codex_overrides();
-    assert_eq!(current_codex_version(), "0.144.0");
+    assert_eq!(current_codex_version(), "0.156.1");
 }
 
 fn assert_opencode_id(prefix: &str, id: &str) {
