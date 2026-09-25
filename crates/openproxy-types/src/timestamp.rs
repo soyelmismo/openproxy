@@ -41,12 +41,12 @@ mod tests {
             .expect("should parse RFC3339 with fractional seconds");
         assert_eq!(parsed_fractional.timestamp(), 1750248000);
 
-        let parsed_sqlite = parse_timestamp("2025-06-18 12:00:00")
-            .expect("should parse SQLite datetime string");
+        let parsed_sqlite =
+            parse_timestamp("2025-06-18 12:00:00").expect("should parse SQLite datetime string");
         assert_eq!(parsed_sqlite.timestamp(), 1750248000);
 
-        let parsed_iso_no_tz = parse_timestamp("2025-06-18T12:00:00")
-            .expect("should parse ISO-8601 without timezone");
+        let parsed_iso_no_tz =
+            parse_timestamp("2025-06-18T12:00:00").expect("should parse ISO-8601 without timezone");
         assert_eq!(parsed_iso_no_tz.timestamp(), 1750248000);
     }
 }
