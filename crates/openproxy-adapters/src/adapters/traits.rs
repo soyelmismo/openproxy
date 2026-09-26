@@ -27,25 +27,19 @@ thread_local! {
     static SERIALIZE_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[derive(Serialize)]
-struct ModelInjector<'a, T> {
-    #[serde(flatten)]
-    req: &'a T,
-    model: &'a str,
-}
-
 /// Helper to serialize a request object, overwrite its `model` field, and return `Bytes`.
 pub fn inject_model_and_serialize<T: Serialize>(
     req: &T,
     upstream_model: &str,
 ) -> std::result::Result<Bytes, CoreError> {
-    let injector = ModelInjector {
-        req,
-        model: upstream_model,
-    };
+    let mut val = serde_json::to_value(req)
+        .map_err(|e| CoreError::Validation(e.to_string()))?;
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert("model".to_string(), serde_json::Value::String(upstream_model.to_string()));
+    }
     SERIALIZE_BUF.with_borrow_mut(|buf| {
         buf.clear();
-        serde_json::to_writer(&mut *buf, &injector)
+        serde_json::to_writer(&mut *buf, &val)
             .map_err(|e| CoreError::Validation(e.to_string()))?;
         let bytes = Bytes::copy_from_slice(buf);
         if buf.capacity() > 64 * 1024 {
