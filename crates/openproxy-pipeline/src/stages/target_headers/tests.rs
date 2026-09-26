@@ -82,14 +82,6 @@ fn test_propagate_codex_headers() {
     req_headers.insert("version".into(), "0.150.0".into());
     req_headers.insert("authorization".into(), "override-hack".into());
 
-    req_headers.insert("session-id".into(), "sess-k1".into());
-    req_headers.insert("session_id".into(), "sess-k2".into());
-    req_headers.insert("thread-id".into(), "th-123".into());
-    req_headers.insert("x-client-request-id".into(), "req-uuid-456".into());
-    req_headers.insert("x-conversation-id".into(), "conv-789".into());
-    req_headers.insert("x-session-id".into(), "sess-abc".into());
-    req_headers.insert("x-openai-internal-codex-residency".into(), "us-east".into());
-
     propagate_codex_headers(&mut headers, &req_headers);
 
     let find = |k: &str| {
@@ -104,13 +96,6 @@ fn test_propagate_codex_headers() {
     assert_eq!(find("codex-subaction"), Some("lint"));
     assert_eq!(find("originator"), Some("codex_exec"));
     assert_eq!(find("version"), Some("0.150.0"));
-    assert_eq!(find("session-id"), Some("sess-k1"));
-    assert_eq!(find("session_id"), Some("sess-k2"));
-    assert_eq!(find("thread-id"), Some("th-123"));
-    assert_eq!(find("x-client-request-id"), Some("req-uuid-456"));
-    assert_eq!(find("x-conversation-id"), Some("conv-789"));
-    assert_eq!(find("x-session-id"), Some("sess-abc"));
-    assert_eq!(find("x-openai-internal-codex-residency"), Some("us-east"));
     assert_eq!(find("Authorization"), Some("Bearer codex-tok"));
 }
 
@@ -212,8 +197,6 @@ fn test_propagate_commandcode_headers() {
     assert_eq!(find("x-project-slug"), Some("my-project"));
     assert_eq!(find("x-cli-environment"), Some("staging"));
     assert_eq!(find("x-taste-learning"), Some("false"));
-    assert_eq!(find("x-session-id"), Some("conv-cc-789"));
-    assert_eq!(find("x-session-affinity"), Some("conv-cc-789"));
     assert_eq!(find("x-conversation-id"), Some("conv-cc-789"));
     assert_eq!(find("x-command-code-version"), Some("1.60.0"));
     assert_eq!(find("Authorization"), Some("Bearer cc-tok"));

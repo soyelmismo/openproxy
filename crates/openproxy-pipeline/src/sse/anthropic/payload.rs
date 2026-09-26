@@ -143,15 +143,11 @@ pub(crate) fn translate_anthropic_message_delta(
     let stop_reason = data
         .get("delta")
         .and_then(|d| d.get("stop_reason"))
-        .or_else(|| data.get("stop_reason"))
         .and_then(|r| r.as_str());
 
     let finish_reason = match stop_reason {
         Some("end_turn" | "stop_sequence") => Some("stop".to_string()),
         Some("max_tokens") => Some("length".to_string()),
-        Some("tool_use" | "tool_call" | "tool_calls" | "toolUse" | "toolCall" | "toolCalls") => {
-            Some("tool_calls".to_string())
-        }
         _ => None,
     };
 
