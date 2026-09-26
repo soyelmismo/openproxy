@@ -25,6 +25,28 @@ impl ResponseExt for OpenAIResponse {
         let mut output: Vec<Value> = Vec::new();
 
         for c in &self.choices {
+            let reasoning = c
+                .message
+                .extra
+                .get("reasoning_content")
+                .or_else(|| c.message.extra.get("reasoning"))
+                .or_else(|| c.message.extra.get("thinking"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty());
+
+            if let Some(r_text) = reasoning {
+                output.push(json!({
+                    "id": format!("rs_{}", self.id),
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{
+                        "type": "reasoning_text",
+                        "text": r_text
+                    }],
+                    "summary": []
+                }));
+            }
+
             let has_content = match &c.message.content {
                 Some(Value::String(s)) => !s.is_empty(),
                 Some(Value::Array(a)) => !a.is_empty(),
@@ -199,5 +221,26 @@ mod tests {
         assert_eq!(output[0]["call_id"], "call_999");
         assert_eq!(output[0]["name"], "get_weather");
         assert_eq!(output[0]["arguments"], "{\"city\":\"Madrid\"}");
+    }
+
+    #[test]
+    fn envelope_preserves_reasoning() {
+        let mut resp = sample_response();
+        resp.choices[0].message.extra.insert(
+            "reasoning_content".to_string(),
+            json!("Step 1: calculate. Step 2: solve."),
+        );
+        let v = resp.to_responses_envelope();
+        let output = v["output"].as_array().expect("output[]");
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["type"], "reasoning");
+        assert_eq!(output[0]["id"], "rs_chatcmpl-xyz");
+        assert_eq!(output[0]["summary"], json!([]));
+        assert_eq!(
+            output[0]["content"][0]["text"],
+            "Step 1: calculate. Step 2: solve."
+        );
+        assert_eq!(output[1]["type"], "message");
+        assert_eq!(output[1]["role"], "assistant");
     }
 }

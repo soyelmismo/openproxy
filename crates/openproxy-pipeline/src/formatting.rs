@@ -37,22 +37,20 @@ impl TargetFormatter for OpenaiFormatter {
                 view.messages.iter().map(normalize_openai_message).collect(),
             );
         }
-        if let Some(ref tools) = view.tools
-            && tools.iter().any(|t| t.get("cache_control").is_some())
-        {
-            let sanitized_tools: Vec<Value> = tools
-                .iter()
-                .map(|t| {
-                    if let Some(obj) = t.as_object()
-                        && obj.contains_key("cache_control")
+        if let Some(ref tools) = view.tools {
+            let mut sanitized_tools: Vec<Value> = Vec::with_capacity(tools.len());
+            for t in tools.iter() {
+                let mut clean = t.clone();
+                if let Some(obj) = clean.as_object_mut() {
+                    obj.remove("cache_control");
+                    if let Some(func) = obj.get_mut("function").and_then(|f| f.as_object_mut())
+                        && let Some(params) = func.get_mut("parameters")
                     {
-                        let mut clean = obj.clone();
-                        clean.remove("cache_control");
-                        return Value::Object(clean);
+                        crate::schema_sanitizer::sanitize_tool_parameters_schema(params);
                     }
-                    t.clone()
-                })
-                .collect();
+                }
+                sanitized_tools.push(clean);
+            }
             view.tools = Some(std::borrow::Cow::Owned(sanitized_tools));
         }
         const OPENAI_CHAT_DISALLOWED_EXTRA: &[&str] = &[
@@ -257,12 +255,13 @@ impl TargetFormatter for ResponsesFormatter {
         let mut obj = req.openai_request.extra.clone();
         obj.insert("model".to_string(), Value::String(resolved_model));
 
-        let (system_instructions, messages_without_system) =
+        let (system_instructions, _messages_without_system) =
             extract_system_and_messages(messages_ref);
 
+        let all_refs: Vec<&OpenAIMessage> = messages_ref.iter().collect();
         obj.insert(
             "input".to_string(),
-            messages_to_responses_input(&messages_without_system),
+            messages_to_responses_input(&all_refs),
         );
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
@@ -270,7 +269,37 @@ impl TargetFormatter for ResponsesFormatter {
         let default_instructions =
             "Follow the developer instructions in the conversation.".to_string();
         obj.entry("instructions".to_string())
-            .or_insert_with(|| Value::String(system_instructions.unwrap_or(default_instructions)));
+            .or_insert_with(|| Value::String(system_instructions.unwrap_or(default_instructions.clone())));
+
+        let custom_instructions = if !messages_ref
+            .iter()
+            .any(|m| m.role == "system" || m.role == "developer")
+        {
+            obj.get("instructions")
+                .and_then(Value::as_str)
+                .filter(|inst| !inst.is_empty() && *inst != default_instructions)
+                .map(str::to_string)
+        } else {
+            None
+        };
+
+        if let Some(inst) = custom_instructions
+            && let Some(arr) = obj.get_mut("input").and_then(Value::as_array_mut)
+            && !arr.iter().any(|item| {
+                item.get("role").and_then(Value::as_str) == Some("developer")
+            })
+        {
+            arr.insert(
+                0,
+                json!({
+                    "role": "developer",
+                    "content": [{
+                        "type": "input_text",
+                        "text": inst
+                    }]
+                }),
+            );
+        }
 
         if let Some(temperature) = req.openai_request.temperature {
             obj.insert("temperature".to_string(), json!(temperature));
@@ -289,15 +318,27 @@ impl TargetFormatter for ResponsesFormatter {
         strip_responses_disallowed_keys(&mut obj);
         apply_responses_reasoning_and_tier(&mut obj, effort_from_model);
 
-        let instructions_str = obj
-            .get("instructions")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Follow the developer instructions in the conversation.");
-        let pck = compute_responses_prompt_cache_key(
-            instructions_str,
-            req.openai_request.tools.as_deref(),
-        );
-        obj.insert("prompt_cache_key".to_string(), Value::String(pck));
+        if obj
+            .get("prompt_cache_key")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            let instructions_str = obj
+                .get("instructions")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Follow the developer instructions in the conversation.");
+            let pck = compute_responses_prompt_cache_key(
+                instructions_str,
+                req.openai_request.tools.as_deref(),
+            );
+            obj.insert("prompt_cache_key".to_string(), Value::String(pck));
+        }
+
+        if let Some(arr) = obj.get_mut("input").and_then(Value::as_array_mut) {
+            for item in arr.iter_mut() {
+                sanitize_responses_reasoning_item(item);
+            }
+        }
 
         serde_json::to_vec(&Value::Object(obj))
             .map(bytes::Bytes::from)
@@ -313,7 +354,7 @@ fn extract_system_and_messages(
     let mut leading_system = true;
 
     for msg in messages_ref {
-        if msg.role == "system" && leading_system {
+        if (msg.role == "system" || msg.role == "developer") && leading_system {
             let text = content_to_text(msg.content.as_ref());
             if !text.is_empty() {
                 instructions_parts.push(text);
@@ -349,7 +390,8 @@ fn format_responses_tools(tools: Option<&[Value]>) -> Option<Value> {
             if let Some(desc) = func_obj.remove("description") {
                 obj.insert("description".to_string(), desc);
             }
-            if let Some(params) = func_obj.remove("parameters") {
+            if let Some(mut params) = func_obj.remove("parameters") {
+                crate::schema_sanitizer::sanitize_tool_parameters_schema(&mut params);
                 obj.insert("parameters".to_string(), params);
             }
         }
@@ -555,6 +597,73 @@ fn convert_msg_tool_calls(tool_calls: &[Value], input_items: &mut Vec<Value>) {
     }
 }
 
+fn extract_reasoning_content(msg: &OpenAIMessage) -> Option<String> {
+    for key in &["reasoning_content", "reasoning", "thinking"] {
+        if let Some(val) = msg.extra.get(*key) {
+            match val {
+                Value::String(s) if !s.is_empty() => return Some(s.clone()),
+                Value::Array(arr) => {
+                    let mut combined = String::new();
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            combined.push_str(s);
+                        } else if let Some(text) = item.get("text").and_then(Value::as_str) {
+                            combined.push_str(text);
+                        } else if let Some(thinking) = item.get("thinking").and_then(Value::as_str) {
+                            combined.push_str(thinking);
+                        }
+                    }
+                    if !combined.is_empty() {
+                        return Some(combined);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(Value::Array(parts)) = &msg.content {
+        let mut combined = String::new();
+        for p in parts {
+            let p_type = p.get("type").and_then(Value::as_str);
+            if matches!(p_type, Some("thinking" | "reasoning")) {
+                if let Some(t) = p.get("thinking").and_then(Value::as_str) {
+                    combined.push_str(t);
+                } else if let Some(t) = p.get("text").and_then(Value::as_str) {
+                    combined.push_str(t);
+                }
+            }
+        }
+        if !combined.is_empty() {
+            return Some(combined);
+        }
+    }
+    None
+}
+
+fn sanitize_responses_reasoning_item(item: &mut Value) {
+    let Some(map) = item.as_object_mut() else { return };
+    if map.get("type").and_then(Value::as_str) != Some("reasoning") {
+        return;
+    }
+    let Some(content) = map.remove("content") else { return };
+    let summary_empty = map.get("summary").and_then(Value::as_array).is_none_or(Vec::is_empty);
+    if summary_empty {
+        let mut text = String::new();
+        if let Some(c_arr) = content.as_array() {
+            for part in c_arr {
+                if let Some(t) = part.get("text").and_then(Value::as_str).or_else(|| part.as_str()) {
+                    text.push_str(t);
+                }
+            }
+        } else if let Some(t) = content.as_str() {
+            text.push_str(t);
+        }
+        if !text.is_empty() {
+            map.insert("summary".to_string(), json!([{ "type": "summary_text", "text": text }]));
+        }
+    }
+}
+
 fn convert_single_message_to_responses_input(msg: &OpenAIMessage, input_items: &mut Vec<Value>) {
     if msg.role == "tool" {
         let call_id = msg.tool_call_id.as_deref().unwrap_or("call_xyz");
@@ -567,17 +676,36 @@ fn convert_single_message_to_responses_input(msg: &OpenAIMessage, input_items: &
         return;
     }
 
-    if msg.role == "system" {
-        input_items.push(json!({
-            "role": "system",
-            "content": content_to_text(msg.content.as_ref())
-        }));
+    if msg.role == "system" || msg.role == "developer" {
+        let mut parts = convert_msg_content_to_parts(msg.content.as_ref(), "input_text");
+        if parts.is_empty() {
+            let text = content_to_text(msg.content.as_ref());
+            if !text.is_empty() {
+                parts.push(json!({ "type": "input_text", "text": text }));
+            }
+        }
+        if !parts.is_empty() {
+            input_items.push(json!({
+                "role": "developer",
+                "content": parts
+            }));
+        }
         return;
     }
 
     let has_tool_calls = msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
 
     if msg.role == "assistant" {
+        if let Some(reasoning_text) = extract_reasoning_content(msg) {
+            input_items.push(json!({
+                "type": "reasoning",
+                "summary": [{
+                    "type": "summary_text",
+                    "text": reasoning_text
+                }]
+            }));
+        }
+
         let parts = convert_msg_content_to_parts(msg.content.as_ref(), "output_text");
         if !parts.is_empty() {
             input_items.push(json!({

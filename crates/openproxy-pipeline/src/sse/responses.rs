@@ -95,15 +95,7 @@ pub fn parse_responses_sse_stream_line(
                 .and_then(|v| u32::try_from(v).ok())
                 .unwrap_or_else(|| prompt_tokens.saturating_add(completion_tokens));
 
-            let cached_tokens = u
-                .get("input_tokens_details")
-                .and_then(|d| d.get("cached_tokens"))
-                .or_else(|| {
-                    u.get("prompt_tokens_details")
-                        .and_then(|d| d.get("cached_tokens"))
-                })
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok());
+            let cached_tokens = crate::translation::responses::extract_responses_cached_tokens(u);
 
             let prompt_tokens_details =
                 cached_tokens.map(|cached| openproxy_types::PromptTokensDetails {
@@ -607,5 +599,44 @@ mod tests {
         let chunk = parse_responses_sse_stream_line(line, "c1", 123, "muse-spark", &mut state)
             .expect("should not error on null response.error");
         assert!(chunk.is_none());
+    }
+
+    #[test]
+    fn test_responses_sse_exhaustive_cached_tokens() {
+        let mut state = ResponsesSseState::default();
+        // 1. prompt_cache_hit_tokens in root with cached_tokens: 0
+        let line1 = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":20,"prompt_cache_hit_tokens":512,"cached_tokens":0}}}"#;
+        let chunk1 = parse_responses_sse_stream_line(line1, "c1", 123, "gpt-4o", &mut state)
+            .expect("parse")
+            .expect("chunk");
+        let u1 = chunk1.usage.expect("usage");
+        assert_eq!(
+            u1.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            Some(512)
+        );
+
+        // 2. cache_read_input_tokens in input_tokens_details
+        let mut state2 = ResponsesSseState::default();
+        let line2 = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":20,"input_tokens_details":{"cache_read_input_tokens":256}}}}"#;
+        let chunk2 = parse_responses_sse_stream_line(line2, "c1", 123, "gpt-4o", &mut state2)
+            .expect("parse")
+            .expect("chunk");
+        let u2 = chunk2.usage.expect("usage");
+        assert_eq!(
+            u2.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            Some(256)
+        );
+
+        // 3. prompt_tokens_details with cached_tokens: 0 and cache_read_input_tokens: 128
+        let mut state3 = ResponsesSseState::default();
+        let line3 = r#"data: {"type":"response.completed","response":{"usage":{"input_tokens":100,"output_tokens":20,"prompt_tokens_details":{"cached_tokens":0,"cache_read_input_tokens":128}}}}"#;
+        let chunk3 = parse_responses_sse_stream_line(line3, "c1", 123, "gpt-4o", &mut state3)
+            .expect("parse")
+            .expect("chunk");
+        let u3 = chunk3.usage.expect("usage");
+        assert_eq!(
+            u3.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            Some(128)
+        );
     }
 }

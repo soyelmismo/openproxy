@@ -66,14 +66,46 @@ pub struct ResponsesFunctionCallProbe<'a> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ResponsesTokensDetailsProbe {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: Option<u32>,
+}
+
+impl ResponsesTokensDetailsProbe {
+    pub fn extract_cached(&self) -> Option<u32> {
+        match (
+            self.cached_tokens,
+            self.cache_read_input_tokens,
+            self.prompt_cache_hit_tokens,
+        ) {
+            (Some(v), _, _) if v > 0 => Some(v),
+            (_, Some(v), _) if v > 0 => Some(v),
+            (_, _, Some(v)) if v > 0 => Some(v),
+            (Some(0), _, _) | (_, Some(0), _) | (_, _, Some(0)) => Some(0),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ResponsesUsageProbe {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
     pub input_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
-    pub prompt_tokens_details: Option<openproxy_types::PromptTokensDetails>,
-    pub input_tokens_details: Option<openproxy_types::PromptTokensDetails>,
+    pub prompt_tokens_details: Option<ResponsesTokensDetailsProbe>,
+    pub input_tokens_details: Option<ResponsesTokensDetailsProbe>,
+    #[serde(default)]
+    pub prompt_cache_hit_tokens: Option<u32>,
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
 }
 
 impl ResponsesUsageProbe {
@@ -81,10 +113,39 @@ impl ResponsesUsageProbe {
         let pt = self.prompt_tokens.or(self.input_tokens).unwrap_or(0);
         let ct = self.completion_tokens.or(self.output_tokens).unwrap_or(0);
         let tt = self.total_tokens.unwrap_or_else(|| pt.saturating_add(ct));
-        let details = self
+        let details_cached = self
             .prompt_tokens_details
-            .clone()
-            .or_else(|| self.input_tokens_details.clone());
+            .as_ref()
+            .and_then(|d| d.extract_cached())
+            .or_else(|| {
+                self.input_tokens_details
+                    .as_ref()
+                    .and_then(|d| d.extract_cached())
+            });
+
+        let root_cached = match (
+            self.cached_tokens,
+            self.cache_read_input_tokens,
+            self.prompt_cache_hit_tokens,
+        ) {
+            (Some(v), _, _) if v > 0 => Some(v),
+            (_, Some(v), _) if v > 0 => Some(v),
+            (_, _, Some(v)) if v > 0 => Some(v),
+            (Some(0), _, _) | (_, Some(0), _) | (_, _, Some(0)) => Some(0),
+            _ => None,
+        };
+
+        let cached = match (details_cached, root_cached) {
+            (Some(d), _) if d > 0 => Some(d),
+            (_, Some(r)) if r > 0 => Some(r),
+            (Some(0), _) | (_, Some(0)) => Some(0),
+            _ => None,
+        };
+
+        let details = cached.map(|c| openproxy_types::PromptTokensDetails {
+            cached_tokens: Some(c),
+        });
+
         OpenAIUsage {
             prompt_tokens: pt,
             completion_tokens: ct,
