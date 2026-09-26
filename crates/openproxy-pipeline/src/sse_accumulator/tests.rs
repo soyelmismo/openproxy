@@ -587,3 +587,54 @@ fn test_adversarial_concurrent_stream_simulation() {
             .expect("Concurrent accumulator thread must not panic");
     }
 }
+
+#[test]
+fn finish_reason_tool_calls_from_stop_reason() {
+    for stop in ["tool_use", "tool_call", "tool_calls", "toolUse", "toolCall", "toolCalls"] {
+        let mut acc = ResponseAccumulator::new();
+        acc.set_stop_reason(stop);
+        let v = acc.finish("id", 0, "m");
+        assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+    }
+}
+
+#[test]
+fn finish_reason_tool_calls_from_empty_stop_reason_with_tool_calls() {
+    let mut acc = ResponseAccumulator::new();
+    acc.append_openai_tool_call(Some("call_1"), "get_weather", r#"{"location":"Tokyo"}"#);
+    acc.set_stop_reason("");
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+}
+
+#[test]
+fn finish_reason_tool_calls_from_accumulated_tool_calls_without_stop_reason() {
+    let mut acc = ResponseAccumulator::new();
+    acc.append_openai_tool_call(Some("call_1"), "get_weather", r#"{"location":"Tokyo"}"#);
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+}
+
+#[test]
+fn finish_reason_tool_calls_from_anthropic_tool_use_without_stop_reason() {
+    let mut acc = ResponseAccumulator::new();
+    acc.update_anthropic_tool_use(AnthropicToolEvent::Open(Box::new(AnthropicToolOpen {
+        id: "toolu_1".into(),
+        name: "get_weather".into(),
+    })));
+    acc.update_anthropic_tool_use(AnthropicToolEvent::Delta {
+        partial_json: r#"{"city":"Madrid"}"#.into(),
+    });
+    acc.update_anthropic_tool_use(AnthropicToolEvent::Close);
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
+}
+
+#[test]
+fn finish_reason_preserves_other_stop_reason_even_with_tool_calls() {
+    let mut acc = ResponseAccumulator::new();
+    acc.append_openai_tool_call(Some("call_1"), "get_weather", r#"{"location":"Tokyo"}"#);
+    acc.set_stop_reason("length");
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(v["choices"][0]["finish_reason"], "length");
+}
