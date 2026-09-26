@@ -7,6 +7,8 @@ pub fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Val
         .map(std::mem::take)
         .unwrap_or_default();
 
+    let thread_id = resolve_commandcode_thread_id(val, &messages);
+
     // Pass 1: index tool_call id -> name
     let mut tool_id_to_name = std::collections::HashMap::new();
     for msg in &messages {
@@ -265,7 +267,6 @@ pub fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Val
     }
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let thread_id = uuid::Uuid::new_v4().to_string();
 
     json!({
         "config": {
@@ -306,4 +307,69 @@ fn extract_content_string(msg: &Value) -> String {
         Some(Value::Null) | None => String::new(),
         Some(v) => v.to_string(),
     }
+}
+
+fn format_as_uuid(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Ok(parsed) = uuid::Uuid::parse_str(trimmed) {
+        return parsed.to_string();
+    }
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(trimmed, &mut hasher);
+    let h = std::hash::Hasher::finish(&hasher);
+    let u128_val = ((h as u128) << 64) | (h as u128 ^ 0xa5a5_a5a5_a5a5_a5a5);
+    uuid::Uuid::from_u128(u128_val).to_string()
+}
+
+fn resolve_commandcode_thread_id(val: &Value, messages: &[Value]) -> String {
+    // 1. Explicit thread / session identifiers in payload
+    for key in &[
+        "thread_id",
+        "threadId",
+        "session_id",
+        "sessionId",
+        "conversation_id",
+        "conversationId",
+    ] {
+        if let Some(s) = val.get(*key).and_then(Value::as_str) {
+            let clean = s.trim().trim_matches('"');
+            if !clean.is_empty() {
+                return format_as_uuid(clean);
+            }
+        }
+    }
+
+    // 2. Explicit user identifier (used by LLM clients for user/session continuity)
+    if let Some(user) = val.get("user").and_then(Value::as_str) {
+        let clean = user.trim().trim_matches('"');
+        if !clean.is_empty() {
+            return format_as_uuid(clean);
+        }
+    }
+
+    // 3. Fallback: derive deterministic conversation affinity from root system/user messages
+    let mut hasher = std::hash::DefaultHasher::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(Value::as_str).unwrap_or("");
+        if role == "system" || role == "developer" || role == "user" {
+            std::hash::Hash::hash(role, &mut hasher);
+            match msg.get("content") {
+                Some(Value::String(s)) => std::hash::Hash::hash(s.as_str(), &mut hasher),
+                Some(Value::Array(arr)) => {
+                    for part in arr {
+                        if let Some(t) = part.get("text").and_then(Value::as_str) {
+                            std::hash::Hash::hash(t, &mut hasher);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if role == "user" {
+            break;
+        }
+    }
+    let h = std::hash::Hasher::finish(&hasher);
+    let u128_val = ((h as u128) << 64) | (h as u128 ^ 0xa5a5_a5a5_a5a5_a5a5);
+    uuid::Uuid::from_u128(u128_val).to_string()
 }

@@ -291,3 +291,43 @@ fn test_humanize_commandcode_plan() {
 
     assert_eq!(humanize_commandcode_plan(None, None), "Command Code");
 }
+
+#[test]
+fn test_commandcode_deterministic_thread_id() {
+    let mut val1 = json!({
+        "messages": [
+            { "role": "system", "content": "You are a coding assistant." },
+            { "role": "user", "content": "Write a python script." }
+        ]
+    });
+    let mut val2 = json!({
+        "messages": [
+            { "role": "system", "content": "You are a coding assistant." },
+            { "role": "user", "content": "Write a python script." },
+            { "role": "assistant", "content": "def main(): pass" },
+            { "role": "user", "content": "Now add tests." }
+        ]
+    });
+
+    let env1 = transform_openai_to_commandcode(&mut val1, "claude-sonnet-5");
+    let env2 = transform_openai_to_commandcode(&mut val2, "claude-sonnet-5");
+
+    let tid1 = env1["threadId"].as_str().expect("has threadId");
+    let tid2 = env2["threadId"].as_str().expect("has threadId");
+
+    // Conversation turns with same root system and user prompt MUST produce identical threadId
+    assert_eq!(tid1, tid2);
+    assert!(uuid::Uuid::parse_str(tid1).is_ok());
+
+    // Explicit session_id takes precedence
+    let mut val_explicit = json!({
+        "session_id": "my-explicit-session-1234",
+        "messages": [
+            { "role": "user", "content": "Hello" }
+        ]
+    });
+    let env3 = transform_openai_to_commandcode(&mut val_explicit, "claude-sonnet-5");
+    let tid3 = env3["threadId"].as_str().expect("has threadId");
+    assert!(uuid::Uuid::parse_str(tid3).is_ok());
+    assert_ne!(tid1, tid3);
+}
