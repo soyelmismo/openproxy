@@ -80,3 +80,37 @@ async fn test_responses_stream_error_frame() {
     assert!(combined.contains("event: response.failed"));
     assert!(combined.contains("\"status\":\"failed\""));
 }
+
+#[tokio::test]
+async fn test_responses_stream_reasoning_and_cached_tokens() {
+    let incoming = vec![
+        Bytes::from(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I think therefore I code.\"}}]}\n\n",
+        ),
+        Bytes::from("data: {\"choices\":[{\"delta\":{\"content\":\"Result.\"}}]}\n\n"),
+        Bytes::from(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":15,\"total_tokens\":115,\"input_tokens_details\":{\"cache_read_input_tokens\":80}}}\n\n",
+        ),
+        Bytes::from("data: [DONE]\n\n"),
+    ];
+    let stream = futures_util::stream::iter(incoming);
+    let responses_stream =
+        OpenAIToResponsesSseStream::new(stream, "resp_reasoning".into(), "gpt-5".into());
+    let items: Vec<Bytes> = responses_stream.map(|r| r.unwrap()).collect().await;
+
+    let combined = items
+        .iter()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .collect::<String>();
+    assert!(combined.contains("event: response.created"));
+    assert!(combined.contains("event: response.output_item.added"));
+    assert!(combined.contains("\"type\":\"reasoning\""));
+    assert!(combined.contains("event: response.reasoning_text.delta"));
+    assert!(combined.contains("I think therefore I code."));
+    assert!(combined.contains("event: response.output_item.done"));
+    assert!(combined.contains("event: response.output_text.delta"));
+    assert!(combined.contains("Result."));
+    assert!(combined.contains("event: response.completed"));
+    assert!(combined.contains("\"cached_tokens\":80"));
+    assert!(combined.contains("data: [DONE]"));
+}
