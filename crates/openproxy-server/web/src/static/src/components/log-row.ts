@@ -114,7 +114,10 @@ function buildLogRowCells(
   
   if (has("cache")) {
     if (row && row.cached_tokens != null && row.cached_tokens > 0) {
-      cells.push(html`<span class="log-cache" style="color: var(--color-success);" title="${formatContext(row.cached_tokens)} tokens cached by upstream API">${icons.target()} ${formatContext(row.cached_tokens)}</span>`);
+      const promptTokens = row.prompt_tokens ?? 0;
+      const pctVal = promptTokens > 0 ? Math.min(100, (row.cached_tokens / promptTokens) * 100) : 0;
+      const pctStr = pctVal > 0 && pctVal < 1 ? pctVal.toFixed(1) : Math.round(pctVal).toString();
+      cells.push(html`<span class="log-cache" style="color: var(--color-success);" title="${formatContext(row.cached_tokens)} / ${formatContext(promptTokens)} tokens cached by upstream API (${pctVal.toFixed(1)}%)">${icons.target()} ${pctStr}%</span>`);
     } else {
       cells.push(html`<span class="log-cache">—</span>`);
     }
@@ -178,7 +181,10 @@ function buildMobileCardView(
   // Optional badge: cache, compression or cost
   let extraBadge: TemplateResult | null = null;
   if (row && row.cached_tokens != null && row.cached_tokens > 0) {
-    extraBadge = html`<span class="log-cache" style="color: var(--color-success); font-size: 0.72rem;">${icons.target()} ${formatContext(row.cached_tokens)}</span>`;
+    const promptTokens = row.prompt_tokens ?? 0;
+    const pctVal = promptTokens > 0 ? Math.min(100, (row.cached_tokens / promptTokens) * 100) : 0;
+    const pctStr = pctVal > 0 && pctVal < 1 ? pctVal.toFixed(1) : Math.round(pctVal).toString();
+    extraBadge = html`<span class="log-cache" style="color: var(--color-success); font-size: 0.72rem;" title="${formatContext(row.cached_tokens)} / ${formatContext(promptTokens)} tokens cached (${pctVal.toFixed(1)}%)">${icons.target()} ${pctStr}%</span>`;
   } else if (row && row.compression_savings_pct != null && row.compression_savings_pct > 0) {
     const pct = row.compression_savings_pct < 1 ? row.compression_savings_pct.toFixed(2) : Math.round(row.compression_savings_pct).toString();
     extraBadge = html`<span class="log-compression" style="color: var(--color-success); font-size: 0.72rem;">${icons.lightning()} ${pct}%</span>`;
