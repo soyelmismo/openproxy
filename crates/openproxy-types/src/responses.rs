@@ -65,6 +65,17 @@ pub enum ResponsesInputItem {
     },
     /// Tool-side function result (re-injected to restore tool results).
     FunctionCallOutput { call_id: String, output: String },
+    /// Reasoning block (re-injected into multi-turn conversations).
+    Reasoning {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<Value>,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
     /// Forward-compatible: new item types the proxy doesn't know
     /// about are dropped (with a debug log).
     Unknown,
@@ -146,6 +157,23 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
                             .unwrap_or_default();
                         ResponsesInputItem::FunctionCallOutput { call_id, output }
                     }
+                    Some("reasoning") => {
+                        let id = map.remove("id").and_then(|v| match v {
+                            Value::String(s) => Some(s),
+                            _ => None,
+                        });
+                        let content = map.remove("content");
+                        let summary = map
+                            .remove("summary")
+                            .filter(|v| !v.is_null())
+                            .or_else(|| Some(Value::Array(Vec::new())));
+                        ResponsesInputItem::Reasoning {
+                            id,
+                            content,
+                            summary,
+                            extra: map,
+                        }
+                    }
                     Some(_) => ResponsesInputItem::Unknown,
                     None => {
                         // Inferred variants without explicit "type":
@@ -202,6 +230,24 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
                                 name,
                                 arguments,
                             }
+                        } else if map.contains_key("summary")
+                            && (map.contains_key("content") || map.contains_key("id"))
+                        {
+                            let id = map.remove("id").and_then(|v| match v {
+                                Value::String(s) => Some(s),
+                                _ => None,
+                            });
+                            let content = map.remove("content");
+                            let summary = map
+                                .remove("summary")
+                                .filter(|v| !v.is_null())
+                                .or_else(|| Some(Value::Array(Vec::new())));
+                            ResponsesInputItem::Reasoning {
+                                id,
+                                content,
+                                summary,
+                                extra: map,
+                            }
                         } else {
                             ResponsesInputItem::Unknown
                         }
@@ -210,6 +256,71 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
             }
             _ => ResponsesInputItem::Unknown,
         })
+    }
+}
+
+impl ResponsesInputItem {
+    /// Extracts the combined reasoning text from a `Reasoning` item, if present.
+    pub fn reasoning_text(&self) -> Option<String> {
+        match self {
+            ResponsesInputItem::Reasoning {
+                content,
+                summary,
+                extra,
+                ..
+            } => {
+                if let Some(content) = content {
+                    if let Some(s) = content.as_str()
+                        && !s.is_empty()
+                    {
+                        return Some(s.to_string());
+                    } else if let Some(arr) = content.as_array() {
+                        let mut text = String::new();
+                        for item in arr {
+                            if let Some(s) = item.get("text").and_then(Value::as_str) {
+                                text.push_str(s);
+                            } else if let Some(s) = item.as_str() {
+                                text.push_str(s);
+                            }
+                        }
+                        if !text.is_empty() {
+                            return Some(text);
+                        }
+                    }
+                }
+                if let Some(summary) = summary {
+                    if let Some(s) = summary.as_str()
+                        && !s.is_empty()
+                    {
+                        return Some(s.to_string());
+                    } else if let Some(arr) = summary.as_array() {
+                        let mut text = String::new();
+                        for item in arr {
+                            if let Some(s) = item.get("text").and_then(Value::as_str) {
+                                text.push_str(s);
+                            } else if let Some(s) = item.as_str() {
+                                text.push_str(s);
+                            }
+                        }
+                        if !text.is_empty() {
+                            return Some(text);
+                        }
+                    }
+                }
+                if let Some(s) = extra.get("text").and_then(Value::as_str)
+                    && !s.is_empty()
+                {
+                    return Some(s.to_string());
+                }
+                if let Some(s) = extra.get("reasoning_content").and_then(Value::as_str)
+                    && !s.is_empty()
+                {
+                    return Some(s.to_string());
+                }
+                None
+            }
+            _ => None,
+        }
     }
 }
 
@@ -339,6 +450,33 @@ mod tests {
                 }
             }
             _ => panic!("expected Message"),
+        }
+    }
+
+    #[test]
+    fn test_responses_input_reasoning() {
+        let raw = r#"{
+            "model": "gpt-5",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "content": [
+                        { "type": "reasoning_text", "text": "Analyzing the multi-turn prompt..." }
+                    ],
+                    "summary": []
+                }
+            ]
+        }"#;
+        let req: ResponsesRequest = serde_json::from_str(raw).expect("parse reasoning input");
+        assert_eq!(req.input.len(), 1);
+        match &req.input[0] {
+            ResponsesInputItem::Reasoning { .. } => {
+                assert_eq!(
+                    req.input[0].reasoning_text().as_deref(),
+                    Some("Analyzing the multi-turn prompt...")
+                );
+            }
+            _ => panic!("expected Reasoning item"),
         }
     }
 }
