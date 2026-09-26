@@ -119,15 +119,17 @@ fn test_propagate_codex_headers() {
 fn test_propagate_codex_headers_synthesizes_session_affinity() {
     let mut headers = vec![("User-Agent".into(), "Codex/1.0".into())];
     let req_headers = std::collections::BTreeMap::new();
-    let mut req = openproxy_types::OpenAIRequest::default();
-    req.messages = vec![openproxy_types::OpenAIMessage {
-        role: "user".into(),
-        content: Some(serde_json::json!("Test conversation prompt")),
-        name: None,
-        tool_calls: None,
-        tool_call_id: None,
-        extra: serde_json::Map::new(),
-    }];
+    let req = openproxy_types::OpenAIRequest {
+        messages: vec![openproxy_types::OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::json!("Test conversation prompt")),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            extra: serde_json::Map::new(),
+        }],
+        ..Default::default()
+    };
 
     propagate_codex_headers(&mut headers, &req_headers, &req);
 

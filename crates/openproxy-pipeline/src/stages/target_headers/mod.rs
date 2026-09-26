@@ -9,26 +9,15 @@
 //! 4. x-opencode-session: ses_... (canonical descending format)
 //! 5. x-opencode-request: msg_... (canonical ascending format)
 
-use openproxy_adapters::spoofer::{
-    generate_request_id, generate_session_id, has_valid_opencode_version, translate_session_id,
-    upsert_header,
-};
+use openproxy_adapters::spoofer::{generate_request_id, has_valid_opencode_version};
+
+pub mod session;
+pub use session::*;
 
 #[inline]
 fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
     s.get(..prefix.len())
         .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
-}
-
-#[inline]
-fn get_header_val<'a>(
-    request_headers: &'a std::collections::BTreeMap<String, String>,
-    name: &str,
-) -> Option<&'a str> {
-    request_headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.as_str())
 }
 
 fn propagate_matching_headers<P>(
@@ -57,35 +46,9 @@ pub fn propagate_opencode_headers(
             .map(|(_, v)| v.as_str())
     };
 
-    // 1. Session affinity: downstream session, user, extra, or generated canonical session
-    let downstream_session = get_header("x-opencode-session")
-        .or_else(|| get_header("x-session-affinity"))
-        .or_else(|| get_header("x-session-id"))
-        .or_else(|| get_header("session-id"))
-        .or_else(|| get_header("x-conversation-id"))
-        .or(openai_req.user.as_deref())
-        .or_else(|| {
-            openai_req
-                .extra
-                .get("session_id")
-                .or_else(|| openai_req.extra.get("conversation_id"))
-                .and_then(|v| v.as_str())
-        });
-
-    let session_val = if let Some(raw) = downstream_session
-        && !raw.trim().is_empty()
-    {
-        translate_session_id(raw.trim(), None)
-    } else if let Some(existing) = headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-opencode-session"))
-        .map(|(_, v)| v.clone())
-    {
-        existing
-    } else {
-        generate_session_id()
-    };
-    upsert_header(headers, "x-opencode-session", session_val);
+    // 1. Session affinity: downstream session or canonical derivation translated for OpenCode
+    let canonical = resolve_canonical_session(request_headers, openai_req);
+    OpenCodeSessionTranslator.apply_session(headers, &canonical);
 
     // 2. Request ID: downstream request or ensure msg_... is present
     let downstream_req = get_header("x-opencode-request")
@@ -187,19 +150,12 @@ pub fn propagate_minimax_headers(
     });
 
     // Dynamic session continuity: if downstream supplies session or conversation ID, bind to x-mavis-session-id
-    if let Some((_, v)) = request_headers.iter().find(|(k, _)| {
-        k.eq_ignore_ascii_case("x-session-id")
-            || k.eq_ignore_ascii_case("session-id")
-            || k.eq_ignore_ascii_case("x-conversation-id")
-    }) && !v.trim().is_empty()
-    {
-        let clean = v.trim();
-        let session_val = if clean.starts_with("session_") {
-            clean.to_string()
-        } else {
-            format!("session_{clean}")
-        };
-        upsert_header(headers, "x-mavis-session-id", session_val);
+    let session_val = get_header_val(request_headers, "x-conversation-id")
+        .or_else(|| get_header_val(request_headers, "x-session-id"))
+        .or_else(|| get_header_val(request_headers, "session-id"));
+
+    if let Some(session_id) = session_val.filter(|s| !s.trim().is_empty()) {
+        MiniMaxSessionTranslator.apply_session(headers, session_id.trim());
     }
 }
 
@@ -242,22 +198,6 @@ pub fn propagate_kilocode_headers(
     });
 }
 
-fn derive_conversation_affinity(openai_req: &openproxy_types::OpenAIRequest) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    if let Some(first) = openai_req.messages.first() {
-        first.role.hash(&mut hasher);
-        openproxy_types::extract_content_text(&first.content).hash(&mut hasher);
-    }
-    if openai_req.messages.len() > 1
-        && let Some(second) = openai_req.messages.get(1)
-    {
-        second.role.hash(&mut hasher);
-        openproxy_types::extract_content_text(&second.content).hash(&mut hasher);
-    }
-    format!("sess-openproxy-{:016x}", hasher.finish())
-}
-
 /// Propagate downstream client headers for Codex.
 ///
 /// Forwards `x-codex-*`, `codex-*`, `chatgpt-account-id`, and CLI identity headers
@@ -289,50 +229,8 @@ pub fn propagate_codex_headers(
             || k.eq_ignore_ascii_case("x-openai-internal-codex-residency")
     });
 
-    let session_val = headers
-        .iter()
-        .find(|(k, _)| {
-            k.eq_ignore_ascii_case("x-conversation-id")
-                || k.eq_ignore_ascii_case("x-session-id")
-                || k.eq_ignore_ascii_case("session-id")
-                || k.eq_ignore_ascii_case("x-codex-session")
-        })
-        .map(|(_, v)| v.clone())
-        .or_else(|| {
-            get_header_val(request_headers, "x-opencode-session")
-                .or_else(|| get_header_val(request_headers, "x-session-affinity"))
-                .or_else(|| get_header_val(request_headers, "conversation-id"))
-                .or_else(|| get_header_val(request_headers, "session_id"))
-                .or_else(|| get_header_val(request_headers, "thread-id"))
-                .or_else(|| get_header_val(request_headers, "thread_id"))
-                .or(openai_req.user.as_deref())
-                .or_else(|| {
-                    openai_req
-                        .extra
-                        .get("session_id")
-                        .or_else(|| openai_req.extra.get("conversation_id"))
-                        .and_then(|v| v.as_str())
-                })
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.trim().to_string())
-        })
-        .unwrap_or_else(|| derive_conversation_affinity(openai_req));
-
-    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("session-id")) {
-        headers.push(("session-id".to_string(), session_val.clone()));
-    }
-    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-session-id")) {
-        headers.push(("x-session-id".to_string(), session_val.clone()));
-    }
-    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-conversation-id")) {
-        headers.push(("x-conversation-id".to_string(), session_val.clone()));
-    }
-    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-codex-session")) {
-        headers.push(("x-codex-session".to_string(), session_val.clone()));
-    }
-    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-session-affinity")) {
-        headers.push(("x-session-affinity".to_string(), session_val));
-    }
+    let canonical = resolve_canonical_session(request_headers, openai_req);
+    CodexSessionTranslator.apply_session(headers, &canonical);
 }
 
 /// Propagate downstream client headers for Kiro AI (AWS CodeWhisperer).
@@ -360,10 +258,8 @@ pub fn propagate_kiro_headers(
         .or_else(|| get_header_val(request_headers, "x-session-id"))
         .or_else(|| get_header_val(request_headers, "session-id"));
 
-    if let Some(session_id) = session_val
-        && !session_id.trim().is_empty()
-    {
-        upsert_header(headers, "x-conversation-id", session_id.trim().to_string());
+    if let Some(session_id) = session_val.filter(|s| !s.trim().is_empty()) {
+        KiroSessionTranslator.apply_session(headers, session_id.trim());
     }
 }
 
@@ -395,13 +291,11 @@ pub fn propagate_commandcode_headers(
         .or_else(|| get_header_val(request_headers, "x-commandcode-session-id"));
 
     let session_id = session_val.filter(|s| !s.trim().is_empty()).map_or_else(
-        || uuid::Uuid::new_v4().to_string(),
+        || derive_conversation_affinity(&openproxy_types::OpenAIRequest::default()),
         |s| s.trim().to_string(),
     );
 
-    upsert_header(headers, "x-session-id", session_id.clone());
-    upsert_header(headers, "x-conversation-id", session_id.clone());
-    upsert_header(headers, "x-session-affinity", session_id);
+    CommandCodeSessionTranslator.apply_session(headers, &session_id);
 }
 
 /// Dispatches downstream client header propagation to the appropriate provider adapter.
@@ -444,6 +338,8 @@ pub fn propagate_provider_target_headers(
     } else if matches("codebuddy") {
         propagate_codebuddy_headers(headers, req_headers, openai_req);
     }
+
+    apply_provider_session_affinity(headers, provider_id, adapter_id, req_headers, openai_req);
 }
 
 /// Propagate downstream client headers for CodeBuddy.
@@ -473,48 +369,8 @@ pub fn propagate_codebuddy_headers(
         upsert_header(headers, "User-Agent", ua.to_string());
     }
 
-    let downstream_session = get_header_val(request_headers, "x-codebuddy-session-id")
-        .or_else(|| get_header_val(request_headers, "x-conversation-id"))
-        .or_else(|| get_header_val(request_headers, "x-session-id"))
-        .or_else(|| get_header_val(request_headers, "session-id"))
-        .or_else(|| get_header_val(request_headers, "x-session-affinity"))
-        .or(openai_req.user.as_deref())
-        .or_else(|| {
-            openai_req
-                .extra
-                .get("session_id")
-                .or_else(|| openai_req.extra.get("conversation_id"))
-                .and_then(|v| v.as_str())
-        });
-
-    let session_val = if let Some(raw) = downstream_session
-        && !raw.trim().is_empty()
-    {
-        raw.trim().to_string()
-    } else if let Some(existing) = headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("x-conversation-id"))
-        .map(|(_, v)| v.clone())
-    {
-        existing
-    } else if let Some(first_user) = openai_req.messages.iter().find(|m| m.role == "user") {
-        let text = first_user.extract_text_cow();
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            use std::hash::{DefaultHasher, Hash, Hasher};
-            let mut hasher = DefaultHasher::new();
-            trimmed.hash(&mut hasher);
-            let h = hasher.finish();
-            let u128_val = ((h as u128) << 64) | (h as u128 ^ 0xa5a5_a5a5_a5a5_a5a5);
-            uuid::Uuid::from_u128(u128_val).to_string()
-        } else {
-            uuid::Uuid::new_v4().to_string()
-        }
-    } else {
-        uuid::Uuid::new_v4().to_string()
-    };
-
-    upsert_header(headers, "x-conversation-id", session_val);
+    let canonical = resolve_canonical_session(request_headers, openai_req);
+    CodeBuddySessionTranslator.apply_session(headers, &canonical);
 }
 
 #[cfg(test)]
