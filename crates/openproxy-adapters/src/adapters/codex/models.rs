@@ -255,9 +255,9 @@ pub async fn fetch_codex_models_pipeline(
     upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Result<Vec<DiscoveredModel>> {
-    // 1. Fetch base catalog from upstream repo (models.json) with fallback to embedded static models
-    let base_models = if let Some(models) = try_fetch_upstream_repo_models(upstream_client).await {
-        models
+    // 1. Fetch base catalog from upstream repo (models.json) merged over embedded static models
+    let base_models = if let Some(repo_models) = try_fetch_upstream_repo_models(upstream_client).await {
+        merge_codex_models(hardcoded_models(), repo_models)
     } else {
         hardcoded_models()
     };
