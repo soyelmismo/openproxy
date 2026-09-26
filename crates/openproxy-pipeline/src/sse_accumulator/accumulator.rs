@@ -327,14 +327,14 @@ impl ResponseAccumulator {
             Value::Array(vec![Value::Object(self.build_finish_choice())]),
         );
         if let Some(usage) = &self.usage {
-            response.insert(
-                "usage".to_string(),
+            let val = serde_json::to_value(usage).unwrap_or_else(|_| {
                 json!({
                     "prompt_tokens": usage.prompt_tokens,
                     "completion_tokens": usage.completion_tokens,
                     "total_tokens": usage.total_tokens,
-                }),
-            );
+                })
+            });
+            response.insert("usage".to_string(), val);
         }
         if (self.partial || (self.content.is_empty() && self.tool_calls.is_empty()))
             && !self.raw_response_body.is_empty()

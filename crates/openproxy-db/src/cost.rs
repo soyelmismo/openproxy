@@ -12,10 +12,11 @@ use crate::error::with_busy_retry;
 
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64>, Option<f64>) {
     let cost = if input.status_code >= 200 && input.status_code < 400 {
-        pricing::compute_cost_opt(
+        pricing::compute_cost_opt_with_cache(
             price,
             input.prompt_tokens.unwrap_or(0),
             input.completion_tokens.unwrap_or(0),
+            input.cached_tokens,
         )
     } else {
         Some(0.0)
@@ -503,6 +504,10 @@ mod tests {
         let (cost, tps) = compute(Some(price), &input);
         assert_eq!(cost, Some(0.0005));
         assert_eq!(tps, Some(200.0));
+
+        input.cached_tokens = Some(100);
+        let (cost_cached, _) = compute(Some(price), &input);
+        assert!(cost_cached.is_some_and(|c| (c - 0.00045).abs() < 1e-9));
 
         input.ttft_ms = None;
         assert_eq!(

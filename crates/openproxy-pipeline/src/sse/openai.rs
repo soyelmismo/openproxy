@@ -23,23 +23,23 @@ struct OpenAiUsageProbe {
     #[serde(alias = "output_tokens")]
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "prompt_token_details")]
     prompt_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
-    #[serde(default)]
+    #[serde(default, alias = "input_token_details")]
     input_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
     #[serde(default)]
     prompt_cache_hit_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "cached_prompt_tokens")]
     cached_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "cache_read_tokens")]
     cache_read_input_tokens: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
 struct OpenAiPromptTokensDetailsProbe {
-    #[serde(default)]
+    #[serde(default, alias = "cached_prompt_tokens")]
     cached_tokens: Option<u64>,
-    #[serde(default)]
+    #[serde(default, alias = "cache_read_tokens")]
     cache_read_input_tokens: Option<u64>,
     #[serde(default)]
     prompt_cache_hit_tokens: Option<u64>,

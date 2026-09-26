@@ -645,3 +645,21 @@ fn finish_reason_preserves_other_stop_reason_even_with_tool_calls() {
     let v = acc.finish("id", 0, "m");
     assert_eq!(v["choices"][0]["finish_reason"], "length");
 }
+
+#[test]
+fn finish_preserves_prompt_tokens_details() {
+    let mut acc = ResponseAccumulator::new();
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        total_tokens: 150,
+        prompt_tokens_details: Some(openproxy_types::PromptTokensDetails {
+            cached_tokens: Some(80),
+        }),
+    });
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(v["usage"]["prompt_tokens"], 100);
+    assert_eq!(v["usage"]["completion_tokens"], 50);
+    assert_eq!(v["usage"]["total_tokens"], 150);
+    assert_eq!(v["usage"]["prompt_tokens_details"]["cached_tokens"], 80);
+}

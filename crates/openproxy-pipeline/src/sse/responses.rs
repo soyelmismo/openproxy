@@ -111,7 +111,10 @@ pub fn parse_responses_sse_stream_line(
         });
 
     if let Some(ref u) = usage {
-        state.usage = Some(u.clone());
+        state.usage = Some(match state.usage.take() {
+            Some(existing) => crate::sse::merge_usage(existing, u.clone()),
+            None => u.clone(),
+        });
     }
 
     if event_type == "response.output_item.added"

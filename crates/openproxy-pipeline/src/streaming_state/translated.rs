@@ -75,6 +75,7 @@ impl ChunkProcessor<'_> {
             let _ = self.send_to_sink(ctx, sse_bytes).await;
         }
 
+        let payload_is_null = chunk.payload.is_null();
         let json_str = chunk.into_json_string();
 
         let norm_action = self.state.normalizer.process_chunk(&json_str);
@@ -106,12 +107,14 @@ impl ChunkProcessor<'_> {
             _ => normalized_json,
         };
 
-        let sse_frame = crate::sse::build_sse_frame(final_json);
-        if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
-            let fail_ctx = self.state.make_failure_context(ctx);
-            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
-            )));
+        if !payload_is_null {
+            let sse_frame = crate::sse::build_sse_frame(final_json);
+            if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
+                let fail_ctx = self.state.make_failure_context(ctx);
+                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
+                    self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
+                )));
+            }
         }
 
         // If PII stage has residual buffered content, flush before [DONE]

@@ -19,8 +19,15 @@ use serde_json::Value;
 /// - `cache_read_input_tokens`
 pub fn extract_responses_cached_tokens(usage_val: &Value) -> Option<u32> {
     let extract_from_obj = |obj: &Value| -> Option<u64> {
-        let cached = obj.get("cached_tokens").and_then(Value::as_u64);
-        let read_tokens = obj.get("cache_read_input_tokens").and_then(Value::as_u64);
+        let cached = obj
+            .get("cached_tokens")
+            .or_else(|| obj.get("cached_prompt_tokens"))
+            .or_else(|| obj.get("cached_input_tokens"))
+            .and_then(Value::as_u64);
+        let read_tokens = obj
+            .get("cache_read_input_tokens")
+            .or_else(|| obj.get("cache_read_tokens"))
+            .and_then(Value::as_u64);
         let hit_tokens = obj.get("prompt_cache_hit_tokens").and_then(Value::as_u64);
         match (cached, read_tokens, hit_tokens) {
             (Some(count), _, _) if count > 0 => Some(count),
@@ -33,12 +40,10 @@ pub fn extract_responses_cached_tokens(usage_val: &Value) -> Option<u32> {
 
     let details_val = usage_val
         .get("prompt_tokens_details")
-        .and_then(extract_from_obj)
-        .or_else(|| {
-            usage_val
-                .get("input_tokens_details")
-                .and_then(extract_from_obj)
-        });
+        .or_else(|| usage_val.get("input_tokens_details"))
+        .or_else(|| usage_val.get("prompt_token_details"))
+        .or_else(|| usage_val.get("input_token_details"))
+        .and_then(extract_from_obj);
 
     let root_val = extract_from_obj(usage_val);
 
@@ -385,6 +390,22 @@ mod tests {
             }
         });
         assert_eq!(extract_responses_cached_tokens(&u5), Some(128));
+
+        // Singular input_token_details with cached_tokens
+        let u6 = serde_json::json!({
+            "input_token_details": {
+                "cached_tokens": 512
+            }
+        });
+        assert_eq!(extract_responses_cached_tokens(&u6), Some(512));
+
+        // Singular prompt_token_details with cached_prompt_tokens
+        let u7 = serde_json::json!({
+            "prompt_token_details": {
+                "cached_prompt_tokens": 1024
+            }
+        });
+        assert_eq!(extract_responses_cached_tokens(&u7), Some(1024));
     }
 
     #[test]
