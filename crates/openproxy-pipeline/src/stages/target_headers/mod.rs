@@ -242,13 +242,33 @@ pub fn propagate_kilocode_headers(
     });
 }
 
+fn derive_conversation_affinity(openai_req: &openproxy_types::OpenAIRequest) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if let Some(first) = openai_req.messages.first() {
+        first.role.hash(&mut hasher);
+        openproxy_types::extract_content_text(&first.content).hash(&mut hasher);
+    }
+    if openai_req.messages.len() > 1
+        && let Some(second) = openai_req.messages.get(1)
+    {
+        second.role.hash(&mut hasher);
+        openproxy_types::extract_content_text(&second.content).hash(&mut hasher);
+    }
+    format!("sess-openproxy-{:016x}", hasher.finish())
+}
+
 /// Propagate downstream client headers for Codex.
 ///
 /// Forwards `x-codex-*`, `codex-*`, `chatgpt-account-id`, and CLI identity headers
 /// (`originator`, `version`, `origin`) while strictly preserving auth credentials.
+/// Also extracts or synthesizes session affinity (`session-id`, `x-session-id`,
+/// `x-conversation-id`, `x-codex-session`) so upstream load balancers route
+/// requests for the same conversation to the same GPU worker node for prompt caching.
 pub fn propagate_codex_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
+    openai_req: &openproxy_types::OpenAIRequest,
 ) {
     propagate_matching_headers(headers, request_headers, |k| {
         starts_with_ignore_ascii_case(k, "x-codex-")
@@ -268,6 +288,51 @@ pub fn propagate_codex_headers(
             || k.eq_ignore_ascii_case("x-session-id")
             || k.eq_ignore_ascii_case("x-openai-internal-codex-residency")
     });
+
+    let session_val = headers
+        .iter()
+        .find(|(k, _)| {
+            k.eq_ignore_ascii_case("x-conversation-id")
+                || k.eq_ignore_ascii_case("x-session-id")
+                || k.eq_ignore_ascii_case("session-id")
+                || k.eq_ignore_ascii_case("x-codex-session")
+        })
+        .map(|(_, v)| v.clone())
+        .or_else(|| {
+            get_header_val(request_headers, "x-opencode-session")
+                .or_else(|| get_header_val(request_headers, "x-session-affinity"))
+                .or_else(|| get_header_val(request_headers, "conversation-id"))
+                .or_else(|| get_header_val(request_headers, "session_id"))
+                .or_else(|| get_header_val(request_headers, "thread-id"))
+                .or_else(|| get_header_val(request_headers, "thread_id"))
+                .or(openai_req.user.as_deref())
+                .or_else(|| {
+                    openai_req
+                        .extra
+                        .get("session_id")
+                        .or_else(|| openai_req.extra.get("conversation_id"))
+                        .and_then(|v| v.as_str())
+                })
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_else(|| derive_conversation_affinity(openai_req));
+
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("session-id")) {
+        headers.push(("session-id".to_string(), session_val.clone()));
+    }
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-session-id")) {
+        headers.push(("x-session-id".to_string(), session_val.clone()));
+    }
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-conversation-id")) {
+        headers.push(("x-conversation-id".to_string(), session_val.clone()));
+    }
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-codex-session")) {
+        headers.push(("x-codex-session".to_string(), session_val.clone()));
+    }
+    if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-session-affinity")) {
+        headers.push(("x-session-affinity".to_string(), session_val));
+    }
 }
 
 /// Propagate downstream client headers for Kiro AI (AWS CodeWhisperer).
@@ -364,7 +429,7 @@ pub fn propagate_provider_target_headers(
     } else if matches("kilocode") {
         propagate_kilocode_headers(headers, req_headers);
     } else if matches("codex") {
-        propagate_codex_headers(headers, req_headers);
+        propagate_codex_headers(headers, req_headers, openai_req);
         if let Some(ws) = codex_workspace_id
             && !headers
                 .iter()

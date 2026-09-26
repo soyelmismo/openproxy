@@ -90,7 +90,8 @@ fn test_propagate_codex_headers() {
     req_headers.insert("x-session-id".into(), "sess-abc".into());
     req_headers.insert("x-openai-internal-codex-residency".into(), "us-east".into());
 
-    propagate_codex_headers(&mut headers, &req_headers);
+    let req = openproxy_types::OpenAIRequest::default();
+    propagate_codex_headers(&mut headers, &req_headers, &req);
 
     let find = |k: &str| {
         headers
@@ -112,6 +113,37 @@ fn test_propagate_codex_headers() {
     assert_eq!(find("x-session-id"), Some("sess-abc"));
     assert_eq!(find("x-openai-internal-codex-residency"), Some("us-east"));
     assert_eq!(find("Authorization"), Some("Bearer codex-tok"));
+}
+
+#[test]
+fn test_propagate_codex_headers_synthesizes_session_affinity() {
+    let mut headers = vec![("User-Agent".into(), "Codex/1.0".into())];
+    let req_headers = std::collections::BTreeMap::new();
+    let mut req = openproxy_types::OpenAIRequest::default();
+    req.messages = vec![openproxy_types::OpenAIMessage {
+        role: "user".into(),
+        content: Some(serde_json::json!("Test conversation prompt")),
+        name: None,
+        tool_calls: None,
+        tool_call_id: None,
+        extra: serde_json::Map::new(),
+    }];
+
+    propagate_codex_headers(&mut headers, &req_headers, &req);
+
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    let session = find("session-id").expect("session-id synthesized");
+    assert!(session.starts_with("sess-openproxy-"));
+    assert_eq!(find("x-session-id"), Some(session));
+    assert_eq!(find("x-conversation-id"), Some(session));
+    assert_eq!(find("x-codex-session"), Some(session));
+    assert_eq!(find("x-session-affinity"), Some(session));
 }
 
 #[test]
