@@ -99,9 +99,7 @@ pub fn map_finish_reason(stop_reason: &str) -> String {
     match stop_reason {
         "end_turn" => "stop".to_string(),
         "max_tokens" => "length".to_string(),
-        "tool_use" | "tool_call" | "tool_calls" | "toolUse" | "toolCall" | "toolCalls" => {
-            "tool_calls".to_string()
-        }
+        "tool_use" => "tool_calls".to_string(),
         // stop_sequence and unknown values fall back to "stop".
         other => {
             // Treat anything unknown as "stop" to stay close to OpenAI's vocabulary.

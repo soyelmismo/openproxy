@@ -377,26 +377,21 @@ pub(crate) fn normalize_responses_content_parts(
     if parts.is_empty() {
         return None;
     }
-    let all_text = parts.iter().all(|p| {
-        let t = p.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-        matches!(t, "text" | "input_text" | "output_text")
-    });
-    if all_text {
-        let mut combined = String::new();
-        for p in parts {
-            if let Some(t) = p.get("text").and_then(|s| s.as_str()) {
-                combined.push_str(t);
+    if parts.len() == 1 {
+        let first = &parts[0];
+        if let Some(text) = first.get("text").and_then(|t| t.as_str()) {
+            let part_type = first.get("type").and_then(|t| t.as_str()).unwrap_or("text");
+            if part_type == "text" || part_type == "input_text" {
+                return Some(serde_json::Value::String(text.to_string()));
             }
         }
-        return Some(serde_json::Value::String(combined));
     }
     let normalized: Vec<serde_json::Value> = parts
         .iter()
         .map(|p| {
             if let serde_json::Value::Object(mut map) = p.clone() {
-                map.remove("annotations");
                 if let Some(t) = map.get("type").and_then(|v| v.as_str()) {
-                    if t == "input_text" || t == "output_text" {
+                    if t == "input_text" {
                         map.insert(
                             "type".to_string(),
                             serde_json::Value::String("text".to_string()),
@@ -477,22 +472,8 @@ pub(crate) fn translate_responses_to_openai(
 
     let mut messages: Vec<OpenAIMessage> = Vec::with_capacity(req.input.len() + 1);
 
-    let already_has_instructions = req.input.first().is_some_and(|item| match item {
-        ResponsesInputItem::Message { role, content } if role == "system" || role == "developer" => {
-            req.instructions.as_deref().is_some_and(|inst| match content {
-                openproxy_types::ResponsesContent::Plain(s) => s.trim() == inst.trim(),
-                openproxy_types::ResponsesContent::Parts(parts) => parts
-                    .first()
-                    .and_then(|p| p.get("text"))
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|t| t.trim() == inst.trim()),
-            })
-        }
-        _ => false,
-    });
-
-    if !already_has_instructions
-        && let Some(instructions) = req.instructions.as_deref().filter(|s| !s.is_empty())
+    if let Some(instructions) = req.instructions.as_deref()
+        && !instructions.is_empty()
     {
         messages.push(OpenAIMessage {
             role: "system".to_string(),
@@ -504,43 +485,8 @@ pub(crate) fn translate_responses_to_openai(
         });
     }
 
-    let mut pending_reasoning: Option<String> = None;
-    let flush_reasoning = |msgs: &mut Vec<OpenAIMessage>, r: String| {
-        if let Some(last_msg) = msgs
-            .last_mut()
-            .filter(|m| m.role == "assistant" && !m.extra.contains_key("reasoning_content"))
-        {
-            last_msg
-                .extra
-                .insert("reasoning_content".to_string(), serde_json::Value::String(r));
-            return;
-        }
-        let mut synth_extra = serde_json::Map::new();
-        synth_extra.insert("reasoning_content".to_string(), serde_json::Value::String(r));
-        msgs.push(OpenAIMessage {
-            role: "assistant".to_string(),
-            content: Some(serde_json::Value::String(String::new())),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-            extra: synth_extra,
-        });
-    };
-
     for item in &req.input {
         match item {
-            ResponsesInputItem::Reasoning { .. } => {
-                if let Some(r_text) = item.reasoning_text() {
-                    if let Some(prev) = pending_reasoning.as_mut() {
-                        if !prev.is_empty() && !r_text.is_empty() {
-                            prev.push('\n');
-                        }
-                        prev.push_str(&r_text);
-                    } else {
-                        pending_reasoning = Some(r_text);
-                    }
-                }
-            }
             ResponsesInputItem::Message { role, content } => {
                 let content_value = match content {
                     openproxy_types::ResponsesContent::Plain(s) => {
@@ -550,21 +496,13 @@ pub(crate) fn translate_responses_to_openai(
                         normalize_responses_content_parts(parts)
                     }
                 };
-                let mut extra = serde_json::Map::new();
-                if role == "assistant" {
-                    if let Some(r) = pending_reasoning.take() {
-                        extra.insert("reasoning_content".to_string(), serde_json::Value::String(r));
-                    }
-                } else if let Some(r) = pending_reasoning.take() {
-                    flush_reasoning(&mut messages, r);
-                }
                 messages.push(OpenAIMessage {
                     role: role.clone(),
                     content: content_value,
                     name: None,
                     tool_call_id: None,
                     tool_calls: None,
-                    extra,
+                    extra: serde_json::Map::new(),
                 });
             }
             ResponsesInputItem::FunctionCall {
@@ -577,23 +515,16 @@ pub(crate) fn translate_responses_to_openai(
                     "type": "function",
                     "function": { "name": name, "arguments": arguments }
                 });
-                let mut extra = serde_json::Map::new();
-                if let Some(r) = pending_reasoning.take() {
-                    extra.insert("reasoning_content".to_string(), serde_json::Value::String(r));
-                }
                 messages.push(OpenAIMessage {
                     role: "assistant".to_string(),
                     content: None,
                     name: None,
                     tool_call_id: None,
                     tool_calls: Some(vec![tool_call]),
-                    extra,
+                    extra: serde_json::Map::new(),
                 });
             }
             ResponsesInputItem::FunctionCallOutput { call_id, output } => {
-                if let Some(r) = pending_reasoning.take() {
-                    flush_reasoning(&mut messages, r);
-                }
                 messages.push(OpenAIMessage {
                     role: "tool".to_string(),
                     content: Some(serde_json::Value::String(output.clone())),
@@ -609,10 +540,6 @@ pub(crate) fn translate_responses_to_openai(
         }
     }
 
-    if let Some(r) = pending_reasoning.take() {
-        flush_reasoning(&mut messages, r);
-    }
-
     let max_tokens = req.max_output_tokens.or_else(|| {
         req.extra
             .get("max_tokens")
@@ -623,14 +550,6 @@ pub(crate) fn translate_responses_to_openai(
     let mut extra = req.extra.clone();
     extra.remove("input");
     extra.remove("max_output_tokens");
-    if let Some(instructions) = req.instructions.as_deref()
-        && !instructions.is_empty()
-    {
-        extra.insert(
-            "instructions".to_string(),
-            serde_json::Value::String(instructions.to_string()),
-        );
-    }
 
     openproxy_types::OpenAIRequest {
         model: req.model.clone(),

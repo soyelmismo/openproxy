@@ -382,7 +382,9 @@ async fn codex_fetch_models_discovers_dynamic_upstream_catalog() {
         .fetch_models(&upstream, "")
         .await
         .expect("fetch models");
-    assert!(!models.is_empty());
+    assert!(models.len() >= 10);
     let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
-    assert!(ids.iter().any(|id| id.starts_with("gpt-")));
+    assert!(ids.contains(&"gpt-6-astra"));
+    assert!(ids.contains(&"gpt-6-sol"));
+    assert!(ids.contains(&"gpt-6-luna"));
 }
