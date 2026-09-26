@@ -157,7 +157,14 @@ fn anthropic_translate_message_delta_tool_use() {
 
 #[test]
 fn anthropic_translate_message_delta_tool_calling_variants() {
-    for reason in ["tool_use", "tool_call", "tool_calls", "toolUse", "toolCall", "toolCalls"] {
+    for reason in [
+        "tool_use",
+        "tool_call",
+        "tool_calls",
+        "toolUse",
+        "toolCall",
+        "toolCalls",
+    ] {
         let json = serde_json::json!({
             "type": "message_delta",
             "delta": {

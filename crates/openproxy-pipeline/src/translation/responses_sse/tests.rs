@@ -84,7 +84,9 @@ async fn test_responses_stream_error_frame() {
 #[tokio::test]
 async fn test_responses_stream_reasoning_and_cached_tokens() {
     let incoming = vec![
-        Bytes::from("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I think therefore I code.\"}}]}\n\n"),
+        Bytes::from(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"I think therefore I code.\"}}]}\n\n",
+        ),
         Bytes::from("data: {\"choices\":[{\"delta\":{\"content\":\"Result.\"}}]}\n\n"),
         Bytes::from(
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":15,\"total_tokens\":115,\"input_tokens_details\":{\"cache_read_input_tokens\":80}}}\n\n",
@@ -112,4 +114,3 @@ async fn test_responses_stream_reasoning_and_cached_tokens() {
     assert!(combined.contains("\"cached_tokens\":80"));
     assert!(combined.contains("data: [DONE]"));
 }
-

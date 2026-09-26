@@ -101,7 +101,12 @@ mod tests {
         sanitize_tool_parameters_schema(&mut schema);
 
         // additionalProperties: false should be removed because sessionID, model, background are optional
-        assert!(!schema.as_object().unwrap().contains_key("additionalProperties"));
+        assert!(
+            !schema
+                .as_object()
+                .unwrap()
+                .contains_key("additionalProperties")
+        );
 
         // pattern: "^ses" should be stripped from sessionID
         let session_id_prop = &schema["properties"]["sessionID"];

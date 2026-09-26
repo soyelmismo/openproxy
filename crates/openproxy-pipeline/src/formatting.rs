@@ -259,17 +259,15 @@ impl TargetFormatter for ResponsesFormatter {
             extract_system_and_messages(messages_ref);
 
         let all_refs: Vec<&OpenAIMessage> = messages_ref.iter().collect();
-        obj.insert(
-            "input".to_string(),
-            messages_to_responses_input(&all_refs),
-        );
+        obj.insert("input".to_string(), messages_to_responses_input(&all_refs));
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
 
         let default_instructions =
             "Follow the developer instructions in the conversation.".to_string();
-        obj.entry("instructions".to_string())
-            .or_insert_with(|| Value::String(system_instructions.unwrap_or(default_instructions.clone())));
+        obj.entry("instructions".to_string()).or_insert_with(|| {
+            Value::String(system_instructions.unwrap_or(default_instructions.clone()))
+        });
 
         let custom_instructions = if !messages_ref
             .iter()
@@ -285,9 +283,9 @@ impl TargetFormatter for ResponsesFormatter {
 
         if let Some(inst) = custom_instructions
             && let Some(arr) = obj.get_mut("input").and_then(Value::as_array_mut)
-            && !arr.iter().any(|item| {
-                item.get("role").and_then(Value::as_str) == Some("developer")
-            })
+            && !arr
+                .iter()
+                .any(|item| item.get("role").and_then(Value::as_str) == Some("developer"))
         {
             arr.insert(
                 0,
@@ -609,7 +607,8 @@ fn extract_reasoning_content(msg: &OpenAIMessage) -> Option<String> {
                             combined.push_str(s);
                         } else if let Some(text) = item.get("text").and_then(Value::as_str) {
                             combined.push_str(text);
-                        } else if let Some(thinking) = item.get("thinking").and_then(Value::as_str) {
+                        } else if let Some(thinking) = item.get("thinking").and_then(Value::as_str)
+                        {
                             combined.push_str(thinking);
                         }
                     }
@@ -641,17 +640,28 @@ fn extract_reasoning_content(msg: &OpenAIMessage) -> Option<String> {
 }
 
 fn sanitize_responses_reasoning_item(item: &mut Value) {
-    let Some(map) = item.as_object_mut() else { return };
+    let Some(map) = item.as_object_mut() else {
+        return;
+    };
     if map.get("type").and_then(Value::as_str) != Some("reasoning") {
         return;
     }
-    let Some(content) = map.remove("content") else { return };
-    let summary_empty = map.get("summary").and_then(Value::as_array).is_none_or(Vec::is_empty);
+    let Some(content) = map.remove("content") else {
+        return;
+    };
+    let summary_empty = map
+        .get("summary")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
     if summary_empty {
         let mut text = String::new();
         if let Some(c_arr) = content.as_array() {
             for part in c_arr {
-                if let Some(t) = part.get("text").and_then(Value::as_str).or_else(|| part.as_str()) {
+                if let Some(t) = part
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| part.as_str())
+                {
                     text.push_str(t);
                 }
             }
@@ -659,7 +669,10 @@ fn sanitize_responses_reasoning_item(item: &mut Value) {
             text.push_str(t);
         }
         if !text.is_empty() {
-            map.insert("summary".to_string(), json!([{ "type": "summary_text", "text": text }]));
+            map.insert(
+                "summary".to_string(),
+                json!([{ "type": "summary_text", "text": text }]),
+            );
         }
     }
 }

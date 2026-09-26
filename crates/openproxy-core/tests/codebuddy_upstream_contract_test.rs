@@ -417,7 +417,10 @@ async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     }
-    assert!(ok, "background auto update must complete within test timeout");
+    assert!(
+        ok,
+        "background auto update must complete within test timeout"
+    );
 
     unsafe {
         std::env::remove_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL");

@@ -506,10 +506,7 @@ fn test_responses_formatter_preserves_prompt_cache_key_and_developer_instruction
         input[0]["content"][0]["text"].as_str(),
         Some("You are an expert assistant.")
     );
-    assert_eq!(
-        input[1].get("role").and_then(Value::as_str),
-        Some("user")
-    );
+    assert_eq!(input[1].get("role").and_then(Value::as_str), Some("user"));
 }
 
 #[test]
@@ -545,10 +542,7 @@ fn test_responses_formatter_assistant_reasoning_reinjection() {
 
     // items should be: user message, reasoning item, assistant message
     assert_eq!(items.len(), 3);
-    assert_eq!(
-        items[0].get("role").and_then(Value::as_str),
-        Some("user")
-    );
+    assert_eq!(items[0].get("role").and_then(Value::as_str), Some("user"));
 
     // Verify reasoning shape: summary has the reasoning text, and content is omitted to satisfy Codex maxItems: 0
     assert_eq!(
@@ -556,7 +550,10 @@ fn test_responses_formatter_assistant_reasoning_reinjection() {
         Some("reasoning")
     );
     assert_eq!(
-        items[1].get("summary").and_then(Value::as_array).map(Vec::len),
+        items[1]
+            .get("summary")
+            .and_then(Value::as_array)
+            .map(Vec::len),
         Some(1)
     );
     assert_eq!(
@@ -612,9 +609,19 @@ fn test_format_responses_tools_sanitizes_subagent_schema() {
 
     let params = &tool_obj["parameters"];
     // Regex pattern should be stripped
-    assert!(!params["properties"]["sessionID"].as_object().unwrap().contains_key("pattern"));
+    assert!(
+        !params["properties"]["sessionID"]
+            .as_object()
+            .unwrap()
+            .contains_key("pattern")
+    );
     // additionalProperties: false should be relaxed/removed since sessionID is optional
-    assert!(!params.as_object().unwrap().contains_key("additionalProperties"));
+    assert!(
+        !params
+            .as_object()
+            .unwrap()
+            .contains_key("additionalProperties")
+    );
 }
 
 #[test]
@@ -662,7 +669,10 @@ fn test_responses_formatter_developer_instruction_preservation_and_cache_key() {
 
     // Verify developer message is preserved in input[0]
     let input = val.get("input").unwrap().as_array().unwrap();
-    assert_eq!(input[0].get("role").and_then(Value::as_str), Some("developer"));
+    assert_eq!(
+        input[0].get("role").and_then(Value::as_str),
+        Some("developer")
+    );
     assert_eq!(
         input[0]["content"][0]["text"].as_str(),
         Some("You are an elite coding subagent.")
@@ -722,5 +732,3 @@ fn test_responses_formatter_sanitizes_reasoning_content_array() {
         Some("inner thought")
     );
 }
-
-

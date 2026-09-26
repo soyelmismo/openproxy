@@ -83,7 +83,10 @@ impl ClientSpoofer for CommandCodeSpoofer {
             })
             .collect();
 
-        if !list.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-session-id")) {
+        if !list
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-session-id"))
+        {
             let session_id = uuid::Uuid::new_v4().to_string();
             list.push(("x-session-id".to_string(), session_id.clone()));
             list.push(("x-session-affinity".to_string(), session_id));

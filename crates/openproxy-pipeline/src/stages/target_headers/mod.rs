@@ -329,9 +329,10 @@ pub fn propagate_commandcode_headers(
         .or_else(|| get_header_val(request_headers, "x-command-code-session-id"))
         .or_else(|| get_header_val(request_headers, "x-commandcode-session-id"));
 
-    let session_id = session_val
-        .filter(|s| !s.trim().is_empty())
-        .map_or_else(|| uuid::Uuid::new_v4().to_string(), |s| s.trim().to_string());
+    let session_id = session_val.filter(|s| !s.trim().is_empty()).map_or_else(
+        || uuid::Uuid::new_v4().to_string(),
+        |s| s.trim().to_string(),
+    );
 
     upsert_header(headers, "x-session-id", session_id.clone());
     upsert_header(headers, "x-conversation-id", session_id.clone());

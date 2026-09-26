@@ -590,7 +590,14 @@ fn test_adversarial_concurrent_stream_simulation() {
 
 #[test]
 fn finish_reason_tool_calls_from_stop_reason() {
-    for stop in ["tool_use", "tool_call", "tool_calls", "toolUse", "toolCall", "toolCalls"] {
+    for stop in [
+        "tool_use",
+        "tool_call",
+        "tool_calls",
+        "toolUse",
+        "toolCall",
+        "toolCalls",
+    ] {
         let mut acc = ResponseAccumulator::new();
         acc.set_stop_reason(stop);
         let v = acc.finish("id", 0, "m");

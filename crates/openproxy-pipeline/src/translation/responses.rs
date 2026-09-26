@@ -34,7 +34,11 @@ pub fn extract_responses_cached_tokens(usage_val: &Value) -> Option<u32> {
     let details_val = usage_val
         .get("prompt_tokens_details")
         .and_then(extract_from_obj)
-        .or_else(|| usage_val.get("input_tokens_details").and_then(extract_from_obj));
+        .or_else(|| {
+            usage_val
+                .get("input_tokens_details")
+                .and_then(extract_from_obj)
+        });
 
     let root_val = extract_from_obj(usage_val);
 

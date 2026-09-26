@@ -434,7 +434,14 @@ fn anthropic_sse_forwards_cached_usage() {
 
 #[test]
 fn map_finish_reason_maps_all_tool_calling_variants() {
-    for reason in ["tool_use", "tool_call", "tool_calls", "toolUse", "toolCall", "toolCalls"] {
+    for reason in [
+        "tool_use",
+        "tool_call",
+        "tool_calls",
+        "toolUse",
+        "toolCall",
+        "toolCalls",
+    ] {
         assert_eq!(map_finish_reason(reason), "tool_calls");
     }
 }
@@ -470,7 +477,8 @@ fn anthropic_sse_forwards_tool_calls_finish_reason() {
         };
         let chunks = anthropic_sse_to_openai_chunks(&event, "cmpl_1", 123456, "claude-3-5-sonnet");
         assert_eq!(chunks.len(), 1);
-        let v: Value = serde_json::from_str(chunks[0].strip_prefix("data: ").unwrap().trim()).unwrap();
+        let v: Value =
+            serde_json::from_str(chunks[0].strip_prefix("data: ").unwrap().trim()).unwrap();
         assert_eq!(v["choices"][0]["finish_reason"], "tool_calls");
     }
 }

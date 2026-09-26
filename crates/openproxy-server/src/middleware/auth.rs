@@ -478,15 +478,19 @@ pub(crate) fn translate_responses_to_openai(
     let mut messages: Vec<OpenAIMessage> = Vec::with_capacity(req.input.len() + 1);
 
     let already_has_instructions = req.input.first().is_some_and(|item| match item {
-        ResponsesInputItem::Message { role, content } if role == "system" || role == "developer" => {
-            req.instructions.as_deref().is_some_and(|inst| match content {
-                openproxy_types::ResponsesContent::Plain(s) => s.trim() == inst.trim(),
-                openproxy_types::ResponsesContent::Parts(parts) => parts
-                    .first()
-                    .and_then(|p| p.get("text"))
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|t| t.trim() == inst.trim()),
-            })
+        ResponsesInputItem::Message { role, content }
+            if role == "system" || role == "developer" =>
+        {
+            req.instructions
+                .as_deref()
+                .is_some_and(|inst| match content {
+                    openproxy_types::ResponsesContent::Plain(s) => s.trim() == inst.trim(),
+                    openproxy_types::ResponsesContent::Parts(parts) => parts
+                        .first()
+                        .and_then(|p| p.get("text"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|t| t.trim() == inst.trim()),
+                })
         }
         _ => false,
     });
@@ -510,13 +514,17 @@ pub(crate) fn translate_responses_to_openai(
             .last_mut()
             .filter(|m| m.role == "assistant" && !m.extra.contains_key("reasoning_content"))
         {
-            last_msg
-                .extra
-                .insert("reasoning_content".to_string(), serde_json::Value::String(r));
+            last_msg.extra.insert(
+                "reasoning_content".to_string(),
+                serde_json::Value::String(r),
+            );
             return;
         }
         let mut synth_extra = serde_json::Map::new();
-        synth_extra.insert("reasoning_content".to_string(), serde_json::Value::String(r));
+        synth_extra.insert(
+            "reasoning_content".to_string(),
+            serde_json::Value::String(r),
+        );
         msgs.push(OpenAIMessage {
             role: "assistant".to_string(),
             content: Some(serde_json::Value::String(String::new())),
@@ -553,7 +561,10 @@ pub(crate) fn translate_responses_to_openai(
                 let mut extra = serde_json::Map::new();
                 if role == "assistant" {
                     if let Some(r) = pending_reasoning.take() {
-                        extra.insert("reasoning_content".to_string(), serde_json::Value::String(r));
+                        extra.insert(
+                            "reasoning_content".to_string(),
+                            serde_json::Value::String(r),
+                        );
                     }
                 } else if let Some(r) = pending_reasoning.take() {
                     flush_reasoning(&mut messages, r);
@@ -579,7 +590,10 @@ pub(crate) fn translate_responses_to_openai(
                 });
                 let mut extra = serde_json::Map::new();
                 if let Some(r) = pending_reasoning.take() {
-                    extra.insert("reasoning_content".to_string(), serde_json::Value::String(r));
+                    extra.insert(
+                        "reasoning_content".to_string(),
+                        serde_json::Value::String(r),
+                    );
                 }
                 messages.push(OpenAIMessage {
                     role: "assistant".to_string(),

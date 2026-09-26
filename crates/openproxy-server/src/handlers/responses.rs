@@ -481,11 +481,21 @@ mod tests {
         // Instructions + assistant 1 + assistant 2
         assert_eq!(openai_req.messages.len(), 3);
         assert_eq!(openai_req.messages[0].role, "system");
-        assert_eq!(openai_req.messages[0].content, Some(json!("Be accurate and concise.")));
+        assert_eq!(
+            openai_req.messages[0].content,
+            Some(json!("Be accurate and concise."))
+        );
         // Assistant 1 content flattened to plain string
         assert_eq!(openai_req.messages[1].role, "assistant");
-        assert_eq!(openai_req.messages[1].content, Some(json!("Prior turn answer")));
-        assert!(!openai_req.messages[1].extra.contains_key("reasoning_content"));
+        assert_eq!(
+            openai_req.messages[1].content,
+            Some(json!("Prior turn answer"))
+        );
+        assert!(
+            !openai_req.messages[1]
+                .extra
+                .contains_key("reasoning_content")
+        );
         // Assistant 2 got the forward-attached reasoning
         assert_eq!(openai_req.messages[2].role, "assistant");
         assert_eq!(
@@ -497,7 +507,10 @@ mod tests {
         );
         // Extra preserved instructions
         assert_eq!(
-            openai_req.extra.get("instructions").and_then(|v| v.as_str()),
+            openai_req
+                .extra
+                .get("instructions")
+                .and_then(|v| v.as_str()),
             Some("Be accurate and concise.")
         );
     }

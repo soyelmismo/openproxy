@@ -611,7 +611,9 @@ mod tests {
             .expect("chunk");
         let u1 = chunk1.usage.expect("usage");
         assert_eq!(
-            u1.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            u1.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
             Some(512)
         );
 
@@ -623,7 +625,9 @@ mod tests {
             .expect("chunk");
         let u2 = chunk2.usage.expect("usage");
         assert_eq!(
-            u2.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            u2.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
             Some(256)
         );
 
@@ -635,7 +639,9 @@ mod tests {
             .expect("chunk");
         let u3 = chunk3.usage.expect("usage");
         assert_eq!(
-            u3.prompt_tokens_details.as_ref().and_then(|d| d.cached_tokens),
+            u3.prompt_tokens_details
+                .as_ref()
+                .and_then(|d| d.cached_tokens),
             Some(128)
         );
     }

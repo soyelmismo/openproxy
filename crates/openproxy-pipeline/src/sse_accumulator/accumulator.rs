@@ -298,9 +298,9 @@ impl ResponseAccumulator {
             Value::Object(self.build_finish_message()),
         );
         let finish_reason = match self.stop_reason.as_deref() {
-            Some("tool_use" | "tool_call" | "tool_calls" | "toolUse" | "toolCall" | "toolCalls") => {
-                Some("tool_calls")
-            }
+            Some(
+                "tool_use" | "tool_call" | "tool_calls" | "toolUse" | "toolCall" | "toolCalls",
+            ) => Some("tool_calls"),
             Some(reason) if !reason.is_empty() => Some(reason),
             _ if !self.tool_calls.is_empty() => Some("tool_calls"),
             _ => None,
