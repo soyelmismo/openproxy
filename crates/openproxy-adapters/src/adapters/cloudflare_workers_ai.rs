@@ -307,4 +307,58 @@ mod tests {
         assert_eq!(adapter.models_url_for_account(""), None);
         assert_eq!(adapter.models_url_for_account("   "), None);
     }
+
+    #[test]
+    fn test_cloudflare_build_chat_url_and_disabled_extra_fields() {
+        let adapter = CloudflareWorkersAIAdapter::new();
+        let model = ModelId::new("test-model");
+
+        let label_less_url = adapter.build_chat_url(TargetFormat::Openai, &model);
+        assert!(label_less_url.contains("MISSING_ACCOUNT_LABEL_USE_build_chat_url_for_account"));
+
+        let mut extra_map = serde_json::Map::new();
+        extra_map.insert("disabled".to_string(), json!(true));
+        extra_map.insert("other".to_string(), json!("value"));
+
+        let stop = None;
+        let tool_choice = None;
+        let user = None;
+
+        let mut view = OpenAIRequestView {
+            model: "test-model",
+            messages: std::borrow::Cow::Owned(vec![]),
+            temperature: Some(0.5),
+            max_tokens: None,
+            top_p: None,
+            stop: &stop,
+            tools: None,
+            tool_choice: &tool_choice,
+            top_k: None,
+            user: &user,
+            extra: std::borrow::Cow::Owned(extra_map),
+            stream: false,
+        };
+
+        adapter.normalize_openai_request(&mut view);
+        assert!(!view.extra.contains_key("disabled"));
+        assert!(view.extra.contains_key("other"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_models_for_account_empty_label_validation_error() {
+        let adapter = CloudflareWorkersAIAdapter::new();
+        let client = Arc::new(UpstreamClient::new());
+
+        let err = adapter
+            .fetch_models_for_account(&client, "api-key", "   ")
+            .await
+            .expect_err("should fail with validation error for empty label");
+
+        match err {
+            CoreError::Validation(msg) => {
+                assert!(msg.contains("account label is empty"));
+            }
+            _ => panic!("Expected CoreError::Validation, got {err:?}"),
+        }
+    }
 }
