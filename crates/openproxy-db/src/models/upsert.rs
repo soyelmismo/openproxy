@@ -193,15 +193,12 @@ fn reconnect_inserted_combo_targets(
         )
         .is_ok_and(|n| n != 0);
 
-    if combo_targets_present {
-        for (new_id, upstream) in &new_rows {
-            let _ = crate::combos::reconnect_orphan_targets(
-                tx,
-                provider,
-                upstream,
-                ModelRowId(*new_id),
-            )?;
-        }
+    if combo_targets_present && !new_rows.is_empty() {
+        let pairs: Vec<(ModelRowId, &str)> = new_rows
+            .iter()
+            .map(|(new_id, upstream)| (ModelRowId(*new_id), upstream.as_str()))
+            .collect();
+        let _ = crate::combos::reconnect_orphan_targets_batch(tx, provider, &pairs)?;
     }
     Ok(())
 }

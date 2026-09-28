@@ -3,9 +3,10 @@
 use super::*;
 use crate::conn::DbPool;
 use openproxy_types::MAX_SUB_COMBO_DEPTH;
+use openproxy_types::ProviderId;
 use openproxy_types::combos::Strategy;
 use openproxy_types::error::CoreError;
-use openproxy_types::ids::{ComboId, ComboTargetId};
+use openproxy_types::ids::{ComboId, ComboTargetId, ModelRowId};
 use std::path::PathBuf;
 
 fn fresh_pool() -> (DbPool, PathBuf) {
@@ -459,4 +460,52 @@ fn test_zero_or_empty_subcombos_and_nonpositive_context_lengths() {
         compute_effective_context_window(&conn, ComboId(50)).unwrap(),
         Some(256_000)
     );
+}
+
+#[test]
+fn test_reconnect_orphan_targets_batch() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.writer();
+
+    conn.execute_batch(
+        "INSERT INTO providers (id, name, base_url, auth_type, format, active) VALUES
+            ('p1', 'P1', 'https://example.com', 'none', 'openai', 1);
+         INSERT INTO models (id, provider_id, model_id, target_format, active, custom) VALUES
+            (101, 'p1', 'gpt-4o', 'openai', 1, 0),
+            (102, 'p1', 'claude-3-5-sonnet', 'openai', 1, 0);
+         INSERT INTO combos (id, name, strategy) VALUES
+            (1, 'c1', 'priority');
+         -- Insert orphan targets with model_row_id = NULL
+         INSERT INTO combo_targets (id, combo_id, provider_id, upstream_model_id, priority_order, active) VALUES
+            (10, 1, 'p1', 'gpt-4o', 1, 1),
+            (11, 1, 'p1', 'claude-3-5-sonnet', 2, 1),
+            (12, 1, 'p1', 'gpt-4o', 3, 1);"
+    ).unwrap();
+
+    // Batch reconnect empty list
+    let affected_empty =
+        reconnect_orphan_targets_batch(&conn, &ProviderId::from("p1"), &[]).unwrap();
+    assert_eq!(affected_empty, 0);
+
+    // Batch reconnect gpt-4o and claude-3-5-sonnet
+    let pairs = [
+        (ModelRowId(101), "gpt-4o"),
+        (ModelRowId(102), "claude-3-5-sonnet"),
+    ];
+    let affected = reconnect_orphan_targets_batch(&conn, &ProviderId::from("p1"), &pairs).unwrap();
+    assert_eq!(affected, 3);
+
+    let target10 = get_target(&conn, ComboTargetId(10)).unwrap().unwrap();
+    assert_eq!(target10.model_row_id, Some(ModelRowId(101)));
+
+    let target11 = get_target(&conn, ComboTargetId(11)).unwrap().unwrap();
+    assert_eq!(target11.model_row_id, Some(ModelRowId(102)));
+
+    let target12 = get_target(&conn, ComboTargetId(12)).unwrap().unwrap();
+    assert_eq!(target12.model_row_id, Some(ModelRowId(101)));
+
+    // Reconnect when no orphan targets remain
+    let affected_no_orphans =
+        reconnect_orphan_targets_batch(&conn, &ProviderId::from("p1"), &pairs).unwrap();
+    assert_eq!(affected_no_orphans, 0);
 }

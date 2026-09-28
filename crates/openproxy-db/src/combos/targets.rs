@@ -252,37 +252,78 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
     Ok(ComboTargetId(conn.last_insert_rowid()))
 }
 
+pub fn reconnect_orphan_targets_batch(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    pairs: &[(ModelRowId, &str)],
+) -> Result<usize> {
+    if pairs.is_empty() {
+        return Ok(0);
+    }
+
+    // SQLite max variables limit is 999. Each pair uses 2 variables (model_row_id, upstream_model_id) plus 1 for provider_id.
+    // So 400 pairs per chunk = 801 variables, well under 999.
+    const CHUNK_SIZE: usize = 400;
+    let mut total_affected = 0;
+
+    for chunk in pairs.chunks(CHUNK_SIZE) {
+        let vals = crate::batch::values_placeholders(chunk.len(), 2);
+        let mut query = String::with_capacity(160 + vals.len());
+        query.push_str("WITH updates(m_id, u_id) AS (VALUES ");
+        query.push_str(&vals);
+        query.push_str(
+            ") UPDATE combo_targets SET model_row_id = updates.m_id \
+             FROM updates \
+             WHERE combo_targets.provider_id = ? \
+               AND combo_targets.upstream_model_id = updates.u_id \
+               AND combo_targets.model_row_id IS NULL",
+        );
+
+        let mut params = Vec::with_capacity(chunk.len() * 2 + 1);
+        for (m_id, u_id) in chunk {
+            params.push(rusqlite::types::Value::Integer(m_id.0));
+            params.push(rusqlite::types::Value::Text((*u_id).to_string()));
+        }
+        params.push(rusqlite::types::Value::Text(
+            provider_id.as_str().to_string(),
+        ));
+
+        let mut stmt = conn
+            .prepare_cached(&query)
+            .map_err(crate::error::map_db_error_ctx(
+                "prepare batch reconnect orphan targets",
+            ))?;
+
+        let affected = stmt.execute(rusqlite::params_from_iter(params)).map_err(
+            crate::error::map_db_error_ctx(format!(
+                "reconnect orphan targets batch for provider {}",
+                provider_id.as_str()
+            )),
+        )?;
+
+        total_affected += affected;
+    }
+
+    if total_affected > 0 {
+        tracing::info!(
+            target: "openproxy::db::combos",
+            provider = provider_id.as_str(),
+            reconnected_targets = total_affected,
+            pairs_count = pairs.len(),
+            "reconnected orphan combo_targets after model row upsert batch"
+        );
+    }
+
+    Ok(total_affected)
+}
+
 pub fn reconnect_orphan_targets(
     conn: &Connection,
     provider_id: &ProviderId,
     upstream_model_id: &str,
     model_row_id: ModelRowId,
 ) -> Result<usize> {
-    let affected = conn
-        .execute(
-            "UPDATE combo_targets \
-             SET model_row_id = ?1 \
-             WHERE provider_id = ?2 \
-               AND upstream_model_id = ?3 \
-               AND model_row_id IS NULL",
-            params![model_row_id.0, provider_id.as_str(), upstream_model_id],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "reconnect orphan targets for {provider_id}:{upstream_model_id} -> model_row_id={}",
-            model_row_id.0
-        )))?;
-
-    if affected > 0 {
-        tracing::info!(
-            target: "openproxy::db::combos",
-            provider = provider_id.as_str(),
-            upstream_model_id,
-            model_row_id = model_row_id.0,
-            reconnected_targets = affected,
-            "reconnected orphan combo_targets after model row upsert"
-        );
-    }
-    Ok(affected)
+    reconnect_orphan_targets_batch(conn, provider_id, &[(model_row_id, upstream_model_id)])
 }
 
 fn fetch_sub_combo_ids(conn: &Connection, current_level: &[i64]) -> Result<Vec<i64>> {

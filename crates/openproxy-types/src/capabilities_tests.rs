@@ -241,7 +241,8 @@ fn test_contains_delimited_token() {
 
 #[test]
 fn test_model_capabilities_flexible_deserialization() {
-    let json_int = r#"{"vision":1,"tool_calling":1,"reasoning":1,"thinking":true,"temperature":true}"#;
+    let json_int =
+        r#"{"vision":1,"tool_calling":1,"reasoning":1,"thinking":true,"temperature":true}"#;
     let caps = ModelCapabilities::from_json(Some(json_int));
     assert_eq!(caps.vision, Some(true));
     assert_eq!(caps.tool_calling, Some(true));
@@ -255,4 +256,3 @@ fn test_model_capabilities_flexible_deserialization() {
     assert_eq!(caps_zero.tool_calling, Some(true));
     assert_eq!(caps_zero.reasoning, Some(false));
 }
-

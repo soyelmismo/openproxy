@@ -225,24 +225,20 @@ pub fn execute_sync_transaction(
             )
             .is_ok_and(|n| n != 0);
 
-            if combo_targets_present {
-                for (new_id, upstream) in &new_rows {
-                    let updated = openproxy_db::combos::reconnect_orphan_targets(
-                        &tx,
-                        provider,
-                        upstream,
-                        ModelRowId(*new_id),
-                    )?;
-                    if updated > 0 {
-                        tracing::info!(
-                            target: "openproxy.core.models",
-                            provider = %provider,
-                            upstream_model_id = %upstream,
-                            new_model_row_id = new_id,
-                            reconnected_targets = updated,
-                            "gate F1: reconnected orphan combo_targets to re-inserted model",
-                        );
-                    }
+            if combo_targets_present && !new_rows.is_empty() {
+                let pairs: Vec<(ModelRowId, &str)> = new_rows
+                    .iter()
+                    .map(|(new_id, upstream)| (ModelRowId(*new_id), upstream.as_str()))
+                    .collect();
+                let updated =
+                    openproxy_db::combos::reconnect_orphan_targets_batch(&tx, provider, &pairs)?;
+                if updated > 0 {
+                    tracing::info!(
+                        target: "openproxy.core.models",
+                        provider = %provider,
+                        reconnected_targets = updated,
+                        "gate F1: reconnected orphan combo_targets to re-inserted model",
+                    );
                 }
             }
         }

@@ -100,10 +100,8 @@ pub trait AccountRepository: Send + Sync {
 /// Combo repository trait.
 pub trait ComboRepository: Send + Sync {
     fn list_combos(&self) -> Result<Vec<Combo>, CoreError>;
-    fn compute_effective_context_window(
-        &self,
-        combo_id: ComboId,
-    ) -> Result<Option<i64>, CoreError>;
+    fn compute_effective_context_window(&self, combo_id: ComboId)
+    -> Result<Option<i64>, CoreError>;
     fn compute_effective_capabilities(
         &self,
         combo_id: ComboId,
