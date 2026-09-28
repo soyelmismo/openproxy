@@ -52,10 +52,22 @@ pub fn openai_to_anthropic(
     let (max_tokens_override, thinking_val) = if let Some(effort) = effort_opt {
         let (val, budget) = match effort {
             "none" => (None, 0u32),
-            "low" => (Some(json!({"type": "enabled", "budget_tokens": 2048})), 2048),
-            "medium" => (Some(json!({"type": "enabled", "budget_tokens": 8192})), 8192),
-            "high" => (Some(json!({"type": "enabled", "budget_tokens": 16384})), 16384),
-            "max" | "xhigh" => (Some(json!({"type": "enabled", "budget_tokens": 32768})), 32768),
+            "low" => (
+                Some(json!({"type": "enabled", "budget_tokens": 2048})),
+                2048,
+            ),
+            "medium" => (
+                Some(json!({"type": "enabled", "budget_tokens": 8192})),
+                8192,
+            ),
+            "high" => (
+                Some(json!({"type": "enabled", "budget_tokens": 16384})),
+                16384,
+            ),
+            "max" | "xhigh" => (
+                Some(json!({"type": "enabled", "budget_tokens": 32768})),
+                32768,
+            ),
             s => {
                 let b = s.parse::<u32>().unwrap_or(8192);
                 (Some(json!({"type": "enabled", "budget_tokens": b})), b)

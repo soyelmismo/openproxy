@@ -131,8 +131,18 @@ pub async fn list_models(
             .compute_effective_capabilities(c.id)
             .ok()
             .flatten();
-        data.push(build_combo_entry(c, None, effective_cw, effective_caps.as_ref()));
-        data.push(build_combo_entry(c, Some(&c.name), effective_cw, effective_caps.as_ref()));
+        data.push(build_combo_entry(
+            c,
+            None,
+            effective_cw,
+            effective_caps.as_ref(),
+        ));
+        data.push(build_combo_entry(
+            c,
+            Some(&c.name),
+            effective_cw,
+            effective_caps.as_ref(),
+        ));
     }
 
     let is_anthropic =
@@ -190,13 +200,7 @@ fn authenticate_chat_or_anonymous(
 }
 
 fn build_supported_parameters(caps: &capabilities::ModelCapabilities) -> Vec<&'static str> {
-    let mut params = vec![
-        "max_tokens",
-        "temperature",
-        "top_p",
-        "stream",
-        "stop",
-    ];
+    let mut params = vec!["max_tokens", "temperature", "top_p", "stream", "stop"];
     if caps.tool_calling == Some(true) {
         params.push("tools");
         params.push("tool_choice");
@@ -566,7 +570,10 @@ mod tests {
         m.capabilities_json = Some(r#"{"reasoning": true, "tool_calling": true}"#.into());
         let v = build_model_entry(&m);
 
-        assert_eq!(v.get("supports_reasoning"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            v.get("supports_reasoning"),
+            Some(&serde_json::Value::Bool(true))
+        );
         let params: Vec<&str> = v
             .get("supported_parameters")
             .and_then(|p| p.as_array())
@@ -604,8 +611,14 @@ mod tests {
         caps.tool_calling = Some(true);
 
         let v = build_combo_entry(&combo, Some("test-ninja"), Some(128_000), Some(&caps));
-        assert_eq!(v.get("id"), Some(&serde_json::Value::String("test-ninja".into())));
-        assert_eq!(v.get("supports_reasoning"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            v.get("id"),
+            Some(&serde_json::Value::String("test-ninja".into()))
+        );
+        assert_eq!(
+            v.get("supports_reasoning"),
+            Some(&serde_json::Value::Bool(true))
+        );
         let params: Vec<&str> = v
             .get("supported_parameters")
             .and_then(|p| p.as_array())
@@ -617,7 +630,9 @@ mod tests {
         assert!(params.contains(&"thinking"));
         assert!(params.contains(&"tools"));
         let caps_obj = v.get("capabilities").and_then(|c| c.as_object()).unwrap();
-        assert_eq!(caps_obj.get("thinking"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            caps_obj.get("thinking"),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 }
-
