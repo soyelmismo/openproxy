@@ -134,7 +134,11 @@ pub fn parse_sse_stream_to_openai_response(
                 }
             }
         }
-        TargetFormat::CommandCodeGo | TargetFormat::SystemOne => unreachable!(),
+        TargetFormat::CommandCodeGo | TargetFormat::SystemOne => {
+            return Err(CoreError::Parse(format!(
+                "SSE streaming is not supported for target format {target_format}"
+            )));
+        }
     }
 
     let val = acc.finish(chunk_id, created, model_name);
@@ -169,6 +173,18 @@ mod tests {
         let usage = resp.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 10);
         assert_eq!(usage.completion_tokens, 2);
+    }
+
+    #[test]
+    fn test_parse_sse_stream_unsupported_formats() {
+        let res = parse_sse_stream_to_openai_response(
+            TargetFormat::SystemOne,
+            "data: test\n\n",
+            "systemone-model",
+        );
+        assert!(
+            matches!(res, Err(CoreError::Parse(ref msg)) if msg.contains("SSE streaming is not supported for target format systemone"))
+        );
     }
 
     #[test]
