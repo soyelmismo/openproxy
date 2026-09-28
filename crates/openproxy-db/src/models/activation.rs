@@ -4,6 +4,20 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::model_auto_active_select;
 use crate::error::{map_db_error, map_db_error_ctx};
 
+#[inline]
+fn ascii_case_insensitive_contains(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 pub fn set_active(conn: &Connection, id: ModelRowId, active: bool) -> Result<()> {
     if active {
         conn.execute(
@@ -121,22 +135,10 @@ pub(crate) fn notify_auto_activated_models(
     }
 
     let candidates: Vec<&(String, Option<String>)> = match (notif_keyword_only, keyword) {
-        (true, Some(k)) => {
-            let mut keep: Vec<&(String, Option<String>)> = Vec::with_capacity(newly_active.len());
-            for entry in newly_active {
-                let matches: i64 = tx
-                    .query_row(
-                        "SELECT ?1 LIKE '%' || ?2 || '%'",
-                        params![entry.0.as_str(), k],
-                        |r| r.get(0),
-                    )
-                    .map_err(map_db_error)?;
-                if matches != 0 {
-                    keep.push(entry);
-                }
-            }
-            keep
-        }
+        (true, Some(k)) => newly_active
+            .iter()
+            .filter(|(model_id, _)| ascii_case_insensitive_contains(model_id, k))
+            .collect(),
         _ => newly_active.iter().collect(),
     };
 

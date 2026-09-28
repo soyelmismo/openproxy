@@ -178,3 +178,33 @@ fn notif_keyword_only_end_to_end_applies_toggle_from_provider_row() {
     assert!(keys[0].contains("claude-3") && !keys.iter().any(|k| k.contains("gpt-4")));
     assert!(keys[0].starts_with("w2_e2e:claude-3:auto"));
 }
+
+#[test]
+fn test_notify_auto_activated_models_substring_matching() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.writer();
+    let provider = CoreProviderId::new("sub_test");
+    seed_provider(&conn, &provider);
+
+    let candidates: Vec<(String, Option<String>)> = (0..500)
+        .map(|i| {
+            let name = if i % 2 == 0 {
+                format!("model-claude-v{i}")
+            } else {
+                format!("model-gpt-v{i}")
+            };
+            (name, None)
+        })
+        .collect();
+
+    let tx = conn.unchecked_transaction().unwrap();
+    let start = Instant::now();
+    notify_auto_activated_models(&tx, &provider, Some("CLAUDE"), &candidates, true).unwrap();
+    let elapsed = start.elapsed();
+    tx.commit().unwrap();
+
+    let (cnt, _) = count_notifs(&conn, provider.as_str());
+    assert_eq!(cnt, 250);
+    // In-memory string matching on 500 items should take well under 20ms
+    assert!(elapsed < Duration::from_millis(20));
+}
