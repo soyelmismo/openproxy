@@ -532,16 +532,29 @@ async fn execute_oauth_refresh(
     fallback_token: String,
 ) -> String {
     let upstream_client = s.upstream_client();
-    let token = match provider
-        .refresh_token(
+    // Route through the global coordinator so the refresh is serialized per-provider.
+    // Providers with rotating refresh tokens (Auth0-backed: MiniMax, Cline, etc.)
+    // break when concurrent callers use the same one-time token in parallel.
+    let token = match openproxy_core::oauth::TokenRefreshCoordinator::global()
+        .refresh_and_store(openproxy_core::oauth::OAuthRefreshParams {
+            provider_id: provider_id.as_str(),
+            provider: provider.clone(),
             refresh_token,
             upstream_client,
-            account.id,
-            openproxy_core::oauth::DbRef::Pool(s.db_pool().as_ref()),
-        )
+            account_id: account.id,
+            db: openproxy_core::oauth::DbRef::Pool(s.db_pool().as_ref()),
+            master_key: s.master_key().as_ref(),
+        })
         .await
     {
-        Ok(t) => t,
+        Ok(t) => {
+            tracing::info!(
+                account = account.id.0,
+                provider = %provider_id,
+                "oauth refresh-on-demand: tokens refreshed successfully"
+            );
+            t
+        }
         Err(e) => {
             tracing::warn!(
                 account = account.id.0,
@@ -553,60 +566,5 @@ async fn execute_oauth_refresh(
         }
     };
 
-    let expires_at = token.expires_in.map(|secs| {
-        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string()
-    });
-
-    let pool = std::sync::Arc::clone(s.db_pool());
-    let master_key = std::sync::Arc::clone(s.master_key());
-    let account_id = account.id;
-    let access_token = token.access_token.clone();
-    let refresh_token = token.refresh_token.clone();
-    let token_type = token.token_type.clone();
-    let scope = token.scope.clone();
-    let oauth_provider_specific = account.oauth_provider_specific.clone();
-    let email = account.email.clone();
-    let store_result = tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
-        let conn = pool
-            .try_writer_for(std::time::Duration::from_secs(5))
-            .ok_or_else(|| CoreError::Internal("writer lock timeout".into()))?;
-        core_accounts::store_oauth_tokens(
-            &conn,
-            account_id,
-            &master_key,
-            core_accounts::StoreOAuthTokensParams {
-                access_token: &access_token,
-                refresh_token: refresh_token.as_deref(),
-                token_type: &token_type,
-                expires_at: expires_at.as_deref(),
-                scope: scope.as_deref(),
-                provider_specific: oauth_provider_specific.as_deref(),
-                email: email.as_deref(),
-            },
-        )
-    })
-    .await
-    .unwrap_or_else(|e| Err(CoreError::Internal(format!("spawn failed: {e}"))));
-
-    match store_result {
-        Ok(()) => {
-            tracing::info!(
-                account = account.id.0,
-                provider = %provider_id,
-                "oauth refresh-on-demand: tokens refreshed successfully"
-            );
-            token.access_token
-        }
-        Err(e) => {
-            tracing::warn!(
-                account = account.id.0,
-                provider = %provider_id,
-                error = %e,
-                "oauth refresh-on-demand: failed to store refreshed tokens"
-            );
-            fallback_token
-        }
-    }
+    token.access_token
 }

@@ -7,7 +7,7 @@ use crate::accounts;
 use crate::admin;
 use crate::ids::AccountId;
 use crate::notifications;
-use crate::oauth::{DbRef, OAuthProvider, OAuthProviderRegistry};
+use crate::oauth::{DbRef, OAuthProviderRegistry};
 use crate::quota::AccountQuota;
 use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_adapters::upstream::UpstreamClient;
@@ -306,48 +306,23 @@ pub async fn refresh_single_account_quota(
         if let Some(refresh_token) = refresh_result
             && let Some(provider) = oauth_registry.get(&provider_id_str)
         {
-            match provider
-                .refresh_token(
-                    &refresh_token,
+            // Use the global coordinator to serialize refresh calls per-provider.
+            // Providers like MiniMax (Auth0-backed) rotate refresh tokens on each
+            // use; concurrent callers that bypass the coordinator burn the token
+            // and get `invalid_grant`.
+            match crate::oauth::TokenRefreshCoordinator::global()
+                .refresh_and_store(crate::oauth::OAuthRefreshParams {
+                    provider_id: &provider_id_str,
+                    provider,
+                    refresh_token: &refresh_token,
                     upstream_client,
                     account_id,
-                    DbRef::Pool(db_pool.as_ref()),
-                )
+                    db: DbRef::Pool(db_pool.as_ref()),
+                    master_key,
+                })
                 .await
             {
                 Ok(new_tokens) => {
-                    let expires_at = new_tokens.expires_in.map(|secs| {
-                        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-                            .format("%Y-%m-%dT%H:%M:%SZ")
-                            .to_string()
-                    });
-                    // Store the refreshed tokens.
-                    {
-                        let db_pool = Arc::clone(db_pool);
-                        let master_key = Arc::clone(master_key);
-                        let access_token = new_tokens.access_token.clone();
-                        let refresh_token = new_tokens.refresh_token.clone();
-                        let token_type = new_tokens.token_type.clone();
-                        let expires_at = expires_at.clone();
-                        let scope = new_tokens.scope.clone();
-                        let _ = tokio::task::spawn_blocking(move || {
-                            let w = db_pool.writer();
-                            let _ = accounts::store_oauth_tokens(
-                                &w,
-                                account_id,
-                                &master_key,
-                                accounts::StoreOAuthTokensParams {
-                                    access_token: &access_token,
-                                    refresh_token: refresh_token.as_deref(),
-                                    token_type: &token_type,
-                                    expires_at: expires_at.as_deref(),
-                                    scope: scope.as_deref(),
-                                    ..Default::default()
-                                },
-                            );
-                        })
-                        .await;
-                    }
                     // Retry quota fetch with the new access token
                     admin::fetch_account_quota_with_proxy(
                         &provider_id_str,

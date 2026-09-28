@@ -543,9 +543,9 @@ fn test_oauth_registry_and_refresh_lead_times() {
     assert_eq!(refresh_lead_seconds("kiro"), 300);
     assert_eq!(refresh_lead_seconds("codex"), 300);
     assert_eq!(refresh_lead_seconds("cline"), 300);
+    assert_eq!(refresh_lead_seconds("minimax"), 300);
 
     // non-rotating providers default to a 15m lead time
-    assert_eq!(refresh_lead_seconds("minimax"), 900);
     assert_eq!(refresh_lead_seconds("google"), 900);
     assert_eq!(refresh_lead_seconds("github"), 900);
 

@@ -76,6 +76,9 @@ impl ProviderAdapter for MiniMaxAdapter {
         meta.supports_quota = true;
         meta.quota_refresh_supported = true;
         meta.requires_oauth = false;
+        // MiniMax is Auth0-backed and rotates refresh tokens on each use.
+        // Refresh 5 min early to avoid cascade revocation races.
+        meta.oauth_refresh_lead_seconds = Some(300);
         meta
     }
 
