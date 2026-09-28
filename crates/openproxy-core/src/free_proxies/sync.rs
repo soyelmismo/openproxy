@@ -97,42 +97,34 @@ pub async fn sync_all_providers_with_container(
     sync_all_providers(db_pool).await
 }
 
-async fn sync_single_source(
-    src: &ProxySource,
-    errors: &mut Vec<String>,
-    scraped: &mut Vec<ScrapedProxy>,
-    fetched: &mut usize,
-) {
+async fn sync_single_source(src: ProxySource) -> (Vec<ScrapedProxy>, Option<String>) {
     if !src.active {
-        return;
+        return (Vec::new(), None);
     }
     if src.is_builtin {
         let Some(def) = BuiltinProxySourceDef::find_by_id(&src.id) else {
-            return;
+            return (Vec::new(), None);
         };
         match (def.sync_fn)(def.url).await {
-            Ok(mut list) => {
-                *fetched += list.len();
-                scraped.append(&mut list);
-            }
-            Err(e) => errors.push(format!(
-                "Built-in proxy source '{}' sync failed: {}",
-                src.name, e
-            )),
+            Ok(list) => (list, None),
+            Err(e) => (
+                Vec::new(),
+                Some(format!(
+                    "Built-in proxy source '{}' sync failed: {}",
+                    src.name, e
+                )),
+            ),
         }
-        return;
-    }
-
-    match fetch_custom_proxy_source(&src.name, &src.url, src.priority).await {
-        Ok(mut list) => {
-            *fetched += list.len();
-            scraped.append(&mut list);
-        }
-        Err(e) => {
-            errors.push(format!(
-                "Custom proxy source '{}' sync failed: {}",
-                src.name, e
-            ));
+    } else {
+        match fetch_custom_proxy_source(&src.name, &src.url, src.priority).await {
+            Ok(list) => (list, None),
+            Err(e) => (
+                Vec::new(),
+                Some(format!(
+                    "Custom proxy source '{}' sync failed: {}",
+                    src.name, e
+                )),
+            ),
         }
     }
 }
@@ -156,8 +148,14 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
     .await;
 
     if let Ok(Ok(custom_sources)) = sources_res {
-        for src in custom_sources {
-            sync_single_source(&src, &mut errors, &mut scraped, &mut fetched).await;
+        let tasks = custom_sources.into_iter().map(sync_single_source);
+        let results = futures::future::join_all(tasks).await;
+        for (mut list, err) in results {
+            if let Some(e) = err {
+                errors.push(e);
+            }
+            fetched += list.len();
+            scraped.append(&mut list);
         }
     }
 
