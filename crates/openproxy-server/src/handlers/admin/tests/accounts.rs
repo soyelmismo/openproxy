@@ -188,6 +188,43 @@ async fn adv_scan_endpoint_with_dry_run_true_and_auto_import_true() {
 }
 
 #[tokio::test]
+async fn test_scan_endpoint_auto_import_creates_accounts() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    seed::seed_builtin_providers(&state.db_pool().writer()).unwrap();
+    seed_token(
+        tmp.path(),
+        serde_json::json!({
+            "token": { "access_token": "ya-import", "refresh_token": "1//import", "expiry": "2099-01-01T00:00:00Z" },
+            "auth_method": "consumer", "user": { "email": "import@example.com" }
+        }),
+    );
+    let _lock = SCAN_TEST_LOCK.lock().await;
+    let _home = HomeGuard::set(tmp.path());
+    let app = Router::new()
+        .route("/admin/accounts/scan", post(scan_accounts))
+        .with_state(state.clone());
+    let (status, parsed) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/scan",
+        Some(&plaintext),
+        Some(serde_json::json!({"dry_run": false, "auto_import": true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let imported = parsed["imported"].as_array().unwrap();
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0]["provider_id"], "antigravity");
+
+    let count: i64 = state.db_pool().with_conn(|c| {
+        c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+            .unwrap()
+    });
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
 async fn adv_scan_endpoint_array_body_returns_4xx() {
     let tmp = tempdir();
     let (state, plaintext) = make_state_with_key(tmp.path()).await;

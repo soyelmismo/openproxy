@@ -49,21 +49,53 @@ where
 /// Capability flags surfaced to clients via `GET /v1/models`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelCapabilities {
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub vision: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub tool_calling: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub reasoning: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub thinking: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub attachment: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub structured_output: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub temperature: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_flex_bool")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
     pub decisions: Option<bool>,
 }
 

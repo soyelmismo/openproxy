@@ -476,48 +476,45 @@ pub async fn scan_accounts(
     // (handlers/admin/oauth.rs).
     let mut imported = Vec::with_capacity(discovered.len());
     for entry in discovered {
-        let id = s.services().accounts.create(
-            s.master_key().as_ref(),
-            core_admin::CreateAccountInput {
-                provider_id: entry.provider_id.clone(),
-                api_key: None, // OAuth: el token va en store_oauth_tokens
-                label: Some(entry.label.clone()),
-                priority: Some(100),
-                extra_config_json: None,
-            },
-        )?;
+        let pool = std::sync::Arc::clone(s.db_pool());
+        let master_key = std::sync::Arc::clone(s.master_key());
+        let accounts_service = std::sync::Arc::clone(&s.services().accounts);
+        let entry_clone = entry.clone();
 
-        // Almacena los tokens OAuth leídos del archivo (espejo del path
-        // OAuth post-exchange). El writer guard se libera al salir del
-        // bloque (AGENTS §4.3: jamás retener locks a través de `.await`).
-        {
-            let pool = std::sync::Arc::clone(s.db_pool());
-            let master_key = std::sync::Arc::clone(s.master_key());
-            let access_token = entry.access_token.clone();
-            let refresh_token = entry.refresh_token.clone();
-            let email = entry.email.clone();
-            tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
-                let w = pool
-                    .try_writer_for(std::time::Duration::from_secs(5))
-                    .ok_or_else(|| CoreError::Internal("writer lock timeout".into()))?;
-                core_accounts::store_oauth_tokens(
-                    &w,
-                    id,
-                    &master_key,
-                    core_accounts::StoreOAuthTokensParams {
-                        access_token: &access_token,
-                        refresh_token: refresh_token.as_deref(),
-                        token_type: "Bearer",
-                        expires_at: None,
-                        scope: None,
-                        provider_specific: None,
-                        email: email.as_deref(),
-                    },
-                )
-            })
-            .await
-            .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))??;
-        }
+        let id = tokio::task::spawn_blocking(move || -> Result<AccountId, CoreError> {
+            let id = accounts_service.create(
+                master_key.as_ref(),
+                core_admin::CreateAccountInput {
+                    provider_id: entry_clone.provider_id.clone(),
+                    api_key: None, // OAuth: el token va en store_oauth_tokens
+                    label: Some(entry_clone.label.clone()),
+                    priority: Some(100),
+                    extra_config_json: None,
+                },
+            )?;
+
+            let w = pool
+                .try_writer_for(std::time::Duration::from_secs(5))
+                .ok_or_else(|| CoreError::Internal("writer lock timeout".into()))?;
+            core_accounts::store_oauth_tokens(
+                &w,
+                id,
+                &master_key,
+                core_accounts::StoreOAuthTokensParams {
+                    access_token: &entry_clone.access_token,
+                    refresh_token: entry_clone.refresh_token.as_deref(),
+                    token_type: "Bearer",
+                    expires_at: None,
+                    scope: None,
+                    provider_specific: None,
+                    email: entry_clone.email.as_deref(),
+                },
+            )?;
+
+            Ok(id)
+        })
+        .await
+        .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))??;
 
         // Refresca metadata/quota del provider en background — idéntico a
         // `create_account` (accounts.rs:62).
