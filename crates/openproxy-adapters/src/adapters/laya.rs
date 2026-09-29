@@ -93,11 +93,17 @@ mod tests {
     async fn test_laya_fetch_models() {
         let adapter = LayaAdapter::new();
         let client = Arc::new(UpstreamClient::new());
-        let models = adapter.fetch_models(&client, "").await.expect("fetch_models should succeed");
+        let models = adapter
+            .fetch_models(&client, "")
+            .await
+            .expect("fetch_models should succeed");
 
         assert_eq!(models.len(), 3);
         assert_eq!(models[0].model_id.as_str(), "laya");
-        assert_eq!(models[0].display_name.as_deref(), Some("Convai Laya (ModernBERT)"));
+        assert_eq!(
+            models[0].display_name.as_deref(),
+            Some("Convai Laya (ModernBERT)")
+        );
         assert_eq!(models[0].target_format, TargetFormat::SystemOne);
         assert_eq!(models[0].context_length, Some(8_192));
         assert_eq!(models[0].max_output_tokens, Some(1_024));
