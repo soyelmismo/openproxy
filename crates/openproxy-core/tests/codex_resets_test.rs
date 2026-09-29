@@ -177,17 +177,15 @@ async fn test_codex_resets_validation_fails_for_non_codex_or_api_key() {
         .unwrap_err();
     assert!(err.to_string().contains("require an OAuth account"));
 
-    let err_redeem_key = redeem_codex_account_reset(
-        key_account,
-        None,
-        &pool,
-        &master_key,
-        &upstream,
-        &registry,
-    )
-    .await
-    .unwrap_err();
-    assert!(err_redeem_key.to_string().contains("require an OAuth account"));
+    let err_redeem_key =
+        redeem_codex_account_reset(key_account, None, &pool, &master_key, &upstream, &registry)
+            .await
+            .unwrap_err();
+    assert!(
+        err_redeem_key
+            .to_string()
+            .contains("require an OAuth account")
+    );
 }
 
 #[tokio::test]
