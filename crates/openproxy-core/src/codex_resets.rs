@@ -178,6 +178,7 @@ pub async fn list_codex_account_resets(
 
 pub async fn redeem_codex_account_reset(
     account_id: AccountId,
+    target_credit_id: Option<&str>,
     db_pool: &Arc<DbPool>,
     master_key: &Arc<MasterKey>,
     upstream_client: &Arc<UpstreamClient>,
@@ -235,12 +236,27 @@ pub async fn redeem_codex_account_reset(
     }
 
     let (credits, _) = parse_codex_reset_credits(&json)?;
-    let Some(target_credit) = credits.first() else {
-        return Ok(CodexResetResult {
-            success: false,
-            outcome: CodexResetOutcome::NoCredit.as_str().into(),
-            message: "No Codex reset credits are available for this account.".into(),
-        });
+    let target_credit = if let Some(target_id) = target_credit_id.filter(|s| !s.trim().is_empty()) {
+        credits
+            .into_iter()
+            .find(|c| c.id == target_id)
+            .unwrap_or_else(|| CodexResetCredit {
+                id: target_id.to_string(),
+                reset_type: None,
+                status: None,
+                expires_at: None,
+                title: None,
+                description: None,
+            })
+    } else {
+        let Some(first) = credits.into_iter().next() else {
+            return Ok(CodexResetResult {
+                success: false,
+                outcome: CodexResetOutcome::NoCredit.as_str().into(),
+                message: "No Codex reset credits are available for this account.".into(),
+            });
+        };
+        first
     };
 
     let idempotency_key = uuid::Uuid::new_v4().to_string();

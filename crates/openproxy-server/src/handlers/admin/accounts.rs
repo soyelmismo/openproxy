@@ -220,14 +220,22 @@ pub async fn refresh_account_quota(
     result
 }
 
+#[derive(Debug, serde::Deserialize, Default)]
+pub struct RedeemCodexResetInput {
+    pub credit_id: Option<String>,
+}
+
 pub async fn redeem_codex_reset(
     State(s): State<AppState>,
     Path(account_id): Path<i64>,
+    body: Option<Json<RedeemCodexResetInput>>,
 ) -> Result<Json<openproxy_core::codex_resets::CodexResetResult>, ApiError> {
     tracing::info!(account_id = account_id, "redeem_codex_reset: start");
+    let credit_id = body.and_then(|Json(b)| b.credit_id);
     let account_id = AccountId::new(account_id);
     let result = openproxy_core::codex_resets::redeem_codex_account_reset(
         account_id,
+        credit_id.as_deref(),
         s.db_pool(),
         s.master_key(),
         s.upstream_client(),

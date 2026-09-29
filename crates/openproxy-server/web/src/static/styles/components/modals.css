@@ -202,3 +202,83 @@
   resize: vertical;
   box-sizing: border-box;
 }
+
+/* Codex Banked Reset Credits Modal */
+.codex-credits-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.codex-credit-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.codex-credit-item:hover {
+  border-color: var(--color-primary);
+}
+.codex-credit-item.selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft, rgba(56, 189, 248, 0.08));
+}
+.codex-credit-radio {
+  margin-top: 3px;
+  cursor: pointer;
+}
+.codex-credit-info {
+  flex: 1;
+  min-width: 0;
+}
+.codex-credit-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+.codex-credit-title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  color: var(--color-text);
+}
+.codex-credit-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.codex-credit-desc {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+.codex-credit-exp {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.codex-credit-exp.urgent {
+  color: var(--color-warn, #f59e0b);
+  font-weight: 600;
+}
+.codex-resets-hint {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--color-primary);
+  margin-top: var(--space-3);
+  line-height: 1.4;
+}
+

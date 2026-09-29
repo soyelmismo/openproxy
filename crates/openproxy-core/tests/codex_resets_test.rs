@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use tokio::net::TcpListener;
 
 use openproxy_adapters::upstream::UpstreamClient;
-use openproxy_core::codex_resets::list_codex_account_resets;
+use openproxy_core::codex_resets::{list_codex_account_resets, redeem_codex_account_reset};
 use openproxy_core::oauth::OAuthProviderRegistry;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
@@ -154,12 +154,40 @@ async fn test_codex_resets_validation_fails_for_non_codex_or_api_key() {
             .contains("only be redeemed for Codex accounts")
     );
 
+    let err_redeem = redeem_codex_account_reset(
+        ant_account,
+        Some("credit-123"),
+        &pool,
+        &master_key,
+        &upstream,
+        &registry,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err_redeem
+            .to_string()
+            .contains("only be redeemed for Codex accounts")
+    );
+
     // Non-oauth account
     let key_account = create_codex_oauth_account(&pool, &master_key, "codex", "api_key");
     let err = list_codex_account_resets(key_account, &pool, &master_key, &upstream, &registry)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("require an OAuth account"));
+
+    let err_redeem_key = redeem_codex_account_reset(
+        key_account,
+        None,
+        &pool,
+        &master_key,
+        &upstream,
+        &registry,
+    )
+    .await
+    .unwrap_err();
+    assert!(err_redeem_key.to_string().contains("require an OAuth account"));
 }
 
 #[tokio::test]

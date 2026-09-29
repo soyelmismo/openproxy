@@ -1,7 +1,6 @@
-// views/quota-cell.ts — render the per-account "Quota" cell.
-
 import { html, type TemplateResult } from 'lit-html';
 import type { Account, ModelQuotaDetail } from "../lib/types/api.js";
+import { showCodexResetsModal } from "../components/codex-resets-modal.js";
 
 // Format reset time as a short exact relative hint.
 const resetHint = (ts: string | null | undefined): string => {
@@ -133,14 +132,20 @@ function formatCredits(val: string | number): string {
   return new Intl.NumberFormat().format(num);
 }
 
-function renderMetaBadges(meta: ProviderSpecificMeta | null): TemplateResult | null {
+function renderMetaBadges(meta: ProviderSpecificMeta | null, account?: Account): TemplateResult | null {
   if (!meta) return null;
   const badges: TemplateResult[] = [];
 
   const resetCredits = meta.reset_credits ?? meta.banked_resets;
   if (resetCredits != null && resetCredits > 0) {
+    const isCodex = account?.provider_id === 'codex';
     badges.push(
-      html`<span class="quota-tag credits" title="Available Banked Rate Limit Resets">⚡ ${resetCredits} Banked Reset${resetCredits > 1 ? "s" : ""}</span>`
+      html`<span
+        class="quota-tag credits ${isCodex ? 'clickable' : ''}"
+        style="${isCodex ? 'cursor: pointer;' : ''}"
+        title="${isCodex ? 'Click to inspect & redeem Codex banked rate limit resets' : 'Available Banked Rate Limit Resets'}"
+        @click=${isCodex && account ? () => showCodexResetsModal(account.id, account.label || account.email || undefined) : null}
+      >⚡ ${resetCredits} Banked Reset${resetCredits > 1 ? "s" : ""}</span>`
     );
   }
 
@@ -175,7 +180,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
     return html`<div class="quota-cell error"><small>✗ ${a.quota_fetch_error}</small></div>`;
   }
   const meta = parseProviderSpecific(a.oauth_provider_specific);
-  const badgesResult = renderMetaBadges(meta);
+  const badgesResult = renderMetaBadges(meta, a);
 
   if (a.quota_session_used == null && a.quota_weekly_used == null) {
     if (a.quota_plan_name || badgesResult) {
