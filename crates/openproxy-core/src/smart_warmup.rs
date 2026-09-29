@@ -79,9 +79,16 @@ async fn run_warmup_cycle(
     upstream: &Arc<UpstreamClient>,
     master_key: &Arc<MasterKey>,
 ) {
+    struct WarmupAccount {
+        id: i64,
+        token: String,
+        project_id: String,
+        account_desc: String,
+    }
+
     // Read the account list inside spawn_blocking so no DB guard is held across the
     // network calls below.
-    let account_list: Vec<(i64, String, String, String)> = {
+    let account_list: Vec<WarmupAccount> = {
         let db_pool = Arc::clone(db_pool);
         let master_key = Arc::clone(master_key);
         tokio::task::spawn_blocking(move || {
@@ -91,7 +98,12 @@ async fn run_warmup_cycle(
             let accounts = match accounts::list(&conn, Some(&provider_id), &master_key) {
                 Ok(accs) => accs,
                 Err(e) => {
-                    tracing::warn!("[SmartWarmup] Failed to list accounts: {}", e);
+                    tracing::warn!(
+                        provider = "antigravity",
+                        error = %e,
+                        "[SmartWarmup] Failed to list accounts for provider 'antigravity': {}",
+                        e
+                    );
                     return Vec::new();
                 }
             };
@@ -106,8 +118,25 @@ async fn run_warmup_cycle(
                     let v: serde_json::Value = serde_json::from_str(&meta).ok()?;
                     let project_id =
                         openproxy_pipeline::credentials::antigravity_project_from_value(&v)?;
-                    let account_id_str = acc_id.to_string();
-                    Some((acc_id, token, project_id, account_id_str))
+                    let acc_id_str = acc_id.to_string();
+                    let label = a
+                        .label
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty() && *s != acc_id_str);
+                    let email = a.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    let account_desc = match (label, email) {
+                        (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
+                        (Some(l), None) => format!("{acc_id} ({l})"),
+                        (None, Some(e)) => format!("{acc_id} ({e})"),
+                        (None, None) => acc_id_str,
+                    };
+                    Some(WarmupAccount {
+                        id: acc_id,
+                        token,
+                        project_id,
+                        account_desc,
+                    })
                 })
                 .collect()
         })
@@ -121,14 +150,17 @@ async fn run_warmup_cycle(
         .as_secs() as i64;
     let models_to_ping = &config.smart_warmup.models;
 
-    for (account_id_i64, access_token, project_id, account_id_str) in account_list {
+    for acc in account_list {
         // Fetch fresh quota
-        let quota = match fetch_antigravity_quota(upstream, &access_token, &project_id).await {
+        let quota = match fetch_antigravity_quota(upstream, &acc.token, &acc.project_id).await {
             Some(Ok(q)) => q,
             Some(Err(e)) => {
                 tracing::debug!(
-                    "[SmartWarmup] Failed to fetch quota for account {}: {}",
-                    account_id_str,
+                    provider = "antigravity",
+                    account_id = acc.id,
+                    error = %e,
+                    "[SmartWarmup] Failed to fetch quota for account {} (provider: 'antigravity'): {}",
+                    acc.account_desc,
                     e
                 );
                 continue;
@@ -140,11 +172,12 @@ async fn run_warmup_cycle(
         {
             let db_pool = Arc::clone(db_pool);
             let quota = quota.clone();
+            let acc_id = acc.id;
             let _ = tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
                 let _ = crate::accounts::set_quota(
                     &conn,
-                    crate::ids::AccountId(account_id_i64),
+                    crate::ids::AccountId(acc_id),
                     &quota,
                 );
             })
@@ -176,7 +209,7 @@ async fn run_warmup_cycle(
                 continue;
             };
 
-            let history_key = format!("{account_id_str}:{true_model_id}");
+            let history_key = format!("{}:{true_model_id}", acc.id);
 
             let last_ts = {
                 let db_pool = Arc::clone(db_pool);
@@ -201,18 +234,23 @@ async fn run_warmup_cycle(
             }
 
             tracing::info!(
-                "[SmartWarmup] 🔥 Triggering dummy ping for {} (alias: {}) on account {}",
+                provider = "antigravity",
+                account_id = acc.id,
+                model = %true_model_id,
+                alias = %model_alias,
+                "[SmartWarmup] 🔥 Triggering dummy ping for model '{}' (alias: '{}') on account {} (provider: 'antigravity')",
                 true_model_id,
                 model_alias,
-                account_id_str
+                acc.account_desc
             );
 
             let success = ping_antigravity_model(
                 upstream,
-                &access_token,
-                &project_id,
+                &acc.token,
+                &acc.project_id,
                 &true_model_id,
-                &account_id_str,
+                acc.id,
+                &acc.account_desc,
             )
             .await;
 
@@ -271,7 +309,8 @@ async fn ping_antigravity_model(
     access_token: &str,
     project_id: &str,
     model: &str,
-    account_id: &str,
+    account_id: i64,
+    account_desc: &str,
 ) -> bool {
     let request = build_warmup_request(model);
     let request_payload = serde_json::to_value(
@@ -321,19 +360,27 @@ async fn ping_antigravity_model(
                 true
             } else {
                 tracing::warn!(
-                    "[SmartWarmup] Ping failed with status {} for {} on {}",
+                    provider = "antigravity",
+                    account_id = account_id,
+                    model = %model,
+                    status = %status,
+                    "[SmartWarmup] Ping failed with status {} for model '{}' on account {} (provider: 'antigravity')",
                     status,
                     model,
-                    account_id
+                    account_desc
                 );
                 false
             }
         }
         Err(e) => {
             tracing::warn!(
-                "[SmartWarmup] Ping request failed for {} on {}: {}",
+                provider = "antigravity",
+                account_id = account_id,
+                model = %model,
+                error = %e,
+                "[SmartWarmup] Ping request failed for model '{}' on account {} (provider: 'antigravity'): {}",
                 model,
-                account_id,
+                account_desc,
                 e
             );
             false
