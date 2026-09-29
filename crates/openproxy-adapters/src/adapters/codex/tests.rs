@@ -30,6 +30,40 @@ fn test_parse_codex_usage_quota_valid() {
 }
 
 #[test]
+fn test_parse_codex_usage_quota_with_additional_rate_limits() {
+    let body = json!({
+        "rate_limit": {
+            "primary_window": {
+                "used_percent": 10.0,
+                "reset_at": 1_700_000_000.0
+            }
+        },
+        "additional_rate_limits": [
+            {
+                "limit_name": "gpt-reserve",
+                "metered_feature": "codex_reserve",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 25.0,
+                        "reset_at": 1_700_050_000.0
+                    }
+                }
+            }
+        ]
+    });
+
+    let quota = quota::parse_codex_usage_quota(&body).expect("should parse");
+    assert_eq!(quota.session_used, Some(10));
+    let details = quota.model_details.expect("model_details must be present");
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].model_id, "gpt-reserve");
+    assert_eq!(details[0].session_used, 25);
+    assert_eq!(details[0].session_limit, 100);
+    assert_eq!(details[0].session_reset_at, Some("1700050000".to_string()));
+    assert!((details[0].remaining_fraction - 0.75).abs() < 1e-4);
+}
+
+#[test]
 fn test_parse_codex_usage_quota_missing_rate_limit() {
     let body = json!({});
     let err = quota::parse_codex_usage_quota(&body).unwrap_err();

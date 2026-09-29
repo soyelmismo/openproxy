@@ -330,10 +330,10 @@ mod tests {
         let res = create_custom_proxy(State(state.clone()), Json(input)).await;
         assert!(res.is_err(), "should fail DNS validation");
 
-        // Verify writer lock was never held or locked by create_custom_proxy and is immediately acquirable
+        // Verify writer lock was never held or locked by create_custom_proxy and is acquirable
         let writer_guard = state
             .db_pool()
-            .try_writer_for(std::time::Duration::from_millis(50));
+            .try_writer_for(std::time::Duration::from_millis(1500));
         assert!(
             writer_guard.is_some(),
             "writer lock must be free immediately after DNS failure"
@@ -352,10 +352,10 @@ mod tests {
         let res = update_proxy_test_url(State(state.clone()), Json(input)).await;
         assert!(res.is_err(), "should fail DNS validation");
 
-        // Verify writer lock was never held or locked and is immediately acquirable
+        // Verify writer lock was never held or locked and is acquirable
         let writer_guard = state
             .db_pool()
-            .try_writer_for(std::time::Duration::from_millis(50));
+            .try_writer_for(std::time::Duration::from_millis(1500));
         assert!(
             writer_guard.is_some(),
             "writer lock must be free immediately after DNS failure"

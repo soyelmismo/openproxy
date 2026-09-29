@@ -1,6 +1,6 @@
 use crate::adapters::codex::apply_codex_spoofing_headers;
 use crate::upstream::UpstreamRequest;
-use openproxy_types::{AccountQuota, CoreError, Result};
+use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, Result};
 
 pub fn build_codex_quota_request(
     access_token: &str,
@@ -75,6 +75,7 @@ pub fn parse_codex_usage_quota(body: &serde_json::Value) -> Result<AccountQuota>
         .or_else(|| rate_limit.get("secondaryWindow"));
     let (session_used, session_reset_at) = parse_codex_usage_window(primary);
     let (weekly_used, weekly_reset_at) = parse_codex_usage_window(secondary);
+    let model_details = parse_codex_additional_rate_limits(body);
 
     Ok(AccountQuota {
         session_used,
@@ -86,8 +87,60 @@ pub fn parse_codex_usage_quota(body: &serde_json::Value) -> Result<AccountQuota>
         plan_name: Some("Codex / ChatGPT".into()),
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
-        model_details: None,
+        model_details,
     })
+}
+
+fn parse_codex_additional_rate_limits(body: &serde_json::Value) -> Option<Box<[ModelQuotaDetail]>> {
+    let list = body
+        .get("additional_rate_limits")
+        .or_else(|| body.get("additionalRateLimits"))?
+        .as_array()?;
+
+    let mut details = Vec::new();
+    for entry in list {
+        let Some(name) = entry
+            .get("limit_name")
+            .or_else(|| entry.get("limitName"))
+            .or_else(|| entry.get("name"))
+            .or_else(|| entry.get("model"))
+            .or_else(|| entry.get("metered_feature"))
+            .or_else(|| entry.get("meteredFeature"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            continue;
+        };
+
+        let rate_limit = entry
+            .get("rate_limit")
+            .or_else(|| entry.get("rateLimit"))
+            .and_then(|v| v.as_object());
+
+        let window = rate_limit.and_then(|rl| {
+            rl.get("primary_window")
+                .or_else(|| rl.get("primaryWindow"))
+                .or_else(|| rl.get("secondary_window"))
+                .or_else(|| rl.get("secondaryWindow"))
+        });
+
+        if let (Some(used), reset_at) = parse_codex_usage_window(window) {
+            let clamped_used = used.clamp(0, 100);
+            details.push(ModelQuotaDetail {
+                model_id: name.to_string(),
+                session_used: clamped_used,
+                session_limit: 100,
+                session_reset_at: reset_at,
+                remaining_fraction: ((100 - clamped_used) as f64) / 100.0,
+            });
+        }
+    }
+
+    if details.is_empty() {
+        None
+    } else {
+        Some(details.into_boxed_slice())
+    }
 }
 
 fn parse_codex_usage_window(window: Option<&serde_json::Value>) -> (Option<i64>, Option<String>) {
