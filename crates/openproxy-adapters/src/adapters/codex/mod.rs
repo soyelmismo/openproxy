@@ -35,7 +35,7 @@ pub fn codex_client_version_str() -> &'static str {
 }
 
 pub fn codex_user_agent_str() -> &'static str {
-    "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
+    "codex-cli/0.159.0 (Windows 10.0.26200; x64)"
 }
 
 pub fn apply_codex_spoofing_headers(req: &mut UpstreamRequest) {

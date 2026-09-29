@@ -12,6 +12,9 @@ use std::sync::{Arc, RwLock};
 pub const MINIMAX_UPSTREAM_CONFIG_RAW_URL: &str =
     "https://raw.githubusercontent.com/MiniMax-AI/minimax-code/main/packages/config/src/config.ts";
 
+/// Canonical raw GitHub URL for upstream MiniMax Code model catalog.
+pub const MINIMAX_UPSTREAM_CATALOG_RAW_URL: &str = "https://raw.githubusercontent.com/MiniMax-AI/minimax-code/main/packages/config/src/minimax-model-catalog.ts";
+
 static DYNAMIC_MINIMAX_MODELS: RwLock<Option<Vec<DiscoveredModel>>> = RwLock::new(None);
 
 /// Returns the currently cached in-memory dynamic models, if any.
@@ -337,13 +340,11 @@ fn parse_single_minimax_model(key: &str, body: &str) -> Option<DiscoveredModel> 
     })
 }
 
-/// Attempts to fetch and parse the upstream model catalog from the official GitHub repository.
-pub async fn try_fetch_upstream_minimax_models(
+async fn fetch_and_parse_ts(
     upstream_client: &Arc<UpstreamClient>,
+    url: &str,
 ) -> Option<Vec<DiscoveredModel>> {
-    let url = std::env::var("OPENPROXY_MINIMAX_CONFIG_URL")
-        .unwrap_or_else(|_| MINIMAX_UPSTREAM_CONFIG_RAW_URL.to_string());
-    let mut req = UpstreamRequest::get(&url);
+    let mut req = UpstreamRequest::get(url);
     req.headers.insert(
         http::header::ACCEPT,
         http::HeaderValue::from_static("text/plain, application/javascript, */*"),
@@ -366,6 +367,23 @@ pub async fn try_fetch_upstream_minimax_models(
     let body = resp.collect().await.ok()?;
     let text = String::from_utf8_lossy(&body);
     parse_minimax_config_ts(&text)
+}
+
+/// Attempts to fetch and parse the upstream model catalog from the official GitHub repository.
+pub async fn try_fetch_upstream_minimax_models(
+    upstream_client: &Arc<UpstreamClient>,
+) -> Option<Vec<DiscoveredModel>> {
+    if let Ok(url) = std::env::var("OPENPROXY_MINIMAX_CONFIG_URL") {
+        return fetch_and_parse_ts(upstream_client, &url).await;
+    }
+
+    if let Some(models) =
+        fetch_and_parse_ts(upstream_client, MINIMAX_UPSTREAM_CATALOG_RAW_URL).await
+    {
+        return Some(models);
+    }
+
+    fetch_and_parse_ts(upstream_client, MINIMAX_UPSTREAM_CONFIG_RAW_URL).await
 }
 
 /// Environment JSON override (`OPENPROXY_MINIMAX_MODELS_JSON`), then upstream

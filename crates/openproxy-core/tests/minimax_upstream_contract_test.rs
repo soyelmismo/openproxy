@@ -408,16 +408,32 @@ async fn test_minimax_remote_upstream_live_contract_parity() {
         .await
         .expect("fetch config.ts");
     let config_bytes = resp.collect().await.expect("read config.ts body");
-    let config_ts = String::from_utf8_lossy(&config_bytes);
+    let config_ts = String::from_utf8_lossy(&config_bytes).into_owned();
 
-    let start_idx = config_ts
-        .find("const MINIMAX_MODELS: Record<string, ModelConfig> = {")
-        .expect("find MINIMAX_MODELS in upstream config.ts");
-    let end_idx = config_ts[start_idx..]
+    let catalog_ts: String = if config_ts.contains("MINIMAX_MODELS: Record") {
+        config_ts.clone()
+    } else {
+        let catalog_ts_url = format!("{raw_base}/packages/config/src/minimax-model-catalog.ts");
+        let resp = client
+            .call(
+                UpstreamRequest::get(&catalog_ts_url),
+                TimeoutProfile::OAuth,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("fetch minimax-model-catalog.ts");
+        let catalog_bytes = resp.collect().await.expect("read catalog.ts body");
+        String::from_utf8_lossy(&catalog_bytes).into_owned()
+    };
+
+    let start_idx = catalog_ts
+        .find("MINIMAX_MODELS: Record<string, ModelConfig> = {")
+        .expect("find MINIMAX_MODELS in upstream catalog");
+    let end_idx = catalog_ts[start_idx..]
         .find("};")
         .map(|rel| start_idx + rel)
         .expect("find end of MINIMAX_MODELS");
-    let models_block = &config_ts[start_idx..end_idx];
+    let models_block = &catalog_ts[start_idx..end_idx];
 
     assert!(
         models_block.contains("\"MiniMax-M3\":"),
@@ -468,7 +484,7 @@ async fn test_minimax_remote_upstream_live_contract_parity() {
     assert_eq!(m27.max_output_tokens, Some(128_000));
 
     let dynamically_parsed =
-        openproxy_adapters::adapters::minimax::parse_minimax_config_ts(&config_ts)
+        openproxy_adapters::adapters::minimax::parse_minimax_config_ts(&catalog_ts)
             .expect("dynamically parse upstream MINIMAX_MODELS");
     assert!(
         dynamically_parsed

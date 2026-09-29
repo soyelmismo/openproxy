@@ -396,6 +396,12 @@ async fn test_opencode_zen_remote_upstream_live_contract_parity() {
     );
 
     let chat_resp = match client.call(chat_req, TimeoutProfile::OAuth, cancel).await {
+        Ok(r) if r.status.as_u16() == 429 => {
+            eprintln!(
+                "[OpenCodeContractTest] Rate limited (429) by live free tier endpoint, skipping"
+            );
+            return;
+        }
         Ok(r) => r,
         Err(e) => {
             eprintln!("[OpenCodeContractTest] Live chat inference failed ({e}), skipping");

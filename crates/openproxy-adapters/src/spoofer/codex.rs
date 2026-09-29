@@ -3,13 +3,13 @@ use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, Upstrea
 use http::HeaderValue;
 use std::sync::Arc;
 
-pub const DEFAULT_CODEX_VERSION: &str = "0.156.1";
+pub const DEFAULT_CODEX_VERSION: &str = "0.159.0";
 
 pub const CODEX_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("origin", "https://chatgpt.com"),
     ("originator", "codex_cli_rs"),
-    ("version", "0.156.1"),
-    ("user-agent", "codex-cli/0.156.1 (Windows 10.0.26200; x64)"),
+    ("version", "0.159.0"),
+    ("user-agent", "codex-cli/0.159.0 (Windows 10.0.26200; x64)"),
 ];
 
 pub const CODEX_LATEST_RELEASE_URL: &str =

@@ -47,6 +47,7 @@ pub fn hardcoded_models() -> Vec<DiscoveredModel> {
     // Updated from https://github.com/openai/codex
     [
         ("gpt-6-astra", "GPT-6-Astra", 272_000, 872_000, true),
+        ("gpt-6.1-sol", "GPT-6.1-Sol", 272_000, 872_000, true),
         ("gpt-6-sol", "GPT-6-Sol", 272_000, 872_000, true),
         ("gpt-6-luna", "GPT-6-Luna", 272_000, 872_000, true),
         ("gpt-5.6-sol", "GPT-5.6-Sol", 272_000, 872_000, true),
@@ -255,6 +256,9 @@ pub async fn fetch_codex_models_pipeline(
     upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Result<Vec<DiscoveredModel>> {
+    // 0. Automatically sync client version from upstream GitHub releases into memory
+    let _ = crate::spoofer::refresh_codex_version(upstream_client).await;
+
     // 1. Fetch base catalog from upstream repo (models.json) merged over embedded static models
     let base_models =
         if let Some(repo_models) = try_fetch_upstream_repo_models(upstream_client).await {

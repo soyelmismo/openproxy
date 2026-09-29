@@ -175,11 +175,7 @@ async fn run_warmup_cycle(
             let acc_id = acc.id;
             let _ = tokio::task::spawn_blocking(move || {
                 let conn = db_pool.writer();
-                let _ = crate::accounts::set_quota(
-                    &conn,
-                    crate::ids::AccountId(acc_id),
-                    &quota,
-                );
+                let _ = crate::accounts::set_quota(&conn, crate::ids::AccountId(acc_id), &quota);
             })
             .await;
         }

@@ -506,11 +506,11 @@ async fn test_codex_dynamic_version_remote_refresh_and_header_validation() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
+        "codex-cli/0.159.0 (Windows 10.0.26200; x64)"
     );
     assert_eq!(
         hdrs_outdated.get("version").unwrap().to_str().unwrap(),
-        "0.156.1"
+        "0.159.0"
     );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -549,7 +549,7 @@ async fn test_codex_dynamic_version_remote_refresh_and_header_validation() {
         std::env::remove_var("OPENPROXY_CODEX_LATEST_RELEASE_URL");
     }
     reset_dynamic_codex_overrides();
-    assert_eq!(current_codex_version(), "0.156.1");
+    assert_eq!(current_codex_version(), "0.159.0");
 }
 
 #[test]

@@ -218,12 +218,13 @@ fn test_codex_default_headers_contract() {
 #[test]
 fn test_codex_hardcoded_models_parity() {
     let models = codex_static_models();
-    assert_eq!(models.len(), 10);
+    assert_eq!(models.len(), 11);
     let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
     assert_eq!(
         ids,
         vec![
             "gpt-6-astra",
+            "gpt-6.1-sol",
             "gpt-6-sol",
             "gpt-6-luna",
             "gpt-5.6-sol",
@@ -285,9 +286,9 @@ fn test_codex_spoofer_preserves_valid_and_upgrades_invalid_ua() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "codex-cli/0.156.1 (Windows 10.0.26200; x64)"
+        "codex-cli/0.159.0 (Windows 10.0.26200; x64)"
     );
-    assert_eq!(headers.get("version").unwrap().to_str().unwrap(), "0.156.1");
+    assert_eq!(headers.get("version").unwrap().to_str().unwrap(), "0.159.0");
     assert_eq!(
         headers.get("origin").unwrap().to_str().unwrap(),
         "https://chatgpt.com"
@@ -327,7 +328,7 @@ fn test_codex_spoofer_preserves_valid_and_upgrades_invalid_ua() {
 #[test]
 fn test_merge_codex_models_preserves_base_and_adds_backend() {
     let base = codex_static_models();
-    assert_eq!(base.len(), 10);
+    assert_eq!(base.len(), 11);
     assert!(base.iter().any(|m| m.model_id.as_str() == "gpt-6-astra"));
     assert!(!base.iter().any(|m| m.model_id.as_str() == "gpt-reserve"));
 
@@ -359,7 +360,7 @@ fn test_merge_codex_models_preserves_base_and_adds_backend() {
     ];
 
     let merged = models::merge_codex_models(base, backend);
-    assert_eq!(merged.len(), 11);
+    assert_eq!(merged.len(), 12);
     assert!(merged.iter().any(|m| m.model_id.as_str() == "gpt-6-astra"));
     assert!(merged.iter().any(|m| m.model_id.as_str() == "gpt-5.4"));
     assert!(merged.iter().any(|m| m.model_id.as_str() == "gpt-reserve"));
