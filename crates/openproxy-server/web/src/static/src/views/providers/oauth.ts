@@ -152,6 +152,38 @@ async function onApplyLocalCli(accountId: number): Promise<void> {
   }
 }
 
+async function onRedeemCodexReset(accountId: number, e: Event): Promise<void> {
+  const btn = (e.currentTarget || e.target) as HTMLButtonElement | null;
+  if (!confirm('Redeem 1 banked rate limit reset credit for this Codex account?')) {
+    return;
+  }
+  const oldText = btn?.textContent;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Resetting...';
+  }
+  try {
+    const res = (await api(`/accounts/${accountId}/redeem-codex-reset`, {
+      method: 'POST',
+    })) as { success?: boolean; outcome?: string; message?: string };
+
+    if (res && res.success) {
+      showToast(res.message || 'Codex rate limit reset applied successfully!', 'success');
+      state.accounts = (await api('/accounts')) as typeof state.accounts;
+      requestUpdate();
+    } else {
+      showToast(res?.message || 'Failed to apply Codex reset', 'warning');
+    }
+  } catch (err: unknown) {
+    showApiError(err, 'Error redeeming Codex reset credit');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || '⚡ Reset';
+    }
+  }
+}
+
 
 export function renderOAuthSection(_provider: Provider): TemplateResult {
   return html``;
@@ -200,6 +232,7 @@ export function renderConnectionsSection(
                 <div class="account-actions-wrap">
                   ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>${icons.refresh()} Quota</button>` : html``}
                   ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>${icons.desktop()} Apply Local</button>` : html``}
+                  ${provider.id === 'codex' && isOAuth ? html`<button class="small" title="Redeem Codex Banked Reset Credit" @click=${(e: Event) => onRedeemCodexReset(a.id, e)}>⚡ Reset</button>` : html``}
                   <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>${icons.copy()} Copy</button>
                   ${isOAuth
                     ? html`<button class="small" title="Re-authenticate OAuth account" @click=${() => onShowReauthAccount(a.id)}>${icons.refresh()} Reauth</button>`

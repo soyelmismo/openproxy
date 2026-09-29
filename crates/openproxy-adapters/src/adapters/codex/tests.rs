@@ -409,3 +409,105 @@ fn test_merge_codex_models_preserves_base_and_adds_backend() {
     );
     assert_eq!(updated_luna.context_length, Some(300_000));
 }
+
+#[test]
+fn test_codex_reset_credits_request_builders() {
+    let req_list = quota::build_codex_reset_credits_request("test_token_abc", Some("ws_xyz"));
+    assert_eq!(
+        req_list.url,
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+    );
+    assert_eq!(req_list.method, http::Method::GET);
+    assert_eq!(
+        req_list.headers.get("authorization").unwrap(),
+        "Bearer test_token_abc"
+    );
+    assert_eq!(
+        req_list.headers.get("chatgpt-account-id").unwrap(),
+        "ws_xyz"
+    );
+
+    let req_consume = quota::build_codex_consume_reset_request(
+        "test_token_abc",
+        Some("ws_xyz"),
+        "req-uuid-1",
+        "credit-uuid-99",
+    );
+    assert_eq!(
+        req_consume.url,
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(req_consume.body.as_ref().unwrap()).unwrap();
+    assert_eq!(payload["redeem_request_id"], "req-uuid-1");
+    assert_eq!(payload["credit_id"], "credit-uuid-99");
+}
+
+#[test]
+fn test_parse_codex_reset_credits_list() {
+    let raw = serde_json::json!({
+        "credits": [
+            {
+                "id": "c1",
+                "status": "available",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "title": "Plus reset credit"
+            },
+            {
+                "credit_id": "c2",
+                "status": "consumed",
+                "expires_at": "2099-01-01T00:00:00Z"
+            },
+            {
+                "credit_id": "c0",
+                "status": "available",
+                "expires_at": "2090-01-01T00:00:00Z"
+            }
+        ],
+        "available_count": 2
+    });
+
+    let (credits, count) = quota::parse_codex_reset_credits(&raw).unwrap();
+    assert_eq!(count, 2);
+    assert_eq!(credits.len(), 2);
+    // Soonest expiring (2090) should be first
+    assert_eq!(credits[0].id, "c0");
+    assert_eq!(credits[1].id, "c1");
+}
+
+#[test]
+fn test_parse_codex_consume_response() {
+    let ok_reset = serde_json::json!({ "code": "reset" });
+    assert_eq!(
+        quota::parse_codex_consume_response(200, &ok_reset).unwrap(),
+        quota::CodexResetOutcome::Reset
+    );
+
+    let ok_already = serde_json::json!({ "code": "alreadyRedeemed" });
+    assert_eq!(
+        quota::parse_codex_consume_response(200, &ok_already).unwrap(),
+        quota::CodexResetOutcome::AlreadyRedeemed
+    );
+
+    let err_nothing = serde_json::json!({ "error": { "code": "nothing_to_reset" } });
+    assert_eq!(
+        quota::parse_codex_consume_response(409, &err_nothing).unwrap(),
+        quota::CodexResetOutcome::NothingToReset
+    );
+
+    let err_nocredit = serde_json::json!({ "error": { "code": "no_credit" } });
+    assert_eq!(
+        quota::parse_codex_consume_response(409, &err_nocredit).unwrap(),
+        quota::CodexResetOutcome::NoCredit
+    );
+}
+
+#[test]
+fn test_parse_codex_reset_credits_count() {
+    let usage = serde_json::json!({
+        "rate_limit_reset_credits": {
+            "available_count": 3
+        }
+    });
+    assert_eq!(quota::parse_codex_reset_credits_count(&usage), Some(3));
+}

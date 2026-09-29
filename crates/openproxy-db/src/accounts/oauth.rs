@@ -471,6 +471,44 @@ pub fn update_antigravity_project_id(
     Ok(())
 }
 
+pub fn update_codex_reset_credits(
+    conn: &Connection,
+    account_id: i64,
+    reset_credits: u32,
+) -> Result<()> {
+    let current_json_opt: Option<String> = conn
+        .query_row(
+            account_oauth_specific_select!("WHERE id = ?1"),
+            params![account_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(crate::error::map_db_error_ctx("query account"))?
+        .flatten();
+
+    let mut obj: serde_json::Map<String, serde_json::Value> = current_json_opt
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    obj.insert(
+        "reset_credits".to_string(),
+        serde_json::Value::from(reset_credits),
+    );
+    let new_json_str = serde_json::to_string(&obj).map_err(|e| {
+        CoreError::Internal(format!(
+            "update_codex_reset_credits serialize for account {account_id}: {e}"
+        ))
+    })?;
+
+    conn.execute(
+        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+        params![new_json_str, account_id],
+    )
+    .map_err(crate::error::map_db_error_ctx("update account"))?;
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct AntigravityMeta {
     #[serde(alias = "projectId", alias = "project_id")]

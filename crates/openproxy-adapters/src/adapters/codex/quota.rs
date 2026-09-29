@@ -2,12 +2,14 @@ use crate::adapters::codex::apply_codex_spoofing_headers;
 use crate::upstream::UpstreamRequest;
 use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, Result};
 
-pub fn build_codex_quota_request(
+fn build_codex_base_request(
+    url: &str,
+    method: http::Method,
     access_token: &str,
     workspace_id: Option<&str>,
 ) -> UpstreamRequest {
-    let url = "https://chatgpt.com/backend-api/wham/usage";
     let mut req = UpstreamRequest::get(url);
+    req.method = method;
     req.headers.insert(
         http::header::AUTHORIZATION,
         http::HeaderValue::from_str(&format!("Bearer {access_token}"))
@@ -29,6 +31,52 @@ pub fn build_codex_quota_request(
         req.headers
             .insert(http::HeaderName::from_static("chatgpt-account-id"), val);
     }
+    req
+}
+
+pub fn build_codex_quota_request(
+    access_token: &str,
+    workspace_id: Option<&str>,
+) -> UpstreamRequest {
+    build_codex_base_request(
+        "https://chatgpt.com/backend-api/wham/usage",
+        http::Method::GET,
+        access_token,
+        workspace_id,
+    )
+}
+
+pub fn build_codex_reset_credits_request(
+    access_token: &str,
+    workspace_id: Option<&str>,
+) -> UpstreamRequest {
+    build_codex_base_request(
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+        http::Method::GET,
+        access_token,
+        workspace_id,
+    )
+}
+
+pub fn build_codex_consume_reset_request(
+    access_token: &str,
+    workspace_id: Option<&str>,
+    redeem_request_id: &str,
+    credit_id: &str,
+) -> UpstreamRequest {
+    let mut req = build_codex_base_request(
+        "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+        http::Method::POST,
+        access_token,
+        workspace_id,
+    );
+    let payload = serde_json::json!({
+        "redeem_request_id": redeem_request_id,
+        "credit_id": credit_id,
+    });
+    req.body = Some(bytes::Bytes::from(
+        serde_json::to_vec(&payload).unwrap_or_default(),
+    ));
     req
 }
 
@@ -178,4 +226,224 @@ fn json_f64(value: &serde_json::Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str().and_then(|s| s.parse::<f64>().ok()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CodexResetCredit {
+    pub id: String,
+    pub reset_type: Option<String>,
+    pub status: Option<String>,
+    pub expires_at: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexResetOutcome {
+    Reset,
+    AlreadyRedeemed,
+    NoCredit,
+    NothingToReset,
+}
+
+impl CodexResetOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::AlreadyRedeemed => "alreadyRedeemed",
+            Self::NoCredit => "no_credit",
+            Self::NothingToReset => "nothing_to_reset",
+        }
+    }
+}
+
+pub fn parse_codex_reset_credits_count(body: &serde_json::Value) -> Option<u32> {
+    body.get("rate_limit_reset_credits")
+        .or_else(|| body.get("rateLimitResetCredits"))
+        .and_then(|v| {
+            v.get("available_count")
+                .or_else(|| v.get("availableCount"))
+                .and_then(|c| c.as_u64())
+                .map(|c| c as u32)
+        })
+}
+
+pub fn parse_codex_reset_credits(body: &serde_json::Value) -> Result<(Vec<CodexResetCredit>, u32)> {
+    let candidates = if let Some(arr) = body.as_array() {
+        arr.as_slice()
+    } else {
+        const CANDIDATE_KEYS: &[&str] = &[
+            "credits",
+            "reset_credits",
+            "resetCredits",
+            "rate_limit_reset_credits",
+            "rateLimitResetCredits",
+            "items",
+            "data",
+        ];
+        CANDIDATE_KEYS
+            .iter()
+            .find_map(|k| body.get(*k).and_then(|v| v.as_array()))
+            .map_or(&[] as &[serde_json::Value], Vec::as_slice)
+    };
+
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+
+    let mut credits = Vec::new();
+    for item in candidates {
+        let Some(item_obj) = item.as_object() else {
+            continue;
+        };
+        let Some(id) = item_obj
+            .get("credit_id")
+            .or_else(|| item_obj.get("creditId"))
+            .or_else(|| item_obj.get("id"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            continue;
+        };
+
+        let status = item_obj
+            .get("status")
+            .or_else(|| item_obj.get("state"))
+            .or_else(|| item_obj.get("outcome"))
+            .or_else(|| item_obj.get("result"))
+            .or_else(|| item_obj.get("code"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_lowercase());
+
+        if let Some(ref st) = status
+            && matches!(
+                st.as_str(),
+                "consumed" | "redeeming" | "redeemed" | "used" | "expired" | "unavailable"
+            )
+        {
+            continue;
+        }
+        if item_obj.get("consumed").and_then(|v| v.as_bool()) == Some(true)
+            || item_obj.get("redeemed").and_then(|v| v.as_bool()) == Some(true)
+            || item_obj.get("available").and_then(|v| v.as_bool()) == Some(false)
+        {
+            continue;
+        }
+
+        let expires_at = item_obj
+            .get("expires_at")
+            .or_else(|| item_obj.get("expiresAt"))
+            .or_else(|| item_obj.get("expiration_at"))
+            .or_else(|| item_obj.get("expirationAt"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string());
+
+        if let Some(ref exp) = expires_at {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(exp) {
+                if dt.timestamp() as u64 <= now_secs {
+                    continue;
+                }
+            } else if let Ok(exp_secs) = exp.parse::<u64>()
+                && exp_secs <= now_secs
+            {
+                continue;
+            }
+        }
+
+        let reset_type = item_obj
+            .get("reset_type")
+            .or_else(|| item_obj.get("resetType"))
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let title = item_obj
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+        let description = item_obj
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
+
+        credits.push(CodexResetCredit {
+            id: id.to_string(),
+            reset_type,
+            status,
+            expires_at,
+            title,
+            description,
+        });
+    }
+
+    credits.sort_by(|a, b| match (&a.expires_at, &b.expires_at) {
+        (Some(ea), Some(eb)) => ea.cmp(eb),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
+    let reported_count = body
+        .get("available_count")
+        .or_else(|| body.get("availableCount"))
+        .and_then(|v| v.as_u64())
+        .map_or(credits.len() as u32, |v| v as u32);
+
+    Ok((credits, reported_count))
+}
+
+pub fn parse_codex_consume_response(
+    status: u16,
+    body: &serde_json::Value,
+) -> Result<CodexResetOutcome> {
+    fn normalize_outcome(s: &str) -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_lowercase()
+    }
+
+    let direct = body.as_str().map(normalize_outcome);
+    let extracted = direct.or_else(|| {
+        const OUTCOME_KEYS: &[&str] = &["code", "outcome", "status", "result", "type"];
+        OUTCOME_KEYS
+            .iter()
+            .find_map(|k| body.get(*k).and_then(|v| v.as_str()).map(normalize_outcome))
+    });
+
+    if let Some(ref outcome) = extracted {
+        match outcome.as_str() {
+            "reset" => return Ok(CodexResetOutcome::Reset),
+            "alreadyredeemed" => return Ok(CodexResetOutcome::AlreadyRedeemed),
+            "nocredit" | "nocredits" => return Ok(CodexResetOutcome::NoCredit),
+            "nothingtoreset" => return Ok(CodexResetOutcome::NothingToReset),
+            _ => {}
+        }
+    }
+
+    if status == 409
+        && let Some(err) = body
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_str())
+    {
+        let norm = normalize_outcome(err);
+        if norm.contains("nocredit") {
+            return Ok(CodexResetOutcome::NoCredit);
+        }
+        if norm.contains("nothingtoreset") {
+            return Ok(CodexResetOutcome::NothingToReset);
+        }
+    }
+
+    if (200..300).contains(&status) {
+        Ok(CodexResetOutcome::Reset)
+    } else {
+        Err(CoreError::upstream_error(
+            status,
+            "codex",
+            "codex-reset",
+            body.to_string(),
+            false,
+        ))
+    }
 }

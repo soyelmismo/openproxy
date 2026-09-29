@@ -289,6 +289,39 @@ pub async fn refresh_single_account_quota(
         .await;
     }
 
+    if provider_id_str == "codex" && access_token.is_some() {
+        let pool = Arc::clone(db_pool);
+        let up = Arc::clone(upstream_client);
+        let tok = access_token.clone().unwrap_or_default();
+        let prov_spec = provider_specific.clone();
+        tokio::spawn(async move {
+            let req = openproxy_adapters::adapters::codex::quota::build_codex_reset_credits_request(
+                &tok,
+                prov_spec.as_deref(),
+            );
+            let cancel = openproxy_adapters::CancellationToken::new();
+            if let Ok(resp) = up
+                .call(
+                    req,
+                    openproxy_adapters::upstream::TimeoutProfile::Chat,
+                    cancel,
+                )
+                .await
+                && resp.status.is_success()
+                && let Ok(body) = resp.collect().await
+                && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
+                && let Ok((_, count)) =
+                    openproxy_adapters::adapters::codex::quota::parse_codex_reset_credits(&json)
+            {
+                let _ = tokio::task::spawn_blocking(move || {
+                    let w = pool.writer();
+                    openproxy_db::accounts::update_codex_reset_credits(&w, account_id.0, count)
+                })
+                .await;
+            }
+        });
+    }
+
     let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some()
     {
         let refresh_result = {

@@ -114,6 +114,8 @@ interface ProviderSpecificMeta {
   credit_balance?: string | number;
   last_checkin_date?: string;
   streak_days?: number;
+  reset_credits?: number;
+  banked_resets?: number;
 }
 
 function parseProviderSpecific(raw: string | null | undefined): ProviderSpecificMeta | null {
@@ -134,6 +136,13 @@ function formatCredits(val: string | number): string {
 function renderMetaBadges(meta: ProviderSpecificMeta | null): TemplateResult | null {
   if (!meta) return null;
   const badges: TemplateResult[] = [];
+
+  const resetCredits = meta.reset_credits ?? meta.banked_resets;
+  if (resetCredits != null && resetCredits > 0) {
+    badges.push(
+      html`<span class="quota-tag credits" title="Available Banked Rate Limit Resets">⚡ ${resetCredits} Banked Reset${resetCredits > 1 ? "s" : ""}</span>`
+    );
+  }
 
   if (meta.credit_balance != null && meta.credit_balance !== "") {
     const formatted = formatCredits(meta.credit_balance);

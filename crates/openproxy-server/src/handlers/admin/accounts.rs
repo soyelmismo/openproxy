@@ -36,6 +36,11 @@ pub fn router() -> axum::Router<AppState> {
             axum::routing::post(refresh_account_quota),
         )
         .route(
+            "/{id}/redeem-codex-reset",
+            axum::routing::post(redeem_codex_reset),
+        )
+        .route("/{id}/codex-resets", axum::routing::get(list_codex_resets))
+        .route(
             "/{id}/apply-local-cli",
             axum::routing::post(apply_account_local_cli),
         )
@@ -213,6 +218,43 @@ pub async fn refresh_account_quota(
     }
     .await;
     result
+}
+
+pub async fn redeem_codex_reset(
+    State(s): State<AppState>,
+    Path(account_id): Path<i64>,
+) -> Result<Json<openproxy_core::codex_resets::CodexResetResult>, ApiError> {
+    tracing::info!(account_id = account_id, "redeem_codex_reset: start");
+    let account_id = AccountId::new(account_id);
+    let result = openproxy_core::codex_resets::redeem_codex_account_reset(
+        account_id,
+        s.db_pool(),
+        s.master_key(),
+        s.upstream_client(),
+        &s.oauth_provider_registry(),
+    )
+    .await
+    .map_err(ApiError)?;
+
+    Ok(Json(result))
+}
+
+pub async fn list_codex_resets(
+    State(s): State<AppState>,
+    Path(account_id): Path<i64>,
+) -> Result<Json<openproxy_core::codex_resets::CodexResetListResponse>, ApiError> {
+    let account_id = AccountId::new(account_id);
+    let result = openproxy_core::codex_resets::list_codex_account_resets(
+        account_id,
+        s.db_pool(),
+        s.master_key(),
+        s.upstream_client(),
+        &s.oauth_provider_registry(),
+    )
+    .await
+    .map_err(ApiError)?;
+
+    Ok(Json(result))
 }
 
 fn find_candidate_account_for_refresh(
