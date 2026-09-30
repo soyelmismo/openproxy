@@ -72,6 +72,16 @@ pub async fn oauth_authorize(
         effective_redirect_uri
     };
 
+    // Security (OP-19): persist the generated state with the verifier and
+    // redirect URI actually used, so the exchange can validate `state` and
+    // stop trusting client-supplied redirect_uri / code_verifier.
+    s.oauth_states().insert(
+        &provider,
+        &state,
+        &code_verifier,
+        &redirect_uri,
+    );
+
     Ok(Json(serde_json::json!({
         "authorization_url": auth_url,
         "code_verifier": code_verifier,
@@ -212,23 +222,31 @@ pub async fn oauth_exchange(
         .get("code")
         .and_then(|v| v.as_str())
         .ok_or_else(|| CoreError::Validation("missing 'code'".into()))?;
-    let code_verifier = input
-        .get("code_verifier")
+
+    // Security (OP-19): `state` is now mandatory and validated server-side.
+    // The PKCE verifier and redirect URI are taken from the record persisted
+    // at authorize time — client-supplied values are no longer forwarded to
+    // the IdP token endpoint.
+    let state_param = input
+        .get("state")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            if provider == "zai" {
-                input.get("state").and_then(|v| v.as_str())
-            } else {
-                None
-            }
-        })
-        .unwrap_or("");
+        .ok_or_else(|| {
+            CoreError::Validation(
+                "missing 'state': start the flow with GET /admin/api/oauth/{provider}/authorize \
+                 and pass the returned state back"
+                    .into(),
+            )
+        })?;
+    let (code_verifier, redirect_uri) = s
+        .oauth_states()
+        .consume(&provider, state_param)
+        .ok_or_else(|| {
+            CoreError::Validation(
+                "unknown, expired or already-used 'state'; restart the authorization flow".into(),
+            )
+        })?;
     let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
-    let redirect_uri = input
-        .get("redirect_uri")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| CoreError::Validation("missing 'redirect_uri'".into()))?;
 
     let registry = s.oauth_provider_registry();
     let provider_impl = registry.get(&provider).ok_or_else(|| {
@@ -238,7 +256,7 @@ pub async fn oauth_exchange(
     })?;
 
     let token = provider_impl
-        .exchange_code(code, code_verifier, s.upstream_client(), redirect_uri)
+        .exchange_code(code, &code_verifier, s.upstream_client(), &redirect_uri)
         .await?;
 
     let account_id = resolve_or_create_oauth_account(&s, &provider, account_id_input).await?;
@@ -567,4 +585,90 @@ async fn execute_oauth_refresh(
     };
 
     token.access_token
+}
+
+/// Server-side OAuth state store (OP-19).
+///
+/// Security: `oauth_exchange` previously trusted the client-supplied
+/// `redirect_uri` and `code_verifier` verbatim and never validated `state`,
+/// so the CSRF/CSRF-mitigation trio of the authorization-code flow rested
+/// entirely on the IdP. The authorize handler now persists the
+/// `(provider, state)` pair it generated together with the PKCE verifier and
+/// redirect URI it used; the exchange consumes that record (single-use,
+/// 10-minute TTL) and uses the persisted values instead of whatever the
+/// client posts.
+pub struct OAuthStateStore {
+    entries:
+        dashmap::DashMap<(String, String), (String, String, std::time::Instant)>,
+}
+
+/// Lifetime of an authorize→exchange pair.
+const OAUTH_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+/// Bound on distinct pending states.
+const OAUTH_STATE_MAX_ENTRIES: usize = 4096;
+
+impl Default for OAuthStateStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OAuthStateStore {
+    pub fn new() -> Self {
+        Self {
+            entries: dashmap::DashMap::new(),
+        }
+    }
+
+    /// Record a freshly generated authorize response.
+    pub fn insert(&self, provider: &str, state: &str, code_verifier: &str, redirect_uri: &str) {
+        if self.entries.len() >= OAUTH_STATE_MAX_ENTRIES {
+            self.evict_expired();
+        }
+        if self.entries.len() >= OAUTH_STATE_MAX_ENTRIES {
+            self.entries.clear();
+        }
+        self.entries.insert(
+            (provider.to_string(), state.to_string()),
+            (
+                code_verifier.to_string(),
+                redirect_uri.to_string(),
+                std::time::Instant::now(),
+            ),
+        );
+    }
+
+    /// Consume the record for `(provider, state)` — single use. `None` when
+    /// unknown, already used, or expired.
+    pub fn consume(&self, provider: &str, state: &str) -> Option<(String, String)> {
+        let (verifier, redirect_uri, created) = self.entries.remove(&(provider.to_string(), state.to_string()))?.1;
+        if created.elapsed() > OAUTH_STATE_TTL {
+            return None;
+        }
+        Some((verifier, redirect_uri))
+    }
+
+    fn evict_expired(&self) {
+        self.entries
+            .retain(|_, (_, _, created)| created.elapsed() <= OAUTH_STATE_TTL);
+    }
+}
+
+#[cfg(test)]
+mod state_store_tests {
+    use super::*;
+
+    #[test]
+    fn oauth_state_is_single_use_and_ttl_bound() {
+        let store = OAuthStateStore::new();
+        store.insert("antigravity", "st1", "verifier-1", "http://localhost:8787/admin/callback.html");
+        let (verifier, redirect) = store
+            .consume("antigravity", "st1")
+            .expect("state resolves once");
+        assert_eq!(verifier, "verifier-1");
+        assert_eq!(redirect, "http://localhost:8787/admin/callback.html");
+        assert!(store.consume("antigravity", "st1").is_none(), "single use");
+        assert!(store.consume("antigravity", "other").is_none());
+        assert!(store.consume("zai", "st1").is_none(), "provider-bound");
+    }
 }

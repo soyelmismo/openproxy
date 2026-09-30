@@ -67,6 +67,7 @@ pub struct AppState {
         Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
     ws_tickets: Arc<WsTicketStore>,
     admin_limiter: Arc<crate::handlers::admin::auth::AdminAuthLimiter>,
+    oauth_states: Arc<crate::handlers::admin::oauth::OAuthStateStore>,
 }
 
 /// VACUUM status reported to the dashboard.
@@ -194,6 +195,11 @@ impl AppState {
         &self,
     ) -> Arc<crate::handlers::admin::auth::AdminAuthLimiter> {
         Arc::clone(&self.admin_limiter)
+    }
+
+    /// Server-side OAuth state validation store (OP-19).
+    pub fn oauth_states(&self) -> &crate::handlers::admin::oauth::OAuthStateStore {
+        self.oauth_states.as_ref()
     }
 
     /// Borrow the master encryption key.
