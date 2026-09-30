@@ -108,16 +108,16 @@ impl AppState {
             && self.api_key_cache.len() >= Self::MAX_API_KEY_CACHE_ENTRIES
         {
             self.prune_api_key_cache();
-            while self.api_key_cache.len() >= Self::MAX_API_KEY_CACHE_ENTRIES {
-                let to_evict = self
+            if self.api_key_cache.len() >= Self::MAX_API_KEY_CACHE_ENTRIES {
+                let excess = self.api_key_cache.len() - Self::MAX_API_KEY_CACHE_ENTRIES + 1;
+                let mut entries: Vec<(std::time::Instant, String)> = self
                     .api_key_cache
                     .iter()
-                    .min_by_key(|entry| entry.value().1)
-                    .map(|entry| entry.key().clone());
-                if let Some(k) = to_evict {
+                    .map(|entry| (entry.value().1, entry.key().clone()))
+                    .collect();
+                entries.sort_unstable_by_key(|(exp, _)| *exp);
+                for (_, k) in entries.into_iter().take(excess) {
                     self.api_key_cache.remove(&k);
-                } else {
-                    break;
                 }
             }
         }
