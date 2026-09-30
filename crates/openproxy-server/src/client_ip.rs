@@ -80,9 +80,13 @@ pub fn parse_ip_or_bracketed(val: &str) -> Option<IpAddr> {
 /// Resolve the real client IP address from request headers and TCP peer address.
 ///
 /// If `peer_addr` is trusted (loopback or in `trusted_proxies`):
-/// 1. `X-Real-IP` header.
-/// 2. Leftmost (client) IP in `X-Forwarded-For`.
-/// 3. `for=` entry in RFC 7239 `Forwarded`.
+/// 1. `X-Real-IP` header (single value overwritten by the proxy).
+/// 2. **Rightmost-untrusted** IP in `X-Forwarded-For`: each proxy appends
+///    the address it received the request from, so the rightmost entry NOT
+///    belonging to a trusted proxy is the client. The leftmost entry is
+///    fully client-controlled and must never be used (OP-08: spoofing of
+///    audit-log IPs and per-IP rate-limit buckets).
+/// 3. Last `for=` entry in RFC 7239 `Forwarded` (same rightmost logic).
 /// 4. Fallback: `peer_addr` IP.
 ///
 /// If `peer_addr` is not trusted, returns `peer_addr` IP directly (anti-spoofing).
@@ -95,7 +99,7 @@ pub fn resolve_client_ip(
     let is_trusted = peer_ip.is_some_and(|ip| is_trusted_proxy(ip, trusted_proxies));
 
     if is_trusted {
-        // 1. X-Real-IP
+        // 1. X-Real-IP: a single value your proxy overwrites on every hop.
         if let Some(real_ip) = headers
             .get("x-real-ip")
             .and_then(|v| v.to_str().ok())
@@ -104,29 +108,45 @@ pub fn resolve_client_ip(
             return Some(real_ip);
         }
 
-        // 2. X-Forwarded-For: comma-separated list; first entry is the client
-        if let Some(ip) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|forwarded_for| forwarded_for.split(',').find_map(parse_ip_or_bracketed))
-        {
-            return Some(ip);
+        // 2. X-Forwarded-For, rightmost-untrusted (see doc comment).
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            let entries: Vec<Option<IpAddr>> =
+                xff.split(',').map(parse_ip_or_bracketed).collect();
+            if let Some(ip) = rightmost_untrusted(&entries, trusted_proxies) {
+                return Some(ip);
+            }
         }
 
-        // 3. RFC 7239 Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43
+        // 3. RFC 7239 Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43 —
+        //    multiple comma-separated sections may each carry a for=; the
+        //    rightmost non-trusted one wins, mirroring XFF semantics.
         if let Some(forwarded) = headers.get("forwarded").and_then(|v| v.to_str().ok()) {
-            for part in forwarded.split(';') {
-                let part = part.trim();
-                if let Some(val) = part.strip_prefix("for=")
-                    && let Some(ip) = parse_ip_or_bracketed(val)
-                {
-                    return Some(ip);
-                }
+            let entries: Vec<Option<IpAddr>> = forwarded
+                .split(',')
+                .filter_map(|section| {
+                    section.split(';').find_map(|part| {
+                        part.trim()
+                            .strip_prefix("for=")
+                            .and_then(parse_ip_or_bracketed)
+                    })
+                })
+                .map(Some)
+                .collect();
+            if let Some(ip) = rightmost_untrusted(&entries, trusted_proxies) {
+                return Some(ip);
             }
         }
     }
 
     peer_ip
+}
+
+/// Walk `entries` right-to-left and return the first address that is NOT a
+/// trusted proxy; `None` when every entry is trusted or nothing parses.
+fn rightmost_untrusted(entries: &[Option<IpAddr>], trusted_proxies: &[String]) -> Option<IpAddr> {
+    entries.iter().rev().find_map(|entry| {
+        entry.filter(|ip| !is_trusted_proxy(*ip, trusted_proxies))
+    })
 }
 
 #[cfg(test)]
@@ -221,5 +241,69 @@ mod tests {
         let resolved = resolve_client_ip(&headers, Some(&untrusted_peer), &trusted);
         // Must ignore spoofed headers and return the untrusted peer's actual IP
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 50))));
+    }
+
+    /// OP-08: a client behind a trusted proxy spoofs a leftmost XFF entry
+    /// (`X-Forwarded-For: 1.2.3.4`); the proxy appends the real client IP.
+    /// The rightmost-untrusted entry must win — the leftmost is dead simple
+    /// for the client to forge.
+    #[test]
+    fn test_resolve_client_ip_xff_spoofed_leftmost_ignored() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "1.2.3.4, 198.51.100.42".parse().unwrap(),
+        );
+        let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
+        let trusted: Vec<String> = Vec::new();
+
+        let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
+        assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))));
+    }
+
+    /// OP-08: multi-hop chain — trusted proxies are skipped from the right
+    /// until the first untrusted address.
+    #[test]
+    fn test_resolve_client_ip_xff_multihop_skips_trusted() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "1.2.3.4, 198.51.100.42, 10.0.0.7".parse().unwrap(),
+        );
+        let peer = "10.0.0.9:8787".parse::<SocketAddr>().unwrap();
+        let trusted = vec!["10.0.0.0/8".to_string()];
+
+        let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
+        assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))));
+    }
+
+    /// OP-08: every XFF entry is a trusted proxy → fall back to the peer.
+    #[test]
+    fn test_resolve_client_ip_xff_all_trusted_falls_back_to_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "127.0.0.2, 127.0.0.3".parse().unwrap(),
+        );
+        let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
+        let trusted: Vec<String> = Vec::new();
+
+        let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
+        assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    }
+
+    /// OP-08: RFC 7239 Forwarded uses the rightmost for= entry as well.
+    #[test]
+    fn test_resolve_client_ip_forwarded_rightmost() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "forwarded",
+            "for=1.2.3.4, for=198.51.100.99".parse().unwrap(),
+        );
+        let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
+        let trusted: Vec<String> = Vec::new();
+
+        let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
+        assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 99))));
     }
 }
