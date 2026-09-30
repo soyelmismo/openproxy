@@ -129,9 +129,9 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
 
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(|e| crate::error::map_db_error_ctx(format!(
             "update provider {id}"
-        )))?;
+        ))(e))?;
 
     if affected == 0 {
         return Err(CoreError::ProviderNotFound(id.to_string()));

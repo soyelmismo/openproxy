@@ -145,10 +145,10 @@ pub fn decrypt_api_key(conn: &Connection, id: AccountId, master_key: &MasterKey)
             |r| r.get(0),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(|e| crate::error::map_db_error_ctx(format!(
             "select api_key_encrypted for account {}",
             id.0
-        )))?
+        ))(e))?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
     let blob = blob
@@ -168,10 +168,10 @@ pub fn decrypt_api_key_and_label(
             |r| crate::map_row_tuple!(r => (0, 1)),
         )
         .optional()
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(|e| crate::error::map_db_error_ctx(format!(
             "select api_key+label for account {}",
             id.0
-        )))?;
+        ))(e))?;
     let Some((blob, label)) = row else {
         return Err(CoreError::AccountNotFound(id.0));
     };
@@ -234,10 +234,10 @@ pub fn update_api_key(
              WHERE id = ?2",
             params![blob, id.0],
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(|e| crate::error::map_db_error_ctx(format!(
             "update api_key for account {}",
             id.0
-        )))?;
+        ))(e))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -263,15 +263,15 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
         "UPDATE combo_targets SET account_id = NULL WHERE account_id = ?1",
         params![id.0],
     )
-    .map_err(crate::error::map_db_error_ctx(format!(
+    .map_err(|e| crate::error::map_db_error_ctx(format!(
         "null combo_targets.account_id for account {}",
         id.0
-    )))?;
+    ))(e))?;
     conn.execute("DELETE FROM accounts WHERE id = ?1", params![id.0])
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(|e| crate::error::map_db_error_ctx(format!(
             "delete account {}",
             id.0
-        )))?;
+        ))(e))?;
     Ok(())
 }
 

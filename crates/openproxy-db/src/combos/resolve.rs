@@ -128,10 +128,10 @@ fn compute_effective_context_window_recursive(
             rusqlite::params![combo_id.0],
             |row| row.get(0),
         )
-        .map_err(crate::error::map_db_error_ctx(format!(
+        .map_err(|e| crate::error::map_db_error_ctx(format!(
             "get context_window for combo {}",
             combo_id.0
-        )))?;
+        ))(e))?;
 
     let natural = aggregate_target_context_windows(conn, combo_id, visited, depth)?;
 

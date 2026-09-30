@@ -27,10 +27,10 @@ macro_rules! define_column_updaters {
                 let id_raw = { let $id = id; $id_val };
                 let sql = concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE id = ?2");
                 let affected = conn.execute(sql, rusqlite::params![val, id_raw])
-                    .map_err($crate::error::map_db_error_ctx(format!(
+                    .map_err(|e| $crate::error::map_db_error_ctx(format!(
                         "update {} for {} {}",
                         $col, $table, id_raw
-                    )))?;
+                    ))(e))?;
                 if affected == 0 {
                     return Err({ let $nf_id = id; $nf_err });
                 }
@@ -58,10 +58,10 @@ macro_rules! define_column_updaters {
                 let id_raw = { let $id = id; $id_val };
                 let sql = concat!("UPDATE ", $table, " SET ", $col, " = ?1 WHERE id = ?2");
                 conn.execute(sql, rusqlite::params![val, id_raw])
-                    .map_err($crate::error::map_db_error_ctx(format!(
+                    .map_err(|e| $crate::error::map_db_error_ctx(format!(
                         "update {} for {} {}",
                         $col, $table, id_raw
-                    )))?;
+                    ))(e))?;
                 Ok(())
             }
         )*
