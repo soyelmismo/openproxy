@@ -75,13 +75,30 @@ pub fn init_stage_broadcast() -> tokio::sync::broadcast::Sender<openproxy_types:
     tx
 }
 
-fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
-    if row.trace_id.is_empty() {
-        let key = format!("{}:unknown", row.request_id);
-        INFLIGHT_REGISTRY.remove(&key);
+#[inline]
+fn with_attempt_key<R>(trace_id: &str, request_id: &str, f: impl FnOnce(&str) -> R) -> R {
+    if !trace_id.is_empty() {
+        f(trace_id)
     } else {
-        INFLIGHT_REGISTRY.remove(&row.trace_id);
+        let mut buf = [0u8; 96];
+        if request_id.len() + 8 <= buf.len() {
+            buf[..request_id.len()].copy_from_slice(request_id.as_bytes());
+            buf[request_id.len()..request_id.len() + 8].copy_from_slice(b":unknown");
+            if let Ok(s) = std::str::from_utf8(&buf[..request_id.len() + 8]) {
+                return f(s);
+            }
+        }
+        let mut s = String::with_capacity(request_id.len() + 8);
+        use std::fmt::Write;
+        let _ = write!(&mut s, "{request_id}:unknown");
+        f(&s)
     }
+}
+
+fn publish_usage_global(row: openproxy_types::RecentUsageRow) {
+    with_attempt_key(&row.trace_id, &row.request_id, |key| {
+        INFLIGHT_REGISTRY.remove(key);
+    });
 
     if let Some(tx) = USAGE_SENDER.get() {
         let _ = tx.send(openproxy_types::usage::redact_for_broadcast(row));
@@ -134,53 +151,68 @@ fn update_inflight_attempt(
 }
 
 fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
-    let attempt_key = if event.trace_id.is_empty() {
-        format!("{}:unknown", event.request_id)
-    } else {
-        event.trace_id.clone()
-    };
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-
     if is_terminal_stage_event(&event) {
-        INFLIGHT_REGISTRY.remove(&attempt_key);
+        with_attempt_key(&event.trace_id, &event.request_id, |key| {
+            INFLIGHT_REGISTRY.remove(key);
+        });
     } else {
         let rank = stage_rank(&event.stage);
-        let started_at = now_ms.saturating_sub(event.elapsed_ms);
-        let status_opt = event.status_code;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
 
-        INFLIGHT_REGISTRY
-            .entry(attempt_key.clone())
-            .and_modify(|item| update_inflight_attempt(item, &event, rank, now_ms))
-            .or_insert_with(|| openproxy_types::usage::InflightAttempt {
-                attempt_key: attempt_key.clone(),
-                request_id: event.request_id.clone(),
-                trace_id: event.trace_id.clone(),
-                provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
-                upstream_model_id: event
-                    .upstream_model_id
-                    .as_deref()
-                    .unwrap_or_default()
-                    .to_string(),
-                started_at_ms: started_at,
-                updated_at_ms: now_ms,
-                stage: event.stage.clone(),
-                stage_seq: event.elapsed_ms as u32,
-                stage_rank: rank,
-                elapsed_ms_at_event: event.elapsed_ms,
-                connect_ms: event.connect_ms,
-                ttft_ms: event.ttft_ms,
-                status_code: status_opt,
-                terminal: false,
-                terminal_kind: None,
-                error: event.error.clone(),
-                row_id: None,
-                source: "live".into(),
-                endpoint_kind: event.endpoint_kind,
-            });
+        let updated = with_attempt_key(&event.trace_id, &event.request_id, |key| {
+            if let Some(mut item) = INFLIGHT_REGISTRY.get_mut(key) {
+                update_inflight_attempt(&mut item, &event, rank, now_ms);
+                true
+            } else {
+                false
+            }
+        });
+
+        if !updated {
+            let attempt_key = if event.trace_id.is_empty() {
+                let mut s = String::with_capacity(event.request_id.len() + 8);
+                s.push_str(&event.request_id);
+                s.push_str(":unknown");
+                s
+            } else {
+                event.trace_id.clone()
+            };
+            let started_at = now_ms.saturating_sub(event.elapsed_ms);
+            let status_opt = event.status_code;
+
+            INFLIGHT_REGISTRY.insert(
+                attempt_key.clone(),
+                openproxy_types::usage::InflightAttempt {
+                    attempt_key,
+                    request_id: event.request_id.clone(),
+                    trace_id: event.trace_id.clone(),
+                    provider_id: event.provider_id.as_deref().unwrap_or_default().to_string(),
+                    upstream_model_id: event
+                        .upstream_model_id
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_string(),
+                    started_at_ms: started_at,
+                    updated_at_ms: now_ms,
+                    stage: event.stage.clone(),
+                    stage_seq: event.elapsed_ms as u32,
+                    stage_rank: rank,
+                    elapsed_ms_at_event: event.elapsed_ms,
+                    connect_ms: event.connect_ms,
+                    ttft_ms: event.ttft_ms,
+                    status_code: status_opt,
+                    terminal: false,
+                    terminal_kind: None,
+                    error: event.error.clone(),
+                    row_id: None,
+                    source: "live".into(),
+                    endpoint_kind: event.endpoint_kind,
+                },
+            );
+        }
     }
 
     if let Some(tx) = STAGE_SENDER.get() {
@@ -190,3 +222,17 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod inflight_tests {
+    use super::*;
+
+    #[test]
+    fn test_with_attempt_key() {
+        with_attempt_key("tr-123", "req-456", |k| assert_eq!(k, "tr-123"));
+        with_attempt_key("", "req-456", |k| assert_eq!(k, "req-456:unknown"));
+        let long_id = "a".repeat(120);
+        with_attempt_key("", &long_id, |k| assert_eq!(k, format!("{long_id}:unknown")));
+    }
+}
+
