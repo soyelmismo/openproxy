@@ -1,5 +1,5 @@
 use crate::{
-    ErrorPhase, FailureContext, PartialFailureParams, Pipeline, PipelineRequest, PipelineResult,
+    ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult,
     SingleExecutionParams,
 };
 use openproxy_types::combos::{Combo, ComboTarget};
@@ -392,7 +392,7 @@ impl Pipeline {
     pub(crate) fn is_client_disconnected(
         rx: &mut watch::Receiver<Option<openproxy_types::CancelReason>>,
     ) -> Option<openproxy_types::CancelReason> {
-        *rx.borrow_and_update()
+        crate::dispatcher::fail::is_client_disconnected(rx)
     }
 
     pub(crate) fn record_and_fail(
@@ -402,17 +402,7 @@ impl Pipeline {
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
-        let trace_id = if ctx.attempt > 1 {
-            {
-                let mut s = String::with_capacity(48);
-                use std::fmt::Write;
-                let _ = write!(&mut s, "{}:retry{}", req.trace_id, ctx.attempt - 1);
-                s
-            }
-        } else {
-            req.trace_id.to_string()
-        };
-        self.record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
+        self.dispatcher.record_and_fail(req, combo, target, ctx)
     }
 
     pub(crate) fn record_and_fail_with_trace_id(
@@ -423,24 +413,7 @@ impl Pipeline {
         ctx: FailureContext<'_>,
         trace_id: String,
     ) -> PipelineResult {
-        self.record_and_fail_with_trace_id_and_partial(PartialFailureParams {
-            req,
-            combo,
-            target,
-            ctx,
-            trace_id,
-            acc: None,
-            chunk_id: None,
-            created: 0,
-            model_name: "",
-        })
-    }
-
-    pub(crate) fn record_and_fail_with_trace_id_and_partial(
-        &self,
-        params: PartialFailureParams<'_>,
-    ) -> PipelineResult {
-        self.tracker
-            .record_and_fail_with_trace_id_and_partial(params)
+        self.dispatcher
+            .record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
     }
 }

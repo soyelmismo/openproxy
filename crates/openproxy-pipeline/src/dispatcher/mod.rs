@@ -8,7 +8,7 @@ use openproxy_adapters::upstream::UpstreamRequest;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-pub(super) mod fail;
+pub(crate) mod fail;
 pub(super) mod horde;
 pub(super) mod proxy;
 pub(super) mod rotation;

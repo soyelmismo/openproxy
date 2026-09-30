@@ -16,7 +16,7 @@ use tokio::sync::watch;
 
 /// Último valor publicado por el watchdog del cliente, leído sin avanzar
 /// la versión.
-pub(super) fn is_client_disconnected(
+pub(crate) fn is_client_disconnected(
     rx: &mut watch::Receiver<Option<CancelReason>>,
 ) -> Option<CancelReason> {
     *rx.borrow_and_update()
@@ -24,7 +24,7 @@ pub(super) fn is_client_disconnected(
 
 impl UpstreamDispatcher {
     /// Construye el `trace_id` con sufijo `:retry{N}` cuando `attempt > 1`.
-    pub(super) fn record_and_fail(
+    pub(crate) fn record_and_fail(
         &self,
         req: PipelineRequest,
         combo: &Combo,
@@ -44,7 +44,7 @@ impl UpstreamDispatcher {
         self.record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
     }
 
-    pub(super) fn record_and_fail_with_trace_id(
+    pub(crate) fn record_and_fail_with_trace_id(
         &self,
         req: PipelineRequest,
         combo: &Combo,
