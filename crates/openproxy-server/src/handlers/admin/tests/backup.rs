@@ -18,10 +18,36 @@ async fn test_backup_export_validate_and_restore_endpoints() {
         ),
     ));
 
-    // 1. Export unencrypted
+    // 1. Export unencrypted: rejected without the explicit opt-in (OP-16)...
     let req = Request::builder()
         .method("GET")
         .uri("/admin/api/backup/export")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // ...and the query-string passphrase is rejected with a pointer to the
+    // header (OP-05).
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/backup/export?passphrase=leaky")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let body_str = String::from_utf8_lossy(&body_bytes);
+    assert!(body_str.contains("x-backup-passphrase"), "{body_str}");
+
+    // ...but works with the explicit plaintext opt-in.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/backup/export?plaintext=confirmed")
         .header("authorization", format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
@@ -106,11 +132,13 @@ async fn test_backup_encrypted_export_and_restore() {
         ),
     ));
 
-    // 1. Export with passphrase
+    // 1. Export with passphrase — via the x-backup-passphrase header (OP-05:
+    //    the query-string form is rejected)
     let req = Request::builder()
         .method("GET")
-        .uri("/admin/api/backup/export?passphrase=secure-passphrase-123")
+        .uri("/admin/api/backup/export")
         .header("authorization", format!("Bearer {token}"))
+        .header("x-backup-passphrase", "secure-passphrase-123")
         .body(Body::empty())
         .unwrap();
 

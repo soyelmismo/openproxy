@@ -1,5 +1,6 @@
 //! Admin HTTP handlers for backup export, validation, and restore.
 
+use super::auth::AdminIdentity;
 use super::{ApiError, AppState, CoreError};
 use axum::{
     Json,
@@ -26,7 +27,13 @@ pub fn router() -> axum::Router<AppState> {
 
 #[derive(Debug, Default, Deserialize)]
 pub struct ExportQuery {
+    /// Deprecated: accepted only to return an explicit error pointing at the
+    /// header (OP-05). A passphrase in the URL leaks into access logs, shell
+    /// history and any intermediate proxy.
     pub passphrase: Option<String>,
+    /// Explicit opt-in for an UNENCRYPTED export (OP-16). Must be exactly
+    /// `confirmed`.
+    pub plaintext: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,16 +77,52 @@ fn extract_header_passphrase(headers: &HeaderMap) -> Option<String> {
 /// GET /admin/api/backup/export
 ///
 /// Exports the database state into an `openproxy-backup.json` bundle.
-/// If `?passphrase=...` is provided, encrypts the bundle with AES-256-GCM.
+/// With the `x-backup-passphrase` header, encrypts the bundle with
+/// AES-256-GCM (PBKDF2-HMAC-SHA256). An unencrypted export requires the
+/// explicit `?plaintext=confirmed` opt-in.
 pub async fn export_backup_handler(
     State(s): State<AppState>,
+    headers: HeaderMap,
     identity: super::auth::Identity,
     Query(q): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
+    // Security (OP-05): the passphrase used to travel in the query string of
+    // this GET (`?passphrase=...`), leaking into access logs of every
+    // intermediate proxy, shell history and browser history. Reject it loudly
+    // so old clients/scripts fail fast instead of silently leaking.
+    if q.passphrase.is_some() {
+        return Err(ApiError(CoreError::Validation(
+            "passphrase no longer accepted via query string: send it in the \
+             x-backup-passphrase header instead"
+                .into(),
+        )));
+    }
+
+    let passphrase = extract_header_passphrase(&headers);
+
+    // Security (OP-16): without a passphrase the export decrypts and dumps
+    // every provider credential in cleartext. Require an explicit opt-in so a
+    // compromised manage key cannot exfiltrate the whole secret store in one
+    // casual GET.
+    if passphrase.is_none() && q.plaintext.as_deref() != Some("confirmed") {
+        return Err(ApiError(CoreError::Validation(
+            "unencrypted export requires an explicit opt-in: pass \
+             ?plaintext=confirmed, or send x-backup-passphrase to encrypt"
+                .into(),
+        )));
+    }
+    if passphrase.is_none() {
+        let id = identity.as_ref().map(|axum::Extension(i)| i);
+        tracing::warn!(
+            key_id = id.and_then(AdminIdentity::key_id),
+            "backup exported WITHOUT encryption (plaintext=confirmed): the bundle \
+             contains every provider credential in cleartext"
+        );
+    }
+
     super::auth::audit_secret_read(&identity, "backup_bundle", "export");
     let pool = Arc::clone(s.db_pool());
     let master_key = Arc::clone(s.master_key());
-    let passphrase = q.passphrase;
 
     let bundle = tokio::task::spawn_blocking(move || {
         let r = pool.reader();
