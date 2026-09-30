@@ -180,7 +180,12 @@ fn warn_missing_pricing_once(provider_id: &str, upstream_model_id: &str) {
     }
 }
 
-pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {
+/// Persists a usage row and returns `(UsageId, RecentUsageRow)` so callers can release
+/// the database connection lock before broadcasting the row, eliminating lock contention (AGENTS.md §4.3).
+pub fn record_row(
+    conn: &Connection,
+    input: &UsageInput,
+) -> openproxy_types::Result<(UsageId, RecentUsageRow)> {
     let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
     if price.is_none()
         && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
@@ -230,9 +235,25 @@ pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<
         flags: input.flags,
         endpoint_kind: input.endpoint_kind,
     };
-    publish_usage_row(row);
 
-    Ok(UsageId(rowid))
+    Ok((UsageId(rowid), row))
+}
+
+#[inline]
+fn broadcast_usage_row(row: RecentUsageRow) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
+            publish_usage_row(row);
+        });
+    } else {
+        publish_usage_row(row);
+    }
+}
+
+pub fn record(conn: &Connection, input: &UsageInput) -> openproxy_types::Result<UsageId> {
+    let (usage_id, row) = record_row(conn, input)?;
+    broadcast_usage_row(row);
+    Ok(usage_id)
 }
 
 /// Hot-path wrapper around [`record`] that retries on transient
@@ -408,7 +429,7 @@ pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_typ
         ))
         && let Ok(row) = stmt.query_row(params![row_id.0], map_recent_usage_from_row)
     {
-        publish_usage_row(row);
+        broadcast_usage_row(row);
     }
     Ok(())
 }
@@ -432,7 +453,7 @@ pub fn mark_winner_usage_row(
         ))
         && let Ok(row) = stmt.query_row(params![request_id, attempt, target_id.0], map_recent_usage_from_row)
     {
-        publish_usage_row(row);
+        broadcast_usage_row(row);
     }
     Ok(())
 }
@@ -656,5 +677,17 @@ mod tests {
             .unwrap();
         assert_eq!(cr3, 1);
         assert_eq!(ww3, 1);
+    }
+
+    #[test]
+    fn test_record_row_returns_id_and_row_without_lock_contention() {
+        let pool = DbPool::test_pool_with_prefix("openproxy-cost-record-row").expect("open pool");
+        let conn = pool.writer();
+        let input = test_input(50, 150, Some(80), 800, USAGE_FLAG_CLIENT_RESPONSE);
+        let (usage_id, row) = record_row(&conn, &input).expect("record_row succeeded");
+        assert_eq!(usage_id, row.id);
+        assert_eq!(row.prompt_tokens, Some(50));
+        assert_eq!(row.completion_tokens, Some(150));
+        assert_eq!(row.ttft_ms, Some(80));
     }
 }
