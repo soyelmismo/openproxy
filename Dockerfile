@@ -10,10 +10,18 @@
 #   docker buildx build --platform linux/amd64,linux/arm64 -t openproxy .
 #
 
-FROM --platform=$BUILDPLATFORM alpine:latest AS onnx-fetcher
+# Security (OP-09): base image pinned by digest (alpine:latest at 2026-09-30).
+# Bump deliberately after reviewing the new image, not by accident on a rebuild.
+FROM --platform=$BUILDPLATFORM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS onnx-fetcher
 
 ARG TARGETARCH
 ARG ONNXRUNTIME_VERSION=1.20.1
+# Security (OP-09): expected SHA-256 of the onnxruntime release tarballs.
+# The build FAILS if the downloaded artifact does not match — a compromised
+# release or a MITM'd build can no longer inject a trojanized libonnxruntime
+# (which the gateway dlopens into its own process).
+ARG ONNXRUNTIME_SHA256_X64=67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105
+ARG ONNXRUNTIME_SHA256_AARCH64=ae4fedbdc8c18d688c01306b4b50c63de3445cdf2dbd720e01a2fa3810b8106a
 
 RUN apk add --no-cache curl tar
 
@@ -26,13 +34,14 @@ RUN apk add --no-cache curl tar
 RUN mkdir -p /container-config && printf '[server]\n# Container default: must bind all interfaces for the port mapping to work.\nbind = "0.0.0.0:8787"\nrequest_max_body_bytes = 10485760\n\n[storage]\ndatabase_path = "/var/lib/openproxy/data.db"\nencryption_key_source = "env"\n' > /container-config/config.toml
 
 RUN case "${TARGETARCH}" in \
-      amd64) ORT_ARCH="x64" ;; \
-      arm64) ORT_ARCH="aarch64" ;; \
+      amd64) ORT_ARCH="x64"; ORT_SHA256="${ONNXRUNTIME_SHA256_X64}" ;; \
+      arm64) ORT_ARCH="aarch64"; ORT_SHA256="${ONNXRUNTIME_SHA256_AARCH64}" ;; \
       *) echo "Unsupported target architecture for onnxruntime: ${TARGETARCH}"; exit 1 ;; \
     esac && \
-    mkdir -p /opt/onnxruntime && \
-    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ONNXRUNTIME_VERSION}.tgz" | \
-    tar -xz --wildcards --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
+    mkdir -p /opt/onnxruntime /tmp/ort && \
+    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ONNXRUNTIME_VERSION}.tgz" -o /tmp/ort/ort.tgz && \
+    echo "${ORT_SHA256}  /tmp/ort/ort.tgz" | sha256sum -c - && \
+    tar -xzf /tmp/ort/ort.tgz --wildcards --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
 
 FROM gcr.io/distroless/cc:nonroot AS runtime
 

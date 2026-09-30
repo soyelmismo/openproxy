@@ -114,6 +114,20 @@ curl -L -o ~/.openproxy/models/laya/tokenizer.json "$HF_BASE/tokenizer.json"
 curl -L -o ~/.openproxy/models/laya/rl_agent_config.json "$HF_BASE/rl_agent_config.json"
 ```
 
+> **Security (OP-09)**: the model is loaded and executed in-process. Always
+> verify the download before using it — fetch the current digests from the
+> repository page and check them:
+>
+> ```bash
+> cd ~/.openproxy/models/laya
+> sha256sum model.onnx tokenizer.json rl_agent_config.json
+> # compare against the digests published in the model repository
+> ```
+>
+> A mismatched or unknown model file must not be loaded: the ONNX graph is
+> trusted input (see the shape validation in `laya_bridge.c` for the output
+> tensor, which is a backstop, not a substitute for verifying the artifact).
+
 ### 3.3 Precision Tiers and CPU Latency
 
 | Precision Tier | Format | RAM / Disk | CPU Latency | Notes |
