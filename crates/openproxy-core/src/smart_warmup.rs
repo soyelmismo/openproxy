@@ -20,18 +20,31 @@ use tokio::time::sleep;
 const COOLDOWN_SECS: i64 = 14_400;
 
 fn build_warmup_request(model: &str) -> OpenAIRequest {
+    let lower = model.to_lowercase();
+    let is_gemini = lower.contains("gemini");
+
+    let (prompt, max_tokens, temperature) = if is_gemini {
+        (
+            "Write a Python function to check if a number is prime and explain how it works with a brief example.",
+            Some(256),
+            Some(0.2),
+        )
+    } else {
+        ("Say hi", None, Some(0.0))
+    };
+
     OpenAIRequest {
         model: model.to_string(),
         messages: vec![OpenAIMessage {
             role: "user".to_string(),
-            content: Some(serde_json::Value::String("Say hi".to_string())),
+            content: Some(serde_json::Value::String(prompt.to_string())),
             name: None,
             tool_call_id: None,
             tool_calls: None,
             extra: serde_json::Map::new(),
         }],
-        max_tokens: None,
-        temperature: Some(0.0),
+        max_tokens,
+        temperature,
         stream: false,
         top_p: None,
         stop: None,
@@ -255,17 +268,36 @@ async fn run_warmup_cycle(
             .await;
 
             if success {
-                let db_pool = Arc::clone(db_pool);
-                let history_key = history_key.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let conn = db_pool.writer();
-                    let _ = conn.execute(
-                        "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
-                         ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
-                        rusqlite::params![history_key, now],
-                    );
-                })
-                .await;
+                {
+                    let db_pool = Arc::clone(db_pool);
+                    let history_key = history_key.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let conn = db_pool.writer();
+                        let _ = conn.execute(
+                            "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
+                             ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
+                            rusqlite::params![history_key, now],
+                        );
+                    })
+                    .await;
+                }
+
+                // Refresh and persist quota immediately so UI shows updated quota / ticking reset timer
+                if let Some(Ok(fresh_quota)) =
+                    fetch_antigravity_quota(upstream, &acc.token, &acc.project_id).await
+                {
+                    let db_pool = Arc::clone(db_pool);
+                    let acc_id = acc.id;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        let conn = db_pool.writer();
+                        let _ = crate::accounts::set_quota(
+                            &conn,
+                            crate::ids::AccountId(acc_id),
+                            &fresh_quota,
+                        );
+                    })
+                    .await;
+                }
             }
 
             // Pausa entre modelos para no acribillar la API
@@ -312,6 +344,8 @@ async fn ping_antigravity_model(
     account_id: i64,
     account_desc: &str,
 ) -> bool {
+    let physical_model =
+        openproxy_adapters::adapters::antigravity::map_antigravity_physical_model(model);
     let request = build_warmup_request(model);
     let request_payload = serde_json::to_value(
         openproxy_adapters::adapters::gemini::openai_to_gemini(&request, &request.messages),
@@ -320,7 +354,7 @@ async fn ping_antigravity_model(
 
     let wrapped = serde_json::json!({
         "project": project_id,
-        "model": model,
+        "model": physical_model,
         "requestType": "agent",
         "requestId": uuid::Uuid::new_v4().to_string(),
         "userAgent": "antigravity",
@@ -397,45 +431,96 @@ fn is_model_quota_ready_for_warmup(
     let is_claude = lower_target.contains("claude");
     let is_gemini = lower_target.contains("gemini");
 
-    // 1. Check if there are specific model details
-    if let Some(details) = &quota.model_details {
-        let matched_detail = details
+    if is_claude
+        && let Some(details) = &quota.model_details
+    {
+        let weekly_detail = details.iter().find(|d| d.model_id == "Claude (Weekly)");
+        let session_detail = details
             .iter()
-            .find(|d| d.model_id == true_model_id)
-            .or_else(|| {
-                if is_claude {
-                    details
-                        .iter()
-                        .find(|d| d.model_id == "Claude (5h)")
-                        .or_else(|| {
-                            details
-                                .iter()
-                                .find(|d| d.model_id.to_lowercase().contains("claude"))
-                        })
-                } else if is_gemini {
-                    details
-                        .iter()
-                        .find(|d| d.model_id.to_lowercase().contains("gemini"))
-                } else {
-                    None
-                }
-            });
+            .find(|d| d.model_id == "Claude (5h)")
+            .or_else(|| details.iter().find(|d| d.model_id == true_model_id));
 
-        if let Some(detail) = matched_detail {
-            if let Some(reset_str) = &detail.session_reset_at
+        // If Claude weekly window has usage and is actively ticking in the future, it's already warmed up
+        if let Some(w) = weekly_detail
+            && w.session_used > 0
+            && let Some(reset_str) = &w.session_reset_at
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+            && dt.timestamp() > now
+        {
+            return false;
+        }
+
+        // If Claude 5h session has usage and is actively ticking in the future, skip
+        if let Some(s) = session_detail
+            && s.session_used > 0
+            && let Some(reset_str) = &s.session_reset_at
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+            && dt.timestamp() > now
+        {
+            return false;
+        }
+
+        if let Some(detail) = session_detail.or(weekly_detail) {
+            return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
+        }
+    }
+
+    if is_gemini {
+        // If Gemini weekly window already has usage and is actively ticking in the future, it's already warmed up
+        if let Some(used) = quota.weekly_used
+            && used > 0
+            && let Some(reset_str) = &quota.weekly_reset_at
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+            && dt.timestamp() > now
+        {
+            return false;
+        }
+
+        // If specific model has usage and is ticking in the future, skip
+        if let Some(details) = &quota.model_details {
+            let matched = details.iter().find(|d| d.model_id == true_model_id);
+            if let Some(d) = matched
+                && d.session_used > 0
+                && let Some(reset_str) = &d.session_reset_at
                 && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
                 && dt.timestamp() > now
             {
                 return false;
             }
-            return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
         }
+
+        // If account-level 5h session has usage and is ticking in the future, skip
+        if let Some(used) = quota.session_used
+            && used > 0
+            && let Some(reset_str) = &quota.session_reset_at
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+            && dt.timestamp() > now
+        {
+            return false;
+        }
+
+        // Gemini is ready if weekly is 0 (or not set) or session is 0
+        return quota.weekly_used.unwrap_or(0) == 0 || quota.session_used.unwrap_or(0) == 0;
     }
 
-    // 2. If no model-specific details found, fallback to account-level quota
+    // Fallback for any other provider / model:
+    if let Some(details) = &quota.model_details
+        && let Some(detail) = details.iter().find(|d| d.model_id == true_model_id)
+    {
+        if let Some(reset_str) = &detail.session_reset_at
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+            && dt.timestamp() > now
+            && detail.session_used > 0
+        {
+            return false;
+        }
+        return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
+    }
+
     if let Some(reset_str) = &quota.session_reset_at
         && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
         && dt.timestamp() > now
+        && quota.session_used.unwrap_or(0) > 0
     {
         return false;
     }
@@ -444,7 +529,7 @@ fn is_model_quota_ready_for_warmup(
 }
 
 /// Helper: maps a config string or family name (like "gemini-pro", "claude", "claude-sonnet-4-6")
-/// into the true active provider model_id (like "gemini-3.1-pro-low", "claude-sonnet-4-6")
+/// into the true active provider model_id (like "gemini-2.5-pro", "claude-sonnet-4-6")
 /// dynamically resolving against the combos and models tables.
 pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option<String> {
     // 1. Try exact lookup as combo or exact active model name
@@ -492,10 +577,16 @@ pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option
 
     if is_gemini {
         if wants_pro {
-            // Preferred for pro: newest pro-low (low cost for dummy ping)
+            // Preferred for pro: flagship Gemini 2.5 Pro or Pro High/Agent that deducts from weekly quota
             if let Some(m) = models
                 .iter()
-                .find(|m| m.contains("gemini") && m.contains("pro") && m.contains("low"))
+                .find(|m| m.contains("gemini") && m.contains("2.5") && m.contains("pro"))
+            {
+                return Some(m.clone());
+            }
+            if let Some(m) = models
+                .iter()
+                .find(|m| m.contains("gemini") && m.contains("pro") && !m.contains("low"))
             {
                 return Some(m.clone());
             }
@@ -563,29 +654,31 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> Option<Strin
 #[cfg(test)]
 mod tests {
     #[test]
-    fn warmup_request_is_minimal_openai_shape() {
-        let request = super::build_warmup_request("gemini-2.5-flash-lite");
-
-        assert_eq!(request.model, "gemini-2.5-flash-lite");
-        assert_eq!(request.messages.len(), 1);
-        assert_eq!(request.messages[0].role, "user");
+    fn warmup_request_shapes_for_claude_and_gemini() {
+        let claude = super::build_warmup_request("claude-sonnet-4-6");
+        assert_eq!(claude.model, "claude-sonnet-4-6");
         assert_eq!(
-            request.messages[0]
+            claude.messages[0]
                 .content
                 .as_ref()
                 .and_then(|v| v.as_str()),
             Some("Say hi")
         );
-        assert!(!request.stream);
-        assert_eq!(request.temperature, Some(0.0));
+        assert_eq!(claude.max_tokens, None);
+        assert_eq!(claude.temperature, Some(0.0));
+
+        let gemini = super::build_warmup_request("gemini-2.5-pro");
+        assert_eq!(gemini.model, "gemini-2.5-pro");
+        let content = gemini.messages[0]
+            .content
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(content.contains("prime"));
+        assert_eq!(gemini.max_tokens, Some(256));
+        assert_eq!(gemini.temperature, Some(0.2));
     }
 
-    /// The warmup closure uses `openproxy_pipeline::credentials::
-    /// antigravity_project_from_value`, which (post-C.4 wire-format
-    /// unification) reads snake_case `project_id`. The migration
-    /// `000065_antigravity_project_id_wire_format.sql` normalizes any
-    /// pre-existing camelCase rows at startup, so the closure does not
-    /// need to handle camelCase directly. This test pins the contract.
     #[test]
     fn smart_warmup_extract_reads_snake_case_canonical() {
         use serde_json::json;
@@ -601,71 +694,59 @@ mod tests {
         use openproxy_types::{AccountQuota, ModelQuotaDetail};
 
         let now = 1700000000;
-        let future_str = chrono::DateTime::from_timestamp(now + 3600, 0)
-            .unwrap()
-            .to_rfc3339();
-        let past_str = chrono::DateTime::from_timestamp(now - 3600, 0)
-            .unwrap()
-            .to_rfc3339();
+        let future_str = chrono::DateTime::from_timestamp(now + 3600, 0).unwrap().to_rfc3339();
+        let past_str = chrono::DateTime::from_timestamp(now - 3600, 0).unwrap().to_rfc3339();
 
-        // 1. Model with future reset is NOT ready
-        let quota_ticking = AccountQuota {
-            model_details: Some(
-                vec![ModelQuotaDetail {
-                    model_id: "claude-sonnet-4-6".to_string(),
-                    session_used: 1,
-                    session_limit: 1000,
-                    session_reset_at: Some(future_str.clone()),
-                    remaining_fraction: 0.999,
-                }]
-                .into_boxed_slice(),
-            ),
+        let detail = |id: &str, used, reset, frac| ModelQuotaDetail {
+            model_id: id.to_string(),
+            session_used: used,
+            session_limit: 1000,
+            session_reset_at: reset,
+            remaining_fraction: frac,
+        };
+
+        // 1. Claude model with future reset and usage is NOT ready
+        let claude_ticking = AccountQuota {
+            model_details: Some(vec![detail("claude-sonnet-4-6", 1, Some(future_str.clone()), 0.999)].into_boxed_slice()),
             ..AccountQuota::empty()
         };
-        assert!(!super::is_model_quota_ready_for_warmup(
-            &quota_ticking,
-            "claude-sonnet-4-6",
-            now
-        ));
+        assert!(!super::is_model_quota_ready_for_warmup(&claude_ticking, "claude-sonnet-4-6", now));
 
-        // 2. Model with expired reset and 100% capacity IS ready
-        let quota_ready = AccountQuota {
-            model_details: Some(
-                vec![ModelQuotaDetail {
-                    model_id: "claude-sonnet-4-6".to_string(),
-                    session_used: 0,
-                    session_limit: 1000,
-                    session_reset_at: Some(past_str),
-                    remaining_fraction: 1.0,
-                }]
-                .into_boxed_slice(),
-            ),
+        // 2. Claude model with expired reset and 100% capacity IS ready
+        let claude_ready = AccountQuota {
+            model_details: Some(vec![detail("claude-sonnet-4-6", 0, Some(past_str), 1.0)].into_boxed_slice()),
             ..AccountQuota::empty()
         };
-        assert!(super::is_model_quota_ready_for_warmup(
-            &quota_ready,
-            "claude-sonnet-4-6",
-            now
-        ));
+        assert!(super::is_model_quota_ready_for_warmup(&claude_ready, "claude-sonnet-4-6", now));
 
         // 3. Model matching Claude summary bucket "Claude (5h)"
-        let quota_summary_ticking = AccountQuota {
-            model_details: Some(
-                vec![ModelQuotaDetail {
-                    model_id: "Claude (5h)".to_string(),
-                    session_used: 1,
-                    session_limit: 1000,
-                    session_reset_at: Some(future_str),
-                    remaining_fraction: 0.999,
-                }]
-                .into_boxed_slice(),
-            ),
+        let claude_summary_ticking = AccountQuota {
+            model_details: Some(vec![detail("Claude (5h)", 1, Some(future_str.clone()), 0.999)].into_boxed_slice()),
             ..AccountQuota::empty()
         };
-        assert!(!super::is_model_quota_ready_for_warmup(
-            &quota_summary_ticking,
-            "claude-opus-4-6-thinking",
-            now
-        ));
+        assert!(!super::is_model_quota_ready_for_warmup(&claude_summary_ticking, "claude-opus-4-6-thinking", now));
+
+        // 4. Gemini account with 0 weekly used IS ready (kickstarts weekly countdown)
+        let gemini_ready = AccountQuota {
+            weekly_used: Some(0),
+            weekly_limit: Some(1000),
+            weekly_reset_at: Some(future_str.clone()),
+            session_used: Some(0),
+            session_limit: Some(1000),
+            session_reset_at: Some(future_str.clone()),
+            ..AccountQuota::empty()
+        };
+        assert!(super::is_model_quota_ready_for_warmup(&gemini_ready, "gemini-2.5-pro", now));
+
+        // 5. Gemini account with weekly usage already ticking is NOT ready
+        let gemini_ticking = AccountQuota {
+            weekly_used: Some(1),
+            weekly_limit: Some(1000),
+            weekly_reset_at: Some(future_str),
+            session_used: Some(1),
+            session_limit: Some(1000),
+            ..AccountQuota::empty()
+        };
+        assert!(!super::is_model_quota_ready_for_warmup(&gemini_ticking, "gemini-2.5-pro", now));
     }
 }
