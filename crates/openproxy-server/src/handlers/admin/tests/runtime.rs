@@ -83,6 +83,7 @@ async fn put_runtime_timeouts_malformed_body_returns_400() {
 }
 
 #[tokio::test]
+#[cfg(feature = "dev-auth-bypass")]
 async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
     let tmp = tempdir();
     let (state, _key) = make_state_with_key(tmp.path()).await;
@@ -102,6 +103,32 @@ async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
         result.is_ok(),
         "authenticate_admin_ws should succeed when bypass=1 is set, got {:?}",
         result.err()
+    );
+}
+
+#[tokio::test]
+#[cfg(not(feature = "dev-auth-bypass"))]
+async fn auth_bypass_unavailable_without_the_explicit_feature() {
+    // OP-20: plain builds (debug included) must not compile the bypass in at
+    // all — OPENPROXY_DASHBOARD_AUTH_BYPASS=1 no longer disables admin auth
+    // unless the binary was explicitly built with --features dev-auth-bypass.
+    let tmp = tempdir();
+    let (state, _key) = make_state_with_key(tmp.path()).await;
+    {
+        let w = state.db_pool().writer();
+        w.execute("DELETE FROM api_keys", []).expect("delete keys");
+    }
+    let headers = HeaderMap::new();
+    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+    let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
+    let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        authenticate_admin_ws(&state, &headers, None, Some(&addr))
+    }));
+    let result = result.expect("authenticate_admin_ws should not panic");
+    assert!(
+        result.is_err(),
+        "bypass=1 must NOT disable auth in builds without the dev-auth-bypass feature"
     );
 }
 
