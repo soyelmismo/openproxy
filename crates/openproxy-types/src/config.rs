@@ -266,11 +266,7 @@ fn default_smart_warmup_interval() -> u64 {
 }
 
 fn default_smart_warmup_models() -> Box<[String]> {
-    vec![
-        "gemini-3.5-flash-extra-low".to_string(),
-        "claude-sonnet-4-6".to_string(),
-    ]
-    .into_boxed_slice()
+    vec!["gemini-pro".to_string(), "claude".to_string()].into_boxed_slice()
 }
 
 impl Default for SmartWarmupConfig {

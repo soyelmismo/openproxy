@@ -180,22 +180,13 @@ async fn run_warmup_cycle(
             .await;
         }
 
-        let is_100_percent = matches!(
-            (quota.session_used, quota.session_limit),
-            (Some(0), Some(limit)) if limit > 0
-        );
-
-        if !is_100_percent {
-            continue;
-        }
-
         for model_alias in models_to_ping {
             let true_model_id = {
                 let db_pool = Arc::clone(db_pool);
                 let alias = model_alias.to_owned();
                 tokio::task::spawn_blocking(move || {
                     let conn = db_pool.reader();
-                    resolve_model_alias(&conn, &alias)
+                    resolve_warmup_target(&conn, &alias)
                 })
                 .await
                 .unwrap_or(None)
@@ -204,6 +195,19 @@ async fn run_warmup_cycle(
             let Some(true_model_id) = true_model_id else {
                 continue;
             };
+
+            if !is_model_quota_ready_for_warmup(&quota, &true_model_id, now) {
+                tracing::debug!(
+                    provider = "antigravity",
+                    account_id = acc.id,
+                    model = %true_model_id,
+                    alias = %model_alias,
+                    "[SmartWarmup] Skipping model '{}' on account {}: quota is not full or window is already ticking",
+                    true_model_id,
+                    acc.account_desc
+                );
+                continue;
+            }
 
             let history_key = format!("{}:{true_model_id}", acc.id);
 
@@ -384,6 +388,140 @@ async fn ping_antigravity_model(
     }
 }
 
+fn is_model_quota_ready_for_warmup(
+    quota: &openproxy_types::AccountQuota,
+    true_model_id: &str,
+    now: i64,
+) -> bool {
+    let lower_target = true_model_id.to_lowercase();
+    let is_claude = lower_target.contains("claude");
+    let is_gemini = lower_target.contains("gemini");
+
+    // 1. Check if there are specific model details
+    if let Some(details) = &quota.model_details {
+        let matched_detail = details
+            .iter()
+            .find(|d| d.model_id == true_model_id)
+            .or_else(|| {
+                if is_claude {
+                    details
+                        .iter()
+                        .find(|d| d.model_id == "Claude (5h)")
+                        .or_else(|| {
+                            details
+                                .iter()
+                                .find(|d| d.model_id.to_lowercase().contains("claude"))
+                        })
+                } else if is_gemini {
+                    details
+                        .iter()
+                        .find(|d| d.model_id.to_lowercase().contains("gemini"))
+                } else {
+                    None
+                }
+            });
+
+        if let Some(detail) = matched_detail {
+            if let Some(reset_str) = &detail.session_reset_at
+                && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+                && dt.timestamp() > now
+            {
+                return false;
+            }
+            return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
+        }
+    }
+
+    // 2. If no model-specific details found, fallback to account-level quota
+    if let Some(reset_str) = &quota.session_reset_at
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
+        && dt.timestamp() > now
+    {
+        return false;
+    }
+
+    quota.session_used == Some(0)
+}
+
+/// Helper: maps a config string or family name (like "gemini-pro", "claude", "claude-sonnet-4-6")
+/// into the true active provider model_id (like "gemini-3.1-pro-low", "claude-sonnet-4-6")
+/// dynamically resolving against the combos and models tables.
+pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option<String> {
+    // 1. Try exact lookup as combo or exact active model name
+    if let Some(exact) = resolve_model_alias(conn, alias) {
+        return Some(exact);
+    }
+
+    let lower = alias.to_lowercase();
+    let is_claude = lower.contains("claude");
+    let is_gemini = lower.contains("gemini");
+    let wants_pro = lower.contains("pro");
+
+    if !is_claude && !is_gemini {
+        return None;
+    }
+
+    // 2. Dynamic resolution against active models for Antigravity, ordered DESC for newest versions
+    let mut stmt = conn
+        .prepare(
+            "SELECT model_id FROM models \
+             WHERE provider_id = 'antigravity' AND active = 1 \
+             ORDER BY model_id DESC",
+        )
+        .ok()?;
+
+    let models: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if is_claude {
+        // Preferred: newest Claude Sonnet
+        if let Some(m) = models
+            .iter()
+            .find(|m| m.contains("claude") && m.contains("sonnet"))
+        {
+            return Some(m.clone());
+        }
+        // Fallback: any newest Claude model (e.g. opus)
+        if let Some(m) = models.iter().find(|m| m.contains("claude")) {
+            return Some(m.clone());
+        }
+    }
+
+    if is_gemini {
+        if wants_pro {
+            // Preferred for pro: newest pro-low (low cost for dummy ping)
+            if let Some(m) = models
+                .iter()
+                .find(|m| m.contains("gemini") && m.contains("pro") && m.contains("low"))
+            {
+                return Some(m.clone());
+            }
+            // Fallback: any newest pro
+            if let Some(m) = models
+                .iter()
+                .find(|m| m.contains("gemini") && m.contains("pro"))
+            {
+                return Some(m.clone());
+            }
+        }
+        // Fallback for flash / generic: newest flash-low or flash
+        if let Some(m) = models
+            .iter()
+            .find(|m| m.contains("gemini") && m.contains("flash") && m.contains("low"))
+        {
+            return Some(m.clone());
+        }
+        if let Some(m) = models.iter().find(|m| m.contains("gemini")) {
+            return Some(m.clone());
+        }
+    }
+
+    None
+}
+
 /// Helper: maps a config string (like "gpt-oss-120b-medium") into the true provider model_id
 /// (like "gemini-3.1-pro-low") by resolving it against the `combos` and `models` tables.
 /// If it can't find a combo or model, it assumes the string itself is the target.
@@ -456,5 +594,69 @@ mod tests {
             openproxy_pipeline::credentials::antigravity_project_from_value(&v),
             Some("canonical".to_string())
         );
+    }
+
+    #[test]
+    fn test_is_model_quota_ready_for_warmup() {
+        use openproxy_types::{AccountQuota, ModelQuotaDetail};
+
+        let now = 1700000000;
+        let future_str = chrono::DateTime::from_timestamp(now + 3600, 0)
+            .unwrap()
+            .to_rfc3339();
+        let past_str = chrono::DateTime::from_timestamp(now - 3600, 0)
+            .unwrap()
+            .to_rfc3339();
+
+        // 1. Model with future reset is NOT ready
+        let quota_ticking = AccountQuota {
+            model_details: Some(vec![ModelQuotaDetail {
+                model_id: "claude-sonnet-4-6".to_string(),
+                session_used: 1,
+                session_limit: 1000,
+                session_reset_at: Some(future_str.clone()),
+                remaining_fraction: 0.999,
+            }].into_boxed_slice()),
+            ..AccountQuota::empty()
+        };
+        assert!(!super::is_model_quota_ready_for_warmup(
+            &quota_ticking,
+            "claude-sonnet-4-6",
+            now
+        ));
+
+        // 2. Model with expired reset and 100% capacity IS ready
+        let quota_ready = AccountQuota {
+            model_details: Some(vec![ModelQuotaDetail {
+                model_id: "claude-sonnet-4-6".to_string(),
+                session_used: 0,
+                session_limit: 1000,
+                session_reset_at: Some(past_str),
+                remaining_fraction: 1.0,
+            }].into_boxed_slice()),
+            ..AccountQuota::empty()
+        };
+        assert!(super::is_model_quota_ready_for_warmup(
+            &quota_ready,
+            "claude-sonnet-4-6",
+            now
+        ));
+
+        // 3. Model matching Claude summary bucket "Claude (5h)"
+        let quota_summary_ticking = AccountQuota {
+            model_details: Some(vec![ModelQuotaDetail {
+                model_id: "Claude (5h)".to_string(),
+                session_used: 1,
+                session_limit: 1000,
+                session_reset_at: Some(future_str),
+                remaining_fraction: 0.999,
+            }].into_boxed_slice()),
+            ..AccountQuota::empty()
+        };
+        assert!(!super::is_model_quota_ready_for_warmup(
+            &quota_summary_ticking,
+            "claude-opus-4-6-thinking",
+            now
+        ));
     }
 }

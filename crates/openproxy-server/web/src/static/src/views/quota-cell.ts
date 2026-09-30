@@ -218,16 +218,35 @@ export function renderQuotaCell(a: Account): TemplateResult {
   const sessionText = getQuotaText(a.quota_session_used, a.quota_session_limit);
   const weeklyText = getQuotaText(a.quota_weekly_used, a.quota_weekly_limit);
 
+  const isAntigravity = a.provider_id === "antigravity";
+
   const monthlyDetail = a.quota_model_details?.find(
     (d) => d.model_id === "Monthly Limit" || d.model_id === "Monthly Window"
   );
   const reserveDetail = a.quota_model_details?.find(
     (d) => d.model_id.toLowerCase().includes("reserve") || d.model_id.toLowerCase().includes("luna")
   );
+  const claudeWeeklyDetail = isAntigravity
+    ? a.quota_model_details?.find(
+        (d) => d.model_id === "Claude (Weekly)" || d.model_id === "Claude Weekly Window"
+      )
+    : undefined;
+  const claude5hDetail = isAntigravity
+    ? a.quota_model_details?.find(
+        (d) => d.model_id === "Claude (5h)" || d.model_id === "Claude 5h Window"
+      ) || a.quota_model_details?.find(
+        (d) => d.model_id.startsWith("claude-sonnet") || d.model_id.startsWith("claude-opus")
+      )
+    : undefined;
+
   const otherModels = a.quota_model_details?.filter(
     (d) =>
       d.model_id !== "Monthly Limit" &&
       d.model_id !== "Monthly Window" &&
+      d.model_id !== "Claude (5h)" &&
+      d.model_id !== "Claude 5h Window" &&
+      d.model_id !== "Claude (Weekly)" &&
+      d.model_id !== "Claude Weekly Window" &&
       !d.model_id.toLowerCase().includes("reserve") &&
       !d.model_id.toLowerCase().includes("luna")
   );
@@ -236,9 +255,26 @@ export function renderQuotaCell(a: Account): TemplateResult {
     ? Math.round(monthlyDetail.session_used / monthlyDetail.session_limit * 100) : null;
   const monthlyColor = getQuotaColor(monthlyPct);
   const monthlyText = monthlyDetail ? getQuotaText(monthlyDetail.session_used, monthlyDetail.session_limit) : "";
-  const sessionLabel = (a.provider_id === "claude" || a.provider_id === "anthropic")
-    ? "5h Window"
-    : (a.provider_id === "codebuddy" ? "Credits" : "Session Window");
+
+  const claude5hPct = (claude5hDetail && claude5hDetail.session_limit > 0 && claude5hDetail.session_used != null)
+    ? Math.round(claude5hDetail.session_used / claude5hDetail.session_limit * 100) : null;
+  const claude5hColor = getQuotaColor(claude5hPct);
+  const claude5hText = claude5hDetail ? getQuotaText(claude5hDetail.session_used, claude5hDetail.session_limit) : "";
+
+  const claudeWeeklyPct = (claudeWeeklyDetail && claudeWeeklyDetail.session_limit > 0 && claudeWeeklyDetail.session_used != null)
+    ? Math.round(claudeWeeklyDetail.session_used / claudeWeeklyDetail.session_limit * 100) : null;
+  const claudeWeeklyColor = getQuotaColor(claudeWeeklyPct);
+  const claudeWeeklyText = claudeWeeklyDetail ? getQuotaText(claudeWeeklyDetail.session_used, claudeWeeklyDetail.session_limit) : "";
+
+  const sessionLabel = isAntigravity
+    ? "Gemini 5h Window"
+    : (a.provider_id === "claude" || a.provider_id === "anthropic")
+      ? "5h Window"
+      : (a.provider_id === "codebuddy" ? "Credits" : "Session Window");
+
+  const weeklyLabel = isAntigravity
+    ? "Gemini Weekly Window"
+    : "Weekly Window";
 
   return html`<div class="quota-cell">
     <div class="quota-plan-row">
@@ -256,11 +292,31 @@ export function renderQuotaCell(a: Account): TemplateResult {
     ${(a.quota_weekly_used != null || a.quota_weekly_limit != null) ? html`
     <div class="quota-bar ${weeklyColor}">
       <div class="quota-bar-header">
-        <span class="quota-bar-label-left">Weekly Window</span>
+        <span class="quota-bar-label-left">${weeklyLabel}</span>
         <span class="quota-bar-label-right">${weeklyText}${resetHint(a.quota_weekly_reset_at)}</span>
       </div>
       <div class="quota-bar-track">
         <div class="quota-bar-fill" style="width: ${weeklyPct == null ? 0 : Math.min(100, weeklyPct)}%"></div>
+      </div>
+    </div>` : null}
+    ${claude5hDetail ? html`
+    <div class="quota-bar ${claude5hColor}">
+      <div class="quota-bar-header">
+        <span class="quota-bar-label-left">Claude 5h Window</span>
+        <span class="quota-bar-label-right">${claude5hText}${resetHint(claude5hDetail.session_reset_at)}</span>
+      </div>
+      <div class="quota-bar-track">
+        <div class="quota-bar-fill" style="width: ${claude5hPct == null ? 0 : Math.min(100, claude5hPct)}%"></div>
+      </div>
+    </div>` : null}
+    ${claudeWeeklyDetail ? html`
+    <div class="quota-bar ${claudeWeeklyColor}">
+      <div class="quota-bar-header">
+        <span class="quota-bar-label-left">Claude Weekly Window</span>
+        <span class="quota-bar-label-right">${claudeWeeklyText}${resetHint(claudeWeeklyDetail.session_reset_at)}</span>
+      </div>
+      <div class="quota-bar-track">
+        <div class="quota-bar-fill" style="width: ${claudeWeeklyPct == null ? 0 : Math.min(100, claudeWeeklyPct)}%"></div>
       </div>
     </div>` : null}
     ${monthlyDetail ? html`

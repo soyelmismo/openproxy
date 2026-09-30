@@ -65,12 +65,28 @@ pub(crate) fn merge_summary_into_models_quota(
             .weekly_reset_at
             .clone_from(&summary_quota.weekly_reset_at);
     }
-    if models_quota.session_used.is_none() && summary_quota.session_used.is_some() {
+    if summary_quota.session_used.is_some() {
         models_quota.session_used = summary_quota.session_used;
         models_quota.session_limit = summary_quota.session_limit;
         models_quota
             .session_reset_at
             .clone_from(&summary_quota.session_reset_at);
+    }
+    if let Some(summary_details) = &summary_quota.model_details {
+        let mut combined = models_quota
+            .model_details
+            .take()
+            .map(|b| b.into_vec())
+            .unwrap_or_default();
+
+        for s_detail in summary_details {
+            if let Some(pos) = combined.iter().position(|m| m.model_id == s_detail.model_id) {
+                combined[pos] = s_detail.clone();
+            } else {
+                combined.push(s_detail.clone());
+            }
+        }
+        models_quota.model_details = Some(combined.into_boxed_slice());
     }
 }
 
@@ -214,10 +230,12 @@ pub fn parse_antigravity_models_response(
 }
 
 pub(crate) struct AntigravityQuotaBucket {
-    pub(crate) plan_name: Option<String>,
+    pub(crate) group_name: Option<String>,
+    pub(crate) bucket_id: Option<String>,
     pub(crate) is_weekly: bool,
     pub(crate) used: i64,
     pub(crate) reset_at: Option<String>,
+    pub(crate) remaining_fraction: f64,
 }
 
 pub(crate) fn parse_quota_bucket(
@@ -229,17 +247,25 @@ pub(crate) fn parse_quota_bucket(
         .and_then(|r| r.as_str())
         .map(String::from);
     let window = bucket.get("window").and_then(|w| w.as_str()).unwrap_or("");
+    let bucket_id = bucket
+        .get("bucketId")
+        .and_then(|b| b.as_str())
+        .map(String::from);
     let raw_fraction = bucket
         .get("remainingFraction")
         .and_then(serde_json::Value::as_f64);
     let (used, _) = normalize_quota_fraction(reset_time.as_deref(), raw_fraction);
+    let remaining_fraction =
+        raw_fraction.unwrap_or_else(|| if reset_time.is_some() { 0.0 } else { 1.0 });
     let is_weekly = window.to_uppercase().contains("WEEK") || window.eq_ignore_ascii_case("WEEKLY");
 
     AntigravityQuotaBucket {
-        plan_name: group_plan.map(std::string::ToString::to_string),
+        group_name: group_plan.map(std::string::ToString::to_string),
+        bucket_id,
         is_weekly,
         used,
         reset_at: reset_time,
+        remaining_fraction,
     }
 }
 
@@ -276,24 +302,46 @@ pub fn parse_antigravity_user_quota_summary(
     let mut session_limit = None;
     let mut session_reset_at = None;
     let mut plan_name = None;
+    let mut claude_details = Vec::new();
 
     for bucket in extract_quota_buckets(groups) {
-        if bucket.is_weekly {
+        let is_claude = bucket.group_name.as_deref().is_some_and(|g| {
+            let lower = g.to_lowercase();
+            lower.contains("claude") || lower.contains("3p")
+        }) || bucket.bucket_id.as_deref().is_some_and(|b| {
+            let lower = b.to_lowercase();
+            lower.starts_with("3p") || lower.starts_with("claude")
+        });
+
+        if is_claude {
+            let model_id = if bucket.is_weekly {
+                "Claude (Weekly)".to_string()
+            } else {
+                "Claude (5h)".to_string()
+            };
+            claude_details.push(openproxy_types::ModelQuotaDetail {
+                model_id,
+                session_used: bucket.used,
+                session_limit: NORMALIZED_BASE,
+                session_reset_at: bucket.reset_at,
+                remaining_fraction: bucket.remaining_fraction,
+            });
+        } else if bucket.is_weekly {
             if weekly_used.is_none() {
                 weekly_used = Some(bucket.used);
                 weekly_limit = Some(NORMALIZED_BASE);
                 weekly_reset_at = bucket.reset_at;
-                plan_name = plan_name.or(bucket.plan_name);
+                plan_name = plan_name.or(bucket.group_name);
             }
         } else if session_used.is_none() {
             session_used = Some(bucket.used);
             session_limit = Some(NORMALIZED_BASE);
             session_reset_at = bucket.reset_at;
-            plan_name = plan_name.or(bucket.plan_name);
+            plan_name = plan_name.or(bucket.group_name);
         }
     }
 
-    if weekly_used.is_none() && session_used.is_none() {
+    if weekly_used.is_none() && session_used.is_none() && claude_details.is_empty() {
         return Err(CoreError::Internal(
             "retrieveUserQuotaSummary: no usable buckets found".into(),
         ));
@@ -309,7 +357,11 @@ pub fn parse_antigravity_user_quota_summary(
         plan_name: Some(plan_name.unwrap_or_else(|| "Antigravity".to_string())),
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
-        model_details: None,
+        model_details: if claude_details.is_empty() {
+            None
+        } else {
+            Some(claude_details.into_boxed_slice())
+        },
     })
 }
 
