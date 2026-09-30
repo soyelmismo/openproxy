@@ -68,9 +68,28 @@ pub async fn list_providers(
     let adapters = s.adapters();
     let enriched = list
         .into_iter()
-        .map(|p| enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r))
+        .map(|mut p| {
+            redact_extra_headers(&mut p);
+            enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r)
+        })
         .collect();
     Ok(Json(enriched))
+}
+
+/// Security (OP-07): `extra_headers_json` is the documented mechanism for
+/// passing upstream credentials in custom providers (notably with
+/// `auth_type: none`). Mask it in read responses; the plaintext must not be
+/// disclosed without an audited, dedicated reveal path. A PATCH echoing the
+/// sentinel back keeps the stored value (see `core_admin::update_provider`).
+fn redact_extra_headers(provider: &mut core_providers::Provider) {
+    if provider
+        .extra_headers_json
+        .as_deref()
+        .is_some_and(|h| !h.trim().is_empty())
+    {
+        provider.extra_headers_json =
+            Some(openproxy_core::admin::REDACTED_EXTRA_HEADERS_SENTINEL.into());
+    }
 }
 
 /// Run a sync SQLite write against `db_pool` off the async runtime worker, then
@@ -149,8 +168,10 @@ pub async fn get_provider(
     // Read-only SELECT — use the READER.
     let r = s.db_pool().reader();
     let id = ProviderId::new(id);
-    let provider =
+    let mut provider =
         core_providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+    // OP-07: same redaction as the list endpoint.
+    redact_extra_headers(&mut provider);
     let registry = s.oauth_provider_registry();
     let adapters = s.adapters();
     let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);

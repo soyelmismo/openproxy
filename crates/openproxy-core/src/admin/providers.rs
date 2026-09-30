@@ -209,6 +209,13 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
     }
 }
 
+/// Sentinel returned by the admin list/get provider endpoints in place of
+/// `extra_headers_json` (OP-07: that field carries upstream credentials for
+/// custom providers and must not be disclosed read-only). A PATCH that echoes
+/// the sentinel back is treated as "keep the stored value" so a
+/// GET → edit unrelated field → PATCH roundtrip never wipes the credentials.
+pub const REDACTED_EXTRA_HEADERS_SENTINEL: &str = "***redacted***";
+
 /// Apply a partial update to an existing provider.
 pub fn update_provider(
     conn: &Connection,
@@ -220,7 +227,19 @@ pub fn update_provider(
         validate_base_url(url)?;
     }
     let keyword = input.auto_activate_keyword.as_ref().map(|o| o.as_deref());
-    let extra_headers = input.extra_headers_json.as_ref().map(|o| o.as_deref());
+    // OP-07: an update echoing the redaction sentinel back (SPA edit forms
+    // re-submit the object they got from GET) means "keep the stored value".
+    let extra_headers = input
+        .extra_headers_json
+        .as_ref()
+        .map(|o| o.as_deref())
+        .map(|opt| {
+            if opt == Some(REDACTED_EXTRA_HEADERS_SENTINEL) {
+                None
+            } else {
+                opt
+            }
+        });
     providers::update(
         conn,
         id,
