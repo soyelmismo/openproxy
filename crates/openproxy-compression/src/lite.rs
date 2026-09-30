@@ -150,27 +150,13 @@ pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<&'static str> {
 const MAX_TOOL_CHARS: usize = 2000;
 
 fn truncate_tool_text(text: &str) -> Option<String> {
-    let mut cut_byte = None;
-    let mut total_chars = 0;
-    for (i, _) in text.char_indices() {
+    for (total_chars, (i, _)) in text.char_indices().enumerate() {
         if total_chars == MAX_TOOL_CHARS {
-            cut_byte = Some(i);
+            let remaining = text[i..].chars().count();
+            return Some(format!("{}…[truncated {} chars]", &text[..i], remaining));
         }
-        total_chars += 1;
     }
-    if total_chars > MAX_TOOL_CHARS {
-        let mut cut = cut_byte.unwrap_or(text.len());
-        if !text.is_char_boundary(cut) {
-            cut = text.len();
-        }
-        Some(format!(
-            "{}…[truncated {} chars]",
-            &text[..cut],
-            total_chars - MAX_TOOL_CHARS
-        ))
-    } else {
-        None
-    }
+    None
 }
 
 pub fn compress_tool_results(msgs: &mut Messages) -> Vec<&'static str> {
