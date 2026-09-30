@@ -25,8 +25,8 @@ fn build_warmup_request(model: &str) -> OpenAIRequest {
 
     let (prompt, max_tokens, temperature) = if is_gemini {
         (
-            "Write a Python function to check if a number is prime and explain how it works with a brief example.",
-            Some(256),
+            "Write a complete, detailed Python module with functions to compute Fibonacci numbers, check for prime numbers, and calculate the greatest common divisor using Euclidean algorithm. Include docstrings, type annotations, and full unit tests for all functions.",
+            Some(1024),
             Some(0.2),
         )
     } else {
@@ -446,6 +446,12 @@ async fn ping_antigravity_model(
     false
 }
 
+fn is_future_reset(reset_str: Option<&str>, now: i64) -> bool {
+    reset_str
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .is_some_and(|dt| dt.timestamp() > now)
+}
+
 fn is_model_quota_ready_for_warmup(
     quota: &openproxy_types::AccountQuota,
     true_model_id: &str,
@@ -464,22 +470,16 @@ fn is_model_quota_ready_for_warmup(
             .find(|d| d.model_id == "Claude (5h)")
             .or_else(|| details.iter().find(|d| d.model_id == true_model_id));
 
-        // If Claude weekly window has usage and is actively ticking in the future, it's already warmed up
         if let Some(w) = weekly_detail
             && w.session_used > 0
-            && let Some(reset_str) = &w.session_reset_at
-            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-            && dt.timestamp() > now
+            && is_future_reset(w.session_reset_at.as_deref(), now)
         {
             return false;
         }
 
-        // If Claude 5h session has usage and is actively ticking in the future, skip
         if let Some(s) = session_detail
             && s.session_used > 0
-            && let Some(reset_str) = &s.session_reset_at
-            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-            && dt.timestamp() > now
+            && is_future_reset(s.session_reset_at.as_deref(), now)
         {
             return false;
         }
@@ -490,62 +490,48 @@ fn is_model_quota_ready_for_warmup(
     }
 
     if is_gemini {
-        // If Gemini weekly window already has usage and is actively ticking in the future, it's already warmed up
         if let Some(used) = quota.weekly_used
             && used > 0
-            && let Some(reset_str) = &quota.weekly_reset_at
-            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-            && dt.timestamp() > now
+            && is_future_reset(quota.weekly_reset_at.as_deref(), now)
         {
             return false;
         }
 
-        // If specific model has usage and is ticking in the future, skip
+        if let Some(used) = quota.weekly_used {
+            return used == 0;
+        }
+
         if let Some(details) = &quota.model_details {
             let matched = details.iter().find(|d| d.model_id == true_model_id);
             if let Some(d) = matched
                 && d.session_used > 0
-                && let Some(reset_str) = &d.session_reset_at
-                && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-                && dt.timestamp() > now
+                && is_future_reset(d.session_reset_at.as_deref(), now)
             {
                 return false;
             }
         }
 
-        // If account-level 5h session has usage and is ticking in the future, skip
         if let Some(used) = quota.session_used
             && used > 0
-            && let Some(reset_str) = &quota.session_reset_at
-            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-            && dt.timestamp() > now
+            && is_future_reset(quota.session_reset_at.as_deref(), now)
         {
             return false;
         }
 
-        // Gemini is ready if weekly is 0 (or not set) or session is 0
-        return quota.weekly_used.unwrap_or(0) == 0 || quota.session_used.unwrap_or(0) == 0;
+        return quota.session_used.unwrap_or(0) == 0;
     }
 
     // Fallback for any other provider / model:
     if let Some(details) = &quota.model_details
         && let Some(detail) = details.iter().find(|d| d.model_id == true_model_id)
     {
-        if let Some(reset_str) = &detail.session_reset_at
-            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-            && dt.timestamp() > now
-            && detail.session_used > 0
-        {
+        if detail.session_used > 0 && is_future_reset(detail.session_reset_at.as_deref(), now) {
             return false;
         }
         return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
     }
 
-    if let Some(reset_str) = &quota.session_reset_at
-        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(reset_str)
-        && dt.timestamp() > now
-        && quota.session_used.unwrap_or(0) > 0
-    {
+    if quota.session_used.unwrap_or(0) > 0 && is_future_reset(quota.session_reset_at.as_deref(), now) {
         return false;
     }
 
@@ -601,16 +587,17 @@ pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option
 
     if is_gemini {
         if wants_pro {
-            // Preferred for pro: flagship Gemini 2.5 Pro or Pro High/Agent that deducts from weekly quota
+            // Preferred for pro: active flagship agentic Gemini Pro (gemini-3.1-pro-high / gemini-pro-agent)
+            // Note: gemini-2.5-pro is capacity-exhausted (503/429) on Google Cloud Code.
             if let Some(m) = models
                 .iter()
-                .find(|m| m.contains("gemini") && m.contains("2.5") && m.contains("pro"))
+                .find(|m| m.contains("gemini") && m.contains("pro") && (m.contains("high") || m.contains("agent")))
             {
                 return Some(m.clone());
             }
             if let Some(m) = models
                 .iter()
-                .find(|m| m.contains("gemini") && m.contains("pro") && !m.contains("low"))
+                .find(|m| m.contains("gemini") && m.contains("pro") && !m.contains("low") && !m.contains("2.5"))
             {
                 return Some(m.clone());
             }
@@ -691,15 +678,15 @@ mod tests {
         assert_eq!(claude.max_tokens, None);
         assert_eq!(claude.temperature, Some(0.0));
 
-        let gemini = super::build_warmup_request("gemini-2.5-pro");
-        assert_eq!(gemini.model, "gemini-2.5-pro");
+        let gemini = super::build_warmup_request("gemini-pro-agent");
+        assert_eq!(gemini.model, "gemini-pro-agent");
         let content = gemini.messages[0]
             .content
             .as_ref()
             .and_then(|v| v.as_str())
             .unwrap();
-        assert!(content.contains("prime"));
-        assert_eq!(gemini.max_tokens, Some(256));
+        assert!(content.contains("Fibonacci"));
+        assert_eq!(gemini.max_tokens, Some(1024));
         assert_eq!(gemini.temperature, Some(0.2));
     }
 
