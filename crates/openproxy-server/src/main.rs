@@ -204,11 +204,11 @@ fn main() -> anyhow::Result<()> {
             Err(e) => anyhow::bail!("healthcheck: cannot connect to {addr}: {e}"),
         }
     } else {
-        run_main().await
+        run_main()
     }
 }
 
-async fn run_main() -> anyhow::Result<()> {
+fn run_main() -> anyhow::Result<()> {
     // 0. Programmatic allocator configuration: tune mimalloc before telemetry,
     //    the Tokio runtime, or any DB connection exists.
     configure_allocator();
