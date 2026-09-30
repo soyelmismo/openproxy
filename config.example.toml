@@ -4,7 +4,12 @@
 [server]
 bind = "127.0.0.1:8787"
 request_max_body_bytes = 33554432  # enforced request body limit (default 32 MiB)
-# trusted_proxies = ["127.0.0.1", "::1"]  # Optional: trusted proxy IPs/CIDRs to resolve X-Forwarded-For / X-Real-IP (loopbacks trusted by default)
+# Trusted proxy IPs/CIDRs authorised to set X-Forwarded-For / X-Real-IP /
+# RFC 7239 Forwarded. Loopback is NOT trusted by default (security: if you
+# run openproxy behind nginx on 127.0.0.1 you MUST list 127.0.0.1 / ::1 here
+# or per-IP rate limits and the admin-auth throttle will key on the TCP peer
+# IP — i.e. all clients will share the proxy's IP bucket).
+# trusted_proxies = ["127.0.0.1", "::1"]
 
 [storage]
 database_path = "~/.openproxy/data.db"

@@ -48,11 +48,14 @@ pub fn is_ip_in_cidr(ip: IpAddr, cidr: &str) -> bool {
 
 /// Check if a peer IP address is trusted to forward client IP headers.
 ///
-/// Loopback addresses (`127.0.0.0/8` and `::1`) are always trusted.
+/// Security: loopback addresses (`127.0.0.0/8` and `::1`) are NOT trusted
+/// by default. An operator who runs openproxy behind a reverse proxy on
+/// the same host (the common nginx-on-127.0.0.1 deployment) MUST list the
+/// proxy's IP in `server.trusted_proxies` (e.g. `["127.0.0.1", "::1"]`).
+/// This closes the per-IP rate-limit / admin-auth-throttle bypass in which
+/// any local user could spoof `X-Forwarded-For` / `X-Real-IP` and evade
+/// per-IP buckets.
 pub fn is_trusted_proxy(ip: IpAddr, trusted_proxies: &[String]) -> bool {
-    if ip.is_loopback() {
-        return true;
-    }
     trusted_proxies.iter().any(|entry| is_ip_in_cidr(ip, entry))
 }
 
@@ -176,11 +179,21 @@ mod tests {
         let local_v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
         let public_ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
 
+        // Security: loopback is NOT trusted by default. Operators who want
+        // X-Forwarded-For / X-Real-IP honored must explicitly list the
+        // proxy's IP in `server.trusted_proxies`.
         let empty_trusted: Vec<String> = Vec::new();
-        assert!(is_trusted_proxy(local_v4, &empty_trusted));
-        assert!(is_trusted_proxy(local_v4_alias, &empty_trusted));
-        assert!(is_trusted_proxy(local_v6, &empty_trusted));
+        assert!(!is_trusted_proxy(local_v4, &empty_trusted));
+        assert!(!is_trusted_proxy(local_v4_alias, &empty_trusted));
+        assert!(!is_trusted_proxy(local_v6, &empty_trusted));
         assert!(!is_trusted_proxy(public_ip, &empty_trusted));
+
+        // Explicit opt-in: list loopback (or any CIDR) and it is trusted.
+        let loopback_trusted = vec!["127.0.0.0/8".to_string(), "::1".to_string()];
+        assert!(is_trusted_proxy(local_v4, &loopback_trusted));
+        assert!(is_trusted_proxy(local_v4_alias, &loopback_trusted));
+        assert!(is_trusted_proxy(local_v6, &loopback_trusted));
+        assert!(!is_trusted_proxy(public_ip, &loopback_trusted));
 
         let custom_trusted = vec!["203.0.113.0/24".to_string()];
         assert!(is_trusted_proxy(public_ip, &custom_trusted));
@@ -222,7 +235,8 @@ mod tests {
         );
 
         let peer = "127.0.0.253:8787".parse::<SocketAddr>().unwrap();
-        let trusted: Vec<String> = Vec::new();
+        // Security: nginx-on-loopback deployment requires explicit opt-in.
+        let trusted = vec!["127.0.0.0/8".to_string()];
 
         let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))));
@@ -255,7 +269,8 @@ mod tests {
             "1.2.3.4, 198.51.100.42".parse().unwrap(),
         );
         let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
-        let trusted: Vec<String> = Vec::new();
+        // Explicit opt-in: 127.0.0.0/8 is trusted.
+        let trusted = vec!["127.0.0.0/8".to_string()];
 
         let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))));
@@ -286,7 +301,7 @@ mod tests {
             "127.0.0.2, 127.0.0.3".parse().unwrap(),
         );
         let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
-        let trusted: Vec<String> = Vec::new();
+        let trusted = vec!["127.0.0.0/8".to_string()];
 
         let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::LOCALHOST)));
@@ -301,7 +316,7 @@ mod tests {
             "for=1.2.3.4, for=198.51.100.99".parse().unwrap(),
         );
         let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
-        let trusted: Vec<String> = Vec::new();
+        let trusted = vec!["127.0.0.0/8".to_string()];
 
         let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 99))));
