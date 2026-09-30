@@ -53,7 +53,7 @@ pub use ids::{
 pub use message::{
     OpenAIChoice, OpenAIMessage, OpenAIRequest, OpenAIRequestView, OpenAIResponse, OpenAIUsage,
     PromptTokensDetails, TargetFormat, TargetFormatDescriptor, extract_content_part_text,
-    extract_content_text,
+    extract_content_text, map_stop_reason_to_finish_reason,
 };
 pub use providers::{
     AuthType, DiscoveredModel, FormatsMetadata, NewProvider, Provider, ProviderFormat,

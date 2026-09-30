@@ -365,10 +365,54 @@ impl<'a> OpenAIRequestView<'a> {
     }
 }
 
+/// Maps upstream stop reasons to canonical OpenAI finish reasons ("stop", "length", "tool_calls", "content_filter").
+///
+/// Returns canonical `"stop"`, `"length"`, `"tool_calls"`, or `"content_filter"` at zero runtime allocation.
+/// Unknown or unmapped stop reasons default to `"stop"`.
+#[inline]
+pub const fn map_stop_reason_to_finish_reason(reason: &str) -> &'static str {
+    match reason.as_bytes() {
+        b"end_turn" | b"stop" | b"stop_sequence" | b"end" | b"complete" => "stop",
+        b"max_tokens" | b"length" => "length",
+        b"tool_use" | b"tool_call" | b"tool_calls" | b"toolUse" | b"toolCall" | b"toolCalls" => {
+            "tool_calls"
+        }
+        b"content_filter" | b"safety" => "content_filter",
+        _ => "stop",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_map_stop_reason_to_finish_reason() {
+        const CONST_CHECK: &str = map_stop_reason_to_finish_reason("tool_use");
+        assert_eq!(CONST_CHECK, "tool_calls");
+
+        for reason in ["end_turn", "stop", "stop_sequence", "end", "complete", ""] {
+            assert_eq!(map_stop_reason_to_finish_reason(reason), "stop");
+        }
+        for reason in ["max_tokens", "length"] {
+            assert_eq!(map_stop_reason_to_finish_reason(reason), "length");
+        }
+        for reason in [
+            "tool_use",
+            "tool_call",
+            "tool_calls",
+            "toolUse",
+            "toolCall",
+            "toolCalls",
+        ] {
+            assert_eq!(map_stop_reason_to_finish_reason(reason), "tool_calls");
+        }
+        for reason in ["content_filter", "safety"] {
+            assert_eq!(map_stop_reason_to_finish_reason(reason), "content_filter");
+        }
+        assert_eq!(map_stop_reason_to_finish_reason("unexpected_reason"), "stop");
+    }
 
     #[test]
     fn test_extract_text_plain_string() {
