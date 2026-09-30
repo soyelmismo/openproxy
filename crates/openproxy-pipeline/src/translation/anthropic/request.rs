@@ -96,7 +96,15 @@ pub fn openai_to_anthropic(
         extra.insert("thinking".to_string(), tv);
     }
 
-    let base_max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+    let base_max_tokens = req
+        .max_tokens
+        .or_else(|| {
+            req.extra
+                .get("max_completion_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+        })
+        .unwrap_or(DEFAULT_MAX_TOKENS);
     let effective_max_tokens = if max_tokens_override > 0 {
         base_max_tokens.max(max_tokens_override + 1024)
     } else {

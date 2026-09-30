@@ -414,6 +414,7 @@ fn format_responses_tool_choice(tool_choice: Option<&Value>) -> Option<Value> {
 fn strip_responses_disallowed_keys(obj: &mut serde_json::Map<String, Value>) {
     const DISALLOWED: &[&str] = &[
         "max_tokens",
+        "max_completion_tokens",
         "max_output_tokens",
         "truncation",
         "background",

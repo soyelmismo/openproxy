@@ -267,6 +267,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
         let session_header_name = http::header::HeaderName::from_static("x-opencode-session");
         let candidate_session = headers
             .get(&session_header_name)
+            .or_else(|| headers.get("x-opencode-session-id"))
             .or_else(|| headers.get("x-session-affinity"))
             .or_else(|| headers.get("x-session-id"));
 

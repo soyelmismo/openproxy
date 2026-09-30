@@ -111,11 +111,29 @@ impl ProviderAdapter for GeminiAdapter {
         &self,
         _target_format: TargetFormat,
         req: &openproxy_types::OpenAIRequest,
-        _model: &ModelId,
+        model: &ModelId,
         messages: &[openproxy_types::OpenAIMessage],
         _stream: bool,
     ) -> std::result::Result<bytes::Bytes, CoreError> {
-        serialize_gemini_request(req, messages)
+        serialize_gemini_request_with_model(req, messages, Some(model.as_str()))
+    }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        _target_format: TargetFormat,
+        model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        if !gemini_model_supports_thinking(model.as_str()) {
+            crate::adapters::traits::patch_json_request_body(body, |obj| {
+                if let Some(gen_cfg) = obj.get_mut("generationConfig").and_then(|v| v.as_object_mut()) {
+                    gen_cfg.remove("thinkingConfig");
+                }
+            })
+        } else {
+            Ok(body)
+        }
     }
 
     fn translate_non_streaming_response(

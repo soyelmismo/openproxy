@@ -401,36 +401,91 @@ fn tool_choice_to_config(tool_choice: Option<&serde_json::Value>) -> GeminiToolC
     }
 }
 
+/// Returns true if the Gemini model supports `thinkingConfig` (thinking budget).
+///
+/// Gemma models (e.g. `gemma-4-26b-a4b-it`, `gemma-2-27b-it`), legacy Gemini 1.x models,
+/// and distilled/lite models do not support thinking tokens and strictly reject `thinkingBudget`
+/// with HTTP 400 INVALID_ARGUMENT ("Thinking budget is not supported for this model.").
+pub fn gemini_model_supports_thinking(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    let m = lower.strip_prefix("models/").unwrap_or(&lower);
+    let m = m.split('/').next_back().unwrap_or(m);
+
+    if m.is_empty() || m.contains("gemma") {
+        return false;
+    }
+    if m.starts_with("gemini-1.") || m == "gemini-pro" || m.starts_with("gemini-pro-") {
+        return false;
+    }
+    if m.contains("lite") {
+        return false;
+    }
+    if m.contains("embedding") || m.contains("learnlm") || m.contains("imagen") || m.contains("aqa") {
+        return false;
+    }
+    m.contains("thinking")
+        || m.starts_with("gemini-2.")
+        || m.starts_with("gemini-3.")
+        || m.starts_with("gemini-4.")
+        || m.starts_with("gemini-exp")
+}
+
 /// Convert an OpenAI-format chat completion request to Gemini format.
 pub fn openai_to_gemini(
     req: &openproxy_types::OpenAIRequest,
     override_messages: &[openproxy_types::OpenAIMessage],
 ) -> GeminiRequest {
+    openai_to_gemini_with_model(req, override_messages, None)
+}
+
+/// Convert an OpenAI-format chat completion request to Gemini format with explicit target model awareness.
+pub fn openai_to_gemini_with_model(
+    req: &openproxy_types::OpenAIRequest,
+    override_messages: &[openproxy_types::OpenAIMessage],
+    target_model: Option<&str>,
+) -> GeminiRequest {
     let (system_instruction, contents) = partition_messages_for_gemini(override_messages);
 
-    let thinking_config = req
-        .extra
-        .get("reasoning_effort")
-        .and_then(|v| v.as_str())
-        .or_else(|| req.extra.get("thinking_effort").and_then(|v| v.as_str()))
-        .map(|effort| {
-            let budget = match effort {
-                "none" => 0,
-                "low" => 1024,
-                "medium" => 8192,
-                "high" => 16384,
-                "max" | "xhigh" => 32768,
-                s => s.parse::<i32>().unwrap_or(8192),
-            };
-            GeminiThinkingConfig {
-                thinking_budget: budget,
-            }
-        });
+    let effective_model = target_model
+        .filter(|m| !m.is_empty())
+        .unwrap_or(req.model.as_str());
+
+    let thinking_config = if gemini_model_supports_thinking(effective_model) {
+        req.extra
+            .get("reasoning_effort")
+            .and_then(|v| v.as_str())
+            .or_else(|| req.extra.get("thinking_effort").and_then(|v| v.as_str()))
+            .map(|effort| {
+                let budget = match effort {
+                    "none" => 0,
+                    "low" => 1024,
+                    "medium" => 8192,
+                    "high" => 16384,
+                    "max" | "xhigh" => 32768,
+                    s => s.parse::<i32>().unwrap_or(8192),
+                };
+                GeminiThinkingConfig {
+                    thinking_budget: budget,
+                }
+            })
+    } else {
+        None
+    };
+
+    let max_output_tokens = req
+        .max_tokens
+        .or_else(|| {
+            req.extra
+                .get("max_completion_tokens")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+        })
+        .or(Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS));
 
     let generation_config = GeminiGenerationConfig {
         temperature: req.temperature,
         top_p: req.top_p,
-        max_output_tokens: req.max_tokens.or(Some(DEFAULT_GEMINI_MAX_OUTPUT_TOKENS)),
+        max_output_tokens,
         stop_sequences: req.stop.clone(),
         thinking_config,
     };
@@ -588,7 +643,16 @@ pub fn serialize_gemini_request(
     req: &openproxy_types::OpenAIRequest,
     messages: &[openproxy_types::OpenAIMessage],
 ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-    let gemini_req = openai_to_gemini(req, messages);
+    serialize_gemini_request_with_model(req, messages, None)
+}
+
+/// Serialize an OpenAI chat request into Gemini wire-format bytes with model awareness.
+pub fn serialize_gemini_request_with_model(
+    req: &openproxy_types::OpenAIRequest,
+    messages: &[openproxy_types::OpenAIMessage],
+    target_model: Option<&str>,
+) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+    let gemini_req = openai_to_gemini_with_model(req, messages, target_model);
     serde_json::to_vec(&gemini_req)
         .map(bytes::Bytes::from)
         .map_err(|e| {

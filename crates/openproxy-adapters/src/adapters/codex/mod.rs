@@ -200,6 +200,7 @@ pub fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::
         "presence_penalty",
         "frequency_penalty",
         "max_tokens",
+        "max_completion_tokens",
         "max_output_tokens",
         "stop",
         "n",

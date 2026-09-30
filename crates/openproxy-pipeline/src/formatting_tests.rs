@@ -454,6 +454,7 @@ fn test_responses_formatter_preserves_prompt_cache_key_and_developer_instruction
     let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
     let mut extra = serde_json::Map::new();
     extra.insert("prompt_cache_key".into(), json!("client-cache-key-999"));
+    extra.insert("max_completion_tokens".into(), json!(1000));
 
     let messages = vec![
         OpenAIMessage {
@@ -492,6 +493,10 @@ fn test_responses_formatter_preserves_prompt_cache_key_and_developer_instruction
     assert_eq!(
         val.get("prompt_cache_key").and_then(Value::as_str),
         Some("client-cache-key-999")
+    );
+    assert!(
+        val.get("max_completion_tokens").is_none(),
+        "ResponsesFormatter must strip max_completion_tokens"
     );
 
     // Verify system instructions are preserved in input as role developer

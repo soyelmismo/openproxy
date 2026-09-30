@@ -425,6 +425,8 @@ async fn test_opencode_upstream_repo_headers_drift_detection() {
         "x-opencode-client",
         "x-opencode-project",
         "x-opencode-session",
+        "x-opencode-session-id",
+        "x-opencode-parent-session-id",
         "x-opencode-request",
     ];
 
@@ -432,6 +434,8 @@ async fn test_opencode_upstream_repo_headers_drift_detection() {
         "x-opencode-client",
         "x-opencode-project",
         "x-opencode-session",
+        "x-opencode-session-id",
+        "x-opencode-parent-session-id",
         "x-opencode-request",
         "x-opencode-endpoint-id",
         "x-opencode-upstream-model-id",

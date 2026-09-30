@@ -97,6 +97,7 @@ fn test_wrap_request_body_enforces_stream_true() {
         "temperature": 0.7,
         "top_p": 0.9,
         "max_tokens": 4096,
+        "max_completion_tokens": 4096,
         "stop": ["\n"],
         "reasoning_effort": "high"
     });
@@ -160,6 +161,10 @@ fn test_wrap_request_body_enforces_stream_true() {
     assert!(
         val.get("max_tokens").is_none(),
         "Codex must strip max_tokens"
+    );
+    assert!(
+        val.get("max_completion_tokens").is_none(),
+        "Codex must strip max_completion_tokens"
     );
     assert!(val.get("stop").is_none(), "Codex must strip stop");
     assert_eq!(val["reasoning"]["effort"], "high");

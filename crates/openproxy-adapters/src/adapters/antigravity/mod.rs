@@ -208,11 +208,15 @@ impl ProviderAdapter for AntigravityAdapter {
         &self,
         _target_format: TargetFormat,
         req: &openproxy_types::OpenAIRequest,
-        _model: &ModelId,
+        model: &ModelId,
         messages: &[openproxy_types::OpenAIMessage],
         _stream: bool,
     ) -> std::result::Result<bytes::Bytes, CoreError> {
-        crate::adapters::gemini::serialize_gemini_request(req, messages)
+        crate::adapters::gemini::serialize_gemini_request_with_model(
+            req,
+            messages,
+            Some(model.as_str()),
+        )
     }
 
     fn translate_non_streaming_response(
@@ -267,6 +271,12 @@ impl ProviderAdapter for AntigravityAdapter {
 
             if let Some(contents) = json.get_mut("contents") {
                 tokens::inject_sentinel_thought_signatures(contents, physical_model);
+            }
+
+            if !crate::adapters::gemini::gemini_model_supports_thinking(physical_model)
+                && let Some(gen_cfg) = json.get_mut("generationConfig").and_then(|v| v.as_object_mut())
+            {
+                gen_cfg.remove("thinkingConfig");
             }
 
             let wrapped = serde_json::json!({
