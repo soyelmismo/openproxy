@@ -58,6 +58,11 @@ impl Default for ServerConfig {
 pub struct StorageConfig {
     pub database_path: String,
     pub encryption_key_source: EncryptionKeySource,
+    /// Path to the base64-encoded 32-byte master key file, used when
+    /// `encryption_key_source = "file"` (OP-29). Required in that mode;
+    /// the file must have mode 0600.
+    #[serde(default)]
+    pub encryption_key_file: Option<String>,
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
 }
@@ -67,6 +72,7 @@ impl Default for StorageConfig {
         Self {
             database_path: "~/.openproxy/data.db".into(),
             encryption_key_source: EncryptionKeySource::Env,
+            encryption_key_file: None,
             maintenance: MaintenanceConfig::default(),
         }
     }

@@ -9,6 +9,9 @@ request_max_body_bytes = 33554432  # enforced request body limit (default 32 MiB
 [storage]
 database_path = "~/.openproxy/data.db"
 encryption_key_source = "env"  # env | file
+# With source = "file", the master key is read from this path instead
+# (base64 of 32 bytes, mode 0600 — the server refuses looser permissions):
+# encryption_key_file = "/etc/openproxy/master.key"
 
 [racing]
 default_race_size = 1

@@ -47,7 +47,20 @@ impl AppState {
         let notifications_enabled_cell = Arc::new(AtomicBool::new(notifications_enabled));
         openproxy_core::notifications::set_enabled(notifications_enabled);
 
-        let master_key = Arc::new(MasterKey::from_env()?);
+        // OP-29: honor the configured encryption key source. `file` used to
+        // be documented but silently ignored (env was always used).
+        let master_key = Arc::new(match config.storage.encryption_key_source {
+            openproxy_types::config::EncryptionKeySource::File => {
+                let path = config.storage.encryption_key_file.clone().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "storage.encryption_key_source = \"file\" requires \
+                         storage.encryption_key_file to be set"
+                    )
+                })?;
+                MasterKey::from_file(&path)?
+            }
+            openproxy_types::config::EncryptionKeySource::Env => MasterKey::from_env()?,
+        });
         let initial_adapters = Self::load_adapters(&db_pool)?;
         let adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>> =
             Arc::new(RwLock::new(Arc::new(initial_adapters)));

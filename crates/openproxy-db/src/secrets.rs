@@ -59,6 +59,44 @@ impl MasterKey {
         Ok(Self { current, previous })
     }
 
+    /// Load from a file containing base64 of 32 bytes (OP-29).
+    ///
+    /// Implements the documented-but-unimplemented
+    /// `encryption_key_source = "file"` option. The file must have mode 0600
+    /// (owner-only) on unix: a master key readable by other local users
+    /// defeats the at-rest encryption of every provider credential.
+    pub fn from_file(path: &str) -> Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(path)
+                .map_err(|e| CoreError::Config(format!("master key file {path:?}: {e}")))?;
+            let mode = meta.permissions().mode();
+            if mode & 0o077 != 0 {
+                return Err(CoreError::Config(format!(
+                    "master key file {path:?} must have mode 0600 (got {:o}); \
+                     chmod 600 it before starting openproxy",
+                    mode & 0o777
+                )));
+            }
+        }
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| CoreError::Config(format!("master key file {path:?}: {e}")))?;
+        let decoded = BASE64
+            .decode(raw.trim())
+            .map_err(|e| CoreError::Config(format!("master key file {path:?} is not valid base64: {e}")))?;
+        let current: [u8; KEY_LEN] = decoded.try_into().map_err(|v: Vec<u8>| {
+            CoreError::Config(format!(
+                "master key file {path:?} must decode to {KEY_LEN} bytes, got {}",
+                v.len()
+            ))
+        })?;
+        // Rotation fallback stays env-based: OPENPROXY_MASTER_KEY_PREVIOUS.
+        let previous = load_optional_previous_key()?;
+        tracing::info!(path = %path, "loaded master key from file");
+        Ok(Self { current, previous })
+    }
+
     /// Generate a fresh random key. For tests and bootstrapping.
     pub fn generate() -> Result<Self> {
         let mut bytes = [0u8; KEY_LEN];
