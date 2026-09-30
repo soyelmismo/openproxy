@@ -4,15 +4,15 @@ use serde_json::Value;
 
 /// `content` concatenates the text blocks, `usage` maps input/output/sum
 /// onto prompt/completion/total, and `finish_reason` comes from
-/// `stop_reason`.
 pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
-    let combined: String = resp
-        .content
-        .iter()
-        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
-        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
-        .collect::<Vec<_>>()
-        .join("");
+    let mut combined = String::new();
+    for b in &resp.content {
+        if b.get("type").and_then(|t| t.as_str()) == Some("text")
+            && let Some(t) = b.get("text").and_then(|t| t.as_str())
+        {
+            combined.push_str(t);
+        }
+    }
 
     let mut tool_calls = Vec::new();
     for b in &resp.content {
@@ -92,16 +92,5 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
 }
 
 pub fn map_finish_reason(stop_reason: &str) -> String {
-    match stop_reason {
-        "end_turn" => "stop".to_string(),
-        "max_tokens" => "length".to_string(),
-        "tool_use" | "tool_call" | "tool_calls" | "toolUse" | "toolCall" | "toolCalls" => {
-            "tool_calls".to_string()
-        }
-        other => {
-            // Unknown values stay inside OpenAI's vocabulary.
-            let _ = other;
-            "stop".to_string()
-        }
-    }
+    openproxy_types::map_stop_reason_to_finish_reason(stop_reason).to_string()
 }

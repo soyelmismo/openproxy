@@ -22,14 +22,7 @@ pub struct CommandCodeSseState {
 }
 
 fn map_commandcode_finish_reason(reason: &str) -> String {
-    match reason {
-        "end_turn" | "stop" => "stop".to_string(),
-        "tool_use" | "tool_call" | "tool_calls" => "tool_calls".to_string(),
-        "max_tokens" | "length" => "length".to_string(),
-        "content_filter" => "content_filter".to_string(),
-        other if !other.is_empty() => other.to_string(),
-        _ => "stop".to_string(),
-    }
+    openproxy_types::map_stop_reason_to_finish_reason(reason).to_string()
 }
 
 /// Parse a single Command Code SSE or NDJSON line into an OpenAI-format chunk.

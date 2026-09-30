@@ -12,11 +12,16 @@ fn build_openai_system_message(sys: serde_json::Value) -> OpenAIMessage {
     let sys_str = if let Some(s) = sys.as_str() {
         normalize_claude_client_identity(s).to_string()
     } else if let Some(arr) = sys.as_array() {
-        arr.iter()
-            .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
-            .map(normalize_claude_client_identity)
-            .collect::<Vec<_>>()
-            .join("\n")
+        let mut combined = String::new();
+        for v in arr {
+            if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                if !combined.is_empty() {
+                    combined.push('\n');
+                }
+                combined.push_str(normalize_claude_client_identity(t));
+            }
+        }
+        combined
     } else {
         sys.to_string()
     };
@@ -136,10 +141,16 @@ fn emit_anthropic_user_and_tools(
         let text_res = if let Some(s) = content.as_str() {
             s.to_string()
         } else if let Some(arr) = content.as_array() {
-            arr.iter()
-                .filter_map(|v| v.get("text").and_then(|t| t.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n")
+            let mut combined = String::new();
+            for v in arr {
+                if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+                    if !combined.is_empty() {
+                        combined.push('\n');
+                    }
+                    combined.push_str(t);
+                }
+            }
+            combined
         } else {
             content.to_string()
         };
