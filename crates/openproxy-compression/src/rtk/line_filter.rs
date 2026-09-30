@@ -487,7 +487,7 @@ fn check_match_output_stage(
 thread_local! {
     static ANSI_BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static LINE_SPANS_BUF: std::cell::RefCell<Vec<(usize, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
-    static SEEN_COLLAPSE_SET: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(std::collections::HashSet::new());
+    static SEEN_COLLAPSE_SET: std::cell::RefCell<std::collections::HashSet<u64>> = std::cell::RefCell::new(std::collections::HashSet::new());
     static OUTPUT_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
 }
 
@@ -550,11 +550,13 @@ fn apply_line_filtering_pipeline(
                 line_spans.retain(|&(start, end)| {
                     let line = &result[start..end];
                     if filter.collapse_patterns.iter().any(|r| r.is_match(line)) {
-                        let key = line.trim();
-                        if seen.contains(key) {
+                        use std::hash::{DefaultHasher, Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        line.trim().hash(&mut hasher);
+                        let hash = hasher.finish();
+                        if !seen.insert(hash) {
                             return false;
                         }
-                        seen.insert(key.to_string());
                     }
                     true
                 });
