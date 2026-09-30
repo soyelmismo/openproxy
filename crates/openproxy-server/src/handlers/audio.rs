@@ -18,6 +18,11 @@ pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
         .route("/transcriptions", axum::routing::post(transcribe))
         // Security (OP-02): header-only auth BEFORE the Multipart extractor
         // buffers the audio body (pre-auth 32 MiB buffering per request).
+        // Security (OP-03): rate limit + per-key concurrency cap.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::rate_limit::rate_limit_middleware,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::key_auth_middleware,

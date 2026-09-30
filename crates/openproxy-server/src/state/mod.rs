@@ -37,6 +37,7 @@ pub struct AppState {
     services: Arc<crate::services::Services>,
     adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>>,
     rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter>,
+    inflight_limiter: Arc<openproxy_core::rate_limit::InFlightLimiter>,
     upstream_client: Arc<UpstreamClient>,
     usage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow>,
     stage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
@@ -174,6 +175,11 @@ impl AppState {
     /// Borrow the per-key rate limiter.
     pub fn rate_limiter(&self) -> &(dyn openproxy_core::rate_limit::RateLimiter + 'static) {
         self.rate_limiter.as_ref()
+    }
+
+    /// Per-key concurrent-request limiter (OP-03).
+    pub fn inflight_limiter(&self) -> &openproxy_core::rate_limit::InFlightLimiter {
+        self.inflight_limiter.as_ref()
     }
 
     /// Borrow the master encryption key.

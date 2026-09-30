@@ -20,6 +20,11 @@ pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
         // Security (OP-02): header-only auth BEFORE the Json extractor buffers
         // the request body — an unauthenticated client used to be able to pin
         // up to 32 MiB per request in RAM (multiplied by concurrency).
+        // Security (OP-03): rate limit + per-key concurrency cap.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::rate_limit::rate_limit_middleware,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::key_auth_middleware,

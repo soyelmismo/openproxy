@@ -103,9 +103,127 @@ impl RateLimiter for SlidingWindowRateLimiter {
     }
 }
 
+/// Default cap on concurrently in-flight requests per rate-limit key
+/// (API key or client IP).
+///
+/// Security (OP-03): the request-per-minute limiter only counts request
+/// *starts*, so a key could otherwise hold an unbounded number of concurrent
+/// requests — each retaining a parsed body, channels and an upstream
+/// connection for up to the 300 s SSE stream lifetime.
+pub const DEFAULT_MAX_CONCURRENT_PER_KEY: usize = 64;
+
+/// Tracks the number of concurrently in-flight requests per
+/// [`RateLimitKey`].
+///
+/// A request acquires a slot before the handler runs and releases it only
+/// when its response body has fully finished streaming (see the
+/// `InFlightBody` wrapper in the server crate), which is what bounds
+/// long-lived SSE streams.
+pub struct InFlightLimiter {
+    max: usize,
+    in_flight: Arc<DashMap<RateLimitKey, usize>>,
+}
+
+/// Releases one in-flight slot when dropped.
+pub struct InFlightGuard {
+    key: RateLimitKey,
+    in_flight: Arc<DashMap<RateLimitKey, usize>>,
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        use dashmap::mapref::entry::Entry;
+        match self.in_flight.entry(self.key) {
+            Entry::Occupied(mut o) => {
+                if *o.get() <= 1 {
+                    o.remove();
+                } else {
+                    *o.get_mut() -= 1;
+                }
+            }
+            Entry::Vacant(_) => {}
+        }
+    }
+}
+
+impl InFlightLimiter {
+    pub fn new(max_concurrent_per_key: usize) -> Self {
+        Self {
+            max: max_concurrent_per_key.max(1),
+            in_flight: Arc::new(DashMap::new()),
+        }
+    }
+
+    /// Number of requests currently in flight for `key`.
+    pub fn active(&self, key: RateLimitKey) -> usize {
+        self.in_flight.get(&key).map(|e| *e.value()).unwrap_or(0)
+    }
+
+    /// Acquire one in-flight slot for `key`, or `None` when the key already
+    /// holds `max_concurrent_per_key` requests.
+    pub fn try_acquire(&self, key: RateLimitKey) -> Option<InFlightGuard> {
+        use dashmap::mapref::entry::Entry;
+        // Hard cap on distinct keys to bound memory under a spoofed-IP flood.
+        if self.in_flight.len() >= 100_000 {
+            self.in_flight.clear();
+        }
+        match self.in_flight.entry(key) {
+            Entry::Occupied(mut o) => {
+                if *o.get() >= self.max {
+                    None
+                } else {
+                    *o.get_mut() += 1;
+                    Some(InFlightGuard {
+                        key,
+                        in_flight: Arc::clone(&self.in_flight),
+                    })
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(1);
+                Some(InFlightGuard {
+                    key,
+                    in_flight: Arc::clone(&self.in_flight),
+                })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inflight_limiter_caps_concurrency_and_releases() {
+        let limiter = InFlightLimiter::new(3);
+        let key = RateLimitKey::Key(ApiKeyId(7));
+
+        let g1 = limiter.try_acquire(key).expect("first slot");
+        let _g2 = limiter.try_acquire(key).expect("second slot");
+        let g3 = limiter.try_acquire(key).expect("third slot");
+        assert!(limiter.try_acquire(key).is_none(), "4th concurrent blocked");
+        assert_eq!(limiter.active(key), 3);
+
+        drop(g1);
+        drop(g3);
+        assert_eq!(limiter.active(key), 1);
+
+        let _g4 = limiter.try_acquire(key).expect("slot freed after drop");
+        drop(_g2);
+        drop(_g4);
+        assert_eq!(limiter.active(key), 0, "map entry removed at zero");
+    }
+
+    #[test]
+    fn inflight_limiter_keys_are_independent() {
+        let limiter = InFlightLimiter::new(1);
+        let k1 = RateLimitKey::Key(ApiKeyId(1));
+        let k2 = RateLimitKey::Key(ApiKeyId(2));
+        let _g1 = limiter.try_acquire(k1).expect("k1 slot");
+        assert!(limiter.try_acquire(k1).is_none());
+        assert!(limiter.try_acquire(k2).is_some(), "k2 unaffected");
+    }
 
     #[test]
     fn allows_up_to_limit() {

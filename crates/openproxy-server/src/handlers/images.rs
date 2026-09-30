@@ -42,6 +42,12 @@ pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
         .route("/generations", axum::routing::post(generate_images))
         .route("/edits", axum::routing::post(edit_images))
         .route("/variations", axum::routing::post(create_image_variation))
+        // Security (OP-03): rate limit + per-key concurrency cap — /v1/images
+        // previously had no request-rate limiting at all.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::rate_limit::rate_limit_middleware,
+        ))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::middleware::auth::key_auth_middleware,
