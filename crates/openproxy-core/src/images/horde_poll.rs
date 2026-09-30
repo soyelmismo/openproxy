@@ -325,14 +325,13 @@ async fn download_horde_image_capped(
 
     let mut buf = bytes::BytesMut::new();
     loop {
-        let chunk = match resp
+        let Some(chunk) = resp
             .body
             .next_chunk()
             .await
             .map_err(|e| CoreError::UpstreamConnection(format!("download image body error: {e:?}")))?
-        {
-            Some(c) => c,
-            None => break,
+        else {
+            break;
         };
         if buf.len() + chunk.len() > limit_bytes {
             return Err(CoreError::Validation(format!(

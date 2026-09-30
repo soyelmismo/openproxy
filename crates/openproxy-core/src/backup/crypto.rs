@@ -322,8 +322,9 @@ mod tests {
         let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
         key.zeroize();
         let json_bytes = serde_json::to_vec(&payload).unwrap();
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
         let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce_bytes), json_bytes.as_slice())
+            .encrypt(&nonce, json_bytes.as_slice())
             .unwrap();
 
         let legacy_bundle = BackupBundle {

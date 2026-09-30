@@ -466,7 +466,7 @@ async fn run_phased_connect(
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     } else {
-        Ok(PhasedConnection::Plain(TokioIo::new(stream)))
+        Ok(PhasedConnection::Plain(Box::new(TokioIo::new(stream))))
     }
 }
 

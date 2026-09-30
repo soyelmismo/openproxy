@@ -60,7 +60,7 @@ pub async fn rate_limit_middleware(
             &state.config().server.trusted_proxies,
         )
         .or_else(|| peer.map(|p| p.ip()))
-        .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
         RateLimitKey::Ip(client_ip)
     };
 

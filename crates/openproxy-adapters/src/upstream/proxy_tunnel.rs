@@ -234,7 +234,7 @@ pub(crate) async fn run_proxy_tunnel(
             io::Error::other(format!("TLS handshake to https proxy failed: {e}"))
         })?;
         let tunneled = http_connect_tunnel(tls_stream, proxy, dest_host, dest_port).await?;
-        Ok(super::connector_types::MaybeTlsStream::TlsToProxy(tunneled))
+        Ok(super::connector_types::MaybeTlsStream::TlsToProxy(Box::new(tunneled)))
     } else {
         Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into())
     }

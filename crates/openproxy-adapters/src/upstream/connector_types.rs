@@ -21,7 +21,7 @@ use super::phases::UpstreamPhase;
 /// `Proxy-Authorization: Basic` header must not travel in cleartext.
 pub enum MaybeTlsStream {
     Plain(TcpStream),
-    TlsToProxy(ClientTlsStream<TcpStream>),
+    TlsToProxy(Box<ClientTlsStream<TcpStream>>),
 }
 
 impl tokio::io::AsyncRead for MaybeTlsStream {
@@ -65,7 +65,7 @@ impl tokio::io::AsyncWrite for MaybeTlsStream {
 }
 
 pub enum PhasedConnection {
-    Plain(TokioIo<MaybeTlsStream>),
+    Plain(Box<TokioIo<MaybeTlsStream>>),
     /// `true` when ALPN negotiated `h2`. `connected()` hands this to
     /// hyper-util to pick the HTTP/2 or HTTP/1.1 parser; a wrong answer surfaces
     /// as `invalid HTTP version parsed` once the request reaches the body.
@@ -82,7 +82,7 @@ impl Read for PhasedConnection {
         buf: hyper::rt::ReadBufCursor<'_>,
     ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
-            PhasedConnection::Plain(io) => Pin::new(io).poll_read(cx, buf),
+            PhasedConnection::Plain(io) => Pin::new(&mut **io).poll_read(cx, buf),
             PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_read(cx, buf),
         }
     }
@@ -95,14 +95,14 @@ impl Write for PhasedConnection {
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
         match &mut *self {
-            PhasedConnection::Plain(io) => Pin::new(io).poll_write(cx, buf),
+            PhasedConnection::Plain(io) => Pin::new(&mut **io).poll_write(cx, buf),
             PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_write(cx, buf),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         match &mut *self {
-            PhasedConnection::Plain(io) => Pin::new(io).poll_flush(cx),
+            PhasedConnection::Plain(io) => Pin::new(&mut **io).poll_flush(cx),
             PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_flush(cx),
         }
     }
@@ -112,7 +112,7 @@ impl Write for PhasedConnection {
         cx: &mut Context<'_>,
     ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
-            PhasedConnection::Plain(io) => Pin::new(io).poll_shutdown(cx),
+            PhasedConnection::Plain(io) => Pin::new(&mut **io).poll_shutdown(cx),
             PhasedConnection::Tls { io, .. } => Pin::new(&mut **io).poll_shutdown(cx),
         }
     }

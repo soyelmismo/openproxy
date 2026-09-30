@@ -79,7 +79,7 @@ fn load_server_config() -> anyhow::Result<AppConfig> {
 
 /// Whether `bind` restricts the listener to the loopback interface.
 fn is_loopback_bind(bind: &str) -> bool {
-    let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(bind);
+    let host = bind.rsplit_once(':').map_or(bind, |(h, _)| h);
     host == "localhost" || host.starts_with("127.") || host == "[::1]" || host == "::1"
 }
 
@@ -143,18 +143,15 @@ async fn serve_with_limits(
 
         // Bound concurrent connections: if all slots are taken, shed the new
         // connection instead of queuing it (unbounded task growth).
-        let permit = match connection_slots.clone().try_acquire_owned() {
-            Ok(permit) => permit,
-            Err(_) => {
-                tracing::warn!(
-                    peer = %remote_addr,
-                    "connection limit reached ({}), dropping new connection",
-                    MAX_CONNECTIONS
-                );
-                // Drop `io` (closing the socket) and continue accepting.
-                drop(io);
-                continue;
-            }
+        let Ok(permit) = std::sync::Arc::clone(&connection_slots).try_acquire_owned() else {
+            tracing::warn!(
+                peer = %remote_addr,
+                "connection limit reached ({}), dropping new connection",
+                MAX_CONNECTIONS
+            );
+            // Drop `io` (closing the socket) and continue accepting.
+            drop(io);
+            continue;
         };
 
         tokio::spawn(async move {

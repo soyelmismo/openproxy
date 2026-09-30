@@ -340,13 +340,12 @@ async fn fetch_remote_image(
     // of accumulating the whole response in RAM.
     let mut buf = bytes::BytesMut::new();
     loop {
-        let chunk = match resp.body.next_chunk().await.map_err(|e| {
+        let Some(chunk) = resp.body.next_chunk().await.map_err(|e| {
             ApiError(CoreError::UpstreamConnection(format!(
                 "failed to read image URL body: {e}"
             )))
-        })? {
-            Some(c) => c,
-            None => break,
+        })? else {
+            break;
         };
         if buf.len() + chunk.len() > IMAGE_FETCH_LIMIT_BYTES {
             return Err(ApiError(CoreError::Validation(format!(

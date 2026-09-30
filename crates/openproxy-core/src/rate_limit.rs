@@ -156,7 +156,7 @@ impl InFlightLimiter {
 
     /// Number of requests currently in flight for `key`.
     pub fn active(&self, key: RateLimitKey) -> usize {
-        self.in_flight.get(&key).map(|e| *e.value()).unwrap_or(0)
+        self.in_flight.get(&key).map_or(0, |e| *e.value())
     }
 
     /// Acquire one in-flight slot for `key`, or `None` when the key already
