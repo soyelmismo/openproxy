@@ -4,6 +4,7 @@ use openproxy_types::ids::{AccountId, ModelRowId};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -36,7 +37,7 @@ pub enum Health {
 #[derive(Debug)]
 struct AccountBreaker {
     unhealthy_until: Option<Instant>,
-    last_activity_ms: u64,
+    last_activity_ms: AtomicU64,
     consecutive_failures: u8,
     state: Health,
 }
@@ -72,10 +73,26 @@ impl CircuitBreakerRegistry {
     }
 
     pub fn is_healthy(&self, account: CircuitBreakerKey) -> Health {
-        if !self.inner.read().contains_key(&account) {
+        let read_guard = self.inner.read();
+        let Some(entry) = read_guard.get(&account) else {
+            return Health::Healthy;
+        };
+
+        if entry.state == Health::Healthy {
+            entry.last_activity_ms.store(now_ms(), Ordering::Relaxed);
             return Health::Healthy;
         }
 
+        let now = Instant::now();
+        let is_expired = entry.state == Health::Unhealthy
+            && entry.unhealthy_until.is_some_and(|until| now >= until);
+
+        if !is_expired {
+            entry.last_activity_ms.store(now_ms(), Ordering::Relaxed);
+            return entry.state;
+        }
+
+        drop(read_guard);
         let mut g = self.inner.write();
         if let Some(entry) = g.get_mut(&account) {
             if entry.state == Health::Unhealthy
@@ -86,7 +103,7 @@ impl CircuitBreakerRegistry {
                 entry.consecutive_failures = 0;
                 entry.unhealthy_until = None;
             }
-            entry.last_activity_ms = now_ms();
+            entry.last_activity_ms.store(now_ms(), Ordering::Relaxed);
             entry.state
         } else {
             Health::Healthy
@@ -113,7 +130,7 @@ impl CircuitBreakerRegistry {
             entry.consecutive_failures = 0;
             entry.state = Health::Healthy;
             entry.unhealthy_until = None;
-            entry.last_activity_ms = now_ms();
+            entry.last_activity_ms.store(now_ms(), Ordering::Relaxed);
         }
     }
 
@@ -127,7 +144,7 @@ impl CircuitBreakerRegistry {
             consecutive_failures: 0,
             state: Health::Healthy,
             unhealthy_until: None,
-            last_activity_ms: now_ms(),
+            last_activity_ms: AtomicU64::new(now_ms()),
         });
         entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
         let just_opened =
@@ -138,7 +155,7 @@ impl CircuitBreakerRegistry {
             } else {
                 false
             };
-        entry.last_activity_ms = now_ms();
+        entry.last_activity_ms.store(now_ms(), Ordering::Relaxed);
         FailureOutcome {
             health: entry.state,
             just_opened,
@@ -156,7 +173,7 @@ impl CircuitBreakerRegistry {
                 consecutive_failures: self.threshold,
                 state: Health::Unhealthy,
                 unhealthy_until: Some(Instant::now() + self.unhealthy_duration),
-                last_activity_ms: now_ms(),
+                last_activity_ms: AtomicU64::new(now_ms()),
             },
         );
     }
@@ -169,7 +186,7 @@ impl CircuitBreakerRegistry {
         g.retain(|_, e| {
             let is_actively_unhealthy =
                 e.state == Health::Unhealthy && e.unhealthy_until.is_some_and(|until| now < until);
-            let keep = is_actively_unhealthy || e.last_activity_ms >= cutoff;
+            let keep = is_actively_unhealthy || e.last_activity_ms.load(Ordering::Relaxed) >= cutoff;
             if !keep {
                 pruned += 1;
             }
