@@ -110,11 +110,9 @@ impl AppState {
         let rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter> = Arc::new(
             openproxy_core::rate_limit::SlidingWindowRateLimiter::new(rate_limiter_config),
         );
-        let inflight_limiter = Arc::new(
-            openproxy_core::rate_limit::InFlightLimiter::new(
-                openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
-            ),
-        );
+        let inflight_limiter = Arc::new(openproxy_core::rate_limit::InFlightLimiter::new(
+            openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
+        ));
         spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
@@ -248,11 +246,9 @@ impl AppState {
         let rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter> = Arc::new(
             openproxy_core::rate_limit::SlidingWindowRateLimiter::new(rate_limiter_config),
         );
-        let inflight_limiter = Arc::new(
-            openproxy_core::rate_limit::InFlightLimiter::new(
-                openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
-            ),
-        );
+        let inflight_limiter = Arc::new(openproxy_core::rate_limit::InFlightLimiter::new(
+            openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
+        ));
         spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());

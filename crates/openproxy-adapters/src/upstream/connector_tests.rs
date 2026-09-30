@@ -88,9 +88,7 @@ fn test_is_private_or_reserved() {
     assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
         240, 0, 0, 1
     )))); // 240.0.0.0/4 (Reserved Class E RFC 1112)
-    assert!(is_private_or_reserved(&IpAddr::V4(
-        Ipv4Addr::BROADCAST,
-    ))); // broadcast
+    assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::BROADCAST,))); // broadcast
 }
 
 #[test]

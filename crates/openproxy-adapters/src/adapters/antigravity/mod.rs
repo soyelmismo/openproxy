@@ -274,7 +274,9 @@ impl ProviderAdapter for AntigravityAdapter {
             }
 
             if !crate::adapters::gemini::gemini_model_supports_thinking(physical_model)
-                && let Some(gen_cfg) = json.get_mut("generationConfig").and_then(|v| v.as_object_mut())
+                && let Some(gen_cfg) = json
+                    .get_mut("generationConfig")
+                    .and_then(|v| v.as_object_mut())
             {
                 gen_cfg.remove("thinkingConfig");
             }

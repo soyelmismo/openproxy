@@ -258,7 +258,10 @@ impl TargetFormatter for ResponsesFormatter {
         let (system_instructions, _messages_without_system) =
             extract_system_and_messages(messages_ref);
 
-        obj.insert("input".to_string(), messages_to_responses_input(messages_ref));
+        obj.insert(
+            "input".to_string(),
+            messages_to_responses_input(messages_ref),
+        );
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
 

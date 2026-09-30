@@ -378,10 +378,7 @@ async fn ping_antigravity_model(
         if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
             req.headers.insert(http::header::AUTHORIZATION, v);
         }
-        openproxy_adapters::antigravity_headers::inject_antigravity_headers(
-            &mut req.headers,
-            None,
-        );
+        openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
         let cancel = openproxy_adapters::upstream::CancellationToken::new();
         match upstream
@@ -460,9 +457,7 @@ fn is_model_quota_ready_for_warmup(
     let is_claude = lower_target.contains("claude");
     let is_gemini = lower_target.contains("gemini");
 
-    if is_claude
-        && let Some(details) = &quota.model_details
-    {
+    if is_claude && let Some(details) = &quota.model_details {
         let weekly_detail = details.iter().find(|d| d.model_id == "Claude (Weekly)");
         let session_detail = details
             .iter()
@@ -530,7 +525,9 @@ fn is_model_quota_ready_for_warmup(
         return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
     }
 
-    if quota.session_used.unwrap_or(0) > 0 && is_future_reset(quota.session_reset_at.as_deref(), now) {
+    if quota.session_used.unwrap_or(0) > 0
+        && is_future_reset(quota.session_reset_at.as_deref(), now)
+    {
         return false;
     }
 
@@ -588,16 +585,19 @@ pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option
         if wants_pro {
             // Preferred for pro: active flagship agentic Gemini Pro (gemini-3.1-pro-high / gemini-pro-agent)
             // Note: gemini-2.5-pro is capacity-exhausted (503/429) on Google Cloud Code.
-            if let Some(m) = models
-                .iter()
-                .find(|m| m.contains("gemini") && m.contains("pro") && (m.contains("high") || m.contains("agent")))
-            {
+            if let Some(m) = models.iter().find(|m| {
+                m.contains("gemini")
+                    && m.contains("pro")
+                    && (m.contains("high") || m.contains("agent"))
+            }) {
                 return Some(m.clone());
             }
-            if let Some(m) = models
-                .iter()
-                .find(|m| m.contains("gemini") && m.contains("pro") && !m.contains("low") && !m.contains("2.5"))
-            {
+            if let Some(m) = models.iter().find(|m| {
+                m.contains("gemini")
+                    && m.contains("pro")
+                    && !m.contains("low")
+                    && !m.contains("2.5")
+            }) {
                 return Some(m.clone());
             }
             // Fallback: any newest pro
@@ -668,10 +668,7 @@ mod tests {
         let claude = super::build_warmup_request("claude-sonnet-4-6");
         assert_eq!(claude.model, "claude-sonnet-4-6");
         assert_eq!(
-            claude.messages[0]
-                .content
-                .as_ref()
-                .and_then(|v| v.as_str()),
+            claude.messages[0].content.as_ref().and_then(|v| v.as_str()),
             Some("Say hi")
         );
         assert_eq!(claude.max_tokens, None);
@@ -704,8 +701,12 @@ mod tests {
         use openproxy_types::{AccountQuota, ModelQuotaDetail};
 
         let now = 1700000000;
-        let future_str = chrono::DateTime::from_timestamp(now + 3600, 0).unwrap().to_rfc3339();
-        let past_str = chrono::DateTime::from_timestamp(now - 3600, 0).unwrap().to_rfc3339();
+        let future_str = chrono::DateTime::from_timestamp(now + 3600, 0)
+            .unwrap()
+            .to_rfc3339();
+        let past_str = chrono::DateTime::from_timestamp(now - 3600, 0)
+            .unwrap()
+            .to_rfc3339();
 
         let detail = |id: &str, used, reset, frac| ModelQuotaDetail {
             model_id: id.to_string(),
@@ -717,24 +718,48 @@ mod tests {
 
         // 1. Claude model with future reset and usage is NOT ready
         let claude_ticking = AccountQuota {
-            model_details: Some(vec![detail("claude-sonnet-4-6", 1, Some(future_str.clone()), 0.999)].into_boxed_slice()),
+            model_details: Some(
+                vec![detail(
+                    "claude-sonnet-4-6",
+                    1,
+                    Some(future_str.clone()),
+                    0.999,
+                )]
+                .into_boxed_slice(),
+            ),
             ..AccountQuota::empty()
         };
-        assert!(!super::is_model_quota_ready_for_warmup(&claude_ticking, "claude-sonnet-4-6", now));
+        assert!(!super::is_model_quota_ready_for_warmup(
+            &claude_ticking,
+            "claude-sonnet-4-6",
+            now
+        ));
 
         // 2. Claude model with expired reset and 100% capacity IS ready
         let claude_ready = AccountQuota {
-            model_details: Some(vec![detail("claude-sonnet-4-6", 0, Some(past_str), 1.0)].into_boxed_slice()),
+            model_details: Some(
+                vec![detail("claude-sonnet-4-6", 0, Some(past_str), 1.0)].into_boxed_slice(),
+            ),
             ..AccountQuota::empty()
         };
-        assert!(super::is_model_quota_ready_for_warmup(&claude_ready, "claude-sonnet-4-6", now));
+        assert!(super::is_model_quota_ready_for_warmup(
+            &claude_ready,
+            "claude-sonnet-4-6",
+            now
+        ));
 
         // 3. Model matching Claude summary bucket "Claude (5h)"
         let claude_summary_ticking = AccountQuota {
-            model_details: Some(vec![detail("Claude (5h)", 1, Some(future_str.clone()), 0.999)].into_boxed_slice()),
+            model_details: Some(
+                vec![detail("Claude (5h)", 1, Some(future_str.clone()), 0.999)].into_boxed_slice(),
+            ),
             ..AccountQuota::empty()
         };
-        assert!(!super::is_model_quota_ready_for_warmup(&claude_summary_ticking, "claude-opus-4-6-thinking", now));
+        assert!(!super::is_model_quota_ready_for_warmup(
+            &claude_summary_ticking,
+            "claude-opus-4-6-thinking",
+            now
+        ));
 
         // 4. Gemini account with 0 weekly used IS ready (kickstarts weekly countdown)
         let gemini_ready = AccountQuota {
@@ -746,7 +771,11 @@ mod tests {
             session_reset_at: Some(future_str.clone()),
             ..AccountQuota::empty()
         };
-        assert!(super::is_model_quota_ready_for_warmup(&gemini_ready, "gemini-2.5-pro", now));
+        assert!(super::is_model_quota_ready_for_warmup(
+            &gemini_ready,
+            "gemini-2.5-pro",
+            now
+        ));
 
         // 5. Gemini account with weekly usage already ticking is NOT ready
         let gemini_ticking = AccountQuota {
@@ -757,6 +786,10 @@ mod tests {
             session_limit: Some(1000),
             ..AccountQuota::empty()
         };
-        assert!(!super::is_model_quota_ready_for_warmup(&gemini_ticking, "gemini-2.5-pro", now));
+        assert!(!super::is_model_quota_ready_for_warmup(
+            &gemini_ticking,
+            "gemini-2.5-pro",
+            now
+        ));
     }
 }

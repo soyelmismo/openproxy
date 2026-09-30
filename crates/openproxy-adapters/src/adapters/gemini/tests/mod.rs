@@ -246,7 +246,9 @@ fn test_gemini_model_supports_thinking_filter() {
     assert!(gemini_model_supports_thinking("gemini-2.5-flash"));
     assert!(gemini_model_supports_thinking("gemini-2.5-pro"));
     assert!(gemini_model_supports_thinking("gemini-2.0-flash"));
-    assert!(gemini_model_supports_thinking("gemini-2.0-flash-thinking-exp-01-21"));
+    assert!(gemini_model_supports_thinking(
+        "gemini-2.0-flash-thinking-exp-01-21"
+    ));
     assert!(gemini_model_supports_thinking("gemini-3.0-pro"));
     assert!(gemini_model_supports_thinking("gemini-exp-1206"));
 }

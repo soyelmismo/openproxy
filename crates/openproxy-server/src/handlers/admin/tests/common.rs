@@ -102,12 +102,7 @@ pub async fn make_state_with_key_and_config(
     let adapters = std::sync::Arc::new(parking_lot::RwLock::new(std::sync::Arc::new(
         adapters::builtin_adapters(),
     )));
-    let state = AppState::for_test(
-        config,
-        pool,
-        std::sync::Arc::new(mk),
-        adapters,
-    );
+    let state = AppState::for_test(config, pool, std::sync::Arc::new(mk), adapters);
     (state, plaintext)
 }
 

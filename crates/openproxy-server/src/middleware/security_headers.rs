@@ -75,11 +75,7 @@ pub(crate) fn build_csp(host: Option<&str>) -> String {
 }
 
 /// Axum middleware fn: see module docs.
-pub async fn security_headers(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn security_headers(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let csp = build_csp(sanitized_host(&req));
     // Security (OP-21): HSTS is only meaningful when the deployment actually
     // serves TLS. The binary itself is plain HTTP, so emit the header only
@@ -91,10 +87,7 @@ pub async fn security_headers(
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0)
         .is_some_and(|peer| {
-            crate::client_ip::is_trusted_proxy(
-                peer.ip(),
-                &state.config().server.trusted_proxies,
-            )
+            crate::client_ip::is_trusted_proxy(peer.ip(), &state.config().server.trusted_proxies)
         })
         && req
             .headers()
@@ -210,9 +203,11 @@ mod tests {
             .header("x-forwarded-proto", "https")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(
-            axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 44444))),
-        );
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                44444,
+            ))));
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(
             resp.headers().get("strict-transport-security").unwrap(),

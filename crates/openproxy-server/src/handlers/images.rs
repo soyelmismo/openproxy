@@ -307,8 +307,8 @@ async fn fetch_remote_image(
     // `TimeoutProfile::Chat`, whose 6 s TTFT accidentally capped the whole
     // download while leaving the byte count unbounded. Bind the fetch
     // explicitly instead: 10 s to first byte, 15 s max chunk gap, 60 s total.
-    let profile = openproxy_adapters::TimeoutProfile::Custom(
-        openproxy_adapters::ResolvedTimeouts {
+    let profile =
+        openproxy_adapters::TimeoutProfile::Custom(openproxy_adapters::ResolvedTimeouts {
             dns_ms: 5_000,
             dial_ms: 5_000,
             tls_ms: 5_000,
@@ -316,8 +316,7 @@ async fn fetch_remote_image(
             headers_ms: 10_000,
             body_chunk_ms: 15_000,
             total_ms: 60_000,
-        },
-    );
+        });
     let mut resp = upstream_client
         .call(req, profile, cancel)
         .await
@@ -344,7 +343,8 @@ async fn fetch_remote_image(
             ApiError(CoreError::UpstreamConnection(format!(
                 "failed to read image URL body: {e}"
             )))
-        })? else {
+        })?
+        else {
             break;
         };
         if buf.len() + chunk.len() > IMAGE_FETCH_LIMIT_BYTES {

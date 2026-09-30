@@ -42,15 +42,20 @@ fn email_zero_width_space_before_at_is_detected() {
 fn email_cyrillic_homoglyph_in_domain_is_detected() {
     // Cyrillic 'е' U+0435 instead of Latin 'e' U+0065
     let input = "test@\u{0435}xample.com";
-    let m = REGEX_EMAIL.find(input).expect("Cyrillic 'е' in domain must match");
+    let m = REGEX_EMAIL
+        .find(input)
+        .expect("Cyrillic 'е' in domain must match");
     assert_eq!(m.as_str(), input);
 }
 
 #[test]
 fn phone_intl_fullwidth_digits_are_detected() {
     // FULLWIDTH DIGITS U+FF11..U+FF19
-    let input = "+\u{FF11}\u{FF12}\u{FF13}-\u{FF15}\u{FF15}\u{FF15}-\u{FF10}\u{FF11}\u{FF19}\u{FF19}";
-    let m = REGEX_PHONE_INTL.find(input).expect("FULLWIDTH digits must match");
+    let input =
+        "+\u{FF11}\u{FF12}\u{FF13}-\u{FF15}\u{FF15}\u{FF15}-\u{FF10}\u{FF11}\u{FF19}\u{FF19}";
+    let m = REGEX_PHONE_INTL
+        .find(input)
+        .expect("FULLWIDTH digits must match");
     assert_eq!(m.as_str(), input);
 }
 
@@ -58,7 +63,9 @@ fn phone_intl_fullwidth_digits_are_detected() {
 fn phone_intl_unicode_hyphen_is_detected() {
     // HYPHEN U+2010 instead of ASCII HYPHEN-MINUS U+002D
     let input = "+1\u{2010}800\u{2010}555\u{2010}0199";
-    let m = REGEX_PHONE_INTL.find(input).expect("U+2010 hyphen must match");
+    let m = REGEX_PHONE_INTL
+        .find(input)
+        .expect("U+2010 hyphen must match");
     assert_eq!(m.as_str(), input);
 }
 

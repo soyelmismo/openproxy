@@ -420,7 +420,8 @@ pub fn gemini_model_supports_thinking(model: &str) -> bool {
     if m.contains("lite") {
         return false;
     }
-    if m.contains("embedding") || m.contains("learnlm") || m.contains("imagen") || m.contains("aqa") {
+    if m.contains("embedding") || m.contains("learnlm") || m.contains("imagen") || m.contains("aqa")
+    {
         return false;
     }
     m.contains("thinking")
@@ -681,7 +682,10 @@ mod tests {
         assert_eq!(settings.len(), 5);
         for s in &settings {
             assert!(matches!(s.category, std::borrow::Cow::Borrowed(_)));
-            assert!(matches!(s.threshold, std::borrow::Cow::Borrowed("BLOCK_NONE")));
+            assert!(matches!(
+                s.threshold,
+                std::borrow::Cow::Borrowed("BLOCK_NONE")
+            ));
         }
     }
 }

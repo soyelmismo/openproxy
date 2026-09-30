@@ -4,11 +4,11 @@ use openproxy_core::api_keys::{self as core_api_keys, ApiKey};
 use openproxy_types::{CoreError, ids::ApiKeyId};
 use std::sync::Arc;
 
-pub(crate) use super::auth_sanitization::{
-    normalize_responses_tools, translate_responses_to_openai,
-};
 use super::auth_sanitization::{
     inject_deepseek_reasoning_if_needed, read_request_body_capped, sanitize_tool_calls,
+};
+pub(crate) use super::auth_sanitization::{
+    normalize_responses_tools, translate_responses_to_openai,
 };
 
 /// Extracted parsed JSON payload for the chat endpoint.
@@ -49,7 +49,10 @@ impl ValidatedApiToken {
             .map_or((None, model), |(p, rest)| (Some(p), rest));
 
         let full_id = provider_id.and_then(|p| {
-            if model.strip_prefix(p).is_some_and(|rest| rest.starts_with('/')) {
+            if model
+                .strip_prefix(p)
+                .is_some_and(|rest| rest.starts_with('/'))
+            {
                 None
             } else {
                 Some(format!("{p}/{model}"))
@@ -326,8 +329,7 @@ pub async fn auth_middleware(
     // Security (OP-14): use the configured request body limit instead of a
     // hardcoded 32 MiB that ignored `server.request_max_body_bytes`.
     let bytes =
-        match read_request_body_capped(body, state.config().server.request_max_body_bytes).await
-        {
+        match read_request_body_capped(body, state.config().server.request_max_body_bytes).await {
             Ok(b) => b,
             Err(resp) => return Ok(*resp),
         };

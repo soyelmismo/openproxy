@@ -56,7 +56,10 @@ impl tokio::io::AsyncWrite for MaybeTlsStream {
         }
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), io::Error>> {
         match &mut *self {
             MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
             MaybeTlsStream::TlsToProxy(s) => Pin::new(s).poll_shutdown(cx),

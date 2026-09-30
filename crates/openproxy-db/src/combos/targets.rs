@@ -449,10 +449,12 @@ pub fn target_belongs_to_combo(
         |r| r.get::<_, i64>(0),
     )
     .map(|v| v != 0)
-    .map_err(|e| crate::error::map_db_error_ctx(format!(
-        "check combo_target {} belongs to combo {}",
-        target_id.0, combo_id.0
-    ))(e))
+    .map_err(|e| {
+        crate::error::map_db_error_ctx(format!(
+            "check combo_target {} belongs to combo {}",
+            target_id.0, combo_id.0
+        ))(e)
+    })
 }
 
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {

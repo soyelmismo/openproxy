@@ -82,9 +82,9 @@ impl MasterKey {
         }
         let raw = std::fs::read_to_string(path)
             .map_err(|e| CoreError::Config(format!("master key file {path:?}: {e}")))?;
-        let decoded = BASE64
-            .decode(raw.trim())
-            .map_err(|e| CoreError::Config(format!("master key file {path:?} is not valid base64: {e}")))?;
+        let decoded = BASE64.decode(raw.trim()).map_err(|e| {
+            CoreError::Config(format!("master key file {path:?} is not valid base64: {e}"))
+        })?;
         let current: [u8; KEY_LEN] = decoded.try_into().map_err(|v: Vec<u8>| {
             CoreError::Config(format!(
                 "master key file {path:?} must decode to {KEY_LEN} bytes, got {}",

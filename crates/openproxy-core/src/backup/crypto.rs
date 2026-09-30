@@ -39,7 +39,10 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
         ipad[i] ^= key_block[i];
         opad[i] ^= key_block[i];
     }
-    let inner = Sha256::new().chain_update(ipad).chain_update(data).finalize();
+    let inner = Sha256::new()
+        .chain_update(ipad)
+        .chain_update(data)
+        .finalize();
     Sha256::new()
         .chain_update(opad)
         .chain_update(inner)
@@ -323,9 +326,7 @@ mod tests {
         key.zeroize();
         let json_bytes = serde_json::to_vec(&payload).unwrap();
         let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
-        let ciphertext = cipher
-            .encrypt(&nonce, json_bytes.as_slice())
-            .unwrap();
+        let ciphertext = cipher.encrypt(&nonce, json_bytes.as_slice()).unwrap();
 
         let legacy_bundle = BackupBundle {
             version: BACKUP_FORMAT_VERSION,

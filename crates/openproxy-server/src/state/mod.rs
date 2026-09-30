@@ -191,9 +191,7 @@ impl AppState {
 
     /// Shared handle to the admin limiter (for WS guards that must outlive the
     /// borrow, OP-27).
-    pub fn admin_limiter_arc(
-        &self,
-    ) -> Arc<crate::handlers::admin::auth::AdminAuthLimiter> {
+    pub fn admin_limiter_arc(&self) -> Arc<crate::handlers::admin::auth::AdminAuthLimiter> {
         Arc::clone(&self.admin_limiter)
     }
 

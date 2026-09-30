@@ -127,7 +127,10 @@ impl ProviderAdapter for GeminiAdapter {
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         if !gemini_model_supports_thinking(model.as_str()) {
             crate::adapters::traits::patch_json_request_body(body, |obj| {
-                if let Some(gen_cfg) = obj.get_mut("generationConfig").and_then(|v| v.as_object_mut()) {
+                if let Some(gen_cfg) = obj
+                    .get_mut("generationConfig")
+                    .and_then(|v| v.as_object_mut())
+                {
                     gen_cfg.remove("thinkingConfig");
                 }
             })

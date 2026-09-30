@@ -230,11 +230,14 @@ pub(crate) async fn run_proxy_tunnel(
         let server_name = rustls::pki_types::ServerName::try_from(proxy.host.clone())
             .map_err(|e| io::Error::other(format!("bad proxy SNI host: {e}")))?;
         let connector = super::connector_types::tls_connector();
-        let tls_stream = connector.connect(server_name, stream).await.map_err(|e| {
-            io::Error::other(format!("TLS handshake to https proxy failed: {e}"))
-        })?;
+        let tls_stream = connector
+            .connect(server_name, stream)
+            .await
+            .map_err(|e| io::Error::other(format!("TLS handshake to https proxy failed: {e}")))?;
         let tunneled = http_connect_tunnel(tls_stream, proxy, dest_host, dest_port).await?;
-        Ok(super::connector_types::MaybeTlsStream::TlsToProxy(Box::new(tunneled)))
+        Ok(super::connector_types::MaybeTlsStream::TlsToProxy(
+            Box::new(tunneled),
+        ))
     } else {
         Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into())
     }

@@ -75,12 +75,8 @@ pub async fn oauth_authorize(
     // Security (OP-19): persist the generated state with the verifier and
     // redirect URI actually used, so the exchange can validate `state` and
     // stop trusting client-supplied redirect_uri / code_verifier.
-    s.oauth_states().insert(
-        &provider,
-        &state,
-        &code_verifier,
-        &redirect_uri,
-    );
+    s.oauth_states()
+        .insert(&provider, &state, &code_verifier, &redirect_uri);
 
     Ok(Json(serde_json::json!({
         "authorization_url": auth_url,
@@ -598,8 +594,7 @@ async fn execute_oauth_refresh(
 /// 10-minute TTL) and uses the persisted values instead of whatever the
 /// client posts.
 pub struct OAuthStateStore {
-    entries:
-        dashmap::DashMap<(String, String), (String, String, std::time::Instant)>,
+    entries: dashmap::DashMap<(String, String), (String, String, std::time::Instant)>,
 }
 
 /// Lifetime of an authorize→exchange pair.
@@ -641,7 +636,10 @@ impl OAuthStateStore {
     /// Consume the record for `(provider, state)` — single use. `None` when
     /// unknown, already used, or expired.
     pub fn consume(&self, provider: &str, state: &str) -> Option<(String, String)> {
-        let (verifier, redirect_uri, created) = self.entries.remove(&(provider.to_string(), state.to_string()))?.1;
+        let (verifier, redirect_uri, created) = self
+            .entries
+            .remove(&(provider.to_string(), state.to_string()))?
+            .1;
         if created.elapsed() > OAUTH_STATE_TTL {
             return None;
         }
@@ -661,7 +659,12 @@ mod state_store_tests {
     #[test]
     fn oauth_state_is_single_use_and_ttl_bound() {
         let store = OAuthStateStore::new();
-        store.insert("antigravity", "st1", "verifier-1", "http://localhost:8787/admin/callback.html");
+        store.insert(
+            "antigravity",
+            "st1",
+            "verifier-1",
+            "http://localhost:8787/admin/callback.html",
+        );
         let (verifier, redirect) = store
             .consume("antigravity", "st1")
             .expect("state resolves once");

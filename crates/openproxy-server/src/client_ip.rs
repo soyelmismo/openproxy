@@ -113,8 +113,7 @@ pub fn resolve_client_ip(
 
         // 2. X-Forwarded-For, rightmost-untrusted (see doc comment).
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            let entries: Vec<Option<IpAddr>> =
-                xff.split(',').map(parse_ip_or_bracketed).collect();
+            let entries: Vec<Option<IpAddr>> = xff.split(',').map(parse_ip_or_bracketed).collect();
             if let Some(ip) = rightmost_untrusted(&entries, trusted_proxies) {
                 return Some(ip);
             }
@@ -147,9 +146,10 @@ pub fn resolve_client_ip(
 /// Walk `entries` right-to-left and return the first address that is NOT a
 /// trusted proxy; `None` when every entry is trusted or nothing parses.
 fn rightmost_untrusted(entries: &[Option<IpAddr>], trusted_proxies: &[String]) -> Option<IpAddr> {
-    entries.iter().rev().find_map(|entry| {
-        entry.filter(|ip| !is_trusted_proxy(*ip, trusted_proxies))
-    })
+    entries
+        .iter()
+        .rev()
+        .find_map(|entry| entry.filter(|ip| !is_trusted_proxy(*ip, trusted_proxies)))
 }
 
 #[cfg(test)]
@@ -264,10 +264,7 @@ mod tests {
     #[test]
     fn test_resolve_client_ip_xff_spoofed_leftmost_ignored() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "1.2.3.4, 198.51.100.42".parse().unwrap(),
-        );
+        headers.insert("x-forwarded-for", "1.2.3.4, 198.51.100.42".parse().unwrap());
         let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
         // Explicit opt-in: 127.0.0.0/8 is trusted.
         let trusted = vec!["127.0.0.0/8".to_string()];
@@ -296,10 +293,7 @@ mod tests {
     #[test]
     fn test_resolve_client_ip_xff_all_trusted_falls_back_to_peer() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "127.0.0.2, 127.0.0.3".parse().unwrap(),
-        );
+        headers.insert("x-forwarded-for", "127.0.0.2, 127.0.0.3".parse().unwrap());
         let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
         let trusted = vec!["127.0.0.0/8".to_string()];
 

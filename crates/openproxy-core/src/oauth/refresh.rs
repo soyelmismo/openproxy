@@ -99,7 +99,12 @@ impl TokenRefreshCoordinator {
                     openproxy_db::accounts::decrypt_refresh_token(conn, account_id, master_key)
                         .ok()
                         .flatten();
-                Ok(Some((needs_refresh, access_token, latest_refresh_token, acc)))
+                Ok(Some((
+                    needs_refresh,
+                    access_token,
+                    latest_refresh_token,
+                    acc,
+                )))
             })
         })?;
 

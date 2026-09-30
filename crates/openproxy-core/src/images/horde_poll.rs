@@ -198,9 +198,12 @@ pub(crate) async fn poll_horde_image_generation(
                 // be public (the generic connector filter blocks private IPs
                 // at dial time, but the port and byte caps are enforced here).
                 validate_horde_image_url(&img).await?;
-                let dl_bytes =
-                    download_horde_image_capped(upstream_client, &img, HORDE_IMAGE_FETCH_LIMIT_BYTES)
-                        .await?;
+                let dl_bytes = download_horde_image_capped(
+                    upstream_client,
+                    &img,
+                    HORDE_IMAGE_FETCH_LIMIT_BYTES,
+                )
+                .await?;
                 use base64::Engine as _;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&dl_bytes);
                 data.push(ImageData {
@@ -272,7 +275,9 @@ async fn validate_horde_image_url(url: &str) -> Result<()> {
         .host()
         .ok_or_else(|| CoreError::Validation("worker image URL must have a host".into()))?;
 
-    let port = uri.port_u16().unwrap_or(if scheme == Some("https") { 443 } else { 80 });
+    let port = uri
+        .port_u16()
+        .unwrap_or(if scheme == Some("https") { 443 } else { 80 });
     if port != 80 && port != 443 {
         return Err(CoreError::Validation(
             "worker image URL rejected: non-standard ports are not allowed".into(),
@@ -284,11 +289,7 @@ async fn validate_horde_image_url(url: &str) -> Result<()> {
     if !allow_private {
         openproxy_adapters::upstream::resolve_public_host(host, port)
             .await
-            .map_err(|e| {
-                CoreError::Validation(format!(
-                    "worker image URL host rejected: {e}"
-                ))
-            })?;
+            .map_err(|e| CoreError::Validation(format!("worker image URL host rejected: {e}")))?;
     }
     Ok(())
 }
@@ -325,11 +326,9 @@ async fn download_horde_image_capped(
 
     let mut buf = bytes::BytesMut::new();
     loop {
-        let Some(chunk) = resp
-            .body
-            .next_chunk()
-            .await
-            .map_err(|e| CoreError::UpstreamConnection(format!("download image body error: {e:?}")))?
+        let Some(chunk) = resp.body.next_chunk().await.map_err(|e| {
+            CoreError::UpstreamConnection(format!("download image body error: {e:?}"))
+        })?
         else {
             break;
         };
