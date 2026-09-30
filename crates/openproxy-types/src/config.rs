@@ -43,7 +43,10 @@ impl Default for ServerConfig {
             // must set an explicit `server.bind` and put a TLS-terminating
             // reverse proxy in front (see the startup warning in main.rs).
             bind: "127.0.0.1:8787".into(),
-            request_max_body_bytes: 10 * 1024 * 1024,
+            // Default preserved from the previously enforced hardcode (the
+            // setting used to be dead); operators can lower it per deployment
+            // now that it is actually wired into the enforced limits (OP-14).
+            request_max_body_bytes: 32 * 1024 * 1024,
             rate_limit_requests_per_minute: 1000,
             allow_anonymous: false,
             trusted_proxies: Vec::new(),
