@@ -258,8 +258,7 @@ impl TargetFormatter for ResponsesFormatter {
         let (system_instructions, _messages_without_system) =
             extract_system_and_messages(messages_ref);
 
-        let all_refs: Vec<&OpenAIMessage> = messages_ref.iter().collect();
-        obj.insert("input".to_string(), messages_to_responses_input(&all_refs));
+        obj.insert("input".to_string(), messages_to_responses_input(messages_ref));
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
 
@@ -747,10 +746,10 @@ fn convert_single_message_to_responses_input(msg: &OpenAIMessage, input_items: &
     }
 }
 
-fn messages_to_responses_input(messages: &[&OpenAIMessage]) -> Value {
+fn messages_to_responses_input<M: crate::context::AsOpenAIMessage>(messages: &[M]) -> Value {
     let mut input_items = Vec::new();
     for msg in messages {
-        convert_single_message_to_responses_input(msg, &mut input_items);
+        convert_single_message_to_responses_input(msg.as_message(), &mut input_items);
     }
     Value::Array(input_items)
 }

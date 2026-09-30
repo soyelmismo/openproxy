@@ -53,3 +53,21 @@ impl PipelineContext {
         }
     }
 }
+
+pub(crate) trait AsOpenAIMessage {
+    fn as_message(&self) -> &openproxy_types::OpenAIMessage;
+}
+
+impl AsOpenAIMessage for openproxy_types::OpenAIMessage {
+    #[inline]
+    fn as_message(&self) -> &openproxy_types::OpenAIMessage {
+        self
+    }
+}
+
+impl AsOpenAIMessage for &openproxy_types::OpenAIMessage {
+    #[inline]
+    fn as_message(&self) -> &openproxy_types::OpenAIMessage {
+        self
+    }
+}
