@@ -1967,6 +1967,7 @@ dependencies = [
  "futures",
  "http-body",
  "http-body-util",
+ "hyper-util",
  "libmimalloc-sys",
  "mimalloc",
  "mime_guess",

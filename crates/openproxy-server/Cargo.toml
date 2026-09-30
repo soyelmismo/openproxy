@@ -101,6 +101,10 @@ rusqlite = { workspace = true }
 ahash = "0.8.12"
 tower-http = { workspace = true }
 thiserror.workspace = true
+# Manual accept loop in main.rs (OP-13): axum::serve does not expose
+# http1_header_read_timeout or a connection cap, so the server drives
+# hyper_util's connection builder directly (same stack axum uses internally).
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
+tower = { version = "0.5", features = ["util"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }

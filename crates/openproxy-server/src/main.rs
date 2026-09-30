@@ -22,6 +22,19 @@
 use openproxy_core::AppConfig;
 use std::env;
 
+/// Hard cap on concurrently-accepted TCP connections.
+///
+/// Security (OP-13): without a cap, an unauthenticated client can open an
+/// unbounded number of sockets (each pinning a tokio task + buffers).
+const MAX_CONNECTIONS: usize = 1024;
+
+/// Max time to receive the request head (request line + headers) before the
+/// connection is dropped.
+///
+/// Security (OP-13): without this deadline a slowloris — sockets that drip
+/// header bytes — are never closed by hyper's defaults.
+const HTTP1_HEADER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 // mimalloc as the global allocator. glibc malloc retains freed arenas
 // aggressively, which inflates idle RSS for long-running services that
 // go through bursts of allocation (startup migrations, models.dev sync,
@@ -87,12 +100,81 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
     let app = openproxy_server::router::build_router(state);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "openproxy listening");
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await?;
-    Ok(())
+    serve_with_limits(listener, app).await
+}
+
+/// Accept loop with connection hardening (OP-13).
+///
+/// `axum::serve` does not expose `http1_header_read_timeout` or a connection
+/// cap, so the loop drives hyper-util's auto connection builder directly —
+/// the same stack `axum::serve` uses internally — adding:
+///
+/// - `MAX_CONNECTIONS`: a semaphore-bounded accept; excess connections are
+///   closed immediately instead of accumulating tasks/FDs.
+/// - `HTTP1_HEADER_READ_TIMEOUT`: sockets that never finish sending their
+///   request head are dropped after 10 s (slowloris).
+async fn serve_with_limits(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+) -> anyhow::Result<()> {
+    use hyper_util::{
+        rt::{TokioExecutor, TokioIo},
+        server::conn::auto::Builder,
+        service::TowerToHyperService,
+    };
+    use tower::{Service, ServiceExt};
+
+    let connection_slots =
+        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let mut make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+
+    loop {
+        let (tcp, remote_addr) = listener.accept().await?;
+        let io = TokioIo::new(tcp);
+
+        // `IntoMakeServiceWithConnectInfo::poll_ready` is always `Ready(Ok)`
+        // (see axum's connect_info.rs), so `call` can be invoked directly.
+        let tower_service = make_service
+            .call(remote_addr)
+            .await
+            .unwrap_or_else(|err| match err {})
+            .map_request(|req: axum::extract::Request<_>| req.map(axum::body::Body::new));
+        let hyper_service = TowerToHyperService::new(tower_service);
+
+        // Bound concurrent connections: if all slots are taken, shed the new
+        // connection instead of queuing it (unbounded task growth).
+        let permit = match connection_slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                tracing::warn!(
+                    peer = %remote_addr,
+                    "connection limit reached ({}), dropping new connection",
+                    MAX_CONNECTIONS
+                );
+                // Drop `io` (closing the socket) and continue accepting.
+                drop(io);
+                continue;
+            }
+        };
+
+        tokio::spawn(async move {
+            let mut builder = Builder::new(TokioExecutor::new());
+            // CONNECT protocol needed for HTTP/2 websockets.
+            builder.http2().enable_connect_protocol();
+            // `header_read_timeout` requires an explicit timer on the
+            // connection (hyper panics otherwise).
+            builder
+                .http1()
+                .timer(hyper_util::rt::TokioTimer::new())
+                .header_read_timeout(HTTP1_HEADER_READ_TIMEOUT);
+            let conn = builder.serve_connection_with_upgrades(io, hyper_service);
+            if let Err(e) = conn.await {
+                tracing::debug!(%e, "connection error");
+            }
+            // Release the slot when the connection has fully finished.
+            drop(permit);
+        });
+    }
 }
 
 fn main() -> anyhow::Result<()> {
