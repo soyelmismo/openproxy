@@ -14,8 +14,16 @@ use openproxy_types::{CoreError, embeddings::EmbeddingRequest};
 
 use crate::{error::ApiError, state::AppState};
 
-pub fn router() -> axum::Router<AppState> {
-    axum::Router::new().route("/embeddings", axum::routing::post(create_embeddings))
+pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/embeddings", axum::routing::post(create_embeddings))
+        // Security (OP-02): header-only auth BEFORE the Json extractor buffers
+        // the request body — an unauthenticated client used to be able to pin
+        // up to 32 MiB per request in RAM (multiplied by concurrency).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::key_auth_middleware,
+        ))
 }
 
 /// `POST /v1/embeddings`.

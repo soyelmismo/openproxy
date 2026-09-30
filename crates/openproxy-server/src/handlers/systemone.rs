@@ -14,8 +14,15 @@ use openproxy_types::{CoreError, systemone::SystemOneRequest};
 
 use crate::{error::ApiError, state::AppState};
 
-pub fn router() -> axum::Router<AppState> {
-    axum::Router::new().route("/systemone", axum::routing::post(handle_system_one))
+pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/systemone", axum::routing::post(handle_system_one))
+        // Security (OP-02): header-only auth BEFORE the Json extractor buffers
+        // the request body (pre-auth 32 MiB buffering per request).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::key_auth_middleware,
+        ))
 }
 
 /// `POST /v1/systemone`.

@@ -13,8 +13,15 @@ use openproxy_types::CoreError;
 
 use crate::{error::ApiError, middleware::auth::authenticate_and_authorize_model, state::AppState};
 
-pub fn router() -> axum::Router<AppState> {
-    axum::Router::new().route("/transcriptions", axum::routing::post(transcribe))
+pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
+    axum::Router::new()
+        .route("/transcriptions", axum::routing::post(transcribe))
+        // Security (OP-02): header-only auth BEFORE the Multipart extractor
+        // buffers the audio body (pre-auth 32 MiB buffering per request).
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::key_auth_middleware,
+        ))
 }
 
 /// `POST /v1/audio/transcriptions`.

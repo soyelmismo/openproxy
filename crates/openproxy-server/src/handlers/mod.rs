@@ -69,11 +69,11 @@ pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
         .merge(models::router())
         .merge(messages::router(state))
         .merge(responses::router(state))
-        .merge(embeddings::router())
-        .merge(systemone::router())
+        .merge(embeddings::router(state))
+        .merge(systemone::router(state))
         .merge(tokenize::router(state))
         .nest("/chat", chat::router(state))
-        .nest("/audio", audio::router())
+        .nest("/audio", audio::router(state))
         .nest("/images", images::router(state));
 
     axum::Router::new().nest("/v1", v1_routes)
