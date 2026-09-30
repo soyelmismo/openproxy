@@ -66,6 +66,7 @@ pub struct AppState {
     api_key_cache:
         Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
     ws_tickets: Arc<WsTicketStore>,
+    admin_limiter: Arc<crate::handlers::admin::auth::AdminAuthLimiter>,
 }
 
 /// VACUUM status reported to the dashboard.
@@ -180,6 +181,19 @@ impl AppState {
     /// Per-key concurrent-request limiter (OP-03).
     pub fn inflight_limiter(&self) -> &openproxy_core::rate_limit::InFlightLimiter {
         self.inflight_limiter.as_ref()
+    }
+
+    /// Admin auth throttle + per-key WS stream cap (OP-27).
+    pub fn admin_limiter(&self) -> &crate::handlers::admin::auth::AdminAuthLimiter {
+        self.admin_limiter.as_ref()
+    }
+
+    /// Shared handle to the admin limiter (for WS guards that must outlive the
+    /// borrow, OP-27).
+    pub fn admin_limiter_arc(
+        &self,
+    ) -> Arc<crate::handlers::admin::auth::AdminAuthLimiter> {
+        Arc::clone(&self.admin_limiter)
     }
 
     /// Borrow the master encryption key.

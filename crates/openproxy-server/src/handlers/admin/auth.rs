@@ -242,11 +242,31 @@ pub async fn admin_auth_middleware(
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // Security (OP-27): per-IP throttle on FAILED admin authentications. Key
+    // entropy makes brute force impractical, but unthrottled attempts were a
+    // cheap resource-exhaustion and audit-log-flooding vector.
+    let client_ip_for_throttle = crate::client_ip::resolve_client_ip(
+        req.headers(),
+        Some(&addr),
+        &state.config().server.trusted_proxies,
+    )
+    .unwrap_or_else(|| addr.ip());
+    if state.admin_limiter().is_blocked(client_ip_for_throttle) {
+        return crate::error::ApiError(openproxy_types::CoreError::RateLimited {
+            provider: "admin_auth_throttle".into(),
+            retry_after_ms: 60_000,
+            is_proxy_rotated: false,
+        })
+        .into_response();
+    }
+
     match authenticate_admin(&state, req.headers(), Some(&addr)) {
         Ok(identity) => {
+            state.admin_limiter().record_success(client_ip_for_throttle);
             req.extensions_mut().insert(identity);
         }
         Err(e) => {
+            state.admin_limiter().record_failure(client_ip_for_throttle);
             let path = req.uri().path().to_string();
             let method = req.method().to_string();
             let client_ip = crate::client_ip::resolve_client_ip(
@@ -298,4 +318,162 @@ pub async fn admin_auth_middleware(
         }
     }
     next.run(req).await
+}
+
+/// Per-IP failed-attempt throttle for the admin API, plus a per-key cap on
+/// concurrent dashboard WebSocket streams (OP-27).
+///
+/// Security: the admin surface previously had no throttle at all — an
+/// attacker could hammer `authenticate_admin` (SHA-256 + SQLite lookup per
+/// attempt) and open unlimited `/admin/ws` upgrades per key. Key entropy
+/// (~190 bits) makes brute force impractical, but the throttle removes the
+/// cheap resource-exhaustion and log-flooding paths.
+pub struct AdminAuthLimiter {
+    /// client IP -> (failures in window, window start)
+    failures: dashmap::DashMap<std::net::IpAddr, (u32, std::time::Instant)>,
+    /// key id -> live WebSocket streams
+    ws_streams: dashmap::DashMap<openproxy_types::ids::ApiKeyId, usize>,
+}
+
+/// Max failed admin authentication attempts per IP per window.
+const ADMIN_AUTH_MAX_FAILURES: u32 = 20;
+/// Window for the failure counter.
+const ADMIN_AUTH_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+/// Max concurrent dashboard WebSocket streams per API key.
+const ADMIN_AUTH_MAX_WS_PER_KEY: usize = 32;
+
+impl Default for AdminAuthLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AdminAuthLimiter {
+    pub fn new() -> Self {
+        Self {
+            failures: dashmap::DashMap::new(),
+            ws_streams: dashmap::DashMap::new(),
+        }
+    }
+
+    /// `true` when `ip` exhausted its failure budget inside the window.
+    pub fn is_blocked(&self, ip: std::net::IpAddr) -> bool {
+        self.failures
+            .get(&ip)
+            .is_some_and(|e| e.value().0 >= ADMIN_AUTH_MAX_FAILURES)
+    }
+
+    /// Count one failed attempt; resets the window when it expired.
+    pub fn record_failure(&self, ip: std::net::IpAddr) {
+        use dashmap::mapref::entry::Entry;
+        // Bound the map under a spoofed-IP flood (matches the key cache cap).
+        if self.failures.len() >= 100_000 {
+            self.failures.clear();
+        }
+        let now = std::time::Instant::now();
+        match self.failures.entry(ip) {
+            Entry::Occupied(mut o) => {
+                let (count, start) = o.get_mut();
+                if start.elapsed() >= ADMIN_AUTH_WINDOW {
+                    *count = 1;
+                    *start = now;
+                } else {
+                    *count += 1;
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert((1, now));
+            }
+        }
+    }
+
+    /// A successful authentication clears the IP's failure budget.
+    pub fn record_success(&self, ip: std::net::IpAddr) {
+        self.failures.remove(&ip);
+    }
+
+    /// Acquire one WebSocket stream slot for `key`, or `None` when the key
+    /// already holds `ADMIN_AUTH_MAX_WS_PER_KEY` live streams.
+    pub fn try_acquire_ws(
+        self: &std::sync::Arc<Self>,
+        key: openproxy_types::ids::ApiKeyId,
+    ) -> Option<WsStreamGuard> {
+        use dashmap::mapref::entry::Entry;
+        if self.ws_streams.len() >= 100_000 {
+            self.ws_streams.clear();
+        }
+        match self.ws_streams.entry(key) {
+            Entry::Occupied(mut o) => {
+                if *o.get() >= ADMIN_AUTH_MAX_WS_PER_KEY {
+                    None
+                } else {
+                    *o.get_mut() += 1;
+                    Some(WsStreamGuard {
+                        key,
+                        limiter: std::sync::Arc::clone(self),
+                    })
+                }
+            }
+            Entry::Vacant(v) => {
+                v.insert(1);
+                Some(WsStreamGuard {
+                    key,
+                    limiter: std::sync::Arc::clone(self),
+                })
+            }
+        }
+    }
+}
+
+/// Releases one per-key WebSocket stream slot when dropped (i.e. when the
+/// stream task finishes).
+pub struct WsStreamGuard {
+    key: openproxy_types::ids::ApiKeyId,
+    limiter: std::sync::Arc<AdminAuthLimiter>,
+}
+
+impl Drop for WsStreamGuard {
+    fn drop(&mut self) {
+        use dashmap::mapref::entry::Entry;
+        match self.limiter.ws_streams.entry(self.key) {
+            Entry::Occupied(mut o) => {
+                if *o.get() <= 1 {
+                    o.remove();
+                } else {
+                    *o.get_mut() -= 1;
+                }
+            }
+            Entry::Vacant(_) => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod limiter_tests {
+    use super::*;
+
+    #[test]
+    fn admin_auth_failure_throttle_blocks_after_budget() {
+        let limiter = std::sync::Arc::new(AdminAuthLimiter::new());
+        let ip: std::net::IpAddr = "203.0.113.77".parse().unwrap();
+        for _ in 0..ADMIN_AUTH_MAX_FAILURES {
+            assert!(!limiter.is_blocked(ip));
+            limiter.record_failure(ip);
+        }
+        assert!(limiter.is_blocked(ip), "blocked at budget");
+        limiter.record_success(ip);
+        assert!(!limiter.is_blocked(ip), "success clears the budget");
+    }
+
+    #[test]
+    fn ws_per_key_cap_releases_on_drop() {
+        let limiter = std::sync::Arc::new(AdminAuthLimiter::new());
+        let key = openproxy_types::ids::ApiKeyId(9);
+        let guards: Vec<_> = (0..ADMIN_AUTH_MAX_WS_PER_KEY)
+            .map(|_| limiter.try_acquire_ws(key).expect("slot"))
+            .collect();
+        assert!(limiter.try_acquire_ws(key).is_none(), "cap reached");
+        drop(guards);
+        assert!(limiter.try_acquire_ws(key).is_some(), "released on drop");
+    }
 }

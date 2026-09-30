@@ -175,6 +175,7 @@ impl AppState {
             supervisor,
             api_key_cache,
             ws_tickets: Arc::new(super::WsTicketStore::new()),
+            admin_limiter: Arc::new(crate::handlers::admin::auth::AdminAuthLimiter::new()),
         };
 
         Ok(state)
@@ -302,6 +303,7 @@ impl AppState {
             supervisor,
             api_key_cache,
             ws_tickets: Arc::new(super::WsTicketStore::new()),
+            admin_limiter: Arc::new(crate::handlers::admin::auth::AdminAuthLimiter::new()),
         }
     }
 }

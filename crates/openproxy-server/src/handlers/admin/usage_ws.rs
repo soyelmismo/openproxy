@@ -86,9 +86,31 @@ pub async fn usage_stream(
     }
 
     match authenticate_admin_ws(&s, &headers, q.ticket.as_deref(), Some(&addr)) {
-        Ok(_identity) => ws
-            .on_upgrade(move |socket| stream_usage_rows(socket, s))
-            .into_response(),
+        Ok(identity) => {
+            // Security (OP-27): cap concurrent dashboard streams per key so a
+            // single manage key cannot pin unlimited WS tasks. Dev-bypass
+            // sessions carry no key and are not capped (feature-gated builds
+            // only).
+            let ws_guard = match identity.key.as_ref().map(|k| k.id) {
+                Some(key_id) => match s.admin_limiter_arc().try_acquire_ws(key_id) {
+                    Some(guard) => Some(guard),
+                    None => {
+                        return (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            "too many concurrent dashboard streams for this key",
+                        )
+                            .into_response();
+                    }
+                },
+                None => None,
+            };
+            ws.on_upgrade(move |socket| {
+                let s = s;
+                let _guard = ws_guard;
+                async move { stream_usage_rows(socket, s).await }
+            })
+            .into_response()
+        }
         Err(e) => e.into_response(),
     }
 }
