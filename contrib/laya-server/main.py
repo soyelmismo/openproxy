@@ -6,16 +6,39 @@ Provides a fast local inference server implementing the System One protocol
 Usage:
     pip install -r requirements.txt
     python main.py --model convaiinnovations/laya --port 8000
+
+Security (OP-11):
+    - Binds 127.0.0.1 by default (was 0.0.0.0 — any host on the network
+      could consume the model without a credential).
+    - Optional API key: --api-key SECRET requires `Authorization: Bearer SECRET`
+      on every endpoint. Generate one with `openssl rand -hex 32`.
 """
 
 import argparse
+import hmac
+import os
 import time
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 import uvicorn
 
 app = FastAPI(title="Laya System One Server", version="1.0.0")
+
+# Set by main() from --api-key / LAYA_SERVER_API_KEY (OP-11). Empty string
+# disables auth (kept for local, loopback-only use).
+API_KEY = ""
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    """OP-11: reject unauthenticated callers when a key is configured."""
+    if API_KEY:
+        provided = request.headers.get("authorization", "")
+        expected = f"Bearer {API_KEY}"
+        if not hmac.compare_digest(provided, expected):
+            raise HTTPException(status_code=401, detail="missing or invalid API key")
+    return await call_next(request)
 
 class SystemOneQuestion(BaseModel):
     type: str = "categorical"
@@ -131,9 +154,25 @@ def main():
     parser = argparse.ArgumentParser(description="Run Laya System One Server")
     parser.add_argument("--model", default="convaiinnovations/laya", help="Hugging Face model ID")
     parser.add_argument("--device", default="cpu", help="Device to run on ('cpu' or 'cuda')")
-    parser.add_argument("--host", default="0.0.0.0", help="Host address")
+    # Security (OP-11): loopback by default — this reference server has no
+    # built-in tenancy or rate limiting and must not face a network.
+    parser.add_argument("--host", default="127.0.0.1", help="Host address (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("LAYA_SERVER_API_KEY", ""),
+        help="Require 'Authorization: Bearer <key>' on every endpoint "
+        "(or set LAYA_SERVER_API_KEY). Empty = no auth (loopback use only).",
+    )
     args = parser.parse_args()
+
+    global API_KEY
+    API_KEY = args.api_key
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not API_KEY:
+        print(
+            "WARNING (OP-11): binding a non-loopback interface without --api-key; "
+            "anyone on the network will be able to use this server."
+        )
 
     init_model(args.model, args.device)
     uvicorn.run(app, host=args.host, port=args.port)

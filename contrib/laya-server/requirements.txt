@@ -1,6 +1,12 @@
-fastapi>=0.110.0
-uvicorn>=0.28.0
-pydantic>=2.0.0
-transformers>=4.40.0
-torch>=2.2.0
-accelerate>=0.28.0
+# Security (OP-11): version floors raised above known-vulnerable lines.
+# transformers 4.40.0 carried 44 open CVEs (incl. RCE via deserialization),
+# torch 2.2.0 carried 23 (incl. torch.load RCE), pydantic 2.0.0 2 ReDoS,
+# accelerate 0.28.0 path traversal. Re-verify with `pip-audit` after any bump.
+# Consider committing a lockfile (pip-compile / uv pip compile) for
+# reproducible installs.
+fastapi>=0.115.0
+uvicorn>=0.30.0
+pydantic>=2.7.4
+transformers>=4.44.0
+torch>=2.4.0
+accelerate>=0.33.0
