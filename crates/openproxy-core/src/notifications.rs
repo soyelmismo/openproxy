@@ -204,6 +204,9 @@ pub fn insert_and_broadcast(
 /// broadcast from within the tx (the row isn't visible to other connections
 /// until commit). Called AFTER the transaction commits.
 ///
+/// Dispatches broadcast asynchronously if a Tokio runtime is present, releasing
+/// the caller and its database connection lock before channel transmission (AGENTS.md §4.3).
+///
 /// Never bubbles: `send` errors from an empty receiver set are expected during
 /// cold start and unit tests.
 pub fn broadcast_one(
@@ -218,16 +221,27 @@ pub fn broadcast_one(
     }
     let created_at = openproxy_db::notifications::get_created_at(conn, id)?
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    if let Some(tx) = try_get_tx() {
-        // `send` errors when no receivers are attached, which is expected.
-        let _ = tx.send(NotificationEvent {
-            id,
-            kind: kind.to_string(),
-            payload: payload.to_owned(),
-            created_at,
-        });
-    }
+    broadcast_event(NotificationEvent {
+        id,
+        kind: kind.to_string(),
+        payload: payload.to_owned(),
+        created_at,
+    });
     Ok(())
+}
+
+/// Broadcast a [`NotificationEvent`] to subscribers, offloading transmission to the
+/// background runtime when available to decouple channel delivery from database locks.
+pub fn broadcast_event(event: NotificationEvent) {
+    if let Some(tx) = try_get_tx() {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = tx.send(event);
+            });
+        } else {
+            let _ = tx.send(event);
+        }
+    }
 }
 
 /// Insert + broadcast for system notifications. The dedup key is the `code`,
@@ -553,5 +567,17 @@ mod tests {
         let reinserted = insert_many(&conn, KIND_MODEL_NEW, &rows).unwrap();
         assert_eq!(reinserted.len(), count);
         assert_eq!(inserted, reinserted);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_one_releases_lock_without_blocking() {
+        init_broadcast();
+        let conn = fresh_db();
+        let payload = serde_json::json!({"test": "data"});
+        let id = insert(&conn, KIND_MODEL_NEW, &payload, Some("p_test:m_test"), Some("p_test"))
+            .unwrap()
+            .unwrap();
+        let res = broadcast_one(&conn, id, KIND_MODEL_NEW, &payload);
+        assert!(res.is_ok());
     }
 }
