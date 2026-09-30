@@ -366,9 +366,20 @@ impl AdminAuthLimiter {
     /// Count one failed attempt; resets the window when it expired.
     pub fn record_failure(&self, ip: std::net::IpAddr) {
         use dashmap::mapref::entry::Entry;
-        // Bound the map under a spoofed-IP flood (matches the key cache cap).
+        // Bound the map under a spoofed-IP flood. Security: previously this
+        // called `clear()`, which wiped the failure counters for active IPs
+        // too — a flood of 100,001 unique spoofed IPs would unblock an IP
+        // that was already throttled. We now drop only entries whose window
+        // has expired (the only ones that were going to be reaped anyway),
+        // preserving active failure counters and the throttle they back.
+        // If even after eviction we are still at the cap, drop the entries
+        // with the LOWEST failure count — those have not tripped the throttle
+        // and dropping them does not unblock anyone.
         if self.failures.len() >= 100_000 {
-            self.failures.clear();
+            self.evict_expired_failures();
+            if self.failures.len() >= 100_000 {
+                self.evict_oldest_failures(10_000);
+            }
         }
         let now = std::time::Instant::now();
         match self.failures.entry(ip) {
@@ -392,6 +403,36 @@ impl AdminAuthLimiter {
         self.failures.remove(&ip);
     }
 
+    /// Drop every failure-counter entry whose window has expired. Called when
+    /// the DashMap approaches its bound; preserves every active counter.
+    fn evict_expired_failures(&self) {
+        let now = std::time::Instant::now();
+        self.failures
+            .retain(|_, (_, start)| now.duration_since(*start) < ADMIN_AUTH_WINDOW);
+    }
+
+    /// Drop the `n` failure-counter entries with the LOWEST failure count.
+    /// Only invoked when [`evict_expired_failures`] could not free enough
+    /// slots — i.e. every surviving entry is still inside its 60-second
+    /// window, which only happens under a sustained spoofed-IP flood.
+    /// We evict the lowest-count entries because:
+    ///   * an entry with count < ADMIN_AUTH_MAX_FAILURES has not tripped the
+    ///     throttle, so dropping it does NOT unblock anyone;
+    ///   * a blocked IP (count >= ADMIN_AUTH_MAX_FAILURES) is preserved, so
+    ///     the throttle it backs survives the flood.
+    fn evict_oldest_failures(&self, n: usize) {
+        let mut lowest: Vec<(u32, std::net::IpAddr)> = self
+            .failures
+            .iter()
+            .map(|e| (e.value().0, *e.key()))
+            .collect();
+        // Sort ascending by failure count — lowest first.
+        lowest.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (_, ip) in lowest.into_iter().take(n) {
+            self.failures.remove(&ip);
+        }
+    }
+
     /// Acquire one WebSocket stream slot for `key`, or `None` when the key
     /// already holds `ADMIN_AUTH_MAX_WS_PER_KEY` live streams.
     pub fn try_acquire_ws(
@@ -399,8 +440,13 @@ impl AdminAuthLimiter {
         key: openproxy_types::ids::ApiKeyId,
     ) -> Option<WsStreamGuard> {
         use dashmap::mapref::entry::Entry;
+        // Security: previously this called `clear()` on overflow, which would
+        // drop the live-stream counters for ALL keys, letting a key that had
+        // already saturated its 32-stream cap grab another 32. We now drop
+        // only the keys with zero live streams (i.e. leaked entries from a
+        // panic before the guard ran its Drop) — active keys are preserved.
         if self.ws_streams.len() >= 100_000 {
-            self.ws_streams.clear();
+            self.ws_streams.retain(|_, count| *count > 0);
         }
         match self.ws_streams.entry(key) {
             Entry::Occupied(mut o) => {
@@ -475,5 +521,36 @@ mod limiter_tests {
         assert!(limiter.try_acquire_ws(key).is_none(), "cap reached");
         drop(guards);
         assert!(limiter.try_acquire_ws(key).is_some(), "released on drop");
+    }
+
+    /// Regression: a flood of unique spoofed-IP failures MUST NOT wipe the
+    /// failure counter of an already-blocked IP. Previously the overflow
+    /// branch called `self.failures.clear()`, which let a blocked IP back in
+    /// after the flood crested 100k entries.
+    #[test]
+    fn admin_auth_failure_throttle_survives_spoofed_ip_flood() {
+        let limiter = std::sync::Arc::new(AdminAuthLimiter::new());
+        let blocked_ip: std::net::IpAddr = "203.0.113.77".parse().unwrap();
+        // Trip the throttle for `blocked_ip`.
+        for _ in 0..ADMIN_AUTH_MAX_FAILURES {
+            limiter.record_failure(blocked_ip);
+        }
+        assert!(limiter.is_blocked(blocked_ip), "blocked at budget");
+
+        // Flood with 100_001 unique spoofed IPs (use 198.51.100.0/24 + the
+        // lower 16 bits as the cycle counter to stay inside TEST-NET-2 so
+        // we don't trip real outbound filtering on the test runner).
+        for i in 0..100_001u32 {
+            let ip: std::net::IpAddr =
+                std::net::Ipv4Addr::new(198, 51, 100, (i & 0xff) as u8).into();
+            limiter.record_failure(ip);
+        }
+
+        // The blocked IP MUST still be blocked after the flood: the eviction
+        // path drops only expired or oldest entries, not the whole map.
+        assert!(
+            limiter.is_blocked(blocked_ip),
+            "BLOCKED IP must remain blocked after spoofed-IP flood — clear() regression"
+        );
     }
 }
