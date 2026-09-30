@@ -32,6 +32,26 @@ pub struct DiscoveredAccount {
     pub source_path: PathBuf,
 }
 
+impl DiscoveredAccount {
+    /// Security (OP-18): a metadata-only copy for dry-run / preview
+    /// responses. The raw OAuth tokens read from the host's filesystem must
+    /// not be echoed back over HTTP — a manage key is enough to trigger the
+    /// scan, and the response used to carry the full credentials.
+    pub fn redacted(&self) -> Self {
+        Self {
+            provider_id: self.provider_id.clone(),
+            label: self.label.clone(),
+            access_token: "***redacted***".to_string(),
+            refresh_token: self
+                .refresh_token
+                .as_ref()
+                .map(|_| "***redacted***".to_string()),
+            email: self.email.clone(),
+            source_path: self.source_path.clone(),
+        }
+    }
+}
+
 /// `Some` si el token file del agy-cli existe, se parsea y trae `access_token`.
 /// Cualquier fallo (ausente, permisos, JSON inválido, sin access_token) → `None` con un `warn`
 /// log; el caller decide.

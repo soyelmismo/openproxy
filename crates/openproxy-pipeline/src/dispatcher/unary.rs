@@ -407,16 +407,23 @@ impl UpstreamDispatcher {
 
         let status_code = response.status.as_u16();
         let response_headers = self.is_recording().then(|| {
-            response
-                .headers
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.as_str().to_string(),
-                        v.to_str().unwrap_or_default().to_string(),
-                    )
-                })
-                .collect::<std::collections::BTreeMap<String, String>>()
+            // Security (OP-17): upstream responses can carry credentials back
+            // (`set-cookie` from the provider, `proxy-authorization`, ...).
+            // The recorded row is operator-visible via /admin/api/usage/detail,
+            // so it must go through the same redaction as request headers —
+            // this is the invariant documented in crate::redact.
+            crate::redact::redact_btreemap_sensitive(
+                response
+                    .headers
+                    .iter()
+                    .map(|(k, v)| {
+                        (
+                            k.as_str().to_string(),
+                            v.to_str().unwrap_or_default().to_string(),
+                        )
+                    })
+                    .collect::<std::collections::BTreeMap<String, String>>(),
+            )
         });
 
         let ttft_ms = params.started.elapsed().as_millis() as u64;

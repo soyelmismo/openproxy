@@ -516,8 +516,11 @@ pub async fn scan_accounts(
 
     // dry_run o sin auto_import: devolver sin tocar la DB.
     if q.dry_run || !q.auto_import {
+        // Security (OP-18): metadata only — strip the raw OAuth tokens from
+        // the response; they are imported encrypted via auto_import instead.
+        let scanned = discovered.iter().map(|d| d.redacted()).collect();
         return Ok(Json(ScanResponse {
-            scanned: discovered,
+            scanned,
             imported: Vec::new(),
         }));
     }
