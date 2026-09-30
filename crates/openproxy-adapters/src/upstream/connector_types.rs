@@ -13,13 +13,64 @@ use tokio_rustls::client::TlsStream as ClientTlsStream;
 
 use super::phases::UpstreamPhase;
 
+/// Transport returned by the proxy-tunnel phase (OP-28).
+///
+/// `Plain` is a raw TCP stream (direct connection, or an http/socks proxy
+/// tunnel). `TlsToProxy` is a TLS session established with an `https://`
+/// proxy, inside which the CONNECT tunnel runs — the CONNECT request and its
+/// `Proxy-Authorization: Basic` header must not travel in cleartext.
+pub enum MaybeTlsStream {
+    Plain(TcpStream),
+    TlsToProxy(ClientTlsStream<TcpStream>),
+}
+
+impl tokio::io::AsyncRead for MaybeTlsStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<Result<(), io::Error>> {
+        match &mut *self {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::TlsToProxy(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for MaybeTlsStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        match &mut *self {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::TlsToProxy(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        match &mut *self {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::TlsToProxy(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        match &mut *self {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::TlsToProxy(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
 pub enum PhasedConnection {
-    Plain(TokioIo<TcpStream>),
+    Plain(TokioIo<MaybeTlsStream>),
     /// `true` when ALPN negotiated `h2`. `connected()` hands this to
     /// hyper-util to pick the HTTP/2 or HTTP/1.1 parser; a wrong answer surfaces
     /// as `invalid HTTP version parsed` once the request reaches the body.
     Tls {
-        io: Box<TokioIo<ClientTlsStream<TcpStream>>>,
+        io: Box<TokioIo<ClientTlsStream<MaybeTlsStream>>>,
         negotiated_h2: bool,
     },
 }

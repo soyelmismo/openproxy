@@ -326,9 +326,9 @@ async fn proxy_tunnel_phase(
     host: &str,
     port: u16,
     connect_deadline: std::time::Instant,
-) -> Result<TcpStream, PhasedConnectorError> {
+) -> Result<MaybeTlsStream, PhasedConnectorError> {
     let Some(proxy_config) = proxy_config_opt else {
-        return Ok(stream);
+        return Ok(MaybeTlsStream::Plain(stream));
     };
 
     let dial_remaining = connect_deadline
@@ -369,7 +369,7 @@ fn configure_tcp_stream(stream: &TcpStream) {
 }
 
 async fn tls_phase(
-    stream: TcpStream,
+    stream: MaybeTlsStream,
     host: &str,
     connect_deadline: std::time::Instant,
     tls_timeout_config: Duration,
@@ -450,6 +450,8 @@ async fn run_phased_connect(
     let (dial_host, dial_port) = resolve_dial_target(proxy_config_opt.as_ref(), host, port);
 
     let stream = establish_raw_tcp_stream(dial_host, dial_port, connect_deadline, timeouts).await?;
+    // TCP tuning applies to the raw socket before any proxy/TLS wrapping.
+    configure_tcp_stream(&stream);
     let stream = proxy_tunnel_phase(
         stream,
         proxy_config_opt.as_ref(),
@@ -458,7 +460,6 @@ async fn run_phased_connect(
         connect_deadline,
     )
     .await?;
-    configure_tcp_stream(&stream);
 
     if is_https {
         tls_phase(stream, host, connect_deadline, timeouts.tls)

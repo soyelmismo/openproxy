@@ -146,9 +146,12 @@ async fn socks4_tunnel(
     Ok(stream)
 }
 
-async fn read_http_connect_headers(
-    stream: &mut TcpStream,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+async fn read_http_connect_headers<S>(
+    stream: &mut S,
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>>
+where
+    S: tokio::io::AsyncRead + Unpin,
+{
     use tokio::io::AsyncReadExt;
     let mut headers_buf = Vec::new();
     let mut byte_buf = [0u8; 1];
@@ -164,12 +167,15 @@ async fn read_http_connect_headers(
     }
 }
 
-async fn http_connect_tunnel(
-    mut stream: TcpStream,
+async fn http_connect_tunnel<S>(
+    mut stream: S,
     proxy: &ProxyConfig,
     dest_host: &str,
     dest_port: u16,
-) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<S, Box<dyn std::error::Error + Send + Sync>>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::AsyncWriteExt;
 
     let auth_header = if let Some(ref auth) = proxy.auth {
@@ -200,14 +206,35 @@ pub(crate) async fn run_proxy_tunnel(
     proxy: &ProxyConfig,
     dest_host: &str,
     dest_port: u16,
-) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<super::connector_types::MaybeTlsStream, Box<dyn std::error::Error + Send + Sync>> {
     let scheme = proxy.scheme.as_str();
     if scheme.eq_ignore_ascii_case("socks5") {
-        socks5_tunnel(stream, dest_host, dest_port).await
+        socks5_tunnel(stream, dest_host, dest_port)
+            .await
+            .map(super::connector_types::MaybeTlsStream::Plain)
     } else if scheme.eq_ignore_ascii_case("socks4") {
-        socks4_tunnel(stream, dest_host, dest_port).await
-    } else if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https") {
-        http_connect_tunnel(stream, proxy, dest_host, dest_port).await
+        socks4_tunnel(stream, dest_host, dest_port)
+            .await
+            .map(super::connector_types::MaybeTlsStream::Plain)
+    } else if scheme.eq_ignore_ascii_case("http") {
+        http_connect_tunnel(stream, proxy, dest_host, dest_port)
+            .await
+            .map(super::connector_types::MaybeTlsStream::Plain)
+    } else if scheme.eq_ignore_ascii_case("https") {
+        // Security (OP-28): an `https://` proxy previously degraded to a
+        // cleartext TCP CONNECT — the Basic Proxy-Authorization credentials
+        // traveled unencrypted to the proxy. Establish TLS to the PROXY first
+        // (webpki roots, SNI = proxy host), then run CONNECT inside the TLS
+        // session; the destination's own TLS handshake runs on top of the
+        // tunnel as usual.
+        let server_name = rustls::pki_types::ServerName::try_from(proxy.host.clone())
+            .map_err(|e| io::Error::other(format!("bad proxy SNI host: {e}")))?;
+        let connector = super::connector_types::tls_connector();
+        let tls_stream = connector.connect(server_name, stream).await.map_err(|e| {
+            io::Error::other(format!("TLS handshake to https proxy failed: {e}"))
+        })?;
+        let tunneled = http_connect_tunnel(tls_stream, proxy, dest_host, dest_port).await?;
+        Ok(super::connector_types::MaybeTlsStream::TlsToProxy(tunneled))
     } else {
         Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into())
     }
