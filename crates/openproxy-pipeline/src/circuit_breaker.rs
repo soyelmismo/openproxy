@@ -186,7 +186,8 @@ impl CircuitBreakerRegistry {
         g.retain(|_, e| {
             let is_actively_unhealthy =
                 e.state == Health::Unhealthy && e.unhealthy_until.is_some_and(|until| now < until);
-            let keep = is_actively_unhealthy || e.last_activity_ms.load(Ordering::Relaxed) >= cutoff;
+            let keep =
+                is_actively_unhealthy || e.last_activity_ms.load(Ordering::Relaxed) >= cutoff;
             if !keep {
                 pruned += 1;
             }

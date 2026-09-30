@@ -36,7 +36,10 @@ pub struct UsageStreamQuery {
 
 fn is_allowed_origin(origin: &str, host: &str) -> bool {
     let is_same_host = !host.is_empty()
-        && (origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://")) == Some(host));
+        && (origin
+            .strip_prefix("http://")
+            .or_else(|| origin.strip_prefix("https://"))
+            == Some(host));
     if is_same_host {
         return true;
     }
@@ -476,11 +479,13 @@ mod tests {
     fn test_is_allowed_origin() {
         assert!(is_allowed_origin("http://example.com", "example.com"));
         assert!(is_allowed_origin("https://example.com", "example.com"));
-        assert!(is_allowed_origin("http://example.com:8080", "example.com:8080"));
+        assert!(is_allowed_origin(
+            "http://example.com:8080",
+            "example.com:8080"
+        ));
         assert!(!is_allowed_origin("http://malicious.com", "example.com"));
         assert!(is_allowed_origin("http://localhost:3000", "example.com"));
         assert!(is_allowed_origin("http://127.0.0.1:8000", "example.com"));
         assert!(!is_allowed_origin("http://example.com", ""));
     }
 }
-

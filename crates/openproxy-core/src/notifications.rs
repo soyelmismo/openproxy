@@ -574,9 +574,15 @@ mod tests {
         init_broadcast();
         let conn = fresh_db();
         let payload = serde_json::json!({"test": "data"});
-        let id = insert(&conn, KIND_MODEL_NEW, &payload, Some("p_test:m_test"), Some("p_test"))
-            .unwrap()
-            .unwrap();
+        let id = insert(
+            &conn,
+            KIND_MODEL_NEW,
+            &payload,
+            Some("p_test:m_test"),
+            Some("p_test"),
+        )
+        .unwrap()
+        .unwrap();
         let res = broadcast_one(&conn, id, KIND_MODEL_NEW, &payload);
         assert!(res.is_ok());
     }

@@ -230,7 +230,10 @@ fn try_replace_image_part(part: &mut serde_json::Value) -> bool {
     };
 
     obj.clear();
-    obj.insert("type".to_string(), serde_json::Value::String("text".to_string()));
+    obj.insert(
+        "type".to_string(),
+        serde_json::Value::String("text".to_string()),
+    );
     obj.insert("text".to_string(), serde_json::Value::String(text));
 
     true
