@@ -368,7 +368,6 @@ async fn ping_antigravity_model(
     };
 
     let endpoints = [
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
         "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
         "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
     ];
@@ -388,7 +387,7 @@ async fn ping_antigravity_model(
         match upstream
             .call(
                 req,
-                openproxy_adapters::upstream::TimeoutProfile::Chat,
+                openproxy_adapters::upstream::TimeoutProfile::ModelDiscovery,
                 cancel,
             )
             .await
