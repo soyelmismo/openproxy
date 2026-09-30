@@ -21,11 +21,31 @@ use openproxy_types::{CoreError, images::ImageGenerationRequest};
 
 use crate::{error::ApiError, state::AppState};
 
-pub fn router() -> axum::Router<AppState> {
+/// Hard cap on a remotely-fetched image (`image`/`mask` URL fields).
+///
+/// Security (OP-01): the fetch used to stream the whole response into RAM
+/// (`STREAMING_BODY_LIMIT_BYTES = u64::MAX` via the streaming path), so a
+/// single unauthenticated request could bufferize an attacker-controlled
+/// amount of memory. 20 MiB comfortably covers any legitimate edit/variation
+/// input image while bounding the per-request memory exposure.
+const IMAGE_FETCH_LIMIT_BYTES: usize = 20 * 1024 * 1024;
+
+/// Build the `/v1/images` sub-router.
+///
+/// Security (OP-01): `key_auth_middleware` authenticates the `Authorization`
+/// header BEFORE the handlers run, so an unauthenticated client can no longer
+/// trigger `fetch_remote_image` (blind SSRF / unbounded download) or have its
+/// 64 MiB JSON / multipart body buffered. Model-level authorization still
+/// happens in-handler after parsing.
+pub fn router(state: &crate::state::AppState) -> axum::Router<AppState> {
     axum::Router::new()
         .route("/generations", axum::routing::post(generate_images))
         .route("/edits", axum::routing::post(edit_images))
         .route("/variations", axum::routing::post(create_image_variation))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth::key_auth_middleware,
+        ))
 }
 
 /// `POST /v1/images/generations`.
@@ -256,21 +276,67 @@ async fn fetch_remote_image(
             })?;
     }
 
-    let req = openproxy_adapters::UpstreamRequest::get(url);
+    let mut req = openproxy_adapters::UpstreamRequest::get(url);
+    // Non-streaming: the response is a single bounded asset, not an SSE pipe.
+    // This both applies the non-streaming body limit and opts out of the
+    // TTFT-derived deadline quirks of the streaming path.
+    req.is_streaming = false;
     let cancel = openproxy_adapters::CancellationToken::new();
-    let resp = upstream_client
-        .call(req, openproxy_adapters::TimeoutProfile::Chat, cancel)
+    // Dedicated short profile (OP-01): the fetch used to run under
+    // `TimeoutProfile::Chat`, whose 6 s TTFT accidentally capped the whole
+    // download while leaving the byte count unbounded. Bind the fetch
+    // explicitly instead: 10 s to first byte, 15 s max chunk gap, 60 s total.
+    let profile = openproxy_adapters::TimeoutProfile::Custom(
+        openproxy_adapters::ResolvedTimeouts {
+            dns_ms: 5_000,
+            dial_ms: 5_000,
+            tls_ms: 5_000,
+            write_ms: 5_000,
+            headers_ms: 10_000,
+            body_chunk_ms: 15_000,
+            total_ms: 60_000,
+        },
+    );
+    let mut resp = upstream_client
+        .call(req, profile, cancel)
         .await
         .map_err(|e| {
             ApiError(CoreError::UpstreamConnection(format!(
                 "failed to fetch image URL: {e}"
             )))
         })?;
-    resp.collect().await.map_err(|e| {
-        ApiError(CoreError::UpstreamConnection(format!(
-            "failed to read image URL body: {e}"
-        )))
-    })
+
+    // Security (OP-01): the origin's status was previously ignored — any 4xx/5xx
+    // body was collected as if it were a valid image.
+    if !resp.status.is_success() {
+        return Err(ApiError(CoreError::UpstreamConnection(format!(
+            "image URL returned HTTP {} (expected 2xx)",
+            resp.status
+        ))));
+    }
+
+    // Bounded collection (OP-01): abort as soon as the cap is exceeded instead
+    // of accumulating the whole response in RAM.
+    let mut buf = bytes::BytesMut::new();
+    loop {
+        let chunk = match resp.body.next_chunk().await.map_err(|e| {
+            ApiError(CoreError::UpstreamConnection(format!(
+                "failed to read image URL body: {e}"
+            )))
+        })? {
+            Some(c) => c,
+            None => break,
+        };
+        if buf.len() + chunk.len() > IMAGE_FETCH_LIMIT_BYTES {
+            return Err(ApiError(CoreError::Validation(format!(
+                "remote image exceeds the {} MiB fetch limit",
+                IMAGE_FETCH_LIMIT_BYTES / (1024 * 1024)
+            ))));
+        }
+        buf.extend_from_slice(&chunk);
+        resp.body.note_content_chunk();
+    }
+    Ok(buf.freeze())
 }
 
 fn decode_base64_image(raw: &str) -> Result<bytes::Bytes, ApiError> {

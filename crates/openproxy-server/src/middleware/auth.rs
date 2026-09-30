@@ -796,3 +796,32 @@ pub async fn auth_middleware(
     let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     Ok(next.run(req).await)
 }
+
+/// Header-only API-key gate for non-chat `/v1` endpoints (images, embeddings,
+/// audio, systemone).
+///
+/// Unlike [`auth_middleware`], this middleware authenticates the caller from
+/// the `Authorization` header alone and never reads or buffers the request
+/// body, so an unauthenticated client is rejected with 401 **before** any
+/// expensive per-endpoint work (body buffering, remote fetches, multipart
+/// parsing) can start. Model- and combo-level authorization stays in the
+/// handlers, which run after the body has been parsed.
+///
+/// Security: without this gate, `POST /v1/images/edits` and
+/// `POST /v1/images/variations` fetched attacker-supplied remote URLs before
+/// authenticating (OP-01), and the JSON/multipart extractors of the media
+/// endpoints buffered 32-64 MiB request bodies from unauthenticated clients
+/// (OP-02).
+pub async fn key_auth_middleware(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, crate::error::ApiError> {
+    let (parts, body) = req.into_parts();
+    let auth_result = authenticate(&state, &parts.headers)?;
+    let mut req = axum::extract::Request::from_parts(parts, body);
+    if let Some(res) = auth_result {
+        req.extensions_mut().insert(res);
+    }
+    Ok(next.run(req).await)
+}
