@@ -62,6 +62,46 @@ impl SlidingWindowRateLimiter {
             windows: Arc::new(DashMap::new()),
         }
     }
+
+    /// Drop the `n` window entries with the LOWEST request count, but ONLY
+    /// those that have not yet tripped the rate limit (`count < max`). Only
+    /// invoked when [`cleanup`] could not free enough slots — i.e. every
+    /// surviving entry is still inside its window. Entries that have already
+    /// tripped the rate limit (`count >= max`) are preserved so the throttle
+    /// they back survives the spoofed-key flood.
+    fn evict_lowest_count_windows(&self, n: usize) {
+        let max = self.config.max_requests;
+        let mut lowest: Vec<(u32, RateLimitKey)> = self
+            .windows
+            .iter()
+            .filter(|e| e.value().0 < max) // never evict a throttled entry
+            .map(|e| (e.value().0, e.key().clone()))
+            .collect();
+        lowest.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (_, key) in lowest.into_iter().take(n) {
+            self.windows.remove(&key);
+        }
+    }
+
+    /// Last-resort eviction when the map is still full after `cleanup` and
+    /// `evict_lowest_count_windows` (i.e. every entry is currently
+    /// throttled). We drop the OLDEST entries because they are closest to
+    /// their window expiring naturally, so the unblock window is shortest.
+    /// Without this the map could grow unboundedly under a sustained flood
+    /// of unique keys, which is a memory DoS vector that outweighs the
+    /// short-lived unblock.
+    fn evict_oldest_throttled_windows(&self, n: usize) {
+        let now = Instant::now();
+        let mut oldest: Vec<(std::time::Duration, RateLimitKey)> = self
+            .windows
+            .iter()
+            .map(|e| (now.duration_since(e.value().1), e.key().clone()))
+            .collect();
+        oldest.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (_, key) in oldest.into_iter().take(n) {
+            self.windows.remove(&key);
+        }
+    }
 }
 
 impl RateLimiter for SlidingWindowRateLimiter {
@@ -86,8 +126,20 @@ impl RateLimiter for SlidingWindowRateLimiter {
 
         if self.windows.len() >= self.config.max_capacity {
             self.cleanup();
+            // Security: previously this called `clear()`, which wiped the
+            // counters for ACTIVE windows too — a flood of unique spoofed
+            // keys would unblock keys that had already been throttled. We
+            // now drop only the entries with the LOWEST count (those have
+            // not tripped the rate limit and dropping them does not unblock
+            // anyone). Active throttles (count >= max) are preserved.
             if self.windows.len() >= self.config.max_capacity {
-                self.windows.clear();
+                self.evict_lowest_count_windows(10_000);
+                // Last resort: if every entry is currently throttled, evict
+                // the oldest ones to keep the memory bound. The unblock
+                // window is short (closest to natural expiry).
+                if self.windows.len() >= self.config.max_capacity {
+                    self.evict_oldest_throttled_windows(1_000);
+                }
             }
         }
 
@@ -164,8 +216,13 @@ impl InFlightLimiter {
     pub fn try_acquire(&self, key: RateLimitKey) -> Option<InFlightGuard> {
         use dashmap::mapref::entry::Entry;
         // Hard cap on distinct keys to bound memory under a spoofed-IP flood.
+        // Security: previously this called `clear()` on overflow, which would
+        // drop the in-flight counters for ALL keys, letting a key that had
+        // already saturated its cap grab another batch. We now drop only
+        // keys with zero in-flight requests (leaked entries from a panic
+        // before the guard ran its Drop) — active keys are preserved.
         if self.in_flight.len() >= 100_000 {
-            self.in_flight.clear();
+            self.in_flight.retain(|_, count| *count > 0);
         }
         match self.in_flight.entry(key) {
             Entry::Occupied(mut o) => {
@@ -287,8 +344,42 @@ mod tests {
         assert!(rl.check(key2));
         assert_eq!(rl.windows.len(), 2);
 
-        // The third key triggers cleanup; none expired, so the map is cleared
+        // The third key triggers cleanup; none expired, so the lowest-count
+        // entries (key1, key2 with count=1) are evicted to make room for key3.
         assert!(rl.check(key3));
         assert_eq!(rl.windows.len(), 1); // Only key3 remains
+    }
+
+    /// Regression: a flood of unique keys MUST NOT wipe the counter of a key
+    /// that was already throttled. Previously the overflow branch called
+    /// `self.windows.clear()`, which let a throttled key back in after the
+    /// flood crested `max_capacity`.
+    #[test]
+    fn throttle_survives_spoofed_key_flood() {
+        let rl = SlidingWindowRateLimiter::new(RateLimitConfig {
+            max_requests: 10,
+            window: Duration::from_secs(60),
+            max_capacity: 100,
+        });
+
+        // Trip the throttle for `blocked_key` (count reaches max=10).
+        let blocked_key = RateLimitKey::Key(ApiKeyId(1));
+        for _ in 0..10 {
+            assert!(rl.check(blocked_key.clone()));
+        }
+        assert!(!rl.check(blocked_key.clone()), "blocked at budget");
+
+        // Flood with unique keys. Each flood key has count=1 (below max=10),
+        // so eviction drops THEM, not `blocked_key` (count=10 = max).
+        for i in 2..200i64 {
+            let k = RateLimitKey::Key(ApiKeyId(i));
+            let _ = rl.check(k);
+        }
+
+        // The throttled key MUST still be throttled after the flood.
+        assert!(
+            !rl.check(blocked_key),
+            "BLOCKED key must remain blocked after spoofed-key flood — clear() regression"
+        );
     }
 }
