@@ -617,7 +617,10 @@ mod tests {
         assert_eq!(settings.len(), 5);
         for s in &settings {
             assert!(matches!(s.category, std::borrow::Cow::Borrowed(_)));
-            assert!(matches!(s.threshold, std::borrow::Cow::Borrowed("BLOCK_NONE")));
+            assert!(matches!(
+                s.threshold,
+                std::borrow::Cow::Borrowed("BLOCK_NONE")
+            ));
         }
     }
 }

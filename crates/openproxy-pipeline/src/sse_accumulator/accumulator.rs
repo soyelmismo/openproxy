@@ -239,10 +239,7 @@ impl ResponseAccumulator {
             Some(String::from_utf8_lossy(&self.content))
         };
 
-        let reasoning_content = self
-            .reasoning
-            .as_ref()
-            .map(|r| String::from_utf8_lossy(r));
+        let reasoning_content = self.reasoning.as_ref().map(|r| String::from_utf8_lossy(r));
 
         let tool_calls = if self.tool_calls.is_empty() {
             None

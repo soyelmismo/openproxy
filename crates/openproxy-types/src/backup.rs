@@ -337,3 +337,51 @@ pub struct RestoreReport {
     pub migrations_applied: usize,
     pub message: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_backup_bundle_serde_defaults() {
+        let json = r#"{
+            "version": 1,
+            "exported_at": "2026-03-30T00:00:00Z",
+            "openproxy_version": "1.0.0"
+        }"#;
+
+        let bundle: BackupBundle =
+            serde_json::from_str(json).expect("failed to deserialize minimal BackupBundle");
+        assert_eq!(bundle.version, 1);
+        assert_eq!(bundle.exported_at, "2026-03-30T00:00:00Z");
+        assert_eq!(bundle.openproxy_version, "1.0.0");
+        assert!(!bundle.encrypted);
+        assert!(bundle.kdf.is_none());
+        assert!(bundle.payload.is_none());
+    }
+
+    #[test]
+    fn test_restore_report_serde() {
+        let report = RestoreReport {
+            success: true,
+            safety_backup_path: None,
+            providers_restored: 1,
+            accounts_restored: 2,
+            models_restored: 3,
+            combos_restored: 4,
+            combo_targets_restored: 5,
+            proxy_sources_restored: 6,
+            api_keys_restored: 7,
+            app_config_restored: 8,
+            migrations_applied: 0,
+            message: "Restore successful".to_string(),
+        };
+
+        let json = serde_json::to_string(&report).expect("failed to serialize RestoreReport");
+        assert!(!json.contains("safety_backup_path"));
+
+        let deserialized: RestoreReport =
+            serde_json::from_str(&json).expect("failed to deserialize RestoreReport");
+        assert_eq!(report, deserialized);
+    }
+}

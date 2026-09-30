@@ -1,6 +1,5 @@
 use crate::{
-    ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult,
-    SingleExecutionParams,
+    ErrorPhase, FailureContext, Pipeline, PipelineRequest, PipelineResult, SingleExecutionParams,
 };
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
