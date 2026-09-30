@@ -52,6 +52,11 @@ pub fn build_router(state: AppState) -> Router {
     let public_api_routes = handlers::public_api_routes(&state);
     let admin_routes = build_admin_router(&state);
 
+    // Security (OP-14): honor the configured `server.request_max_body_bytes`
+    // (default 10 MiB) instead of a hardcoded 32 MiB that ignored the setting.
+    // Admin backup restore raises its own per-route limit (see backup.rs).
+    let request_body_limit = state.config().server.request_max_body_bytes;
+
     Router::new()
         .route(
             "/",
@@ -68,12 +73,10 @@ pub fn build_router(state: AppState) -> Router {
         .layer(middleware::from_fn(
             crate::middleware::request_id::request_id,
         ))
-        // 32 MiB: axum's 2 MiB default is too small for a long-context prompt
-        // (tens of KiB of system prompt + tool definitions) and leaves admin JSON
-        // extractors (combo targets, bulk_toggle_models, reorder_combo_targets)
-        // without a project-wide ceiling. Request bodies only — SSE responses
-        // are unaffected.
-        .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024))
+        // Request bodies only — SSE responses are unaffected. Backup restore
+        // and other admin routes that legitimately need larger payloads raise
+        // this with their own per-route `DefaultBodyLimit`.
+        .layer(axum::extract::DefaultBodyLimit::max(request_body_limit))
         .with_state(state)
         // Outermost so every response carries the browser security headers;
         // policy rationale in `middleware::security_headers`.

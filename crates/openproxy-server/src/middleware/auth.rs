@@ -698,10 +698,14 @@ pub async fn auth_middleware(
 
     let auth_result = authenticate(&state, &parts.headers)?;
 
-    let bytes = match read_request_body_capped(body, 32 * 1024 * 1024).await {
-        Ok(b) => b,
-        Err(resp) => return Ok(*resp),
-    };
+    // Security (OP-14): use the configured request body limit instead of a
+    // hardcoded 32 MiB that ignored `server.request_max_body_bytes`.
+    let bytes =
+        match read_request_body_capped(body, state.config().server.request_max_body_bytes).await
+        {
+            Ok(b) => b,
+            Err(resp) => return Ok(*resp),
+        };
 
     let mut parsed: openproxy_types::OpenAIRequest = if is_responses {
         let responses_req: openproxy_types::ResponsesRequest = serde_json::from_slice(&bytes)

@@ -107,7 +107,12 @@ pub async fn edit_images(
     headers: HeaderMap,
     req: Request,
 ) -> Result<Response, ApiError> {
-    let parsed_body = parse_image_request(req, state.upstream_client()).await?;
+    let parsed_body = parse_image_request(
+        req,
+        state.upstream_client(),
+        state.config().server.request_max_body_bytes,
+    )
+    .await?;
     validate_image_edit_body(&parsed_body)?;
 
     let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
@@ -127,7 +132,12 @@ pub async fn create_image_variation(
     headers: HeaderMap,
     req: Request,
 ) -> Result<Response, ApiError> {
-    let parsed_body = parse_image_request(req, state.upstream_client()).await?;
+    let parsed_body = parse_image_request(
+        req,
+        state.upstream_client(),
+        state.config().server.request_max_body_bytes,
+    )
+    .await?;
 
     if !parsed_body
         .files
@@ -198,6 +208,7 @@ async fn parse_image_json(
 async fn parse_image_request(
     req: Request,
     upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
+    body_limit: usize,
 ) -> Result<ParsedImageMultipartBody, ApiError> {
     let is_multipart = req
         .headers()
@@ -212,7 +223,11 @@ async fn parse_image_request(
         return parse_image_multipart(multipart).await;
     }
 
-    let body_bytes = axum::body::to_bytes(req.into_body(), 64 * 1024 * 1024)
+    // Security (OP-14): the JSON body limit is the configured
+    // `request_max_body_bytes` (it was a hardcoded 64 MiB — 2x the old global
+    // 32 MiB ceiling — on an endpoint whose body is parsed before the model
+    // is dispatched).
+    let body_bytes = axum::body::to_bytes(req.into_body(), body_limit)
         .await
         .map_err(|e| ApiError(CoreError::Validation(format!("read body: {e}"))))?;
 

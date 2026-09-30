@@ -18,6 +18,9 @@ pub fn router() -> axum::Router<AppState> {
         .route("/export", axum::routing::get(export_backup_handler))
         .route("/validate", axum::routing::post(validate_backup_handler))
         .route("/restore", axum::routing::post(restore_backup_handler))
+        // Per-route override (OP-14): restore bundles legitimately exceed the
+        // global `request_max_body_bytes`; this admin-only, authenticated
+        // endpoint keeps an explicit 50 MiB ceiling.
         .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024))
 }
 
