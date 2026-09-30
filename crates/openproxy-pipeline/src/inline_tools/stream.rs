@@ -66,31 +66,34 @@ impl StreamingChunkStage for InlineToolStreamExtractor {
             && !payload.contains('<')
             && !payload.contains("[TOOL_CALLS]")
         {
-            if self.emitted_tool_call
-                && (payload.contains("\"finish_reason\":\"stop\"")
-                    || payload.contains("\"finish_reason\": \"stop\"")
-                    || payload.contains("\"finish_reason\":\"end_turn\"")
-                    || payload.contains("\"finish_reason\": \"end_turn\""))
-            {
-                return StreamAction::Mutate(
-                    payload
-                        .replace(
-                            "\"finish_reason\":\"stop\"",
-                            "\"finish_reason\":\"tool_calls\"",
-                        )
-                        .replace(
-                            "\"finish_reason\": \"stop\"",
-                            "\"finish_reason\": \"tool_calls\"",
-                        )
-                        .replace(
-                            "\"finish_reason\":\"end_turn\"",
-                            "\"finish_reason\":\"tool_calls\"",
-                        )
-                        .replace(
-                            "\"finish_reason\": \"end_turn\"",
-                            "\"finish_reason\": \"tool_calls\"",
-                        ),
-                );
+            if self.emitted_tool_call {
+                const TARGETS: [(&str, &str); 4] = [
+                    (
+                        "\"finish_reason\":\"stop\"",
+                        "\"finish_reason\":\"tool_calls\"",
+                    ),
+                    (
+                        "\"finish_reason\": \"stop\"",
+                        "\"finish_reason\": \"tool_calls\"",
+                    ),
+                    (
+                        "\"finish_reason\":\"end_turn\"",
+                        "\"finish_reason\":\"tool_calls\"",
+                    ),
+                    (
+                        "\"finish_reason\": \"end_turn\"",
+                        "\"finish_reason\": \"tool_calls\"",
+                    ),
+                ];
+                for &(from, to) in &TARGETS {
+                    if let Some(pos) = payload.find(from) {
+                        let mut res = String::with_capacity(payload.len() + to.len() - from.len());
+                        res.push_str(&payload[..pos]);
+                        res.push_str(to);
+                        res.push_str(&payload[pos + from.len()..]);
+                        return StreamAction::Mutate(res);
+                    }
+                }
             }
             return StreamAction::Passthrough;
         }
