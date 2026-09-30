@@ -70,8 +70,21 @@ fn configure_allocator() {
     }
 }
 
+fn resolve_config_path() -> String {
+    env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| {
+        let home_cfg = env::var("HOME").ok().map(|h| format!("{h}/.openproxy/config.toml"));
+        if let Some(ref p) = home_cfg
+            && std::path::Path::new(p).exists()
+        {
+            p.clone()
+        } else {
+            "config.toml".to_string()
+        }
+    })
+}
+
 fn load_server_config() -> anyhow::Result<AppConfig> {
-    let config_path = env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
+    let config_path = resolve_config_path();
     let config = AppConfig::load_or_default(&config_path)?;
     openproxy_server::telemetry::init(&config.logging)?;
     Ok(config)
@@ -180,8 +193,7 @@ fn main() -> anyhow::Result<()> {
     // TCP connect against the configured bind address and exits 0/1 — usable
     // by Docker/Kubernetes without any extra tooling in the image.
     if std::env::args().any(|a| a == "--healthcheck") {
-        let config_path =
-            env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
+        let config_path = resolve_config_path();
         let config = AppConfig::load_or_default(&config_path)?;
         let bind = config.server.bind;
         let addr = bind
