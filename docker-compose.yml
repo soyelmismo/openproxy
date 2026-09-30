@@ -44,14 +44,10 @@ services:
       # `RUST_LOG` overrides [logging].level if set.
       - RUST_LOG=info
     restart: unless-stopped
-    # The Dockerfile already declares a HEALTHCHECK; this is a Compose-level
-    # hint for `docker compose ps` to show health status.
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--spider", "--timeout=3", "--tries=1", "http://127.0.0.1:8787/v1/health"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
+    # Security/ops (OP-23): the image declares a real HEALTHCHECK
+    # (`openproxy --healthcheck`, TCP connect — distroless has no wget), so
+    # Compose inherits it from the image; no broken wget-based test here
+    # anymore (it kept the container permanently `unhealthy`).
 
 volumes:
   openproxy-data:

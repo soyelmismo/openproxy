@@ -178,6 +178,37 @@ async fn serve_with_limits(
 }
 
 fn main() -> anyhow::Result<()> {
+    // Healthcheck mode (OP-23): distroless containers have no shell, wget or
+    // curl, so the image's HEALTHCHECK invokes the binary itself. This runs a
+    // TCP connect against the configured bind address and exits 0/1 — usable
+    // by Docker/Kubernetes without any extra tooling in the image.
+    if std::env::args().any(|a| a == "--healthcheck") {
+        let config_path =
+            env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
+        let config = AppConfig::load_or_default(&config_path)?;
+        let bind = config.server.bind;
+        let addr = bind
+            .parse::<std::net::SocketAddr>()
+            .or_else(|_| {
+                // Bind strings like "localhost:8787" need DNS; try the
+                // canonical loopback form as a fallback.
+                bind.replacen("localhost", "127.0.0.1", 1)
+                    .parse::<std::net::SocketAddr>()
+            })
+            .map_err(|e| anyhow::anyhow!("invalid bind address {bind:?}: {e}"))?;
+        match std::net::TcpStream::connect_timeout(
+            &addr,
+            std::time::Duration::from_secs(3),
+        ) {
+            Ok(_) => Ok(()),
+            Err(e) => anyhow::bail!("healthcheck: cannot connect to {addr}: {e}"),
+        }
+    } else {
+        run_main().await
+    }
+}
+
+async fn run_main() -> anyhow::Result<()> {
     // 0. Programmatic allocator configuration: tune mimalloc before telemetry,
     //    the Tokio runtime, or any DB connection exists.
     configure_allocator();

@@ -68,5 +68,11 @@ EXPOSE 8787
 # Persistent state: SQLite database, encryption key file, models, etc.
 VOLUME ["/var/lib/openproxy"]
 
+# Security (OP-23): real HEALTHCHECK. Distroless has no shell/wget/curl, so
+# the binary checks itself: `openproxy --healthcheck` TCP-connects to the
+# configured bind address and exits 0/1.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["/usr/local/bin/openproxy", "--healthcheck"]
+
 ENTRYPOINT ["/usr/local/bin/openproxy"]
 CMD ["--config", "/etc/openproxy/config.toml"]

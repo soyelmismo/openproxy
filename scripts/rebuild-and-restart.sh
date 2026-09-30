@@ -80,19 +80,18 @@ if [[ -d "$WEB_DIR" && -f "$WEB_DIR/package.json" ]]; then
   fi
   log "pnpm install --frozen-lockfile  (en $WEB_DIR)"
   PNPM_ERR=$(mktemp)
-  if ! (cd "$WEB_DIR" && pnpm install --config.minimum-release-age=0 --frozen-lockfile) >"$PNPM_ERR" 2>&1; then
-    if grep -Eq "ERR_PNPM_OUTDATED_LOCKFILE|ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION" "$PNPM_ERR"; then
-      log "⚠️  lockfile o políticas desincronizadas — reintentando con --no-frozen-lockfile y --config.minimum-release-age=0"
-      (cd "$WEB_DIR" && pnpm install --config.minimum-release-age=0 --no-frozen-lockfile)
-    else
-      cat "$PNPM_ERR" >&2
-      rm -f "$PNPM_ERR"
-      die "pnpm install falló"
-    fi
+  # Security (OP-24): keep pnpm's minimum-release-age supply-chain guard ON
+  # and keep the lockfile frozen. A production deploy script must fail loudly
+  # on a desynchronized lockfile instead of silently pulling unvetted
+  # packages that end up embedded in the binary via rust-embed.
+  if ! (cd "$WEB_DIR" && pnpm install --frozen-lockfile) >"$PNPM_ERR" 2>&1; then
+    cat "$PNPM_ERR" >&2
+    rm -f "$PNPM_ERR"
+    die "pnpm install falló (lockfile desincronizado: ejecutá 'pnpm install' manualmente, revisá el lockfile y comitealo; NO se degrada --frozen-lockfile ni minimum-release-age en deploy)"
   fi
   rm -f "$PNPM_ERR"
   log "pnpm build  (esbuild emite a $WEB_DIR/src/static/dist/)"
-  (cd "$WEB_DIR" && pnpm --config.minimum-release-age=0 run build)
+  (cd "$WEB_DIR" && pnpm run build)
   # Sanity check: app.js (esbuild bundle) + 2 .d.ts files que demuestran
   # que tsc caminó todo el source tree (esbuild inlinea todo en app.js,
   # así que los .js por módulo no se emiten más).
