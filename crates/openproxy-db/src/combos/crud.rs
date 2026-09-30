@@ -100,10 +100,9 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
                 "UPDATE combos SET race_size = ?1 WHERE id = ?2",
                 params![i64::from(rs), id.0],
             )
-            .map_err(|e| crate::error::map_db_error_ctx(format!(
-                "update race_size for combo {}",
-                id.0
-            ))(e))?;
+            .map_err(|e| {
+                crate::error::map_db_error_ctx(format!("update race_size for combo {}", id.0))(e)
+            })?;
         if affected == 0 {
             return Err(CoreError::ComboNotFound(id.0));
         }
@@ -121,10 +120,9 @@ pub fn update_strategy(conn: &Connection, id: ComboId, strategy: &str) -> Result
             "UPDATE combos SET strategy = ?1 WHERE id = ?2",
             params![parsed.as_str(), id.0],
         )
-        .map_err(|e| crate::error::map_db_error_ctx(format!(
-            "update strategy for combo {}",
-            id.0
-        ))(e))?;
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!("update strategy for combo {}", id.0))(e)
+        })?;
     if affected == 0 {
         return Err(CoreError::ComboNotFound(id.0));
     }
@@ -136,9 +134,8 @@ pub fn clear_targets(conn: &Connection, combo_id: ComboId) -> Result<()> {
         "DELETE FROM combo_targets WHERE combo_id = ?1",
         params![combo_id.0],
     )
-    .map_err(|e| crate::error::map_db_error_ctx(format!(
-        "clear combo_targets for combo {}",
-        combo_id.0
-    ))(e))?;
+    .map_err(|e| {
+        crate::error::map_db_error_ctx(format!("clear combo_targets for combo {}", combo_id.0))(e)
+    })?;
     Ok(())
 }

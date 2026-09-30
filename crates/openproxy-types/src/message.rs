@@ -411,7 +411,10 @@ mod tests {
         for reason in ["content_filter", "safety"] {
             assert_eq!(map_stop_reason_to_finish_reason(reason), "content_filter");
         }
-        assert_eq!(map_stop_reason_to_finish_reason("unexpected_reason"), "stop");
+        assert_eq!(
+            map_stop_reason_to_finish_reason("unexpected_reason"),
+            "stop"
+        );
     }
 
     #[test]

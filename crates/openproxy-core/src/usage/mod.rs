@@ -232,7 +232,8 @@ mod inflight_tests {
         with_attempt_key("tr-123", "req-456", |k| assert_eq!(k, "tr-123"));
         with_attempt_key("", "req-456", |k| assert_eq!(k, "req-456:unknown"));
         let long_id = "a".repeat(120);
-        with_attempt_key("", &long_id, |k| assert_eq!(k, format!("{long_id}:unknown")));
+        with_attempt_key("", &long_id, |k| {
+            assert_eq!(k, format!("{long_id}:unknown"))
+        });
     }
 }
-

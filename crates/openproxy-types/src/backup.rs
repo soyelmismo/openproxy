@@ -350,7 +350,8 @@ mod tests {
             "openproxy_version": "1.0.0"
         }"#;
 
-        let bundle: BackupBundle = serde_json::from_str(json).expect("failed to deserialize minimal BackupBundle");
+        let bundle: BackupBundle =
+            serde_json::from_str(json).expect("failed to deserialize minimal BackupBundle");
         assert_eq!(bundle.version, 1);
         assert_eq!(bundle.exported_at, "2026-03-30T00:00:00Z");
         assert_eq!(bundle.openproxy_version, "1.0.0");
@@ -379,7 +380,8 @@ mod tests {
         let json = serde_json::to_string(&report).expect("failed to serialize RestoreReport");
         assert!(!json.contains("safety_backup_path"));
 
-        let deserialized: RestoreReport = serde_json::from_str(&json).expect("failed to deserialize RestoreReport");
+        let deserialized: RestoreReport =
+            serde_json::from_str(&json).expect("failed to deserialize RestoreReport");
         assert_eq!(report, deserialized);
     }
 }

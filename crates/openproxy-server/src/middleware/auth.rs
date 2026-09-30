@@ -42,7 +42,10 @@ impl ValidatedApiToken {
             .map_or((None, model), |(p, rest)| (Some(p), rest));
 
         let full_id = provider_id.and_then(|p| {
-            if model.strip_prefix(p).is_some_and(|rest| rest.starts_with('/')) {
+            if model
+                .strip_prefix(p)
+                .is_some_and(|rest| rest.starts_with('/'))
+            {
                 None
             } else {
                 Some(format!("{p}/{model}"))
