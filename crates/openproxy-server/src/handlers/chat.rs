@@ -28,10 +28,7 @@ use std::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    error::ApiError,
-    middleware::auth::ParsedChatRequest,
-    services::PipelineRunner,
-    state::AppState,
+    error::ApiError, middleware::auth::ParsedChatRequest, services::PipelineRunner, state::AppState,
 };
 
 pub fn router(state: &AppState) -> axum::Router<AppState> {

@@ -129,10 +129,9 @@ pub fn store_oauth_tokens(
                 id.0,
             ],
         )
-        .map_err(|e| crate::error::map_db_error_ctx(format!(
-            "store_oauth_tokens for account {}",
-            id.0
-        ))(e))?;
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!("store_oauth_tokens for account {}", id.0))(e)
+        })?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }
@@ -151,10 +150,9 @@ pub fn decrypt_access_token(
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| crate::error::map_db_error_ctx(format!(
-            "select access_token for account {}",
-            id.0
-        ))(e))?
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!("select access_token for account {}", id.0))(e)
+        })?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
     let blob = blob.ok_or_else(|| {
@@ -175,10 +173,9 @@ pub fn decrypt_refresh_token(
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| crate::error::map_db_error_ctx(format!(
-            "select refresh_token for account {}",
-            id.0
-        ))(e))?
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!("select refresh_token for account {}", id.0))(e)
+        })?
         .ok_or(CoreError::AccountNotFound(id.0))?;
 
     blob.map(|b| master_key.decrypt(&b)).transpose()
@@ -530,9 +527,11 @@ where
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| crate::error::map_db_error_ctx(format!(
-            "read_provider_meta for account {account_id}"
-        ))(e))?;
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!("read_provider_meta for account {account_id}"))(
+                e,
+            )
+        })?;
 
     let Some(raw) = raw.flatten() else {
         return Ok(None);
