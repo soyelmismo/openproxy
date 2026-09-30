@@ -1,6 +1,5 @@
-//! Streaming response body accumulator implementation.
-
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::translation::OpenAIUsage;
 
@@ -224,62 +223,7 @@ impl ResponseAccumulator {
         self.truncated
     }
 
-    fn build_finish_extra(&self) -> Map<String, Value> {
-        let mut extra = Map::new();
-        if let Some(reasoning) = &self.reasoning {
-            extra.insert(
-                "reasoning_content".to_string(),
-                Value::String(String::from_utf8_lossy(reasoning).into_owned()),
-            );
-        }
-        if !self.tool_calls.is_empty() {
-            let tool_calls_value: Vec<Value> = self
-                .tool_calls
-                .iter()
-                .map(|tc| {
-                    json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": tc.arguments,
-                        }
-                    })
-                })
-                .collect();
-            extra.insert("tool_calls".to_string(), Value::Array(tool_calls_value));
-        }
-        if self.truncated {
-            extra.insert("truncated".to_string(), Value::Bool(true));
-        }
-        if self.partial {
-            extra.insert("partial".to_string(), Value::Bool(true));
-        }
-        extra
-    }
-
-    fn build_finish_message(&self) -> Map<String, Value> {
-        let mut message = Map::new();
-        message.insert("role".to_string(), Value::String("assistant".to_string()));
-        let content_val = if self.content.is_empty() {
-            Value::Null
-        } else {
-            Value::String(String::from_utf8_lossy(&self.content).into_owned())
-        };
-        message.insert("content".to_string(), content_val);
-        for (k, v) in self.build_finish_extra() {
-            message.insert(k, v);
-        }
-        message
-    }
-
-    fn build_finish_choice(&self) -> Map<String, Value> {
-        let mut choice = Map::new();
-        choice.insert("index".to_string(), Value::Number(0u64.into()));
-        choice.insert(
-            "message".to_string(),
-            Value::Object(self.build_finish_message()),
-        );
+    pub fn finish(&self, chunk_id: &str, created: u64, model: &str) -> Value {
         let finish_reason = match self.stop_reason.as_deref() {
             Some(
                 "tool_use" | "tool_call" | "tool_calls" | "toolUse" | "toolCall" | "toolCalls",
@@ -288,46 +232,116 @@ impl ResponseAccumulator {
             _ if !self.tool_calls.is_empty() => Some("tool_calls"),
             _ => None,
         };
-        choice.insert(
-            "finish_reason".to_string(),
-            finish_reason.map_or(Value::Null, |s| Value::String(s.to_owned())),
-        );
-        choice
-    }
 
-    pub fn finish(&self, chunk_id: &str, created: u64, model: &str) -> Value {
-        let mut response = Map::new();
-        response.insert("id".to_string(), Value::String(chunk_id.to_string()));
-        response.insert(
-            "object".to_string(),
-            Value::String("chat.completion".to_string()),
-        );
-        response.insert("created".to_string(), Value::Number(created.into()));
-        response.insert("model".to_string(), Value::String(model.to_string()));
-        response.insert(
-            "choices".to_string(),
-            Value::Array(vec![Value::Object(self.build_finish_choice())]),
-        );
-        if let Some(usage) = &self.usage {
-            let val = serde_json::to_value(usage).unwrap_or_else(|_| {
-                json!({
-                    "prompt_tokens": usage.prompt_tokens,
-                    "completion_tokens": usage.completion_tokens,
-                    "total_tokens": usage.total_tokens,
-                })
-            });
-            response.insert("usage".to_string(), val);
-        }
-        if (self.partial || (self.content.is_empty() && self.tool_calls.is_empty()))
+        let content = if self.content.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(&self.content))
+        };
+
+        let reasoning_content = self
+            .reasoning
+            .as_ref()
+            .map(|r| String::from_utf8_lossy(r));
+
+        let tool_calls = if self.tool_calls.is_empty() {
+            None
+        } else {
+            Some(
+                self.tool_calls
+                    .iter()
+                    .map(|tc| FinishToolCall {
+                        id: &tc.id,
+                        tool_type: "function",
+                        function: FinishFunction {
+                            name: &tc.name,
+                            arguments: &tc.arguments,
+                        },
+                    })
+                    .collect(),
+            )
+        };
+
+        let raw_response_body = if (self.partial
+            || (self.content.is_empty() && self.tool_calls.is_empty()))
             && !self.raw_response_body.is_empty()
         {
-            response.insert(
-                "raw_response_body".to_string(),
-                Value::String(String::from_utf8_lossy(&self.raw_response_body).into_owned()),
-            );
-        }
-        Value::Object(response)
+            Some(String::from_utf8_lossy(&self.raw_response_body))
+        } else {
+            None
+        };
+
+        let response = FinishResponse {
+            id: chunk_id,
+            object: "chat.completion",
+            created,
+            model,
+            choices: [FinishChoice {
+                index: 0,
+                message: FinishMessage {
+                    role: "assistant",
+                    content,
+                    reasoning_content,
+                    tool_calls,
+                    truncated: self.truncated,
+                    partial: self.partial,
+                },
+                finish_reason,
+            }],
+            usage: self.usage.as_ref(),
+            raw_response_body,
+        };
+
+        serde_json::to_value(response).unwrap_or_default()
     }
+}
+
+#[derive(Serialize)]
+struct FinishResponse<'a> {
+    id: &'a str,
+    object: &'static str,
+    created: u64,
+    model: &'a str,
+    choices: [FinishChoice<'a>; 1],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<&'a OpenAIUsage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    raw_response_body: Option<std::borrow::Cow<'a, str>>,
+}
+
+#[derive(Serialize)]
+struct FinishChoice<'a> {
+    index: u64,
+    message: FinishMessage<'a>,
+    finish_reason: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct FinishMessage<'a> {
+    role: &'static str,
+    content: Option<std::borrow::Cow<'a, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<std::borrow::Cow<'a, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<FinishToolCall<'a>>>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    truncated: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    partial: bool,
+}
+
+#[derive(Serialize)]
+struct FinishToolCall<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    tool_type: &'static str,
+    function: FinishFunction<'a>,
+}
+
+#[derive(Serialize)]
+struct FinishFunction<'a> {
+    name: &'a str,
+    arguments: &'a str,
 }
 
 impl crate::streaming::StreamingChunkStage for ResponseAccumulator {
