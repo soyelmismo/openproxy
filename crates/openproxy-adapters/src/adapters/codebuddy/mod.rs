@@ -267,42 +267,23 @@ impl ProviderAdapter for CodeBuddyAdapter {
         _model: &ModelId,
         _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        let mut val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!(
-                "failed to parse request body for codebuddy wrapping: {e}"
-            ))
-        })?;
+        crate::adapters::traits::patch_json_request_body(body, patch_codebuddy_request_object)
+    }
+}
 
-        let mut changed = false;
-        if let Some(obj) = val.as_object_mut() {
-            if obj.get("stream") != Some(&serde_json::Value::Bool(true)) {
-                obj.insert("stream".to_string(), serde_json::Value::Bool(true));
-                changed = true;
-            }
+fn patch_codebuddy_request_object(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    if obj.get("stream") != Some(&serde_json::Value::Bool(true)) {
+        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+    }
 
-            if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut())
-                && (messages.is_empty()
-                    || messages[0].get("role").and_then(|r| r.as_str()) != Some("system")
-                    || messages
-                        .iter()
-                        .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer")))
-            {
-                ensure_codebuddy_system_prompt_json(messages);
-                changed = true;
-            }
-        }
-
-        if !changed {
-            return Ok(body);
-        }
-
-        let re_encoded = serde_json::to_vec(&val).map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!(
-                "failed to re-encode request body for codebuddy wrapping: {e}"
-            ))
-        })?;
-
-        Ok(bytes::Bytes::from(re_encoded))
+    if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut())
+        && (messages.is_empty()
+            || messages[0].get("role").and_then(|r| r.as_str()) != Some("system")
+            || messages
+                .iter()
+                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer")))
+    {
+        ensure_codebuddy_system_prompt_json(messages);
     }
 }
 

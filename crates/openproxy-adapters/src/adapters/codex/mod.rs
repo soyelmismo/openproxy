@@ -122,19 +122,7 @@ impl ProviderAdapter for CodexAdapter {
         _model: &ModelId,
         _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        if body.is_empty() {
-            return Ok(body);
-        }
-        let mut val: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
-
-        if let Some(obj) = val.as_object_mut() {
-            patch_codex_request_object(obj);
-        }
-
-        let new_body = serde_json::to_vec(&val)
-            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
-        Ok(bytes::Bytes::from(new_body))
+        crate::adapters::traits::patch_json_request_body(body, patch_codex_request_object)
     }
 
     fn models_url(&self) -> Option<String> {

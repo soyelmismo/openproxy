@@ -47,6 +47,28 @@ pub fn inject_model_and_serialize<T: Serialize>(
     })
 }
 
+pub fn patch_json_request_body<F>(
+    body: bytes::Bytes,
+    patcher: F,
+) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError>
+where
+    F: FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+{
+    if body.is_empty() {
+        return Ok(body);
+    }
+    let mut val: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+
+    if let Some(obj) = val.as_object_mut() {
+        patcher(obj);
+    }
+
+    let new_body = serde_json::to_vec(&val)
+        .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+    Ok(bytes::Bytes::from(new_body))
+}
+
 pub(crate) fn resolve_target_format(format: AdapterFormat, fallback: TargetFormat) -> TargetFormat {
     match format {
         AdapterFormat::Mixed => fallback,
@@ -373,4 +395,39 @@ pub fn build_spoofer_headers(
     headers.extend(spoofer.headers());
     crate::spoofer::merge_header_refs(&mut headers, extra_headers);
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_patch_json_request_body_empty() {
+        let empty = Bytes::new();
+        let res = patch_json_request_body(empty.clone(), |_| {}).unwrap();
+        assert_eq!(res, empty);
+    }
+
+    #[test]
+    fn test_patch_json_request_body_mutates_fields() {
+        let input = Bytes::from(r#"{"model":"gpt-4","stream":false}"#);
+        let res = patch_json_request_body(input, |obj| {
+            obj.insert("stream".to_string(), serde_json::Value::Bool(true));
+            obj.insert(
+                "model".to_string(),
+                serde_json::Value::String("gpt-4o".to_string()),
+            );
+        })
+        .unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&res).unwrap();
+        assert_eq!(val["stream"], true);
+        assert_eq!(val["model"], "gpt-4o");
+    }
+
+    #[test]
+    fn test_patch_json_request_body_invalid_json_returns_error() {
+        let invalid = Bytes::from("not valid json");
+        let res = patch_json_request_body(invalid, |_| {});
+        assert!(res.is_err());
+    }
 }

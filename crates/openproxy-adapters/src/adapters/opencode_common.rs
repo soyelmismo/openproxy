@@ -226,13 +226,7 @@ impl OpenCodeAdapter {
             return Ok(body);
         }
 
-        let mut val: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-            CoreError::Parse(format!(
-                "failed to parse request body for opencode wrapping: {e}"
-            ))
-        })?;
-
-        if let Some(obj) = val.as_object_mut() {
+        crate::adapters::traits::patch_json_request_body(body, |obj| {
             if target_format != TargetFormat::Gemini {
                 obj.insert("stream".to_string(), serde_json::Value::Bool(true));
             }
@@ -259,12 +253,7 @@ impl OpenCodeAdapter {
                 }
             }
             inject_opencode_agent_quartet_tools(obj, target_format);
-        }
-
-        let updated_bytes = serde_json::to_vec(&val).map_err(|e| {
-            CoreError::Parse(format!("failed to re-serialize wrapped opencode body: {e}"))
-        })?;
-        Ok(bytes::Bytes::from(updated_bytes))
+        })
     }
 
     pub fn config_mut(&mut self) -> Option<&mut crate::adapters::ProviderAdapterConfig> {
