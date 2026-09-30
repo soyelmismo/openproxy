@@ -16,10 +16,21 @@
 //! single use, whichever comes first.
 
 use openproxy_types::ids::ApiKeyId;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Length of the random alphanumeric ticket (62-symbol alphabet → ≈190 bits).
 const TICKET_LEN: usize = 32;
+
+/// Minimum seconds between periodic expired ticket sweeps during issue().
+const PRUNE_INTERVAL_SECS: u64 = 15;
+
+#[inline]
+fn current_time_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 #[derive(Debug, Clone, Copy)]
 struct Ticket {
@@ -28,9 +39,19 @@ struct Ticket {
 }
 
 /// In-memory ticket registry. Cheap to clone via `Arc` in `AppState`.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct WsTicketStore {
     tickets: dashmap::DashMap<String, Ticket>,
+    last_prune_secs: AtomicU64,
+}
+
+impl Default for WsTicketStore {
+    fn default() -> Self {
+        Self {
+            tickets: dashmap::DashMap::new(),
+            last_prune_secs: AtomicU64::new(current_time_secs()),
+        }
+    }
 }
 
 impl WsTicketStore {
@@ -52,7 +73,13 @@ impl WsTicketStore {
     /// saturated (only possible under abuse: a legitimate dashboard holds
     /// at most one outstanding ticket at a time).
     pub fn issue(&self, key_id: ApiKeyId) -> Option<String> {
-        self.prune_expired();
+        let now = current_time_secs();
+        let last_prune = self.last_prune_secs.load(Ordering::Relaxed);
+        if self.tickets.len() >= Self::MAX_OUTSTANDING
+            || now.saturating_sub(last_prune) >= PRUNE_INTERVAL_SECS
+        {
+            self.prune_expired();
+        }
         if self.tickets.len() >= Self::MAX_OUTSTANDING {
             tracing::warn!(
                 target: "openproxy::security",
@@ -90,6 +117,8 @@ impl WsTicketStore {
     }
 
     fn prune_expired(&self) {
+        self.last_prune_secs
+            .store(current_time_secs(), Ordering::Relaxed);
         let now = Instant::now();
         self.tickets.retain(|_, t| t.expires_at > now);
     }
@@ -135,5 +164,31 @@ mod tests {
             assert!(store.issue(ApiKeyId(1)).is_some());
         }
         assert!(store.issue(ApiKeyId(1)).is_none());
+    }
+
+    #[test]
+    fn test_issue_pruning_throttled() {
+        let store = WsTicketStore::new();
+        let key = ApiKeyId(42);
+        // Insert an expired ticket
+        store.tickets.insert(
+            "expired_ticket".to_string(),
+            Ticket {
+                key_id: key,
+                expires_at: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("valid sub"),
+            },
+        );
+        // Store just initialized, last_prune_ms is now. issue() without reaching MAX_OUTSTANDING
+        // should NOT prune immediately because 15s have not elapsed.
+        assert!(store.issue(key).is_some());
+        assert!(store.tickets.contains_key("expired_ticket"));
+
+        // Reset last_prune_secs to 0 to simulate 15s elapsed
+        store.last_prune_secs.store(0, Ordering::Relaxed);
+        assert!(store.issue(key).is_some());
+        // Now expired ticket should have been pruned
+        assert!(!store.tickets.contains_key("expired_ticket"));
     }
 }
