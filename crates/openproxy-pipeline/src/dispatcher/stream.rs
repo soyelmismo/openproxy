@@ -121,7 +121,7 @@ impl UpstreamDispatcher {
         let _ = write!(&mut chunk_id, "chatcmpl-{}", uuid::Uuid::new_v4());
 
         let created = chrono::Utc::now().timestamp() as u64;
-        let model_name = model.model_id.as_str().to_string();
+        let model_name = model.model_id.as_str();
 
         openproxy_types::emit_stage_event!(
             request_id: req.request_id,
@@ -151,7 +151,7 @@ impl UpstreamDispatcher {
             sink,
             trace_id: &trace_id,
             chunk_id: &chunk_id,
-            model_name: &model_name,
+            model_name,
             started,
             attempt,
             race_size,
@@ -207,7 +207,7 @@ impl UpstreamDispatcher {
                 acc: state.acc.as_mut(),
                 chunk_id: &chunk_id,
                 created,
-                model_name: &model_name,
+                model_name,
             });
         }
 
@@ -233,7 +233,7 @@ impl UpstreamDispatcher {
                 acc: acc.as_ref(),
                 chunk_id: Some(&chunk_id),
                 created,
-                model_name: &model_name,
+                model_name,
             });
         }
 
@@ -273,7 +273,7 @@ impl UpstreamDispatcher {
                 state,
                 chunk_id: &chunk_id,
                 created,
-                model_name: &model_name,
+                model_name,
                 connect_and_send_ms,
                 status_code,
             },
