@@ -87,7 +87,7 @@ impl ZaiTokens {
 fn build_zai_get_request(url: &str, token: &str, proxy_url: Option<&str>) -> UpstreamRequest {
     let mut req = UpstreamRequest::get(url);
     req.proxy = proxy_url.map(ToString::to_string);
-    if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {token}")) {
+    if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
         req.headers.insert(http::header::AUTHORIZATION, val);
     }
     req.headers.insert(

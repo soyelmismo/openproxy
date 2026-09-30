@@ -177,7 +177,7 @@ impl MiniMaxAdapter {
             let url = format!("{platform_origin}/v1/api/openplatform/coding_plan/remains");
 
             let mut req = UpstreamRequest::get(&url);
-            if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {token}")) {
+            if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
                 req.headers.insert(http::header::AUTHORIZATION, val);
             }
             if let Some(ref gid) = op_group_id
@@ -275,7 +275,7 @@ async fn send_minimax_quota_request(
     url: &str,
 ) -> Result<bytes::Bytes> {
     let mut req = UpstreamRequest::get(url);
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+    if let Ok(v) = crate::antigravity_headers::build_bearer_header(api_key) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     let cancel = CancellationToken::new();

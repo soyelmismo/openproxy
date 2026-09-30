@@ -203,7 +203,7 @@ pub async fn try_fetch_backend_models(
         current_codex_version()
     );
     let mut req = UpstreamRequest::get(&url);
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {api_key}")) {
+    if let Ok(v) = crate::antigravity_headers::build_bearer_header(api_key) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
     req.headers.insert(

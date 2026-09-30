@@ -12,7 +12,7 @@ fn build_codex_base_request(
     req.method = method;
     req.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+        crate::antigravity_headers::build_bearer_header(access_token)
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
     );
     req.headers.insert(
