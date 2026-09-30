@@ -19,7 +19,6 @@ use futures::stream::Stream;
 use openproxy_pipeline::ResponseExt;
 use openproxy_pipeline::{Pipeline, PipelineRequest};
 use openproxy_types::TargetFormat;
-use openproxy_types::ids::ApiKeyId;
 use serde_json::json;
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -29,9 +28,8 @@ use std::time::Instant;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::{
-    disconnect::CancelWatch,
     error::ApiError,
-    middleware::auth::{ParsedChatRequest, ValidatedApiToken},
+    middleware::auth::ParsedChatRequest,
     services::PipelineRunner,
     state::AppState,
 };
@@ -92,49 +90,19 @@ pub async fn chat_completions(
     crate::extractors::ValidatedToken(auth_token): crate::extractors::ValidatedToken,
     axum::Extension(resolved_route): axum::Extension<crate::middleware::routing::ResolvedRoute>,
 ) -> Result<axum::response::Response, ApiError> {
-    let cancel = cancel_watch
-        .map(|axum::Extension(cw)| cw)
-        .unwrap_or_default();
-    let token_inner = auth_token;
-    run_pipeline(
-        state,
-        cancel,
-        headers,
-        parsed_req.bytes,
-        token_inner,
-        resolved_route,
-    )
-    .await
-}
-
-/// Drive one chat-completion request through the pipeline.
-async fn run_pipeline(
-    state: AppState,
-    cancel: CancelWatch,
-    headers: HeaderMap,
-    raw_request_body: bytes::Bytes,
-    auth_result: Option<ValidatedApiToken>,
-    resolved_route: crate::middleware::routing::ResolvedRoute,
-) -> Result<axum::response::Response, ApiError> {
-    let api_key_id: Option<ApiKeyId> = auth_result.as_ref().map(|r| r.key_id);
-    let pipeline = PipelineRunner::build_pipeline(&state);
-    let is_stream = resolved_route.openai_req.stream;
-
-    let prepared =
-        PipelineRunner::prepare_request(crate::services::pipeline_runner::PrepareRequestParams {
+    let (pipeline, prepared) = PipelineRunner::prepare_from_handler(
+        crate::services::pipeline_runner::PrepareFromHandlerParams {
             state: &state,
             headers: &headers,
-            cancel,
-            openai_req: resolved_route.openai_req,
-            raw_request_body,
-            api_key_id,
-            combo_id: resolved_route.combo_id,
-            combo_override: resolved_route.combo_override,
-            targets_override: resolved_route.targets_override,
+            cancel_watch,
+            auth_token,
+            resolved_route,
+            raw_request_body: parsed_req.bytes,
             endpoint_kind: openproxy_types::EndpointKind::Chat,
-        });
+        },
+    );
 
-    if is_stream {
+    if prepared.req.openai_request.stream {
         return Ok(handle_streaming_response(
             pipeline,
             prepared.req,

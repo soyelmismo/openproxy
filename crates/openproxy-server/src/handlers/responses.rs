@@ -50,29 +50,19 @@ pub async fn responses_completions(
     axum::Extension(parsed_req): axum::Extension<ParsedChatRequest>,
     axum::Extension(resolved_route): axum::Extension<ResolvedRoute>,
 ) -> Result<axum::response::Response, ApiError> {
-    let cancel = cancel_watch
-        .map(|axum::Extension(cw)| cw)
-        .unwrap_or_default();
-
-    let token_inner = auth_token;
-    let api_key_id: Option<openproxy_types::ids::ApiKeyId> = token_inner.as_ref().map(|r| r.key_id);
-
-    let pipeline = PipelineRunner::build_pipeline(&state);
-    let is_stream = resolved_route.openai_req.stream;
-
-    let prepared =
-        PipelineRunner::prepare_request(crate::services::pipeline_runner::PrepareRequestParams {
+    let (pipeline, prepared) = PipelineRunner::prepare_from_handler(
+        crate::services::pipeline_runner::PrepareFromHandlerParams {
             state: &state,
             headers: &headers,
-            cancel,
-            openai_req: resolved_route.openai_req,
+            cancel_watch,
+            auth_token,
+            resolved_route,
             raw_request_body: parsed_req.bytes,
-            api_key_id,
-            combo_id: resolved_route.combo_id,
-            combo_override: resolved_route.combo_override,
-            targets_override: resolved_route.targets_override,
             endpoint_kind: openproxy_types::EndpointKind::Chat,
-        });
+        },
+    );
+
+    let is_stream = prepared.req.openai_request.stream;
 
     // Non-streaming MUST go through `handle_sync_response_responses` to emit the
     // Responses-shaped envelope.

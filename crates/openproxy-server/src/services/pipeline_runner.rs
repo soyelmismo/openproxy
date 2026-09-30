@@ -16,12 +16,27 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::{disconnect::CancelWatch, error::ApiError, state::AppState};
+use crate::{
+    disconnect::CancelWatch,
+    error::ApiError,
+    middleware::{auth::ValidatedApiToken, routing::ResolvedRoute},
+    state::AppState,
+};
 
 pub struct PreparedPipelineRequest {
     pub req: PipelineRequest,
     pub done_tx: oneshot::Sender<()>,
     pub stream_rx: mpsc::Receiver<Bytes>,
+}
+
+pub struct PrepareFromHandlerParams<'a> {
+    pub state: &'a AppState,
+    pub headers: &'a HeaderMap,
+    pub cancel_watch: Option<axum::Extension<CancelWatch>>,
+    pub auth_token: Option<ValidatedApiToken>,
+    pub resolved_route: ResolvedRoute,
+    pub raw_request_body: Bytes,
+    pub endpoint_kind: EndpointKind,
 }
 
 pub struct PrepareRequestParams<'a> {
@@ -40,6 +55,32 @@ pub struct PrepareRequestParams<'a> {
 pub struct PipelineRunner;
 
 impl PipelineRunner {
+    /// Prepare pipeline and request from handler parameters, consolidating
+    /// cancellation watch unpacking, api key id extraction, pipeline building,
+    /// and request preparation.
+    pub fn prepare_from_handler(
+        params: PrepareFromHandlerParams<'_>,
+    ) -> (Pipeline, PreparedPipelineRequest) {
+        let cancel = params
+            .cancel_watch
+            .map(|axum::Extension(cw)| cw)
+            .unwrap_or_default();
+        let api_key_id = params.auth_token.as_ref().map(|r| r.key_id);
+        let pipeline = Self::build_pipeline(params.state);
+        let prepared = Self::prepare_request(PrepareRequestParams {
+            state: params.state,
+            headers: params.headers,
+            cancel,
+            openai_req: params.resolved_route.openai_req,
+            raw_request_body: params.raw_request_body,
+            api_key_id,
+            combo_id: params.resolved_route.combo_id,
+            combo_override: params.resolved_route.combo_override,
+            targets_override: params.resolved_route.targets_override,
+            endpoint_kind: params.endpoint_kind,
+        });
+        (pipeline, prepared)
+    }
     /// Build a configured [`Pipeline`] from the current [`AppState`].
     pub fn build_pipeline(state: &AppState) -> Pipeline {
         let config = PipelineConfig {

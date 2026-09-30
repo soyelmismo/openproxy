@@ -4,7 +4,6 @@ use openproxy_pipeline::translation::{
     openai_response_to_anthropic,
 };
 use openproxy_types::TargetFormat;
-use openproxy_types::ids::ApiKeyId;
 use std::sync::Arc;
 
 use crate::{
@@ -34,32 +33,23 @@ pub async fn anthropic_messages(
     let openai_req = Arc::new(anthropic_request_to_openai(anthropic_req));
     resolved_route.openai_req = Arc::clone(&openai_req);
 
-    let cancel = cancel_watch
-        .map(|axum::Extension(cw)| cw)
-        .unwrap_or_default();
-    let api_key_id: Option<ApiKeyId> = auth_token.as_ref().map(|r| r.key_id);
-
-    let pipeline = PipelineRunner::build_pipeline(&state);
-    let is_stream = openai_req.stream;
-    let model = openai_req.model.clone();
-
-    let prepared =
-        PipelineRunner::prepare_request(crate::services::pipeline_runner::PrepareRequestParams {
+    let (pipeline, prepared) = PipelineRunner::prepare_from_handler(
+        crate::services::pipeline_runner::PrepareFromHandlerParams {
             state: &state,
             headers: &headers,
-            cancel,
-            openai_req,
+            cancel_watch,
+            auth_token,
+            resolved_route,
             raw_request_body: parsed_req.bytes,
-            api_key_id,
-            combo_id: resolved_route.combo_id,
-            combo_override: resolved_route.combo_override,
-            targets_override: resolved_route.targets_override,
             endpoint_kind: openproxy_types::EndpointKind::Chat,
-        });
+        },
+    );
 
     let request_id = prepared.req.request_id;
+    let is_stream = prepared.req.openai_request.stream;
 
     if is_stream {
+        let model = prepared.req.openai_request.model.clone();
         let merged = PipelineRunner::spawn_streaming_bridge(
             pipeline,
             prepared.req,
