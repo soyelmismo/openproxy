@@ -42,15 +42,31 @@ static const char* candidate_paths[] = {
     "/usr/lib/libonnxruntime.so",
     "/usr/lib/x86_64-linux-gnu/libonnxruntime.so",
     "/usr/lib/aarch64-linux-gnu/libonnxruntime.so",
-    "libonnxruntime.so",
-    "libonnxruntime.so.1",
     "/opt/homebrew/lib/libonnxruntime.dylib",
     "/usr/local/lib/libonnxruntime.dylib",
-    "libonnxruntime.dylib",
+#ifdef _WIN32
+    "C:\\onnxruntime\\onnxruntime.dll",
     "onnxruntime.dll",
-    "libonnxruntime.dll",
+#endif
     NULL
 };
+
+/* Security (OP-12): the ONNX library is loaded INTO the gateway process via
+ * dlopen/LoadLibrary. Bare relative names ("libonnxruntime.so") resolved
+ * through LD_LIBRARY_PATH and the current working directory, letting anyone
+ * who controls either inject code directly into the process. Only explicit
+ * absolute paths are accepted. */
+static int is_absolute_lib_path(const char* path) {
+    if (!path || path[0] == '\0') return 0;
+#ifdef _WIN32
+    if (path[0] == '\\' || (path[0] != '\0' && path[1] == ':')) return 1;
+    /* Fall back to the classic DLL search for the bare Windows name kept in
+     * candidate_paths; every other name must be absolute. */
+    return strcmp(path, "onnxruntime.dll") == 0;
+#else
+    return path[0] == '/';
+#endif
+}
 
 LayaSession* laya_session_create(
     const char* onnx_lib_path,
@@ -63,9 +79,20 @@ LayaSession* laya_session_create(
     const char* env_path = getenv("OPENPROXY_ONNX_LIB");
 
     if (onnx_lib_path && onnx_lib_path[0] != '\0') {
+        if (!is_absolute_lib_path(onnx_lib_path)) {
+            set_error(err_buf, err_buf_len,
+                      "onnx lib path must be absolute (relative paths would "
+                      "resolve through LD_LIBRARY_PATH/CWD)");
+            return NULL;
+        }
         handle = DL_OPEN(onnx_lib_path);
     }
     if (!handle && env_path && env_path[0] != '\0') {
+        if (!is_absolute_lib_path(env_path)) {
+            set_error(err_buf, err_buf_len,
+                      "OPENPROXY_ONNX_LIB must be an absolute path");
+            return NULL;
+        }
         handle = DL_OPEN(env_path);
     }
     if (!handle) {
@@ -277,6 +304,46 @@ int laya_session_run(
         ort->ReleaseStatus(status);
         ort->ReleaseValue(out_vals[0]);
         return -8;
+    }
+
+    // Security (OP-12): validate the output tensor's shape BEFORE the copy.
+    // The element count used to be derived solely from the batch_size and
+    // max_markers arguments passed by Rust; a model (or a replaced model
+    // file) declaring a smaller "logits" output made the memcpy below read
+    // past the end of the tensor buffer — a heap over-read in the gateway
+    // process.
+    {
+        OrtTensorTypeAndShapeInfo* shape_info = NULL;
+        size_t element_count = 0;
+        enum ONNXTensorElementDataType element_type =
+            ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+
+        status = ort->GetTensorTypeAndShape(out_vals[0], &shape_info);
+        if (!status) {
+            status = ort->GetTensorElementType(shape_info, &element_type);
+        }
+        if (!status) {
+            status = ort->GetTensorShapeElementCount(shape_info, &element_count);
+        }
+        if (shape_info) {
+            ort->ReleaseTensorTypeAndShapeInfo(shape_info);
+        }
+        if (status) {
+            set_error(err_buf, err_buf_len, ort->GetErrorMessage(status));
+            ort->ReleaseStatus(status);
+            ort->ReleaseValue(out_vals[0]);
+            return -9;
+        }
+        if (element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
+            element_count < (size_t)batch_size * (size_t)max_markers) {
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "logits tensor mismatch: type=%d elements=%zu, expected >= %d FLOAT",
+                     (int)element_type, element_count, batch_size * max_markers);
+            set_error(err_buf, err_buf_len, msg);
+            ort->ReleaseValue(out_vals[0]);
+            return -10;
+        }
     }
 
     memcpy(out_logits, logits_ptr, (size_t)(batch_size * max_markers * sizeof(float)));
