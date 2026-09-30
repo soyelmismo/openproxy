@@ -56,6 +56,9 @@ pub fn build_router(state: AppState) -> Router {
     // (default 10 MiB) instead of a hardcoded 32 MiB that ignored the setting.
     // Admin backup restore raises its own per-route limit (see backup.rs).
     let request_body_limit = state.config().server.request_max_body_bytes;
+    // Cloned for the outermost security-headers layer, which needs the
+    // trusted-proxy config for conditional HSTS (OP-21).
+    let state_clone = state.clone();
 
     Router::new()
         .route(
@@ -80,7 +83,8 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
         // Outermost so every response carries the browser security headers;
         // policy rationale in `middleware::security_headers`.
-        .layer(middleware::from_fn(
+        .layer(middleware::from_fn_with_state(
+            state_clone,
             crate::middleware::security_headers::security_headers,
         ))
 }
@@ -155,12 +159,15 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
         .fallback(admin_ui::serve_asset)
 }
 
-/// `GET /v1/health` — unauthenticated liveness probe returning
-/// `{"status": "ok", "version": <CARGO_PKG_VERSION>}` (baked at compile time).
+/// `GET /v1/health` — unauthenticated liveness probe.
+///
+/// Security (OP-26): returns `{"status": "ok"}` only. The exact binary
+/// version used to be exposed here without authentication, handing attackers
+/// a precise fingerprint for mapping the install to future advisories; it now
+/// lives behind the admin API (`GET /admin/api/version`).
 async fn health() -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
     }))
 }
 

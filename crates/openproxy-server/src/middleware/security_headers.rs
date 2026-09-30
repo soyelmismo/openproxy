@@ -32,11 +32,13 @@
 //!   standard hardening; `frame-ancestors` mirrors `X-Frame-Options: DENY`.
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{HeaderValue, header},
     middleware::Next,
     response::Response,
 };
+
+use crate::state::AppState;
 
 /// Policy directives that do not depend on the request.
 const CSP_STATIC: &str = "default-src 'self'; \
@@ -73,10 +75,40 @@ pub(crate) fn build_csp(host: Option<&str>) -> String {
 }
 
 /// Axum middleware fn: see module docs.
-pub async fn security_headers(req: Request, next: Next) -> Response {
+pub async fn security_headers(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
     let csp = build_csp(sanitized_host(&req));
+    // Security (OP-21): HSTS is only meaningful when the deployment actually
+    // serves TLS. The binary itself is plain HTTP, so emit the header only
+    // when the request demonstrably arrived over HTTPS through a TRUSTED
+    // reverse proxy (`X-Forwarded-Proto: https` from a trusted peer) — an
+    // untrusted client must not be able to pin HSTS for other users.
+    let served_over_tls = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0)
+        .is_some_and(|peer| {
+            crate::client_ip::is_trusted_proxy(
+                peer.ip(),
+                &state.config().server.trusted_proxies,
+            )
+        })
+        && req
+            .headers()
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.eq_ignore_ascii_case("https"));
     let mut response = next.run(req).await;
     let headers = response.headers_mut();
+    if served_over_tls {
+        headers.insert(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -145,5 +177,69 @@ mod tests {
             );
         }
         assert!(build_csp(sanitized_host(&req_with_host(None))).ends_with("connect-src 'self';"));
+    }
+
+    #[tokio::test]
+    async fn hsts_only_when_tls_via_trusted_proxy() {
+        use axum::body::Body;
+        use axum::http::StatusCode;
+        use tower::ServiceExt;
+
+        async fn ok_handler() -> &'static str {
+            "ok"
+        }
+        let app = axum::Router::new()
+            .route("/x", axum::routing::get(ok_handler))
+            .layer(axum::middleware::from_fn(security_headers_test_shim));
+
+        // Plain HTTP (no X-Forwarded-Proto): no HSTS.
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri("/x").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            resp.headers().get("strict-transport-security").is_none(),
+            "no HSTS on plain HTTP"
+        );
+
+        // x-forwarded-proto: https from a loopback peer (trusted): HSTS.
+        let mut req = Request::builder()
+            .uri("/x")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(
+            axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 44444))),
+        );
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(
+            resp.headers().get("strict-transport-security").unwrap(),
+            "max-age=31536000; includeSubDomains"
+        );
+    }
+
+    /// Test shim standing in for the state-aware middleware: same logic,
+    /// fixed empty trusted-proxies list (loopback trusted by default).
+    async fn security_headers_test_shim(req: Request, next: Next) -> Response {
+        let served_over_tls = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|ci| ci.0)
+            .is_some_and(|peer| crate::client_ip::is_trusted_proxy(peer.ip(), &[]))
+            && req
+                .headers()
+                .get("x-forwarded-proto")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.eq_ignore_ascii_case("https"));
+        let mut response = next.run(req).await;
+        if served_over_tls {
+            response.headers_mut().insert(
+                header::STRICT_TRANSPORT_SECURITY,
+                HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+            );
+        }
+        response
     }
 }

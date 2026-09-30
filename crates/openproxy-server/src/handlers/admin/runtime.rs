@@ -32,6 +32,7 @@ pub struct RuntimeConfigResponse {
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/", axum::routing::get(get_runtime_config))
+        .route("/version", axum::routing::get(admin_version))
         .route("/timeouts", axum::routing::put(put_runtime_timeouts))
         .route(
             "/recording-ttl",
@@ -62,9 +63,19 @@ pub fn router() -> axum::Router<AppState> {
         .route("/backfill-status", axum::routing::get(get_backfill_status))
 }
 
+/// `GET /admin/health` — public liveness probe for load balancers.
+///
+/// Security (OP-26): status only, no version. The exact binary version is
+/// available at the authenticated `GET /admin/api/version`.
 pub async fn admin_health() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "ok",
+    }))
+}
+
+/// `GET /admin/api/version` — authenticated binary version (OP-26).
+pub async fn admin_version() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
     }))
 }
