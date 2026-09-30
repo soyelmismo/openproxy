@@ -218,8 +218,7 @@ pub fn init(
     config_path_opt: Option<&str>,
     num_threads_opt: Option<usize>,
 ) -> Result<(), CoreError> {
-    let mut guard = INSTANCE.write();
-    if guard.is_some() {
+    if INSTANCE.read().is_some() {
         return Ok(());
     }
 
@@ -301,8 +300,11 @@ pub fn init(
         config,
     };
 
-    *guard = Some(Arc::new(engine));
-    tracing::info!("Laya ONNX internal engine ready for in-process inference");
+    let mut guard = INSTANCE.write();
+    if guard.is_none() {
+        *guard = Some(Arc::new(engine));
+        tracing::info!("Laya ONNX internal engine ready for in-process inference");
+    }
     Ok(())
 }
 
