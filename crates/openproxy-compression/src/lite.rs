@@ -223,7 +223,7 @@ fn extract_data_image_format(url: &str) -> &str {
 }
 
 fn try_replace_image_part(part: &mut serde_json::Value) -> bool {
-    let fmt = {
+    let text = {
         let url = part
             .get("image_url")
             .and_then(|v| v.get("url"))
@@ -236,20 +236,16 @@ fn try_replace_image_part(part: &mut serde_json::Value) -> bool {
             return false;
         }
 
-        extract_data_image_format(url).to_string()
+        format!("[image: {}]", extract_data_image_format(url))
     };
 
     let Some(obj) = part.as_object_mut() else {
         return false;
     };
 
-    *obj = serde_json::json!({
-        "type": "text",
-        "text": format!("[image: {fmt}]")
-    })
-    .as_object()
-    .cloned()
-    .unwrap_or_default();
+    obj.clear();
+    obj.insert("type".to_string(), serde_json::Value::String("text".to_string()));
+    obj.insert("text".to_string(), serde_json::Value::String(text));
 
     true
 }
