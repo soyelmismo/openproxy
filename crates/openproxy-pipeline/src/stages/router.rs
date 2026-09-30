@@ -83,10 +83,14 @@ impl PipelineStage for RouterStage {
             return Err(CoreError::NoHealthyTargets(combo.id.0));
         }
 
-        if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision {
+        let is_decision_mode =
+            combo.priority_mode == openproxy_types::combos::PriorityMode::Decision;
+        let mut session_hash = None;
+
+        if is_decision_mode {
             let should_reset =
                 crate::session_affinity::SessionAffinityRegistry::should_reset(&ctx.req);
-            let session_hash =
+            session_hash =
                 crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req);
 
             let mut current_pinned_id = None;
@@ -123,11 +127,10 @@ impl PipelineStage for RouterStage {
         ctx.targets = resolved;
         let res = next.execute(ctx).await?;
 
-        if combo.priority_mode == openproxy_types::combos::PriorityMode::Decision
+        if is_decision_mode
             && res.error.is_none()
             && matches!(res.status_code, 200..=299)
-            && let Some(hash) =
-                crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req)
+            && let Some(hash) = session_hash
         {
             let successful_target_id = res
                 .usage_tuple
