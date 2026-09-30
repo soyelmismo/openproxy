@@ -80,7 +80,10 @@ pub(crate) fn merge_summary_into_models_quota(
             .unwrap_or_default();
 
         for s_detail in summary_details {
-            if let Some(pos) = combined.iter().position(|m| m.model_id == s_detail.model_id) {
+            if let Some(pos) = combined
+                .iter()
+                .position(|m| m.model_id == s_detail.model_id)
+            {
                 combined[pos] = s_detail.clone();
             } else {
                 combined.push(s_detail.clone());

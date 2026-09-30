@@ -233,19 +233,37 @@ fn test_parse_antigravity_user_quota_summary_gemini_and_claude() {
     });
 
     let result = parse_antigravity_user_quota_summary(&body).expect("should parse");
-    assert_eq!(result.weekly_reset_at.as_deref(), Some("2026-10-07T03:24:40Z"));
-    assert_eq!(result.session_reset_at.as_deref(), Some("2026-09-30T08:24:40Z"));
+    assert_eq!(
+        result.weekly_reset_at.as_deref(),
+        Some("2026-10-07T03:24:40Z")
+    );
+    assert_eq!(
+        result.session_reset_at.as_deref(),
+        Some("2026-09-30T08:24:40Z")
+    );
     assert_eq!(result.weekly_used, Some(0));
     assert_eq!(result.session_used, Some(0));
 
     let details = result.model_details.expect("should have claude details");
     assert_eq!(details.len(), 2);
-    let claude_weekly = details.iter().find(|d| d.model_id == "Claude (Weekly)").unwrap();
-    assert_eq!(claude_weekly.session_reset_at.as_deref(), Some("2026-10-06T23:16:00Z"));
+    let claude_weekly = details
+        .iter()
+        .find(|d| d.model_id == "Claude (Weekly)")
+        .unwrap();
+    assert_eq!(
+        claude_weekly.session_reset_at.as_deref(),
+        Some("2026-10-06T23:16:00Z")
+    );
     assert_eq!(claude_weekly.session_used, 50); // 1.0 - 0.95 = 5% of 1000
 
-    let claude_5h = details.iter().find(|d| d.model_id == "Claude (5h)").unwrap();
-    assert_eq!(claude_5h.session_reset_at.as_deref(), Some("2026-09-30T06:42:34Z"));
+    let claude_5h = details
+        .iter()
+        .find(|d| d.model_id == "Claude (5h)")
+        .unwrap();
+    assert_eq!(
+        claude_5h.session_reset_at.as_deref(),
+        Some("2026-09-30T06:42:34Z")
+    );
     assert_eq!(claude_5h.session_used, 200); // 1.0 - 0.8 = 20% of 1000
 }
 

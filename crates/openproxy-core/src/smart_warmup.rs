@@ -610,13 +610,16 @@ mod tests {
 
         // 1. Model with future reset is NOT ready
         let quota_ticking = AccountQuota {
-            model_details: Some(vec![ModelQuotaDetail {
-                model_id: "claude-sonnet-4-6".to_string(),
-                session_used: 1,
-                session_limit: 1000,
-                session_reset_at: Some(future_str.clone()),
-                remaining_fraction: 0.999,
-            }].into_boxed_slice()),
+            model_details: Some(
+                vec![ModelQuotaDetail {
+                    model_id: "claude-sonnet-4-6".to_string(),
+                    session_used: 1,
+                    session_limit: 1000,
+                    session_reset_at: Some(future_str.clone()),
+                    remaining_fraction: 0.999,
+                }]
+                .into_boxed_slice(),
+            ),
             ..AccountQuota::empty()
         };
         assert!(!super::is_model_quota_ready_for_warmup(
@@ -627,13 +630,16 @@ mod tests {
 
         // 2. Model with expired reset and 100% capacity IS ready
         let quota_ready = AccountQuota {
-            model_details: Some(vec![ModelQuotaDetail {
-                model_id: "claude-sonnet-4-6".to_string(),
-                session_used: 0,
-                session_limit: 1000,
-                session_reset_at: Some(past_str),
-                remaining_fraction: 1.0,
-            }].into_boxed_slice()),
+            model_details: Some(
+                vec![ModelQuotaDetail {
+                    model_id: "claude-sonnet-4-6".to_string(),
+                    session_used: 0,
+                    session_limit: 1000,
+                    session_reset_at: Some(past_str),
+                    remaining_fraction: 1.0,
+                }]
+                .into_boxed_slice(),
+            ),
             ..AccountQuota::empty()
         };
         assert!(super::is_model_quota_ready_for_warmup(
@@ -644,13 +650,16 @@ mod tests {
 
         // 3. Model matching Claude summary bucket "Claude (5h)"
         let quota_summary_ticking = AccountQuota {
-            model_details: Some(vec![ModelQuotaDetail {
-                model_id: "Claude (5h)".to_string(),
-                session_used: 1,
-                session_limit: 1000,
-                session_reset_at: Some(future_str),
-                remaining_fraction: 0.999,
-            }].into_boxed_slice()),
+            model_details: Some(
+                vec![ModelQuotaDetail {
+                    model_id: "Claude (5h)".to_string(),
+                    session_used: 1,
+                    session_limit: 1000,
+                    session_reset_at: Some(future_str),
+                    remaining_fraction: 0.999,
+                }]
+                .into_boxed_slice(),
+            ),
             ..AccountQuota::empty()
         };
         assert!(!super::is_model_quota_ready_for_warmup(
