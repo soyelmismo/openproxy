@@ -57,6 +57,40 @@ fn test_is_private_or_reserved() {
     assert!(!is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
         0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
     ))));
+
+    // Security regression: IPv4-COMPATIBLE IPv6 form (::a.b.c.d) MUST be
+    // blocked. Previously `to_ipv4_mapped()` returned None for this form,
+    // so `::127.0.0.1`, `::169.254.169.254`, `::10.0.0.1`, `::192.168.1.1`
+    // slipped through the SSRF filter.
+    assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+        0, 0, 0, 0, 0, 0, 0x7f00, 0x0001
+    )))); // ::127.0.0.1 (loopback)
+    assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+        0, 0, 0, 0, 0, 0, 0xa9fe, 0xa9fe
+    )))); // ::169.254.169.254 (link-local IMDS)
+    assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+        0, 0, 0, 0, 0, 0, 0x0a00, 0x0001
+    )))); // ::10.0.0.1 (RFC 1918)
+    assert!(is_private_or_reserved(&IpAddr::V6(Ipv6Addr::new(
+        0, 0, 0, 0, 0, 0, 0xc0a8, 0x0101
+    )))); // ::192.168.1.1 (RFC 1918)
+
+    // IPv4 reserved ranges that were previously missing.
+    assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+        100, 64, 0, 1
+    )))); // 100.64.0.0/10 (CGNAT RFC 6598)
+    assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+        192, 0, 0, 1
+    )))); // 192.0.0.0/24 (IETF Protocol Assignments RFC 6890)
+    assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+        198, 18, 0, 1
+    )))); // 198.18.0.0/15 (Benchmarking RFC 2544)
+    assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+        240, 0, 0, 1
+    )))); // 240.0.0.0/4 (Reserved Class E RFC 1112)
+    assert!(is_private_or_reserved(&IpAddr::V4(Ipv4Addr::new(
+        255, 255, 255, 255
+    )))); // broadcast
 }
 
 #[test]
