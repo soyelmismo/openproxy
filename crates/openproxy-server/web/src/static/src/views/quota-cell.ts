@@ -171,6 +171,21 @@ function renderMetaBadges(meta: ProviderSpecificMeta | null, account?: Account):
     }
   }
 
+  if (account?.provider_id === 'codex' && account.quota_session_used != null) {
+    const hasActiveReserve = account.quota_model_details?.some(
+      (d) => d.model_id.toLowerCase().includes('reserve') || d.model_id.toLowerCase().includes('luna')
+    );
+    if (!hasActiveReserve) {
+      badges.push(
+        html`<span
+          class="quota-tag"
+          style="opacity: 0.85;"
+          title="gpt-reserve (Luna) es la cuota suplementaria de OpenAI. Se activa automáticamente cuando se agota la ventana principal de 5h o semanal."
+        >🛡️ gpt-reserve: Standby</span>`
+      );
+    }
+  }
+
   if (badges.length === 0) return null;
   return html`<div class="quota-meta-row">${badges}</div>`;
 }
@@ -206,8 +221,15 @@ export function renderQuotaCell(a: Account): TemplateResult {
   const monthlyDetail = a.quota_model_details?.find(
     (d) => d.model_id === "Monthly Limit" || d.model_id === "Monthly Window"
   );
+  const reserveDetail = a.quota_model_details?.find(
+    (d) => d.model_id.toLowerCase().includes("reserve") || d.model_id.toLowerCase().includes("luna")
+  );
   const otherModels = a.quota_model_details?.filter(
-    (d) => d.model_id !== "Monthly Limit" && d.model_id !== "Monthly Window"
+    (d) =>
+      d.model_id !== "Monthly Limit" &&
+      d.model_id !== "Monthly Window" &&
+      !d.model_id.toLowerCase().includes("reserve") &&
+      !d.model_id.toLowerCase().includes("luna")
   );
 
   const monthlyPct = (monthlyDetail && monthlyDetail.session_limit > 0 && monthlyDetail.session_used != null)
@@ -249,6 +271,16 @@ export function renderQuotaCell(a: Account): TemplateResult {
       </div>
       <div class="quota-bar-track">
         <div class="quota-bar-fill" style="width: ${monthlyPct == null ? 0 : Math.min(100, monthlyPct)}%"></div>
+      </div>
+    </div>` : null}
+    ${reserveDetail ? html`
+    <div class="quota-bar ${getQuotaColor(reserveDetail.session_limit > 0 ? Math.round(reserveDetail.session_used / reserveDetail.session_limit * 100) : null)}">
+      <div class="quota-bar-header">
+        <span class="quota-bar-label-left">🛡️ ${reserveDetail.model_id}</span>
+        <span class="quota-bar-label-right">${getQuotaText(reserveDetail.session_used, reserveDetail.session_limit)}${resetHint(reserveDetail.session_reset_at)}</span>
+      </div>
+      <div class="quota-bar-track">
+        <div class="quota-bar-fill" style="width: ${Math.min(100, Math.max(0, reserveDetail.session_used))}%"></div>
       </div>
     </div>` : null}
     ${otherModels && otherModels.length > 0 ? renderModelQuotaRows(otherModels, a.provider_id) : null}

@@ -165,12 +165,21 @@ fn parse_codex_additional_rate_limits(body: &serde_json::Value) -> Option<Box<[M
             .or_else(|| entry.get("rateLimit"))
             .and_then(|v| v.as_object());
 
-        let window = rate_limit.and_then(|rl| {
-            rl.get("primary_window")
-                .or_else(|| rl.get("primaryWindow"))
-                .or_else(|| rl.get("secondary_window"))
-                .or_else(|| rl.get("secondaryWindow"))
-        });
+        let window = rate_limit
+            .and_then(|rl| {
+                rl.get("primary_window")
+                    .or_else(|| rl.get("primaryWindow"))
+                    .or_else(|| rl.get("secondary_window"))
+                    .or_else(|| rl.get("secondaryWindow"))
+            })
+            .or_else(|| {
+                entry
+                    .get("primary_window")
+                    .or_else(|| entry.get("primaryWindow"))
+                    .or_else(|| entry.get("secondary_window"))
+                    .or_else(|| entry.get("secondaryWindow"))
+                    .or_else(|| entry.get("window"))
+            });
 
         if let (Some(used), reset_at) = parse_codex_usage_window(window) {
             let clamped_used = used.clamp(0, 100);
