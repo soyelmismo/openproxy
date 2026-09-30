@@ -191,16 +191,16 @@ pub(crate) async fn poll_horde_image_generation(
 
         if img.starts_with("http://") || img.starts_with("https://") {
             if ctx.response_format == Some("b64_json") {
-                let dl_req = UpstreamRequest::get(&img);
-                let dl_resp = upstream_client
-                    .call(dl_req, TimeoutProfile::Chat, CancellationToken::new())
-                    .await
-                    .map_err(|e| {
-                        CoreError::UpstreamConnection(format!("download image error: {e:?}"))
-                    })?;
-                let dl_bytes = dl_resp.collect().await.map_err(|e| {
-                    CoreError::UpstreamConnection(format!("download image body error: {e:?}"))
-                })?;
+                // Security (OP-22): the `img` URL is supplied by an AI Horde
+                // WORKER — anyone can register one. Apply the same guards the
+                // server-side image fetch uses: scheme restricted to http(s),
+                // ports restricted to 80/443, and every resolved address must
+                // be public (the generic connector filter blocks private IPs
+                // at dial time, but the port and byte caps are enforced here).
+                validate_horde_image_url(&img).await?;
+                let dl_bytes =
+                    download_horde_image_capped(upstream_client, &img, HORDE_IMAGE_FETCH_LIMIT_BYTES)
+                        .await?;
                 use base64::Engine as _;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&dl_bytes);
                 data.push(ImageData {
@@ -245,4 +245,103 @@ pub(crate) async fn poll_horde_image_generation(
         created,
         data: data.into_boxed_slice(),
     })
+}
+
+/// Hard cap on a worker-supplied Horde image download (OP-22).
+const HORDE_IMAGE_FETCH_LIMIT_BYTES: usize = 20 * 1024 * 1024;
+
+/// Validate a worker-supplied `img` URL before the gateway fetches it (OP-22).
+///
+/// Mirrors the guards of the server-side `fetch_remote_image`: http(s) scheme
+/// only, standard ports only, and every resolved address must be public —
+/// previously ANY port was reachable and the response was collected into RAM
+/// without a byte cap.
+async fn validate_horde_image_url(url: &str) -> Result<()> {
+    let uri: http::Uri = url
+        .parse()
+        .map_err(|e| CoreError::Validation(format!("invalid worker image URL: {e}")))?;
+
+    let scheme = uri.scheme_str();
+    if scheme != Some("http") && scheme != Some("https") {
+        return Err(CoreError::Validation(
+            "worker image URL must use http or https".into(),
+        ));
+    }
+
+    let host = uri
+        .host()
+        .ok_or_else(|| CoreError::Validation("worker image URL must have a host".into()))?;
+
+    let port = uri.port_u16().unwrap_or(if scheme == Some("https") { 443 } else { 80 });
+    if port != 80 && port != 443 {
+        return Err(CoreError::Validation(
+            "worker image URL rejected: non-standard ports are not allowed".into(),
+        ));
+    }
+
+    let allow_private = cfg!(test)
+        || std::env::var("OPENPROXY_ALLOW_PRIVATE_IMAGES").is_ok_and(|v| v == "true" || v == "1");
+    if !allow_private {
+        openproxy_adapters::upstream::resolve_public_host(host, port)
+            .await
+            .map_err(|e| {
+                CoreError::Validation(format!(
+                    "worker image URL host rejected: {e}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+/// Bounded download of a worker-supplied image (OP-22): aborts as soon as the
+/// cap is exceeded instead of accumulating the whole response in RAM.
+async fn download_horde_image_capped(
+    upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
+    url: &str,
+    limit_bytes: usize,
+) -> Result<bytes::Bytes> {
+    let mut req = UpstreamRequest::get(url);
+    req.is_streaming = false;
+    let profile = TimeoutProfile::Custom(openproxy_adapters::ResolvedTimeouts {
+        dns_ms: 5_000,
+        dial_ms: 5_000,
+        tls_ms: 5_000,
+        write_ms: 5_000,
+        headers_ms: 10_000,
+        body_chunk_ms: 15_000,
+        total_ms: 60_000,
+    });
+    let mut resp = upstream_client
+        .call(req, profile, CancellationToken::new())
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("download image error: {e:?}")))?;
+
+    if !resp.status.is_success() {
+        return Err(CoreError::UpstreamConnection(format!(
+            "worker image URL returned HTTP {} (expected 2xx)",
+            resp.status
+        )));
+    }
+
+    let mut buf = bytes::BytesMut::new();
+    loop {
+        let chunk = match resp
+            .body
+            .next_chunk()
+            .await
+            .map_err(|e| CoreError::UpstreamConnection(format!("download image body error: {e:?}")))?
+        {
+            Some(c) => c,
+            None => break,
+        };
+        if buf.len() + chunk.len() > limit_bytes {
+            return Err(CoreError::Validation(format!(
+                "worker image exceeds the {} MiB fetch limit",
+                limit_bytes / (1024 * 1024)
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+        resp.body.note_content_chunk();
+    }
+    Ok(buf.freeze())
 }
