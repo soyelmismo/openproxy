@@ -249,7 +249,9 @@ pub async fn set_provider_active(
         if active {
             openproxy_adapters::laya_engine::spawn_init_background();
         } else {
-            openproxy_adapters::laya_engine::shutdown();
+            tokio::task::spawn_blocking(openproxy_adapters::laya_engine::shutdown)
+                .await
+                .map_err(|e| CoreError::Internal(format!("Laya shutdown: {e}")))?;
         }
     }
 

@@ -493,7 +493,7 @@ async fn execute_system_one_decision(
         let is_laya = resolved_prov.as_deref() == Some("laya")
             || decision_model.to_ascii_lowercase().contains("laya");
 
-        if is_laya && openproxy_adapters::laya_engine::is_available() {
+        if is_laya && openproxy_adapters::laya_engine::is_enabled() {
             let req_clone = req.clone();
             let res = tokio::task::spawn_blocking(move || {
                 openproxy_adapters::laya_engine::execute_decision(&req_clone)
@@ -509,7 +509,7 @@ async fn execute_system_one_decision(
                     return Ok(answer);
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "Laya in-process inference failed, falling back to HTTP");
+                    tracing::warn!(error = %e, "Laya worker inference failed, falling back to HTTP");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Laya spawn_blocking join error, falling back to HTTP");

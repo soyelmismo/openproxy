@@ -5,13 +5,15 @@ use openproxy_types::{
         SystemOneResponse, SystemOneUsage,
     },
 };
-use parking_lot::RwLock;
-use std::{
-    collections::BTreeMap,
-    ffi::{CStr, CString},
-    sync::Arc,
+mod assets;
+mod lifecycle;
+mod worker;
+pub use lifecycle::{
+    execute_decision, init, is_available, is_enabled, shutdown, spawn_init_background,
 };
+use std::{collections::BTreeMap, ffi::CString};
 use tokenizers::Tokenizer;
+pub use worker::run_worker;
 
 #[repr(C)]
 struct LayaSessionOpaque {
@@ -46,8 +48,6 @@ unsafe extern "C" {
 }
 
 struct SafeSession(*mut LayaSessionOpaque);
-unsafe impl Send for SafeSession {}
-unsafe impl Sync for SafeSession {}
 
 impl Drop for SafeSession {
     fn drop(&mut self) {
@@ -99,20 +99,6 @@ pub struct LayaEngine {
     sep_id: u32,
     mask_id: u32,
     config: LayaConfig,
-}
-
-static INSTANCE: RwLock<Option<Arc<LayaEngine>>> = RwLock::new(None);
-
-pub fn is_available() -> bool {
-    INSTANCE.read().is_some()
-}
-
-pub fn shutdown() {
-    let mut guard = INSTANCE.write();
-    if guard.is_some() {
-        tracing::info!("Unloading Laya ONNX internal engine (releasing memory)");
-        *guard = None;
-    }
 }
 
 fn resolve_candidate_path(
@@ -212,16 +198,12 @@ pub fn is_model_installed() -> bool {
     std::path::Path::new(&p).exists()
 }
 
-pub fn init(
+fn load_engine(
     model_path_opt: Option<&str>,
     tokenizer_path_opt: Option<&str>,
     config_path_opt: Option<&str>,
     num_threads_opt: Option<usize>,
-) -> Result<(), CoreError> {
-    if INSTANCE.read().is_some() {
-        return Ok(());
-    }
-
+) -> Result<LayaEngine, CoreError> {
     let model_path = resolve_model_path(model_path_opt);
     let tokenizer_path = resolve_tokenizer_path(tokenizer_path_opt);
     let config_path = resolve_config_path(config_path_opt);
@@ -238,7 +220,7 @@ pub fn init(
         model = %model_path,
         tokenizer = %tokenizer_path,
         threads = num_threads,
-        "Initializing Laya internal C FFI engine"
+        "Initializing Laya C FFI engine in isolated worker"
     );
 
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
@@ -258,15 +240,21 @@ pub fn init(
         .unwrap_or(1);
     let mask_id = tokenizer
         .token_to_id("<mask >")
-        .or_else(|| tokenizer.token_to_id("<mask >"))
+        .or_else(|| tokenizer.token_to_id("<mask>"))
         .unwrap_or(4);
 
     let config: LayaConfig = if let Ok(content) = std::fs::read_to_string(&config_path) {
-        serde_json::from_str(&content).unwrap_or_default()
+        serde_json::from_str(&content)
+            .map_err(|e| CoreError::Validation(format!("Invalid Laya config: {e}")))?
     } else {
         LayaConfig::default()
     };
 
+    validate_config(&config)?;
+    let num_threads = std::ffi::c_int::try_from(num_threads)
+        .ok()
+        .filter(|n| (1..=64).contains(n))
+        .ok_or_else(|| CoreError::Validation("Laya threads must be in 1..=64".into()))?;
     let c_model_path = CString::new(model_path)
         .map_err(|e| CoreError::Validation(format!("Invalid model path: {e}")))?;
 
@@ -275,22 +263,20 @@ pub fn init(
         laya_session_create(
             std::ptr::null(),
             c_model_path.as_ptr(),
-            num_threads as std::ffi::c_int,
+            num_threads,
             err_buf.as_mut_ptr().cast::<std::ffi::c_char>(),
             err_buf.len(),
         )
     };
 
     if session_ptr.is_null() {
-        let err_msg = unsafe { CStr::from_ptr(err_buf.as_ptr().cast::<std::ffi::c_char>()) }
-            .to_string_lossy()
-            .into_owned();
+        let err_msg = ffi_error(&err_buf);
         return Err(CoreError::Internal(format!(
             "Failed to initialize Laya ONNX session: {err_msg}"
         )));
     }
 
-    let engine = LayaEngine {
+    Ok(LayaEngine {
         session: SafeSession(session_ptr),
         tokenizer,
         pad_id,
@@ -298,12 +284,26 @@ pub fn init(
         sep_id,
         mask_id,
         config,
-    };
+    })
+}
 
-    let mut guard = INSTANCE.write();
-    if guard.is_none() {
-        *guard = Some(Arc::new(engine));
-        tracing::info!("Laya ONNX internal engine ready for in-process inference");
+fn ffi_error(buffer: &[u8]) -> String {
+    let end = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
+}
+
+fn validate_config(config: &LayaConfig) -> Result<(), CoreError> {
+    if !(32..=8192).contains(&config.max_len)
+        || !(16..=config.max_len - 4).contains(&config.head_max_len)
+        || config
+            .temperature
+            .iter()
+            .chain(config.temperature_by_options.values())
+            .any(|t| !t.is_finite() || *t <= 0.0)
+    {
+        return Err(CoreError::Validation(
+            "Invalid Laya sequence lengths or temperatures".into(),
+        ));
     }
     Ok(())
 }
@@ -454,7 +454,11 @@ impl LayaEngine {
         ids.push(self.sep_id as i64);
         ids.truncate(self.config.max_len);
 
-        markers.retain(|&m| (m as usize) < self.config.max_len);
+        if markers.iter().any(|&m| m as usize >= self.config.max_len) {
+            return Err(CoreError::Validation(
+                "Laya options exceed the sequence budget".into(),
+            ));
+        }
 
         Ok(PreparedItem {
             ids,
@@ -539,14 +543,17 @@ impl LayaEngine {
         };
 
         if rc != 0 {
-            let err_msg = unsafe { CStr::from_ptr(err_buf.as_ptr().cast::<std::ffi::c_char>()) }
-                .to_string_lossy()
-                .into_owned();
+            let err_msg = ffi_error(&err_buf);
             return Err(CoreError::Internal(format!(
                 "Laya ONNX inference failed (rc={rc}): {err_msg}"
             )));
         }
 
+        if out_logits.iter().any(|v| !v.is_finite()) {
+            return Err(CoreError::Internal(
+                "Laya returned non-finite logits".into(),
+            ));
+        }
         let mut answers = BTreeMap::new();
 
         for (r, key) in q_keys.into_iter().enumerate() {
@@ -698,18 +705,43 @@ fn round_4(val: f64) -> f64 {
     (val * 10000.0).round() / 10000.0
 }
 
-pub fn execute_decision(req: &SystemOneRequest) -> Result<SystemOneResponse, CoreError> {
-    let guard = INSTANCE.read();
-    let engine = guard.as_ref().ok_or_else(|| {
-        CoreError::Internal("Laya internal engine is not initialized or active".into())
-    })?;
-    engine.classify(req)
-}
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
 
-pub fn spawn_init_background() {
-    tokio::task::spawn_blocking(|| {
-        if let Err(e) = init(None, None, None, None) {
-            tracing::warn!(error = %e, "Failed to initialize Laya ONNX engine in background");
+    #[test]
+    fn ffi_error_is_bounded_even_without_nul() {
+        assert_eq!(ffi_error(b"abc"), "abc");
+        assert_eq!(ffi_error(b"abc\0hidden"), "abc");
+        assert_eq!(ffi_error(&[]), "");
+        assert!(ffi_error(&[0xff]).contains('\u{fffd}'));
+    }
+
+    #[test]
+    fn config_rejects_invalid_budgets_and_temperatures() {
+        assert!(validate_config(&LayaConfig::default()).is_ok());
+        for max_len in [0, 31, 8193, usize::MAX] {
+            assert!(
+                validate_config(&LayaConfig {
+                    max_len,
+                    ..Default::default()
+                })
+                .is_err()
+            );
         }
-    });
+        assert!(
+            validate_config(&LayaConfig {
+                temperature: vec![f32::NAN],
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_config(&LayaConfig {
+                head_max_len: 512,
+                ..Default::default()
+            })
+            .is_err()
+        );
+    }
 }

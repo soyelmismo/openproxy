@@ -330,7 +330,7 @@ pub async fn run_test_for_model(
             #[cfg(feature = "laya-engine")]
             let laya_inprocess = is_decision
                 && model.provider_id.as_str() == "laya"
-                && openproxy_adapters::laya_engine::is_available();
+                && openproxy_adapters::laya_engine::is_enabled();
             #[cfg(not(feature = "laya-engine"))]
             let laya_inprocess = false;
 
@@ -360,7 +360,7 @@ pub async fn run_test_for_model(
                         ),
                     };
                     let debug_payload = Some(serde_json::json!({
-                        "engine": "in-process (C FFI)",
+                        "engine": "isolated worker (C FFI)",
                         "request_body": body_value,
                         "response_body": resp_val,
                     }));

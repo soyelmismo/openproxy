@@ -72,7 +72,9 @@ fn configure_allocator() {
 
 fn resolve_config_path() -> String {
     env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| {
-        let home_cfg = env::var("HOME").ok().map(|h| format!("{h}/.openproxy/config.toml"));
+        let home_cfg = env::var("HOME")
+            .ok()
+            .map(|h| format!("{h}/.openproxy/config.toml"));
         if let Some(ref p) = home_cfg
             && std::path::Path::new(p).exists()
         {
@@ -137,8 +139,7 @@ async fn serve_with_limits(
     };
     use tower::{Service, ServiceExt};
 
-    let connection_slots =
-        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
+    let connection_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
     let mut make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
 
     loop {
@@ -188,6 +189,10 @@ async fn serve_with_limits(
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(feature = "laya-engine")]
+    if std::env::args().nth(1).as_deref() == Some("--laya-worker") {
+        return openproxy_adapters::laya_engine::run_worker().map_err(Into::into);
+    }
     // Healthcheck mode (OP-23): distroless containers have no shell, wget or
     // curl, so the image's HEALTHCHECK invokes the binary itself. This runs a
     // TCP connect against the configured bind address and exits 0/1 — usable
@@ -205,10 +210,7 @@ fn main() -> anyhow::Result<()> {
                     .parse::<std::net::SocketAddr>()
             })
             .map_err(|e| anyhow::anyhow!("invalid bind address {bind:?}: {e}"))?;
-        match std::net::TcpStream::connect_timeout(
-            &addr,
-            std::time::Duration::from_secs(3),
-        ) {
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)) {
             Ok(_) => Ok(()),
             Err(e) => anyhow::bail!("healthcheck: cannot connect to {addr}: {e}"),
         }
@@ -250,14 +252,20 @@ fn run_main() -> anyhow::Result<()> {
                 .is_ok_and(|p_opt| p_opt.is_some_and(|p| p.active));
                 if is_laya_active {
                     openproxy_adapters::laya_engine::spawn_init_background();
+                } else {
+                    openproxy_adapters::laya_engine::shutdown();
                 }
-            });
+            })
+            .await?;
         }
 
         unsafe {
             libmimalloc_sys::mi_collect(true);
         }
-        run_server(state).await
+        let result = run_server(state).await;
+        #[cfg(feature = "laya-engine")]
+        openproxy_adapters::laya_engine::shutdown();
+        result
     })
 }
 

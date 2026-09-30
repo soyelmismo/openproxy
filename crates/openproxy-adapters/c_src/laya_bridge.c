@@ -19,7 +19,7 @@
 #define DL_OPEN(path) dlopen(path, RTLD_NOW | RTLD_GLOBAL)
 #define DL_SYM(handle, sym) dlsym(handle, sym)
 #define DL_CLOSE(handle) dlclose(handle)
-#define DL_ERROR() (dlerror() ? dlerror() : "failed to load dynamic library")
+#define DL_ERROR() "failed to load dynamic library"
 #endif
 
 struct LayaSession {
@@ -51,7 +51,7 @@ static const char* candidate_paths[] = {
     NULL
 };
 
-/* Security (OP-12): the ONNX library is loaded INTO the gateway process via
+/* Security (OP-12): the ONNX library is loaded INTO the isolated worker via
  * dlopen/LoadLibrary. Bare relative names ("libonnxruntime.so") resolved
  * through LD_LIBRARY_PATH and the current working directory, letting anyone
  * who controls either inject code directly into the process. Only explicit
@@ -230,6 +230,13 @@ int laya_session_run(
         return -1;
     }
 
+    if (batch_size <= 0 || batch_size > 64 || seq_len <= 0 || seq_len > 8192 ||
+        max_markers <= 0 || max_markers > 128 || !input_ids || !attention_mask ||
+        !marker_pos || !marker_mask || !qtype || !out_logits) {
+        set_error(err_buf, err_buf_len, "invalid or oversized inference buffers");
+        return -1;
+    }
+
     const OrtApi* ort = session->ort;
     OrtStatus* status = NULL;
     OrtValue* in_vals[5] = {NULL, NULL, NULL, NULL, NULL};
@@ -315,6 +322,8 @@ int laya_session_run(
     {
         OrtTensorTypeAndShapeInfo* shape_info = NULL;
         size_t element_count = 0;
+        size_t rank = 0;
+        int64_t dimensions[2] = {0, 0};
         enum ONNXTensorElementDataType element_type =
             ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
 
@@ -324,6 +333,12 @@ int laya_session_run(
         }
         if (!status) {
             status = ort->GetTensorShapeElementCount(shape_info, &element_count);
+        }
+        if (!status) {
+            status = ort->GetDimensionsCount(shape_info, &rank);
+        }
+        if (!status && rank == 2) {
+            status = ort->GetDimensions(shape_info, dimensions, 2);
         }
         if (shape_info) {
             ort->ReleaseTensorTypeAndShapeInfo(shape_info);
@@ -335,11 +350,12 @@ int laya_session_run(
             return -9;
         }
         if (element_type != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-            element_count < (size_t)batch_size * (size_t)max_markers) {
+            rank != 2 || dimensions[0] != batch_size || dimensions[1] != max_markers ||
+            element_count != (size_t)batch_size * (size_t)max_markers) {
             char msg[160];
             snprintf(msg, sizeof(msg),
-                     "logits tensor mismatch: type=%d elements=%zu, expected >= %d FLOAT",
-                     (int)element_type, element_count, batch_size * max_markers);
+                     "logits tensor mismatch: type=%d elements=%zu, expected %zu FLOAT",
+                     (int)element_type, element_count, (size_t)batch_size * (size_t)max_markers);
             set_error(err_buf, err_buf_len, msg);
             ort->ReleaseValue(out_vals[0]);
             return -10;

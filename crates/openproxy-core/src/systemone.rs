@@ -79,7 +79,7 @@ async fn dispatch_single_system_one(
     req: &SystemOneRequest,
 ) -> Result<(SystemOneResponse, u16)> {
     #[cfg(feature = "laya-engine")]
-    if target.provider.as_str() == "laya" && openproxy_adapters::laya_engine::is_available() {
+    if target.provider.as_str() == "laya" && openproxy_adapters::laya_engine::is_enabled() {
         let mut req_clone = req.clone();
         if req_clone.model.is_none() {
             req_clone.model = Some(target.upstream_model.clone());
