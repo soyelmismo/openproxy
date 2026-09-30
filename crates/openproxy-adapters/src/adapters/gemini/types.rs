@@ -1,9 +1,11 @@
+use std::borrow::Cow;
+
 pub const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS: u32 = 8192;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeminiSafetySetting {
-    pub category: String,
-    pub threshold: String,
+    pub category: Cow<'static, str>,
+    pub threshold: Cow<'static, str>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

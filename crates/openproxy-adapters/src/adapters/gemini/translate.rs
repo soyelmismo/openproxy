@@ -32,29 +32,31 @@ fn message_content_to_gemini_parts(content: Option<&serde_json::Value>) -> Vec<G
     }
 }
 
+static DEFAULT_GEMINI_SAFETY_SETTINGS: [GeminiSafetySetting; 5] = [
+    GeminiSafetySetting {
+        category: std::borrow::Cow::Borrowed("HARM_CATEGORY_HARASSMENT"),
+        threshold: std::borrow::Cow::Borrowed("BLOCK_NONE"),
+    },
+    GeminiSafetySetting {
+        category: std::borrow::Cow::Borrowed("HARM_CATEGORY_HATE_SPEECH"),
+        threshold: std::borrow::Cow::Borrowed("BLOCK_NONE"),
+    },
+    GeminiSafetySetting {
+        category: std::borrow::Cow::Borrowed("HARM_CATEGORY_SEXUALLY_EXPLICIT"),
+        threshold: std::borrow::Cow::Borrowed("BLOCK_NONE"),
+    },
+    GeminiSafetySetting {
+        category: std::borrow::Cow::Borrowed("HARM_CATEGORY_DANGEROUS_CONTENT"),
+        threshold: std::borrow::Cow::Borrowed("BLOCK_NONE"),
+    },
+    GeminiSafetySetting {
+        category: std::borrow::Cow::Borrowed("HARM_CATEGORY_CIVIC_INTEGRITY"),
+        threshold: std::borrow::Cow::Borrowed("BLOCK_NONE"),
+    },
+];
+
 fn build_default_gemini_safety_settings() -> Vec<GeminiSafetySetting> {
-    vec![
-        GeminiSafetySetting {
-            category: "HARM_CATEGORY_HARASSMENT".to_string(),
-            threshold: "BLOCK_NONE".to_string(),
-        },
-        GeminiSafetySetting {
-            category: "HARM_CATEGORY_HATE_SPEECH".to_string(),
-            threshold: "BLOCK_NONE".to_string(),
-        },
-        GeminiSafetySetting {
-            category: "HARM_CATEGORY_SEXUALLY_EXPLICIT".to_string(),
-            threshold: "BLOCK_NONE".to_string(),
-        },
-        GeminiSafetySetting {
-            category: "HARM_CATEGORY_DANGEROUS_CONTENT".to_string(),
-            threshold: "BLOCK_NONE".to_string(),
-        },
-        GeminiSafetySetting {
-            category: "HARM_CATEGORY_CIVIC_INTEGRITY".to_string(),
-            threshold: "BLOCK_NONE".to_string(),
-        },
-    ]
+    DEFAULT_GEMINI_SAFETY_SETTINGS.to_vec()
 }
 
 fn partition_messages_for_gemini(
@@ -603,4 +605,19 @@ pub fn deserialize_gemini_response(
             openproxy_types::error::CoreError::Parse(format!("parse gemini response: {e}"))
         })?;
     Ok(gemini_to_openai(&gemini_resp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_gemini_safety_settings_borrowed_cow() {
+        let settings = build_default_gemini_safety_settings();
+        assert_eq!(settings.len(), 5);
+        for s in &settings {
+            assert!(matches!(s.category, std::borrow::Cow::Borrowed(_)));
+            assert!(matches!(s.threshold, std::borrow::Cow::Borrowed("BLOCK_NONE")));
+        }
+    }
 }
