@@ -19,7 +19,7 @@
 //!   `cost::redact_error_msg` is available if a caller ever logs a raw secret.
 
 use std::collections::VecDeque;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -60,11 +60,11 @@ pub struct DebugLogEntry {
 /// `telemetry::init`); accessed via [`snapshot`] and [`snapshot_since`].
 static DEBUG_LOG_BUFFER: LazyLock<Mutex<DebugLogBuffer>> =
     LazyLock::new(|| Mutex::new(DebugLogBuffer::new()));
-static FILE_LOG_SENDER: OnceLock<mpsc::Sender<DebugLogEntry>> = OnceLock::new();
+static FILE_LOG_SENDER: OnceLock<mpsc::Sender<Arc<DebugLogEntry>>> = OnceLock::new();
 
 /// Internal struct holding the VecDeque + the monotonic seq counter.
 struct DebugLogBuffer {
-    entries: VecDeque<DebugLogEntry>,
+    entries: VecDeque<Arc<DebugLogEntry>>,
     next_seq: u64,
 }
 
@@ -76,13 +76,15 @@ impl DebugLogBuffer {
         }
     }
 
-    fn push(&mut self, mut entry: DebugLogEntry) {
+    fn push(&mut self, mut entry: DebugLogEntry) -> Arc<DebugLogEntry> {
         entry.seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
         if self.entries.len() >= BUFFER_CAPACITY {
             self.entries.pop_front();
         }
-        self.entries.push_back(entry);
+        let arc = Arc::new(entry);
+        self.entries.push_back(Arc::clone(&arc));
+        arc
     }
 }
 
@@ -96,7 +98,7 @@ fn resolve_debug_log_path() -> std::path::PathBuf {
         .join("debug.log")
 }
 
-fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<DebugLogEntry>) {
+fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<DebugLogEntry>>) {
     tokio::spawn(async move {
         if let Some(parent) = path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
@@ -139,7 +141,7 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Debug
                                 }
                             }
                             for item in batch {
-                                if let Ok(mut json) = serde_json::to_string(&item) {
+                                if let Ok(mut json) = serde_json::to_string(item.as_ref()) {
                                     json.push('\n');
                                     let _ = file.write_all(json.as_bytes()).await;
                                 }
@@ -159,7 +161,7 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Debug
 pub fn init() {
     let _ = &*DEBUG_LOG_BUFFER;
     let _ = FILE_LOG_SENDER.get_or_init(|| {
-        let (tx, rx) = mpsc::channel::<DebugLogEntry>(FILE_LOG_CAPACITY);
+        let (tx, rx) = mpsc::channel::<Arc<DebugLogEntry>>(FILE_LOG_CAPACITY);
         let path = resolve_debug_log_path();
         spawn_file_logger_task(path, rx);
         tx
@@ -168,19 +170,25 @@ pub fn init() {
 
 /// Snapshot all entries, insertion order (oldest first) — the dashboard's initial fetch.
 pub fn snapshot() -> Vec<DebugLogEntry> {
-    let guard = DEBUG_LOG_BUFFER.lock();
-    guard.entries.iter().cloned().collect()
+    let entries: Vec<Arc<DebugLogEntry>> = {
+        let guard = DEBUG_LOG_BUFFER.lock();
+        guard.entries.iter().cloned().collect()
+    };
+    entries.into_iter().map(|e| (*e).clone()).collect()
 }
 
 /// Snapshot entries with `seq > since` — the dashboard's polling fetch.
 pub fn snapshot_since(since: u64) -> Vec<DebugLogEntry> {
-    let guard = DEBUG_LOG_BUFFER.lock();
-    guard
-        .entries
-        .iter()
-        .filter(|e| e.seq > since)
-        .cloned()
-        .collect()
+    let entries: Vec<Arc<DebugLogEntry>> = {
+        let guard = DEBUG_LOG_BUFFER.lock();
+        guard
+            .entries
+            .iter()
+            .filter(|e| e.seq > since)
+            .cloned()
+            .collect()
+    };
+    entries.into_iter().map(|e| (*e).clone()).collect()
 }
 
 /// Highest `seq` in the buffer: what the frontend passes as `since` next poll.
@@ -257,9 +265,7 @@ where
         // Push into the global buffer.
         let file_entry = {
             let mut guard = DEBUG_LOG_BUFFER.lock();
-            let to_send = entry.clone();
-            guard.push(entry);
-            to_send
+            guard.push(entry)
         };
 
         // Push to the file log task.
