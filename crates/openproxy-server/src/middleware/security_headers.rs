@@ -227,7 +227,9 @@ mod tests {
             .extensions()
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
             .map(|ci| ci.0)
-            .is_some_and(|peer| crate::client_ip::is_trusted_proxy(peer.ip(), &[]))
+            .is_some_and(|peer| {
+                crate::client_ip::is_trusted_proxy(peer.ip(), &["127.0.0.1".into()])
+            })
             && req
                 .headers()
                 .get("x-forwarded-proto")

@@ -75,9 +75,9 @@ impl SlidingWindowRateLimiter {
             .windows
             .iter()
             .filter(|e| e.value().0 < max) // never evict a throttled entry
-            .map(|e| (e.value().0, e.key().clone()))
+            .map(|e| (e.value().0, *e.key()))
             .collect();
-        lowest.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        lowest.sort_unstable_by_key(|a| a.0);
         for (_, key) in lowest.into_iter().take(n) {
             self.windows.remove(&key);
         }
@@ -95,9 +95,9 @@ impl SlidingWindowRateLimiter {
         let mut oldest: Vec<(std::time::Duration, RateLimitKey)> = self
             .windows
             .iter()
-            .map(|e| (now.duration_since(e.value().1), e.key().clone()))
+            .map(|e| (now.duration_since(e.value().1), *e.key()))
             .collect();
-        oldest.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        oldest.sort_unstable_by_key(|a| a.0);
         for (_, key) in oldest.into_iter().take(n) {
             self.windows.remove(&key);
         }
@@ -365,9 +365,9 @@ mod tests {
         // Trip the throttle for `blocked_key` (count reaches max=10).
         let blocked_key = RateLimitKey::Key(ApiKeyId(1));
         for _ in 0..10 {
-            assert!(rl.check(blocked_key.clone()));
+            assert!(rl.check(blocked_key));
         }
-        assert!(!rl.check(blocked_key.clone()), "blocked at budget");
+        assert!(!rl.check(blocked_key), "blocked at budget");
 
         // Flood with unique keys. Each flood key has count=1 (below max=10),
         // so eviction drops THEM, not `blocked_key` (count=10 = max).

@@ -85,7 +85,10 @@ pub fn insert_manage_key(pool: &core_db::DbPool, plaintext: &str) {
     .expect("insert api key");
 }
 
-pub async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
+pub async fn make_state_with_key_and_config(
+    dir: &std::path::Path,
+    config: openproxy_core::AppConfig,
+) -> (AppState, String) {
     let pool =
         std::sync::Arc::new(core_db::DbPool::open(&dir.join("smoke.db")).expect("open pool"));
     {
@@ -100,12 +103,16 @@ pub async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
         adapters::builtin_adapters(),
     )));
     let state = AppState::for_test(
-        openproxy_core::AppConfig::default(),
+        config,
         pool,
         std::sync::Arc::new(mk),
         adapters,
     );
     (state, plaintext)
+}
+
+pub async fn make_state_with_key(dir: &std::path::Path) -> (AppState, String) {
+    make_state_with_key_and_config(dir, openproxy_core::AppConfig::default()).await
 }
 
 pub fn assert_recording_ttl_db_count(state: &AppState, expected: i64) {

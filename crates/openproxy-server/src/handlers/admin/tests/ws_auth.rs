@@ -184,7 +184,9 @@ async fn admin_middleware_exposes_identity_to_handlers() {
 #[tokio::test]
 async fn admin_middleware_resolves_real_ip_behind_proxy() {
     let tmp = tempdir();
-    let (state, key) = make_state_with_key(tmp.path()).await;
+    let mut config = openproxy_core::AppConfig::default();
+    config.server.trusted_proxies = vec!["127.0.0.1".to_string()];
+    let (state, key) = make_state_with_key_and_config(tmp.path(), config).await;
     let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("authorization", format!("Bearer {key}").parse().unwrap());

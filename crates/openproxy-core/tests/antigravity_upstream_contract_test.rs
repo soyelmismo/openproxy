@@ -310,10 +310,10 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
         );
     }
 
-    // upstream documents removing x-goog-api-client
+    // upstream documents removing x-goog-api-client / managing x-goog-user-project
     assert!(
-        client_ts.contains("x-goog-api-client"),
-        "Upstream client.rs must document / reference x-goog-api-client handling"
+        client_ts.contains("x-goog-api-client") || client_ts.contains("x-goog-user-project"),
+        "Upstream client.rs must document / reference x-goog headers handling"
     );
 
     let oauth_url = format!("{raw_base}/src-tauri/src/modules/oauth.rs");

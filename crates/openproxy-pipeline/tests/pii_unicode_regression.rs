@@ -8,6 +8,8 @@
 //! provider verbatim. These tests confirm the extended regexes catch each
 //! variant that was previously leaking.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use openproxy_pipeline::pii::engine::regexes::{
     REGEX_EMAIL, REGEX_PHONE_INTL, REGEX_PHONE_REGIONAL,
 };

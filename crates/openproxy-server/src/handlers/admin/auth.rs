@@ -427,7 +427,7 @@ impl AdminAuthLimiter {
             .map(|e| (e.value().0, *e.key()))
             .collect();
         // Sort ascending by failure count — lowest first.
-        lowest.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        lowest.sort_unstable_by_key(|a| a.0);
         for (_, ip) in lowest.into_iter().take(n) {
             self.failures.remove(&ip);
         }
