@@ -20,23 +20,26 @@ pub struct OAuthRefreshParams<'a> {
     pub master_key: &'a MasterKey,
 }
 
-type ProviderMutexMap = HashMap<Box<str>, Arc<tokio::sync::Mutex<()>>>;
+type AccountMutexKey = (Box<str>, i64);
+type AccountMutexMap = HashMap<AccountMutexKey, Arc<tokio::sync::Mutex<()>>>;
 
 /// Coordinates OAuth refresh calls so every runtime path uses the same
 /// serialization and persistence behavior.
 ///
-/// The lock is provider-scoped. That is intentionally conservative: several
-/// OAuth backends rotate refresh tokens and can react badly to bursty parallel
-/// refreshes for sibling accounts under the same public client.
+/// The lock is scoped per `(provider_id, account_id)`. Serializing at the
+/// account level prevents multiple concurrent requests or race conditions
+/// between quota synchronization and background schedulers from attempting
+/// parallel refresh operations on the same rotating refresh token (which causes
+/// Auth0/MiniMax/Cline reuse detection to revoke the grant).
 #[derive(Default)]
 pub struct TokenRefreshCoordinator {
-    provider_mutexes: Arc<std::sync::Mutex<ProviderMutexMap>>,
+    account_mutexes: Arc<std::sync::Mutex<AccountMutexMap>>,
 }
 
 impl TokenRefreshCoordinator {
     pub fn new() -> Self {
         Self {
-            provider_mutexes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            account_mutexes: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -46,16 +49,21 @@ impl TokenRefreshCoordinator {
         COORDINATOR.get_or_init(TokenRefreshCoordinator::new)
     }
 
-    fn mutex_for_provider(&self, provider_id: &str) -> Result<Arc<tokio::sync::Mutex<()>>> {
+    fn mutex_for_account(
+        &self,
+        provider_id: &str,
+        account_id: AccountId,
+    ) -> Result<Arc<tokio::sync::Mutex<()>>> {
         let mut map = self
-            .provider_mutexes
+            .account_mutexes
             .lock()
-            .map_err(|e| CoreError::Internal(format!("provider_mutexes lock poisoned: {e}")))?;
-        if let Some(mutex) = map.get(provider_id) {
+            .map_err(|e| CoreError::Internal(format!("account_mutexes lock poisoned: {e}")))?;
+        let key = (Box::from(provider_id), account_id.0);
+        if let Some(mutex) = map.get(&key) {
             return Ok(Arc::clone(mutex));
         }
         Ok(Arc::clone(
-            map.entry(Box::from(provider_id))
+            map.entry(key)
                 .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
         ))
     }
@@ -70,11 +78,56 @@ impl TokenRefreshCoordinator {
             db,
             master_key,
         } = params;
-        let mutex = self.mutex_for_provider(provider_id)?;
+        let mutex = self.mutex_for_account(provider_id, account_id)?;
         let _guard = mutex.lock().await;
 
+        // Double-checked locking against the database:
+        // Check if another concurrent task already refreshed this account while
+        // we waited for the account lock. If `expires_at` is safely in the future,
+        // reuse the freshly stored access token to avoid burning rotating refresh tokens.
+        let check_res = tokio::task::block_in_place(|| {
+            db.with_conn(|conn| {
+                let acc = openproxy_db::accounts::get(conn, account_id, master_key)?;
+                let Some(acc) = acc else {
+                    return Ok(None);
+                };
+                let needs_refresh =
+                    pipeline_token_needs_refresh(acc.expires_at.as_deref(), provider_id);
+                let access_token =
+                    openproxy_db::accounts::decrypt_access_token(conn, account_id, master_key).ok();
+                let latest_refresh_token =
+                    openproxy_db::accounts::decrypt_refresh_token(conn, account_id, master_key)
+                        .ok()
+                        .flatten();
+                Ok(Some((needs_refresh, access_token, latest_refresh_token, acc)))
+            })
+        })?;
+
+        if let Some((false, Some(access_token), maybe_rt, acc)) = check_res {
+            tracing::info!(
+                account = account_id.0,
+                provider = provider_id,
+                "oauth refresh: account already refreshed by concurrent caller, reusing current token"
+            );
+            return Ok(TokenResponse {
+                access_token,
+                token_type: "Bearer".to_string(),
+                expires_in: None,
+                refresh_token: maybe_rt,
+                scope: acc.oauth_scope.map(|s| s.to_string()),
+                id_token: None,
+            });
+        }
+
+        // If SQLite holds a newer refresh token than the caller's parameter,
+        // use the database's latest token so we never send a stale/consumed token.
+        let effective_refresh_token = match &check_res {
+            Some((_, _, Some(latest_rt), _)) if !latest_rt.is_empty() => latest_rt.as_str(),
+            _ => refresh_token,
+        };
+
         let token = provider
-            .refresh_token(refresh_token, upstream_client, account_id, db)
+            .refresh_token(effective_refresh_token, upstream_client, account_id, db)
             .await?;
         let expires_at = token_expires_at(token.expires_in);
 

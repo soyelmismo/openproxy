@@ -199,7 +199,27 @@ async function onConfirmDeleteProvider(providerId: string): Promise<void> {
 }
 
 
-function renderDetailHeader(provider: Provider): TemplateResult {
+export function getHeadersChipLabel(raw?: string | null): string {
+  if (!raw || !raw.trim()) return '';
+  if (raw.trim() === '***redacted***') return 'headers (configured)';
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return `headers (${Object.keys(parsed).length})`;
+    }
+  } catch {
+    // fallback for non-JSON or masked strings
+  }
+  return 'headers (configured)';
+}
+
+export function getHeadersChipTitle(raw?: string | null): string {
+  if (!raw || !raw.trim()) return '';
+  if (raw.trim() === '***redacted***') return 'Extra headers configured (redacted for security)';
+  return raw;
+}
+
+export function renderDetailHeader(provider: Provider): TemplateResult {
   const isDeletable = provider.metadata?.deletable ?? true;
   return html`
     <div class="provider-detail-header${provider.active ? '' : ' inactive'}">
@@ -220,7 +240,7 @@ function renderDetailHeader(provider: Provider): TemplateResult {
             <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
             <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
             ${provider.extra_headers_json
-              ? html`<span class="chip headers-chip" title=${provider.extra_headers_json} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>headers (${Object.keys(JSON.parse(provider.extra_headers_json || '{}')).length})</span>`
+              ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
               : html``}
           </div>
         </div>

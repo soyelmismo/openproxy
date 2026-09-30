@@ -114,6 +114,7 @@ async fn try_proactive_oauth_refresh(
     {
         Ok(token) => {
             custom_meta.access_token = token.access_token;
+            custom_meta.maybe_refresh = None;
         }
         Err(e) => {
             tracing::warn!(
@@ -122,6 +123,7 @@ async fn try_proactive_oauth_refresh(
                 error = %e,
                 "pipeline: proactive OAuth refresh failed, continuing with existing token"
             );
+            custom_meta.maybe_refresh = None;
         }
     }
 }

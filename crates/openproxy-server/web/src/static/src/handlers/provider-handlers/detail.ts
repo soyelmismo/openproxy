@@ -43,7 +43,16 @@ export function showEditProviderHeaders(
 
   let rows: HeaderRow[] = [...initialRows];
   let rawMode = false;
-  let rawJson = currentHeadersJson ? JSON.stringify(JSON.parse(currentHeadersJson), null, 2) : "";
+  let rawJson = "";
+  if (initialRows.length > 0) {
+    const obj: Record<string, string> = {};
+    for (const r of initialRows) {
+      if (r.key.trim()) {
+        obj[r.key.trim()] = r.value;
+      }
+    }
+    rawJson = Object.keys(obj).length > 0 ? JSON.stringify(obj, null, 2) : "";
+  }
   let errorMsg: string | null = null;
   let isSaving = false;
 
@@ -225,6 +234,14 @@ export function showEditProviderHeaders(
               Custom HTTP headers attached to all outbound requests (inference and discovery) for
               this provider.
             </p>
+
+            ${currentHeadersJson?.trim() === "***redacted***" && rows.length === 0 && !rawJson
+              ? html`
+                  <div class="banner banner-info" style="margin-bottom: var(--space-3); font-size: var(--fs-xs);">
+                    Current extra headers are configured and redacted for security. Setting new headers below will replace them.
+                  </div>
+                `
+              : html``}
 
             <div class="headers-presets">
               <span class="headers-presets-label">Quick Presets:</span>

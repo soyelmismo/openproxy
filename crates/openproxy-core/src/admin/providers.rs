@@ -229,17 +229,11 @@ pub fn update_provider(
     let keyword = input.auto_activate_keyword.as_ref().map(|o| o.as_deref());
     // OP-07: an update echoing the redaction sentinel back (SPA edit forms
     // re-submit the object they got from GET) means "keep the stored value".
-    let extra_headers = input
-        .extra_headers_json
-        .as_ref()
-        .map(|o| o.as_deref())
-        .map(|opt| {
-            if opt == Some(REDACTED_EXTRA_HEADERS_SENTINEL) {
-                None
-            } else {
-                opt
-            }
-        });
+    let extra_headers = match &input.extra_headers_json {
+        Some(Some(s)) if s == REDACTED_EXTRA_HEADERS_SENTINEL => None,
+        Some(opt) => Some(opt.as_deref()),
+        None => None,
+    };
     providers::update(
         conn,
         id,
