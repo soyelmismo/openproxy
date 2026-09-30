@@ -221,14 +221,43 @@ pub(crate) fn verify_key_credentials(
 
     validate_key_record(&key, required_scope)?;
 
-    let pool = Arc::clone(state.db_pool());
-    let key_id = key.id;
-    tokio::task::spawn_blocking(move || {
-        let w = pool.writer();
-        let _ = core_api_keys::touch_last_used(&w, key_id);
-    });
+    // Security (OP-15): `touch_last_used` is throttled in SQL to one write per
+    // LAST_USED_THROTTLE_SECS, but the old code contended for the pool's
+    // SINGLE writer mutex on every authenticated request — at high RPS a
+    // single key monopolized the writer and delayed usage tracking and admin
+    // operations. The fetched row already tells us whether a stamp is due, so
+    // only take the writer when it actually is.
+    if last_used_needs_stamp(&key.last_used_at) {
+        let pool = Arc::clone(state.db_pool());
+        let key_id = key.id;
+        tokio::task::spawn_blocking(move || {
+            let w = pool.writer();
+            let _ = core_api_keys::touch_last_used(&w, key_id);
+        });
+        // Refresh the cached stamp so the next request does not re-contend for
+        // another LAST_USED_THROTTLE_SECS window (the cache holds an Arc, so
+        // the row is cloned with the new stamp).
+        let mut refreshed = (*key).clone();
+        refreshed.last_used_at = Some(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        state.cache_api_key(Arc::new(refreshed));
+    }
 
     Ok(key)
+}
+
+/// `true` when the row's `last_used_at` is older than the DB-side throttle
+/// window (or missing/unparseable, which errs on the side of stamping).
+fn last_used_needs_stamp(last_used_at: &Option<String>) -> bool {
+    let Some(stamp) = last_used_at else {
+        return true;
+    };
+    match chrono::NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d %H:%M:%S") {
+        Ok(stamp) => {
+            (chrono::Utc::now().naive_utc() - stamp).num_seconds()
+                > core_api_keys::LAST_USED_THROTTLE_SECS
+        }
+        Err(_) => true,
+    }
 }
 
 fn verify_combo_authorization(
