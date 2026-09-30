@@ -36,7 +36,13 @@ fn default_allow_anonymous() -> bool {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            bind: "0.0.0.0:8787".into(),
+            // Security (OP-04): loopback by default. The binary speaks plain
+            // HTTP only (no TLS support), so binding a public interface out of
+            // the box would expose every credential — including admin Bearer
+            // tokens — in cleartext. Deployments that need to expose the port
+            // must set an explicit `server.bind` and put a TLS-terminating
+            // reverse proxy in front (see the startup warning in main.rs).
+            bind: "127.0.0.1:8787".into(),
             request_max_body_bytes: 10 * 1024 * 1024,
             rate_limit_requests_per_minute: 1000,
             allow_anonymous: false,

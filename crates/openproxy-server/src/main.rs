@@ -64,8 +64,26 @@ fn load_server_config() -> anyhow::Result<AppConfig> {
     Ok(config)
 }
 
+/// Whether `bind` restricts the listener to the loopback interface.
+fn is_loopback_bind(bind: &str) -> bool {
+    let host = bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(bind);
+    host == "localhost" || host.starts_with("127.") || host == "[::1]" || host == "::1"
+}
+
 async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<()> {
     let bind_addr = state.config().server.bind.clone();
+    // Security (OP-04): this binary has no TLS support — every credential
+    // (admin Bearer tokens included) would travel in cleartext. Make an
+    // externally-reachable bind an explicit, warned operator decision instead
+    // of a silent default.
+    if !is_loopback_bind(&bind_addr) {
+        tracing::warn!(
+            addr = %bind_addr,
+            "openproxy is binding a NON-LOOPBACK interface over plain HTTP. \
+             The binary has no TLS support: admin and API credentials will travel \
+             unencrypted unless a TLS-terminating reverse proxy fronts this port."
+        );
+    }
     let app = openproxy_server::router::build_router(state);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "openproxy listening");

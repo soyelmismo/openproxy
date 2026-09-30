@@ -4,10 +4,14 @@
 # To build locally instead, comment out `image:` and uncomment `build:`.
 #
 # Usage:
-#   1. Copy config.example.toml to ./config.toml and edit (at minimum set
-#      `server.bind = "0.0.0.0:8787"` so the port is reachable from the host).
-#   2. `docker compose up -d`
-#   3. Visit http://localhost:8787/v1/health to confirm the server is up.
+#   1. `docker compose up -d` (works out of the box: the image ships a
+#      container config binding 0.0.0.0:8787, and the host-side port mapping
+#      below is loopback-only).
+#   2. Visit http://localhost:8787/v1/health to confirm the server is up.
+#   3. To expose the service beyond the host, change the ports mapping to
+#      "8787:8787" AND put a TLS-terminating reverse proxy in front — the
+#      binary has no TLS support and admin credentials would otherwise
+#      travel in cleartext (OP-04).
 #
 # The dashboard SPA is embedded into the openproxy binary at compile time via
 # rust-embed (see `crates/openproxy-server/src/admin_ui.rs`), so this single
@@ -20,9 +24,17 @@ services:
     # build: .
     container_name: openproxy
     ports:
-      - "8787:8787"
+      # Security (OP-04): loopback-only on the host by default. The dashboard,
+      # admin API, WebSocket and public API all share this single plain-HTTP
+      # port; mapping it to 0.0.0.0 without a TLS reverse proxy in front
+      # exposes admin credentials on the network.
+      - "127.0.0.1:8787:8787"
     volumes:
-      - ./config.toml:/etc/openproxy/config.toml:ro
+      # Optional: mount your own config over the image default
+      # (/etc/openproxy/config.toml, which binds 0.0.0.0:8787 inside the
+      # container). Commented out so `docker compose up -d` works with no
+      # local files.
+      # - ./config.toml:/etc/openproxy/config.toml:ro
       - openproxy-data:/var/lib/openproxy
       # Optional: mount model weights for in-process Laya decision routing
       # - ./models/laya:/var/lib/openproxy/models/laya:ro
