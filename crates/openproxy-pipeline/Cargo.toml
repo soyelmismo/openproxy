@@ -56,3 +56,8 @@ tokio-util = { workspace = true, features = ["rt"] }
 chrono = { workspace = true }
 regex = { workspace = true }
 aho-corasick = { workspace = true }
+# Security: NFKC normalization collapses fullwidth/homoglyph characters to
+# their ASCII equivalents before PII regex matching, so that inputs like
+# `alice＠example.com` (FULLWIDTH @) or `+１２３-５５５-０１９９` (FULLWIDTH
+# digits) are detected instead of leaking to upstream providers verbatim.
+unicode-normalization = "0.1"

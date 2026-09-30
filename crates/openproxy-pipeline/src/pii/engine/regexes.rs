@@ -47,7 +47,17 @@ pub static REGEX_JSON_KEY: LazyLock<Regex> =
     LazyLock::new(|| openproxy_types::static_regex!(r#""([^"\\]*(?:\\.[^"\\]*)*)"\s*:"#));
 
 pub static REGEX_EMAIL: LazyLock<Regex> = LazyLock::new(|| {
-    openproxy_types::static_regex!(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+    // Security: include common Unicode homoglyph variants of the separators
+    // (`@` U+0040 vs FULLWIDTH @ U+FF20; `.` U+002E vs FULLWIDTH FULL STOP
+    // U+FF0E) and allow any Unicode letter / decimal digit in local-part
+    // and domain. Zero-width characters (U+200B/C/D, U+FEFF) are matched
+    // around the separators so an input like `alice\u200B@example.com`
+    // does not slip past the regex. NFKC-equivalent variants are caught by
+    // the alternation; pure-script Cyrillic / Greek homoglyphs in the
+    // domain are caught by `\p{L}`.
+    openproxy_types::static_regex!(
+        r"[\p{L}\p{N}._%+-]+[\u200B\u200C\u200D\uFEFF]*(?:@|\uFF20)[\u200B\u200C\u200D\uFEFF]*[\p{L}\p{N}.-]+[\u200B\u200C\u200D\uFEFF]*(?:\.|\uFF0E)[\p{L}]{2,}"
+    )
 });
 
 pub static REGEX_IPV4: LazyLock<Regex> = LazyLock::new(|| {
@@ -63,14 +73,24 @@ pub static REGEX_IPV6: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub static REGEX_PHONE_INTL: LazyLock<Regex> = LazyLock::new(|| {
+    // Security: use `\p{Nd}` (any Unicode decimal digit) instead of `\d`
+    // (ASCII-only) so FULLWIDTH DIGITS U+FF11..U+FF19 are matched. Include
+    // the Unicode hyphen/dash family U+2010..U+2015 + U+2212 as alternatives
+    // to ASCII `-`, so `+1\u2010800\u2010555\u20100199` (HYPHEN U+2010) is
+    // detected instead of leaking verbatim to the upstream provider. The
+    // leading country-code digit class also accepts fullwidth 1-9
+    // (U+FF11..U+FF19) so an all-fullwidth number like
+    // `+\uFF11\uFF12\uFF13-\uFF15\uFF15\uFF15-\uFF10\uFF11\uFF19\uFF19`
+    // is matched end-to-end.
     openproxy_types::static_regex!(
-        r"\+(?:[1-9]\d{0,2})[ -.]?(?:\(?\d{1,4}\)?[ -.]?)?\d{2,4}[ -.]?\d{2,4}(?:[ -.]?\d{1,4})?",
+        r"\+(?:[1-9\u{FF11}-\u{FF19}]\p{Nd}{0,2})[ \-.\u2010-\u2015\u2212]?(?:\(?\p{Nd}{1,4}\)?[ \-.\u2010-\u2015\u2212]?)?\p{Nd}{2,4}[ \-.\u2010-\u2015\u2212]?\p{Nd}{2,4}(?:[ \-.\u2010-\u2015\u2212]?\p{Nd}{1,4})?"
     )
 });
 
 pub static REGEX_PHONE_REGIONAL: LazyLock<Regex> = LazyLock::new(|| {
+    // Security: same `\p{Nd}` + Unicode hyphen extension as REGEX_PHONE_INTL.
     openproxy_types::static_regex!(
-        r"(?:(?:\b1[-. ])?(?:\(\d{3}\)\s*|\b\d{3}[-. ]))\d{3}[-. ]\d{4}\b"
+        r"(?:(?:\b1[-. \u2010-\u2015\u2212])?(?:\(\p{Nd}{3}\)\s*|\b\p{Nd}{3}[-. \u2010-\u2015\u2212]))\p{Nd}{3}[-. \u2010-\u2015\u2212]\p{Nd}{4}\b"
     )
 });
 
