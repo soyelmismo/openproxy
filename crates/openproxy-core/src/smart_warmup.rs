@@ -367,59 +367,83 @@ async fn ping_antigravity_model(
         Err(_) => return false,
     };
 
-    let url = format!(
-        "{}/v1internal:generateContent",
-        openproxy_adapters::adapters::antigravity::DEFAULT_ANTIGRAVITY_BASE_URL
-    );
+    let endpoints = [
+        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+    ];
 
-    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(url, payload);
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
-    openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
+    for url in &endpoints {
+        let mut req =
+            openproxy_adapters::upstream::UpstreamRequest::post_json(*url, payload.clone());
+        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
+            req.headers.insert(http::header::AUTHORIZATION, v);
+        }
+        openproxy_adapters::antigravity_headers::inject_antigravity_headers(
+            &mut req.headers,
+            None,
+        );
 
-    let cancel = openproxy_adapters::upstream::CancellationToken::new();
-    match upstream
-        .call(
-            req,
-            openproxy_adapters::upstream::TimeoutProfile::Chat,
-            cancel,
-        )
-        .await
-    {
-        Ok(resp) => {
-            let status = resp.status;
-            let _ = resp.collect().await;
-            if status.is_success() {
-                true
-            } else {
+        let cancel = openproxy_adapters::upstream::CancellationToken::new();
+        match upstream
+            .call(
+                req,
+                openproxy_adapters::upstream::TimeoutProfile::Chat,
+                cancel,
+            )
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status;
+                let body = resp.collect().await.unwrap_or_default();
+                if status.is_success() {
+                    return true;
+                }
+                let body_str = String::from_utf8_lossy(&body);
+                let snippet = if body_str.len() > 200 {
+                    let boundary = body_str
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .take_while(|&i| i <= 200)
+                        .last()
+                        .unwrap_or(0);
+                    &body_str[..boundary]
+                } else {
+                    &body_str
+                };
                 tracing::warn!(
                     provider = "antigravity",
                     account_id = account_id,
                     model = %model,
                     status = %status,
-                    "[SmartWarmup] Ping failed with status {} for model '{}' on account {} (provider: 'antigravity')",
+                    endpoint = %url,
+                    response = %snippet,
+                    "[SmartWarmup] Ping failed with status {} on '{}' for model '{}' on account {}: {}",
                     status,
+                    url,
                     model,
-                    account_desc
+                    account_desc,
+                    snippet
                 );
-                false
+            }
+            Err(e) => {
+                tracing::warn!(
+                    provider = "antigravity",
+                    account_id = account_id,
+                    model = %model,
+                    endpoint = %url,
+                    error = %e,
+                    "[SmartWarmup] Ping request failed on '{}' for model '{}' on account {}: {}",
+                    url,
+                    model,
+                    account_desc,
+                    e
+                );
             }
         }
-        Err(e) => {
-            tracing::warn!(
-                provider = "antigravity",
-                account_id = account_id,
-                model = %model,
-                error = %e,
-                "[SmartWarmup] Ping request failed for model '{}' on account {} (provider: 'antigravity'): {}",
-                model,
-                account_desc,
-                e
-            );
-            false
-        }
     }
+
+    false
 }
 
 fn is_model_quota_ready_for_warmup(
