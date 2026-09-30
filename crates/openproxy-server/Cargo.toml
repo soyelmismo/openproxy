@@ -11,6 +11,9 @@ workspace = true
 
 [features]
 default = ["laya-engine"]
+# OP-20: opt-in build flag for the local-development admin auth bypass
+# (OPENPROXY_DASHBOARD_AUTH_BYPASS). Never enabled by default.
+dev-auth-bypass = []
 laya-engine = [
     "openproxy-adapters/laya-engine",
     "openproxy-pipeline/laya-engine",

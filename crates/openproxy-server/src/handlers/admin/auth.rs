@@ -50,7 +50,15 @@ pub(crate) fn audit_secret_read(identity: &Identity, secret_kind: &str, subject:
     );
 }
 
-#[cfg(debug_assertions)]
+/// Dev-only admin auth bypass (OP-20).
+///
+/// Gated behind the non-default `dev-auth-bypass` cargo feature instead of
+/// `debug_assertions`: a plain `cargo run` (debug build) must NOT ship a
+/// switch that disables the ENTIRE admin authentication surface — on a
+/// shared host any local user could flip `OPENPROXY_DASHBOARD_AUTH_BYPASS=1`
+/// and get full admin access. Opting in now requires building with
+/// `--features dev-auth-bypass` explicitly.
+#[cfg(feature = "dev-auth-bypass")]
 fn check_dev_auth_bypass(
     headers: &HeaderMap,
     remote_addr: Option<&SocketAddr>,
@@ -140,7 +148,7 @@ pub(crate) fn authenticate_admin(
         .map(|(ip, peer)| SocketAddr::new(ip, peer.port()))
         .or_else(|| remote_addr.copied());
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "dev-auth-bypass")]
     if check_dev_auth_bypass(headers, remote_addr)? {
         return Ok(AdminIdentity {
             key: None,
@@ -201,7 +209,7 @@ pub(crate) fn authenticate_admin_ws(
         .map(|(ip, peer)| SocketAddr::new(ip, peer.port()))
         .or_else(|| remote_addr.copied());
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "dev-auth-bypass")]
     if check_dev_auth_bypass(headers, remote_addr)? {
         return Ok(AdminIdentity {
             key: None,
