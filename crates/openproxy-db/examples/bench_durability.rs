@@ -89,11 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let path_display = db_path.display();
     println!(
-        "Benchmarking SQLite Durability: Mode={:?}, Path={}, Transactions={}",
-        mode,
-        db_path.display(),
-        num_txs
+        "Benchmarking SQLite Durability: Mode={mode:?}, Path={path_display}, Transactions={num_txs}"
     );
 
     let pool = DbPool::open_with_options(&db_path, 2, mode)?;
@@ -132,12 +130,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tx_per_sec = (num_txs as f64) / total_elapsed.as_secs_f64();
 
     println!("--- Benchmark Results ---");
-    println!("Synchronous: {:?}", mode);
-    println!("Total Time:  {:?}", total_elapsed);
-    println!("Throughput:  {:.2} tx/sec", tx_per_sec);
-    println!("Avg Latency: {:.2} µs/tx", avg_us);
-    println!("p50 Latency: {} µs/tx", p50_us);
-    println!("p99 Latency: {} µs/tx", p99_us);
+    println!("Synchronous: {mode:?}");
+    println!("Total Time:  {total_elapsed:?}");
+    println!("Throughput:  {tx_per_sec:.2} tx/sec");
+    println!("Avg Latency: {avg_us:.2} µs/tx");
+    println!("p50 Latency: {p50_us} µs/tx");
+    println!("p99 Latency: {p99_us} µs/tx");
 
     Ok(())
 }
