@@ -133,6 +133,159 @@ fn do_auto_populate(
     Ok(added)
 }
 
+pub(crate) struct ComboMeta {
+    pub(crate) combo: Option<Combo>,
+    pub(crate) name: String,
+    pub(crate) active_cooldowns:
+        Option<std::collections::HashSet<openproxy_types::ids::ComboTargetId>>,
+    pub(crate) metadata_error: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CooldownConfigDefaults {
+    pub(crate) cooldown_secs: u64,
+    pub(crate) cooldown_max_secs: u64,
+    pub(crate) cooldown_factor: u32,
+}
+
+pub(crate) fn load_candidate_combos(
+    repo: &dyn crate::repository::PipelineRepository,
+    eligible: &[ComboTarget],
+    providers_map: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<ComboId, ComboMeta> {
+    let mut combo_cache: std::collections::HashMap<ComboId, ComboMeta> =
+        std::collections::HashMap::new();
+
+    for t in eligible {
+        if t.account_id.is_none() && !crate::credentials::is_anonymous_target(t, providers_map) {
+            combo_cache.entry(t.combo_id).or_insert_with(|| {
+                let (combo, metadata_error) = match repo.load_combo(t.combo_id) {
+                    Ok(c) => (c, false),
+                    Err(e) => {
+                        tracing::error!(
+                            combo_id = t.combo_id.0,
+                            error = %e,
+                            "failed to load combo metadata during target expansion"
+                        );
+                        (None, true)
+                    }
+                };
+                let name = match &combo {
+                    Some(c) => c.name.clone(),
+                    None => format!("combo_{}", t.combo_id.0),
+                };
+                let active_cooldowns = match repo.get_active_cooldown_targets(t.combo_id) {
+                    Ok(set) => Some(set),
+                    Err(e) => {
+                        tracing::error!(
+                            combo_id = t.combo_id.0,
+                            error = %e,
+                            "failed to load active cooldown targets for combo; skipping cooldown mutation to avoid blind refresh"
+                        );
+                        None
+                    }
+                };
+                ComboMeta {
+                    combo,
+                    name,
+                    active_cooldowns,
+                    metadata_error,
+                }
+            });
+        }
+    }
+    combo_cache
+}
+
+pub(crate) fn record_missing_account_cooldowns(
+    repo: &dyn crate::repository::PipelineRepository,
+    rejected: Vec<crate::credentials::RejectedTarget>,
+    mut combo_cache: std::collections::HashMap<ComboId, ComboMeta>,
+    defaults: CooldownConfigDefaults,
+) {
+    for rej in rejected {
+        let Some(meta) = combo_cache.get(&rej.target.combo_id) else {
+            continue;
+        };
+
+        if meta.metadata_error {
+            tracing::warn!(
+                combo_id = rej.target.combo_id.0,
+                target_id = rej.target.id.0,
+                "skipping cooldown recording because combo metadata could not be loaded due to previous database error"
+            );
+            continue;
+        }
+
+        let combo = meta.combo.as_ref();
+        let mode = rej.target.cooldown_mode.unwrap_or_else(|| {
+            combo.map_or(openproxy_types::config::CooldownMode::Flat, |c| {
+                c.cooldown_mode
+            })
+        });
+        let base_secs = rej
+            .target
+            .cooldown_base_secs
+            .or_else(|| combo.and_then(|c| c.cooldown_base_secs))
+            .unwrap_or(defaults.cooldown_secs);
+        let max_secs = rej
+            .target
+            .cooldown_max_secs
+            .or_else(|| combo.and_then(|c| c.cooldown_max_secs))
+            .unwrap_or(defaults.cooldown_max_secs);
+        let factor = rej
+            .target
+            .cooldown_factor
+            .or_else(|| combo.and_then(|c| c.cooldown_factor))
+            .unwrap_or(defaults.cooldown_factor);
+
+        if mode == openproxy_types::config::CooldownMode::None || base_secs == 0 {
+            continue;
+        }
+
+        // Check active cooldowns from cache. If active cooldown state could not be determined
+        // due to DB error, skip cooldown mutation to avoid blind refresh.
+        let Some(active_set) = &meta.active_cooldowns else {
+            tracing::warn!(
+                combo_id = rej.target.combo_id.0,
+                target_id = rej.target.id.0,
+                "skipping cooldown recording because active cooldown state could not be determined due to previous database error"
+            );
+            continue;
+        };
+
+        if active_set.contains(&rej.target.id) {
+            continue;
+        }
+
+        if let Err(e) = repo.record_cooldown(
+            rej.target.id,
+            &rej.reason,
+            mode,
+            base_secs,
+            max_secs,
+            factor,
+        ) {
+            tracing::error!(
+                combo_id = rej.target.combo_id.0,
+                combo_name = %rej.combo_name,
+                provider = %rej.target.provider_id.as_str(),
+                model = %rej.model.model_id.as_str(),
+                target_id = rej.target.id.0,
+                error = %e,
+                "failed to record cooldown for {}: {}",
+                rej.reason,
+                e
+            );
+        } else if let Some(set_mut) = combo_cache
+            .get_mut(&rej.target.combo_id)
+            .and_then(|meta_mut| meta_mut.active_cooldowns.as_mut())
+        {
+            set_mut.insert(rej.target.id);
+        }
+    }
+}
+
 impl Pipeline {
     pub(crate) async fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
         let combo_id = combo.id;
@@ -158,9 +311,11 @@ impl Pipeline {
 
         let master_key = Arc::clone(&self.config.master_key);
         let oauth_registry = self.config.oauth_provider_registry.as_ref().map(Arc::clone);
-        let config_cooldown_secs = self.config.cooldown_secs;
-        let config_cooldown_max_secs = self.config.cooldown_max_secs;
-        let config_cooldown_factor = self.config.cooldown_factor;
+        let defaults = CooldownConfigDefaults {
+            cooldown_secs: self.config.cooldown_secs,
+            cooldown_max_secs: self.config.cooldown_max_secs,
+            cooldown_factor: self.config.cooldown_factor,
+        };
 
         self.async_repo()
             .run(move |repo| {
@@ -177,57 +332,7 @@ impl Pipeline {
                     .get_antigravity_projects(&id_values)
                     .unwrap_or_default();
 
-                // Candidate combos: only owners of targets with None account_id and not anonymous.
-                // Healthy hot path does not execute DB lookups for combos/cooldowns.
-                struct ComboMeta {
-                    combo: Option<openproxy_types::combos::Combo>,
-                    name: String,
-                    active_cooldowns: Option<std::collections::HashSet<openproxy_types::ids::ComboTargetId>>,
-                }
-
-                let mut combo_cache: std::collections::HashMap<openproxy_types::ids::ComboId, ComboMeta> =
-                    std::collections::HashMap::new();
-
-                for t in &eligible {
-                    if t.account_id.is_none()
-                        && !openproxy_adapters::adapters::is_anonymous_fallback(&t.provider_id.0)
-                        && providers_map.get(&t.provider_id.0).map(String::as_str) != Some("none")
-                    {
-                        combo_cache.entry(t.combo_id).or_insert_with(|| {
-                            let combo = match repo.load_combo(t.combo_id) {
-                                Ok(c) => c,
-                                Err(e) => {
-                                    tracing::error!(
-                                        combo_id = t.combo_id.0,
-                                        error = %e,
-                                        "failed to load combo metadata during target expansion"
-                                    );
-                                    None
-                                }
-                            };
-                            let name = match &combo {
-                                Some(c) => c.name.clone(),
-                                None => format!("combo_{}", t.combo_id.0),
-                            };
-                            let active_cooldowns = match repo.get_active_cooldown_targets(t.combo_id) {
-                                Ok(set) => Some(set),
-                                Err(e) => {
-                                    tracing::error!(
-                                        combo_id = t.combo_id.0,
-                                        error = %e,
-                                        "failed to load active cooldown targets for combo; skipping cooldown mutation to avoid blind refresh"
-                                    );
-                                    None
-                                }
-                            };
-                            ComboMeta {
-                                combo,
-                                name,
-                                active_cooldowns,
-                            }
-                        });
-                    }
-                }
+                let combo_cache = load_candidate_combos(repo, &eligible, &providers_map);
 
                 let mut combo_names = std::collections::HashMap::with_capacity(combo_cache.len());
                 let mut active_cooldowns_cache =
@@ -256,80 +361,7 @@ impl Pipeline {
                         Some(&active_cooldowns_cache),
                     );
 
-                for rej in rejected {
-                    let combo_meta = combo_cache.get(&rej.target.combo_id);
-                    let combo = combo_meta.and_then(|m| m.combo.as_ref());
-                    let mode = rej.target.cooldown_mode.unwrap_or_else(|| {
-                        combo
-                            .map(|c| c.cooldown_mode)
-                            .unwrap_or(openproxy_types::config::CooldownMode::Flat)
-                    });
-                    let base_secs = rej
-                        .target
-                        .cooldown_base_secs
-                        .or_else(|| combo.and_then(|c| c.cooldown_base_secs))
-                        .unwrap_or(config_cooldown_secs);
-                    let max_secs = rej
-                        .target
-                        .cooldown_max_secs
-                        .or_else(|| combo.and_then(|c| c.cooldown_max_secs))
-                        .unwrap_or(config_cooldown_max_secs);
-                    let factor = rej
-                        .target
-                        .cooldown_factor
-                        .or_else(|| combo.and_then(|c| c.cooldown_factor))
-                        .unwrap_or(config_cooldown_factor);
-
-                    if mode == openproxy_types::config::CooldownMode::None || base_secs == 0 {
-                        continue;
-                    }
-
-                    // Check active cooldowns from cache. If active cooldown state could not be determined
-                    // due to DB error, skip cooldown mutation to avoid blind refresh.
-                    let Some(meta) = combo_meta else {
-                        continue;
-                    };
-                    let Some(active_set) = &meta.active_cooldowns else {
-                        tracing::warn!(
-                            combo_id = rej.target.combo_id.0,
-                            target_id = rej.target.id.0,
-                            "skipping cooldown recording because active cooldown state could not be determined due to previous database error"
-                        );
-                        continue;
-                    };
-
-                    if active_set.contains(&rej.target.id) {
-                        continue;
-                    }
-
-                    if let Err(e) = repo.record_cooldown(
-                        rej.target.id,
-                        &rej.reason,
-                        mode,
-                        base_secs,
-                        max_secs,
-                        factor,
-                    ) {
-                        tracing::error!(
-                            combo_id = rej.target.combo_id.0,
-                            combo_name = %rej.combo_name,
-                            provider = %rej.target.provider_id.as_str(),
-                            model = %rej.model.model_id.as_str(),
-                            target_id = rej.target.id.0,
-                            error = %e,
-                            "failed to record cooldown for combo_target {} ({}) on combo {} [{}]: {}",
-                            rej.target.id.0,
-                            rej.model.model_id.as_str(),
-                            rej.combo_name,
-                            rej.target.combo_id.0,
-                            e
-                        );
-                    } else if let Some(meta_mut) = combo_cache.get_mut(&rej.target.combo_id) {
-                        if let Some(set_mut) = &mut meta_mut.active_cooldowns {
-                            set_mut.insert(rej.target.id);
-                        }
-                    }
-                }
+                record_missing_account_cooldowns(repo, rejected, combo_cache, defaults);
 
                 Ok(resolved)
             })
@@ -566,5 +598,7 @@ impl Pipeline {
     }
 }
 
+#[cfg(test)]
+mod mock_repo;
 #[cfg(test)]
 mod tests;

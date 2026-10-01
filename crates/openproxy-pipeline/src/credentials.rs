@@ -78,9 +78,7 @@ impl CredentialManager {
         master_key: &MasterKey,
         oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
         combo_names: Option<&HashMap<ComboId, String>>,
-        active_cooldowns: Option<
-            &HashMap<ComboId, std::collections::HashSet<ComboTargetId>>,
-        >,
+        active_cooldowns: Option<&HashMap<ComboId, std::collections::HashSet<ComboTargetId>>>,
     ) -> (Vec<ResolvedTarget>, Vec<RejectedTarget>) {
         let mut resolved = Vec::with_capacity(eligible.len());
         let mut rejected = Vec::new();
@@ -91,13 +89,8 @@ impl CredentialManager {
             };
 
             if let Some(account_id) = t.account_id {
-                let creds = resolve_account_credentials(
-                    &t,
-                    account_id.0,
-                    maps,
-                    master_key,
-                    oauth_registry,
-                );
+                let creds =
+                    resolve_account_credentials(&t, account_id.0, maps, master_key, oauth_registry);
                 if let Some((api_key, api_key_label, custom_meta)) = creds {
                     resolved.push(ResolvedTarget {
                         target: t,
@@ -197,7 +190,10 @@ fn resolve_target_model(t: &ComboTarget, models_map: &HashMap<i64, Model>) -> Op
     }
 }
 
-fn is_anonymous_target(t: &ComboTarget, providers_map: &HashMap<String, String>) -> bool {
+pub(crate) fn is_anonymous_target(
+    t: &ComboTarget,
+    providers_map: &HashMap<String, String>,
+) -> bool {
     let auth_type = providers_map
         .get(&t.provider_id.0)
         .map(std::string::String::as_str);

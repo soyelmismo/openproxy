@@ -14,11 +14,13 @@ fn setup_test_pipeline() -> (
     let (_pool, conn_arc, _path) = crate::test_utils::fresh_pool();
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let _enter = rt.enter();
-    let pipeline = crate::Pipeline::new(
-        Arc::clone(&conn_arc),
-        crate::test_utils::test_config(Arc::clone(&master_key)),
-    );
+    let pipeline = {
+        let _enter = rt.enter();
+        crate::Pipeline::new(
+            Arc::clone(&conn_arc),
+            crate::test_utils::test_config(Arc::clone(&master_key)),
+        )
+    };
     (pipeline, conn_arc, master_key, rt)
 }
 
@@ -35,13 +37,9 @@ fn test_missing_account_records_cooldown_and_resolves_empty() {
             "gpt-4o",
             TargetFormat::Openai,
         );
-        let c_id = crate::test_utils::combos::create_combo(
-            &conn,
-            "smart-combo",
-            Strategy::Priority,
-            1,
-        )
-        .unwrap();
+        let c_id =
+            crate::test_utils::combos::create_combo(&conn, "smart-combo", Strategy::Priority, 1)
+                .unwrap();
         let t_id = crate::test_utils::combos::add_target(
             &conn,
             AddTargetInput {
@@ -51,7 +49,7 @@ fn test_missing_account_records_cooldown_and_resolves_empty() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -62,18 +60,33 @@ fn test_missing_account_records_cooldown_and_resolves_empty() {
     assert_eq!(targets.len(), 1);
 
     let resolved = rt.block_on(pipeline.resolve_combo_targets_full(targets));
-    assert!(resolved.is_empty(), "target without account must not be resolved");
+    assert!(
+        resolved.is_empty(),
+        "target without account must not be resolved"
+    );
 
     let conn = conn_arc.lock();
     let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id).unwrap();
-    assert!(cd.is_some(), "cooldown must be recorded for target without account");
+    assert!(
+        cd.is_some(),
+        "cooldown must be recorded for target without account"
+    );
     let cd = cd.unwrap();
     assert_eq!(cd.combo_target_id, target_id);
     assert_eq!(cd.failure_count, 1);
     let reason = cd.reason.unwrap();
-    assert!(reason.contains("smart-combo"), "reason must contain combo name: {reason}");
-    assert!(reason.contains("openai"), "reason must contain provider: {reason}");
-    assert!(reason.contains("gpt-4o"), "reason must contain model: {reason}");
+    assert!(
+        reason.contains("smart-combo"),
+        "reason must contain combo name: {reason}"
+    );
+    assert!(
+        reason.contains("openai"),
+        "reason must contain provider: {reason}"
+    );
+    assert!(
+        reason.contains("gpt-4o"),
+        "reason must contain model: {reason}"
+    );
     assert!(!reason.contains("sk-"), "reason must not leak tokens");
 }
 
@@ -100,13 +113,9 @@ fn test_second_healthy_target_same_provider_resolves_without_cooldown() {
             None,
         )
         .unwrap();
-        let c_id = crate::test_utils::combos::create_combo(
-            &conn,
-            "pair-combo",
-            Strategy::Priority,
-            1,
-        )
-        .unwrap();
+        let c_id =
+            crate::test_utils::combos::create_combo(&conn, "pair-combo", Strategy::Priority, 1)
+                .unwrap();
         let bad_id = crate::test_utils::combos::add_target(
             &conn,
             AddTargetInput {
@@ -116,7 +125,7 @@ fn test_second_healthy_target_same_provider_resolves_without_cooldown() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -129,7 +138,7 @@ fn test_second_healthy_target_same_provider_resolves_without_cooldown() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 2,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -166,7 +175,9 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
             [],
         )
         .unwrap();
-        let m_id: i64 = conn.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap();
+        let m_id: i64 = conn
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .unwrap();
         let c_id = crate::test_utils::combos::create_combo(
             &conn,
             "anon-none-combo",
@@ -183,7 +194,7 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
                 model_row_id: Some(ModelRowId(m_id)),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -192,14 +203,21 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
 
     let targets_none = pipeline.repo().list_targets(c_none_id).unwrap();
     let resolved_none = rt.block_on(pipeline.resolve_combo_targets_full(targets_none));
-    assert_eq!(resolved_none.len(), 1, "anonymous AuthType::None target must resolve");
+    assert_eq!(
+        resolved_none.len(),
+        1,
+        "anonymous AuthType::None target must resolve"
+    );
     assert_eq!(resolved_none[0].target.id, anon_none_tid);
     assert_eq!(resolved_none[0].api_key, "");
 
     {
         let conn = conn_arc.lock();
         let cd_none = openproxy_db::cooldowns::get_for_target(&conn, anon_none_tid).unwrap();
-        assert!(cd_none.is_none(), "anonymous AuthType::None target must not be in cooldown");
+        assert!(
+            cd_none.is_none(),
+            "anonymous AuthType::None target must not be in cooldown"
+        );
     }
 
     // Case B: Real is_anonymous_fallback provider from adapters (e.g. horde with API auth type)
@@ -211,7 +229,9 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
             [],
         )
         .unwrap();
-        let m_id: i64 = conn.query_row("SELECT last_insert_rowid()", [], |r| r.get(0)).unwrap();
+        let m_id: i64 = conn
+            .query_row("SELECT last_insert_rowid()", [], |r| r.get(0))
+            .unwrap();
         let c_id = crate::test_utils::combos::create_combo(
             &conn,
             "anon-fallback-combo",
@@ -228,7 +248,7 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
                 model_row_id: Some(ModelRowId(m_id)),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -237,14 +257,21 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
 
     let targets_fb = pipeline.repo().list_targets(c_fallback_id).unwrap();
     let resolved_fb = rt.block_on(pipeline.resolve_combo_targets_full(targets_fb));
-    assert_eq!(resolved_fb.len(), 1, "is_anonymous_fallback provider target must resolve");
+    assert_eq!(
+        resolved_fb.len(),
+        1,
+        "is_anonymous_fallback provider target must resolve"
+    );
     assert_eq!(resolved_fb[0].target.id, anon_fallback_tid);
     assert_eq!(resolved_fb[0].api_key, "");
 
     {
         let conn = conn_arc.lock();
         let cd_fb = openproxy_db::cooldowns::get_for_target(&conn, anon_fallback_tid).unwrap();
-        assert!(cd_fb.is_none(), "is_anonymous_fallback target must not be in cooldown");
+        assert!(
+            cd_fb.is_none(),
+            "is_anonymous_fallback target must not be in cooldown"
+        );
     }
 }
 
@@ -261,13 +288,9 @@ fn test_cooldown_overrides_none_and_zero_preserved() {
             "gpt-4o",
             TargetFormat::Openai,
         );
-        let c_id = crate::test_utils::combos::create_combo(
-            &conn,
-            "override-combo",
-            Strategy::Priority,
-            1,
-        )
-        .unwrap();
+        let c_id =
+            crate::test_utils::combos::create_combo(&conn, "override-combo", Strategy::Priority, 1)
+                .unwrap();
 
         let t_none = crate::test_utils::combos::add_target(
             &conn,
@@ -278,7 +301,7 @@ fn test_cooldown_overrides_none_and_zero_preserved() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -297,7 +320,7 @@ fn test_cooldown_overrides_none_and_zero_preserved() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 2,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -318,10 +341,16 @@ fn test_cooldown_overrides_none_and_zero_preserved() {
 
     let conn = conn_arc.lock();
     let cd_none = openproxy_db::cooldowns::get_for_target(&conn, t_none_id).unwrap();
-    assert!(cd_none.is_none(), "target with cooldown_mode = none must not get cooldown");
+    assert!(
+        cd_none.is_none(),
+        "target with cooldown_mode = none must not get cooldown"
+    );
 
     let cd_zero = openproxy_db::cooldowns::get_for_target(&conn, t_zero_id).unwrap();
-    assert!(cd_zero.is_none(), "target with cooldown_base_secs = 0 must not get cooldown");
+    assert!(
+        cd_zero.is_none(),
+        "target with cooldown_base_secs = 0 must not get cooldown"
+    );
 }
 
 #[test]
@@ -353,7 +382,7 @@ fn test_two_calls_with_active_cooldown_do_not_re_increment_nor_prolong() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -369,7 +398,9 @@ fn test_two_calls_with_active_cooldown_do_not_re_increment_nor_prolong() {
 
     let (first_count, first_until) = {
         let conn = conn_arc.lock();
-        let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id).unwrap().unwrap();
+        let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id)
+            .unwrap()
+            .unwrap();
         (cd.failure_count, cd.cooldown_until)
     };
     assert_eq!(first_count, 1);
@@ -380,11 +411,16 @@ fn test_two_calls_with_active_cooldown_do_not_re_increment_nor_prolong() {
 
     let (second_count, second_until) = {
         let conn = conn_arc.lock();
-        let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id).unwrap().unwrap();
+        let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id)
+            .unwrap()
+            .unwrap();
         (cd.failure_count, cd.cooldown_until)
     };
     assert_eq!(second_count, 1, "failure count must remain 1");
-    assert_eq!(second_until, first_until, "cooldown_until must remain unchanged");
+    assert_eq!(
+        second_until, first_until,
+        "cooldown_until must remain unchanged"
+    );
 }
 
 #[test]
@@ -400,20 +436,12 @@ fn test_nested_target_uses_owner_sub_combo_info() {
             "claude-3-5-sonnet",
             TargetFormat::Anthropic,
         );
-        let root_c_id = crate::test_utils::combos::create_combo(
-            &conn,
-            "root-combo",
-            Strategy::Priority,
-            1,
-        )
-        .unwrap();
-        let sub_c_id = crate::test_utils::combos::create_combo(
-            &conn,
-            "sub-combo",
-            Strategy::Priority,
-            1,
-        )
-        .unwrap();
+        let root_c_id =
+            crate::test_utils::combos::create_combo(&conn, "root-combo", Strategy::Priority, 1)
+                .unwrap();
+        let sub_c_id =
+            crate::test_utils::combos::create_combo(&conn, "sub-combo", Strategy::Priority, 1)
+                .unwrap();
 
         let t_id = crate::test_utils::combos::add_target(
             &conn,
@@ -424,7 +452,7 @@ fn test_nested_target_uses_owner_sub_combo_info() {
                 model_row_id: Some(m_id),
                 sub_combo_id: None,
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -439,7 +467,7 @@ fn test_nested_target_uses_owner_sub_combo_info() {
                 model_row_id: None,
                 sub_combo_id: Some(sub_c_id),
                 priority_order: 1,
-                weight: 1,
+                description: None,
             },
         )
         .unwrap();
@@ -454,16 +482,91 @@ fn test_nested_target_uses_owner_sub_combo_info() {
         .resolve_combo_to_targets(root_c_id, &mut visited, 0)
         .unwrap();
     assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].combo_id, sub_c_id, "target must maintain sub_combo owner");
+    assert_eq!(
+        targets[0].combo_id, sub_c_id,
+        "target must maintain sub_combo owner"
+    );
 
     let resolved = rt.block_on(pipeline.resolve_combo_targets_full(targets));
     assert!(resolved.is_empty());
 
     let conn = conn_arc.lock();
-    let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id).unwrap().unwrap();
+    let cd = openproxy_db::cooldowns::get_for_target(&conn, target_id)
+        .unwrap()
+        .unwrap();
     let reason = cd.reason.unwrap();
-    assert!(reason.contains("sub-combo"), "reason must reflect sub-combo owner: {reason}");
-    assert!(!reason.contains("root-combo"), "reason must NOT use root combo: {reason}");
+    assert!(
+        reason.contains("sub-combo"),
+        "reason must reflect sub-combo owner: {reason}"
+    );
+    assert!(
+        !reason.contains("root-combo"),
+        "reason must NOT use root combo: {reason}"
+    );
     assert!(reason.contains("anthropic"));
     assert!(reason.contains("claude-3-5-sonnet"));
+}
+
+use super::mock_repo::MockFailingComboRepo;
+
+#[test]
+fn test_mock_repo_load_combo_failure_aborts_cooldown_mutation() {
+    let (pipeline_base, conn_arc, master_key, rt) = setup_test_pipeline();
+    let _enter = rt.enter();
+
+    let (combo_id, _target_id) = {
+        let conn = conn_arc.lock();
+        let m_id = crate::test_utils::seed_provider_and_model(
+            &conn,
+            "openai",
+            "gpt-4o",
+            TargetFormat::Openai,
+        );
+        let c_id = crate::test_utils::combos::create_combo(
+            &conn,
+            "failing-combo-test",
+            Strategy::Priority,
+            1,
+        )
+        .unwrap();
+        let t_id = crate::test_utils::combos::add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: c_id,
+                provider_id: ProviderId::new("openai"),
+                account_id: None,
+                model_row_id: Some(m_id),
+                sub_combo_id: None,
+                priority_order: 1,
+                description: None,
+            },
+        )
+        .unwrap();
+        (c_id, t_id)
+    };
+
+    let targets = pipeline_base.repo().list_targets(combo_id).unwrap();
+    assert_eq!(targets.len(), 1);
+
+    let record_cooldown_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mock_repo = Arc::new(MockFailingComboRepo {
+        inner: pipeline_base.repo(),
+        record_cooldown_called: Arc::clone(&record_cooldown_called),
+    });
+
+    let pipeline_mock = Pipeline::with_custom_repo(
+        conn_arc,
+        crate::test_utils::test_config(master_key),
+        mock_repo,
+    );
+
+    let resolved = rt.block_on(pipeline_mock.resolve_combo_targets_full(targets));
+    assert!(
+        resolved.is_empty(),
+        "missing account targets must still resolve empty"
+    );
+    assert!(
+        !record_cooldown_called.load(std::sync::atomic::Ordering::SeqCst),
+        "record_cooldown must NEVER be called when load_combo fails with an error"
+    );
 }

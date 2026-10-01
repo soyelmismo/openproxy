@@ -205,6 +205,20 @@ impl Pipeline {
         config: PipelineConfig,
         services: PipelineServices,
     ) -> Self {
+        let repo = Arc::new(match &db_pool {
+            Some(pool) => crate::repository::SqlitePipelineRepository::with_db_pool(pool.clone()),
+            None => crate::repository::SqlitePipelineRepository::new(Arc::clone(&conn)),
+        });
+        Self::build_with_repo(conn, db_pool, config, services, repo)
+    }
+
+    fn build_with_repo(
+        conn: Arc<parking_lot::Mutex<Connection>>,
+        db_pool: Option<openproxy_db::DbPool>,
+        config: PipelineConfig,
+        services: PipelineServices,
+        repo: Arc<dyn crate::repository::PipelineRepository>,
+    ) -> Self {
         let PipelineServices {
             record_bodies_and_headers,
             selection_registry,
@@ -212,10 +226,6 @@ impl Pipeline {
             predictive_limiter,
             session_affinity,
         } = services;
-        let repo = Arc::new(match &db_pool {
-            Some(pool) => crate::repository::SqlitePipelineRepository::with_db_pool(pool.clone()),
-            None => crate::repository::SqlitePipelineRepository::new(Arc::clone(&conn)),
-        });
         let tracker = crate::usage_tracker::UsageTracker {
             conn: Arc::clone(&conn),
             background_tx: config.background_tx.clone(),
@@ -224,7 +234,7 @@ impl Pipeline {
             cooldown_secs: config.cooldown_secs,
             cooldown_max_secs: config.cooldown_max_secs,
             cooldown_factor: config.cooldown_factor,
-            repo: Arc::clone(&repo) as Arc<dyn crate::repository::PipelineRepository>,
+            repo: Arc::clone(&repo),
             coordinator: None,
         };
         let dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
@@ -247,6 +257,34 @@ impl Pipeline {
             dispatcher,
             repo,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_custom_repo(
+        conn: Arc<parking_lot::Mutex<Connection>>,
+        config: PipelineConfig,
+        repo: Arc<dyn crate::repository::PipelineRepository>,
+    ) -> Self {
+        Self::build_with_repo(
+            conn,
+            None,
+            config,
+            PipelineServices {
+                record_bodies_and_headers: Arc::new(AtomicBool::new(false)),
+                selection_registry: Arc::new(SelectionRegistry::new()),
+                circuit_breaker: CircuitBreakerRegistry::new(
+                    &openproxy_types::config::CircuitBreakerConfig {
+                        failure_threshold: 5,
+                        unhealthy_duration_ms: 60_000,
+                    },
+                ),
+                predictive_limiter: Arc::new(
+                    crate::predictive_rate_limit::PredictiveRateLimiter::new(),
+                ),
+                session_affinity: Arc::new(crate::session_affinity::SessionAffinityRegistry::new()),
+            },
+            repo,
+        )
     }
 
     /// Production constructor: reads use the pool's readers; writes use its writer.
