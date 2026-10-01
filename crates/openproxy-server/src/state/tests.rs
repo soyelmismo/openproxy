@@ -364,7 +364,10 @@ async fn test_enqueue_usage_db_failure_returns_explicit_error() {
     };
 
     let result = state.enqueue_usage(job).await;
-    assert!(result.is_err(), "enqueue_usage must fail when DB write fails");
+    assert!(
+        result.is_err(),
+        "enqueue_usage must fail when DB write fails"
+    );
     let err = result.unwrap_err();
     assert!(
         matches!(err, openproxy_types::CoreError::Database { .. }),
