@@ -17,6 +17,8 @@
 //! `KIND_*` const and its `Serialize` payload, add a `record_*` helper, and
 //! handle the kind in the notifications view.
 
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 use anyhow::Result;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
