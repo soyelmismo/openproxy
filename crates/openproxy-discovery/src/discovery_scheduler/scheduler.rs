@@ -29,38 +29,6 @@ struct ScheduledProvider {
     next_run: tokio::time::Instant,
 }
 
-/// Start the discovery scheduler using a `ServiceContainer` for dependency injection.
-pub fn start_with_container(
-    services: &crate::di::ServiceContainer,
-    config: DiscoverySchedulerConfig,
-) -> crate::error::Result<DiscoveryScheduler> {
-    let db_pool = services.db_pool()?;
-    let master_key = services.master_key()?;
-    let adapters = services.adapters()?;
-    let upstream_client = services.upstream_client()?;
-    Ok(start(
-        db_pool,
-        master_key,
-        adapters,
-        upstream_client,
-        config,
-    ))
-}
-
-pub async fn start_with_container_async(
-    services: &crate::di::ServiceContainer,
-    config: DiscoverySchedulerConfig,
-) -> crate::error::Result<DiscoveryScheduler> {
-    start_async(
-        services.db_pool()?,
-        services.master_key()?,
-        services.adapters()?,
-        services.upstream_client()?,
-        config,
-    )
-    .await
-}
-
 /// Offload the initial provider snapshot while retaining the synchronous API.
 pub async fn start_async(
     db_pool: Arc<DbPool>,

@@ -97,17 +97,6 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
     Ok(body)
 }
 
-/// Background sync task, with dependencies from a `ServiceContainer`.
-pub async fn start_sync_scheduler_with_container(
-    services: &crate::di::ServiceContainer,
-    check_interval_secs: u64,
-) -> Result<()> {
-    let db_pool = services.db_pool()?;
-    let upstream_client = services.upstream_client()?;
-    start_sync_scheduler(db_pool, upstream_client, check_interval_secs).await;
-    Ok(())
-}
-
 fn process_models_dev_sync_payload(db_pool: &openproxy_db::DbPool, body: &[u8]) -> usize {
     let count = {
         let conn = db_pool.writer();
