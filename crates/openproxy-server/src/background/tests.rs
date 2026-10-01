@@ -323,3 +323,54 @@ async fn supervisor_cancellation_of_one_shutdown_caller_does_not_block_next() {
     // Caller 3 verifies idempotence after drain
     supervisor.shutdown_and_wait().await;
 }
+
+#[tokio::test]
+async fn supervisor_supervises_quota_sync_service() {
+    let pool = Arc::new(
+        openproxy_db::DbPool::test_pool_with_prefix("quota-sync-sup-test").expect("open pool"),
+    );
+    let mut config = openproxy_core::AppConfig::default();
+    config.quota_sync.enabled = false;
+    let upstream_client = openproxy_adapters::upstream::UpstreamClient::new();
+    let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().expect("generate key"));
+    let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(
+        openproxy_adapters::adapters::builtin_adapters(),
+    )));
+    let oauth_provider_registry = Arc::new(openproxy_core::oauth::OAuthProviderRegistry::new());
+
+    let supervisor = BackgroundSupervisor::new();
+    let service = QuotaSyncService {
+        db_pool: pool,
+        config,
+        upstream_client,
+        master_key,
+        adapters,
+        oauth_provider_registry,
+    };
+    assert_eq!(service.name(), "quota_sync");
+    let spawned = supervisor.spawn(service);
+    assert!(spawned);
+
+    supervisor.shutdown_and_wait().await;
+}
+
+#[tokio::test]
+async fn supervisor_supervises_minimax_checkin_service() {
+    let pool = Arc::new(
+        openproxy_db::DbPool::test_pool_with_prefix("minimax-checkin-sup-test").expect("open pool"),
+    );
+    let upstream_client = openproxy_adapters::upstream::UpstreamClient::new();
+    let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().expect("generate key"));
+
+    let supervisor = BackgroundSupervisor::new();
+    let service = MiniMaxCheckinService {
+        db_pool: pool,
+        upstream_client,
+        master_key,
+    };
+    assert_eq!(service.name(), "minimax_checkin");
+    let spawned = supervisor.spawn(service);
+    assert!(spawned);
+
+    supervisor.shutdown_and_wait().await;
+}

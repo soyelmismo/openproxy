@@ -81,20 +81,20 @@ pub(crate) fn spawn_background_tasks(
         });
     }
 
-    openproxy_core::quota_sync::start_quota_sync_scheduler(
-        Arc::clone(&db_pool),
+    supervisor.spawn(crate::background::QuotaSyncService {
+        db_pool: Arc::clone(&db_pool),
         config,
-        Arc::clone(&upstream_client),
-        Arc::clone(&master_key),
-        Arc::clone(&adapters),
-        Arc::clone(&oauth_provider_registry),
-    );
+        upstream_client: Arc::clone(&upstream_client),
+        master_key: Arc::clone(&master_key),
+        adapters: Arc::clone(&adapters),
+        oauth_provider_registry: Arc::clone(&oauth_provider_registry),
+    });
 
-    openproxy_core::minimax_checkin::start_checkin_scheduler(
-        Arc::clone(&db_pool),
-        Arc::clone(&upstream_client),
-        Arc::clone(&master_key),
-    );
+    supervisor.spawn(crate::background::MiniMaxCheckinService {
+        db_pool: Arc::clone(&db_pool),
+        upstream_client: Arc::clone(&upstream_client),
+        master_key: Arc::clone(&master_key),
+    });
 
     supervisor.spawn(crate::background::FreeProxiesSyncService {
         db_pool: Arc::clone(&db_pool),
