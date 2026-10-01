@@ -73,7 +73,7 @@ impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry 
         refresh_token: &'a str,
         upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
         account_id: AccountId,
-        conn: &'a parking_lot::Mutex<rusqlite::Connection>,
+        db_pool: Option<&'a openproxy_db::DbPool>,
         master_key: &'a MasterKey,
     ) -> futures_util::future::BoxFuture<
         'a,
@@ -81,6 +81,11 @@ impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry 
     > {
         use futures_util::FutureExt;
         async move {
+            let Some(pool) = db_pool else {
+                return Err(CoreError::Internal(
+                    "oauth refresh requires a database pool".to_string(),
+                ));
+            };
             let provider = self
                 .get(provider_id)
                 .ok_or_else(|| CoreError::ProviderNotFound(provider_id.to_string()))?;
@@ -91,7 +96,7 @@ impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry 
                     refresh_token,
                     upstream_client,
                     account_id,
-                    db: DbRef::Connection(conn),
+                    db: DbRef::Pool(pool),
                     master_key,
                 })
                 .await?;

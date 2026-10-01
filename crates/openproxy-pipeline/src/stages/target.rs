@@ -109,7 +109,7 @@ async fn try_proactive_oauth_refresh(
             refresh_token,
             &pipeline.config.upstream_client,
             account_id,
-            &pipeline.conn,
+            pipeline.db_pool.as_ref(),
             &pipeline.config.master_key,
         )
         .await

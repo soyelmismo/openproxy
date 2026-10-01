@@ -3,17 +3,22 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::AccountId;
 pub use openproxy_types::oauth::TokenResponse;
-use rusqlite::Connection;
 use std::sync::Arc;
 
 pub trait PipelineOAuthRegistry: Send + Sync {
+    /// Refresh and persist tokens for `account_id`.
+    ///
+    /// `db_pool` is `None` only for pipeline configurations built without a pool
+    /// (legacy test harnesses); those configurations cannot serve an OAuth
+    /// refresh and return an error rather than blocking the runtime on a
+    /// connection lock.
     fn refresh_and_store<'a>(
         &'a self,
         provider_id: &'a str,
         refresh_token: &'a str,
         upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
         account_id: AccountId,
-        conn: &'a parking_lot::Mutex<Connection>,
+        db_pool: Option<&'a openproxy_db::DbPool>,
         master_key: &'a MasterKey,
     ) -> futures_util::future::BoxFuture<'a, Result<TokenResponse, CoreError>>;
 }

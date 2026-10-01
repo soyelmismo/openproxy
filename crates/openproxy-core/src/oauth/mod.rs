@@ -49,33 +49,25 @@ pub mod zai;
 
 pub use util::*;
 
-/// A reference to either a `DbPool` or a locked/lockable database `Connection`.
+/// A borrowed database handle for OAuth paths.
+///
+/// Only the pool form exists: every caller hands the shared [`openproxy_db::DbPool`],
+/// so reads and writes are offloaded to the pool's blocking tasks and no SQLite
+/// connection or lock is ever held across an `.await`.
 #[derive(Clone, Copy)]
 pub enum DbRef<'a> {
     Pool(&'a openproxy_db::DbPool),
-    Connection(&'a parking_lot::Mutex<rusqlite::Connection>),
 }
 
 impl DbRef<'_> {
-    pub fn with_conn<R>(
-        &self,
-        f: impl FnOnce(&rusqlite::Connection) -> crate::error::Result<R>,
-    ) -> crate::error::Result<R> {
-        match self {
-            DbRef::Pool(pool) => f(&pool.writer()),
-            DbRef::Connection(mutex) => f(&mutex.lock()),
-        }
-    }
-
-    /// Pool access is offloaded; the borrowed legacy connection requires a
-    /// multi-thread runtime until its caller supplies an owned handle.
+    /// Pool writes are offloaded to the serialized writer; the closure never
+    /// observes a Tokio worker thread and no guard outlives the `.await`.
     pub async fn with_conn_async<R: Send + 'static>(
         &self,
         f: impl FnOnce(&rusqlite::Connection) -> Result<R> + Send + 'static,
     ) -> Result<R> {
         match self {
             Self::Pool(pool) => pool.spawn_write(move |conn| f(conn)).await,
-            Self::Connection(_) => tokio::task::block_in_place(|| self.with_conn(f)),
         }
     }
 
@@ -86,7 +78,6 @@ impl DbRef<'_> {
     ) -> Result<R> {
         match self {
             Self::Pool(pool) => pool.spawn_read(f).await,
-            Self::Connection(_) => tokio::task::block_in_place(|| self.with_conn(f)),
         }
     }
 }

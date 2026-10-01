@@ -108,47 +108,33 @@ pub(crate) fn reset(account_id: AccountId) {
 
 /// Mark the account `Unhealthy` in the DB.
 ///
-/// `DbRef::Pool` goes through a fire-and-forget `spawn_blocking` so the
-/// synchronous write never stalls the runtime and the original `invalid_grant`
-/// error reaches the caller unencumbered. `DbRef::Connection` locks the mutex
-/// inline, which is the test path where no `DbPool` exists.
-///
-/// Failures are logged, never propagated: a secondary DB error must not mask the
-/// original refresh failure.
+/// Fire-and-forget: the write is offloaded to `tokio::spawn` + `DbPool::spawn_write`,
+/// so the synchronous write never stalls the runtime and the original
+/// `invalid_grant` error reaches the caller unencumbered. Logs its own backend
+/// outcome instead of returning it, because a secondary DB failure must not mask
+/// the original refresh failure.
 pub(crate) fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
-    let log_failure = move |e: &crate::error::CoreError, path: &str| {
-        tracing::warn!(
-            account = account_id.0,
-            error = %e,
-            path = path,
-            "antigravity oauth: failed to set health to unhealthy"
-        );
-    };
-    match db {
-        DbRef::Pool(pool) => {
-            let pool = pool.clone();
-            tokio::task::spawn_blocking(move || {
-                let conn = pool.writer();
-                if let Err(e) = crate::accounts::set_health(
-                    &conn,
+    let DbRef::Pool(pool) = db;
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        if let Err(e) = pool
+            .spawn_write(move |conn| {
+                crate::accounts::set_health(
+                    conn,
                     account_id,
                     crate::accounts::HealthStatus::Unhealthy,
-                ) {
-                    log_failure(&e, "spawn_blocking");
-                }
-            });
+                )
+            })
+            .await
+        {
+            tracing::warn!(
+                account = account_id.0,
+                error = %e,
+                path = "spawn_write",
+                "antigravity oauth: failed to set health to unhealthy"
+            );
         }
-        DbRef::Connection(mutex) => {
-            let conn = mutex.lock();
-            if let Err(e) = crate::accounts::set_health(
-                &conn,
-                account_id,
-                crate::accounts::HealthStatus::Unhealthy,
-            ) {
-                log_failure(&e, "test_path");
-            }
-        }
-    }
+    });
 }
 
 #[cfg(test)]

@@ -259,8 +259,8 @@ async fn test_cline_oauth_wire_mock_flow() {
     assert_eq!(token.expires_in, Some(3600));
     assert_eq!(state.token_requests.load(Ordering::SeqCst), 1);
 
-    let conn = parking_lot::Mutex::new(rusqlite::Connection::open_in_memory().unwrap());
-    let db = DbRef::Connection(&conn);
+    let pool = openproxy_db::DbPool::test_pool().expect("pool");
+    let db = DbRef::Pool(&pool);
     let refreshed = provider
         .refresh_token("cline_refresh_token_wire", &client, AccountId(1), db)
         .await
