@@ -158,27 +158,39 @@ pub fn verify_usage_records(conn: &parking_lot::Mutex<Connection>, expected_ids:
 /// Validates that a path resides on a `tmpfs` filesystem mount point according to `/proc/mounts`.
 /// Prevents accidental filling of host or non-tmpfs physical partitions during OS ENOSPC tests.
 pub fn verify_path_is_on_tmpfs(path: &Path) -> bool {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let Ok(canonical) = path.canonicalize() else {
+        return false;
+    };
+    if !canonical.starts_with("/tmp/opencode") {
+        return false;
+    }
+    let Ok(our_ns) = std::fs::read_link("/proc/self/ns/mnt") else {
+        return false;
+    };
+    let Ok(host_ns) = std::fs::read_link("/proc/1/ns/mnt") else {
+        return false;
+    };
+    if our_ns == host_ns {
+        return false;
+    }
     let Ok(content) = std::fs::read_to_string("/proc/mounts") else {
         return false;
     };
-    let mut best_match: Option<(PathBuf, String)> = None;
     for line in content.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 {
-            let mount_point = PathBuf::from(parts[1]);
-            let fstype = parts[2].to_string();
-            if canonical.starts_with(&mount_point) {
-                match &best_match {
-                    None => best_match = Some((mount_point, fstype)),
-                    Some((prev_point, _)) => {
-                        if mount_point.as_os_str().len() > prev_point.as_os_str().len() {
-                            best_match = Some((mount_point, fstype));
-                        }
-                    }
-                }
-            }
+        let [_, mount, fstype, options, ..] = parts.as_slice() else {
+            continue;
+        };
+        if Path::new(mount) == canonical && *fstype == "tmpfs" {
+            return options
+                .split(',')
+                .filter_map(|v| v.strip_prefix("size="))
+                .any(|size| {
+                    size.strip_suffix('k')
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .is_some_and(|kib| kib > 0 && kib <= 64 * 1024)
+                });
         }
     }
-    best_match.is_some_and(|(_, fstype)| fstype == "tmpfs")
+    false
 }

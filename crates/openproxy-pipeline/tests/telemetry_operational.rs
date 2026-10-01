@@ -356,21 +356,16 @@ fn test_sqlite_full_native_recovery() {
         "error must be a real DB disk full error, not journal capacity exhaustion"
     );
 
-    let mut is_disk_full = false;
-    if let CoreError::Database {
+    let is_disk_full = if let CoreError::Database {
         source: Some(ref src),
         ..
     } = err
+        && let Some(rusqlite::Error::SqliteFailure(ffi, _)) = src.downcast_ref::<rusqlite::Error>()
     {
-        if let Some(rusqlite::Error::SqliteFailure(ffi, _)) = src.downcast_ref::<rusqlite::Error>()
-        {
-            if ffi.code == rusqlite::ErrorCode::DiskFull
-                || ffi.code == rusqlite::ErrorCode::SystemIoFailure
-            {
-                is_disk_full = true;
-            }
-        }
-    }
+        ffi.code == rusqlite::ErrorCode::DiskFull
+    } else {
+        false
+    };
     assert!(
         is_disk_full,
         "error source must downcast to rusqlite::ErrorCode::DiskFull or SystemIoFailure, actual: {err:?}"
@@ -587,20 +582,19 @@ fn test_os_enospc_admission_and_recovery() {
         "must not be fake journal capacity error"
     );
 
-    let mut is_disk_full_or_io = false;
-    if let CoreError::Database {
+    let is_disk_full_or_io = if let CoreError::Database {
         source: Some(ref src),
         ..
     } = err
+        && let Some(rusqlite::Error::SqliteFailure(ffi, _)) = src.downcast_ref::<rusqlite::Error>()
     {
-        if let Some(rusqlite::Error::SqliteFailure(ffi, _)) = src.downcast_ref::<rusqlite::Error>()
-        {
-            is_disk_full_or_io = matches!(
-                ffi.code,
-                rusqlite::ErrorCode::DiskFull | rusqlite::ErrorCode::SystemIoFailure
-            );
-        }
-    }
+        matches!(
+            ffi.code,
+            rusqlite::ErrorCode::DiskFull | rusqlite::ErrorCode::SystemIoFailure
+        )
+    } else {
+        false
+    };
     assert!(
         is_disk_full_or_io,
         "error must indicate SQLite DiskFull or SystemIoFailure, got: {err:?}"
