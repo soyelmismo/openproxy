@@ -79,10 +79,10 @@ impl BackgroundSupervisor {
         }
 
         while let Some(handle) = drain.last_mut() {
-            if let Err(e) = handle.await {
-                if !e.is_cancelled() {
-                    tracing::error!("background service task failed on shutdown: {e}");
-                }
+            if let Err(e) = handle.await
+                && !e.is_cancelled()
+            {
+                tracing::error!("background service task failed on shutdown: {e}");
             }
             drain.pop();
         }

@@ -10,5 +10,5 @@ pub(crate) use openproxy_types::ids;
 pub mod cost;
 pub mod quota;
 
-pub use openproxy_db::pricing::*;
 pub use self as pricing;
+pub use openproxy_db::pricing::*;
