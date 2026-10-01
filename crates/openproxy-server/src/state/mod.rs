@@ -91,7 +91,8 @@ pub struct BackfillStatus {
 
 impl AppState {
     pub async fn shutdown_usage_worker(&self) -> openproxy_types::Result<()> {
-        self.supervisor.shutdown();
+        self.discovery_scheduler.cancel();
+        self.supervisor.shutdown_and_wait().await;
         self.usage_worker.shutdown().await
     }
 

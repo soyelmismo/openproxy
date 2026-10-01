@@ -6,15 +6,23 @@ use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+pub mod coordinator;
+pub use coordinator::*;
+
 /// Closes admission, drains accepted jobs and waits for the SQLite worker.
 pub struct WorkerHandle {
     cancel: CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     failed_jobs: Arc<std::sync::atomic::AtomicU64>,
     conn: Arc<parking_lot::Mutex<Connection>>,
+    coordinator: Arc<JournalCoordinator>,
 }
 
 impl WorkerHandle {
+    pub fn coordinator(&self) -> &Arc<JournalCoordinator> {
+        &self.coordinator
+    }
+
     pub async fn stats(&self) -> openproxy_types::Result<WorkerStats> {
         let conn = Arc::clone(&self.conn);
         let pending =
@@ -33,6 +41,7 @@ impl WorkerHandle {
 
     pub async fn shutdown(&self) -> openproxy_types::Result<()> {
         self.cancel.cancel();
+        self.coordinator.notify_closed();
         let mut task = self.task.lock().await;
         if let Some(handle) = task.as_mut() {
             let result = handle.await;
@@ -58,7 +67,7 @@ pub struct WorkerStats {
     pub failed_batches: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BackgroundJob {
     JournalWake,
     RecordUsage(Box<UsageInput>),
@@ -82,13 +91,32 @@ pub enum BackgroundJob {
 
 pub fn spawn_worker(
     conn: Arc<parking_lot::Mutex<Connection>>,
+    rx: mpsc::Receiver<BackgroundJob>,
+) -> WorkerHandle {
+    let coordinator = coordinator_for(&conn);
+    spawn_worker_with_canonical_coordinator(conn, rx, coordinator)
+}
+
+pub fn spawn_worker_with_coordinator(
+    conn: Arc<parking_lot::Mutex<Connection>>,
+    rx: mpsc::Receiver<BackgroundJob>,
+    coordinator: Arc<JournalCoordinator>,
+) -> openproxy_types::Result<WorkerHandle> {
+    let canonical = register_coordinator_for(&conn, coordinator)?;
+    Ok(spawn_worker_with_canonical_coordinator(conn, rx, canonical))
+}
+
+fn spawn_worker_with_canonical_coordinator(
+    conn: Arc<parking_lot::Mutex<Connection>>,
     mut rx: mpsc::Receiver<BackgroundJob>,
+    coordinator: Arc<JournalCoordinator>,
 ) -> WorkerHandle {
     let cancel = CancellationToken::new();
     let shutdown = cancel.clone();
     let failed_jobs = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failures = Arc::clone(&failed_jobs);
     let handle_conn = Arc::clone(&conn);
+    let worker_coord = Arc::clone(&coordinator);
     let task = tokio::spawn(async move {
         let mut retry = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
@@ -96,12 +124,14 @@ pub fn spawn_worker(
                 biased;
                 () = shutdown.cancelled(), if !rx.is_closed() => {
                     rx.close();
+                    worker_coord.notify_closed();
                     continue;
                 }
                 job = rx.recv() => {
                     let Some(job) = job else {
                         let final_conn = Arc::clone(&conn);
-                        match tokio::task::spawn_blocking(move || replay_pending(&final_conn)).await {
+                        let final_coord = Arc::clone(&worker_coord);
+                        match tokio::task::spawn_blocking(move || replay_pending_with_coordinator(&final_conn, &final_coord)).await {
                             Ok(Ok(())) => {}
                             result => {
                                 failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -124,11 +154,13 @@ pub fn spawn_worker(
 
             let conn_clone = Arc::clone(&conn);
             let batch_failures = Arc::clone(&failures);
+            let batch_coord = Arc::clone(&worker_coord);
 
             // spawn_blocking: SQLite es síncrono y no puede correr en el hilo de Tokio.
             let result = tokio::task::spawn_blocking(move || {
                 for job in batch {
-                    if let Err(error) = process_job(&conn_clone, job) {
+                    if let Err(error) = process_job_with_coordinator(&conn_clone, job, &batch_coord)
+                    {
                         batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         tracing::error!(%error, "failed to persist usage job");
                     }
@@ -147,6 +179,7 @@ pub fn spawn_worker(
         task: tokio::sync::Mutex::new(Some(task)),
         failed_jobs,
         conn: handle_conn,
+        coordinator,
     }
 }
 
@@ -175,10 +208,19 @@ pub fn process_job(
     conn: &Arc<parking_lot::Mutex<Connection>>,
     job: BackgroundJob,
 ) -> openproxy_types::Result<()> {
+    let coordinator = coordinator_for(conn);
+    process_job_with_coordinator(conn, job, &coordinator)
+}
+
+pub fn process_job_with_coordinator(
+    conn: &Arc<parking_lot::Mutex<Connection>>,
+    job: BackgroundJob,
+    coordinator: &JournalCoordinator,
+) -> openproxy_types::Result<()> {
     if !matches!(job, BackgroundJob::JournalWake) {
         admit_job(conn, &job)?;
     }
-    replay_pending(conn)
+    replay_pending_with_coordinator(conn, coordinator)
 }
 
 pub fn admit_job(
@@ -191,7 +233,15 @@ pub fn admit_job(
     openproxy_db::usage_journal::append(&mut conn.lock(), &payload)
 }
 
-fn replay_pending(conn: &Arc<parking_lot::Mutex<Connection>>) -> openproxy_types::Result<()> {
+pub fn replay_pending(conn: &Arc<parking_lot::Mutex<Connection>>) -> openproxy_types::Result<()> {
+    let coordinator = coordinator_for(conn);
+    replay_pending_with_coordinator(conn, &coordinator)
+}
+
+pub fn replay_pending_with_coordinator(
+    conn: &Arc<parking_lot::Mutex<Connection>>,
+    coordinator: &JournalCoordinator,
+) -> openproxy_types::Result<()> {
     loop {
         let entries = openproxy_db::usage_journal::pending(&conn.lock(), 32)?;
         if entries.is_empty() {
@@ -204,6 +254,7 @@ fn replay_pending(conn: &Arc<parking_lot::Mutex<Connection>>) -> openproxy_types
                 ))
             })?;
             persist_job(conn, job, id)?;
+            coordinator.notify_drained(1);
         }
     }
 }

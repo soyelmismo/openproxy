@@ -11,9 +11,10 @@ pub(crate) fn init_database(
     {
         std::fs::create_dir_all(parent)?;
     }
-    Ok(openproxy_db::DbPool::open_with_readers(
+    Ok(openproxy_db::DbPool::open_with_options(
         &path,
         config.storage.reader_count,
+        config.storage.synchronous,
     )?)
 }
 

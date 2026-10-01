@@ -14,17 +14,36 @@ pub trait BackgroundService: Send + Sync + 'static {
     fn run(&self, cancel: CancellationToken) -> impl std::future::Future<Output = ()> + Send;
 }
 
-/// Supervisor for background services managing a shared cancellation token.
-#[derive(Clone, Default)]
+/// State container for registered background tasks.
+struct SupervisorRegistry {
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    closed: bool,
+}
+
+/// Supervisor for background services managing cancellation and deterministic task drain.
+#[derive(Clone)]
 pub struct BackgroundSupervisor {
     cancel: CancellationToken,
+    registry: Arc<parking_lot::Mutex<SupervisorRegistry>>,
+    drain_lock: Arc<tokio::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+}
+
+impl Default for BackgroundSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BackgroundSupervisor {
-    /// Create a new supervisor with an un-cancelled token.
+    /// Create a new supervisor with an un-cancelled token and empty task registry.
     pub fn new() -> Self {
         Self {
             cancel: CancellationToken::new(),
+            registry: Arc::new(parking_lot::Mutex::new(SupervisorRegistry {
+                tasks: Vec::new(),
+                closed: false,
+            })),
+            drain_lock: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -33,20 +52,61 @@ impl BackgroundSupervisor {
         self.cancel.clone()
     }
 
-    /// Signal cancellation to all supervised background services.
+    /// Signal cancellation to all supervised background services (synchronous API).
+    /// Marks the supervisor as closed under the registry lock so subsequent spawns are rejected.
     pub fn shutdown(&self) {
         self.cancel.cancel();
+        let mut reg = self.registry.lock();
+        reg.closed = true;
+    }
+
+    /// Signal cancellation and await all registered background tasks until they drain.
+    ///
+    /// Safe against cancellation: pending tasks are taken into the async drain lock
+    /// under the synchronous registry lock, and awaited in place via `drain.last_mut()`,
+    /// popping each handle only upon completion. If an awaiting caller is cancelled,
+    /// in-flight and pending handles remain in `drain_lock` so subsequent callers continue
+    /// draining without task detachment or deadlock.
+    pub async fn shutdown_and_wait(&self) {
+        self.cancel.cancel();
+        let mut drain = self.drain_lock.lock().await;
+        {
+            let mut reg = self.registry.lock();
+            reg.closed = true;
+            if !reg.tasks.is_empty() {
+                drain.extend(std::mem::take(&mut reg.tasks));
+            }
+        }
+
+        while let Some(handle) = drain.last_mut() {
+            if let Err(e) = handle.await
+                && !e.is_cancelled()
+            {
+                tracing::error!("background service task failed on shutdown: {e}");
+            }
+            drain.pop();
+        }
     }
 
     /// Spawn a [`BackgroundService`] under this supervisor's cancellation scope.
-    pub fn spawn<S: BackgroundService>(&self, service: S) -> tokio::task::JoinHandle<()> {
+    /// Returns `true` if admitted, or `false` if rejected because the supervisor is closed.
+    pub fn spawn<S: BackgroundService>(&self, service: S) -> bool {
         let name = service.name();
         let cancel = self.cancel.clone();
-        tokio::spawn(async move {
+
+        let mut reg = self.registry.lock();
+        if reg.closed || self.cancel.is_cancelled() {
+            tracing::warn!(service = name, "supervisor is closed; rejecting new spawn");
+            return false;
+        }
+
+        let handle = tokio::spawn(async move {
             tracing::debug!(service = name, "background service started");
             service.run(cancel).await;
             tracing::debug!(service = name, "background service stopped");
-        })
+        });
+        reg.tasks.push(handle);
+        true
     }
 }
 

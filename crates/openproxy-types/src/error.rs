@@ -130,6 +130,11 @@ pub enum CoreError {
     /// `consumed_at IS NULL` no longer matches. Maps to HTTP 404.
     #[error("{what} not found: {id}")]
     NotFound { what: String, id: String },
+
+    /// The usage journal has reached its maximum pending capacity limit.
+    /// Callers must apply backpressure or wait for draining workers.
+    #[error("usage journal capacity exhausted; admission rejected")]
+    JournalCapacityExhausted,
 }
 
 impl CoreError {
@@ -261,9 +266,16 @@ impl CoreError {
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
             CoreError::Cancelled(CancelReason::ClientDisconnected) | CoreError::RaceLost => 499,
             CoreError::Cancelled(CancelReason::WatchdogTimeout) => 504,
-            CoreError::ServiceUnavailable(_) => 503,
+            CoreError::ServiceUnavailable(_) | CoreError::JournalCapacityExhausted => 503,
             _ => 500,
         }
+    }
+
+    /// Returns `true` if this error represents journal capacity exhaustion.
+    #[inline]
+    #[must_use]
+    pub fn is_journal_capacity_exhausted(&self) -> bool {
+        matches!(self, Self::JournalCapacityExhausted)
     }
 
     /// Short string code for the client.
@@ -289,6 +301,7 @@ impl CoreError {
             CoreError::Internal(_) => "internal",
             CoreError::ServiceUnavailable(_) => "service_unavailable",
             CoreError::NotFound { .. } => "not_found",
+            CoreError::JournalCapacityExhausted => "journal_capacity_exhausted",
         }
     }
 
@@ -296,6 +309,7 @@ impl CoreError {
     pub fn from_code_and_message(code: &str, message: &str) -> Option<Self> {
         let msg = message.to_string();
         match code {
+            "journal_capacity_exhausted" => Some(CoreError::JournalCapacityExhausted),
             "auth" => Some(CoreError::Auth(msg)),
             "validation" => Some(CoreError::Validation(msg)),
             "provider_not_found" => Some(CoreError::ProviderNotFound(msg)),
@@ -607,5 +621,22 @@ mod tests {
         );
         assert!(matches!(none.ctx_validation("msg"), Err(CoreError::Validation(m)) if m == "msg"));
         assert_eq!(Some(100).ctx_not_found("a", "1").unwrap(), 100);
+    }
+
+    #[test]
+    fn test_journal_capacity_exhausted() {
+        let err = CoreError::JournalCapacityExhausted;
+        assert!(err.is_journal_capacity_exhausted());
+        assert_eq!(
+            err.to_string(),
+            "usage journal capacity exhausted; admission rejected"
+        );
+        assert_eq!(err.http_status(), 503);
+        assert_eq!(err.code(), "journal_capacity_exhausted");
+        assert!(matches!(
+            CoreError::from_code_and_message("journal_capacity_exhausted", ""),
+            Some(CoreError::JournalCapacityExhausted)
+        ));
+        assert!(!CoreError::Internal("test".into()).is_journal_capacity_exhausted());
     }
 }

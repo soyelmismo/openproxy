@@ -58,12 +58,48 @@ impl Default for ServerConfig {
     }
 }
 
+impl_string_enum! {
+    /// SQLite synchronous pragma mode.
+    ///
+    /// Controls the aggressiveness of SQLite syncing transactions to disk via fsync.
+    /// Default is `Full` for crash safety and journal durability.
+    ///
+    /// Durability note: `Full` depends on the underlying filesystem and hardware honoring
+    /// flush/fsync requests; it does not grant absolute immunity to power loss.
+    #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SqliteSynchronous {
+        #[default]
+        #[serde(alias = "FULL", alias = "Full")]
+        Full => "full" | "FULL" | "Full",
+        #[serde(alias = "NORMAL", alias = "Normal")]
+        Normal => "normal" | "NORMAL" | "Normal",
+    }
+    error: "sqlite_synchronous"
+}
+
+impl SqliteSynchronous {
+    /// PRAGMA synchronous value expected by SQLite SQL statements.
+    #[must_use]
+    pub const fn as_pragma_str(&self) -> &'static str {
+        match self {
+            Self::Full => "FULL",
+            Self::Normal => "NORMAL",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub database_path: String,
     /// Independent SQLite readers. Zero selects an automatic bounded count.
     #[serde(default)]
     pub reader_count: usize,
+    /// SQLite synchronous pragma mode (FULL by default for safety, or NORMAL for throughput).
+    /// Note: FULL depends on underlying storage honoring fsync/flush; it does not grant
+    /// absolute immunity to power loss.
+    #[serde(default, alias = "sqlite_synchronous")]
+    pub synchronous: SqliteSynchronous,
     pub encryption_key_source: EncryptionKeySource,
     /// Path to the base64-encoded 32-byte master key file, used when
     /// `encryption_key_source = "file"` (OP-29). Required in that mode;
@@ -79,6 +115,7 @@ impl Default for StorageConfig {
         Self {
             database_path: "~/.openproxy/data.db".into(),
             reader_count: 0,
+            synchronous: SqliteSynchronous::Full,
             encryption_key_source: EncryptionKeySource::Env,
             encryption_key_file: None,
             maintenance: MaintenanceConfig::default(),
@@ -527,5 +564,73 @@ mod tests {
             dup_cfg.pii_entities,
             vec![PiiEntity::CreditCard, PiiEntity::Person]
         );
+    }
+
+    #[test]
+    fn test_sqlite_synchronous_enum() {
+        assert_eq!(SqliteSynchronous::default(), SqliteSynchronous::Full);
+        assert_eq!(SqliteSynchronous::Full.as_str(), "full");
+        assert_eq!(SqliteSynchronous::Normal.as_str(), "normal");
+        assert_eq!(SqliteSynchronous::Full.as_pragma_str(), "FULL");
+        assert_eq!(SqliteSynchronous::Normal.as_pragma_str(), "NORMAL");
+
+        assert_eq!(
+            SqliteSynchronous::parse("full"),
+            Ok(SqliteSynchronous::Full)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("FULL"),
+            Ok(SqliteSynchronous::Full)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("Full"),
+            Ok(SqliteSynchronous::Full)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("normal"),
+            Ok(SqliteSynchronous::Normal)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("NORMAL"),
+            Ok(SqliteSynchronous::Normal)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("Normal"),
+            Ok(SqliteSynchronous::Normal)
+        );
+        assert!(SqliteSynchronous::parse("off").is_err());
+        assert!(SqliteSynchronous::parse("invalid").is_err());
+    }
+
+    #[test]
+    fn test_storage_config_backward_compatibility_and_synchronous() {
+        let def = StorageConfig::default();
+        assert_eq!(def.synchronous, SqliteSynchronous::Full);
+
+        // Deserializing without synchronous field defaults safely to Full
+        let json_no_sync = r#"{"database_path": "/var/data.db", "encryption_key_source": "env"}"#;
+        let parsed_no_sync: StorageConfig = serde_json::from_str(json_no_sync).unwrap();
+        assert_eq!(parsed_no_sync.synchronous, SqliteSynchronous::Full);
+        assert_eq!(parsed_no_sync.database_path, "/var/data.db");
+
+        // Deserializing with synchronous = "normal"
+        let json_normal = r#"{"database_path": "/var/data.db", "synchronous": "normal", "encryption_key_source": "env"}"#;
+        let parsed_normal: StorageConfig = serde_json::from_str(json_normal).unwrap();
+        assert_eq!(parsed_normal.synchronous, SqliteSynchronous::Normal);
+
+        // Deserializing with synchronous = "full"
+        let json_full = r#"{"database_path": "/var/data.db", "synchronous": "full", "encryption_key_source": "env"}"#;
+        let parsed_full: StorageConfig = serde_json::from_str(json_full).unwrap();
+        assert_eq!(parsed_full.synchronous, SqliteSynchronous::Full);
+
+        // Deserializing with alias sqlite_synchronous = "normal"
+        let json_alias = r#"{"database_path": "/var/data.db", "sqlite_synchronous": "normal", "encryption_key_source": "env"}"#;
+        let parsed_alias: StorageConfig = serde_json::from_str(json_alias).unwrap();
+        assert_eq!(parsed_alias.synchronous, SqliteSynchronous::Normal);
+
+        // Roundtrip
+        let serialized = serde_json::to_string(&parsed_normal).unwrap();
+        let roundtripped: StorageConfig = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(roundtripped.synchronous, SqliteSynchronous::Normal);
     }
 }

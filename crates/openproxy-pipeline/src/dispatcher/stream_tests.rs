@@ -23,6 +23,7 @@ fn build_dispatcher_for_stream_test(
         cooldown_factor: 2,
         repo: std::sync::Arc::clone(&repo)
             as std::sync::Arc<dyn crate::repository::PipelineRepository>,
+        coordinator: None,
     };
     let cfg = crate::PipelineConfig {
         defaults: crate::timeouts::Timeouts::from_config(

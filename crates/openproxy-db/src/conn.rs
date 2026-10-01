@@ -6,6 +6,7 @@
 //! This avoids adding `r2d2` / `r2d2_sqlite` deps for the MVP. If we ever need
 //! concurrent writers, swap the writer field for a real pool.
 
+use openproxy_types::config::SqliteSynchronous;
 use openproxy_types::{CoreError, Result};
 use parking_lot::Mutex;
 use rusqlite::{Connection, OpenFlags};
@@ -40,24 +41,25 @@ pub struct DbPool {
     /// extra owned `Connection`, since `Connection` is not `Clone` and a second
     /// handle requires opening the file again.
     path: Arc<Path>,
+    synchronous: SqliteSynchronous,
     _cleanup: Option<Arc<crate::testing::TempDir>>,
 }
 
-/// Writer-lock budget for hot-path inserts.
+/// Writer-lock budget for hot-path operations.
 ///
-/// `cost::record` takes the writer on every chat request to persist a usage
-/// row. A long admin query holding it (e.g. a 30-day usage summary over ~10k
-/// rows) would block every concurrent chat request. At a 100ms ceiling the
-/// worst case is one lost usage row (logged, returned as `None`), never a hung
-/// client.
+/// Bounded at a 100ms ceiling so that long-running operations (e.g. heavy admin
+/// queries or background compaction) cannot stall latency-critical requests.
+/// In the modern architecture, high-throughput writes such as usage records
+/// are admitted through the persistent FIFO usage journal with backpressure
+/// rather than silently dropping usage data.
 pub const HOT_PATH_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Writer-lock budget for admin/dashboard queries. Longer than the hot path
 /// because the operator explicitly asked for the result.
 pub const ADMIN_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Reason a `try_lock` returned `None` instead of a guard. Used by
-/// the hot path to log + count dropped writes.
+/// Reason a `try_lock` returned `None` instead of a guard. Used by callers
+/// to log and record lock-acquisition timeouts for bounded backoff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockTimeout {
     Hot,
@@ -85,6 +87,21 @@ impl DbPool {
     }
 
     pub fn open_with_readers(path: &Path, reader_count: usize) -> Result<Self> {
+        Self::open_with_options(path, reader_count, SqliteSynchronous::Full)
+    }
+
+    /// Open (or create) the SQLite database at `path` with explicit reader count
+    /// and `SqliteSynchronous` durability pragma policy.
+    ///
+    /// Durability note: `SqliteSynchronous::Full` issues an fsync on every
+    /// transaction commit as well as on WAL checkpoints. However, durability
+    /// ultimately depends on the underlying storage honoring fsync/flush commands;
+    /// it does not grant absolute immunity to power loss.
+    pub fn open_with_options(
+        path: &Path,
+        reader_count: usize,
+        synchronous: SqliteSynchronous,
+    ) -> Result<Self> {
         if reader_count > 32 {
             return Err(CoreError::Config(
                 "SQLite reader count must be between 0 and 32".into(),
@@ -97,7 +114,10 @@ impl DbPool {
         } else {
             reader_count
         };
-        with_busy_retry("DbPool::open", || Self::open_inner(path, readers)).inspect_err(|e| {
+        with_busy_retry("DbPool::open", || {
+            Self::open_inner(path, readers, synchronous)
+        })
+        .inspect_err(|e| {
             tracing::error!(
                 path = %path.display(),
                 error = %e,
@@ -106,9 +126,9 @@ impl DbPool {
         })
     }
 
-    /// Builds the pool. Public callers go through [`DbPool::open`], which
-    /// wraps this in `with_busy_retry`.
-    fn open_inner(path: &Path, num_readers: usize) -> Result<Self> {
+    /// Builds the pool. Public callers go through [`DbPool::open`] or [`DbPool::open_with_options`],
+    /// which wrap this in `with_busy_retry`.
+    fn open_inner(path: &Path, num_readers: usize, synchronous: SqliteSynchronous) -> Result<Self> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
         let writer = Connection::open_with_flags(path, flags).map_err(
@@ -116,13 +136,13 @@ impl DbPool {
         )?;
 
         configure_temp_dir(&writer, path);
-        configure_connection(&writer, true)?;
+        configure_connection(&writer, true, synchronous)?;
 
         // Extra handles on the same file keep mutex contention off the
         // high-throughput API endpoints.
         let mut readers = Vec::with_capacity(num_readers);
         for i in 0..num_readers {
-            let reader = open_and_configure_reader(path, flags, i)?;
+            let reader = open_and_configure_reader(path, flags, i, synchronous)?;
             readers.push(Arc::new(Mutex::new(reader)));
         }
 
@@ -131,6 +151,7 @@ impl DbPool {
             readers: Arc::new(readers),
             next_reader: Arc::new(AtomicUsize::new(0)),
             path: Arc::from(path),
+            synchronous,
             _cleanup: None,
         })
     }
@@ -158,6 +179,7 @@ impl DbPool {
             readers: pool.readers,
             next_reader: pool.next_reader,
             path: pool.path,
+            synchronous: pool.synchronous,
             _cleanup: Some(temp_dir),
         })
     }
@@ -312,13 +334,17 @@ impl DbPool {
         .map_err(|e| CoreError::Internal(format!("spawn_write join error: {e}")))?
     }
 
-    /// The filesystem path of the SQLite database file. Used by the
     /// Number of reader handles in the pool.
     pub fn reader_count(&self) -> usize {
         self.readers.len()
     }
 
-    /// Access the underlying path.
+    /// Returns the SQLite synchronous durability policy configured for this pool.
+    pub fn synchronous(&self) -> SqliteSynchronous {
+        self.synchronous
+    }
+
+    /// Access the underlying filesystem path of the SQLite database file.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -332,19 +358,25 @@ impl DbPool {
     /// longer has. The new connections see the current on-disk state (fresh
     /// page cache, schema and prepared-statement cache).
     ///
-    /// Takes every lock, writer then readers, so it must not run while a
-    /// query is in flight: the caller holds the writer lock across this call.
+    /// Acquires each connection lock in sequence (writer then readers) to swap
+    /// in the freshly opened handles; callers must NOT hold the writer lock
+    /// or any reader locks when calling this to prevent deadlocks.
     pub fn reopen(&self) -> Result<()> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
         let new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
             crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
         )?;
-        configure_connection(&new_writer, true)?;
+        configure_connection(&new_writer, true, self.synchronous)?;
 
         let mut new_readers = Vec::with_capacity(self.readers.len());
         for (i, _) in self.readers.iter().enumerate() {
-            new_readers.push(reopen_and_configure_reader(&self.path, flags, i)?);
+            new_readers.push(reopen_and_configure_reader(
+                &self.path,
+                flags,
+                i,
+                self.synchronous,
+            )?);
         }
 
         *self.writer.lock() = new_writer;
@@ -356,7 +388,7 @@ impl DbPool {
         Ok(())
     }
 
-    /// Open an *additional* `Connection` to the same SQLite file.
+    /// Open an *additional* `Connection` to the same SQLite file configured with the pool's policy.
     pub fn open_connection(&self) -> Result<Connection> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE;
         let conn = Connection::open_with_flags(self.path.as_ref(), flags).map_err(|e| {
@@ -365,7 +397,7 @@ impl DbPool {
                 source: Some(std::sync::Arc::new(e)),
             }
         })?;
-        configure_connection(&conn, false)?;
+        configure_connection(&conn, false, self.synchronous)?;
         Ok(conn)
     }
 
@@ -398,320 +430,76 @@ fn configure_temp_dir(conn: &Connection, path: &Path) {
     }
 }
 
-fn open_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Result<Connection> {
+fn open_and_configure_reader(
+    path: &Path,
+    flags: OpenFlags,
+    idx: usize,
+    synchronous: SqliteSynchronous,
+) -> Result<Connection> {
     let reader = Connection::open_with_flags(path, flags).map_err(
         crate::error::map_db_error_ctx(format!("open reader {idx} for {}", path.display())),
     )?;
-    configure_connection(&reader, false)?;
+    configure_connection(&reader, false, synchronous)?;
     Ok(reader)
 }
 
-fn reopen_and_configure_reader(path: &Path, flags: OpenFlags, idx: usize) -> Result<Connection> {
+fn reopen_and_configure_reader(
+    path: &Path,
+    flags: OpenFlags,
+    idx: usize,
+    synchronous: SqliteSynchronous,
+) -> Result<Connection> {
     let r = Connection::open_with_flags(path, flags).map_err(crate::error::map_db_error_ctx(
         format!("reopen reader {idx} for {}", path.display()),
     ))?;
-    configure_connection(&r, false)?;
+    configure_connection(&r, false, synchronous)?;
     Ok(r)
 }
 
 /// Apply the standard pragmas required by spec §8/§9.
-fn configure_connection(conn: &Connection, is_writer: bool) -> Result<()> {
+///
+/// # Durability Note
+/// In WAL mode, `PRAGMA synchronous = FULL` issues an fsync on each transaction
+/// commit as well as on WAL checkpoints, significantly reducing the risk of
+/// journal corruption or lost committed transactions during ungraceful power loss
+/// or OS crashes. However, no software setting can guarantee absolute power-loss
+/// immunity: durability is ultimately bounded by the underlying storage device
+/// honoring fsync/flush commands (e.g. disk drive write caches).
+/// `PRAGMA synchronous = NORMAL` skips fsync on regular WAL commits (syncing only
+/// during checkpoints), providing higher throughput at the expense of potential
+/// loss of the most recent transactions if power fails before a checkpoint completes.
+fn configure_connection(
+    conn: &Connection,
+    is_writer: bool,
+    synchronous: SqliteSynchronous,
+) -> Result<()> {
     let _ = conn.pragma_update(None, "auto_vacuum", "INCREMENTAL");
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let sync_val = synchronous.as_pragma_str();
     if is_writer {
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA foreign_keys = ON; \
              PRAGMA busy_timeout = 5000; \
-             PRAGMA synchronous = NORMAL; \
+             PRAGMA synchronous = {sync_val}; \
              PRAGMA wal_autocheckpoint = 250; \
              PRAGMA mmap_size = 0; \
              PRAGMA cache_size = -512; \
              PRAGMA temp_store = FILE;",
-        )
+        ))
     } else {
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "PRAGMA foreign_keys = ON; \
              PRAGMA busy_timeout = 5000; \
-             PRAGMA synchronous = NORMAL; \
+             PRAGMA synchronous = {sync_val}; \
              PRAGMA wal_autocheckpoint = 250; \
              PRAGMA mmap_size = 0; \
              PRAGMA cache_size = -256; \
              PRAGMA temp_store = FILE;",
-        )
+        ))
     }
     .map_err(crate::error::map_db_error)?;
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reader_count_is_explicit_and_bounded() {
-        let directory = crate::testing::TempDir::new("reader-count").unwrap();
-        let path = directory.path().join("db.sqlite");
-        let pool = DbPool::open_with_readers(&path, 4).unwrap();
-        assert_eq!(pool.reader_count(), 4);
-        assert!(DbPool::open_with_readers(&path, 33).is_err());
-    }
-
-    #[test]
-    fn open_creates_file_and_sets_pragmas() {
-        let pool = DbPool::test_pool().expect("test pool");
-        assert!((2..=8).contains(&pool.reader_count()));
-        let conn = pool.writer();
-
-        let journal: String = conn
-            .pragma_query_value(None, "journal_mode", |r| r.get(0))
-            .expect("journal_mode");
-        assert_eq!(journal.to_ascii_lowercase(), "wal");
-
-        let fk: i64 = conn
-            .pragma_query_value(None, "foreign_keys", |r| r.get(0))
-            .expect("foreign_keys");
-        assert_eq!(fk, 1);
-
-        let busy: i64 = conn
-            .pragma_query_value(None, "busy_timeout", |r| r.get(0))
-            .expect("busy_timeout");
-        assert_eq!(busy, 5000);
-
-        let mmap: i64 = conn
-            .pragma_query_value(None, "mmap_size", |r| r.get(0))
-            .expect("mmap_size");
-        assert_eq!(mmap, 0);
-
-        let wal_autocheckpoint: i64 = conn
-            .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))
-            .expect("wal_autocheckpoint");
-        assert_eq!(wal_autocheckpoint, 250);
-
-        let writer_cache: i64 = conn
-            .pragma_query_value(None, "cache_size", |r| r.get(0))
-            .expect("cache_size");
-        assert_eq!(writer_cache, -512);
-
-        let temp_store: i64 = conn
-            .pragma_query_value(None, "temp_store", |r| r.get(0))
-            .expect("temp_store");
-        assert_eq!(temp_store, 1); // 1 = FILE
-
-        drop(conn);
-
-        let reader = pool.reader();
-        let reader_cache: i64 = reader
-            .pragma_query_value(None, "cache_size", |r| r.get(0))
-            .expect("reader cache_size");
-        assert_eq!(reader_cache, -256);
-
-        let reader_mmap: i64 = reader
-            .pragma_query_value(None, "mmap_size", |r| r.get(0))
-            .expect("reader mmap_size");
-        assert_eq!(reader_mmap, 0);
-    }
-
-    #[test]
-    fn try_writer_for_returns_none_when_lock_is_held() {
-        let pool = DbPool::test_pool().expect("test pool");
-
-        let _guard = pool.writer();
-
-        let start = std::time::Instant::now();
-        let result = pool.try_writer_for(std::time::Duration::from_millis(50));
-        let elapsed = start.elapsed();
-
-        assert!(result.is_none(), "lock should not be acquirable while held");
-        assert!(
-            elapsed < std::time::Duration::from_millis(150),
-            "try_writer_for waited {elapsed:?}; should have failed fast"
-        );
-    }
-
-    #[test]
-    fn try_writer_for_succeeds_when_lock_is_free() {
-        let pool = DbPool::test_pool().expect("test pool");
-
-        let start = std::time::Instant::now();
-        let guard = pool
-            .try_writer_for(std::time::Duration::from_millis(100))
-            .expect("lock should be available");
-        let elapsed = start.elapsed();
-
-        assert!(elapsed < std::time::Duration::from_millis(50));
-        drop(guard);
-    }
-
-    #[tokio::test]
-    async fn test_spawn_read_and_spawn_write() {
-        let pool = DbPool::test_pool().expect("test pool");
-
-        // Write via spawn_write
-        pool.spawn_write(|conn| {
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS test_spawn (id INTEGER PRIMARY KEY, val TEXT)",
-                [],
-            )
-            .map_err(|e| CoreError::Database {
-                message: e.to_string(),
-                source: None,
-            })?;
-            conn.execute("INSERT INTO test_spawn (id, val) VALUES (1, 'hello')", [])
-                .map_err(|e| CoreError::Database {
-                    message: e.to_string(),
-                    source: None,
-                })?;
-            Ok(())
-        })
-        .await
-        .expect("spawn_write");
-
-        // Read via spawn_read
-        let val: String = pool
-            .spawn_read(|conn| {
-                conn.query_row("SELECT val FROM test_spawn WHERE id = 1", [], |row| {
-                    row.get(0)
-                })
-                .map_err(|e| CoreError::Database {
-                    message: e.to_string(),
-                    source: None,
-                })
-            })
-            .await
-            .expect("spawn_read");
-
-        assert_eq!(val, "hello");
-    }
-
-    #[test]
-    fn reader_opportunistically_bypasses_held_reader_without_blocking() {
-        let pool = DbPool::test_pool().expect("test pool");
-        assert!(pool.readers.len() >= 2, "pool must have multiple readers");
-
-        // Force next_reader to index 0
-        pool.next_reader.store(0, Ordering::Relaxed);
-
-        // Lock reader 0 directly to simulate a long-running query
-        let _held_guard = pool.readers[0].lock();
-
-        let start = std::time::Instant::now();
-        // reader() starts scanning at index 0, skips reader 0 because try_lock fails,
-        // and opportunistically acquires reader 1 without blocking.
-        let acquired = pool.reader();
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed < std::time::Duration::from_millis(50),
-            "reader() took {elapsed:?}; should have bypassed reader 0 immediately"
-        );
-
-        let val: i64 = acquired
-            .query_row("SELECT 42", [], |row| row.get(0))
-            .expect("query_row on reader");
-        assert_eq!(val, 42);
-        drop(acquired);
-
-        // Also test reader_guard bypasses reader 0
-        pool.next_reader.store(0, Ordering::Relaxed);
-        let guard = pool.reader_guard();
-        let val_guard: i64 = guard
-            .query_row("SELECT 84", [], |row| row.get(0))
-            .expect("query_row on reader_guard");
-        assert_eq!(val_guard, 84);
-    }
-
-    #[test]
-    fn reader_contention_with_one_held_reader() {
-        let pool = std::sync::Arc::new(DbPool::test_pool().expect("test pool"));
-        assert!(pool.readers.len() >= 2);
-        // Lock reader 0 indefinitely
-        let _held = pool.readers[0].lock();
-
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let pool_clone = std::sync::Arc::clone(&pool);
-        std::thread::spawn(move || {
-            let mut handles = Vec::new();
-            for _ in 0..8 {
-                let pool = std::sync::Arc::clone(&pool_clone);
-                handles.push(std::thread::spawn(move || {
-                    for _ in 0..50 {
-                        let guard = pool.reader();
-                        std::thread::sleep(std::time::Duration::from_millis(1));
-                        let val: i64 = guard.query_row("SELECT 1", [], |r| r.get(0)).unwrap();
-                        assert_eq!(val, 1);
-                    }
-                }));
-            }
-            for h in handles {
-                h.join().unwrap();
-            }
-            let _ = tx.send(());
-        });
-
-        // If it deadlocks/hangs, timeout after 3 seconds
-        let res = rx.recv_timeout(std::time::Duration::from_secs(3));
-        assert!(
-            res.is_ok(),
-            "DEADLOCK DETECTED: reader acquisition blocked on locked reader 0!"
-        );
-    }
-
-    #[test]
-    fn try_reader_for_times_out_when_all_readers_locked() {
-        let pool = DbPool::test_pool().expect("test pool");
-
-        // Lock all readers
-        let _guards: Vec<_> = pool.readers.iter().map(|r| r.lock()).collect();
-
-        let start = std::time::Instant::now();
-        let result = pool.try_reader_for(std::time::Duration::from_millis(50));
-        let elapsed = start.elapsed();
-
-        assert!(
-            result.is_none(),
-            "try_reader_for must return None when all readers are locked"
-        );
-        assert!(
-            elapsed >= std::time::Duration::from_millis(40),
-            "try_reader_for must wait for the specified timeout: elapsed {elapsed:?}"
-        );
-    }
-
-    #[test]
-    fn try_reader_for_acquires_freed_reader_when_other_readers_held() {
-        let pool = std::sync::Arc::new(DbPool::test_pool().expect("test pool"));
-        pool.next_reader.store(0, Ordering::Relaxed);
-
-        // Keep all but one reader locked in this thread. The releaser acquires
-        // and drops its own guard; guards deliberately cannot migrate threads.
-        let held: Vec<_> = pool
-            .readers
-            .iter()
-            .skip(1)
-            .map(|reader| reader.lock())
-            .collect();
-        let release_pool = Arc::clone(&pool);
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
-
-        // Background thread releases reader 1 after 15ms
-        let release_thread = std::thread::spawn(move || {
-            let guard = release_pool.readers[0].lock();
-            ready_tx.send(()).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(15));
-            drop(guard);
-        });
-        ready_rx.recv().unwrap();
-
-        // Calling try_reader_for with timeout of 60ms starting at index 0
-        // Reader 1 becomes free at 15ms, well before 60ms timeout!
-        let acquired = pool.try_reader_for(std::time::Duration::from_millis(60));
-        release_thread.join().unwrap();
-
-        assert!(
-            acquired.is_some(),
-            "try_reader_for should acquire reader 1 once freed before timeout!"
-        );
-        drop(held);
-    }
-}
+mod tests;
