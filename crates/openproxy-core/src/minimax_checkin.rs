@@ -28,25 +28,40 @@ pub fn start_checkin_scheduler(
     let token = cancel.clone();
 
     tokio::spawn(async move {
-        tokio::select! {
-            () = token.cancelled() => return,
-            () = sleep(Duration::from_secs(45)) => {}
-        }
-
-        loop {
-            run_checkin_cycle(&db_pool, &upstream_client, &master_key).await;
-
-            tokio::select! {
-                () = token.cancelled() => {
-                    tracing::info!("[MiniMaxCheckin] Scheduler shutting down");
-                    break;
-                }
-                () = sleep(Duration::from_secs(DEFAULT_CHECKIN_INTERVAL_SECS)) => {}
-            }
-        }
+        run_checkin_scheduler(db_pool, upstream_client, master_key, token).await;
     });
 
     Some(cancel)
+}
+
+/// Asynchronous runner for the MiniMax daily check-in scheduler.
+pub async fn run_checkin_scheduler(
+    db_pool: Arc<DbPool>,
+    upstream_client: Arc<UpstreamClient>,
+    master_key: Arc<MasterKey>,
+    cancel: CancellationToken,
+) {
+    tokio::select! {
+        () = cancel.cancelled() => return,
+        () = sleep(Duration::from_secs(45)) => {}
+    }
+
+    loop {
+        if cancel.is_cancelled() {
+            tracing::info!("[MiniMaxCheckin] Scheduler shutting down");
+            break;
+        }
+
+        run_checkin_cycle_with_cancel(&db_pool, &upstream_client, &master_key, Some(&cancel)).await;
+
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::info!("[MiniMaxCheckin] Scheduler shutting down");
+                break;
+            }
+            () = sleep(Duration::from_secs(DEFAULT_CHECKIN_INTERVAL_SECS)) => {}
+        }
+    }
 }
 
 /// Runs a single sweep over all MiniMax accounts and claims checkin for those not yet claimed today.
@@ -54,6 +69,17 @@ pub async fn run_checkin_cycle(
     db_pool: &Arc<DbPool>,
     upstream_client: &Arc<UpstreamClient>,
     master_key: &Arc<MasterKey>,
+) {
+    run_checkin_cycle_with_cancel(db_pool, upstream_client, master_key, None).await;
+}
+
+/// Runs a single sweep over all MiniMax accounts and claims checkin for those not yet claimed today,
+/// with cooperative cancellation checking between accounts.
+pub async fn run_checkin_cycle_with_cancel(
+    db_pool: &Arc<DbPool>,
+    upstream_client: &Arc<UpstreamClient>,
+    master_key: &Arc<MasterKey>,
+    cancel: Option<&CancellationToken>,
 ) {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
@@ -99,6 +125,11 @@ pub async fn run_checkin_cycle(
     };
 
     for account_id in accounts_to_check {
+        if cancel.is_some_and(|c| c.is_cancelled()) {
+            tracing::info!("[MiniMaxCheckin] Cycle cancelled between accounts");
+            break;
+        }
+
         match run_account_checkin(db_pool, upstream_client, master_key, account_id).await {
             Ok(summary) => {
                 tracing::info!(
