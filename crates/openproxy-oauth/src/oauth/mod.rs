@@ -402,3 +402,4 @@ pub use refresh::*;
 #[cfg(test)]
 pub(crate) use refresh::{BASE_BACKOFF_SECS, MAX_BACKOFF_SECS, backoff_seconds};
 pub use registry::*;
+pub use tokio_util::sync::CancellationToken;

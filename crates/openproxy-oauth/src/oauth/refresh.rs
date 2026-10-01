@@ -7,6 +7,7 @@ use openproxy_db::secrets::MasterKey;
 use std::collections::HashMap;
 use std::num::NonZero;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use super::{DbRef, OAuthProvider, OAuthProviderEnum, OAuthProviderRegistry, TokenResponse};
 
@@ -354,15 +355,61 @@ pub async fn start_refresh_scheduler(
     registry: Arc<OAuthProviderRegistry>,
     check_interval_secs: u64,
 ) {
+    let cancel = CancellationToken::new();
+    run_refresh_scheduler(
+        db_pool,
+        master_key,
+        upstream_client,
+        registry,
+        check_interval_secs,
+        cancel,
+    )
+    .await;
+}
+
+/// Run the OAuth token refresh scheduler with cancellation support.
+///
+/// Selects cancel ONLY on idle ticks; batches are awaited to completion so no
+/// JoinSet tasks or database writes in flight are dropped. Checks cancellation between batches.
+pub async fn run_refresh_scheduler(
+    db_pool: std::sync::Arc<openproxy_db::DbPool>,
+    master_key: std::sync::Arc<MasterKey>,
+    upstream_client: Arc<UpstreamClient>,
+    registry: Arc<OAuthProviderRegistry>,
+    check_interval_secs: u64,
+    cancel: CancellationToken,
+) {
+    if cancel.is_cancelled() {
+        tracing::debug!("oauth refresh scheduler: cancelled before start");
+        return;
+    }
+
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
-    // Skip the first immediate tick.
-    tick.tick().await;
+    // Skip the first immediate tick while respecting cancellation.
+    tokio::select! {
+        () = cancel.cancelled() => {
+            tracing::debug!("oauth refresh scheduler: cancelled during initial tick");
+            return;
+        }
+        _ = tick.tick() => {}
+    }
 
     let mut failure_counts: HashMap<i64, u32> = HashMap::new();
     let mut last_refresh_attempts: HashMap<i64, chrono::DateTime<chrono::Utc>> = HashMap::new();
 
     loop {
-        tick.tick().await;
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::info!("oauth refresh scheduler: cancelled during idle tick");
+                break;
+            }
+            _ = tick.tick() => {}
+        }
+
+        if cancel.is_cancelled() {
+            break;
+        }
+
         tick_refresh_cycle(
             &db_pool,
             &master_key,
@@ -372,6 +419,10 @@ pub async fn start_refresh_scheduler(
             &mut last_refresh_attempts,
         )
         .await;
+
+        if cancel.is_cancelled() {
+            break;
+        }
     }
 }
 
