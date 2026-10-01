@@ -49,6 +49,25 @@ pub fn resolve_image_targets(
     Ok(consolidate_image_targets(targets))
 }
 
+pub async fn resolve_image_targets_async(
+    db_pool: &DbPool,
+    routing_plan: RoutingPlan,
+    req_model: &str,
+    api_key_id: Option<ApiKeyId>,
+    started: Instant,
+) -> Result<Vec<ImageTargets>> {
+    let targets = crate::unary::resolve_unary_targets_async(
+        db_pool,
+        routing_plan,
+        req_model,
+        EndpointKind::Image,
+        api_key_id,
+        started,
+    )
+    .await?;
+    Ok(consolidate_image_targets(targets))
+}
+
 fn merge_horde_target(existing: &mut ImageTargets, target: &ImageTargets) {
     let already_present = existing
         .upstream_model

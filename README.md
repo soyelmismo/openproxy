@@ -191,6 +191,7 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 - [`docs/decision-engine.md`](docs/decision-engine.md): Semantic decision routing, System One protocol, and CPU-optimized native Laya ONNX engine.
 - [`docs/hierarchical-decision-routing.md`](docs/hierarchical-decision-routing.md): Hierarchical sub-combo tree evaluation and cascading classifiers.
 - [`docs/architecture.md`](docs/architecture.md): System architecture, routing pipeline, and internals.
+- [`docs/usage-persistence.md`](docs/usage-persistence.md): Usage backpressure, transactional writes, graceful shutdown, and durability limits.
 - [`docs/mvp-spec.md`](docs/mvp-spec.md): Endpoint specifications, schema, and security models.
 - [`docs/roadmap.md`](docs/roadmap.md): Post-MVP roadmap and planned capabilities.
 

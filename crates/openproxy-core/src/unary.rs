@@ -17,7 +17,7 @@ use openproxy_types::{
 };
 
 use crate::{
-    accounts, cost, models, providers,
+    accounts, models, providers,
     routing::{self, RoutingPlan},
 };
 
@@ -167,6 +167,32 @@ pub fn resolve_unary_targets(
     }
 }
 
+/// Preserve the synchronous resolution contract without running its queries or
+/// not-found usage write on a Tokio worker.
+pub async fn resolve_unary_targets_async(
+    db_pool: &DbPool,
+    routing_plan: RoutingPlan,
+    req_model: &str,
+    endpoint_kind: EndpointKind,
+    api_key_id: Option<ApiKeyId>,
+    started: Instant,
+) -> Result<Vec<UnaryTarget>> {
+    let pool = db_pool.clone();
+    let model = req_model.to_owned();
+    tokio::task::spawn_blocking(move || {
+        resolve_unary_targets(
+            &pool,
+            routing_plan,
+            &model,
+            endpoint_kind,
+            api_key_id,
+            started,
+        )
+    })
+    .await
+    .map_err(|error| CoreError::Internal(format!("unary resolution join failed: {error}")))?
+}
+
 pub fn resolve_api_key(
     db_pool: &DbPool,
     master_key: &MasterKey,
@@ -270,8 +296,8 @@ pub struct UnaryUsageArgs<'a> {
     pub endpoint_kind: EndpointKind,
 }
 
-pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
-    let input = UsageInput {
+fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
+    UsageInput {
         proxy_url: None,
         proxy_status: None,
         request_id: args.request_id,
@@ -305,12 +331,31 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
         pii_redacted: None,
         flags: openproxy_types::usage::USAGE_FLAG_CLIENT_RESPONSE,
         endpoint_kind: args.endpoint_kind,
+    }
+}
+
+/// Blocking counterpart for synchronous routing code and non-Tokio consumers.
+pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
+    let result = {
+        let mut conn = db_pool.writer();
+        openproxy_db::usage_writer::record(&mut conn, &unary_usage_input(args), None)
     };
-    let Some(w) = db_pool.try_writer_for(std::time::Duration::from_millis(100)) else {
-        tracing::warn!("hot-path writer lock timeout on unary usage row; dropping");
-        return;
-    };
-    let _ = cost::record_with_retry(&w, &input);
+    match result {
+        Ok((_, row)) => openproxy_types::usage::publish_usage_row(row),
+        Err(error) => tracing::error!(%error, "failed to persist unary usage"),
+    }
+}
+
+/// Async callers wait for persistence without acquiring SQLite locks on Tokio.
+pub async fn record_unary_usage_async(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
+    let input = unary_usage_input(args);
+    match db_pool
+        .spawn_write(move |conn| openproxy_db::usage_writer::record(conn, &input, None))
+        .await
+    {
+        Ok((_, row)) => openproxy_types::usage::publish_usage_row(row),
+        Err(error) => tracing::error!(%error, "failed to persist unary usage"),
+    }
 }
 
 pub fn apply_adapter_headers(

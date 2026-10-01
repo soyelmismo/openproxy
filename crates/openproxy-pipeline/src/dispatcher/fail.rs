@@ -24,7 +24,7 @@ pub(crate) fn is_client_disconnected(
 
 impl UpstreamDispatcher {
     /// Construye el `trace_id` con sufijo `:retry{N}` cuando `attempt > 1`.
-    pub(crate) fn record_and_fail(
+    pub(crate) async fn record_and_fail(
         &self,
         req: PipelineRequest,
         combo: &Combo,
@@ -42,9 +42,10 @@ impl UpstreamDispatcher {
             req.trace_id.to_string()
         };
         self.record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
+            .await
     }
 
-    pub(crate) fn record_and_fail_with_trace_id(
+    pub(crate) async fn record_and_fail_with_trace_id(
         &self,
         req: PipelineRequest,
         combo: &Combo,
@@ -64,16 +65,18 @@ impl UpstreamDispatcher {
                 created: 0,
                 model_name: "",
             })
+            .await
     }
 
     /// Reenvía los params al `UsageTracker`. `pub(crate)` porque
     /// `streaming_state.rs` lo invoca.
-    pub(crate) fn record_and_fail_with_trace_id_and_partial(
+    pub(crate) async fn record_and_fail_with_trace_id_and_partial(
         &self,
         params: crate::PartialFailureParams<'_>,
     ) -> PipelineResult {
         self.tracker
             .record_and_fail_with_trace_id_and_partial(params)
+            .await
     }
 
     pub(super) async fn handle_upstream_error(
@@ -94,17 +97,19 @@ impl UpstreamDispatcher {
                 "client cancelled during upstream send; aborting attempt"
             );
             let core_err = CoreError::Cancelled(CancelReason::ClientDisconnected);
-            return self.record_and_fail(
-                req,
-                combo,
-                target,
-                dctx.fail_ctx_code(
-                    &core_err,
-                    Some(connect_and_send_ms),
-                    None,
-                    core_err.http_status(),
-                ),
-            );
+            return self
+                .record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &core_err,
+                        Some(connect_and_send_ms),
+                        None,
+                        core_err.http_status(),
+                    ),
+                )
+                .await;
         }
 
         let (status, body) = match err {
@@ -183,6 +188,7 @@ impl UpstreamDispatcher {
                 core_err.http_status(),
             ),
         )
+        .await
     }
 
     /// Publica una notificación `account_invalid` deduplicada por
@@ -408,5 +414,6 @@ impl UpstreamDispatcher {
             target,
             dctx.fail_ctx_code(&err, Some(connect_and_send_ms), ttft_ms, status_code),
         )
+        .await
     }
 }

@@ -32,7 +32,8 @@ impl PipelineStage for TelemetryRecorderStage {
                 {
                     ctx.pipeline
                         .tracker
-                        .record_no_healthy_targets_row(&ctx.req, combo, started);
+                        .record_no_healthy_targets_row(&ctx.req, combo, started)
+                        .await;
                 }
 
                 Ok(crate::Pipeline::failure(e, ctx.attempt, phase))

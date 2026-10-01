@@ -35,8 +35,8 @@ pub struct AudioTranscriptionResponse {
 
 pub use crate::unary::{
     UnaryTarget as AudioTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
-    is_target_available, map_upstream_status_error, record_unary_usage, resolve_api_key,
-    resolve_unary_targets,
+    is_target_available, map_upstream_status_error, record_unary_usage, record_unary_usage_async,
+    resolve_api_key, resolve_unary_targets,
 };
 
 pub type AudioUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -207,7 +207,15 @@ pub async fn execute_transcribe(
 
     let routing_plan = routing::resolve_routing(db_pool, &parsed_body.model_name).await?;
 
-    let targets = resolve_audio_targets(db_pool, routing_plan, api_key_id, started)?;
+    let targets = crate::unary::resolve_unary_targets_async(
+        db_pool,
+        routing_plan,
+        "audio",
+        openproxy_types::EndpointKind::Audio,
+        api_key_id,
+        started,
+    )
+    .await?;
 
     let mut last_error = None;
     let mut attempt = 0;
@@ -242,7 +250,7 @@ pub async fn execute_transcribe(
         {
             Ok(resp) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                record_unary_usage(
+                record_unary_usage_async(
                     db_pool,
                     &UnaryUsageArgs {
                         request_id: RequestId::new(),
@@ -260,7 +268,8 @@ pub async fn execute_transcribe(
                         total_ms,
                         endpoint_kind: openproxy_types::EndpointKind::Audio,
                     },
-                );
+                )
+                .await;
 
                 tracing::info!("Audio request succeeded after {} attempts", attempt);
                 return Ok(resp);

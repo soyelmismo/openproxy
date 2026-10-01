@@ -135,15 +135,10 @@ impl AppState {
         );
 
         let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
-        let repo = Arc::new(openproxy_pipeline::SqlitePipelineRepository::new(
+        let usage_worker = Arc::new(openproxy_pipeline::worker::spawn_worker(
             db_pool.writer_arc(),
-        ));
-        openproxy_pipeline::worker::spawn_worker(
-            db_pool.writer_arc(),
-            repo,
             background_rx,
-            Arc::clone(&selection_registry),
-        );
+        ));
 
         let services = Arc::new(crate::services::Services::new(Arc::clone(&db_pool)));
 
@@ -183,6 +178,7 @@ impl AppState {
             vacuum_status,
             backfill_status,
             background_tx,
+            usage_worker,
             supervisor,
             api_key_cache,
             ws_tickets: Arc::new(super::WsTicketStore::new()),
@@ -271,7 +267,11 @@ impl AppState {
 
         openproxy_core::notifications::init_broadcast();
 
-        let (background_tx, _) = tokio::sync::mpsc::channel(1);
+        let (background_tx, background_rx) = tokio::sync::mpsc::channel(1024);
+        let usage_worker = Arc::new(openproxy_pipeline::worker::spawn_worker(
+            db_pool.writer_arc(),
+            background_rx,
+        ));
         let services = Arc::new(crate::services::Services::new(Arc::clone(&db_pool)));
 
         Self {
@@ -310,6 +310,7 @@ impl AppState {
             vacuum_status,
             backfill_status,
             background_tx,
+            usage_worker,
             supervisor,
             api_key_cache,
             ws_tickets: Arc::new(super::WsTicketStore::new()),

@@ -16,10 +16,9 @@ use openproxy_types::{
 };
 
 use crate::images::horde_poll::{HordePollContext, poll_horde_image_generation};
-use crate::images::resolve_image_targets;
 use crate::routing;
 use crate::unary::{
-    UnaryUsageArgs, apply_adapter_headers, map_upstream_status_error, record_unary_usage,
+    UnaryUsageArgs, apply_adapter_headers, map_upstream_status_error, record_unary_usage_async,
     resolve_api_key,
 };
 
@@ -62,7 +61,9 @@ pub async fn execute_image_generation(
 
     let routing_plan = routing::resolve_routing(db_pool, &req.model).await?;
 
-    let targets = resolve_image_targets(db_pool, routing_plan, &req.model, api_key_id, started)?;
+    let targets =
+        super::resolve_image_targets_async(db_pool, routing_plan, &req.model, api_key_id, started)
+            .await?;
 
     let request_id = RequestId::new();
     let mut last_error = None;
@@ -282,7 +283,7 @@ pub async fn execute_image_generation(
         );
 
         let total_ms = started.elapsed().as_millis() as u64;
-        record_unary_usage(
+        record_unary_usage_async(
             db_pool,
             &UnaryUsageArgs {
                 request_id,
@@ -300,7 +301,8 @@ pub async fn execute_image_generation(
                 total_ms,
                 endpoint_kind: EndpointKind::Image,
             },
-        );
+        )
+        .await;
 
         tracing::info!("Image request succeeded after {attempt} attempts");
         return Ok(parsed_response);

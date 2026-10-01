@@ -6,7 +6,7 @@ use crate::streaming::{StreamAction, StreamingChunkStage};
 use openproxy_types::error::CoreError;
 
 impl ChunkProcessor<'_> {
-    pub(super) fn check_and_handle_inline_upstream_error(
+    pub(super) async fn check_and_handle_inline_upstream_error(
         &mut self,
         ctx: &StreamContext<'_>,
         json_payload: &str,
@@ -42,8 +42,8 @@ impl ChunkProcessor<'_> {
                 None => None,
             };
         Some(crate::streaming::ChunkEvent::Return(Box::new(
-            self.dispatcher.record_and_fail_with_trace_id_and_partial(
-                crate::PartialFailureParams {
+            self.dispatcher
+                .record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
                     req: ctx.req.to_owned(),
                     combo: ctx.combo,
                     target: ctx.target,
@@ -64,8 +64,8 @@ impl ChunkProcessor<'_> {
                     chunk_id: Some(ctx.chunk_id),
                     created: ctx.created,
                     model_name: ctx.model_name,
-                },
-            ),
+                })
+                .await,
         )))
     }
 
@@ -128,7 +128,7 @@ impl ChunkProcessor<'_> {
         let (effective_payload, is_skip) =
             self.update_state_and_acc_from_metadata_chunk(chunk, json_payload);
 
-        if let Some(event) = self.check_race_cancelled(ctx) {
+        if let Some(event) = self.check_race_cancelled(ctx).await {
             return Ok(event);
         }
 
@@ -156,7 +156,7 @@ impl ChunkProcessor<'_> {
         if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
+                self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
             )));
         }
 
@@ -213,7 +213,7 @@ impl ChunkProcessor<'_> {
             return Ok(crate::streaming::ChunkEvent::Skip);
         }
 
-        if let Some(event) = self.check_race_cancelled(ctx) {
+        if let Some(event) = self.check_race_cancelled(ctx).await {
             return Ok(event);
         }
 
@@ -221,7 +221,7 @@ impl ChunkProcessor<'_> {
         if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(e, fail_ctx),
+                self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
             )));
         }
 
@@ -247,7 +247,10 @@ impl ChunkProcessor<'_> {
             return self.handle_done_sentinel(ctx).await;
         }
 
-        if let Some(ret) = self.check_and_handle_inline_upstream_error(ctx, json_payload) {
+        if let Some(ret) = self
+            .check_and_handle_inline_upstream_error(ctx, json_payload)
+            .await
+        {
             return Ok(ret);
         }
 

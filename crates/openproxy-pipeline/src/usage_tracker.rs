@@ -51,7 +51,7 @@ impl UsageTracker {
             .store(enabled, Ordering::Relaxed);
     }
 
-    pub(crate) fn mark_client_response(
+    pub(crate) async fn mark_client_response(
         &self,
         usage_tuple: Option<(
             openproxy_types::ids::RequestId,
@@ -67,25 +67,18 @@ impl UsageTracker {
             attempt,
             target_id,
         };
-        if let Err(e) = self.background_tx.try_send(job) {
-            if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
-                let job = e.into_inner();
-                let conn = Arc::clone(&self.conn);
-                let repo = Arc::clone(&self.repo);
-                let selection_registry = Arc::clone(&self.selection_registry);
-                drop(tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(&conn, repo.as_ref(), job, &selection_registry);
-                }));
-            } else {
-                tracing::warn!(
-                    "failed to send MarkClientResponse to background worker: {}",
-                    e
-                );
-            }
+        if let Err(error) = self.enqueue(job).await {
+            tracing::error!(%error, "failed to mark client response");
         }
     }
 
-    pub(crate) fn record_no_healthy_targets_row(
+    async fn enqueue(&self, job: crate::worker::BackgroundJob) -> Result<()> {
+        self.background_tx.send(job).await.map_err(|_| {
+            CoreError::Internal("usage worker is closed; record was not accepted".into())
+        })
+    }
+
+    pub(crate) async fn record_no_healthy_targets_row(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
@@ -126,14 +119,15 @@ impl UsageTracker {
             flags: USAGE_FLAG_CLIENT_RESPONSE,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         };
-        let conn = Arc::clone(&self.conn);
-        drop(tokio::task::spawn_blocking(move || {
-            let lock = conn.lock();
-            let _ = openproxy_db::cost::record(&lock, &input);
-        }));
+        if let Err(error) = self
+            .enqueue(crate::worker::BackgroundJob::RecordUsage(Box::new(input)))
+            .await
+        {
+            tracing::error!(%error, "failed to record no healthy targets");
+        }
     }
 
-    pub(crate) fn record_predictive_skipped_row(
+    pub(crate) async fn record_predictive_skipped_row(
         &self,
         req: &PipelineRequest,
         combo: &Combo,
@@ -178,14 +172,15 @@ impl UsageTracker {
             flags: 0,
             endpoint_kind: req.endpoint_kind,
         };
-        let conn = Arc::clone(&self.conn);
-        drop(tokio::task::spawn_blocking(move || {
-            let lock = conn.lock();
-            let _ = openproxy_db::cost::record(&lock, &input);
-        }));
+        if let Err(error) = self
+            .enqueue(crate::worker::BackgroundJob::RecordUsage(Box::new(input)))
+            .await
+        {
+            tracing::error!(%error, "failed to record predictive skip");
+        }
     }
 
-    pub(crate) fn record_and_fail_with_trace_id_and_partial(
+    pub(crate) async fn record_and_fail_with_trace_id_and_partial(
         &self,
         params: crate::PartialFailureParams<'_>,
     ) -> PipelineResult {
@@ -248,6 +243,7 @@ impl UsageTracker {
             .stream_complete(stream_complete)
             .client_response(false)
             .record()
+            .await
         {
             Ok(id) => id,
             Err(e) => {
@@ -524,7 +520,7 @@ impl<'a> UsageRecordBuilder<'a> {
         );
     }
 
-    fn dispatch_record_job(&self, input: UsageInput) {
+    async fn dispatch_record_job(&self, input: UsageInput) -> Result<()> {
         let err_msg = self.err.map(std::string::ToString::to_string);
         let is_health_issue = self.err.is_some_and(is_upstream_health_issue);
 
@@ -555,19 +551,7 @@ impl<'a> UsageRecordBuilder<'a> {
                 .unwrap_or(self.tracker.cooldown_factor),
         };
 
-        if let Err(e) = self.tracker.background_tx.try_send(job) {
-            if matches!(e, tokio::sync::mpsc::error::TrySendError::Closed(_)) {
-                let job = e.into_inner();
-                let conn = Arc::clone(&self.tracker.conn);
-                let repo = Arc::clone(&self.tracker.repo);
-                let selection_registry = Arc::clone(&self.tracker.selection_registry);
-                drop(tokio::task::spawn_blocking(move || {
-                    crate::worker::process_job(&conn, repo.as_ref(), job, &selection_registry);
-                }));
-            } else {
-                tracing::warn!("failed to send RecordAttempt to background worker: {}", e);
-            }
-        }
+        self.tracker.enqueue(job).await
     }
 }
 
@@ -599,7 +583,7 @@ fn optional_when_recording<T>(recording: bool, val: Option<T>) -> Option<T> {
     if recording { val } else { None }
 }
 
-impl UsageRecordBuilder<'_> {
+impl<'a> UsageRecordBuilder<'a> {
     fn build_usage_input(
         &self,
         prompt_tokens: Option<u32>,
@@ -721,44 +705,51 @@ impl UsageRecordBuilder<'_> {
         }
     }
 
+    /// Await bounded worker admission. Boxing this future keeps request/body
+    /// state out of every enclosing pipeline-stage future.
     pub fn record(
         self,
-    ) -> Result<
-        Option<(
-            openproxy_types::ids::RequestId,
-            u8,
-            openproxy_types::ids::ComboTargetId,
-        )>,
-    > {
-        let (compression_savings_pct, compression_techniques) = {
-            let guard = self.req.compression_stats.lock();
-            (
-                guard
-                    .as_ref()
-                    .and_then(openproxy_compression::CompressionStats::savings_pct_opt),
-                guard
-                    .as_ref()
-                    .and_then(openproxy_compression::CompressionStats::techniques_csv),
-            )
-        };
+    ) -> impl std::future::Future<
+        Output = Result<
+            Option<(
+                openproxy_types::ids::RequestId,
+                u8,
+                openproxy_types::ids::ComboTargetId,
+            )>,
+        >,
+    > + Send
+    + 'a {
+        Box::pin(async move {
+            let (compression_savings_pct, compression_techniques) = {
+                let guard = self.req.compression_stats.lock();
+                (
+                    guard
+                        .as_ref()
+                        .and_then(openproxy_compression::CompressionStats::savings_pct_opt),
+                    guard
+                        .as_ref()
+                        .and_then(openproxy_compression::CompressionStats::techniques_csv),
+                )
+            };
 
-        let (prompt_tokens, prompt_tokens_estimated) = self.compute_prompt_tokens();
-        let (completion_tokens, completion_tokens_estimated) = self.compute_completion_tokens();
+            let (prompt_tokens, prompt_tokens_estimated) = self.compute_prompt_tokens();
+            let (completion_tokens, completion_tokens_estimated) = self.compute_completion_tokens();
 
-        let input = self.build_usage_input(
-            prompt_tokens,
-            prompt_tokens_estimated,
-            completion_tokens,
-            completion_tokens_estimated,
-            compression_savings_pct,
-            compression_techniques,
-        );
+            let input = self.build_usage_input(
+                prompt_tokens,
+                prompt_tokens_estimated,
+                completion_tokens,
+                completion_tokens_estimated,
+                compression_savings_pct,
+                compression_techniques,
+            );
 
-        self.emit_record_stage_event();
-        self.dispatch_record_job(input);
-        self.update_selection_registry();
+            self.emit_record_stage_event();
+            self.update_selection_registry();
+            self.dispatch_record_job(input).await?;
 
-        Ok(Some((self.req.request_id, self.attempt, self.target.id)))
+            Ok(Some((self.req.request_id, self.attempt, self.target.id)))
+        })
     }
 }
 

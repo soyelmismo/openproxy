@@ -14,6 +14,7 @@ pub mod cost;
 pub mod pricing;
 pub mod providers;
 pub mod secrets;
+pub mod usage_writer;
 
 pub use batch::{
     DEFAULT_CHUNK_SIZE, SQLITE_MAX_VARIABLE_NUMBER, batch_insert, in_placeholders, query_in_chunks,

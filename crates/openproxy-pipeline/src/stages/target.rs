@@ -30,7 +30,8 @@ macro_rules! fail_stage {
         };
         Ok($ctx
             .pipeline
-            .record_and_fail($ctx.req.clone(), combo, $target, fail_ctx))
+            .record_and_fail($ctx.req.clone(), combo, $target, fail_ctx)
+            .await)
     }};
     (with_trace; $ctx:expr, $target:expr, $err:expr, $model:expr, $status:expr) => {{
         let combo = $ctx
@@ -49,13 +50,16 @@ macro_rules! fail_stage {
             ttft_ms: None,
             status_code: $status,
         };
-        Ok($ctx.pipeline.record_and_fail_with_trace_id(
-            $ctx.req.clone(),
-            combo,
-            $target,
-            fail_ctx,
-            $ctx.trace_id.clone(),
-        ))
+        Ok($ctx
+            .pipeline
+            .record_and_fail_with_trace_id(
+                $ctx.req.clone(),
+                combo,
+                $target,
+                fail_ctx,
+                $ctx.trace_id.clone(),
+            )
+            .await)
     }};
 }
 

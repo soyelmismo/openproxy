@@ -306,6 +306,7 @@ impl Pipeline {
                     },
                     ctx.trace_id,
                 )
+                .await
             }
         }
     }
@@ -394,17 +395,19 @@ impl Pipeline {
         crate::dispatcher::fail::is_client_disconnected(rx)
     }
 
-    pub(crate) fn record_and_fail(
+    pub(crate) async fn record_and_fail(
         &self,
         req: PipelineRequest,
         combo: &Combo,
         target: &ComboTarget,
         ctx: FailureContext<'_>,
     ) -> PipelineResult {
-        self.dispatcher.record_and_fail(req, combo, target, ctx)
+        self.dispatcher
+            .record_and_fail(req, combo, target, ctx)
+            .await
     }
 
-    pub(crate) fn record_and_fail_with_trace_id(
+    pub(crate) async fn record_and_fail_with_trace_id(
         &self,
         req: PipelineRequest,
         combo: &Combo,
@@ -414,5 +417,6 @@ impl Pipeline {
     ) -> PipelineResult {
         self.dispatcher
             .record_and_fail_with_trace_id(req, combo, target, ctx, trace_id)
+            .await
     }
 }

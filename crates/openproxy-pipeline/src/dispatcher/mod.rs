@@ -92,12 +92,14 @@ impl UpstreamDispatcher {
                 Ok((dctx, upstream_request))
             }
             Err(e) => {
-                let fail_result = self.record_and_fail(
-                    params.req.clone(),
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(&e, None, None, e.http_status()),
-                );
+                let fail_result = self
+                    .record_and_fail(
+                        params.req.clone(),
+                        params.combo,
+                        params.target,
+                        dctx.fail_ctx_code(&e, None, None, e.http_status()),
+                    )
+                    .await;
                 Err(Box::new(fail_result))
             }
         }

@@ -19,8 +19,8 @@ use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
     UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
-    is_target_available, map_upstream_status_error, record_unary_usage, resolve_api_key,
-    resolve_unary_targets,
+    is_target_available, map_upstream_status_error, record_unary_usage, record_unary_usage_async,
+    resolve_api_key, resolve_unary_targets,
 };
 
 pub type EmbeddingUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -151,8 +151,15 @@ pub async fn execute_embeddings(
 
     let routing_plan = routing::resolve_routing(db_pool, &req.model).await?;
 
-    let targets =
-        resolve_embedding_targets(db_pool, routing_plan, &req.model, api_key_id, started)?;
+    let targets = crate::unary::resolve_unary_targets_async(
+        db_pool,
+        routing_plan,
+        &req.model,
+        EndpointKind::Embedding,
+        api_key_id,
+        started,
+    )
+    .await?;
 
     let mut last_error = None;
     let mut attempt = 0;
@@ -183,7 +190,7 @@ pub async fn execute_embeddings(
         {
             Ok((parsed_response, status_code)) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                record_unary_usage(
+                record_unary_usage_async(
                     db_pool,
                     &UnaryUsageArgs {
                         request_id: RequestId::new(),
@@ -201,7 +208,8 @@ pub async fn execute_embeddings(
                         total_ms,
                         endpoint_kind: EndpointKind::Embedding,
                     },
-                );
+                )
+                .await;
 
                 tracing::info!("Embedding request succeeded after {attempt} attempts");
                 return Ok(parsed_response);

@@ -536,7 +536,9 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
     let (combo, target) = make_test_combo_and_target();
-    let tracker = make_test_tracker();
+    let mut tracker = make_test_tracker();
+    let (background_tx, mut background_rx) = tokio::sync::mpsc::channel(2);
+    tracker.background_tx = background_tx;
 
     let (_tx, rx) = tokio::sync::watch::channel(None);
     let compressible_content = "hello   world   this   is   a   test   ".repeat(50);
@@ -597,7 +599,7 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
         ms: 100,
     };
     builder1 = builder1.err(&err);
-    let res1 = builder1.record();
+    let res1 = builder1.record().await;
     assert!(res1.is_ok(), "recording failure must succeed");
 
     // Attempt 2 (Retry on next target with cloned request)
@@ -625,6 +627,128 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
     let mut builder2 = UsageRecordBuilder::new(&tracker, cloned_req, &combo, &target2);
     builder2.prompt_tokens = Some(50);
     builder2.completion_tokens = Some(10);
-    let res2 = builder2.record();
+    let res2 = builder2.record().await;
     assert!(res2.is_ok(), "recording success on retry must succeed");
+    assert!(background_rx.try_recv().is_ok());
+    assert!(background_rx.try_recv().is_ok());
+}
+
+#[tokio::test]
+async fn recording_waits_for_capacity_and_preserves_order() {
+    let mut tracker = make_test_tracker();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    let tuple = make_test_builder(&tracker, &combo, &target)
+        .record()
+        .await
+        .unwrap()
+        .unwrap();
+    let mark = tracker.mark_client_response(Some(tuple));
+    tokio::pin!(mark);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), &mut mark)
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        receiver.recv().await,
+        Some(crate::worker::BackgroundJob::RecordAttempt { .. })
+    ));
+    mark.await;
+    assert!(matches!(
+        receiver.recv().await,
+        Some(crate::worker::BackgroundJob::MarkClientResponse { .. })
+    ));
+}
+
+#[tokio::test]
+async fn closed_usage_worker_is_reported_to_the_builder() {
+    let tracker = make_test_tracker();
+    let (combo, target) = make_test_combo_and_target();
+    assert!(
+        make_test_builder(&tracker, &combo, &target)
+            .record()
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn selection_reputation_is_updated_once_per_attempt() {
+    let mut tracker = make_test_tracker();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    make_test_builder(&tracker, &combo, &target)
+        .record()
+        .await
+        .unwrap();
+    let job = receiver.recv().await.unwrap();
+    let conn = Arc::new(parking_lot::Mutex::new(
+        openproxy_db::testing::open_in_memory(),
+    ));
+    tokio::task::spawn_blocking(move || crate::worker::process_job(&conn, job))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tracker
+            .selection_registry
+            .target_metrics(target.id)
+            .success_count,
+        1
+    );
+}
+
+#[tokio::test]
+async fn usage_worker_drains_accepted_jobs_and_marks_winner() {
+    let conn = Arc::new(parking_lot::Mutex::new(
+        openproxy_db::testing::open_in_memory(),
+    ));
+    let (sender, receiver) = tokio::sync::mpsc::channel(4);
+    let worker = crate::worker::spawn_worker(Arc::clone(&conn), receiver);
+    let mut tracker = make_test_tracker();
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    let tuple = make_test_builder(&tracker, &combo, &target)
+        .record()
+        .await
+        .unwrap();
+    tracker.mark_client_response(tuple).await;
+    for _ in 0..96 {
+        make_test_builder(&tracker, &combo, &target)
+            .record()
+            .await
+            .unwrap();
+    }
+    worker.shutdown().await.unwrap();
+    assert!(tracker.background_tx.is_closed());
+    let (count, winners): (i64, i64) = tokio::task::spawn_blocking(move || {
+        conn.lock()
+            .query_row(
+                "SELECT count(*), sum(client_response) FROM usage",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!((count, winners), (97, 1));
+    worker.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn usage_worker_surfaces_persistence_failures_at_shutdown() {
+    let mut tracker = make_test_tracker();
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+    let worker = crate::worker::spawn_worker(Arc::clone(&tracker.conn), receiver);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    make_test_builder(&tracker, &combo, &target)
+        .record()
+        .await
+        .unwrap();
+    assert!(worker.shutdown().await.is_err());
 }

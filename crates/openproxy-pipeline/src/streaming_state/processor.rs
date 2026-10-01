@@ -28,7 +28,7 @@ impl ChunkInterceptor for ChunkProcessor<'_> {
 
         record_ttft_if_first(ctx, self.state);
 
-        if let Some(cancel_event) = self.check_race_cancelled(ctx) {
+        if let Some(cancel_event) = self.check_race_cancelled(ctx).await {
             return Ok(cancel_event);
         }
 
@@ -75,7 +75,7 @@ pub(super) fn record_ttft_if_first(ctx: &StreamContext<'_>, state: &mut Streamin
 }
 
 impl ChunkProcessor<'_> {
-    pub(super) fn check_race_cancelled(
+    pub(super) async fn check_race_cancelled(
         &mut self,
         ctx: &StreamContext<'_>,
     ) -> Option<crate::streaming::ChunkEvent> {
@@ -87,7 +87,9 @@ impl ChunkProcessor<'_> {
         {
             let fail_ctx = self.state.make_failure_context(ctx);
             Some(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_stream_client_disconnected(fail_ctx),
+                self.dispatcher
+                    .fail_stream_client_disconnected(fail_ctx)
+                    .await,
             )))
         } else {
             None
@@ -109,7 +111,7 @@ impl ChunkProcessor<'_> {
         &mut self,
         ctx: &StreamContext<'_>,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
-        if let Some(event) = self.check_race_cancelled(ctx) {
+        if let Some(event) = self.check_race_cancelled(ctx).await {
             return Ok(event);
         }
         if let Some(residual) = self.state.normalizer.finalize() {
@@ -127,7 +129,8 @@ impl ChunkProcessor<'_> {
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher
-                    .fail_on_sink_send_error(crate::race_sink::StreamSinkError::Lost, fail_ctx),
+                    .fail_on_sink_send_error(crate::race_sink::StreamSinkError::Lost, fail_ctx)
+                    .await,
             )));
         }
         self.state.done_sent = true;

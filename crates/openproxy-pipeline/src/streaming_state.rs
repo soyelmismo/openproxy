@@ -112,7 +112,7 @@ impl StreamingState {
         {
             let fail_ctx = processor.state.make_failure_context(ctx);
             return Ok(ChunkResult::Return(Box::new(
-                dispatcher.fail_stream_client_disconnected(fail_ctx),
+                dispatcher.fail_stream_client_disconnected(fail_ctx).await,
             )));
         }
         Ok(ChunkResult::Break)

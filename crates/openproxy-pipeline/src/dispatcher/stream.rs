@@ -42,24 +42,27 @@ impl UpstreamDispatcher {
         };
 
         let Some(sink) = req.stream_sink.as_ref() else {
-            return self.record_and_fail(
-                req,
-                combo,
-                target,
-                dctx.fail_ctx_code(
-                    &CoreError::Internal(
-                        "dispatch_upstream_streaming called without stream_sink".into(),
+            return self
+                .record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &CoreError::Internal(
+                            "dispatch_upstream_streaming called without stream_sink".into(),
+                        ),
+                        None,
+                        None,
+                        500,
                     ),
-                    None,
-                    None,
-                    500,
-                ),
-            );
+                )
+                .await;
         };
 
         let send_start = Instant::now();
-        if let Some(fail_res) =
-            self.check_preflight_stream_disconnect(&req, combo, target, &dctx, send_start)
+        if let Some(fail_res) = self
+            .check_preflight_stream_disconnect(&req, combo, target, &dctx, send_start)
+            .await
         {
             return fail_res;
         }
@@ -167,13 +170,20 @@ impl UpstreamDispatcher {
             Ok(crate::streaming_state::ChunkResult::Break) => {}
             Err(e) => {
                 let status_code = e.http_status();
-                return self.record_and_fail_with_trace_id(
-                    req.clone(),
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&e, Some(connect_and_send_ms), state.ttft_ms, status_code),
-                    trace_id.clone(),
-                );
+                return self
+                    .record_and_fail_with_trace_id(
+                        req.clone(),
+                        combo,
+                        target,
+                        dctx.fail_ctx_code(
+                            &e,
+                            Some(connect_and_send_ms),
+                            state.ttft_ms,
+                            status_code,
+                        ),
+                        trace_id.clone(),
+                    )
+                    .await;
             }
         }
 
@@ -191,24 +201,26 @@ impl UpstreamDispatcher {
                 provider = %target.provider_id,
                 "client cancelled during SSE stream; aborting attempt"
             );
-            return self.fail_stream_client_disconnected(StreamFailureContext {
-                proxy_url: req_proxy_url.clone(),
-                proxy_status: req_proxy_status.clone(),
-                req: req.clone(),
-                combo,
-                target,
-                attempt,
-                race_size,
-                started,
-                model,
-                connect_ms: connect_and_send_ms,
-                ttft_ms: state.ttft_ms,
-                trace_id: trace_id.clone(),
-                acc: state.acc.as_mut(),
-                chunk_id: &chunk_id,
-                created,
-                model_name,
-            });
+            return self
+                .fail_stream_client_disconnected(StreamFailureContext {
+                    proxy_url: req_proxy_url.clone(),
+                    proxy_status: req_proxy_status.clone(),
+                    req: req.clone(),
+                    combo,
+                    target,
+                    attempt,
+                    race_size,
+                    started,
+                    model,
+                    connect_ms: connect_and_send_ms,
+                    ttft_ms: state.ttft_ms,
+                    trace_id: trace_id.clone(),
+                    acc: state.acc.as_mut(),
+                    chunk_id: &chunk_id,
+                    created,
+                    model_name,
+                })
+                .await;
         }
 
         let is_empty_stream = state
@@ -224,17 +236,19 @@ impl UpstreamDispatcher {
             if let Some(a) = acc.as_mut() {
                 a.mark_partial();
             }
-            return self.record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
-                req,
-                combo,
-                target,
-                ctx: dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, 502),
-                trace_id,
-                acc: acc.as_ref(),
-                chunk_id: Some(&chunk_id),
-                created,
-                model_name,
-            });
+            return self
+                .record_and_fail_with_trace_id_and_partial(crate::PartialFailureParams {
+                    req,
+                    combo,
+                    target,
+                    ctx: dctx.fail_ctx_code(&err, Some(connect_and_send_ms), None, 502),
+                    trace_id,
+                    acc: acc.as_ref(),
+                    chunk_id: Some(&chunk_id),
+                    created,
+                    model_name,
+                })
+                .await;
         }
 
         // A stream that ended without [DONE] still completes successfully:
@@ -278,9 +292,10 @@ impl UpstreamDispatcher {
                 status_code,
             },
         )
+        .await
     }
 
-    fn fail_stream_with_error(
+    async fn fail_stream_with_error(
         &self,
         err: CoreError,
         mut fctx: StreamFailureContext<'_>,
@@ -310,12 +325,13 @@ impl UpstreamDispatcher {
             created: fctx.created,
             model_name: fctx.model_name,
         })
+        .await
     }
 
     /// Un error inline del upstream (chunk SSE con code+msg) emitido antes
     /// de la desconexión se atribuye al upstream. Sin él, es cancel puro,
     /// o `UpstreamConnection` si el cliente ya había recibido contenido.
-    pub(crate) fn fail_stream_client_disconnected(
+    pub(crate) async fn fail_stream_client_disconnected(
         &self,
         fctx: StreamFailureContext<'_>,
     ) -> PipelineResult {
@@ -342,7 +358,7 @@ impl UpstreamDispatcher {
                 false,
                 class,
             );
-            return self.fail_stream_with_error(err, fctx, Some(code));
+            return self.fail_stream_with_error(err, fctx, Some(code)).await;
         }
 
         let has_partial_content = fctx.acc.as_deref().is_some_and(|a| !a.is_empty());
@@ -353,13 +369,13 @@ impl UpstreamDispatcher {
         } else {
             CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
         };
-        self.fail_stream_with_error(err, fctx, Some(499))
+        self.fail_stream_with_error(err, fctx, Some(499)).await
     }
 
     /// `Lost` significa que otra race lane ganó. `Closed` significa que
     /// el cliente o el proxy cayeron, y entonces se propaga el error inline
     /// del upstream o se construye un `UpstreamConnection`.
-    pub(crate) fn fail_on_sink_send_error(
+    pub(crate) async fn fail_on_sink_send_error(
         &self,
         e: crate::race_sink::StreamSinkError,
         fctx: StreamFailureContext<'_>,
@@ -370,7 +386,9 @@ impl UpstreamDispatcher {
                 target_id = fctx.target.id.0,
                 "sink send failed: Lost (another race lane won)"
             );
-            return self.fail_stream_with_error(CoreError::RaceLost, fctx, None);
+            return self
+                .fail_stream_with_error(CoreError::RaceLost, fctx, None)
+                .await;
         }
 
         let elapsed = fctx.started.elapsed().as_millis() as u64;
@@ -398,7 +416,7 @@ impl UpstreamDispatcher {
                 false,
                 class,
             );
-            return self.fail_stream_with_error(err, fctx, Some(code));
+            return self.fail_stream_with_error(err, fctx, Some(code)).await;
         }
 
         let is_watchdog_fired = fctx.req.client_disconnected.borrow().is_some();
@@ -417,11 +435,11 @@ impl UpstreamDispatcher {
             "client disconnected (elapsed={elapsed}ms, connect={}ms, ttft={:?}) — likely proxy idle timeout or client HTTP library timeout",
             fctx.connect_ms, fctx.ttft_ms
         ));
-        self.fail_stream_with_error(err, fctx, None)
+        self.fail_stream_with_error(err, fctx, None).await
     }
 
     /// Corta antes de enviar si el cliente ya se desconectó.
-    fn check_preflight_stream_disconnect(
+    async fn check_preflight_stream_disconnect(
         &self,
         req: &crate::PipelineRequest,
         combo: &Combo,
@@ -439,17 +457,20 @@ impl UpstreamDispatcher {
                 elapsed_ms = elapsed,
                 "client disconnected before upstream streaming send; aborting attempt"
             );
-            return Some(self.record_and_fail(
-                req.clone(),
-                combo,
-                target,
-                dctx.fail_ctx_code(
-                    &CoreError::Cancelled(reason),
-                    Some(elapsed),
-                    None,
-                    CoreError::Cancelled(reason).http_status(),
-                ),
-            ));
+            return Some(
+                self.record_and_fail(
+                    req.clone(),
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(
+                        &CoreError::Cancelled(reason),
+                        Some(elapsed),
+                        None,
+                        CoreError::Cancelled(reason).http_status(),
+                    ),
+                )
+                .await,
+            );
         }
         None
     }
@@ -494,7 +515,7 @@ impl UpstreamDispatcher {
     /// Un sink `Discard` (race lane perdedora) no dejó respuesta en el
     /// cliente, así que el `final_response` se materializa desde el
     /// accumulator.
-    fn record_streaming_success(
+    async fn record_streaming_success(
         &self,
         params: StreamDispatchParams<'_>,
         dctx: &DispatchContext<'_>,
@@ -586,6 +607,7 @@ impl UpstreamDispatcher {
         .client_response(is_client_response)
         .stop_reason(stop_reason)
         .record()
+        .await
         {
             Ok(id) => id,
             Err(e) => {

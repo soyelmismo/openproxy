@@ -57,6 +57,78 @@ fn test_record_image_usage_row() {
     assert_eq!(count, 1);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn async_usage_waits_for_writer_without_blocking_tokio() {
+    let (pool, _dir) = fresh_pool();
+    let writer = pool.writer_arc();
+    let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let blocker = std::thread::spawn(move || {
+        let _guard = writer.lock();
+        locked_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    locked_rx.await.unwrap();
+    let provider = ProviderId::new("openai");
+    let args = UnaryUsageArgs {
+        request_id: RequestId::new(),
+        api_key_id: None,
+        provider_id: &provider,
+        account_id: None,
+        combo_id: None,
+        combo_target_id: None,
+        model_row_id: None,
+        upstream_model_id: "dall-e-3",
+        prompt_tokens: None,
+        completion_tokens: None,
+        status_code: 200,
+        error_msg: None,
+        total_ms: 120,
+        endpoint_kind: EndpointKind::Image,
+    };
+    let record = crate::unary::record_unary_usage_async(&pool, &args);
+    tokio::pin!(record);
+    let pending = tokio::time::timeout(std::time::Duration::from_millis(150), &mut record).await;
+    release_tx.send(()).unwrap();
+    assert!(pending.is_err());
+    record.await;
+    blocker.join().unwrap();
+    let count = pool
+        .spawn_read(|conn| {
+            conn.query_row("SELECT count(*) FROM usage", [], |row| row.get::<_, i64>(0))
+                .map_err(core_db::error::map_db_error)
+        })
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn async_not_found_resolution_records_usage_before_returning() {
+    let (pool, _dir) = fresh_pool();
+    let plan = RoutingPlan::NotFound {
+        model: "missing".into(),
+        hint: Some("check models".into()),
+    };
+    let result = resolve_image_targets_async(&pool, plan, "missing", None, Instant::now()).await;
+    let Err(CoreError::ModelNotFound { model, .. }) = result else {
+        panic!("expected model not found");
+    };
+    assert!(model.contains("check models"));
+    let count = pool
+        .spawn_read(|conn| {
+            conn.query_row(
+                "SELECT count(*) FROM usage WHERE status_code = 404 AND endpoint_kind = 'image'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(core_db::error::map_db_error)
+        })
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
 #[test]
 fn test_paeth_predictor() {
     assert_eq!(paeth_predictor(10, 10, 10), 10);

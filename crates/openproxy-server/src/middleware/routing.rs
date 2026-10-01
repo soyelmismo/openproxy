@@ -50,7 +50,7 @@ pub async fn routing_middleware(
     let (plan, has_key_restrictions) =
         resolve_routing_plan(&state, req.headers(), &openai_req, auth_token.as_ref())?;
     let (combo_id, combo_override, targets_override) =
-        translate_plan_to_targets(&state, plan, has_key_restrictions, api_key_id)?;
+        translate_plan_to_targets(&state, plan, has_key_restrictions, api_key_id).await?;
 
     let resolved = ResolvedRoute {
         openai_req,
@@ -178,7 +178,7 @@ pub type RoutingPlanTargets = (
     Option<Vec<openproxy_types::ComboTarget>>,
 );
 
-fn translate_plan_to_targets(
+async fn translate_plan_to_targets(
     state: &AppState,
     plan: RoutingPlan,
     has_key_restrictions: bool,
@@ -219,7 +219,7 @@ fn translate_plan_to_targets(
             }
         }
         RoutingPlan::NotFound { model, hint } => {
-            record_model_not_found_usage_row(state, RequestId::new(), api_key_id, &model);
+            record_model_not_found_usage_row(state, RequestId::new(), api_key_id, &model).await;
             let mut msg = format!("model not found: {model}");
             if let Some(h) = hint {
                 let _ = write!(msg, " (hint: {h})");
@@ -229,7 +229,7 @@ fn translate_plan_to_targets(
     }
 }
 
-fn record_model_not_found_usage_row(
+async fn record_model_not_found_usage_row(
     state: &AppState,
     request_id: RequestId,
     api_key_id: Option<ApiKeyId>,
@@ -272,12 +272,13 @@ fn record_model_not_found_usage_row(
         endpoint_kind: openproxy_types::EndpointKind::Chat,
         flags: USAGE_FLAG_CLIENT_RESPONSE,
     };
-    let Some(w) = state
-        .db_pool()
-        .try_writer_for(std::time::Duration::from_millis(100))
-    else {
-        tracing::warn!("hot-path writer lock timeout on model_not_found usage row; dropping");
-        return;
-    };
-    let _ = openproxy_db::cost::record_with_retry(&w, &input);
+    if let Err(error) = state
+        .background_tx()
+        .send(openproxy_pipeline::worker::BackgroundJob::RecordUsage(
+            Box::new(input),
+        ))
+        .await
+    {
+        tracing::error!(%error, "failed to enqueue model_not_found usage");
+    }
 }

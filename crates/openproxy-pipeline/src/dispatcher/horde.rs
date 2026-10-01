@@ -55,12 +55,14 @@ impl UpstreamDispatcher {
             let err = CoreError::Validation(
                 "No image found in request messages for Horde vision interrogation".into(),
             );
-            return self.record_and_fail(
-                req,
-                combo,
-                target,
-                dctx.fail_ctx_code(&err, None, None, 400),
-            );
+            return self
+                .record_and_fail(
+                    req,
+                    combo,
+                    target,
+                    dctx.fail_ctx_code(&err, None, None, 400),
+                )
+                .await;
         };
 
         let send_start = Instant::now();
@@ -87,12 +89,14 @@ impl UpstreamDispatcher {
         let caption = match caption_res {
             Ok(c) => c,
             Err(e) => {
-                return self.record_and_fail(
-                    req,
-                    combo,
-                    target,
-                    dctx.fail_ctx_code(&e, Some(connect_and_send_ms), None, e.http_status()),
-                );
+                return self
+                    .record_and_fail(
+                        req,
+                        combo,
+                        target,
+                        dctx.fail_ctx_code(&e, Some(connect_and_send_ms), None, e.http_status()),
+                    )
+                    .await;
             }
         };
 
@@ -218,6 +222,7 @@ impl UpstreamDispatcher {
                 .client_response(true)
                 .stop_reason(None)
                 .record()
+                .await
             {
                 Ok(id) => id,
                 Err(e) => {

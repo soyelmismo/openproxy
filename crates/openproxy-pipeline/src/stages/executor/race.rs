@@ -26,7 +26,8 @@ pub(super) async fn try_initial_race(
     if race_outcome.result.error.is_none() {
         ctx.pipeline
             .tracker
-            .mark_client_response(race_outcome.result.usage_tuple);
+            .mark_client_response(race_outcome.result.usage_tuple)
+            .await;
         return Some(race_outcome);
     }
 

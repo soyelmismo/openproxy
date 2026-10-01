@@ -112,10 +112,12 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
              unencrypted unless a TLS-terminating reverse proxy fronts this port."
         );
     }
-    let app = openproxy_server::router::build_router(state);
+    let app = openproxy_server::router::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "openproxy listening");
-    serve_with_limits(listener, app).await
+    let result = serve_with_limits(listener, app).await;
+    state.shutdown_usage_worker().await?;
+    result
 }
 
 /// Accept loop with connection hardening (OP-13).
@@ -132,28 +134,34 @@ async fn serve_with_limits(
     listener: tokio::net::TcpListener,
     app: axum::Router,
 ) -> anyhow::Result<()> {
-    use hyper_util::{
-        rt::{TokioExecutor, TokioIo},
-        server::conn::auto::Builder,
-        service::TowerToHyperService,
-    };
-    use tower::{Service, ServiceExt};
+    serve_until_shutdown(listener, app, shutdown_signal()).await
+}
 
+async fn serve_until_shutdown(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    signal: impl std::future::Future<Output = anyhow::Result<()>>,
+) -> anyhow::Result<()> {
     let connection_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
-    let mut make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let shutdown = openproxy_adapters::CancellationToken::new();
+    let mut connections = tokio::task::JoinSet::new();
+    tokio::pin!(signal);
 
-    loop {
-        let (tcp, remote_addr) = listener.accept().await?;
-        let io = TokioIo::new(tcp);
-
-        // `IntoMakeServiceWithConnectInfo::poll_ready` is always `Ready(Ok)`
-        // (see axum's connect_info.rs), so `call` can be invoked directly.
-        let tower_service = make_service
-            .call(remote_addr)
-            .await
-            .unwrap_or_else(|err| match err {})
-            .map_request(|req: axum::extract::Request<_>| req.map(axum::body::Body::new));
-        let hyper_service = TowerToHyperService::new(tower_service);
+    let result = loop {
+        let accepted = tokio::select! {
+            result = &mut signal => break result,
+            result = listener.accept() => result,
+            result = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = result {
+                    tracing::error!(%error, "connection task failed");
+                }
+                continue;
+            }
+        };
+        let (tcp, remote_addr) = match accepted {
+            Ok(pair) => pair,
+            Err(error) => break Err(error.into()),
+        };
 
         // Bound concurrent connections: if all slots are taken, shed the new
         // connection instead of queuing it (unbounded task growth).
@@ -163,29 +171,83 @@ async fn serve_with_limits(
                 "connection limit reached ({}), dropping new connection",
                 MAX_CONNECTIONS
             );
-            // Drop `io` (closing the socket) and continue accepting.
-            drop(io);
+            drop(tcp);
             continue;
         };
 
-        tokio::spawn(async move {
-            let mut builder = Builder::new(TokioExecutor::new());
-            // CONNECT protocol needed for HTTP/2 websockets.
-            builder.http2().enable_connect_protocol();
-            // `header_read_timeout` requires an explicit timer on the
-            // connection (hyper panics otherwise).
-            builder
-                .http1()
-                .timer(hyper_util::rt::TokioTimer::new())
-                .header_read_timeout(HTTP1_HEADER_READ_TIMEOUT);
-            let conn = builder.serve_connection_with_upgrades(io, hyper_service);
-            if let Err(e) = conn.await {
-                tracing::debug!(%e, "connection error");
-            }
-            // Release the slot when the connection has fully finished.
-            drop(permit);
-        });
+        connections.spawn(serve_connection(
+            tcp,
+            remote_addr,
+            app.clone(),
+            permit,
+            shutdown.clone(),
+        ));
+    };
+    drop(listener);
+    shutdown.cancel();
+    while let Some(result) = connections.join_next().await {
+        if let Err(error) = result {
+            tracing::error!(%error, "connection task failed during shutdown");
+        }
     }
+    result
+}
+
+async fn serve_connection(
+    tcp: tokio::net::TcpStream,
+    remote_addr: std::net::SocketAddr,
+    app: axum::Router,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    stop: openproxy_adapters::CancellationToken,
+) {
+    use hyper_util::{
+        rt::{TokioExecutor, TokioIo},
+        server::conn::auto::Builder,
+        service::TowerToHyperService,
+    };
+    use tower::{Service, ServiceExt};
+
+    let mut make_service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let tower_service = make_service
+        .call(remote_addr)
+        .await
+        .unwrap_or_else(|err| match err {})
+        .map_request(|req: axum::extract::Request<_>| req.map(axum::body::Body::new));
+    let hyper_service = TowerToHyperService::new(tower_service);
+    let mut builder = Builder::new(TokioExecutor::new());
+    builder.http2().enable_connect_protocol();
+    builder
+        .http1()
+        .timer(hyper_util::rt::TokioTimer::new())
+        .header_read_timeout(HTTP1_HEADER_READ_TIMEOUT);
+    let conn = builder.serve_connection_with_upgrades(TokioIo::new(tcp), hyper_service);
+    tokio::pin!(conn);
+    let result = tokio::select! {
+        result = &mut conn => result,
+        () = stop.cancelled() => {
+            conn.as_mut().graceful_shutdown();
+            conn.await
+        }
+    };
+    if let Err(error) = result {
+        tracing::debug!(%error, "connection error");
+    }
+    drop(permit);
+}
+
+async fn shutdown_signal() -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -272,6 +334,63 @@ fn run_main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_finishes_an_inflight_response() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let finish = std::sync::Arc::new(tokio::sync::Notify::new());
+        let app = axum::Router::new().route(
+            "/slow",
+            axum::routing::get({
+                let started = std::sync::Arc::clone(&started);
+                let finish = std::sync::Arc::clone(&finish);
+                move || {
+                    let started = std::sync::Arc::clone(&started);
+                    let finish = std::sync::Arc::clone(&finish);
+                    async move {
+                        started.notify_one();
+                        finish.notified().await;
+                        "finished"
+                    }
+                }
+            }),
+        );
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_until_shutdown(listener, app, async move {
+            stopped.await?;
+            Ok(())
+        }));
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client
+            .write_all(b"GET /slow HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        started.notified().await;
+        stop.send(()).unwrap();
+        tokio::task::yield_now().await;
+        assert!(!server.is_finished());
+        finish.notify_one();
+        let mut response = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.read_to_string(&mut response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"));
+        assert!(response.ends_with("finished"));
+        assert!(tokio::net::TcpStream::connect(addr).await.is_err());
+    }
 
     #[test]
     fn test_allocator_options_configured() {

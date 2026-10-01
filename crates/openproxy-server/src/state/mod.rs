@@ -62,6 +62,7 @@ pub struct AppState {
     #[allow(dead_code)]
     backfill_status: Arc<RwLock<BackfillStatus>>,
     background_tx: tokio::sync::mpsc::Sender<openproxy_pipeline::worker::BackgroundJob>,
+    usage_worker: Arc<openproxy_pipeline::worker::WorkerHandle>,
     supervisor: Arc<crate::background::BackgroundSupervisor>,
     api_key_cache:
         Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
@@ -89,6 +90,11 @@ pub struct BackfillStatus {
 }
 
 impl AppState {
+    pub async fn shutdown_usage_worker(&self) -> openproxy_types::Result<()> {
+        self.supervisor.shutdown();
+        self.usage_worker.shutdown().await
+    }
+
     /// Retrieve an active API key from the fast in-memory cache if not expired.
     pub fn get_cached_api_key(
         &self,

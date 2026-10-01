@@ -178,7 +178,7 @@ pub(super) async fn execute_sequential_targets(
         }
     }
 
-    finalize_exhausted_combo(ctx, combo.id.0, to_run.len(), last_result)
+    finalize_exhausted_combo(ctx, combo.id.0, to_run.len(), last_result).await
 }
 
 async fn execute_single_target_step(
@@ -206,12 +206,10 @@ async fn execute_single_target_step(
         now_ms,
     ) {
         let skip_trace_id = format!("{}:{}", ctx.req.trace_id, *overall_attempt);
-        ctx.pipeline.tracker.record_predictive_skipped_row(
-            &ctx.req,
-            combo,
-            target,
-            *overall_attempt,
-        );
+        ctx.pipeline
+            .tracker
+            .record_predictive_skipped_row(&ctx.req, combo, target, *overall_attempt)
+            .await;
         *overall_attempt = overall_attempt.saturating_add(1);
         openproxy_types::emit_stage_event!(
             request_id: ctx.req.request_id,

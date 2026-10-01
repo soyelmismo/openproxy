@@ -169,34 +169,40 @@ impl UpstreamDispatcher {
                     "client cancelled during upstream body read; aborting attempt"
                 );
                 let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
-                Err(Box::new(self.record_and_fail(
-                    params.req.clone(),
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                )))
+                Err(Box::new(
+                    self.record_and_fail(
+                        params.req.clone(),
+                        params.combo,
+                        params.target,
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            Some(ttft_ms),
+                            err.http_status(),
+                        ),
+                    )
+                    .await,
+                ))
             }
             Ok(Err(UpstreamError::Timeout(phase))) => {
                 let err = CoreError::UpstreamTimeout {
                     phase: phase.as_str().to_string(),
                     ms: params.started.elapsed().as_millis() as u64,
                 };
-                Err(Box::new(self.record_and_fail(
-                    params.req.clone(),
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                )))
+                Err(Box::new(
+                    self.record_and_fail(
+                        params.req.clone(),
+                        params.combo,
+                        params.target,
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            Some(ttft_ms),
+                            err.http_status(),
+                        ),
+                    )
+                    .await,
+                ))
             }
             Ok(Err(e)) => {
                 self.check_and_trigger_proxy_rotation(
@@ -212,17 +218,20 @@ impl UpstreamDispatcher {
                 )
                 .await;
                 let err = CoreError::UpstreamConnection(format!("read upstream body: {e}"));
-                Err(Box::new(self.record_and_fail(
-                    params.req.clone(),
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                )))
+                Err(Box::new(
+                    self.record_and_fail(
+                        params.req.clone(),
+                        params.combo,
+                        params.target,
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            Some(ttft_ms),
+                            err.http_status(),
+                        ),
+                    )
+                    .await,
+                ))
             }
             Err(_elapsed) => {
                 self.check_and_trigger_proxy_rotation(
@@ -249,24 +258,27 @@ impl UpstreamDispatcher {
                     elapsed_ms = elapsed,
                     "non-streaming body read exceeded total_ms; aborting attempt"
                 );
-                Err(Box::new(self.record_and_fail(
-                    params.req.clone(),
-                    params.combo,
-                    params.target,
-                    dctx.fail_ctx_code(
-                        &err,
-                        Some(connect_and_send_ms),
-                        Some(ttft_ms),
-                        err.http_status(),
-                    ),
-                )))
+                Err(Box::new(
+                    self.record_and_fail(
+                        params.req.clone(),
+                        params.combo,
+                        params.target,
+                        dctx.fail_ctx_code(
+                            &err,
+                            Some(connect_and_send_ms),
+                            Some(ttft_ms),
+                            err.http_status(),
+                        ),
+                    )
+                    .await,
+                ))
             }
         }
     }
 
     /// El builder de usage es no-fatal: un fallo se loguea como warn y
     /// devuelve `usage_tuple=None`.
-    pub(super) fn record_non_streaming_success(
+    pub(super) async fn record_non_streaming_success(
         &self,
         params: DispatchParams<'_>,
         dctx: &DispatchContext<'_>,
@@ -326,6 +338,7 @@ impl UpstreamDispatcher {
         .client_response(true)
         .stop_reason(None)
         .record()
+        .await
         {
             Ok(id) => id,
             Err(e) => {
@@ -360,17 +373,19 @@ impl UpstreamDispatcher {
                 elapsed_ms = elapsed,
                 "client disconnected before upstream send; aborting attempt"
             );
-            return self.record_and_fail(
-                params.req,
-                params.combo,
-                params.target,
-                dctx.fail_ctx_code(
-                    &CoreError::Cancelled(reason),
-                    Some(elapsed),
-                    None,
-                    CoreError::Cancelled(reason).http_status(),
-                ),
-            );
+            return self
+                .record_and_fail(
+                    params.req,
+                    params.combo,
+                    params.target,
+                    dctx.fail_ctx_code(
+                        &CoreError::Cancelled(reason),
+                        Some(elapsed),
+                        None,
+                        CoreError::Cancelled(reason).http_status(),
+                    ),
+                )
+                .await;
         }
 
         let cancel_token = openproxy_adapters::upstream::CancellationToken::from_watch(
@@ -489,17 +504,19 @@ impl UpstreamDispatcher {
                             extract_inline_tools_from_response(think_extracted)
                         }
                         Err(err) => {
-                            return self.record_and_fail(
-                                params.req,
-                                params.combo,
-                                params.target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            );
+                            return self
+                                .record_and_fail(
+                                    params.req,
+                                    params.combo,
+                                    params.target,
+                                    dctx.fail_ctx_code(
+                                        &err,
+                                        Some(connect_and_send_ms),
+                                        Some(ttft_ms),
+                                        err.http_status(),
+                                    ),
+                                )
+                                .await;
                         }
                     };
                 (raw, resp)
@@ -524,32 +541,36 @@ impl UpstreamDispatcher {
                             (raw, extract_inline_tools_from_response(think_extracted))
                         }
                         Err(err) => {
-                            return self.record_and_fail(
-                                params.req,
-                                params.combo,
-                                params.target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            );
+                            return self
+                                .record_and_fail(
+                                    params.req,
+                                    params.combo,
+                                    params.target,
+                                    dctx.fail_ctx_code(
+                                        &err,
+                                        Some(connect_and_send_ms),
+                                        Some(ttft_ms),
+                                        err.http_status(),
+                                    ),
+                                )
+                                .await;
                         }
                     }
                 } else {
                     let err = CoreError::Parse(format!("invalid json in upstream response: {e}"));
-                    return self.record_and_fail(
-                        params.req,
-                        params.combo,
-                        params.target,
-                        dctx.fail_ctx_code(
-                            &err,
-                            Some(connect_and_send_ms),
-                            Some(ttft_ms),
-                            err.http_status(),
-                        ),
-                    );
+                    return self
+                        .record_and_fail(
+                            params.req,
+                            params.combo,
+                            params.target,
+                            dctx.fail_ctx_code(
+                                &err,
+                                Some(connect_and_send_ms),
+                                Some(ttft_ms),
+                                err.http_status(),
+                            ),
+                        )
+                        .await;
                 }
             }
         };
@@ -562,12 +583,14 @@ impl UpstreamDispatcher {
             let err = CoreError::UpstreamConnection(
                 "upstream returned 200 but response is empty (content=null, finish_reason=null, no tool_calls, no reasoning) — treating as error for retry".to_string(),
             );
-            return self.record_and_fail(
-                params.req,
-                params.combo,
-                params.target,
-                dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), 502),
-            );
+            return self
+                .record_and_fail(
+                    params.req,
+                    params.combo,
+                    params.target,
+                    dctx.fail_ctx_code(&err, Some(connect_and_send_ms), Some(ttft_ms), 502),
+                )
+                .await;
         }
 
         if self.config.pii_config.pii_enabled
@@ -596,5 +619,6 @@ impl UpstreamDispatcher {
                 openai_response,
             },
         )
+        .await
     }
 }

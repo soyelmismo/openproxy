@@ -18,10 +18,9 @@ use crate::images::multipart::{
     dispatch_image_multipart_request,
 };
 use crate::images::png_mask::extract_png_alpha_mask;
-use crate::images::resolve_image_targets;
 use crate::routing;
 use crate::unary::{
-    UnaryUsageArgs, apply_adapter_headers, map_upstream_status_error, record_unary_usage,
+    UnaryUsageArgs, apply_adapter_headers, map_upstream_status_error, record_unary_usage_async,
     resolve_api_key,
 };
 
@@ -147,18 +146,16 @@ pub(crate) async fn execute_image_multipart(
 ) -> Result<ImageGenerationResponse> {
     let started = Instant::now();
 
-    let routing_plan = {
-        let r = ctx.db_pool.reader();
-        routing::resolve(&r, &body.model_name)?
-    };
+    let routing_plan = routing::resolve_routing(ctx.db_pool, &body.model_name).await?;
 
-    let targets = resolve_image_targets(
+    let targets = super::resolve_image_targets_async(
         ctx.db_pool,
         routing_plan,
         &body.model_name,
         api_key_id,
         started,
-    )?;
+    )
+    .await?;
 
     let request_id = RequestId::new();
     let mut last_error = None;
@@ -430,7 +427,7 @@ pub(crate) async fn execute_image_multipart(
         );
 
         let total_ms = started.elapsed().as_millis() as u64;
-        record_unary_usage(
+        record_unary_usage_async(
             ctx.db_pool,
             &UnaryUsageArgs {
                 request_id,
@@ -448,7 +445,8 @@ pub(crate) async fn execute_image_multipart(
                 total_ms,
                 endpoint_kind: EndpointKind::Image,
             },
-        );
+        )
+        .await;
 
         tracing::info!(
             "Image multipart request succeeded after {attempt} attempts, url={upstream_url}"

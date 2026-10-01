@@ -299,4 +299,5 @@ pub(super) async fn run_target_with_retries(
         *overall_attempt,
         total_targets,
     )
+    .await
 }

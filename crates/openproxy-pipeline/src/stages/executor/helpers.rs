@@ -54,7 +54,7 @@ pub(super) async fn resolve_target_proxy_mode(
     (can_incremental_race, prov.proxy_rotation_errors.to_string())
 }
 
-pub(super) fn finalize_target_result(
+pub(super) async fn finalize_target_result(
     ctx: &mut PipelineContext,
     combo: &openproxy_types::Combo,
     target: &crate::context::ResolvedTarget,
@@ -66,7 +66,8 @@ pub(super) fn finalize_target_result(
     if result.error.is_none() {
         ctx.pipeline
             .tracker
-            .mark_client_response(result.usage_tuple);
+            .mark_client_response(result.usage_tuple)
+            .await;
         TargetStepResult::Success(result)
     } else {
         log_target_failure(
@@ -137,7 +138,7 @@ pub(super) fn log_target_failure(
     ));
 }
 
-pub(super) fn finalize_exhausted_combo(
+pub(super) async fn finalize_exhausted_combo(
     ctx: &PipelineContext,
     combo_id: i64,
     total_targets: usize,
@@ -155,7 +156,10 @@ pub(super) fn finalize_exhausted_combo(
             ctx.combo_walk_log.len(),
             ctx.combo_walk_log.join("\n")
         );
-        ctx.pipeline.tracker.mark_client_response(r.usage_tuple);
+        ctx.pipeline
+            .tracker
+            .mark_client_response(r.usage_tuple)
+            .await;
         return Ok(r);
     }
 
