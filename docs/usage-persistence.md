@@ -74,6 +74,35 @@ worker without a shutdown path.
 
 ## Limits and remaining work
 
+### Reproducible isolated failure checks
+
+`cargo test -p openproxy-pipeline --test telemetry_operational` checks concurrent
+admission with a bounded queue (8 producers, 512 unique records), recovery of 128
+committed jobs after killing an owned subprocess, native SQLite `SQLITE_FULL`
+via `max_page_count`, and atomic usage/ACK rollback with an injected ACK failure.
+Every case compares individual request IDs and rejects duplicate applications.
+`cargo test -p openproxy-server --lib test_admin_shutdown` checks administrative
+writes/telemetry during drain and cancellation of the caller awaiting shutdown.
+
+The real OS-full test is ignored by default and must run on Linux in a private
+mount namespace with a dedicated bounded tmpfs. Compile the test first (the
+Cargo output gives its executable path), then run:
+
+```sh
+unshare --mount --propagation private python3 scripts/test-storage-full.py \
+  target/debug/deps/telemetry_operational-<hash>
+```
+
+The runner mounts only a 32 MiB temporary filesystem under `/tmp/opencode`, runs
+the opt-in test, unmounts it and removes its temporary directory. The test refuses
+the host mount namespace, non-tmpfs mounts and mounts larger than 64 MiB. It fills
+only its own file until ENOSPC, verifies failed admission leaves old jobs intact,
+then frees space and checks recovery. Never point this test at a production DB.
+This is an OS write-failure check on tmpfs, not physical power-loss durability or
+a production throughput/memory benchmark. A separate network-isolated local
+server smoke exercised 256 health requests and a clean SIGTERM exit; it does not
+measure inference load or SIGTERM during a real upstream response.
+
 Committed admissions survive process crashes and SIGKILL and are replayed at
 startup and periodically. Errors retain their entries for later retry and are
 reported in pending/failed-batch metrics. Cancellation while waiting for capacity
