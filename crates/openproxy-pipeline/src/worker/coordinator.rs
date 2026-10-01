@@ -7,7 +7,9 @@ use openproxy_types::error::{CoreError, Result};
 use parking_lot::Mutex;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Weak};
 use tokio::sync::{Notify, mpsc};
 
@@ -15,7 +17,9 @@ use tokio::sync::{Notify, mpsc};
 pub struct JournalCoordinator {
     drain_notify: Notify,
     acked_total: AtomicU64,
+    #[cfg(test)]
     waiter_entered: Notify,
+    #[cfg(test)]
     waiting_count: AtomicUsize,
 }
 
@@ -30,7 +34,9 @@ impl JournalCoordinator {
         Self {
             drain_notify: Notify::new(),
             acked_total: AtomicU64::new(0),
+            #[cfg(test)]
             waiter_entered: Notify::new(),
+            #[cfg(test)]
             waiting_count: AtomicUsize::new(0),
         }
     }
@@ -64,14 +70,16 @@ impl JournalCoordinator {
         self.acked_total.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn on_capacity_wait(&self) {
+    #[cfg(test)]
+    fn on_capacity_wait(&self) {
         self.waiting_count.fetch_add(1, Ordering::Relaxed);
         self.waiter_entered.notify_waiters();
     }
 
     /// Asynchronously awaits until at least one producer encounters capacity exhaustion
     /// and enters the waiting state. Used for deterministic testing without spin-polling.
-    pub async fn await_waiter(&self) {
+    #[cfg(test)]
+    pub(crate) async fn await_waiter(&self) {
         if self.waiting_count.load(Ordering::Relaxed) > 0 {
             return;
         }
@@ -205,6 +213,7 @@ pub async fn enqueue_with_backpressure(
                 return Ok(());
             }
             Err(ref err) if err.is_journal_capacity_exhausted() => {
+                #[cfg(test)]
                 coord.on_capacity_wait();
                 tokio::select! {
                     biased;
