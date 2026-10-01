@@ -9,6 +9,9 @@ members = [
     "crates/openproxy-compression",
     "crates/openproxy-adapters",
     "crates/openproxy-pipeline",
+    "crates/openproxy-notifications",
+    "crates/openproxy-analytics",
+    "crates/openproxy-pricing",
 ]
 
 [workspace.package]
