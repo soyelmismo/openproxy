@@ -31,16 +31,13 @@ pub(super) async fn resolve_target_proxy_mode(
     ctx: &PipelineContext,
     target: &crate::context::ResolvedTarget,
 ) -> (bool, String) {
-    let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
     let provider_id = target.target.provider_id.clone();
-    let prov_opt = tokio::task::spawn_blocking(move || {
-        let conn = conn_arc.lock();
-        openproxy_db::providers::get(&conn, &provider_id)
-            .ok()
-            .flatten()
-    })
-    .await
-    .unwrap_or_default();
+    let prov_opt = ctx
+        .pipeline
+        .async_repo()
+        .run(move |repo| repo.get_provider(&provider_id))
+        .await
+        .unwrap_or(None);
 
     let Some(prov) = prov_opt else {
         return (false, String::new());

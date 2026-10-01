@@ -266,8 +266,21 @@ fn expand_single_target_rotation(
     target: ComboTarget,
     out: &mut Vec<ComboTarget>,
 ) -> Result<()> {
-    if target.account_id.is_some() || target.sub_combo_id.is_some() {
+    if target.sub_combo_id.is_some() {
         out.push(target);
+        return Ok(());
+    }
+    if let Some(aid) = target.account_id {
+        let is_healthy: bool = conn
+            .query_row(
+                "SELECT health_status = 'healthy' FROM accounts WHERE id = ?1",
+                params![aid.0],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        if is_healthy {
+            out.push(target);
+        }
         return Ok(());
     }
     let healthy_accounts = fetch_healthy_accounts(conn, &target.provider_id)?;

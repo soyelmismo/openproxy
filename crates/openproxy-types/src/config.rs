@@ -16,6 +16,9 @@ impl_string_enum! {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub bind: String,
+    /// Separate administration listener; absent preserves the single-port layout.
+    #[serde(default)]
+    pub admin_bind: Option<String>,
     pub request_max_body_bytes: usize,
     #[serde(default = "default_rate_limit_requests")]
     pub rate_limit_requests_per_minute: u32,
@@ -43,6 +46,7 @@ impl Default for ServerConfig {
             // must set an explicit `server.bind` and put a TLS-terminating
             // reverse proxy in front (see the startup warning in main.rs).
             bind: "127.0.0.1:8787".into(),
+            admin_bind: None,
             // Default preserved from the previously enforced hardcode (the
             // setting used to be dead); operators can lower it per deployment
             // now that it is actually wired into the enforced limits (OP-14).
@@ -57,6 +61,9 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageConfig {
     pub database_path: String,
+    /// Independent SQLite readers. Zero selects an automatic bounded count.
+    #[serde(default)]
+    pub reader_count: usize,
     pub encryption_key_source: EncryptionKeySource,
     /// Path to the base64-encoded 32-byte master key file, used when
     /// `encryption_key_source = "file"` (OP-29). Required in that mode;
@@ -71,6 +78,7 @@ impl Default for StorageConfig {
     fn default() -> Self {
         Self {
             database_path: "~/.openproxy/data.db".into(),
+            reader_count: 0,
             encryption_key_source: EncryptionKeySource::Env,
             encryption_key_file: None,
             maintenance: MaintenanceConfig::default(),

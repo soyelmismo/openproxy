@@ -121,8 +121,7 @@ pub async fn list_models_admin(
     axum::extract::Query(q): axum::extract::Query<ListModelsQuery>,
 ) -> Result<Json<Vec<core_models::Model>>, ApiError> {
     // Read-only SELECT — use the READER.
-    let r = s.db_pool().reader();
-    let mut list = core_models::list_all(&r)?;
+    let mut list = s.db_pool().spawn_read(core_models::list_all).await?;
     if let Some(p) = q.provider_id {
         list.retain(|m| m.provider_id.as_str() == p);
     }
@@ -186,8 +185,10 @@ pub(crate) async fn run_refresh(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let row_id = ModelRowId(id);
     let provider_id = {
-        let r = s.db_pool().reader();
-        let found = core_models::get_by_row_id(&r, row_id)?;
+        let found = s
+            .db_pool()
+            .spawn_read(move |r| core_models::get_by_row_id(r, row_id))
+            .await?;
         match found {
             Some(m) => m.provider_id,
             None => {
@@ -206,7 +207,7 @@ pub(crate) async fn run_refresh(
     super::providers::run_provider_refresh(s, provider_id.as_str(), provider_q).await
 }
 
-pub(crate) fn resolve_adapter(
+pub(crate) async fn resolve_adapter(
     s: &AppState,
     provider_id: &ProviderId,
     builtin: &[adapters::ProviderAdapterEnum],
@@ -218,10 +219,12 @@ pub(crate) fn resolve_adapter(
     // 2. Custom provider in DB → build adapter on-the-fly.
     // `core_providers::get` is a SELECT — use the READER so this lookup
     // doesn't serialize through the writer mutex (chat hot path).
-    let r = s.db_pool().reader();
-    let provider_row = core_providers::get(&r, provider_id)
+    let pid = provider_id.clone();
+    let provider_row = s
+        .db_pool()
+        .spawn_read(move |r| core_providers::get(r, &pid))
+        .await
         .map_err(|e| CoreError::ProviderNotFound(format!("{provider_id}: {e}")))?;
-    drop(r);
     match provider_row {
         Some(row) => Ok(adapters::ProviderAdapterEnum::Custom(Box::new(
             adapters::CustomAdapter::from_provider_row(&row),

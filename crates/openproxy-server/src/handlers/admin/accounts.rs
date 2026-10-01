@@ -50,12 +50,15 @@ pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,
 ) -> Result<Json<Vec<core_accounts::Account>>, ApiError> {
-    let provider = q.provider_id.map(ProviderId::new);
-    let list = s
-        .services()
-        .accounts
-        .list(provider.as_ref(), s.master_key().as_ref())?;
-    Ok(Json(list))
+    crate::error::run_blocking(move || {
+        let provider = q.provider_id.map(ProviderId::new);
+        let list = s
+            .services()
+            .accounts
+            .list(provider.as_ref(), s.master_key().as_ref())?;
+        Ok(Json(list))
+    })
+    .await
 }
 
 pub async fn create_account(
@@ -63,10 +66,14 @@ pub async fn create_account(
     Json(input): Json<core_admin::CreateAccountInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let provider_id = input.provider_id.clone();
-    let id = s
-        .services()
-        .accounts
-        .create(s.master_key().as_ref(), input)?;
+    let worker_state = s.clone();
+    let id = crate::error::run_blocking(move || {
+        Ok(worker_state
+            .services()
+            .accounts
+            .create(worker_state.master_key().as_ref(), input)?)
+    })
+    .await?;
 
     super::providers::spawn_background_provider_refresh(s, provider_id, Some(id.0));
 
@@ -78,10 +85,14 @@ pub async fn bulk_create_accounts(
     Json(input): Json<core_admin::BulkCreateAccountsInput>,
 ) -> Result<Json<core_admin::BulkCreateAccountsResponse>, ApiError> {
     let provider_id = input.provider_id.clone();
-    let ids = s
-        .services()
-        .accounts
-        .bulk_create(s.master_key().as_ref(), input)?;
+    let worker_state = s.clone();
+    let ids = crate::error::run_blocking(move || {
+        Ok(worker_state
+            .services()
+            .accounts
+            .bulk_create(worker_state.master_key().as_ref(), input)?)
+    })
+    .await?;
 
     if let Some(first_id) = ids.first() {
         super::providers::spawn_background_provider_refresh(s, provider_id, Some(first_id.0));
@@ -99,7 +110,7 @@ crate::admin_entity_action_handler! {
         Path(id): Path<i64>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
         let id = AccountId::new(id);
-        s.services().accounts.delete(id)?;
+        s.db_pool().spawn_write(move |w| core_admin::delete_account(w, id)).await?;
         Ok(Json(serde_json::json!({ "deleted": id.0 })))
     }
 }
@@ -109,18 +120,22 @@ pub async fn set_account_health(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let health_str = body
-        .get("health")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
-    let health = core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
-    s.services()
-        .accounts
-        .set_health(AccountId::new(id), health)?;
-    Ok(Json(serde_json::json!({
-        "id": id,
-        "health": health_str,
-    })))
+    crate::error::run_blocking(move || {
+        let health_str = body
+            .get("health")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| CoreError::Validation("missing 'health' string".into()))?;
+        let health =
+            core_accounts::HealthStatus::parse(health_str).map_err(CoreError::Validation)?;
+        s.services()
+            .accounts
+            .set_health(AccountId::new(id), health)?;
+        Ok(Json(serde_json::json!({
+            "id": id,
+            "health": health_str,
+        })))
+    })
+    .await
 }
 
 pub async fn update_account_api_key(
@@ -129,16 +144,22 @@ pub async fn update_account_api_key(
     Json(body): Json<core_admin::UpdateAccountApiKeyInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let acc_id = AccountId::new(id);
-    let provider_id = {
-        let r = s.db_pool().reader();
-        core_accounts::get(&r, acc_id, s.master_key().as_ref())
-            .ok()
-            .flatten()
-            .map(|a| a.provider_id.to_string())
-    };
-    s.services()
-        .accounts
-        .update_api_key(s.master_key().as_ref(), acc_id, body)?;
+    let worker_state = s.clone();
+    let provider_id = crate::error::run_blocking(move || {
+        let s = worker_state;
+        let provider_id = {
+            let r = s.db_pool().reader();
+            core_accounts::get(&r, acc_id, s.master_key().as_ref())
+                .ok()
+                .flatten()
+                .map(|a| a.provider_id.to_string())
+        };
+        s.services()
+            .accounts
+            .update_api_key(s.master_key().as_ref(), acc_id, body)?;
+        Ok(provider_id)
+    })
+    .await?;
 
     if let Some(pid) = provider_id {
         super::providers::spawn_background_provider_refresh(s, pid, Some(id));
@@ -152,10 +173,12 @@ pub async fn get_account_api_key(
     identity: super::auth::Identity,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let key = s
-        .services()
-        .accounts
-        .get_api_key(s.master_key().as_ref(), AccountId::new(id))?;
+    let key = crate::error::run_blocking(move || {
+        Ok(s.services()
+            .accounts
+            .get_api_key(s.master_key().as_ref(), AccountId::new(id))?)
+    })
+    .await?;
     super::auth::audit_secret_read(&identity, "account_api_key", &format!("account:{id}"));
     Ok(Json(serde_json::json!({ "api_key": key })))
 }
@@ -165,10 +188,13 @@ pub async fn update_account_label(
     Path(id): Path<i64>,
     Json(body): Json<core_admin::UpdateAccountLabelInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    s.services()
-        .accounts
-        .update_label(AccountId::new(id), body)?;
-    Ok(Json(serde_json::json!({ "id": id })))
+    crate::error::run_blocking(move || {
+        s.services()
+            .accounts
+            .update_label(AccountId::new(id), body)?;
+        Ok(Json(serde_json::json!({ "id": id })))
+    })
+    .await
 }
 
 pub async fn refresh_account_quota(
@@ -416,53 +442,57 @@ pub async fn apply_account_local_cli(
     DbReader(r): DbReader,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let account_id = AccountId::new(id);
+    crate::error::run_blocking(move || {
+        let r = r.reader();
+        let account_id = AccountId::new(id);
 
-    let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
-        .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
+        let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
+            .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
 
-    if account.provider_id.as_str() != "antigravity" {
-        return Err(CoreError::Validation(
-            "Only antigravity accounts can be injected into agy-cli".into(),
-        )
-        .into());
-    }
+        if account.provider_id.as_str() != "antigravity" {
+            return Err(CoreError::Validation(
+                "Only antigravity accounts can be injected into agy-cli".into(),
+            )
+            .into());
+        }
 
-    let access_token =
-        core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
-    let refresh_token =
-        core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
+        let access_token =
+            core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
+        let refresh_token =
+            core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
 
-    let payload = serde_json::json!({
-        "token": {
-            "access_token": access_token,
-            "token_type": "Bearer",
-            "refresh_token": refresh_token.as_deref().unwrap_or_default(),
-            "expiry": account.expires_at.as_deref().unwrap_or_default(),
-        },
-        "auth_method": "consumer"
-    });
+        let payload = serde_json::json!({
+            "token": {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "refresh_token": refresh_token.as_deref().unwrap_or_default(),
+                "expiry": account.expires_at.as_deref().unwrap_or_default(),
+            },
+            "auth_method": "consumer"
+        });
 
-    let payload_str = serde_json::to_string(&payload)
-        .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
+        let payload_str = serde_json::to_string(&payload)
+            .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
 
-    let token_file = write_antigravity_token_file(
-        &payload_str,
-        &access_token,
-        refresh_token.as_deref(),
-        account.expires_at.as_deref(),
-        account.email.as_deref(),
-    )?;
-    super::auth::audit_secret_read(
-        &identity,
-        "oauth_tokens_written_to_cli",
-        &format!("account:{id} path:{}", token_file.display()),
-    );
+        let token_file = write_antigravity_token_file(
+            &payload_str,
+            &access_token,
+            refresh_token.as_deref(),
+            account.expires_at.as_deref(),
+            account.email.as_deref(),
+        )?;
+        super::auth::audit_secret_read(
+            &identity,
+            "oauth_tokens_written_to_cli",
+            &format!("account:{id} path:{}", token_file.display()),
+        );
 
-    Ok(Json(serde_json::json!({
-        "success": true,
-        "path": token_file.to_string_lossy(),
-    })))
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "path": token_file.to_string_lossy(),
+        })))
+    })
+    .await
 }
 
 // ==========

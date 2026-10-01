@@ -127,7 +127,13 @@ async fn dispatch_single_transcribe(
     parsed_body: &ParsedAudioBody,
 ) -> Result<AudioTranscriptionResponse> {
     let upstream_url = adapter.build_transcription_url();
-    let api_key = resolve_api_key(db_pool, master_key, target.account_id, &target.provider)?;
+    let api_key = crate::unary::resolve_api_key_async(
+        db_pool,
+        master_key,
+        target.account_id,
+        &target.provider,
+    )
+    .await?;
     let body_clone = parsed_body.clone();
 
     let response = dispatch_audio_request(
@@ -223,7 +229,7 @@ pub async fn execute_transcribe(
     for target in targets {
         attempt += 1;
 
-        crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
+        crate::guarded_unary_target!(check_async: db_pool, circuit_breaker, target);
 
         let Some(adapter) = adapters
             .iter()

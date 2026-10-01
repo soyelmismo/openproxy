@@ -130,7 +130,7 @@ pub async fn run_test_for_model(
     let start = std::time::Instant::now();
 
     // 1. Load model row
-    let model = match load_model_for_test(s, model_row_id) {
+    let model = match load_model_for_test(s, model_row_id).await {
         Ok(m) => m,
         Err(err_res) => return (err_res, None),
     };
@@ -140,7 +140,7 @@ pub async fn run_test_for_model(
     }
 
     // 2. Resolve adapter
-    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()) {
+    let adapter = match resolve_adapter(s, &model.provider_id, s.adapters().as_slice()).await {
         Ok(a) => a,
         Err(err) => {
             return (

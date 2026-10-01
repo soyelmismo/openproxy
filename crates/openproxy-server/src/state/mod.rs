@@ -95,6 +95,30 @@ impl AppState {
         self.usage_worker.shutdown().await
     }
 
+    pub async fn usage_worker_stats(
+        &self,
+    ) -> openproxy_types::Result<openproxy_pipeline::worker::WorkerStats> {
+        self.usage_worker.stats().await
+    }
+
+    /// Reserve bounded capacity, durably admit the row, then wake the worker.
+    pub async fn enqueue_usage(
+        &self,
+        job: openproxy_pipeline::worker::BackgroundJob,
+    ) -> openproxy_types::Result<()> {
+        let permit = self.background_tx.reserve().await.map_err(|error| {
+            openproxy_types::CoreError::Internal(format!("usage worker closed: {error}"))
+        })?;
+        let writer = self.db_pool().writer_arc();
+        tokio::task::spawn_blocking(move || openproxy_pipeline::worker::admit_job(&writer, &job))
+            .await
+            .map_err(|error| {
+                openproxy_types::CoreError::Internal(format!("usage admission failed: {error}"))
+            })??;
+        permit.send(openproxy_pipeline::worker::BackgroundJob::JournalWake);
+        Ok(())
+    }
+
     /// Retrieve an active API key from the fast in-memory cache if not expired.
     pub fn get_cached_api_key(
         &self,

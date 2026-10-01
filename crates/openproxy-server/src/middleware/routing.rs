@@ -47,8 +47,13 @@ pub async fn routing_middleware(
     let api_key_id = auth_token.as_ref().map(|t| t.key_id);
 
     let openai_req = parsed_chat_req.parsed;
-    let (plan, has_key_restrictions) =
-        resolve_routing_plan(&state, req.headers(), &openai_req, auth_token.as_ref())?;
+    let worker_state = state.clone();
+    let headers = req.headers().clone();
+    let request = Arc::clone(&openai_req);
+    let (plan, has_key_restrictions) = crate::error::run_blocking(move || {
+        resolve_routing_plan(&worker_state, &headers, &request, auth_token.as_ref())
+    })
+    .await?;
     let (combo_id, combo_override, targets_override) =
         translate_plan_to_targets(&state, plan, has_key_restrictions, api_key_id).await?;
 
@@ -273,8 +278,7 @@ async fn record_model_not_found_usage_row(
         flags: USAGE_FLAG_CLIENT_RESPONSE,
     };
     if let Err(error) = state
-        .background_tx()
-        .send(openproxy_pipeline::worker::BackgroundJob::RecordUsage(
+        .enqueue_usage(openproxy_pipeline::worker::BackgroundJob::RecordUsage(
             Box::new(input),
         ))
         .await

@@ -100,6 +100,7 @@ fn is_loopback_bind(bind: &str) -> bool {
 
 async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<()> {
     let bind_addr = state.config().server.bind.clone();
+    let admin_bind = state.config().server.admin_bind.clone();
     // Security (OP-04): this binary has no TLS support — every credential
     // (admin Bearer tokens included) would travel in cleartext. Make an
     // externally-reachable bind an explicit, warned operator decision instead
@@ -112,11 +113,69 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
              unencrypted unless a TLS-terminating reverse proxy fronts this port."
         );
     }
-    let app = openproxy_server::router::build_router(state.clone());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "openproxy listening");
-    let result = serve_with_limits(listener, app).await;
+    let result = if let Some(admin_bind) = admin_bind {
+        let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
+        if !is_loopback_bind(&admin_bind) {
+            tracing::warn!(addr = %admin_bind, "admin listener is NON-LOOPBACK over plain HTTP; use a TLS-terminating reverse proxy");
+        }
+        tracing::info!(addr = %admin_bind, "openproxy admin listening");
+        serve_listeners(listener, admin_listener, state.clone()).await
+    } else {
+        serve_with_limits(
+            listener,
+            openproxy_server::router::build_router(state.clone()),
+        )
+        .await
+    };
     state.shutdown_usage_worker().await?;
+    result
+}
+
+async fn serve_listeners(
+    public: tokio::net::TcpListener,
+    admin: tokio::net::TcpListener,
+    state: openproxy_server::state::AppState,
+) -> anyhow::Result<()> {
+    let stop = openproxy_adapters::CancellationToken::new();
+    let listeners = async {
+        let (public_result, admin_result) = tokio::join!(
+            serve_listener(
+                public,
+                openproxy_server::router::build_public_router(state.clone()),
+                stop.clone()
+            ),
+            serve_listener(
+                admin,
+                openproxy_server::router::build_admin_listener_router(state),
+                stop.clone()
+            ),
+        );
+        public_result.and(admin_result)
+    };
+    tokio::pin!(listeners);
+    tokio::select! {
+        result = &mut listeners => result,
+        signal = shutdown_signal() => {
+            stop.cancel();
+            let result = listeners.await;
+            signal.and(result)
+        }
+    }
+}
+
+async fn serve_listener(
+    listener: tokio::net::TcpListener,
+    app: axum::Router,
+    stop: openproxy_adapters::CancellationToken,
+) -> anyhow::Result<()> {
+    let result = serve_until_shutdown(listener, app, async {
+        stop.cancelled().await;
+        Ok(())
+    })
+    .await;
+    stop.cancel();
     result
 }
 
@@ -300,7 +359,9 @@ fn run_main() -> anyhow::Result<()> {
 
     runtime.block_on(async {
         let config = load_server_config()?;
-        let state = openproxy_server::state::AppState::new(config)?;
+        let state =
+            tokio::task::spawn_blocking(move || openproxy_server::state::AppState::new(config))
+                .await??;
 
         #[cfg(feature = "laya-engine")]
         {
@@ -334,6 +395,28 @@ fn run_main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shared_stop_closes_both_hardened_listeners() {
+        let public = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let admin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let public_addr = public.local_addr().unwrap();
+        let admin_addr = admin.local_addr().unwrap();
+        let stop = openproxy_adapters::CancellationToken::new();
+        let public_task = tokio::spawn(serve_listener(public, axum::Router::new(), stop.clone()));
+        let admin_task = tokio::spawn(serve_listener(admin, axum::Router::new(), stop.clone()));
+        stop.cancel();
+        let (public_result, admin_result) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(public_task, admin_task)
+            })
+            .await
+            .unwrap();
+        public_result.unwrap().unwrap();
+        admin_result.unwrap().unwrap();
+        assert!(tokio::net::TcpStream::connect(public_addr).await.is_err());
+        assert!(tokio::net::TcpStream::connect(admin_addr).await.is_err());
+    }
 
     #[tokio::test]
     async fn shutdown_finishes_an_inflight_response() {

@@ -66,7 +66,7 @@ parking_lot = { workspace = true }
 # the correct Content-Type for each embedded asset; we also pull in
 # `mime_guess` directly so the handler in `admin_ui.rs` can call
 # `mime_guess::from_path` without going through rust-embed's re-export.
-rust-embed = { version = "8", features = ["mime-guess"] }
+rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
 mime_guess = "2"
 # mimalloc as the global allocator. glibc malloc retains freed arenas
 # aggressively, which inflates idle RSS for long-running services that

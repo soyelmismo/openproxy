@@ -66,6 +66,29 @@ impl DbRef<'_> {
             DbRef::Connection(mutex) => f(&mutex.lock()),
         }
     }
+
+    /// Pool access is offloaded; the borrowed legacy connection requires a
+    /// multi-thread runtime until its caller supplies an owned handle.
+    pub async fn with_conn_async<R: Send + 'static>(
+        &self,
+        f: impl FnOnce(&rusqlite::Connection) -> Result<R> + Send + 'static,
+    ) -> Result<R> {
+        match self {
+            Self::Pool(pool) => pool.spawn_write(move |conn| f(conn)).await,
+            Self::Connection(_) => tokio::task::block_in_place(|| self.with_conn(f)),
+        }
+    }
+
+    /// Read-only pool queries use a reader rather than the serialized writer.
+    pub async fn with_read_conn_async<R: Send + 'static>(
+        &self,
+        f: impl FnOnce(&rusqlite::Connection) -> Result<R> + Send + 'static,
+    ) -> Result<R> {
+        match self {
+            Self::Pool(pool) => pool.spawn_read(f).await,
+            Self::Connection(_) => tokio::task::block_in_place(|| self.with_conn(f)),
+        }
+    }
 }
 
 /// The OAuth flow used by a provider.
@@ -188,8 +211,8 @@ pub trait OAuthProvider: Send + Sync {
     /// fetching user info.
     ///
     /// Takes `&Arc<DbPool>` rather than `&Connection` because SQLite connections
-    /// are not `Send`. Contract: every read and write happens synchronously, the
-    /// guard is released, and only the provider HTTP call is awaited.
+    /// are not `Sync`. Contract: reads and writes are offloaded to the blocking
+    /// pool, and every database guard is released before awaiting provider HTTP.
     fn post_exchange(
         &self,
         _account_id: AccountId,

@@ -60,20 +60,23 @@ pub fn router() -> axum::Router<AppState> {
 pub async fn list_providers(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<ProviderWithOAuth>>, ApiError> {
-    // Read-only SELECT — use the READER so the dashboard's catalog
-    // polling doesn't serialize through the writer mutex.
-    let r = s.db_pool().reader();
-    let list = core_admin::list_providers(&r)?;
-    let registry = s.oauth_provider_registry();
-    let adapters = s.adapters();
-    let enriched = list
-        .into_iter()
-        .map(|mut p| {
-            redact_extra_headers(&mut p);
-            enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r)
-        })
-        .collect();
-    Ok(Json(enriched))
+    crate::error::run_blocking(move || {
+        // Read-only SELECT — use the READER so the dashboard's catalog
+        // polling doesn't serialize through the writer mutex.
+        let r = s.db_pool().reader();
+        let list = core_admin::list_providers(&r)?;
+        let registry = s.oauth_provider_registry();
+        let adapters = s.adapters();
+        let enriched = list
+            .into_iter()
+            .map(|mut p| {
+                redact_extra_headers(&mut p);
+                enrich_provider_with_oauth(p, registry.as_ref(), &adapters, &r)
+            })
+            .collect();
+        Ok(Json(enriched))
+    })
+    .await
 }
 
 /// Security (OP-07): `extra_headers_json` is the documented mechanism for
@@ -165,17 +168,20 @@ pub async fn get_provider(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<ProviderWithOAuth>, ApiError> {
-    // Read-only SELECT — use the READER.
-    let r = s.db_pool().reader();
-    let id = ProviderId::new(id);
-    let mut provider =
-        core_providers::get(&r, &id)?.ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
-    // OP-07: same redaction as the list endpoint.
-    redact_extra_headers(&mut provider);
-    let registry = s.oauth_provider_registry();
-    let adapters = s.adapters();
-    let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
-    Ok(Json(enriched))
+    crate::error::run_blocking(move || {
+        // Read-only SELECT — use the READER.
+        let r = s.db_pool().reader();
+        let id = ProviderId::new(id);
+        let mut provider = core_providers::get(&r, &id)?
+            .ok_or_else(|| CoreError::ProviderNotFound(id.to_string()))?;
+        // OP-07: same redaction as the list endpoint.
+        redact_extra_headers(&mut provider);
+        let registry = s.oauth_provider_registry();
+        let adapters = s.adapters();
+        let enriched = enrich_provider_with_oauth(provider, registry.as_ref(), &adapters, &r);
+        Ok(Json(enriched))
+    })
+    .await
 }
 
 pub async fn get_provider_icon(
@@ -300,7 +306,9 @@ async fn resolve_refresh_key_and_label(
         return Ok((String::new(), String::new()));
     };
 
-    let (account, api_key_res) = {
+    let worker_state = s.clone();
+    let (account, api_key_res) = crate::error::run_blocking(move || {
+        let s = worker_state;
         let r = s.db_pool().reader();
         let a = core_accounts::get(&r, account_id, s.master_key().as_ref())
             .map_err(ApiError)?
@@ -311,8 +319,9 @@ async fn resolve_refresh_key_and_label(
         } else {
             Ok(String::new())
         };
-        (a, key_res)
-    };
+        Ok((a, key_res))
+    })
+    .await?;
 
     let label = account.label.as_deref().unwrap_or_default().to_string();
     let api_key = if account.auth_type.as_ref() == "oauth" {
@@ -380,7 +389,7 @@ pub(crate) async fn run_provider_refresh(
     let provider = ProviderId::new(provider_id_str);
     let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
 
-    let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()) {
+    let adapter = match resolve_adapter(&s, &provider, s.adapters().as_slice()).await {
         Ok(a) => a,
         Err(e) => return Err(ApiError(e)),
     };

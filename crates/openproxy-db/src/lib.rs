@@ -14,6 +14,7 @@ pub mod cost;
 pub mod pricing;
 pub mod providers;
 pub mod secrets;
+pub mod usage_journal;
 pub mod usage_writer;
 
 pub use batch::{

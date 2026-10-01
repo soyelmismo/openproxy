@@ -1,5 +1,6 @@
 use super::common::*;
 use crate::handlers::admin::runtime::{get_recording_ttl, put_recording_ttl, put_runtime_timeouts};
+use futures::FutureExt;
 
 #[tokio::test]
 async fn put_runtime_timeouts_writes_db_and_updates_slot() {
@@ -92,12 +93,14 @@ async fn auth_bypass_sentinel_1_admits_admin_request_without_key() {
         w.execute("DELETE FROM api_keys", []).expect("delete keys");
     }
     let headers = HeaderMap::new();
-    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().await;
     let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
     let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        authenticate_admin_ws(&state, &headers, None, Some(&addr))
-    }));
+    let result = std::panic::AssertUnwindSafe(async {
+        authenticate_admin_ws(&state, &headers, None, Some(&addr)).await
+    })
+    .catch_unwind()
+    .await;
     let result = result.expect("authenticate_admin_ws should not panic");
     assert!(
         result.is_ok(),
@@ -119,12 +122,14 @@ async fn auth_bypass_unavailable_without_the_explicit_feature() {
         w.execute("DELETE FROM api_keys", []).expect("delete keys");
     }
     let headers = HeaderMap::new();
-    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().await;
     let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
     let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        authenticate_admin_ws(&state, &headers, None, Some(&addr))
-    }));
+    let result = std::panic::AssertUnwindSafe(async {
+        authenticate_admin_ws(&state, &headers, None, Some(&addr)).await
+    })
+    .catch_unwind()
+    .await;
     let result = result.expect("authenticate_admin_ws should not panic");
     assert!(
         result.is_err(),
@@ -142,11 +147,13 @@ async fn auth_bypass_does_not_admit_on_non_sentinel_values() {
     }
     for sentinel in ["false", "yes", "0", "true", "TRUE", "legacy-token", " "] {
         let headers = HeaderMap::new();
-        let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+        let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().await;
         let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", sentinel);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            authenticate_admin_ws(&state, &headers, None, None)
-        }));
+        let result = std::panic::AssertUnwindSafe(async {
+            authenticate_admin_ws(&state, &headers, None, None).await
+        })
+        .catch_unwind()
+        .await;
         let result = result.expect("authenticate_admin_ws should not panic");
         assert!(
             result.is_err(),
@@ -164,15 +171,17 @@ async fn auth_bypass_sentinel_1_rejects_non_loopback() {
         w.execute("DELETE FROM api_keys", []).expect("delete keys");
     }
     let headers = HeaderMap::new();
-    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().unwrap();
+    let lock_guard = AUTH_BYPASS_TEST_LOCK.lock().await;
     let _env_guard = EnvVarGuard::set(&lock_guard, "OPENPROXY_DASHBOARD_AUTH_BYPASS", "1");
 
     let addr = "192.168.1.100:12345"
         .parse::<std::net::SocketAddr>()
         .unwrap();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        authenticate_admin_ws(&state, &headers, None, Some(&addr))
-    }));
+    let result = std::panic::AssertUnwindSafe(async {
+        authenticate_admin_ws(&state, &headers, None, Some(&addr)).await
+    })
+    .catch_unwind()
+    .await;
     let result = result.expect("authenticate_admin_ws should not panic");
     assert!(
         result.is_err(),

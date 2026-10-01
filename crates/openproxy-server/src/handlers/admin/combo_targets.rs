@@ -16,9 +16,11 @@ pub async fn list_combo_targets(
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<types_combos::ComboTargetWithModel>>, ApiError> {
     // Read-only SELECT — use the READER.
-    let r = s.db_pool().reader();
     let id = ComboId(id);
-    let targets = core_admin::list_combo_targets_with_model(&r, id)?;
+    let targets = s
+        .db_pool()
+        .spawn_read(move |r| core_admin::list_combo_targets_with_model(r, id))
+        .await?;
     Ok(Json(targets))
 }
 
@@ -27,9 +29,11 @@ pub async fn add_target(
     Path(id): Path<i64>,
     Json(input): Json<core_admin::AddTargetInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
     let combo_id = ComboId(id);
-    let new_id = core_admin::add_target_to_combo(&w, combo_id, input)?;
+    let new_id = s
+        .db_pool()
+        .spawn_write(move |w| core_admin::add_target_to_combo(w, combo_id, input))
+        .await?;
     Ok(Json(serde_json::json!({ "id": new_id.0 })))
 }
 
@@ -38,9 +42,11 @@ pub async fn list_valid_sub_combos(
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<core_admin::ComboSummary>>, ApiError> {
     // Read-only SELECT — use the READER.
-    let r = s.db_pool().reader();
     let id = ComboId(id);
-    let list = core_admin::list_valid_sub_combos(&r, id)?;
+    let list = s
+        .db_pool()
+        .spawn_read(move |r| core_admin::list_valid_sub_combos(r, id))
+        .await?;
     Ok(Json(list))
 }
 
@@ -336,20 +342,23 @@ pub async fn update_combo_target(
     Path((combo_id, target_id)): Path<(i64, i64)>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let updates = parse_combo_target_updates(&body)?;
-    let w = s.db_pool().writer();
-    apply_target_db_updates(&w, ComboTargetId(target_id), &updates)?;
+    crate::error::run_blocking(move || {
+        let updates = parse_combo_target_updates(&body)?;
+        let w = s.db_pool().writer();
+        apply_target_db_updates(&w, ComboTargetId(target_id), &updates)?;
 
-    Ok(Json(serde_json::json!({
-        "combo_id": combo_id,
-        "id": target_id,
-        "priority_order": updates.priority_order,
-        "weight": body.get("weight").and_then(serde_json::Value::as_i64),
-        "active": updates.active,
-        "cooldown_mode": body.get("cooldown_mode"),
-        "cooldown_base_secs": body.get("cooldown_base_secs"),
-        "description": body.get("description"),
-    })))
+        Ok(Json(serde_json::json!({
+            "combo_id": combo_id,
+            "id": target_id,
+            "priority_order": updates.priority_order,
+            "weight": body.get("weight").and_then(serde_json::Value::as_i64),
+            "active": updates.active,
+            "cooldown_mode": body.get("cooldown_mode"),
+            "cooldown_base_secs": body.get("cooldown_base_secs"),
+            "description": body.get("description"),
+        })))
+    })
+    .await
 }
 
 crate::admin_entity_action_handler! {
@@ -383,13 +392,16 @@ pub async fn reorder_combo_targets(
     Path(combo_id): Path<i64>,
     Json(body): Json<ReorderComboTargetsInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut w = s.db_pool().writer();
-    let ordered: Vec<ComboTargetId> = body.target_ids.into_iter().map(ComboTargetId).collect();
-    core_admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
-    Ok(Json(serde_json::json!({
-        "reordered": combo_id,
-        "count": ordered.len(),
-    })))
+    crate::error::run_blocking(move || {
+        let mut w = s.db_pool().writer();
+        let ordered: Vec<ComboTargetId> = body.target_ids.into_iter().map(ComboTargetId).collect();
+        core_admin::reorder_combo_targets(&mut w, ComboId(combo_id), &ordered)?;
+        Ok(Json(serde_json::json!({
+            "reordered": combo_id,
+            "count": ordered.len(),
+        })))
+    })
+    .await
 }
 
 #[cfg(test)]

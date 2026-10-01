@@ -172,42 +172,45 @@ fn fallback_incremental_vacuum(
 }
 
 pub async fn debug_vacuum(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    s.set_vacuum_in_progress(true);
-    let res: Result<Json<serde_json::Value>, ApiError> =
-        (|| -> Result<Json<serde_json::Value>, ApiError> {
-            tracing::info!("VACUUM step 0: reopening DB connections to clear stale page cache");
-            let _ = s.db_pool().reopen();
+    crate::error::run_blocking(move || {
+        s.set_vacuum_in_progress(true);
+        let res: Result<Json<serde_json::Value>, ApiError> =
+            (|| -> Result<Json<serde_json::Value>, ApiError> {
+                tracing::info!("VACUUM step 0: reopening DB connections to clear stale page cache");
+                let _ = s.db_pool().reopen();
 
-            let w = s
-                .db_pool()
-                .try_writer_for(ADMIN_LOCK_TIMEOUT)
-                .ok_or_else(|| {
-                    ApiError(CoreError::ServiceUnavailable(
+                let w =
+                    s.db_pool()
+                        .try_writer_for(ADMIN_LOCK_TIMEOUT)
+                        .ok_or_else(|| {
+                            ApiError(CoreError::ServiceUnavailable(
                         "writer lock busy: cannot VACUUM while another write is in progress".into(),
                     ))
-                })?;
+                        })?;
 
-            let _ = openproxy_db::maintenance::checkpoint_wal(&w);
-            let integrity = openproxy_db::maintenance::integrity_check(&w);
-            tracing::info!("VACUUM step 2: integrity_check = {}", integrity);
+                let _ = openproxy_db::maintenance::checkpoint_wal(&w);
+                let integrity = openproxy_db::maintenance::integrity_check(&w);
+                tracing::info!("VACUUM step 2: integrity_check = {}", integrity);
 
-            let json_val = if integrity != "ok" {
-                let res = run_unhealthy_vacuum(&s, &w, &integrity)?;
-                drop(w);
-                let _ = s.db_pool().reopen();
-                res
-            } else {
-                let res = run_healthy_vacuum(&s, &w)?;
-                drop(w);
-                let _ = s.db_pool().reopen();
-                res
-            };
+                let json_val = if integrity != "ok" {
+                    let res = run_unhealthy_vacuum(&s, &w, &integrity)?;
+                    drop(w);
+                    let _ = s.db_pool().reopen();
+                    res
+                } else {
+                    let res = run_healthy_vacuum(&s, &w)?;
+                    drop(w);
+                    let _ = s.db_pool().reopen();
+                    res
+                };
 
-            Ok(Json(json_val))
-        })();
+                Ok(Json(json_val))
+            })();
 
-    s.set_vacuum_in_progress(false);
-    res
+        s.set_vacuum_in_progress(false);
+        res
+    })
+    .await
 }
 
 fn collect_table_recovery_stats(
@@ -252,69 +255,72 @@ fn collect_table_recovery_stats(
 }
 
 pub async fn debug_recover(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    s.set_vacuum_in_progress(true);
-    let res: Result<Json<serde_json::Value>, ApiError> =
-        (|| -> Result<Json<serde_json::Value>, ApiError> {
-            let w = s
-                .db_pool()
-                .try_writer_for(std::time::Duration::from_mins(1))
-                .ok_or_else(|| {
-                    ApiError(CoreError::ServiceUnavailable(
-                        "writer lock busy: cannot repair while requests are in flight".into(),
-                    ))
+    crate::error::run_blocking(move || {
+        s.set_vacuum_in_progress(true);
+        let res: Result<Json<serde_json::Value>, ApiError> =
+            (|| -> Result<Json<serde_json::Value>, ApiError> {
+                let w = s
+                    .db_pool()
+                    .try_writer_for(std::time::Duration::from_mins(1))
+                    .ok_or_else(|| {
+                        ApiError(CoreError::ServiceUnavailable(
+                            "writer lock busy: cannot repair while requests are in flight".into(),
+                        ))
+                    })?;
+
+                let db_path = s.db_pool().path().to_path_buf();
+                let integrity = openproxy_db::maintenance::integrity_check(&w);
+                let table_names = openproxy_db::maintenance::list_user_tables(&w).map_err(|e| {
+                    ApiError(CoreError::Database {
+                        message: format!("repair: list tables: {e}"),
+                        source: Some(std::sync::Arc::new(e)),
+                    })
                 })?;
 
-            let db_path = s.db_pool().path().to_path_buf();
-            let integrity = openproxy_db::maintenance::integrity_check(&w);
-            let table_names = openproxy_db::maintenance::list_user_tables(&w).map_err(|e| {
-                ApiError(CoreError::Database {
-                    message: format!("repair: list tables: {e}"),
-                    source: Some(std::sync::Arc::new(e)),
-                })
-            })?;
+                let (table_stats, total_rows_recovered) =
+                    collect_table_recovery_stats(&w, &table_names);
+                s.record_vacuum_result(&format!(
+                    "recovery diagnostic ({total_rows_recovered} rows readable)"
+                ));
 
-            let (table_stats, total_rows_recovered) =
-                collect_table_recovery_stats(&w, &table_names);
-            s.record_vacuum_result(&format!(
-                "recovery diagnostic ({total_rows_recovered} rows readable)"
-            ));
+                if integrity == "ok" {
+                    return Ok(Json(serde_json::json!({
+                        "recovered": false,
+                        "integrity_check": "ok",
+                        "message": "Database integrity is OK — no repair needed. \
+                                    If you're seeing disk I/O errors, the issue may be \
+                                    disk space or file permissions, not DB corruption."
+                    })));
+                }
 
-            if integrity == "ok" {
-                return Ok(Json(serde_json::json!({
+                Ok(Json(serde_json::json!({
                     "recovered": false,
-                    "integrity_check": "ok",
-                    "message": "Database integrity is OK — no repair needed. \
-                                If you're seeing disk I/O errors, the issue may be \
-                                disk space or file permissions, not DB corruption."
-                })));
-            }
+                    "needs_manual_repair": true,
+                    "integrity_check": integrity,
+                    "tables": table_stats,
+                    "total_rows_recovered": total_rows_recovered,
+                    "db_path": db_path.display().to_string(),
+                    "instructions": format!(
+                        "The database at {} has corruption. To repair:\n\
+                         1. Stop the openproxy server\n\
+                         2. Run: sqlite3 {} '.recover' > /tmp/recovered.sql\n\
+                         3. Run: mv {} {}.bak\n\
+                         4. Run: sqlite3 {} < /tmp/recovered.sql\n\
+                         5. Restart the server\n\
+                         This will recover all readable rows into a fresh, unfragmented DB.",
+                        db_path.display(),
+                        db_path.display(),
+                        db_path.display(),
+                        db_path.display(),
+                        db_path.display()
+                    )
+                })))
+            })();
 
-            Ok(Json(serde_json::json!({
-                "recovered": false,
-                "needs_manual_repair": true,
-                "integrity_check": integrity,
-                "tables": table_stats,
-                "total_rows_recovered": total_rows_recovered,
-                "db_path": db_path.display().to_string(),
-                "instructions": format!(
-                    "The database at {} has corruption. To repair:\n\
-                     1. Stop the openproxy server\n\
-                     2. Run: sqlite3 {} '.recover' > /tmp/recovered.sql\n\
-                     3. Run: mv {} {}.bak\n\
-                     4. Run: sqlite3 {} < /tmp/recovered.sql\n\
-                     5. Restart the server\n\
-                     This will recover all readable rows into a fresh, unfragmented DB.",
-                    db_path.display(),
-                    db_path.display(),
-                    db_path.display(),
-                    db_path.display(),
-                    db_path.display()
-                )
-            })))
-        })();
-
-    s.set_vacuum_in_progress(false);
-    res
+        s.set_vacuum_in_progress(false);
+        res
+    })
+    .await
 }
 
 pub async fn get_recording(State(s): State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {

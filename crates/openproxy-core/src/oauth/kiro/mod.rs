@@ -226,7 +226,8 @@ impl OAuthProvider for KiroOAuthProvider {
         db: crate::oauth::DbRef<'_>,
     ) -> Result<TokenResponse> {
         let meta = db
-            .with_conn(|conn| read_profile_meta(conn, account_id))?
+            .with_read_conn_async(move |conn| read_profile_meta(conn, account_id))
+            .await?
             .unwrap_or_else(KiroProviderMeta::default);
 
         let region = if meta.region.is_empty() {
@@ -358,13 +359,14 @@ impl OAuthProvider for KiroOAuthProvider {
                         let meta_json = serde_json::to_string(&updated_meta).map_err(|e| {
                             CoreError::Internal(format!("kiro meta serialize: {e}"))
                         })?;
-                        db.with_conn(|conn| {
+                        db.with_conn_async(move |conn| {
                             conn.execute(
                                 "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
                                 rusqlite::params![meta_json, account_id.0],
                             )
                             .map_err(openproxy_db::error::map_db_error)
-                        })?;
+                        })
+                        .await?;
                         success_body = Some(retry_bytes);
                     }
                 }

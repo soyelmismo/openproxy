@@ -19,7 +19,7 @@ use crate::images::horde_poll::{HordePollContext, poll_horde_image_generation};
 use crate::routing;
 use crate::unary::{
     UnaryUsageArgs, apply_adapter_headers, map_upstream_status_error, record_unary_usage_async,
-    resolve_api_key,
+    resolve_api_key_async,
 };
 
 pub async fn dispatch_image_request(
@@ -77,7 +77,7 @@ pub async fn execute_image_generation(
             .skip(attempt)
             .any(|t| t.provider.as_str() != "horde");
 
-        crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
+        crate::guarded_unary_target!(check_async: db_pool, circuit_breaker, target);
 
         openproxy_types::emit_stage_event!(
             request_id: request_id,
@@ -103,7 +103,9 @@ pub async fn execute_image_generation(
         let upstream_url = adapter.build_image_url();
 
         let api_key =
-            match resolve_api_key(db_pool, master_key, target.account_id, &target.provider) {
+            match resolve_api_key_async(db_pool, master_key, target.account_id, &target.provider)
+                .await
+            {
                 Ok(k) => k,
                 Err(e) => {
                     last_error = Some(e);

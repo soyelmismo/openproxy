@@ -45,8 +45,21 @@ fn fetch_healthy_account_ids(
 }
 
 fn expand_single_target(conn: &Connection, target: ComboTarget) -> Result<Vec<ComboTarget>> {
-    if target.account_id.is_some() || target.sub_combo_id.is_some() {
+    if target.sub_combo_id.is_some() {
         return Ok(vec![target]);
+    }
+    if let Some(aid) = target.account_id {
+        let is_healthy: bool = conn
+            .query_row(
+                "SELECT health_status = 'healthy' FROM accounts WHERE id = ?1",
+                rusqlite::params![aid.0],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        if is_healthy {
+            return Ok(vec![target]);
+        }
+        return Ok(vec![]);
     }
     let account_ids = fetch_healthy_account_ids(conn, &target.provider_id)?;
     if account_ids.is_empty() {

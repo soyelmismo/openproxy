@@ -113,15 +113,19 @@ fn test_try_reader_for_acquires_freed_reader_under_saturation() {
     let count = pool.reader_count();
 
     let mut held = Vec::new();
-    for _ in 0..count {
+    for _ in 0..count - 1 {
         held.push(pool.reader_guard());
     }
 
-    let to_release = held.pop().expect("held reader");
+    let release_pool = Arc::clone(&pool);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let release_thread = std::thread::spawn(move || {
+        let guard = release_pool.reader_guard();
+        ready_tx.send(()).expect("notify reader acquired");
         std::thread::sleep(Duration::from_millis(5));
-        drop(to_release);
+        drop(guard);
     });
+    ready_rx.recv().expect("reader acquired");
 
     let start = Instant::now();
     let acquired = pool.try_reader_for(Duration::from_millis(50));
@@ -203,7 +207,10 @@ fn test_try_reader_for_high_concurrency_stress() {
 fn test_empirically_verify_sqlite_pragmas_on_writer_and_all_readers() {
     let pool = DbPool::test_pool().expect("test pool");
     let count = pool.reader_count();
-    assert_eq!(count, 2, "Expected exactly 2 readers in pool");
+    assert!(
+        (2..=8).contains(&count),
+        "automatic reader count must be bounded"
+    );
 
     // 1. Writer PRAGMAs
     {

@@ -61,6 +61,16 @@ pub fn router() -> axum::Router<AppState> {
         )
         .route("/vacuum-status", axum::routing::get(get_vacuum_status))
         .route("/backfill-status", axum::routing::get(get_backfill_status))
+        .route(
+            "/usage-worker-status",
+            axum::routing::get(get_usage_worker_status),
+        )
+}
+
+pub async fn get_usage_worker_status(
+    State(state): State<AppState>,
+) -> Result<Json<openproxy_pipeline::worker::WorkerStats>, ApiError> {
+    Ok(Json(state.usage_worker_stats().await?))
 }
 
 /// `GET /admin/health` — public liveness probe for load balancers.
@@ -116,6 +126,7 @@ macro_rules! runtime_config_put {
             State(s): State<AppState>,
             Json($body): Json<$body_ty>,
         ) -> Result<Json<serde_json::Value>, ApiError> {
+            crate::error::run_blocking(move || {
             {
                 let w = s.db_pool().writer();
                 let now = chrono::Utc::now().timestamp();
@@ -125,6 +136,7 @@ macro_rules! runtime_config_put {
             let resp = $resp;
             s.$set_fn($body);
             Ok(Json(resp))
+            }).await
         }
     };
     (
@@ -140,6 +152,7 @@ macro_rules! runtime_config_put {
             State(s): State<AppState>,
             Json($body): Json<serde_json::Value>,
         ) -> Result<Json<serde_json::Value>, ApiError> {
+            crate::error::run_blocking(move || {
             let $val = $extract;
             {
                 let w = s.db_pool().writer();
@@ -150,6 +163,7 @@ macro_rules! runtime_config_put {
             let resp = $resp;
             s.$set_fn($val);
             Ok(Json(resp))
+            }).await
         }
     };
 }

@@ -76,10 +76,13 @@ macro_rules! analytics_handler {
             State(s): State<AppState>,
             Query(q): Query<UsageQuery>,
         ) -> Result<Json<$res_ty>, ApiError> {
-            let f = q.into_filter()?;
-            let result =
-                run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| $core_fn(conn, fl))?;
-            Ok(Json(result))
+            crate::error::run_blocking(move || {
+                let f = q.into_filter()?;
+                let result =
+                    run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| $core_fn(conn, fl))?;
+                Ok(Json(result))
+            })
+            .await
         }
     };
 }
@@ -143,23 +146,23 @@ pub async fn usage_errors(
     State(s): State<AppState>,
     Query(q): Query<UsageQuery>,
 ) -> Result<Json<Vec<core_usage::ErrorRow>>, ApiError> {
-    let f = q.into_filter()?;
-    let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
-        core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
-    })?;
-    Ok(Json(result))
+    crate::error::run_blocking(move || {
+        let f = q.into_filter()?;
+        let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
+            core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
+        })?;
+        Ok(Json(result))
+    })
+    .await
 }
 
 pub async fn recompute_usage_costs(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let updated = {
-        let w = s.db_pool().writer();
-        match openproxy_core::models_dev_sync::recompute_costs(&w) {
-            Ok(n) => n,
-            Err(e) => return Err(ApiError(e)),
-        }
-    };
+    let updated = s
+        .db_pool()
+        .spawn_write(|w| openproxy_core::models_dev_sync::recompute_costs(w))
+        .await?;
     Ok(Json(serde_json::json!({
         "message": format!("re-priced {} usage rows", updated),
         "updated": updated,
@@ -170,29 +173,32 @@ pub async fn usage_recent(
     State(s): State<AppState>,
     Query(q): Query<RecentQuery>,
 ) -> Result<Json<Vec<openproxy_types::usage::RecentUsageRow>>, ApiError> {
-    let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
-    let limit = q
-        .limit
-        .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
-        .clamp(1, USAGE_RECENT_MAX_LIMIT);
-    // Read-only SELECT — use the READER. The dashboard polls this
-    // endpoint frequently; going through the writer would
-    // serialize every poll against `cost::record` writes.
-    let r = s.db_pool().reader();
-    // SEC-MEDIUM-C fix: drop the heavy request/response payloads
-    // from the WS/REST surface — they can be multi-MB and would
-    // fan out PII to every dashboard subscriber. The detail
-    // endpoint reads them straight from the database on demand.
-    let rows = if since_id == 0 {
-        core_usage::recent_desc(&r, limit)?
-    } else {
-        core_usage::recent(&r, since_id, limit)?
-    };
-    let rows: Vec<_> = rows
-        .into_iter()
-        .map(openproxy_types::usage::redact_for_broadcast)
-        .collect();
-    Ok(Json(rows))
+    crate::error::run_blocking(move || {
+        let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
+        let limit = q
+            .limit
+            .unwrap_or(USAGE_RECENT_DEFAULT_LIMIT)
+            .clamp(1, USAGE_RECENT_MAX_LIMIT);
+        // Read-only SELECT — use the READER. The dashboard polls this
+        // endpoint frequently; going through the writer would
+        // serialize every poll against `cost::record` writes.
+        let r = s.db_pool().reader();
+        // SEC-MEDIUM-C fix: drop the heavy request/response payloads
+        // from the WS/REST surface — they can be multi-MB and would
+        // fan out PII to every dashboard subscriber. The detail
+        // endpoint reads them straight from the database on demand.
+        let rows = if since_id == 0 {
+            core_usage::recent_desc(&r, limit)?
+        } else {
+            core_usage::recent(&r, since_id, limit)?
+        };
+        let rows: Vec<_> = rows
+            .into_iter()
+            .map(openproxy_types::usage::redact_for_broadcast)
+            .collect();
+        Ok(Json(rows))
+    })
+    .await
 }
 
 fn fetch_usage_detail(
@@ -221,17 +227,20 @@ pub async fn usage_detail(
     headers: HeaderMap,
     Query(q): Query<DetailQuery>,
 ) -> Result<Json<UsageDetailResponse>, ApiError> {
-    authenticate_admin_ws(&s, &headers, None, Some(&addr))?;
-    let r = s.db_pool().reader();
+    authenticate_admin_ws(&s, &headers, None, Some(&addr)).await?;
+    crate::error::run_blocking(move || {
+        let r = s.db_pool().reader();
 
-    let row = fetch_usage_detail(&r, &q)?;
-    let Some(r) = row else {
-        return Err(ApiError(CoreError::Internal(format!(
-            "usage row not found for query {q:?}"
-        ))));
-    };
+        let row = fetch_usage_detail(&r, &q)?;
+        let Some(r) = row else {
+            return Err(ApiError(CoreError::Internal(format!(
+                "usage row not found for query {q:?}"
+            ))));
+        };
 
-    Ok(Json(UsageDetailResponse { row: r }))
+        Ok(Json(UsageDetailResponse { row: r }))
+    })
+    .await
 }
 
 fn is_disk_io_error(err: &CoreError) -> bool {

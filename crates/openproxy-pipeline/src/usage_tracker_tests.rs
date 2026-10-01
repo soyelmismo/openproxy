@@ -69,7 +69,7 @@ fn make_test_combo_and_target() -> (Combo, ComboTarget) {
 
 fn make_test_tracker() -> UsageTracker {
     let conn_arc = Arc::new(parking_lot::Mutex::new(
-        rusqlite::Connection::open_in_memory().unwrap(),
+        openproxy_db::testing::open_in_memory(),
     ));
     let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
         Arc::clone(&conn_arc),
@@ -84,6 +84,19 @@ fn make_test_tracker() -> UsageTracker {
         cooldown_factor: 2,
         repo: Arc::clone(&repo) as Arc<dyn crate::repository::PipelineRepository>,
     }
+}
+
+async fn pending_jobs(tracker: &UsageTracker) -> Vec<crate::worker::BackgroundJob> {
+    let conn = Arc::clone(&tracker.conn);
+    tokio::task::spawn_blocking(move || {
+        openproxy_db::usage_journal::pending(&conn.lock(), 128)
+            .unwrap()
+            .into_iter()
+            .map(|(_, payload)| serde_json::from_str(&payload).unwrap())
+            .collect()
+    })
+    .await
+    .unwrap()
 }
 
 #[test]
@@ -653,11 +666,21 @@ async fn recording_waits_for_capacity_and_preserves_order() {
     );
     assert!(matches!(
         receiver.recv().await,
-        Some(crate::worker::BackgroundJob::RecordAttempt { .. })
+        Some(crate::worker::BackgroundJob::JournalWake)
     ));
     mark.await;
     assert!(matches!(
         receiver.recv().await,
+        Some(crate::worker::BackgroundJob::JournalWake)
+    ));
+    let jobs = pending_jobs(&tracker).await;
+    assert_eq!(jobs.len(), 2);
+    assert!(matches!(
+        jobs.first(),
+        Some(crate::worker::BackgroundJob::RecordAttempt { .. })
+    ));
+    assert!(matches!(
+        jobs.get(1),
         Some(crate::worker::BackgroundJob::MarkClientResponse { .. })
     ));
 }
@@ -685,9 +708,8 @@ async fn selection_reputation_is_updated_once_per_attempt() {
         .await
         .unwrap();
     let job = receiver.recv().await.unwrap();
-    let conn = Arc::new(parking_lot::Mutex::new(
-        openproxy_db::testing::open_in_memory(),
-    ));
+    assert!(matches!(job, crate::worker::BackgroundJob::JournalWake));
+    let conn = Arc::clone(&tracker.conn);
     tokio::task::spawn_blocking(move || crate::worker::process_job(&conn, job))
         .await
         .unwrap()
@@ -703,12 +725,10 @@ async fn selection_reputation_is_updated_once_per_attempt() {
 
 #[tokio::test]
 async fn usage_worker_drains_accepted_jobs_and_marks_winner() {
-    let conn = Arc::new(parking_lot::Mutex::new(
-        openproxy_db::testing::open_in_memory(),
-    ));
+    let mut tracker = make_test_tracker();
+    let conn = Arc::clone(&tracker.conn);
     let (sender, receiver) = tokio::sync::mpsc::channel(4);
     let worker = crate::worker::spawn_worker(Arc::clone(&conn), receiver);
-    let mut tracker = make_test_tracker();
     tracker.background_tx = sender;
     let (combo, target) = make_test_combo_and_target();
     let tuple = make_test_builder(&tracker, &combo, &target)
@@ -736,12 +756,24 @@ async fn usage_worker_drains_accepted_jobs_and_marks_winner() {
     .await
     .unwrap();
     assert_eq!((count, winners), (97, 1));
+    assert!(pending_jobs(&tracker).await.is_empty());
     worker.shutdown().await.unwrap();
 }
 
 #[tokio::test]
 async fn usage_worker_surfaces_persistence_failures_at_shutdown() {
     let mut tracker = make_test_tracker();
+    let conn = Arc::clone(&tracker.conn);
+    tokio::task::spawn_blocking(move || {
+        conn.lock()
+            .execute_batch(
+                "CREATE TRIGGER reject_usage BEFORE INSERT ON usage
+             BEGIN SELECT RAISE(FAIL, 'usage persistence rejected'); END;",
+            )
+            .unwrap();
+    })
+    .await
+    .unwrap();
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     let worker = crate::worker::spawn_worker(Arc::clone(&tracker.conn), receiver);
     tracker.background_tx = sender;
@@ -751,4 +783,5 @@ async fn usage_worker_surfaces_persistence_failures_at_shutdown() {
         .await
         .unwrap();
     assert!(worker.shutdown().await.is_err());
+    assert_eq!(pending_jobs(&tracker).await.len(), 1);
 }

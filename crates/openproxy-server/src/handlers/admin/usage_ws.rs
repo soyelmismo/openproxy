@@ -88,7 +88,7 @@ pub async fn usage_stream(
         return resp.into_response();
     }
 
-    match authenticate_admin_ws(&s, &headers, q.ticket.as_deref(), Some(&addr)) {
+    match authenticate_admin_ws(&s, &headers, q.ticket.as_deref(), Some(&addr)).await {
         Ok(identity) => {
             // Security (OP-27): cap concurrent dashboard streams per key so a
             // single manage key cannot pin unlimited WS tasks. Dev-bypass

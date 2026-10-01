@@ -23,7 +23,7 @@ pub fn router() -> axum::Router<AppState> {
 pub async fn list_api_keys(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<core_api_keys::ApiKey>>, ApiError> {
-    let list = s.services().api_keys.list()?;
+    let list = s.db_pool().spawn_read(core_api_keys::list).await?;
     Ok(Json(list))
 }
 
@@ -32,7 +32,10 @@ pub async fn create_api_key(
     identity: super::auth::Identity,
     Json(body): Json<core_api_keys::CreateApiKeyInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let (key, plaintext) = s.services().api_keys.create(body, "admin")?;
+    let (key, plaintext) = s
+        .db_pool()
+        .spawn_write(move |w| core_api_keys::create(w, body, "admin"))
+        .await?;
     s.cache_api_key(Arc::new(key.clone()));
     super::auth::audit_secret_read(
         &identity,
@@ -50,9 +53,9 @@ pub async fn get_api_key(
     Path(id): Path<i64>,
 ) -> Result<Json<core_api_keys::ApiKey>, ApiError> {
     let key = s
-        .services()
-        .api_keys
-        .get_by_id(ApiKeyId(id))?
+        .db_pool()
+        .spawn_read(move |r| core_api_keys::get_by_id(r, ApiKeyId(id)))
+        .await?
         .ok_or_else(|| CoreError::not_found("api_key", id.to_string()))?;
     Ok(Json(key))
 }
@@ -62,62 +65,67 @@ pub async fn update_api_key(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let label = body.get("label").and_then(|v| v.as_str());
+    crate::error::run_blocking(move || {
+        let label = body.get("label").and_then(|v| v.as_str());
 
-    let scopes_owned: Option<Vec<String>> =
-        body.get("scopes").and_then(|v| v.as_array()).map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
+        let scopes_owned: Option<Vec<String>> =
+            body.get("scopes").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            });
+        let scopes_slice: Option<&[String]> = scopes_owned.as_deref();
+
+        // Tri-state array fields: absent = no-op; present + null = clear to NULL;
+        // present + array = set to that array.
+        let allowed_models_owned =
+            extract_tristate_array(&body, "allowed_models", |x| x.as_str().map(String::from));
+        let allowed_models_slice = allowed_models_owned.as_ref().map(|v| v.as_slice());
+
+        let allowed_combos_owned =
+            extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
+        let allowed_combos_slice = allowed_combos_owned.as_ref().map(|v| v.as_slice());
+
+        let blacklisted_providers_owned =
+            extract_tristate_array(&body, "blacklisted_providers", |x| {
+                x.as_str().map(String::from)
+            });
+        let blacklisted_providers_slice =
+            blacklisted_providers_owned.as_ref().map(|v| v.as_slice());
+
+        let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
+            x.as_str().map(String::from)
         });
-    let scopes_slice: Option<&[String]> = scopes_owned.as_deref();
+        let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|v| v.as_slice());
 
-    // Tri-state array fields: absent = no-op; present + null = clear to NULL;
-    // present + array = set to that array.
-    let allowed_models_owned =
-        extract_tristate_array(&body, "allowed_models", |x| x.as_str().map(String::from));
-    let allowed_models_slice = allowed_models_owned.as_ref().map(|v| v.as_slice());
+        let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
-    let allowed_combos_owned =
-        extract_tristate_array(&body, "allowed_combos", serde_json::Value::as_i64);
-    let allowed_combos_slice = allowed_combos_owned.as_ref().map(|v| v.as_slice());
+        let expires_field = match body.get("expires_at") {
+            None => UpdateField::Ignore,
+            Some(v) => match v.as_str() {
+                Some(s) => UpdateField::Set(s.to_string()),
+                None => UpdateField::Reset,
+            },
+        };
+        let expires_slice = expires_field.as_ref().map(|s| s.as_str());
 
-    let blacklisted_providers_owned = extract_tristate_array(&body, "blacklisted_providers", |x| {
-        x.as_str().map(String::from)
-    });
-    let blacklisted_providers_slice = blacklisted_providers_owned.as_ref().map(|v| v.as_slice());
-
-    let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
-        x.as_str().map(String::from)
-    });
-    let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|v| v.as_slice());
-
-    let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
-
-    let expires_field = match body.get("expires_at") {
-        None => UpdateField::Ignore,
-        Some(v) => match v.as_str() {
-            Some(s) => UpdateField::Set(s.to_string()),
-            None => UpdateField::Reset,
-        },
-    };
-    let expires_slice = expires_field.as_ref().map(|s| s.as_str());
-
-    s.services().api_keys.update(
-        ApiKeyId(id),
-        core_api_keys::UpdateParams {
-            label,
-            scopes: scopes_slice,
-            allowed_models: allowed_models_slice,
-            allowed_combos: allowed_combos_slice,
-            blacklisted_providers: blacklisted_providers_slice,
-            blacklisted_models: blacklisted_models_slice,
-            is_active,
-            expires_at: expires_slice,
-        },
-    )?;
-    s.invalidate_api_key_cache(None);
-    Ok(Json(serde_json::json!({ "id": id })))
+        s.services().api_keys.update(
+            ApiKeyId(id),
+            core_api_keys::UpdateParams {
+                label,
+                scopes: scopes_slice,
+                allowed_models: allowed_models_slice,
+                allowed_combos: allowed_combos_slice,
+                blacklisted_providers: blacklisted_providers_slice,
+                blacklisted_models: blacklisted_models_slice,
+                is_active,
+                expires_at: expires_slice,
+            },
+        )?;
+        s.invalidate_api_key_cache(None);
+        Ok(Json(serde_json::json!({ "id": id })))
+    })
+    .await
 }
 
 crate::admin_entity_action_handler! {
@@ -147,9 +155,10 @@ pub async fn regenerate_api_key(
     identity: super::auth::Identity,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let (key, plaintext) = core_api_keys::regenerate(&w, ApiKeyId(id))?;
-    drop(w);
+    let (key, plaintext) = s
+        .db_pool()
+        .spawn_write(move |w| core_api_keys::regenerate(w, ApiKeyId(id)))
+        .await?;
     s.invalidate_api_key_cache(None);
     super::auth::audit_secret_read(&identity, "api_key_regenerated", &format!("key:{id}"));
     Ok(Json(serde_json::json!({
@@ -181,8 +190,9 @@ pub async fn api_key_usage(
     State(s): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let r = s.db_pool().reader();
-    let usage = fetch_api_key_usage(&r, id)?;
+    let usage = crate::extractors::DbReader(Arc::clone(s.db_pool()))
+        .run(move |r| fetch_api_key_usage(r, id))
+        .await?;
     Ok(Json(usage))
 }
 

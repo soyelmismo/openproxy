@@ -101,8 +101,8 @@ impl PipelineRunner {
             pii_config: state.pii_config(),
             background_tx: state.background_tx(),
         };
-        Pipeline::with_selection_registry(
-            state.db_pool().writer_arc(),
+        Pipeline::with_db_pool_selection_registry(
+            state.db_pool().as_ref().clone(),
             config,
             state.record_bodies_and_flags(),
             state.selection_registry(),

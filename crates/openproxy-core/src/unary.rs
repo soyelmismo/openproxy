@@ -199,21 +199,41 @@ pub fn resolve_api_key(
     account_id: Option<AccountId>,
     provider_id: &ProviderId,
 ) -> Result<String> {
+    let conn = db_pool.reader();
+    resolve_api_key_on_connection(&conn, master_key, account_id, provider_id)
+}
+
+fn resolve_api_key_on_connection(
+    conn: &rusqlite::Connection,
+    master_key: &MasterKey,
+    account_id: Option<AccountId>,
+    provider_id: &ProviderId,
+) -> Result<String> {
     match account_id {
-        Some(id) => {
-            let r = db_pool.reader();
-            accounts::decrypt_api_key(&r, id, master_key)
-        }
-        None => {
-            let r = db_pool.reader();
-            match providers::get(&r, provider_id)? {
-                Some(p) if matches!(p.auth_type, providers::AuthType::None) => Ok(String::new()),
-                _ => Err(CoreError::Auth(format!(
-                    "no api key available for provider '{provider_id}'"
-                ))),
-            }
-        }
+        Some(id) => accounts::decrypt_api_key(conn, id, master_key),
+        None => match providers::get(conn, provider_id)? {
+            Some(p) if matches!(p.auth_type, providers::AuthType::None) => Ok(String::new()),
+            _ => Err(CoreError::Auth(format!(
+                "no api key available for provider '{provider_id}'"
+            ))),
+        },
     }
+}
+
+/// Retrieve credentials without acquiring a SQLite guard on the Tokio worker.
+pub async fn resolve_api_key_async(
+    db_pool: &DbPool,
+    master_key: &MasterKey,
+    account_id: Option<AccountId>,
+    provider_id: &ProviderId,
+) -> Result<String> {
+    let master_key = master_key.clone();
+    let provider_id = provider_id.clone();
+    db_pool
+        .spawn_read(move |conn| {
+            resolve_api_key_on_connection(conn, &master_key, account_id, &provider_id)
+        })
+        .await
 }
 
 pub fn is_target_available(
@@ -232,12 +252,7 @@ pub fn is_target_available(
     if let Some(target_id) = combo_target_id {
         let is_cooling_down = {
             let r = db_pool.reader();
-            r.query_row(
-                "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime('now')",
-                rusqlite::params![target_id.0],
-                |row| row.get::<_, i64>(0),
-            )
-            .is_ok_and(|c| c > 0)
+            is_target_cooling_down(&r, target_id)
         };
         if is_cooling_down {
             tracing::debug!("Combo target {target_id:?} is in cooldown, skipping");
@@ -246,6 +261,44 @@ pub fn is_target_available(
     }
 
     true
+}
+
+fn is_target_cooling_down(conn: &rusqlite::Connection, target_id: ComboTargetId) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = ?1 AND datetime(cooldown_until) > datetime('now')",
+        rusqlite::params![target_id.0],
+        |row| row.get::<_, i64>(0),
+    )
+    .is_ok_and(|count| count > 0)
+}
+
+/// Async counterpart preserving fail-open cooldown query behavior.
+pub async fn is_target_available_async(
+    db_pool: &DbPool,
+    circuit_breaker: &CircuitBreakerRegistry,
+    account_id: Option<AccountId>,
+    combo_target_id: Option<ComboTargetId>,
+) -> bool {
+    if account_id.is_some_and(|id| {
+        circuit_breaker.is_healthy(CircuitBreakerKey::Account(id)) == Health::Unhealthy
+    }) {
+        tracing::debug!(
+            ?account_id,
+            "Account is unhealthy via circuit breaker, skipping"
+        );
+        return false;
+    }
+    let Some(target_id) = combo_target_id else {
+        return true;
+    };
+    let is_cooling_down = db_pool
+        .spawn_read(move |conn| Ok(is_target_cooling_down(conn, target_id)))
+        .await
+        .unwrap_or(false);
+    if is_cooling_down {
+        tracing::debug!(?target_id, "Combo target is in cooldown, skipping");
+    }
+    !is_cooling_down
 }
 
 /// Availability check and circuit-breaker failure recording for unary endpoints
@@ -259,6 +312,18 @@ macro_rules! guarded_unary_target {
             $target.account_id,
             $target.combo_target_id,
         ) {
+            continue;
+        }
+    };
+    (check_async: $db_pool:expr, $circuit_breaker:expr, $target:expr $(,)?) => {
+        if !$crate::unary::is_target_available_async(
+            $db_pool,
+            $circuit_breaker,
+            $target.account_id,
+            $target.combo_target_id,
+        )
+        .await
+        {
             continue;
         }
     };
@@ -336,25 +401,30 @@ fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
 
 /// Blocking counterpart for synchronous routing code and non-Tokio consumers.
 pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
+    let job =
+        openproxy_pipeline::worker::BackgroundJob::RecordUsage(Box::new(unary_usage_input(args)));
     let result = {
-        let mut conn = db_pool.writer();
-        openproxy_db::usage_writer::record(&mut conn, &unary_usage_input(args), None)
+        let conn = db_pool.writer_arc();
+        openproxy_pipeline::worker::process_job(&conn, job)
     };
-    match result {
-        Ok((_, row)) => openproxy_types::usage::publish_usage_row(row),
-        Err(error) => tracing::error!(%error, "failed to persist unary usage"),
+    if let Err(error) = result {
+        tracing::error!(%error, "unary usage persistence failed; admitted jobs remain journaled");
     }
 }
 
 /// Async callers wait for persistence without acquiring SQLite locks on Tokio.
 pub async fn record_unary_usage_async(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
-    let input = unary_usage_input(args);
-    match db_pool
-        .spawn_write(move |conn| openproxy_db::usage_writer::record(conn, &input, None))
+    let job =
+        openproxy_pipeline::worker::BackgroundJob::RecordUsage(Box::new(unary_usage_input(args)));
+    let conn = db_pool.writer_arc();
+    match tokio::task::spawn_blocking(move || openproxy_pipeline::worker::process_job(&conn, job))
         .await
     {
-        Ok((_, row)) => openproxy_types::usage::publish_usage_row(row),
-        Err(error) => tracing::error!(%error, "failed to persist unary usage"),
+        Ok(Ok(())) => {}
+        result => tracing::error!(
+            ?result,
+            "unary usage persistence failed; admitted jobs remain journaled"
+        ),
     }
 }
 

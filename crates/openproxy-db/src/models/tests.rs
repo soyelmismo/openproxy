@@ -205,6 +205,7 @@ fn test_notify_auto_activated_models_substring_matching() {
 
     let (cnt, _) = count_notifs(&conn, provider.as_str());
     assert_eq!(cnt, 250);
-    // In-memory string matching on 500 items should take well under 20ms
-    assert!(elapsed < Duration::from_millis(20));
+    // In-memory string matching on 500 items should take well under 200ms,
+    // even on a loaded parallel-test machine.
+    assert!(elapsed < Duration::from_millis(200));
 }

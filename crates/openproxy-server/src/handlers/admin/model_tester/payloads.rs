@@ -16,12 +16,15 @@ pub fn test_error_result(row_id: i64, status: u16, err_msg: &str) -> TestResult 
     }
 }
 
-pub fn load_model_for_test(
+pub async fn load_model_for_test(
     s: &AppState,
     model_row_id: i64,
 ) -> Result<core_models::Model, TestResult> {
-    let r = s.db_pool().reader();
-    match core_models::get_by_row_id(&r, ModelRowId(model_row_id)) {
+    match s
+        .db_pool()
+        .spawn_read(move |r| core_models::get_by_row_id(r, ModelRowId(model_row_id)))
+        .await
+    {
         Ok(Some(mut m)) => {
             let inferred_type =
                 openproxy_types::capabilities::infer_model_type(m.model_id.as_str());
@@ -112,9 +115,13 @@ pub async fn decrypt_test_account_key(
         });
     }
 
-    let r = s.db_pool().reader();
-    core_accounts::decrypt_api_key(&r, aid, s.master_key().as_ref())
-        .or_else(|_| core_accounts::decrypt_access_token(&r, aid, s.master_key().as_ref()))
+    let master_key = std::sync::Arc::clone(s.master_key());
+    s.db_pool()
+        .spawn_read(move |r| {
+            core_accounts::decrypt_api_key(r, aid, master_key.as_ref())
+                .or_else(|_| core_accounts::decrypt_access_token(r, aid, master_key.as_ref()))
+        })
+        .await
         .map_err(|e| test_error_result(model_row_id, e.http_status(), &e.to_string()))
 }
 
@@ -133,13 +140,18 @@ pub async fn resolve_test_credentials(
     ),
     TestResult,
 > {
-    let (accounts_list, _provider_row) = {
-        let r = s.db_pool().reader();
-        let p = core_providers::get(&r, &model.provider_id).unwrap_or_default();
-        let accs = core_accounts::list(&r, Some(&model.provider_id), s.master_key().as_ref())
-            .unwrap_or_default();
-        (accs, p)
-    };
+    let provider_id = model.provider_id.clone();
+    let master_key = std::sync::Arc::clone(s.master_key());
+    let (accounts_list, _provider_row) = s
+        .db_pool()
+        .spawn_read(move |r| {
+            let p = core_providers::get(r, &provider_id).unwrap_or_default();
+            let accs =
+                core_accounts::list(r, Some(&provider_id), master_key.as_ref()).unwrap_or_default();
+            Ok((accs, p))
+        })
+        .await
+        .map_err(|e| test_error_result(model_row_id, e.http_status(), &e.to_string()))?;
 
     let resolved_aid = account_id.or_else(|| select_account_candidate(&accounts_list));
     if let Some(aid) = resolved_aid {

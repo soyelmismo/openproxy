@@ -27,6 +27,21 @@ impl From<CoreError> for ApiError {
     }
 }
 
+/// Execute synchronous administrative work without blocking a Tokio worker.
+pub(crate) async fn run_blocking<T, F>(operation: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, ApiError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| {
+            ApiError(CoreError::Internal(format!(
+                "blocking task failed: {error}"
+            )))
+        })?
+}
+
 impl ApiError {
     /// Return the error message sanitized (secrets redacted) and truncated to length limit.
     pub fn sanitized_message(&self) -> String {

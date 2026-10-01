@@ -11,7 +11,10 @@ pub(crate) fn init_database(
     {
         std::fs::create_dir_all(parent)?;
     }
-    Ok(openproxy_db::DbPool::open(&path)?)
+    Ok(openproxy_db::DbPool::open_with_readers(
+        &path,
+        config.storage.reader_count,
+    )?)
 }
 
 /// Migrations and persisted-config hydration run inline at boot because the rest

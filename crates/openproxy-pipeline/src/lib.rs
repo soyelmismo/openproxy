@@ -30,6 +30,7 @@ pub mod repository;
 pub mod response_ext;
 pub mod retry;
 pub use repository::SqlitePipelineRepository;
+pub use repository::{AsyncPipelineRepository, BlockingPipelineRepository};
 mod dispatcher;
 pub mod pii;
 pub use pii::{PiiEngine, PiiRestorationStage, PiiSession, StreamingWindowReplacer};

@@ -23,7 +23,7 @@ pub(crate) async fn run_one_tick(
     let started = Instant::now();
 
     let Some((provider_row, accounts_list)) =
-        load_provider_snapshot(db_pool, &provider, master_key)
+        load_provider_snapshot(db_pool, &provider, master_key).await
     else {
         return;
     };
@@ -116,35 +116,31 @@ pub(crate) fn trim_allocator() {
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn trim_allocator() {}
 
-fn load_provider_snapshot(
+async fn load_provider_snapshot(
     db_pool: &Arc<DbPool>,
     provider: &ProviderId,
     master_key: &Arc<MasterKey>,
 ) -> Option<(Option<providers::Provider>, Vec<accounts::Account>)> {
-    let w = db_pool.reader();
-    let row = match providers::get(&w, provider) {
-        Ok(r) => r,
+    let provider_id = provider.clone();
+    let master_key = Arc::clone(master_key);
+    match db_pool
+        .spawn_read(move |conn| {
+            let row = providers::get(conn, &provider_id)?;
+            let accounts = accounts::list(conn, Some(&provider_id), &master_key)?;
+            Ok((row, accounts))
+        })
+        .await
+    {
+        Ok(snapshot) => Some(snapshot),
         Err(e) => {
             tracing::warn!(
                 provider = %provider,
                 error = %e,
-                "discovery tick: failed to load provider row; skipping cycle",
+                "discovery tick: failed to load provider snapshot; skipping cycle",
             );
-            return None;
+            None
         }
-    };
-    let accs = match accounts::list(&w, Some(provider), master_key) {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::warn!(
-                provider = %provider,
-                error = %e,
-                "discovery tick: failed to list accounts; skipping cycle",
-            );
-            return None;
-        }
-    };
-    Some((row, accs))
+    }
 }
 
 async fn resolve_account_credentials(
@@ -174,43 +170,26 @@ async fn resolve_account_credentials(
     };
 
     let label = acc.label.as_deref().unwrap_or_default().to_string();
-    if acc.auth_type.as_ref() == "oauth" {
-        let decrypt_result = {
-            let w = db_pool.reader();
-            accounts::decrypt_access_token(&w, acc.id, master_key.as_ref())
-        };
-        match decrypt_result {
-            Ok(k) => Some((k, label)),
-            Err(e) => {
-                tracing::warn!(
-                    provider = %provider,
-                    account = acc.id.0,
-                    error = %e,
-                    "discovery tick: failed to decrypt oauth access token; skipping cycle",
-                );
-                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string())
-                    .await;
-                None
+    let account_id = acc.id;
+    let is_oauth = acc.auth_type.as_ref() == "oauth";
+    let master_key = Arc::clone(master_key);
+    let decrypt_result = db_pool
+        .spawn_read(move |conn| {
+            if is_oauth {
+                accounts::decrypt_access_token(conn, account_id, &master_key)
+            } else {
+                accounts::decrypt_api_key(conn, account_id, &master_key)
             }
-        }
-    } else {
-        let decrypt_result = {
-            let w = db_pool.reader();
-            accounts::decrypt_api_key(&w, acc.id, master_key.as_ref())
-        };
-        match decrypt_result {
-            Ok(k) => Some((k, label)),
-            Err(e) => {
-                tracing::warn!(
-                    provider = %provider,
-                    account = acc.id.0,
-                    error = %e,
-                    "discovery tick: failed to decrypt api key; skipping cycle",
-                );
-                record_decrypt_failed_notification(db_pool, provider, acc.id.0, &e.to_string())
-                    .await;
-                None
-            }
+        })
+        .await;
+    match decrypt_result {
+        Ok(key) => Some((key, label)),
+        Err(error) => {
+            tracing::warn!(provider = %provider, account = account_id.0, %error,
+                "discovery tick: failed to decrypt credentials; skipping cycle");
+            record_decrypt_failed_notification(db_pool, provider, account_id.0, &error.to_string())
+                .await;
+            None
         }
     }
 }

@@ -215,17 +215,17 @@ impl UpstreamDispatcher {
                 "status_code": status_code,
             },
         });
-        let repo = Arc::clone(&self.tracker.repo);
-        tokio::task::spawn_blocking(move || {
-            let _ = repo.insert_and_broadcast_notification(
-                "system",
-                &payload,
-                Some(&dedup_key),
-                Some(&provider_id_str),
-            );
-        })
-        .await
-        .ok();
+        self.async_repo()
+            .run(move |repo| {
+                repo.insert_and_broadcast_notification(
+                    "system",
+                    &payload,
+                    Some(&dedup_key),
+                    Some(&provider_id_str),
+                )
+            })
+            .await
+            .ok();
     }
 
     /// Publica `proxy_failed` cuando un proxy rota.
@@ -248,18 +248,18 @@ impl UpstreamDispatcher {
                 "trigger": trigger_desc,
             },
         });
-        let repo = Arc::clone(&self.tracker.repo);
         let pid = provider_id_str.to_string();
-        tokio::task::spawn_blocking(move || {
-            let _ = repo.insert_and_broadcast_notification(
-                "system",
-                &payload,
-                Some(&dedup_key),
-                Some(&pid),
-            );
-        })
-        .await
-        .ok();
+        self.async_repo()
+            .run(move |repo| {
+                repo.insert_and_broadcast_notification(
+                    "system",
+                    &payload,
+                    Some(&dedup_key),
+                    Some(&pid),
+                )
+            })
+            .await
+            .ok();
     }
 
     /// Maneja respuestas non-2xx: rotación de proxy (por status o

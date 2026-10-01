@@ -163,12 +163,12 @@ impl OAuthProvider for AntigravityOAuthProvider {
         master_key: &MasterKey,
         upstream: &Arc<UpstreamClient>,
     ) -> Result<()> {
-        // the block drops the writer guard before the awaits below: a SQLite
-        // Connection is not `Send` across an await point
-        let access_token = {
-            let conn = db_pool.writer();
-            crate::accounts::decrypt_access_token(&conn, account_id, master_key)?
-        };
+        let master_key = master_key.clone();
+        let access_token = db_pool
+            .spawn_read(move |conn| {
+                crate::accounts::decrypt_access_token(conn, account_id, &master_key)
+            })
+            .await?;
 
         // email is best-effort; the two calls stay sequential
         let email = fetch_user_email(upstream, &access_token).await;

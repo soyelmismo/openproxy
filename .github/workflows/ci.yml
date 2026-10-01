@@ -8,7 +8,7 @@
 #   5. docker         — multi-arch (amd64+arm64) image push to ghcr.io
 #   6. release        — tags v<version>, creates GitHub Release with zips
 #
-# On PRs: frontend + rust-checks run.
+# On PRs: frontend, MSRV, rust-checks and security/coverage/E2E checks run.
 # On master pushes: the full pipeline runs, including e2e tests, build matrix, docker
 # push and a tagged GitHub Release.
 #
@@ -38,6 +38,8 @@ env:
   CARGO_TERM_COLOR: always
   PNPM_VERSION: '9'
   RUST_BACKTRACE: 1
+  # Keep in sync with rust-toolchain.toml; rust-checks verifies equality.
+  RUST_TOOLCHAIN: '1.97.1'
 
 jobs:
   # -----------------------------------------------------------------------------
@@ -106,19 +108,61 @@ jobs:
           if-no-files-found: error
 
   # -----------------------------------------------------------------------------
-  # 2. Rust checks — fmt, clippy (-D warnings), check, test. GATE: nothing
+  # MSRV is independent of the pinned development/release toolchain.
+  # ----------
+  msrv:
+    name: Rust MSRV 1.96
+    runs-on: ubuntu-latest
+    needs: frontend
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install minimum supported Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.96.0'
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: 'crates'
+          key: msrv-1.96.0
+      - name: Download web-dist artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: web-dist
+          path: crates/openproxy-server/web/src/static/dist/
+      - name: Verify declared MSRV
+        run: |
+          python3 - <<'PY'
+          import tomllib
+          with open('Cargo.toml', 'rb') as manifest:
+              assert tomllib.load(manifest)['workspace']['package']['rust-version'] == '1.96'
+          PY
+      - name: Check locked workspace on MSRV
+        run: cargo +1.96.0 check --workspace --all-targets --locked
+
+  # ----------
+  # 2. Rust checks — fmt, clippy (-D warnings), test. GATE: nothing
   #    downstream runs if this fails.
   # -----------------------------------------------------------------------------
   rust-checks:
     name: Rust fmt + clippy + check + test
     runs-on: ubuntu-latest
-    needs: frontend
+    needs: [frontend, msrv]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Install Rust toolchain (stable + rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Verify pinned Rust toolchain
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          with open('rust-toolchain.toml', 'rb') as toolchain:
+              assert tomllib.load(toolchain)['toolchain']['channel'] == os.environ['RUST_TOOLCHAIN']
+          PY
+
+      - name: Install pinned Rust toolchain (rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt,clippy
 
       - name: Cache cargo
@@ -170,8 +214,9 @@ jobs:
     needs: [frontend, rust-checks]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: llvm-tools-preview
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -329,8 +374,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain + target
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
@@ -615,7 +661,9 @@ jobs:
           cache-dependency-path: crates/openproxy-server/web/pnpm-lock.yaml
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -639,5 +687,4 @@ jobs:
       - name: Run Playwright tests
         working-directory: crates/openproxy-server/web
         run: pnpm run test:e2e
-
 

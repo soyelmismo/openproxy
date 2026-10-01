@@ -153,11 +153,15 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|t| !t.is_empty())
 }
 
-fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let active = core_api_keys::count_active(&state.db_pool().reader()).map_err(|e| {
-        tracing::error!(%e, "db error counting active keys");
-        ApiError(CoreError::Auth("missing api key".into()))
-    })?;
+async fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken>, ApiError> {
+    let active = state
+        .db_pool()
+        .spawn_read(core_api_keys::count_active)
+        .await
+        .map_err(|e| {
+            tracing::error!(%e, "db error counting active keys");
+            ApiError(CoreError::Auth("missing api key".into()))
+        })?;
     if active == 0 && state.config().server.allow_anonymous {
         tracing::debug!(
             target: "openproxy::auth",
@@ -169,15 +173,15 @@ fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken
 }
 
 /// Resolve the caller from the `Authorization` header.
-pub(crate) fn authenticate(
+pub(crate) async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<ValidatedApiToken>, ApiError> {
     let Some(token) = extract_bearer_or_api_key_token(headers) else {
-        return check_anonymous_fallback(state);
+        return check_anonymous_fallback(state).await;
     };
 
-    let key = verify_key_credentials(state, token, "chat")?;
+    let key = verify_key_credentials(state, token, "chat").await?;
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
@@ -208,7 +212,7 @@ pub(crate) fn validate_key_record(key: &ApiKey, required_scope: &str) -> Result<
 }
 
 /// Validate an API key credential against active keys
-pub(crate) fn verify_key_credentials(
+pub(crate) async fn verify_key_credentials(
     state: &AppState,
     token: &str,
     required_scope: &str,
@@ -217,8 +221,11 @@ pub(crate) fn verify_key_credentials(
     let key = if let Some(cached) = state.get_cached_api_key(&key_hash) {
         cached
     } else {
-        let r = state.db_pool().reader();
-        let fetched = core_api_keys::get_by_hash(&r, &key_hash)
+        let lookup_hash = key_hash.clone();
+        let fetched = state
+            .db_pool()
+            .spawn_read(move |r| core_api_keys::get_by_hash(r, &lookup_hash))
+            .await
             .map_err(|e| {
                 tracing::error!(%e, "db error looking up api key");
                 ApiError(CoreError::Auth("invalid api key".into()))
@@ -270,13 +277,16 @@ fn last_used_needs_stamp(last_used_at: Option<&String>) -> bool {
     }
 }
 
-fn verify_combo_authorization(
+async fn verify_combo_authorization(
     state: &AppState,
     auth: Option<&ValidatedApiToken>,
     model_name: &str,
 ) -> Result<(), ApiError> {
-    let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) =
-        openproxy_core::routing::resolve(&state.db_pool().reader(), model_name)
+    let model_name = model_name.to_owned();
+    let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) = state
+        .db_pool()
+        .spawn_read(move |r| openproxy_core::routing::resolve(r, &model_name))
+        .await
     else {
         return Ok(());
     };
@@ -292,12 +302,12 @@ fn verify_combo_authorization(
 }
 
 /// Authenticate the request against active API keys and verify model/combo authorization.
-pub(crate) fn authenticate_and_authorize_model(
+pub(crate) async fn authenticate_and_authorize_model(
     state: &AppState,
     headers: &HeaderMap,
     model_name: &str,
 ) -> Result<Option<ApiKeyId>, ApiError> {
-    let auth_result = authenticate(state, headers)?;
+    let auth_result = authenticate(state, headers).await?;
 
     if let Some(token) = &auth_result
         && !token.is_model_allowed(model_name, None)
@@ -307,7 +317,7 @@ pub(crate) fn authenticate_and_authorize_model(
         ))));
     }
 
-    verify_combo_authorization(state, auth_result.as_ref(), model_name)?;
+    verify_combo_authorization(state, auth_result.as_ref(), model_name).await?;
     Ok(auth_result.as_ref().map(|r| r.key_id))
 }
 
@@ -324,7 +334,7 @@ pub async fn auth_middleware(
         || path.starts_with("/responses?")
         || path.ends_with("/responses");
 
-    let auth_result = authenticate(&state, &parts.headers)?;
+    let auth_result = authenticate(&state, &parts.headers).await?;
 
     // Security (OP-14): use the configured request body limit instead of a
     // hardcoded 32 MiB that ignored `server.request_max_body_bytes`.
@@ -413,7 +423,7 @@ pub async fn auth_middleware(
             ))));
         }
 
-        verify_combo_authorization(&state, Some(token), requested_model)?;
+        verify_combo_authorization(&state, Some(token), requested_model).await?;
     }
 
     parts.extensions.insert(ParsedChatRequest {
@@ -449,7 +459,7 @@ pub async fn key_auth_middleware(
     next: axum::middleware::Next,
 ) -> Result<axum::response::Response, crate::error::ApiError> {
     let (parts, body) = req.into_parts();
-    let auth_result = authenticate(&state, &parts.headers)?;
+    let auth_result = authenticate(&state, &parts.headers).await?;
     let mut req = axum::extract::Request::from_parts(parts, body);
     if let Some(res) = auth_result {
         req.extensions_mut().insert(res);

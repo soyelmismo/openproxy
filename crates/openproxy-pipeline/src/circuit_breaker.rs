@@ -164,7 +164,9 @@ impl CircuitBreakerRegistry {
         }
     }
 
-    #[cfg(test)]
+    /// Forces the account circuit open for terminal account faults (402/401).
+    /// Production path calls this from `stages::target`; tests reuse it to
+    /// seed the same state deterministically.
     pub fn force_unhealthy(&self, account: CircuitBreakerKey) {
         let mut g = self.inner.write();
         g.insert(

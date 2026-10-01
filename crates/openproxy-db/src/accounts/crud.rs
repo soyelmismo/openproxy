@@ -181,13 +181,21 @@ pub fn decrypt_api_key_and_label(
 }
 
 pub fn set_health(conn: &Connection, id: AccountId, health: HealthStatus) -> Result<()> {
-    let affected = crate::db_update_field!(
-        conn,
-        "accounts",
-        health_status = health.as_str(),
-        WHERE id = id.0,
-        format!("update health for account {}", id.0)
-    )?;
+    set_health_with_error(conn, id, health, None)
+}
+
+pub fn set_health_with_error(
+    conn: &Connection,
+    id: AccountId,
+    health: HealthStatus,
+    error: Option<&str>,
+) -> Result<()> {
+    let affected = conn
+        .execute(
+            "UPDATE accounts SET health_status = ?1, quota_fetch_error = ?2, rate_limited_until = NULL WHERE id = ?3",
+            params![health.as_str(), error, id.0],
+        )
+        .map_err(|e| crate::error::map_db_error_ctx(format!("update health for account {}", id.0))(e))?;
     if affected == 0 {
         return Err(CoreError::AccountNotFound(id.0));
     }

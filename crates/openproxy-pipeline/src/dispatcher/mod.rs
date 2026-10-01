@@ -45,6 +45,12 @@ impl Dispatcher for UpstreamDispatcher {
 }
 
 impl UpstreamDispatcher {
+    pub(crate) fn async_repo(&self) -> Arc<dyn crate::repository::AsyncPipelineRepository> {
+        Arc::new(crate::repository::BlockingPipelineRepository::new(
+            Arc::clone(&self.tracker.repo),
+        ))
+    }
+
     pub(crate) fn new(
         conn: Arc<parking_lot::Mutex<rusqlite::Connection>>,
         config: crate::PipelineConfig,

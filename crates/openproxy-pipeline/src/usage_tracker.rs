@@ -73,9 +73,17 @@ impl UsageTracker {
     }
 
     async fn enqueue(&self, job: crate::worker::BackgroundJob) -> Result<()> {
-        self.background_tx.send(job).await.map_err(|_| {
+        let permit = self.background_tx.reserve().await.map_err(|_| {
             CoreError::Internal("usage worker is closed; record was not accepted".into())
-        })
+        })?;
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || crate::worker::admit_job(&conn, &job))
+            .await
+            .map_err(|error| {
+                CoreError::Internal(format!("usage admission join failed: {error}"))
+            })??;
+        permit.send(crate::worker::BackgroundJob::JournalWake);
+        Ok(())
     }
 
     pub(crate) async fn record_no_healthy_targets_row(

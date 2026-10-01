@@ -96,7 +96,13 @@ async fn dispatch_single_system_one(
     }
 
     let upstream_url = adapter.build_system_one_url();
-    let api_key = resolve_api_key(db_pool, master_key, target.account_id, &target.provider)?;
+    let api_key = crate::unary::resolve_api_key_async(
+        db_pool,
+        master_key,
+        target.account_id,
+        &target.provider,
+    )
+    .await?;
 
     let response = dispatch_system_one_request(
         upstream_client,
@@ -177,12 +183,14 @@ pub async fn execute_system_one(
     let mut attempt = 0;
 
     for target in targets {
-        if !is_target_available(
+        if !crate::unary::is_target_available_async(
             db_pool,
             circuit_breaker,
             target.account_id,
             target.combo_target_id,
-        ) {
+        )
+        .await
+        {
             continue;
         }
 

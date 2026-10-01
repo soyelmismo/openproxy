@@ -1,4 +1,6 @@
 //! Application services centralizing business logic and decoupling HTTP handlers.
+//!
+//! Database-backed services are synchronous and must run inside blocking tasks.
 
 pub mod pipeline_runner;
 pub use pipeline_runner::{PipelineRunner, PreparedPipelineRequest};

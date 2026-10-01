@@ -106,11 +106,9 @@ impl Pipeline {
         }
 
         let root_combo_id = *root_combo_id;
-        let repo = self.repo();
-        tokio::task::spawn_blocking(move || {
-            flatten_sub_combos(repo.as_ref(), root_combo_id, targets)
-        })
-        .await?
+        self.async_repo()
+            .run(move |repo| flatten_sub_combos(repo, root_combo_id, targets))
+            .await
     }
 }
 
@@ -137,11 +135,11 @@ fn do_auto_populate(
 
 impl Pipeline {
     pub(crate) async fn auto_populate_if_empty(&self, combo: &Combo) -> Result<usize> {
-        let repo = self.repo();
         let combo_id = combo.id;
         let combo_name = combo.name.clone();
-        tokio::task::spawn_blocking(move || do_auto_populate(repo.as_ref(), combo_id, &combo_name))
-            .await?
+        self.async_repo()
+            .run(move |repo| do_auto_populate(repo, combo_id, &combo_name))
+            .await
     }
 
     pub async fn resolve_combo_targets_full(
@@ -158,38 +156,39 @@ impl Pipeline {
             provider_ids_no_account,
         } = collect_and_dedup_target_ids(&eligible);
 
-        let repo = self.repo();
         let master_key = Arc::clone(&self.config.master_key);
         let oauth_registry = self.config.oauth_provider_registry.as_ref().map(Arc::clone);
 
-        tokio::task::spawn_blocking(move || {
-            let models_map = repo
-                .get_models_by_row_ids(&model_row_ids)
-                .unwrap_or_default();
-            let (accounts_map, kiro_map) = repo.get_accounts_meta(&account_ids).unwrap_or_default();
-            let providers_map = repo
-                .get_providers_auth_type(&provider_ids_no_account)
-                .unwrap_or_default();
-            let id_values: Vec<i64> = account_ids.iter().map(|a| a.0).collect();
-            let antigravity_map = repo
-                .get_antigravity_projects(&id_values)
-                .unwrap_or_default();
+        self.async_repo()
+            .run(move |repo| {
+                let models_map = repo
+                    .get_models_by_row_ids(&model_row_ids)
+                    .unwrap_or_default();
+                let (accounts_map, kiro_map) =
+                    repo.get_accounts_meta(&account_ids).unwrap_or_default();
+                let providers_map = repo
+                    .get_providers_auth_type(&provider_ids_no_account)
+                    .unwrap_or_default();
+                let id_values: Vec<i64> = account_ids.iter().map(|a| a.0).collect();
+                let antigravity_map = repo
+                    .get_antigravity_projects(&id_values)
+                    .unwrap_or_default();
 
-            crate::credentials::CredentialManager::resolve_credentials(
-                eligible,
-                &crate::credentials::ResolutionMaps {
-                    models_map: &models_map,
-                    accounts_map: &accounts_map,
-                    kiro_map: &kiro_map,
-                    antigravity_map: &antigravity_map,
-                    providers_map: &providers_map,
-                },
-                master_key.as_ref(),
-                oauth_registry.as_deref(),
-            )
-        })
-        .await
-        .unwrap_or_default()
+                Ok(crate::credentials::CredentialManager::resolve_credentials(
+                    eligible,
+                    &crate::credentials::ResolutionMaps {
+                        models_map: &models_map,
+                        accounts_map: &accounts_map,
+                        kiro_map: &kiro_map,
+                        antigravity_map: &antigravity_map,
+                        providers_map: &providers_map,
+                    },
+                    master_key.as_ref(),
+                    oauth_registry.as_deref(),
+                ))
+            })
+            .await
+            .unwrap_or_default()
     }
 
     /// Execute a test target directly through the full pipeline stages (OAuth refresh, custom adapter,
@@ -315,13 +314,13 @@ impl Pipeline {
         if let Some(combo) = req.combo_override.as_ref() {
             return Ok(combo.clone());
         }
-        let repo = self.repo();
         let combo_id = req.combo_id;
-        tokio::task::spawn_blocking(move || {
-            repo.load_combo(combo_id)?
-                .ok_or(CoreError::ComboNotFound(combo_id.0))
-        })
-        .await?
+        self.async_repo()
+            .run(move |repo| {
+                repo.load_combo(combo_id)?
+                    .ok_or(CoreError::ComboNotFound(combo_id.0))
+            })
+            .await
     }
 }
 
@@ -355,21 +354,21 @@ impl Pipeline {
         combo: &Combo,
         targets_override: Option<&[ComboTarget]>,
     ) -> Result<Vec<ComboTarget>> {
-        let repo = self.repo();
         let combo_clone = combo.clone();
         let overrides = targets_override.map(<[openproxy_types::ComboTarget]>::to_vec);
         let rr_counters = Arc::clone(&self.rr_counters);
         let selection_registry = Arc::clone(&self.selection_registry);
-        tokio::task::spawn_blocking(move || {
-            resolve_targets_blocking(
-                repo.as_ref(),
-                &combo_clone,
-                overrides,
-                &rr_counters,
-                &selection_registry,
-            )
-        })
-        .await?
+        self.async_repo()
+            .run(move |repo| {
+                resolve_targets_blocking(
+                    repo,
+                    &combo_clone,
+                    overrides,
+                    &rr_counters,
+                    &selection_registry,
+                )
+            })
+            .await
     }
 
     pub(crate) fn failure(err: CoreError, attempts: u8, _phase: ErrorPhase) -> PipelineResult {

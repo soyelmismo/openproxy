@@ -54,8 +54,7 @@ pub async fn list_combos(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<types_combos::Combo>>, ApiError> {
     // Read-only SELECT — use the READER.
-    let r = s.db_pool().reader();
-    let list = core_admin::list_combos(&r)?;
+    let list = s.db_pool().spawn_read(core_admin::list_combos).await?;
     Ok(Json(list))
 }
 
@@ -63,8 +62,10 @@ pub async fn create_combo(
     State(s): State<AppState>,
     Json(input): Json<core_admin::CreateComboInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let id = core_admin::create_combo(&w, &input)?;
+    let id = s
+        .db_pool()
+        .spawn_write(move |w| core_admin::create_combo(w, &input))
+        .await?;
     Ok(Json(serde_json::json!({ "id": id.0 })))
 }
 
@@ -73,9 +74,12 @@ pub async fn get_combo(
     Path(id): Path<i64>,
 ) -> Result<Json<types_combos::Combo>, ApiError> {
     // Read-only SELECT — use the READER.
-    let r = s.db_pool().reader();
     let id = ComboId(id);
-    let combo = core_combos::get_combo(&r, id)?.ok_or_else(|| CoreError::ComboNotFound(id.0))?;
+    let combo = s
+        .db_pool()
+        .spawn_read(move |r| core_combos::get_combo(r, id))
+        .await?
+        .ok_or_else(|| CoreError::ComboNotFound(id.0))?;
     Ok(Json(combo))
 }
 
@@ -242,11 +246,14 @@ pub async fn update_combo(
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let w = s.db_pool().writer();
-    let combo_id = ComboId(id);
-    apply_combo_general_updates(&w, combo_id, &body)?;
-    apply_combo_cooldown_updates(&w, combo_id, &body)?;
-    Ok(Json(serde_json::json!({ "id": id })))
+    crate::error::run_blocking(move || {
+        let w = s.db_pool().writer();
+        let combo_id = ComboId(id);
+        apply_combo_general_updates(&w, combo_id, &body)?;
+        apply_combo_cooldown_updates(&w, combo_id, &body)?;
+        Ok(Json(serde_json::json!({ "id": id })))
+    })
+    .await
 }
 
 #[cfg(test)]

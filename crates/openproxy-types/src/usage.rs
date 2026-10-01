@@ -11,7 +11,7 @@ pub const USAGE_FLAG_PROMPT_ESTIMATED: u8 = 1 << 4;
 pub const USAGE_FLAG_COMPLETION_ESTIMATED: u8 = 1 << 5;
 pub const USAGE_FLAG_PROXY_ROTATED: u8 = 1 << 6;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageInput {
     pub request_id: RequestId,
     pub trace_id: String,
@@ -32,6 +32,7 @@ pub struct UsageInput {
     pub error_msg: Option<String>,
     pub race_total: u8,
     pub api_key_id: Option<ApiKeyId>,
+    #[serde(with = "optional_bytes")]
     pub request_body_json: Option<bytes::Bytes>,
     pub response_body_json: Option<serde_json::Value>,
     pub request_headers: Option<std::collections::BTreeMap<String, String>>,
@@ -46,6 +47,23 @@ pub struct UsageInput {
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
     pub flags: u8,
+}
+
+mod optional_bytes {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: impl std::borrow::Borrow<Option<bytes::Bytes>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.borrow().as_deref().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<bytes::Bytes>, D::Error> {
+        Option::<Vec<u8>>::deserialize(deserializer).map(|value| value.map(bytes::Bytes::from))
+    }
 }
 
 impl UsageInput {

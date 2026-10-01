@@ -133,7 +133,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<Option<&str>, ApiError> {
 ///
 /// Returns the resolved identity; `key` is `None` only under the
 /// debug-build dev bypass.
-pub(crate) fn authenticate_admin(
+pub(crate) async fn authenticate_admin(
     state: &AppState,
     headers: &HeaderMap,
     remote_addr: Option<&SocketAddr>,
@@ -159,7 +159,7 @@ pub(crate) fn authenticate_admin(
 
     let token = extract_bearer_token(headers)?
         .ok_or_else(|| ApiError(CoreError::Auth("missing authorization header".into())))?;
-    let key = crate::middleware::auth::verify_key_credentials(state, token, "manage")?;
+    let key = crate::middleware::auth::verify_key_credentials(state, token, "manage").await?;
     Ok(AdminIdentity {
         key: Some(key),
         remote_addr: effective_remote_addr,
@@ -168,7 +168,7 @@ pub(crate) fn authenticate_admin(
 }
 
 /// Redeem a single-use WS ticket and re-validate the key it was bound to.
-fn authenticate_ws_ticket(
+async fn authenticate_ws_ticket(
     state: &AppState,
     ticket: &str,
 ) -> Result<Arc<core_api_keys::ApiKey>, ApiError> {
@@ -177,8 +177,10 @@ fn authenticate_ws_ticket(
         .consume(ticket)
         .ok_or_else(|| ApiError(CoreError::Auth("invalid or expired ws ticket".into())))?;
     let key = {
-        let r = state.db_pool().reader();
-        core_api_keys::get_by_id(&r, key_id)
+        state
+            .db_pool()
+            .spawn_read(move |r| core_api_keys::get_by_id(r, key_id))
+            .await
             .map_err(|e| {
                 tracing::error!(%e, "db error resolving ws ticket key");
                 ApiError(CoreError::Auth("invalid api key".into()))
@@ -193,7 +195,7 @@ fn authenticate_ws_ticket(
 /// same contract). Accepts EITHER `Authorization: Bearer <key>` (CLI /
 /// non-browser clients) OR a single-use `?ticket=` minted by
 /// `POST /admin/api/ws-ticket` (browsers). Never a raw key in the URL.
-pub(crate) fn authenticate_admin_ws(
+pub(crate) async fn authenticate_admin_ws(
     state: &AppState,
     headers: &HeaderMap,
     ticket: Option<&str>,
@@ -220,9 +222,9 @@ pub(crate) fn authenticate_admin_ws(
 
     let key = match (extract_bearer_token(headers)?, ticket) {
         (Some(token), _) => {
-            crate::middleware::auth::verify_key_credentials(state, token, "manage")?
+            crate::middleware::auth::verify_key_credentials(state, token, "manage").await?
         }
-        (None, Some(t)) if !t.is_empty() => authenticate_ws_ticket(state, t)?,
+        (None, Some(t)) if !t.is_empty() => authenticate_ws_ticket(state, t).await?,
         _ => {
             return Err(ApiError(CoreError::Auth(
                 "missing authorization header or ws ticket".into(),
@@ -260,7 +262,7 @@ pub async fn admin_auth_middleware(
         .into_response();
     }
 
-    match authenticate_admin(&state, req.headers(), Some(&addr)) {
+    match authenticate_admin(&state, req.headers(), Some(&addr)).await {
         Ok(identity) => {
             state.admin_limiter().record_success(client_ip_for_throttle);
             req.extensions_mut().insert(identity);
@@ -275,20 +277,25 @@ pub async fn admin_auth_middleware(
                 &state.config().server.trusted_proxies,
             );
 
-            let existing_key =
-                extract_bearer_token(req.headers())
+            let lookup_state = state.clone();
+            let lookup_headers = req.headers().clone();
+            let existing_key = crate::error::run_blocking(move || {
+                Ok(extract_bearer_token(&lookup_headers)
                     .ok()
                     .flatten()
                     .and_then(|token| {
                         let key_hash = core_api_keys::hash_key(token);
-                        state.get_cached_api_key(&key_hash).or_else(|| {
-                            let r = state.db_pool().reader();
+                        lookup_state.get_cached_api_key(&key_hash).or_else(|| {
+                            let r = lookup_state.db_pool().reader();
                             core_api_keys::get_by_hash(&r, &key_hash)
                                 .ok()
                                 .flatten()
                                 .map(Arc::new)
                         })
-                    });
+                    }))
+            })
+            .await
+            .unwrap_or_default();
 
             if let Some(key) = existing_key {
                 tracing::warn!(

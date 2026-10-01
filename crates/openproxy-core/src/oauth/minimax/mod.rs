@@ -379,7 +379,7 @@ impl OAuthProvider for MiniMaxOAuthProvider {
         db: DbRef<'_>,
     ) -> Result<TokenResponse> {
         let region = db
-            .with_conn(|conn| {
+            .with_read_conn_async(move |conn| {
                 conn.query_row(
                     "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
                     rusqlite::params![account_id.0],
@@ -389,7 +389,8 @@ impl OAuthProvider for MiniMaxOAuthProvider {
                 .map_err(openproxy_db::error::map_db_error_ctx(
                     "get provider_specific",
                 ))
-            })?
+            })
+            .await?
             .flatten()
             .and_then(|raw| serde_json::from_str::<MiniMaxAccountMeta>(&raw).ok())
             .and_then(|meta| meta.region)

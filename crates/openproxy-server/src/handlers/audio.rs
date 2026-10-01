@@ -39,7 +39,8 @@ pub async fn transcribe(
     let parsed_body = parse_multipart_body(multipart).await?;
 
     // 2. Authenticate & authorize model (chat scope + combo check).
-    let api_key_id = authenticate_and_authorize_model(&state, &headers, &parsed_body.model_name)?;
+    let api_key_id =
+        authenticate_and_authorize_model(&state, &headers, &parsed_body.model_name).await?;
 
     // 3. Delegate resolution, multi-target dispatch, and usage recording to core::audio.
     let response = call_unary_executor!(execute_transcribe, state, parsed_body, api_key_id);

@@ -49,17 +49,26 @@ use crate::{
 };
 
 pub fn build_router(state: AppState) -> Router {
-    let public_api_routes = handlers::public_api_routes(&state);
-    let admin_routes = build_admin_router(&state);
+    apply_layers(public_routes(&state).merge(admin_routes(&state)), state)
+}
 
-    // Security (OP-14): honor the configured `server.request_max_body_bytes`
-    // (default 10 MiB) instead of a hardcoded 32 MiB that ignored the setting.
-    // Admin backup restore raises its own per-route limit (see backup.rs).
-    let request_body_limit = state.config().server.request_max_body_bytes;
-    // Cloned for the outermost security-headers layer, which needs the
-    // trusted-proxy config for conditional HSTS (OP-21).
-    let state_clone = state.clone();
+/// Public listener: no dashboard, admin API, or admin redirects.
+pub fn build_public_router(state: AppState) -> Router {
+    apply_layers(public_routes(&state), state)
+}
 
+/// Dedicated administrative listener, retaining the same authentication policy.
+pub fn build_admin_listener_router(state: AppState) -> Router {
+    apply_layers(admin_routes(&state), state)
+}
+
+fn public_routes(state: &AppState) -> Router<AppState> {
+    Router::new()
+        .route("/v1/health", get(health))
+        .merge(handlers::public_api_routes(state))
+}
+
+fn admin_routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .route(
             "/",
@@ -69,9 +78,19 @@ pub fn build_router(state: AppState) -> Router {
             "/admin/",
             get(|| async { axum::response::Redirect::temporary("/admin") }),
         )
-        .route("/v1/health", get(health))
-        .merge(public_api_routes)
-        .nest("/admin", admin_routes)
+        .nest("/admin", build_admin_router(state))
+}
+
+fn apply_layers(routes: Router<AppState>, state: AppState) -> Router {
+    // Security (OP-14): honor the configured `server.request_max_body_bytes`
+    // (default 10 MiB) instead of a hardcoded 32 MiB that ignored the setting.
+    // Admin backup restore raises its own per-route limit (see backup.rs).
+    let request_body_limit = state.config().server.request_max_body_bytes;
+    // Cloned for the outermost security-headers layer, which needs the
+    // trusted-proxy config for conditional HSTS (OP-21).
+    let state_clone = state.clone();
+
+    routes
         .layer(crate::middleware::compression::transport_compression_layer())
         .layer(middleware::from_fn(
             crate::middleware::request_id::request_id,
@@ -118,8 +137,7 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
     // Top-level admin router: SPA shell at `/admin` and `/admin/`, the OAuth
     // callback page, the protected REST API under `/admin/api/*`, the WS upgrade,
     // and the two public endpoints. Anything else under `/admin/*` falls through
-    // to `admin_ui::serve_asset`, which serves an embedded asset or (unknown
-    // path) the SPA shell, whose hash-router takes over.
+    // to `admin_ui::serve_asset`, which serves allowlisted assets or 404.
     //
     // Auth scope:
     //   - `/admin/api/*`         — auth middleware (above)
@@ -202,6 +220,60 @@ mod tests {
             core_db::DbPool::test_pool_with_prefix("openproxy-router-test").expect("open pool");
         let path = pool.path().to_path_buf();
         (pool, path)
+    }
+
+    #[tokio::test]
+    async fn dedicated_routers_isolate_surfaces() {
+        let state = make_state().await;
+        let public = build_public_router(state.clone());
+        for path in [
+            "/",
+            "/admin",
+            "/admin/",
+            "/admin/health",
+            "/admin/api/config",
+            "/admin/ws",
+            "/admin/dist/app.js",
+        ] {
+            let response = public
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "public {path}");
+            assert!(response.headers().contains_key("x-request-id"));
+        }
+        let admin = build_admin_listener_router(state).layer(axum::Extension(
+            axum::extract::ConnectInfo("127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap()),
+        ));
+        for path in ["/v1/health", "/v1/models"] {
+            let response = admin
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "admin {path}");
+        }
+        let response = admin
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/api/config")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

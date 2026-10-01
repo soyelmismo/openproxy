@@ -113,11 +113,15 @@ fn usage_filter_preset_unknown_string_returns_400() {
 async fn usage_recent_clamps_since_id_at_max() {
     let tmp = tempdir();
     let (state, key) = make_state_with_key(tmp.path()).await;
-    let app = crate::router::build_router(state);
+    let app = crate::router::build_router(state).layer(axum::Extension(
+        axum::extract::connect_info::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        ),
+    ));
     let (status, _) = test_req(
         &app,
         "GET",
-        "/admin/usage/recent?since_id=9223372036854775807&limit=1",
+        "/admin/api/usage/recent?since_id=9223372036854775807&limit=1",
         Some(&key),
         None,
     )
@@ -129,11 +133,15 @@ async fn usage_recent_clamps_since_id_at_max() {
 async fn usage_recent_rejects_negative_since_id() {
     let tmp = tempdir();
     let (state, key) = make_state_with_key(tmp.path()).await;
-    let app = crate::router::build_router(state);
+    let app = crate::router::build_router(state).layer(axum::Extension(
+        axum::extract::connect_info::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        ),
+    ));
     let (status, _) = test_req(
         &app,
         "GET",
-        "/admin/usage/recent?since_id=-42&limit=1",
+        "/admin/api/usage/recent?since_id=-42&limit=1",
         Some(&key),
         None,
     )

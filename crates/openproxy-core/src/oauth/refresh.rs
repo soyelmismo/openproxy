@@ -85,20 +85,29 @@ impl TokenRefreshCoordinator {
         // Check if another concurrent task already refreshed this account while
         // we waited for the account lock. If `expires_at` is safely in the future,
         // reuse the freshly stored access token to avoid burning rotating refresh tokens.
-        let check_res = tokio::task::block_in_place(|| {
-            db.with_conn(|conn| {
-                let acc = openproxy_db::accounts::get(conn, account_id, master_key)?;
+        let check_master_key = master_key.clone();
+        let check_provider_id = provider_id.to_owned();
+        let check_res = db
+            .with_read_conn_async(move |conn| {
+                let acc = openproxy_db::accounts::get(conn, account_id, &check_master_key)?;
                 let Some(acc) = acc else {
                     return Ok(None);
                 };
                 let needs_refresh =
-                    pipeline_token_needs_refresh(acc.expires_at.as_deref(), provider_id);
-                let access_token =
-                    openproxy_db::accounts::decrypt_access_token(conn, account_id, master_key).ok();
-                let latest_refresh_token =
-                    openproxy_db::accounts::decrypt_refresh_token(conn, account_id, master_key)
-                        .ok()
-                        .flatten();
+                    pipeline_token_needs_refresh(acc.expires_at.as_deref(), &check_provider_id);
+                let access_token = openproxy_db::accounts::decrypt_access_token(
+                    conn,
+                    account_id,
+                    &check_master_key,
+                )
+                .ok();
+                let latest_refresh_token = openproxy_db::accounts::decrypt_refresh_token(
+                    conn,
+                    account_id,
+                    &check_master_key,
+                )
+                .ok()
+                .flatten();
                 Ok(Some((
                     needs_refresh,
                     access_token,
@@ -106,7 +115,7 @@ impl TokenRefreshCoordinator {
                     acc,
                 )))
             })
-        })?;
+            .await?;
 
         if let Some((false, Some(access_token), maybe_rt, acc)) = check_res {
             tracing::info!(
@@ -136,26 +145,26 @@ impl TokenRefreshCoordinator {
             .await?;
         let expires_at = token_expires_at(token.expires_in);
 
-        // `db` borrows a non-'static lifetime, so it cannot move into
-        // `spawn_blocking`; `block_in_place` runs the closure on this worker.
-        tokio::task::block_in_place(|| {
-            db.with_conn(|conn| {
-                store_oauth_tokens(
-                    conn,
-                    account_id,
-                    master_key,
-                    StoreOAuthTokensParams {
-                        access_token: &token.access_token,
-                        refresh_token: token.refresh_token.as_deref(),
-                        token_type: &token.token_type,
-                        expires_at: expires_at.as_deref(),
-                        scope: token.scope.as_deref(),
-                        provider_specific: None,
-                        email: provider.email_from_token(&token).as_deref(),
-                    },
-                )
-            })
-        })?;
+        let stored_token = token.clone();
+        let store_master_key = master_key.clone();
+        let email = provider.email_from_token(&token);
+        db.with_conn_async(move |conn| {
+            store_oauth_tokens(
+                conn,
+                account_id,
+                &store_master_key,
+                StoreOAuthTokensParams {
+                    access_token: &stored_token.access_token,
+                    refresh_token: stored_token.refresh_token.as_deref(),
+                    token_type: &stored_token.token_type,
+                    expires_at: expires_at.as_deref(),
+                    scope: stored_token.scope.as_deref(),
+                    provider_specific: None,
+                    email: email.as_deref(),
+                },
+            )
+        })
+        .await?;
 
         Ok(token)
     }

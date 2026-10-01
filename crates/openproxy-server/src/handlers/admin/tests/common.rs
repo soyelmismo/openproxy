@@ -40,7 +40,7 @@ impl Drop for HomeGuard {
     }
 }
 
-pub static AUTH_BYPASS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub static AUTH_BYPASS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct EnvVarGuard {
     pub key: &'static str,
@@ -48,7 +48,7 @@ pub struct EnvVarGuard {
 }
 
 impl EnvVarGuard {
-    pub fn set(_lock: &std::sync::MutexGuard<'_, ()>, key: &'static str, value: &str) -> Self {
+    pub fn set(_lock: &tokio::sync::MutexGuard<'_, ()>, key: &'static str, value: &str) -> Self {
         let prev = std::env::var(key).ok();
         unsafe { std::env::set_var(key, value) };
         Self { key, prev }

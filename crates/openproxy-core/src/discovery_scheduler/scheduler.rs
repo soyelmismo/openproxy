@@ -47,6 +47,38 @@ pub fn start_with_container(
     ))
 }
 
+pub async fn start_with_container_async(
+    services: &crate::di::ServiceContainer,
+    config: DiscoverySchedulerConfig,
+) -> crate::error::Result<DiscoveryScheduler> {
+    start_async(
+        services.db_pool()?,
+        services.master_key()?,
+        services.adapters()?,
+        services.upstream_client()?,
+        config,
+    )
+    .await
+}
+
+/// Offload the initial provider snapshot while retaining the synchronous API.
+pub async fn start_async(
+    db_pool: Arc<DbPool>,
+    master_key: Arc<MasterKey>,
+    adapters: Arc<Vec<ProviderAdapterEnum>>,
+    upstream_client: Arc<UpstreamClient>,
+    config: DiscoverySchedulerConfig,
+) -> crate::error::Result<DiscoveryScheduler> {
+    tokio::task::spawn_blocking(move || {
+        start(db_pool, master_key, adapters, upstream_client, config)
+    })
+    .await
+    .map_err(|error| {
+        crate::error::CoreError::Internal(format!("discovery startup join failed: {error}"))
+    })
+}
+
+/// Blocking startup snapshot; async callers should use [`start_async`].
 pub fn start(
     db_pool: Arc<DbPool>,
     master_key: Arc<MasterKey>,
@@ -243,8 +275,7 @@ pub fn start(
             }
             if last_db_check.elapsed() >= db_check_interval {
                 last_db_check = tokio::time::Instant::now();
-                let r = coordinator_pool.reader();
-                if let Ok(db_list) = providers::list(&r) {
+                if let Ok(db_list) = coordinator_pool.spawn_read(providers::list).await {
                     for p in db_list {
                         if coordinator_cancel.is_cancelled() {
                             return;

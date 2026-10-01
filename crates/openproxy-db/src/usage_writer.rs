@@ -21,8 +21,26 @@ pub fn record(
     input: &UsageInput,
     cooldown: Option<&AttemptCooldown<'_>>,
 ) -> Result<(UsageId, RecentUsageRow)> {
+    record_journaled(conn, input, cooldown, None)?.ok_or_else(|| {
+        openproxy_types::CoreError::Internal("non-journaled usage unexpectedly skipped".into())
+    })
+}
+
+pub fn record_journaled(
+    conn: &mut Connection,
+    input: &UsageInput,
+    cooldown: Option<&AttemptCooldown<'_>>,
+    journal_id: Option<i64>,
+) -> Result<Option<(UsageId, RecentUsageRow)>> {
     crate::with_busy_retry("usage_writer::record", || {
-        let transaction = conn.transaction().map_err(crate::error::map_db_error)?;
+        let transaction = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::map_db_error)?;
+        if let Some(id) = journal_id
+            && !crate::usage_journal::contains(&transaction, id)?
+        {
+            return Ok(None);
+        }
         let row = crate::cost::record_row(&transaction, input)?;
         if let Some(params) = cooldown.filter(|params| params.combo_id.0 != -1) {
             match params.error {
@@ -41,8 +59,11 @@ pub fn record(
                 Some(_) => {}
             }
         }
+        if let Some(id) = journal_id {
+            crate::usage_journal::acknowledge(&transaction, id)?;
+        }
         transaction.commit().map_err(crate::error::map_db_error)?;
-        Ok(row)
+        Ok(Some(row))
     })
 }
 

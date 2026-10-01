@@ -131,3 +131,44 @@ fn synthetic_target_does_not_change_persistent_cooldowns() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[test]
+fn journal_acknowledgement_is_atomic_and_replay_is_idempotent() {
+    let mut conn = connection();
+    let id = crate::usage_journal::append(&mut conn, "payload").unwrap();
+    assert_eq!(crate::usage_journal::depth(&conn).unwrap(), 1);
+    assert!(
+        record_journaled(&mut conn, &input(), None, Some(id))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(crate::usage_journal::depth(&conn).unwrap(), 0);
+    assert!(
+        record_journaled(&mut conn, &input(), None, Some(id))
+            .unwrap()
+            .is_none()
+    );
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM usage", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn failed_apply_preserves_journal_for_restart() {
+    let mut conn = connection();
+    let id = crate::usage_journal::append(&mut conn, "payload").unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER fail_usage BEFORE INSERT ON usage BEGIN SELECT RAISE(ABORT, 'full'); END;",
+    )
+    .unwrap();
+    assert!(record_journaled(&mut conn, &input(), None, Some(id)).is_err());
+    assert_eq!(crate::usage_journal::depth(&conn).unwrap(), 1);
+    conn.execute_batch("DROP TRIGGER fail_usage").unwrap();
+    assert!(
+        record_journaled(&mut conn, &input(), None, Some(id))
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(crate::usage_journal::depth(&conn).unwrap(), 0);
+}

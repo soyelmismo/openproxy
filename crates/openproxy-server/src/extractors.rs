@@ -5,18 +5,29 @@ use axum::{
     http::request::Parts,
 };
 use openproxy_db as db;
-use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use crate::{error::ApiError, middleware::auth::ValidatedApiToken, state::AppState};
 
-/// Axum extractor that acquires a read connection from [`AppState`].
-pub struct DbReader(pub db::ArcReaderGuard);
+/// Pool handle only: connection acquisition and queries stay on blocking threads.
+pub struct DbReader(pub Arc<db::DbPool>);
 
-impl Deref for DbReader {
-    type Target = rusqlite::Connection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl DbReader {
+    pub async fn run<F, R>(self, query: F) -> Result<R, ApiError>
+    where
+        F: FnOnce(&rusqlite::Connection) -> Result<R, ApiError> + Send + 'static,
+        R: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let reader = self.0.reader();
+            query(&reader)
+        })
+        .await
+        .map_err(|error| {
+            ApiError(openproxy_types::CoreError::Internal(format!(
+                "reader spawn failed: {error}"
+            )))
+        })?
     }
 }
 
@@ -32,25 +43,37 @@ where
         state: &S,
     ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
         let app_state = AppState::from_ref(state);
-        let r = app_state.db_pool().reader_guard();
+        let r = Arc::clone(app_state.db_pool());
         std::future::ready(Ok(DbReader(r)))
     }
 }
 
-/// Axum extractor that acquires a write connection from [`AppState`].
-pub struct DbWriter(pub db::ArcWriterGuard);
+/// Writer pool handle; never exposes a connection guard to async code.
+pub struct DbWriter(pub Arc<db::DbPool>);
 
-impl Deref for DbWriter {
-    type Target = rusqlite::Connection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for DbWriter {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+impl DbWriter {
+    pub async fn run<F, R>(self, query: F) -> Result<R, ApiError>
+    where
+        F: FnOnce(&mut rusqlite::Connection) -> Result<R, ApiError> + Send + 'static,
+        R: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let mut writer = self
+                .0
+                .try_writer_for(db::conn::ADMIN_LOCK_TIMEOUT)
+                .ok_or_else(|| {
+                    ApiError(openproxy_types::CoreError::Internal(
+                        "writer lock timeout (5s)".into(),
+                    ))
+                })?;
+            query(&mut writer)
+        })
+        .await
+        .map_err(|error| {
+            ApiError(openproxy_types::CoreError::Internal(format!(
+                "writer spawn failed: {error}"
+            )))
+        })?
     }
 }
 
@@ -63,22 +86,7 @@ where
 
     async fn from_request_parts(_parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let app_state = AppState::from_ref(state);
-        let conn_arc = app_state.db_pool().writer_arc();
-        let guard = tokio::task::spawn_blocking(move || {
-            conn_arc.try_lock_arc_for(std::time::Duration::from_secs(5))
-        })
-        .await
-        .map_err(|e| {
-            ApiError(openproxy_types::CoreError::Internal(format!(
-                "writer spawn failed: {e}"
-            )))
-        })?
-        .ok_or_else(|| {
-            ApiError(openproxy_types::CoreError::Internal(
-                "writer lock timeout (5s)".into(),
-            ))
-        })?;
-        Ok(DbWriter(guard))
+        Ok(DbWriter(Arc::clone(app_state.db_pool())))
     }
 }
 
@@ -134,5 +142,50 @@ where
         .or_else(|| peer_addr.map(|ci| ci.0.ip()))
         .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
         std::future::ready(Ok(ClientIp(ip)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn writer_contention_does_not_block_runtime() {
+        let pool = Arc::new(db::DbPool::test_pool().unwrap());
+        let locked_pool = Arc::clone(&pool);
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let lock_thread = std::thread::spawn(move || {
+            let _writer = locked_pool.writer();
+            locked_tx.send(()).unwrap();
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        });
+        locked_rx.await.unwrap();
+        let query = tokio::spawn(DbWriter(pool).run(|conn| Ok(conn.is_autocommit())));
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        })
+        .await
+        .unwrap();
+        assert!(!query.is_finished());
+        release_tx.send(()).unwrap();
+        assert!(query.await.unwrap().unwrap());
+        lock_thread.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_query_runs_off_runtime_and_propagates_errors() {
+        let runtime_thread = std::thread::current().id();
+        let pool = Arc::new(db::DbPool::test_pool().unwrap());
+        let error = DbReader(pool)
+            .run(move |_| -> Result<(), ApiError> {
+                assert_ne!(std::thread::current().id(), runtime_thread);
+                Err(openproxy_types::CoreError::Validation("read failed".into()).into())
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error.0, openproxy_types::CoreError::Validation(_)));
     }
 }

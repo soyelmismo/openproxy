@@ -37,19 +37,28 @@ pub async fn list_notifications(
     DbReader(r): DbReader,
     Query(q): Query<NotificationsQuery>,
 ) -> Result<Json<Vec<openproxy_core::notifications::NotificationRow>>, ApiError> {
-    let unread_only = q.unread.unwrap_or(false);
-    let limit = q.limit.unwrap_or(50);
-    let rows = openproxy_core::notifications::list(&r, unread_only, limit, q.before_id)
-        .map_err(|e| CoreError::Internal(format!("core_notifications::list: {e}")))?;
-    Ok(Json(rows))
+    DbReader(r)
+        .run(move |r| {
+            let unread_only = q.unread.unwrap_or(false);
+            let limit = q.limit.unwrap_or(50);
+            let rows = openproxy_core::notifications::list(r, unread_only, limit, q.before_id)
+                .map_err(|e| CoreError::Internal(format!("core_notifications::list: {e}")))?;
+            Ok(Json(rows))
+        })
+        .await
 }
 
 pub async fn notifications_unread_count(
     DbReader(r): DbReader,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let count = openproxy_core::notifications::unread_count(&r)
-        .map_err(|e| CoreError::Internal(format!("core_notifications::unread_count: {e}")))?;
-    Ok(Json(serde_json::json!({ "count": count })))
+    DbReader(r)
+        .run(move |r| {
+            let count = openproxy_core::notifications::unread_count(r).map_err(|e| {
+                CoreError::Internal(format!("core_notifications::unread_count: {e}"))
+            })?;
+            Ok(Json(serde_json::json!({ "count": count })))
+        })
+        .await
 }
 
 macro_rules! notif_action_handler {
@@ -58,18 +67,22 @@ macro_rules! notif_action_handler {
             DbWriter(w): DbWriter,
             Path(id): Path<i64>,
         ) -> Result<Json<serde_json::Value>, ApiError> {
-            openproxy_core::notifications::$core_fn(&w, id)
+            DbWriter(w).run(move |w| {
+            openproxy_core::notifications::$core_fn(w, id)
                 .map_err(|e| CoreError::Internal(format!("core_notifications::{}: {e}", stringify!($core_fn))))?;
             Ok(Json(serde_json::json!({ "ok": true })))
+            }).await
         }
     };
     (all: $fn_name:ident, $core_fn:ident) => {
         pub async fn $fn_name(
             DbWriter(w): DbWriter,
         ) -> Result<Json<serde_json::Value>, ApiError> {
-            let updated = openproxy_core::notifications::$core_fn(&w)
+            DbWriter(w).run(move |w| {
+            let updated = openproxy_core::notifications::$core_fn(w)
                 .map_err(|e| CoreError::Internal(format!("core_notifications::{}: {e}", stringify!($core_fn))))?;
             Ok(Json(serde_json::json!({ "updated": updated })))
+            }).await
         }
     };
 }
@@ -83,7 +96,8 @@ pub async fn delete_notification(
     DbWriter(w): DbWriter,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let deleted = openproxy_core::notifications::delete(&w, id)
+    DbWriter(w).run(move |w| {
+    let deleted = openproxy_core::notifications::delete(w, id)
         .map_err(|e| CoreError::Internal(format!("core_notifications::delete: {e}")))?;
     if deleted {
         Ok(Json(serde_json::json!({ "ok": true })))
@@ -92,4 +106,5 @@ pub async fn delete_notification(
             "notification not deletable (kind=model_* within 30-day audit window, or row does not exist)".into(),
         )))
     }
+    }).await
 }

@@ -20,8 +20,12 @@ pub fn router() -> axum::Router<crate::state::AppState> {
 }
 
 pub async fn list_sources(DbReader(r): DbReader) -> Result<Json<Vec<ProxySource>>, ApiError> {
-    let list = list_proxy_sources(&r)?;
-    Ok(Json(list))
+    DbReader(r)
+        .run(move |r| {
+            let list = list_proxy_sources(r)?;
+            Ok(Json(list))
+        })
+        .await
 }
 
 fn validate_create_source_input(body: &CreateProxySourceInput) -> Result<(), ApiError> {
@@ -51,7 +55,9 @@ pub async fn create_source(
     Json(body): Json<CreateProxySourceInput>,
 ) -> Result<Json<ProxySource>, ApiError> {
     validate_create_source_input(&body)?;
-    let src = create_proxy_source(&w, &body)?;
+    let src = DbWriter(w)
+        .run(move |w| Ok(create_proxy_source(w, &body)?))
+        .await?;
     spawn_source_sync_and_test(Arc::clone(state.db_pool()));
     Ok(Json(src))
 }
@@ -61,8 +67,12 @@ pub async fn update_source(
     Path(id): Path<String>,
     Json(body): Json<UpdateProxySourceInput>,
 ) -> Result<Json<ProxySource>, ApiError> {
-    let src = update_proxy_source(&w, &id, body)?;
-    Ok(Json(src))
+    DbWriter(w)
+        .run(move |w| {
+            let src = update_proxy_source(w, &id, body)?;
+            Ok(Json(src))
+        })
+        .await
 }
 
 fn validate_source_deletion(conn: &rusqlite::Connection, id: &str) -> Result<(), ApiError> {
@@ -84,13 +94,17 @@ pub async fn delete_source(
     DbWriter(w): DbWriter,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    validate_source_deletion(&w, &id)?;
-    if !delete_proxy_source(&w, &id)? {
-        return Err(ApiError(CoreError::Validation(format!(
-            "proxy source '{id}' not found"
-        ))));
-    }
-    Ok(Json(serde_json::json!({ "id": id, "deleted": true })))
+    DbWriter(w)
+        .run(move |w| {
+            validate_source_deletion(w, &id)?;
+            if !delete_proxy_source(w, &id)? {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "proxy source '{id}' not found"
+                ))));
+            }
+            Ok(Json(serde_json::json!({ "id": id, "deleted": true })))
+        })
+        .await
 }
 
 #[derive(serde::Deserialize)]
@@ -108,7 +122,10 @@ pub async fn test_source_by_id(
     DbReader(r): DbReader,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let url = fetch_source_url_by_id(&r, &id)?;
+    let source_id = id.clone();
+    let url = DbReader(r)
+        .run(move |r| fetch_source_url_by_id(r, &source_id))
+        .await?;
     let count = test_proxy_source_url(&url).await?;
     Ok(Json(serde_json::json!({
         "id": id,
@@ -140,6 +157,10 @@ pub async fn reorder_proxy_sources(
     DbWriter(w): DbWriter,
     Json(body): Json<ReorderProxySourcesInput>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    openproxy_core::free_proxies::reorder_proxy_sources(&w, &body.ids)?;
-    Ok(Json(serde_json::json!({ "reordered": true })))
+    DbWriter(w)
+        .run(move |w| {
+            openproxy_core::free_proxies::reorder_proxy_sources(w, &body.ids)?;
+            Ok(Json(serde_json::json!({ "reordered": true })))
+        })
+        .await
 }

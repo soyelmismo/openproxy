@@ -50,23 +50,31 @@ pub async fn list_proxies(
 ) -> Result<Json<Vec<openproxy_core::free_proxies::FreeProxy>>, ApiError> {
     // Rows carry proxy `username`/`password`; make the read attributable.
     super::auth::audit_secret_read(&identity, "proxy_credentials_list", "proxies:list");
-    let list = openproxy_core::free_proxies::list_proxies(
-        &r,
-        query.source.as_deref(),
-        query.status.as_deref(),
-        query.protocol.as_deref(),
-        query.search.as_deref(),
-        query.limit,
-        query.offset,
-    )?;
-    Ok(Json(list))
+    DbReader(r)
+        .run(move |r| {
+            let list = openproxy_core::free_proxies::list_proxies(
+                r,
+                query.source.as_deref(),
+                query.status.as_deref(),
+                query.protocol.as_deref(),
+                query.search.as_deref(),
+                query.limit,
+                query.offset,
+            )?;
+            Ok(Json(list))
+        })
+        .await
 }
 
 pub async fn get_proxy_summary(
     DbReader(r): DbReader,
 ) -> Result<Json<openproxy_core::free_proxies::ProxySummary>, ApiError> {
-    let summary = openproxy_core::free_proxies::get_proxy_summary(&r)?;
-    Ok(Json(summary))
+    DbReader(r)
+        .run(move |r| {
+            let summary = openproxy_core::free_proxies::get_proxy_summary(r)?;
+            Ok(Json(summary))
+        })
+        .await
 }
 
 pub async fn sync_proxies(
@@ -179,7 +187,7 @@ crate::admin_entity_action_handler! {
         DbWriter(w): DbWriter,
         Path(id): Path<String>,
     ) -> Result<Json<serde_json::Value>, ApiError> {
-        openproxy_core::free_proxies::delete_proxy(&w, &id)?;
+        openproxy_core::free_proxies::delete_proxy(w, &id)?;
         Ok(Json(serde_json::json!({ "status": "deleted" })))
     }
 }
@@ -187,8 +195,12 @@ crate::admin_entity_action_handler! {
 pub async fn get_proxy_test_url(
     DbReader(r): DbReader,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let url = openproxy_db::app_config::load_proxy_test_url(&r)?;
-    Ok(Json(serde_json::json!({ "proxy_test_url": url })))
+    DbReader(r)
+        .run(move |r| {
+            let url = openproxy_db::app_config::load_proxy_test_url(r)?;
+            Ok(Json(serde_json::json!({ "proxy_test_url": url })))
+        })
+        .await
 }
 
 #[derive(serde::Deserialize)]

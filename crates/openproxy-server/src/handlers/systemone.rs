@@ -44,7 +44,8 @@ pub async fn handle_system_one(
 
     let model_name = req.model.as_deref().unwrap_or("jev-latest");
     let api_key_id =
-        crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, model_name)?;
+        crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, model_name)
+            .await?;
 
     let response = call_unary_executor!(execute_system_one, state, req, api_key_id);
 

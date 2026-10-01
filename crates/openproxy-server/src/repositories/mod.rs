@@ -1,4 +1,7 @@
-//! Repository traits and SQLite implementation for data persistence layer.
+//! Synchronous repository traits and SQLite implementation.
+//!
+//! Call only inside blocking tasks; async handlers offload their complete
+//! service operation so connection guards never escape onto Tokio workers.
 
 use openproxy_core::{api_keys as core_api_keys, models::Model};
 use openproxy_db as db;

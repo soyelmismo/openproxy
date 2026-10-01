@@ -1,7 +1,6 @@
 //! Resolución de proxy: status + asignación por provider/cuenta. Único
 //! submódulo que NO accede a `self.conn` directamente — toda la BD se
-//! consulta vía `tracker.repo` (que es un `Arc<dyn PipelineRepository>` y
-//! ya gestiona el `conn.lock()` internamente).
+//! consulta mediante el repositorio asíncrono, fuera del reactor Tokio.
 
 use super::UpstreamDispatcher;
 
@@ -10,8 +9,8 @@ impl UpstreamDispatcher {
     /// del `Mutex<Connection>` síncronamente.
     pub(super) async fn fetch_proxy_status(&self, proxy_url: Option<&str>) -> Option<String> {
         let url = proxy_url?.to_string();
-        let repo = std::sync::Arc::clone(&self.tracker.repo);
-        tokio::task::spawn_blocking(move || repo.get_proxy_status_by_url(&url))
+        self.async_repo()
+            .run(move |repo| Ok(repo.get_proxy_status_by_url(&url)))
             .await
             .unwrap_or(None)
     }
@@ -27,13 +26,11 @@ impl UpstreamDispatcher {
         let proxy_url = if let Some((_, ref purl)) = req.proxy_override {
             Some(purl.clone())
         } else {
-            let repo = std::sync::Arc::clone(&self.tracker.repo);
             let provider_id = target.provider_id.clone();
             let account_id = target.account_id;
-            tokio::task::spawn_blocking(move || {
-                repo.get_or_assign_provider_proxy(&provider_id, account_id)
-            })
-            .await??
+            self.async_repo()
+                .run(move |repo| repo.get_or_assign_provider_proxy(&provider_id, account_id))
+                .await?
         };
 
         let proxy_status = self.fetch_proxy_status(proxy_url.as_deref()).await;

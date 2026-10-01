@@ -6,10 +6,20 @@ use openproxy_types::{
 };
 use std::collections::HashMap;
 
+mod async_repository;
+pub use async_repository::{
+    AsyncPipelineRepository, BlockingPipelineRepository, RepositoryFuture, RepositoryOperation,
+};
+
+#[cfg(test)]
+mod tests;
+
 pub use openproxy_db::accounts::{AccountsMetaMaps, KiroMeta, RawAccount};
 
 pub use PipelineRepository as Repository;
 
+/// Blocking-only compatibility contract. Async callers must use
+/// [`AsyncPipelineRepository`] so SQLite and connection locks stay off Tokio.
 pub trait PipelineRepository: Send + Sync {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>>;
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>>;
@@ -126,26 +136,54 @@ pub trait PipelineRepository: Send + Sync {
 
 #[derive(Clone)]
 pub struct SqlitePipelineRepository {
-    conn: std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    connections: RepositoryConnections,
+}
+
+#[derive(Clone)]
+enum RepositoryConnections {
+    Legacy(std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>),
+    Pool(openproxy_db::DbPool),
 }
 
 impl SqlitePipelineRepository {
     pub fn new(conn: std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>) -> Self {
-        Self { conn }
+        Self {
+            connections: RepositoryConnections::Legacy(conn),
+        }
+    }
+
+    pub fn with_db_pool(pool: openproxy_db::DbPool) -> Self {
+        Self {
+            connections: RepositoryConnections::Pool(pool),
+        }
+    }
+
+    fn reader(&self) -> openproxy_db::conn::ArcReaderGuard {
+        match &self.connections {
+            RepositoryConnections::Legacy(conn) => conn.lock_arc(),
+            RepositoryConnections::Pool(pool) => pool.reader_guard(),
+        }
+    }
+
+    fn writer(&self) -> openproxy_db::conn::ArcWriterGuard {
+        match &self.connections {
+            RepositoryConnections::Legacy(conn) => conn.lock_arc(),
+            RepositoryConnections::Pool(pool) => pool.writer_guard(),
+        }
     }
 }
 
 impl PipelineRepository for SqlitePipelineRepository {
     fn load_combo(&self, combo_id: ComboId) -> Result<Option<Combo>> {
-        openproxy_db::combos::get_combo(&self.conn.lock(), combo_id)
+        openproxy_db::combos::get_combo(&self.reader(), combo_id)
     }
 
     fn list_targets(&self, combo_id: ComboId) -> Result<Vec<ComboTarget>> {
-        openproxy_db::combos::list_targets(&self.conn.lock(), combo_id)
+        openproxy_db::combos::list_targets(&self.reader(), combo_id)
     }
 
     fn auto_populate_empty_combo(&self, combo_id: ComboId) -> Result<usize> {
-        auto_populate_empty_combo(&self.conn.lock(), combo_id)
+        auto_populate_empty_combo(&self.writer(), combo_id)
     }
 
     fn get_account(
@@ -153,11 +191,11 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<Option<Account>> {
-        openproxy_db::accounts::get(&self.conn.lock(), account_id, master_key)
+        openproxy_db::accounts::get(&self.reader(), account_id, master_key)
     }
 
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {
-        openproxy_db::accounts::decrypt_api_key(&self.conn.lock(), account_id, master_key)
+        openproxy_db::accounts::decrypt_api_key(&self.reader(), account_id, master_key)
     }
 
     fn decrypt_access_token(
@@ -165,7 +203,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<String> {
-        openproxy_db::accounts::decrypt_access_token(&self.conn.lock(), account_id, master_key)
+        openproxy_db::accounts::decrypt_access_token(&self.reader(), account_id, master_key)
     }
 
     fn store_oauth_tokens(
@@ -174,12 +212,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         master_key: &MasterKey,
         params: openproxy_types::accounts::StoreOAuthTokensParams<'_>,
     ) -> Result<()> {
-        openproxy_db::accounts::store_oauth_tokens(
-            &self.conn.lock(),
-            account_id,
-            master_key,
-            params,
-        )
+        openproxy_db::accounts::store_oauth_tokens(&self.writer(), account_id, master_key, params)
     }
 
     fn insert_and_broadcast_notification(
@@ -189,7 +222,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         dedup_key: Option<&str>,
         provider_id: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock();
+        let conn = self.writer();
         if let Some(id) =
             openproxy_db::notifications::insert(&conn, kind, payload, dedup_key, provider_id)?
         {
@@ -209,7 +242,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn load_model(&self, row_id: ModelRowId) -> Result<Model> {
-        openproxy_db::models::get_by_row_id(&self.conn.lock(), row_id)?.ok_or_else(|| {
+        openproxy_db::models::get_by_row_id(&self.reader(), row_id)?.ok_or_else(|| {
             openproxy_types::error::CoreError::Internal(format!("model {} not found", row_id.0))
         })
     }
@@ -219,16 +252,16 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<Option<String>> {
-        openproxy_db::accounts::get(&self.conn.lock(), account_id, master_key)
+        openproxy_db::accounts::get(&self.reader(), account_id, master_key)
             .map(|opt| opt.and_then(|a| a.label.map(|l| l.to_string())))
     }
 
     fn record_usage_row(&self, input: &UsageInput) -> Result<Option<UsageId>> {
-        openproxy_db::cost::record(&self.conn.lock(), input).map(Some)
+        openproxy_db::cost::record(&self.writer(), input).map(Some)
     }
 
     fn mark_client_response(&self, row_id: UsageId) -> Result<()> {
-        openproxy_db::cost::mark_client_response(&self.conn.lock(), row_id)
+        openproxy_db::cost::mark_client_response(&self.writer(), row_id)
     }
 
     fn mark_winner_usage_row(
@@ -237,7 +270,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         attempt: u8,
         target_id: ComboTargetId,
     ) -> Result<()> {
-        openproxy_db::cost::mark_winner_usage_row(&self.conn.lock(), request_id, attempt, target_id)
+        openproxy_db::cost::mark_winner_usage_row(&self.writer(), request_id, attempt, target_id)
     }
 
     fn record_no_healthy_targets_row(
@@ -250,7 +283,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         error_msg: &str,
     ) -> Result<()> {
         openproxy_db::cost::record_no_healthy_targets_row(
-            &self.conn.lock(),
+            &self.writer(),
             request_id,
             trace_id,
             combo.id,
@@ -261,14 +294,14 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn clear_cooldown(&self, target_id: ComboTargetId) -> Result<()> {
-        openproxy_db::cooldowns::clear_cooldown(&self.conn.lock(), target_id)
+        openproxy_db::cooldowns::clear_cooldown(&self.writer(), target_id)
     }
 
     fn get_active_cooldown_targets(
         &self,
         combo_id: ComboId,
     ) -> Result<std::collections::HashSet<ComboTargetId>> {
-        openproxy_db::combos::get_active_cooldown_target_ids(&self.conn.lock(), combo_id)
+        openproxy_db::combos::get_active_cooldown_target_ids(&self.reader(), combo_id)
     }
 
     fn record_cooldown(
@@ -281,7 +314,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         factor: u32,
     ) -> Result<()> {
         openproxy_db::cooldowns::record_cooldown(
-            &self.conn.lock(),
+            &self.writer(),
             target_id,
             reason,
             mode,
@@ -292,7 +325,7 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>> {
-        let models = openproxy_db::models::get_by_row_ids(&self.conn.lock(), model_row_ids)?;
+        let models = openproxy_db::models::get_by_row_ids(&self.reader(), model_row_ids)?;
         let mut map = HashMap::new();
         for m in models {
             map.insert(m.row_id.0, m);
@@ -301,11 +334,11 @@ impl PipelineRepository for SqlitePipelineRepository {
     }
 
     fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps> {
-        openproxy_db::accounts::get_accounts_meta(&self.conn.lock(), account_ids)
+        openproxy_db::accounts::get_accounts_meta(&self.reader(), account_ids)
     }
 
     fn get_antigravity_projects(&self, account_ids: &[i64]) -> Result<HashMap<i64, Box<str>>> {
-        let conn = self.conn.lock();
+        let conn = self.reader();
         let map: HashMap<i64, openproxy_db::accounts::AntigravityMeta> =
             openproxy_db::accounts::read_provider_meta_batch(&conn, None, account_ids)?;
         Ok(map
@@ -316,7 +349,7 @@ impl PipelineRepository for SqlitePipelineRepository {
 
     fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {
         openproxy_db::accounts::update_antigravity_project_id(
-            &self.conn.lock(),
+            &self.writer(),
             account_id,
             new_project_id,
         )
@@ -326,7 +359,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         &self,
         provider_ids: &[ProviderId],
     ) -> Result<HashMap<String, String>> {
-        openproxy_db::providers::get_auth_types(&self.conn.lock(), provider_ids)
+        openproxy_db::providers::get_auth_types(&self.reader(), provider_ids)
     }
 
     fn resolve_combo_to_targets(
@@ -335,10 +368,10 @@ impl PipelineRepository for SqlitePipelineRepository {
         visited: &mut Vec<ComboId>,
         depth: u32,
     ) -> Result<Vec<ComboTarget>> {
-        resolve_combo_to_targets(&self.conn.lock(), combo_id, visited, depth)
+        resolve_combo_to_targets(&self.reader(), combo_id, visited, depth)
     }
     fn expand_account_rotation(&self, targets: Vec<ComboTarget>) -> Result<Vec<ComboTarget>> {
-        expand_account_rotation(&self.conn.lock(), targets)
+        expand_account_rotation(&self.reader(), targets)
     }
     fn resolve_target_order_with_mode(
         &self,
@@ -371,7 +404,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         &self,
         provider_id: &ProviderId,
     ) -> Result<Option<openproxy_types::providers::Provider>> {
-        openproxy_db::providers::get(&self.conn.lock(), provider_id)
+        openproxy_db::providers::get(&self.reader(), provider_id)
     }
 
     fn update_proxy_status(
@@ -380,7 +413,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         status: &str,
         _error_msg: Option<&str>,
     ) -> Result<()> {
-        openproxy_db::free_proxies::update_proxy_status(&self.conn.lock(), proxy_id, status, None)
+        openproxy_db::free_proxies::update_proxy_status(&self.writer(), proxy_id, status, None)
     }
 
     fn get_or_assign_provider_proxy(
@@ -389,7 +422,7 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: Option<AccountId>,
     ) -> Result<Option<String>> {
         openproxy_db::free_proxies::get_or_assign_provider_proxy(
-            &self.conn.lock(),
+            &self.writer(),
             provider_id,
             account_id.as_ref(),
         )
@@ -401,18 +434,18 @@ impl PipelineRepository for SqlitePipelineRepository {
         limit: usize,
     ) -> Result<Vec<(String, String)>> {
         openproxy_db::free_proxies::get_candidate_proxies_for_provider(
-            &self.conn.lock(),
+            &self.reader(),
             provider_id,
             limit,
         )
     }
 
     fn get_proxy_status_by_url(&self, url: &str) -> Option<String> {
-        openproxy_db::free_proxies::get_proxy_status_by_url(&self.conn.lock(), url)
+        openproxy_db::free_proxies::get_proxy_status_by_url(&self.reader(), url)
     }
 
     fn prune_expired_cooldowns(&self) -> Result<usize> {
-        openproxy_db::cooldowns::prune_expired(&self.conn.lock())
+        openproxy_db::cooldowns::prune_expired(&self.writer())
     }
 }
 

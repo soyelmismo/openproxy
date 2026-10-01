@@ -452,12 +452,14 @@ async fn try_lazy_fetch_antigravity_project(
         Ok(Some(pid)) => {
             tracing::info!("Successfully fetched antigravity projectId: {}", pid);
             custom_meta.antigravity_project = Some(pid.clone());
-            if let Some(ref account_id) = current.target.account_id
-                && let Err(e) = pipeline
-                    .repo()
-                    .update_antigravity_project_id(account_id.0, &pid)
-            {
-                tracing::error!("Failed to update antigravity project id in db: {}", e);
+            if let Some(account_id) = current.target.account_id {
+                let result = pipeline
+                    .async_repo()
+                    .run(move |repo| repo.update_antigravity_project_id(account_id.0, &pid))
+                    .await;
+                if let Err(e) = result {
+                    tracing::error!("Failed to update antigravity project id in db: {}", e);
+                }
             }
         }
         Ok(None) => tracing::warn!("loadCodeAssist returned Ok(None)"),
@@ -512,6 +514,67 @@ fn mark_live_limited_inner(
     std::mem::drop(handle);
 }
 
+fn extract_error_summary(body: &str) -> Option<String> {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body)
+        && let Some(msg) = val
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .or_else(|| val.get("message"))
+            .and_then(|m| m.as_str())
+    {
+        return Some(msg.trim().to_string());
+    }
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let end = trimmed
+        .char_indices()
+        .take(120)
+        .last()
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    Some(trimmed[..end].to_string())
+}
+
+fn detect_account_terminal_error(err: &CoreError) -> Option<String> {
+    let CoreError::UpstreamError { status, body, .. } = err else {
+        return None;
+    };
+    if *status == 402 {
+        return Some(
+            extract_error_summary(body)
+                .unwrap_or_else(|| "Payment Required (insufficient balance)".into()),
+        );
+    }
+    if *status == 401 {
+        return Some(
+            extract_error_summary(body)
+                .unwrap_or_else(|| "Unauthorized (invalid or revoked API key)".into()),
+        );
+    }
+    let lower = body.to_ascii_lowercase();
+    const PATTERNS: &[&str] = &[
+        "insufficient balance",
+        "insufficient_quota",
+        "insufficient_balance",
+        "credit balance is too low",
+        "billing_hard_limit_reached",
+        "account_deactivated",
+    ];
+    if PATTERNS.iter().any(|p| lower.contains(p)) {
+        return Some(
+            extract_error_summary(body)
+                .unwrap_or_else(|| "Insufficient balance or quota exhausted".into()),
+        );
+    }
+    if lower.contains("invalid_api_key") || lower.contains("incorrect api key") {
+        return Some(
+            extract_error_summary(body).unwrap_or_else(|| "Invalid or expired API key".into()),
+        );
+    }
+    None
+}
+
 fn update_circuit_breaker_on_result(
     pipeline: &crate::Pipeline,
     target: &openproxy_types::ComboTarget,
@@ -526,6 +589,27 @@ fn update_circuit_breaker_on_result(
         target.rate_limit_scope,
         target.model_row_id,
     );
+
+    // Terminal account fault (402 balance exhausted, 401 invalid key).
+    // Mark unhealthy in SQLite immediately and force circuit breaker open in memory.
+    if let Some(err) = &result.error
+        && let Some(reason) = detect_account_terminal_error(err)
+    {
+        tracing::warn!(account_id = aid.0, provider = %target.provider_id.as_str(), reason = %reason, "terminal account error; marking unhealthy");
+        pipeline.circuit_breaker.force_unhealthy(key);
+        let conn_clone = Arc::clone(&pipeline.conn);
+        let handle = tokio::task::spawn_blocking(move || {
+            let conn = conn_clone.lock();
+            let _ = openproxy_db::accounts::set_health_with_error(
+                &conn,
+                aid,
+                openproxy_types::accounts::HealthStatus::Unhealthy,
+                Some(&reason),
+            );
+        });
+        std::mem::drop(handle);
+        return;
+    }
 
     // The per-(account, model) live-limit sentinel has to be written
     // even when the breaker records a success below (the catch-all arm

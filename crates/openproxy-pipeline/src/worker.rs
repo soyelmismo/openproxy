@@ -11,9 +11,26 @@ pub struct WorkerHandle {
     cancel: CancellationToken,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     failed_jobs: Arc<std::sync::atomic::AtomicU64>,
+    conn: Arc<parking_lot::Mutex<Connection>>,
 }
 
 impl WorkerHandle {
+    pub async fn stats(&self) -> openproxy_types::Result<WorkerStats> {
+        let conn = Arc::clone(&self.conn);
+        let pending =
+            tokio::task::spawn_blocking(move || openproxy_db::usage_journal::depth(&conn.lock()))
+                .await
+                .map_err(|error| {
+                    openproxy_types::CoreError::Internal(format!(
+                        "usage stats join failed: {error}"
+                    ))
+                })??;
+        Ok(WorkerStats {
+            pending,
+            failed_batches: self.failed_jobs.load(std::sync::atomic::Ordering::Relaxed),
+        })
+    }
+
     pub async fn shutdown(&self) -> openproxy_types::Result<()> {
         self.cancel.cancel();
         let mut task = self.task.lock().await;
@@ -24,17 +41,26 @@ impl WorkerHandle {
                 openproxy_types::CoreError::Internal(format!("usage worker join failed: {error}"))
             })?;
         }
-        let failures = self.failed_jobs.load(std::sync::atomic::Ordering::Relaxed);
-        if failures > 0 {
+        let stats = self.stats().await?;
+        if stats.pending > 0 {
             return Err(openproxy_types::CoreError::Internal(format!(
-                "usage worker failed to persist {failures} jobs"
+                "usage worker stopped with {} durable pending jobs ({} failed batches)",
+                stats.pending, stats.failed_batches
             )));
         }
         Ok(())
     }
 }
 
+#[derive(serde::Serialize)]
+pub struct WorkerStats {
+    pub pending: u64,
+    pub failed_batches: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum BackgroundJob {
+    JournalWake,
     RecordUsage(Box<UsageInput>),
     RecordAttempt {
         usage_input: Box<UsageInput>,
@@ -62,7 +88,9 @@ pub fn spawn_worker(
     let shutdown = cancel.clone();
     let failed_jobs = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let failures = Arc::clone(&failed_jobs);
+    let handle_conn = Arc::clone(&conn);
     let task = tokio::spawn(async move {
+        let mut retry = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {
             let job = tokio::select! {
                 biased;
@@ -71,9 +99,20 @@ pub fn spawn_worker(
                     continue;
                 }
                 job = rx.recv() => {
-                    let Some(job) = job else { break };
+                    let Some(job) = job else {
+                        let final_conn = Arc::clone(&conn);
+                        match tokio::task::spawn_blocking(move || replay_pending(&final_conn)).await {
+                            Ok(Ok(())) => {}
+                            result => {
+                                failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                tracing::error!(?result, "usage journal drain incomplete");
+                            }
+                        }
+                        break
+                    };
                     job
                 }
+                _ = retry.tick(), if !rx.is_closed() => BackgroundJob::JournalWake,
             };
             let mut batch = vec![job];
             while batch.len() < 32 {
@@ -107,6 +146,7 @@ pub fn spawn_worker(
         cancel,
         task: tokio::sync::Mutex::new(Some(task)),
         failed_jobs,
+        conn: handle_conn,
     }
 }
 
@@ -114,12 +154,20 @@ fn record_usage(
     conn: &Arc<parking_lot::Mutex<Connection>>,
     input: &UsageInput,
     cooldown: Option<&openproxy_db::usage_writer::AttemptCooldown<'_>>,
+    journal_id: i64,
 ) -> openproxy_types::Result<()> {
-    let (_, row) = {
+    let row = {
         let mut connection = conn.lock();
-        openproxy_db::usage_writer::record(&mut connection, input, cooldown)?
+        openproxy_db::usage_writer::record_journaled(
+            &mut connection,
+            input,
+            cooldown,
+            Some(journal_id),
+        )?
     };
-    openproxy_types::usage::publish_usage_row(row);
+    if let Some((_, row)) = row {
+        openproxy_types::usage::publish_usage_row(row);
+    }
     Ok(())
 }
 
@@ -127,8 +175,49 @@ pub fn process_job(
     conn: &Arc<parking_lot::Mutex<Connection>>,
     job: BackgroundJob,
 ) -> openproxy_types::Result<()> {
+    if !matches!(job, BackgroundJob::JournalWake) {
+        admit_job(conn, &job)?;
+    }
+    replay_pending(conn)
+}
+
+pub fn admit_job(
+    conn: &Arc<parking_lot::Mutex<Connection>>,
+    job: &BackgroundJob,
+) -> openproxy_types::Result<i64> {
+    let payload = serde_json::to_string(job).map_err(|error| {
+        openproxy_types::CoreError::Internal(format!("usage serialization failed: {error}"))
+    })?;
+    openproxy_db::usage_journal::append(&mut conn.lock(), &payload)
+}
+
+fn replay_pending(conn: &Arc<parking_lot::Mutex<Connection>>) -> openproxy_types::Result<()> {
+    loop {
+        let entries = openproxy_db::usage_journal::pending(&conn.lock(), 32)?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+        for (id, payload) in entries {
+            let job: BackgroundJob = serde_json::from_str(&payload).map_err(|error| {
+                openproxy_types::CoreError::Internal(format!(
+                    "invalid usage journal entry {id}: {error}"
+                ))
+            })?;
+            persist_job(conn, job, id)?;
+        }
+    }
+}
+
+fn persist_job(
+    conn: &Arc<parking_lot::Mutex<Connection>>,
+    job: BackgroundJob,
+    journal_id: i64,
+) -> openproxy_types::Result<()> {
     match job {
-        BackgroundJob::RecordUsage(input) => record_usage(conn, &input, None),
+        BackgroundJob::JournalWake => Err(openproxy_types::CoreError::Internal(
+            "wake cannot be journaled".into(),
+        )),
+        BackgroundJob::RecordUsage(input) => record_usage(conn, &input, None, journal_id),
         BackgroundJob::RecordAttempt {
             usage_input,
             target_id,
@@ -152,21 +241,35 @@ pub fn process_job(
                 max_secs: cooldown_max_secs,
                 factor: cooldown_factor,
             }),
+            journal_id,
         ),
         BackgroundJob::MarkClientResponse {
             request_id,
             attempt,
             target_id,
         } => {
-            let connection = conn.lock();
+            let mut connection = conn.lock();
             openproxy_db::with_busy_retry("usage_worker::mark_winner", || {
+                let transaction = connection
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(openproxy_db::error::map_db_error)?;
+                if !openproxy_db::usage_journal::contains(&transaction, journal_id)? {
+                    return Ok(());
+                }
                 openproxy_db::cost::mark_winner_usage_row(
-                    &connection,
+                    &transaction,
                     &request_id,
                     attempt,
                     target_id,
-                )
+                )?;
+                openproxy_db::usage_journal::acknowledge(&transaction, journal_id)?;
+                transaction
+                    .commit()
+                    .map_err(openproxy_db::error::map_db_error)
             })
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

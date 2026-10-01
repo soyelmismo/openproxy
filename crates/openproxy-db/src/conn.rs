@@ -1,10 +1,7 @@
 //! SQLite connection pool.
 //!
-//! MVP design: one writer connection guarded by a Mutex (SQLite serializes writes
-//! at the file level anyway, and we want strict serialization to keep migration
-//! lock semantics simple per spec §9). Readers are cheap clones of an
-//! `Arc<Connection>`; rusqlite's `Connection: Send` but not `Sync`, so readers
-//! each get their own clone but share the underlying handle state.
+//! One serialized writer and independently opened reader connections. Cloning
+//! the pool shares ownership, not the readers' underlying SQLite handles.
 //!
 //! This avoids adding `r2d2` / `r2d2_sqlite` deps for the MVP. If we ever need
 //! concurrent writers, swap the writer field for a real pool.
@@ -32,10 +29,8 @@ pub type ArcWriterGuard = parking_lot::ArcMutexGuard<parking_lot::RawMutex, Conn
 /// Alias for the owned reader guard returned by [`DbPool::reader_guard`].
 pub type ArcReaderGuard = parking_lot::ArcMutexGuard<parking_lot::RawMutex, Connection>;
 
-/// Connection pool holding one serialized writer and one serialized reader.
-/// SQLite file-level locking + rusqlite's lack of `Sync` on `Connection` mean we
-/// guard both with a Mutex. A future r2d2-based pool can swap in true reader
-/// concurrency without changing the public API beyond return types.
+/// One serialized writer and bounded independent readers, each mutex-protected
+/// because rusqlite connections are Send but not Sync.
 #[derive(Clone)]
 pub struct DbPool {
     writer: Arc<Mutex<Connection>>,
@@ -86,7 +81,23 @@ impl DbPool {
     /// 50ms+100ms backoff covers the handover window without making real
     /// failures noisy.
     pub fn open(path: &Path) -> Result<Self> {
-        with_busy_retry("DbPool::open", || Self::open_inner(path)).inspect_err(|e| {
+        Self::open_with_readers(path, 0)
+    }
+
+    pub fn open_with_readers(path: &Path, reader_count: usize) -> Result<Self> {
+        if reader_count > 32 {
+            return Err(CoreError::Config(
+                "SQLite reader count must be between 0 and 32".into(),
+            ));
+        }
+        let readers = if reader_count == 0 {
+            std::thread::available_parallelism()
+                .map_or(2, std::num::NonZeroUsize::get)
+                .clamp(2, 8)
+        } else {
+            reader_count
+        };
+        with_busy_retry("DbPool::open", || Self::open_inner(path, readers)).inspect_err(|e| {
             tracing::error!(
                 path = %path.display(),
                 error = %e,
@@ -97,7 +108,7 @@ impl DbPool {
 
     /// Builds the pool. Public callers go through [`DbPool::open`], which
     /// wraps this in `with_busy_retry`.
-    fn open_inner(path: &Path) -> Result<Self> {
+    fn open_inner(path: &Path, num_readers: usize) -> Result<Self> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
         let writer = Connection::open_with_flags(path, flags).map_err(
@@ -109,7 +120,6 @@ impl DbPool {
 
         // Extra handles on the same file keep mutex contention off the
         // high-throughput API endpoints.
-        let num_readers = 2;
         let mut readers = Vec::with_capacity(num_readers);
         for i in 0..num_readers {
             let reader = open_and_configure_reader(path, flags, i)?;
@@ -438,9 +448,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reader_count_is_explicit_and_bounded() {
+        let directory = crate::testing::TempDir::new("reader-count").unwrap();
+        let path = directory.path().join("db.sqlite");
+        let pool = DbPool::open_with_readers(&path, 4).unwrap();
+        assert_eq!(pool.reader_count(), 4);
+        assert!(DbPool::open_with_readers(&path, 33).is_err());
+    }
+
+    #[test]
     fn open_creates_file_and_sets_pragmas() {
         let pool = DbPool::test_pool().expect("test pool");
-        assert_eq!(pool.readers.len(), 2);
+        assert!((2..=8).contains(&pool.reader_count()));
         let conn = pool.writer();
 
         let journal: String = conn
@@ -664,15 +683,25 @@ mod tests {
         let pool = std::sync::Arc::new(DbPool::test_pool().expect("test pool"));
         pool.next_reader.store(0, Ordering::Relaxed);
 
-        // Lock all readers: reader 0 held for 200ms, reader 1 released after 15ms
-        let held_0 = pool.readers[0].lock_arc();
-        let held_1 = pool.readers[1].lock_arc();
+        // Keep all but one reader locked in this thread. The releaser acquires
+        // and drops its own guard; guards deliberately cannot migrate threads.
+        let held: Vec<_> = pool
+            .readers
+            .iter()
+            .skip(1)
+            .map(|reader| reader.lock())
+            .collect();
+        let release_pool = Arc::clone(&pool);
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
         // Background thread releases reader 1 after 15ms
         let release_thread = std::thread::spawn(move || {
+            let guard = release_pool.readers[0].lock();
+            ready_tx.send(()).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(15));
-            drop(held_1);
+            drop(guard);
         });
+        ready_rx.recv().unwrap();
 
         // Calling try_reader_for with timeout of 60ms starting at index 0
         // Reader 1 becomes free at 15ms, well before 60ms timeout!
@@ -683,6 +712,6 @@ mod tests {
             acquired.is_some(),
             "try_reader_for should acquire reader 1 once freed before timeout!"
         );
-        drop(held_0);
+        drop(held);
     }
 }

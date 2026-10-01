@@ -152,14 +152,15 @@ impl AppConfig {
             .map_err(|e| CoreError::Config(format!("read {}: {}", path.as_ref().display(), e)))?;
         let cfg: AppConfig =
             toml::from_str(&contents).map_err(|e| CoreError::Config(format!("parse: {e}")))?;
+        cfg.validate()?;
         Ok(cfg)
     }
 
     /// Load with defaults when the file is missing.
     ///
     /// Env overrides are applied after the TOML load. Only
-    /// `OPENPROXY_COOLDOWN_SECS` is honoured today; the rest of the
-    /// `OPENPROXY_*__*` namespace is reserved.
+    /// Explicit overrides are supported for cooldown, the administrative bind
+    /// and SQLite reader count; other namespace entries remain reserved.
     pub fn load_or_default(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let mut cfg = if path.as_ref().exists() {
             Self::load(path)?
@@ -176,7 +177,32 @@ impl AppConfig {
                 }
             }
         }
+        if let Ok(raw) = std::env::var("OPENPROXY_SERVER__ADMIN_BIND") {
+            cfg.server.admin_bind = (!raw.trim().is_empty()).then(|| raw.trim().to_owned());
+        }
+        if let Ok(raw) = std::env::var("OPENPROXY_STORAGE__READER_COUNT") {
+            cfg.storage.reader_count = raw.trim().parse().map_err(|error| {
+                CoreError::Config(format!("OPENPROXY_STORAGE__READER_COUNT: {error}"))
+            })?;
+        }
+        cfg.validate()?;
         Ok(cfg)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.storage.reader_count > 32 {
+            return Err(CoreError::Config(
+                "storage.reader_count must be between 0 and 32".into(),
+            ));
+        }
+        if let Some(bind) = &self.server.admin_bind
+            && (bind.trim().is_empty() || bind == &self.server.bind)
+        {
+            return Err(CoreError::Config(
+                "server.admin_bind must be nonempty and different from server.bind".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Expand ~ to home dir in storage.database_path.
@@ -210,6 +236,22 @@ mod tests {
         assert_eq!(cfg.racing.max_race_size, 8);
         assert_eq!(cfg.timeouts.idle_chunk_ms, 120_000);
         assert_eq!(cfg.retries.max_attempts, 3);
+        assert_eq!(cfg.server.admin_bind, None);
+        assert_eq!(cfg.storage.reader_count, 0);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn separated_admin_and_reader_limits_are_validated() {
+        let mut cfg = AppConfig::default();
+        cfg.server.admin_bind = Some("127.0.0.1:8788".into());
+        cfg.storage.reader_count = 4;
+        assert!(cfg.validate().is_ok());
+        cfg.storage.reader_count = 33;
+        assert!(cfg.validate().is_err());
+        cfg.storage.reader_count = 0;
+        cfg.server.admin_bind = Some(cfg.server.bind.clone());
+        assert!(cfg.validate().is_err());
     }
 
     #[test]

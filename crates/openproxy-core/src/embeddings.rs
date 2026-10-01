@@ -78,7 +78,13 @@ async fn dispatch_single_embedding(
     req: &EmbeddingRequest,
 ) -> Result<(EmbeddingResponse, u16)> {
     let upstream_url = adapter.build_embeddings_url();
-    let api_key = resolve_api_key(db_pool, master_key, target.account_id, &target.provider)?;
+    let api_key = crate::unary::resolve_api_key_async(
+        db_pool,
+        master_key,
+        target.account_id,
+        &target.provider,
+    )
+    .await?;
 
     let response = dispatch_embedding_request(
         upstream_client,
@@ -167,7 +173,7 @@ pub async fn execute_embeddings(
     for target in targets {
         attempt += 1;
 
-        crate::guarded_unary_target!(check: db_pool, circuit_breaker, target);
+        crate::guarded_unary_target!(check_async: db_pool, circuit_breaker, target);
 
         let Some(adapter) = adapters.iter().find(|a| a.id() == &target.provider) else {
             last_error = Some(CoreError::Internal(format!(

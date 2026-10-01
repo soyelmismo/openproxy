@@ -2,10 +2,11 @@
 
 ## Pipeline admission
 
-The pipeline submits attempts, predictive skips, no-healthy-targets errors and
-winner updates through one bounded FIFO queue (capacity 1024). Producers await
-capacity instead of discarding jobs when the queue is full. No detached overflow
-tasks or unbounded buffers are created.
+The pipeline reserves bounded notification capacity (1024), then persists attempts,
+predictive skips, no-healthy-targets errors and winner updates in `usage_journal`
+before returning their usage tuple. Notifications wake the worker; SQLite journal
+IDs define FIFO replay. No detached overflow tasks or unbounded buffers are created.
+The journal rejects admission at 100,000 pending jobs instead of overwriting data.
 
 An attempt is admitted before its usage tuple is returned. Its winner update
 therefore follows its insert in the queue. If admission is closed, the builder
@@ -23,11 +24,14 @@ cooldown update rolls back the usage insert as well; retrying does not leave a
 partial attempt behind. Existing SQLite BUSY/LOCKED retry policy applies to the
 whole transaction. Winner updates also use the BUSY/LOCKED retry policy.
 
+Applying a job and deleting its journal entry share the same transaction. Replays
+skip already acknowledged IDs, including competing replay workers; there is no
+separate delete window that can duplicate a committed row after a crash.
 The shared writer returns a usage row for publication only after commit. Callers
 release the connection lock before publishing the dashboard event.
 
-Successful audio, embeddings, image and System One requests await the same
-transactional writer through `DbPool::spawn_write`. They no longer discard usage
+Successful audio, embeddings, image and System One requests admit and replay
+through the same journal on blocking threads. They no longer discard usage
 because the writer lock was unavailable for 100 ms. A blocking API is retained
 for synchronous routing callers and existing library consumers.
 Async unary execution also resolves its targets on a blocking thread, including
@@ -50,12 +54,14 @@ worker without a shutdown path.
 
 ## Limits and remaining work
 
-This queue is in memory, not a durable journal. An abrupt crash, SIGKILL, forced
-container termination or power loss can lose queued attempts. SQLite errors
-that remain after the bounded retries are reported, not replayed indefinitely.
-Admission awaits are cancellable: cancellation before admission does not commit
-the job. Crash recovery, durable pending jobs, replay idempotency and operational
-queue metrics remain separate work.
+Committed admissions survive process crashes and SIGKILL and are replayed at
+startup and periodically. Errors retain their entries for later retry and are
+reported in pending/failed-batch metrics. Cancellation before admission does not
+commit a job; cancellation after admission cannot remove its durable entry.
+SQLite uses WAL with `synchronous=NORMAL`: power-loss durability is limited by
+that SQLite policy, unlike process-crash recovery. Disk-full or journal-capacity
+errors reject new admissions explicitly; they cannot promise accounting for a job
+that was never successfully persisted.
 
 Shutdown does not impose a new hard deadline on active responses: existing
 request timeouts still apply. Supervisors may impose their own termination grace

@@ -146,18 +146,18 @@ pub async fn apply_decision_routing(
     let active_cooldowns = if combo.is_cooldown_disabled() {
         std::collections::HashSet::new()
     } else {
-        let repo = ctx.pipeline.repo();
         let combo_id = combo.id;
-        tokio::task::spawn_blocking(move || repo.get_active_cooldown_targets(combo_id))
+        ctx.pipeline
+            .async_repo()
+            .run(move |repo| repo.get_active_cooldown_targets(combo_id))
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!(
                     combo_id = combo_id.0,
                     "failed to query cooldowns for decision routing: {e}"
                 );
-                Ok(std::collections::HashSet::new())
+                std::collections::HashSet::new()
             })
-            .unwrap_or_default()
     };
 
     let now_ms = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
@@ -478,15 +478,17 @@ async fn execute_system_one_decision(
     timeout_ms: u64,
 ) -> Result<Option<openproxy_types::systemone::SystemOneAnswer>, openproxy_types::error::CoreError>
 {
-    let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
     let decision_model_owned = decision_model.to_string();
-    let (resolved_prov, upstream_model) = tokio::task::spawn_blocking(move || {
-        let conn = conn_arc.lock();
-        openproxy_db::models::resolve_model_identity(&conn, &decision_model_owned)
-            .unwrap_or((None, decision_model_owned))
-    })
-    .await
-    .unwrap_or((None, decision_model.to_string()));
+    let (resolved_prov, upstream_model) = ctx
+        .pipeline
+        .read_db(move |conn| {
+            Ok(
+                openproxy_db::models::resolve_model_identity(conn, &decision_model_owned)
+                    .unwrap_or((None, decision_model_owned)),
+            )
+        })
+        .await
+        .unwrap_or((None, decision_model.to_string()));
 
     #[cfg(feature = "laya-engine")]
     {
@@ -546,18 +548,20 @@ async fn execute_system_one_decision(
             let b = a.config().base_url.trim_end_matches('/');
             format!("{b}/systemone")
         };
-        let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
         let master_key = std::sync::Arc::clone(&ctx.pipeline.config.master_key);
         let prov_id = a.id().clone();
-        let api_key = tokio::task::spawn_blocking(move || {
-            let conn = conn_arc.lock();
-            openproxy_db::accounts::list_api_keys_for_provider(&conn, &prov_id, &master_key)
-                .ok()
-                .and_then(|keys| keys.into_iter().next())
-                .unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default();
+        let api_key = ctx
+            .pipeline
+            .read_db(move |conn| {
+                Ok(
+                    openproxy_db::accounts::list_api_keys_for_provider(conn, &prov_id, &master_key)
+                        .ok()
+                        .and_then(|keys| keys.into_iter().next())
+                        .unwrap_or_default(),
+                )
+            })
+            .await
+            .unwrap_or_default();
         let auth = a.build_auth_header(&api_key);
         let formatted = a.format_system_one_request(req, &upstream_model)?;
         (base_url, auth, formatted)

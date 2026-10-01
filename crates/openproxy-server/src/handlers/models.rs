@@ -104,57 +104,60 @@ pub async fn list_models(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let maybe_api_key = authenticate_chat_or_anonymous(&state, &headers)?;
+    let maybe_api_key = authenticate_chat_or_anonymous(&state, &headers).await?;
 
-    let raw_models = state
-        .services()
-        .models
-        .list_active_all(std::time::Duration::from_secs(5))?;
-    let raw_combos = state.services().combos.list_combos()?;
-
-    let rows = filter_models_for_key(raw_models, maybe_api_key.as_deref());
-    let combo_rows = filter_combos_for_key(raw_combos, maybe_api_key.as_deref());
-
-    let mut data: Vec<serde_json::Value> =
-        rows.into_iter().map(|m| build_model_entry(&m)).collect();
-    for c in &combo_rows {
-        let effective_cw = state
+    crate::error::run_blocking(move || {
+        let raw_models = state
             .services()
-            .combos
-            .compute_effective_context_window(c.id)
-            .ok()
-            .flatten()
-            .or(c.context_window);
-        let effective_caps = state
-            .services()
-            .combos
-            .compute_effective_capabilities(c.id)
-            .ok()
-            .flatten();
-        data.push(build_combo_entry(
-            c,
-            None,
-            effective_cw,
-            effective_caps.as_ref(),
-        ));
-        data.push(build_combo_entry(
-            c,
-            Some(&c.name),
-            effective_cw,
-            effective_caps.as_ref(),
-        ));
-    }
+            .models
+            .list_active_all(std::time::Duration::from_secs(5))?;
+        let raw_combos = state.services().combos.list_combos()?;
 
-    let is_anthropic =
-        headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
-    if is_anthropic {
-        Ok(Json(format_anthropic_models_response(data)))
-    } else {
-        Ok(Json(serde_json::json!({
-            "object": "list",
-            "data": data,
-        })))
-    }
+        let rows = filter_models_for_key(raw_models, maybe_api_key.as_deref());
+        let combo_rows = filter_combos_for_key(raw_combos, maybe_api_key.as_deref());
+
+        let mut data: Vec<serde_json::Value> =
+            rows.into_iter().map(|m| build_model_entry(&m)).collect();
+        for c in &combo_rows {
+            let effective_cw = state
+                .services()
+                .combos
+                .compute_effective_context_window(c.id)
+                .ok()
+                .flatten()
+                .or(c.context_window);
+            let effective_caps = state
+                .services()
+                .combos
+                .compute_effective_capabilities(c.id)
+                .ok()
+                .flatten();
+            data.push(build_combo_entry(
+                c,
+                None,
+                effective_cw,
+                effective_caps.as_ref(),
+            ));
+            data.push(build_combo_entry(
+                c,
+                Some(&c.name),
+                effective_cw,
+                effective_caps.as_ref(),
+            ));
+        }
+
+        let is_anthropic =
+            headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
+        if is_anthropic {
+            Ok(Json(format_anthropic_models_response(data)))
+        } else {
+            Ok(Json(serde_json::json!({
+                "object": "list",
+                "data": data,
+            })))
+        }
+    })
+    .await
 }
 
 fn extract_auth_header_token(headers: &HeaderMap) -> Option<&str> {
@@ -177,14 +180,17 @@ fn extract_auth_header_token(headers: &HeaderMap) -> Option<&str> {
 /// `middleware::auth::check_anonymous_fallback`. Without the opt-in the catalog
 /// stays private during the first-boot window and after the last key is revoked
 /// (e.g. mid-rotation). Returns the key, or `None` when anonymous.
-fn authenticate_chat_or_anonymous(
+async fn authenticate_chat_or_anonymous(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<std::sync::Arc<openproxy_core::api_keys::ApiKey>>, ApiError> {
     let token = extract_auth_header_token(headers);
 
     let Some(token) = token else {
-        let active = state.services().api_keys.count_active().map_err(ApiError)?;
+        let active = state
+            .db_pool()
+            .spawn_read(openproxy_core::api_keys::count_active)
+            .await?;
         if active == 0 && state.config().server.allow_anonymous {
             return Ok(None);
         }
@@ -195,7 +201,7 @@ fn authenticate_chat_or_anonymous(
         return Err(ApiError(CoreError::Auth("missing api key".into())));
     }
 
-    let key = crate::middleware::auth::verify_key_credentials(state, token, "chat")?;
+    let key = crate::middleware::auth::verify_key_credentials(state, token, "chat").await?;
     Ok(Some(key))
 }
 

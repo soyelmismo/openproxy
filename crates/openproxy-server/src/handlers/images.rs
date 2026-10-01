@@ -71,7 +71,8 @@ pub async fn generate_images(
     }
 
     let api_key_id =
-        crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, &req.model)?;
+        crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, &req.model)
+            .await?;
 
     let response = call_unary_executor!(execute_image_generation, state, req, api_key_id);
 
@@ -119,7 +120,8 @@ pub async fn edit_images(
         &state,
         &headers,
         &parsed_body.model_name,
-    )?;
+    )
+    .await?;
 
     let response = call_unary_executor!(execute_image_edit, state, parsed_body, api_key_id);
 
@@ -153,7 +155,8 @@ pub async fn create_image_variation(
         &state,
         &headers,
         &parsed_body.model_name,
-    )?;
+    )
+    .await?;
 
     let response = call_unary_executor!(execute_image_variation, state, parsed_body, api_key_id);
 

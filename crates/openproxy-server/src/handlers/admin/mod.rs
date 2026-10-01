@@ -171,8 +171,10 @@ macro_rules! admin_entity_action_handler {
             $crate::extractors::DbWriter($w): $crate::extractors::DbWriter,
             axum::extract::Path($id): axum::extract::Path<$id_ty>,
         ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
-            $action;
-            Ok(axum::Json($resp))
+            $crate::extractors::DbWriter($w).run(move |$w| {
+                $action;
+                Ok(axum::Json($resp))
+            }).await
         }
     };
 
@@ -232,7 +234,7 @@ macro_rules! admin_entity_action_handler {
             $crate::extractors::DbWriter($w): $crate::extractors::DbWriter,
             axum::extract::Path($id): axum::extract::Path<$id_ty>,
         ) -> std::result::Result<axum::Json<serde_json::Value>, $crate::error::ApiError> {
-            $body
+            $crate::extractors::DbWriter($w).run(move |$w| $body).await
         }
     };
 }

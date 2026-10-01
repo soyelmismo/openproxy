@@ -51,20 +51,14 @@ pub(super) async fn try_incremental_proxy_race(
     overall_attempt: &mut u8,
     target_local_retry_count: &mut u8,
 ) -> Option<PipelineResult> {
-    let conn_arc = std::sync::Arc::clone(&ctx.pipeline.conn);
     let provider_id = target.target.provider_id.clone();
     let batch_size = *incremental_batch_size;
-    let candidate_proxies = tokio::task::spawn_blocking(move || {
-        let conn = conn_arc.lock();
-        openproxy_db::free_proxies::get_candidate_proxies_for_provider(
-            &conn,
-            &provider_id,
-            batch_size,
-        )
-        .unwrap_or_default()
-    })
-    .await
-    .unwrap_or_default();
+    let candidate_proxies = ctx
+        .pipeline
+        .async_repo()
+        .run(move |repo| repo.get_candidate_proxies(&provider_id, batch_size))
+        .await
+        .unwrap_or_default();
 
     if candidate_proxies.len() < 2 {
         return None;

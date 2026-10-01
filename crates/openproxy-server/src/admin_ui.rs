@@ -1,8 +1,8 @@
 //! Dashboard SPA embedded in the server binary.
 //!
 //! The frontend is built by `pnpm build` in `crates/openproxy-server/web/` into
-//! `web/src/static/dist/`; `rust-embed` embeds the whole `web/src/static/` tree
-//! at compile time, so the binary ships API + dashboard on one port.
+//! `web/src/static/dist/`; `rust-embed` embeds only deployable HTML, bundles,
+//! CSS and fonts, never TypeScript sources, tests or source maps.
 //!
 //! Routes mounted at `/admin/*` (not `/admin/api/*` or `/admin/ws` — those are
 //! served by other handlers; see `router.rs::build_router` for the nesting):
@@ -13,7 +13,7 @@
 //! - `GET /admin/dist/*`     → embedded built bundle
 //! - `GET /admin/styles/*`   → embedded CSS
 //! - `GET /admin/fonts/*`    → embedded fonts
-//! - any other `/admin/*`    → SPA fallback to `index.html`
+//! - any other `/admin/*`    → 404 (the SPA uses hash routes)
 //!
 //! `index.html` and `callback.html` use `include_str!` rather than
 //! `RustEmbed::get` so the handler returns `Html<&'static str>` with no owned
@@ -29,16 +29,25 @@ use mime_guess::from_path;
 use rust_embed::RustEmbed;
 
 /// Embedded copy of `crates/openproxy-server/web/src/static/`. The `#[folder]`
-/// path resolves relative to this crate's `Cargo.toml`; the whole tree (not
-/// just `dist/`) is embedded so `index.html` can reference `/admin/dist/app.js`,
+/// path resolves relative to this crate's `Cargo.toml`; deployable assets
+/// are allowlisted so `index.html` can reference `/admin/dist/app.js`,
 /// `/admin/styles/index.css` and `/admin/fonts/...` from one namespace.
 ///
 /// `dist/` is esbuild output produced by `pnpm build` and gitignored, so a fresh
-/// checkout has none; `rust-embed` still embeds the rest (HTML, CSS, fonts,
-/// i18n JSON). Release builds run `pnpm build` before `cargo build` (see
+/// checkout has none; `rust-embed` still embeds HTML, CSS and fonts.
+/// Language packs have their own JSON-only embedding. Release builds run
+/// `pnpm build` before `cargo build` (see
 /// `Dockerfile`, `.github/workflows/ci.yml`) to ship the full bundle.
 #[derive(RustEmbed)]
 #[folder = "web/src/static/"]
+#[include = "index.html"]
+#[include = "callback.html"]
+#[include = "dist/**/*.js"]
+#[include = "dist/**/*.css"]
+#[include = "styles/**/*.css"]
+#[include = "fonts/*"]
+#[exclude = "**/*.map"]
+#[exclude = "**/tests/**"]
 struct DashboardAssets;
 
 /// Embedded per-language JSON string packs consumed by the frontend's
@@ -51,6 +60,7 @@ struct DashboardAssets;
 /// binary, not runtime config.
 #[derive(RustEmbed)]
 #[folder = "web/src/static/src/i18n/"]
+#[include = "*.json"]
 struct I18nAssets;
 
 /// Serve the SPA shell. `include_str!` keeps this allocation-free
@@ -86,14 +96,16 @@ pub async fn serve_asset(uri: Uri, req_headers: axum::http::HeaderMap) -> Respon
         .unwrap_or(raw)
         .trim_start_matches('/');
 
-    if path.is_empty() || path.contains("..") {
+    if path.is_empty() {
         return index_html().await;
     }
 
+    if !is_public_asset(path) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
     let Some(file) = DashboardAssets::get(path) else {
-        // SPA fallback for unknown `/admin/*` paths (e.g. client-side routes
-        // like `/admin/combos/42/edit`): the hash-router takes over.
-        return index_html().await;
+        return StatusCode::NOT_FOUND.into_response();
     };
 
     let hash = file.metadata.sha256_hash();
@@ -135,27 +147,36 @@ pub async fn serve_asset(uri: Uri, req_headers: axum::http::HeaderMap) -> Respon
     (StatusCode::OK, headers, body).into_response()
 }
 
+fn is_public_asset(path: &str) -> bool {
+    if path
+        .split('/')
+        .any(|segment| matches!(segment, ".." | "." | "src" | "tests"))
+    {
+        return false;
+    }
+    // Bundled asset names are lowercase build outputs; keep the allowlist
+    // strict so path case differences are denied rather than served.
+    // `rsplit_once('.')` is used instead of `ends_with` so dotfiles and
+    // multi-dot names (e.g. `dist/app.js.map`) do not match `*.js`; the
+    // comparison intentionally stays lowercase-only to preserve the denial
+    // contract — outputs are `*.js`/`*.css`, never `*.JS`/`*.CSS`.
+    match path {
+        "index.html" | "callback.html" => true,
+        _ if path.starts_with("dist/") => path
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| ext == "js" || ext == "css"),
+        _ if path.starts_with("styles/") => {
+            path.rsplit_once('.').is_some_and(|(_, ext)| ext == "css")
+        }
+        _ => {
+            path.starts_with("fonts/") && path.rsplit_once('.').is_none_or(|(_, ext)| ext != "map")
+        }
+    }
+}
+
 /// `GET /admin/i18n/{lang}` — serve a language pack.
 ///
 /// `i18n/index.ts::loadLang()` calls this at boot with `/admin/i18n/en.json`.
-/// The route is registered as `/i18n/{lang}` (axum 0.8 rejects literal-suffix
-/// path params, see `router.rs`), so the captured value may be `en` or
-/// `en.json`; the optional `.json` is stripped so both work.
-///
-/// Response is the raw embedded JSON with `Content-Type: application/json;
-/// charset=utf-8` and `Cache-Control: public, max-age=86400`: the pack is
-/// content-addressed in the binary, so a server upgrade also re-ships
-/// `app.js` (no-cache, [`serve_asset`]). 24h is long enough to keep the boot
-/// path off the network on same-day reloads and short enough to refresh after
-/// an upgrade; the frontend's `force-cache` makes repeat hits free.
-///
-/// `404 language not found` when no matching `.json` is embedded — the
-/// frontend's `loadLang` then falls back to `en`.
-///
-/// Path traversal: `Path<String>` captures a single segment (no `/`), so `..`
-/// and `/` are unreachable. `lang` is still validated against
-/// `[a-zA-Z0-9_-]+` after stripping `.json` — `pt-BR` is the most exotic shape
-/// we would ship, and the guard keeps the lookup table closed.
 pub async fn serve_i18n(lang: Path<String>) -> Response {
     let lang = lang.0.strip_suffix(".json").unwrap_or(&lang.0);
     // Letters, digits, hyphen, underscore: every ISO 639-1 code plus regional
@@ -205,4 +226,41 @@ pub async fn serve_i18n(lang: Path<String>) -> Response {
         body,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn denies_source_tests_maps_and_unknown_assets() {
+        for path in [
+            "src/main.ts",
+            "src/i18n/en.json",
+            "tests/test.js",
+            "dist/app.js.map",
+            "styles/index.css.map",
+            "../index.html",
+            "package.json",
+            "missing",
+        ] {
+            assert!(DashboardAssets::get(path).is_none(), "embedded {path}");
+            let response = serve_asset(
+                format!("/admin/{path}").parse().unwrap(),
+                Default::default(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[test]
+    fn preserves_styles_fonts_and_bundles() {
+        for path in DashboardAssets::iter() {
+            assert!(is_public_asset(&path), "unexpected embedded asset: {path}");
+        }
+        assert!(DashboardAssets::get("styles/index.css").is_some());
+        assert!(DashboardAssets::get("fonts/Ubuntu-Regular.ttf").is_some());
+        assert!(I18nAssets::get("en.json").is_some());
+    }
 }

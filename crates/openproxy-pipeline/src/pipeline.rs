@@ -109,6 +109,7 @@ pub struct PartialFailureParams<'a> {
 #[derive(Clone)]
 pub struct Pipeline {
     pub(crate) conn: Arc<parking_lot::Mutex<Connection>>,
+    pub(crate) db_pool: Option<openproxy_db::DbPool>,
     pub(crate) config: PipelineConfig,
     pub(crate) circuit_breaker: CircuitBreakerRegistry,
     pub(crate) rr_counters: Arc<dashmap::DashMap<ComboId, std::sync::atomic::AtomicU64>>,
@@ -121,9 +122,35 @@ pub struct Pipeline {
     pub(crate) repo: Arc<dyn crate::repository::PipelineRepository>,
 }
 
+struct PipelineServices {
+    record_bodies_and_headers: Arc<AtomicBool>,
+    selection_registry: Arc<SelectionRegistry>,
+    circuit_breaker: CircuitBreakerRegistry,
+    predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
+    session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
+}
+
 impl Pipeline {
     pub fn repo(&self) -> Arc<dyn crate::repository::PipelineRepository> {
         Arc::clone(&self.repo)
+    }
+
+    pub fn async_repo(&self) -> Arc<dyn crate::repository::AsyncPipelineRepository> {
+        Arc::new(crate::repository::BlockingPipelineRepository::new(
+            self.repo(),
+        ))
+    }
+
+    pub(crate) async fn read_db<R, F>(&self, operation: F) -> openproxy_types::Result<R>
+    where
+        R: Send + 'static,
+        F: FnOnce(&Connection) -> openproxy_types::Result<R> + Send + 'static,
+    {
+        if let Some(pool) = &self.db_pool {
+            return pool.spawn_read(operation).await;
+        }
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || operation(&conn.lock())).await?
     }
 
     pub fn new(conn: Arc<parking_lot::Mutex<Connection>>, config: PipelineConfig) -> Self {
@@ -158,9 +185,37 @@ impl Pipeline {
         predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
         session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
     ) -> Self {
-        let repo = Arc::new(crate::repository::SqlitePipelineRepository::new(
-            Arc::clone(&conn),
-        ));
+        Self::build(
+            conn,
+            None,
+            config,
+            PipelineServices {
+                record_bodies_and_headers,
+                selection_registry,
+                circuit_breaker,
+                predictive_limiter,
+                session_affinity,
+            },
+        )
+    }
+
+    fn build(
+        conn: Arc<parking_lot::Mutex<Connection>>,
+        db_pool: Option<openproxy_db::DbPool>,
+        config: PipelineConfig,
+        services: PipelineServices,
+    ) -> Self {
+        let PipelineServices {
+            record_bodies_and_headers,
+            selection_registry,
+            circuit_breaker,
+            predictive_limiter,
+            session_affinity,
+        } = services;
+        let repo = Arc::new(match &db_pool {
+            Some(pool) => crate::repository::SqlitePipelineRepository::with_db_pool(pool.clone()),
+            None => crate::repository::SqlitePipelineRepository::new(Arc::clone(&conn)),
+        });
         let tracker = crate::usage_tracker::UsageTracker {
             conn: Arc::clone(&conn),
             background_tx: config.background_tx.clone(),
@@ -179,6 +234,7 @@ impl Pipeline {
         );
         Self {
             conn,
+            db_pool,
             config,
             circuit_breaker,
             rr_counters: Arc::new(dashmap::DashMap::new()),
@@ -190,6 +246,30 @@ impl Pipeline {
             dispatcher,
             repo,
         }
+    }
+
+    /// Production constructor: reads use the pool's readers; writes use its writer.
+    pub fn with_db_pool_selection_registry(
+        pool: openproxy_db::DbPool,
+        config: PipelineConfig,
+        record_bodies_and_headers: Arc<AtomicBool>,
+        selection_registry: Arc<SelectionRegistry>,
+        circuit_breaker: CircuitBreakerRegistry,
+        predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
+        session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
+    ) -> Self {
+        Self::build(
+            pool.writer_arc(),
+            Some(pool),
+            config,
+            PipelineServices {
+                record_bodies_and_headers,
+                selection_registry,
+                circuit_breaker,
+                predictive_limiter,
+                session_affinity,
+            },
+        )
     }
 
     pub fn selection_registry(&self) -> &Arc<SelectionRegistry> {

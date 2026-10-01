@@ -11,7 +11,7 @@ use http_body_util::BodyExt;
 /// `WebSocketUpgrade` needs hyper's `OnUpgrade` extension, which only a
 /// real HTTP/1.1 connection provides, so the extractor fails with 426
 /// before the handler — and therefore before auth — ever runs.)
-fn ws_auth(
+async fn ws_auth(
     state: &AppState,
     uri: &str,
     bearer: Option<&str>,
@@ -28,7 +28,7 @@ fn ws_auth(
         headers.insert("authorization", format!("Bearer {b}").parse().unwrap());
     }
     let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
-    authenticate_admin_ws(state, &headers, q.ticket.as_deref(), Some(&addr))
+    authenticate_admin_ws(state, &headers, q.ticket.as_deref(), Some(&addr)).await
 }
 
 fn app_for(state: &AppState) -> Router {
@@ -105,6 +105,7 @@ async fn ws_upgrade_accepts_ticket_once_and_rejects_replay() {
     assert_eq!(state.ws_tickets().len(), 1);
 
     let identity = ws_auth(&state, &format!("/admin/ws?ticket={ticket}"), None)
+        .await
         .expect("fresh ticket must authenticate");
     assert!(
         identity.key_id().is_some(),
@@ -112,7 +113,7 @@ async fn ws_upgrade_accepts_ticket_once_and_rejects_replay() {
     );
     assert!(state.ws_tickets().is_empty(), "ticket consumed on use");
 
-    let replay = ws_auth(&state, &format!("/admin/ws?ticket={ticket}"), None);
+    let replay = ws_auth(&state, &format!("/admin/ws?ticket={ticket}"), None).await;
     assert!(replay.is_err(), "replayed ticket must be rejected");
 }
 
@@ -123,16 +124,26 @@ async fn ws_upgrade_rejects_raw_key_in_query_string() {
 
     // The legacy `?token=<key>` leaked the long-lived secret into proxy
     // access logs; it must no longer authenticate anything.
-    assert!(ws_auth(&state, &format!("/admin/ws?token={key}"), None).is_err());
+    assert!(
+        ws_auth(&state, &format!("/admin/ws?token={key}"), None)
+            .await
+            .is_err()
+    );
 
     // …and a valid key is not a valid ticket either.
-    assert!(ws_auth(&state, &format!("/admin/ws?ticket={key}"), None).is_err());
+    assert!(
+        ws_auth(&state, &format!("/admin/ws?ticket={key}"), None)
+            .await
+            .is_err()
+    );
 
     // No credentials at all.
-    assert!(ws_auth(&state, "/admin/ws", None).is_err());
+    assert!(ws_auth(&state, "/admin/ws", None).await.is_err());
 
     // Bearer header (non-browser clients) keeps working.
-    let identity = ws_auth(&state, "/admin/ws", Some(&key)).expect("bearer header");
+    let identity = ws_auth(&state, "/admin/ws", Some(&key))
+        .await
+        .expect("bearer header");
     assert!(identity.key_id().is_some());
 }
 
@@ -150,7 +161,11 @@ async fn ws_ticket_is_rejected_when_bound_key_is_revoked() {
     }
     state.invalidate_api_key_cache(None);
 
-    assert!(ws_auth(&state, &format!("/admin/ws?ticket={ticket}"), None).is_err());
+    assert!(
+        ws_auth(&state, &format!("/admin/ws?ticket={ticket}"), None)
+            .await
+            .is_err()
+    );
     assert!(
         state.ws_tickets().is_empty(),
         "a failed redemption still burns the ticket"
@@ -167,6 +182,7 @@ async fn admin_middleware_exposes_identity_to_handlers() {
 
     let identity: AdminIdentity =
         crate::handlers::admin::auth::authenticate_admin(&state, &headers, Some(&addr))
+            .await
             .expect("valid key");
     assert!(identity.key_id().is_some());
     assert_eq!(identity.remote_addr, Some(addr));
@@ -194,6 +210,7 @@ async fn admin_middleware_resolves_real_ip_behind_proxy() {
 
     let identity: AdminIdentity =
         crate::handlers::admin::auth::authenticate_admin(&state, &headers, Some(&addr))
+            .await
             .expect("valid key");
     assert_eq!(
         identity.client_ip(),
@@ -222,6 +239,7 @@ async fn admin_middleware_rejects_spoofed_real_ip_from_untrusted_peer() {
 
     let identity: AdminIdentity =
         crate::handlers::admin::auth::authenticate_admin(&state, &headers, Some(&untrusted_addr))
+            .await
             .expect("valid key");
     // Must NOT be 1.1.1.1 — must be the actual peer IP 203.0.113.10
     assert_eq!(
