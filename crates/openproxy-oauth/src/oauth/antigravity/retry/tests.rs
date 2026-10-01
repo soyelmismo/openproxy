@@ -17,7 +17,7 @@ async fn drive_retry_success_first_attempt() {
             calls.fetch_add(1, Ordering::Relaxed);
             async { Ok(dummy_token("v1")) }
         },
-        |_| {
+        |_| async {
             unhealthy_calls.fetch_add(1, Ordering::Relaxed);
         },
     )
@@ -50,7 +50,7 @@ async fn drive_retry_success_after_one_invalid_grant() {
                 }
             }
         },
-        |_| {
+        |_| async {
             unhealthy_calls.fetch_add(1, Ordering::Relaxed);
         },
     )
@@ -71,6 +71,8 @@ async fn drive_retry_marks_unhealthy_after_threshold() {
     let calls = AtomicU32::new(0);
     let unhealthy_calls = AtomicU32::new(0);
     let unhealthy_account = std::sync::Mutex::new(None::<AccountId>);
+    let u_calls = &unhealthy_calls;
+    let u_account = &unhealthy_account;
 
     let err = drive_invalid_grant_retry(
         account_id,
@@ -78,9 +80,9 @@ async fn drive_retry_marks_unhealthy_after_threshold() {
             calls.fetch_add(1, Ordering::Relaxed);
             async { Err(invalid_grant_err()) }
         },
-        |aid| {
-            unhealthy_calls.fetch_add(1, Ordering::Relaxed);
-            *unhealthy_account.lock().unwrap() = Some(aid);
+        move |aid| async move {
+            u_calls.fetch_add(1, Ordering::Relaxed);
+            *u_account.lock().unwrap() = Some(aid);
         },
     )
     .await
@@ -131,7 +133,7 @@ async fn drive_retry_ignores_non_invalid_grant_errors() {
                 .unwrap_or_else(invalid_grant_err);
             async move { Err(next) }
         },
-        |_| {
+        |_| async {
             unhealthy_calls.fetch_add(1, Ordering::Relaxed);
         },
     )
@@ -172,7 +174,7 @@ async fn drive_retry_backoff_delays_grow_exponentially() {
             calls.fetch_add(1, Ordering::Relaxed);
             async { Err(invalid_grant_err()) }
         },
-        |_| {
+        |_| async {
             unhealthy_calls.fetch_add(1, Ordering::Relaxed);
         },
     )
@@ -215,7 +217,7 @@ async fn drive_retry_cancellation_releases_counter() {
                 calls.fetch_add(1, Ordering::Relaxed);
                 async { Err(invalid_grant_err()) }
             },
-            |_| {},
+            |_| async {},
         ),
     )
     .await;

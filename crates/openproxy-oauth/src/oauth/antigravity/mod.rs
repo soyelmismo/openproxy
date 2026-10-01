@@ -145,8 +145,8 @@ impl OAuthProvider for AntigravityOAuthProvider {
                         .await
                 }
             },
-            move |aid| {
-                mark_account_unhealthy(on_unhealthy_db, aid);
+            move |aid| async move {
+                mark_account_unhealthy(on_unhealthy_db, aid).await;
             },
         )
         .await

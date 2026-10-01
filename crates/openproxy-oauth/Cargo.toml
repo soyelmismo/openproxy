@@ -35,3 +35,6 @@ futures-util = "0.3"
 bytes = "1"
 tokio-util = { workspace = true, features = ["rt"] }
 openproxy-pipeline = { path = "../openproxy-pipeline" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
