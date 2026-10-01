@@ -11,7 +11,7 @@ pub mod routing;
 
 pub mod accounts;
 
-pub mod account_scanner;
+pub use openproxy_oauth::account_scanner;
 
 pub mod admin;
 pub use openproxy_analytics::{analytics, usage};
@@ -33,11 +33,10 @@ pub mod bootstrap;
 
 pub mod discovery_scheduler;
 pub mod free_proxies;
-pub mod model_normalize;
-pub mod models;
 pub mod models_dev_sync;
+pub use openproxy_discovery::{model_normalize, models};
 pub use openproxy_notifications as notifications;
-pub mod oauth;
+pub use openproxy_oauth::oauth;
 
 pub use openproxy_pricing as pricing;
 pub use pricing::{cost, quota};

@@ -338,8 +338,8 @@ pub(crate) fn build_probe_request(test_url: &str, proxy_url: String) -> Upstream
     let mut req = UpstreamRequest::get(test_url);
     req.proxy = Some(proxy_url);
     req.headers.insert(
-        axum::http::header::CONNECTION,
-        axum::http::HeaderValue::from_static("close"),
+        http::header::CONNECTION,
+        http::HeaderValue::from_static("close"),
     );
     req
 }
@@ -356,8 +356,8 @@ mod tests {
         );
         assert_eq!(req.proxy.as_deref(), Some("http://1.2.3.4:8080"));
         assert_eq!(
-            req.headers.get(axum::http::header::CONNECTION),
-            Some(&axum::http::HeaderValue::from_static("close"))
+            req.headers.get(http::header::CONNECTION),
+            Some(&http::HeaderValue::from_static("close"))
         );
     }
 

@@ -501,12 +501,16 @@ mod tests {
         assert!(last_used_needs_stamp(None));
         assert!(last_used_needs_stamp(Some(&"malformed_date".to_string())));
 
-        let old_time = (chrono::Utc::now() - chrono::Duration::seconds(120))
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        let old_time = (chrono::Utc::now()
+            - chrono::Duration::seconds(core_api_keys::LAST_USED_THROTTLE_SECS + 30))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
         assert!(last_used_needs_stamp(Some(&old_time)));
 
-        let recent_time = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let recent_time = (chrono::Utc::now()
+            - chrono::Duration::seconds(core_api_keys::LAST_USED_THROTTLE_SECS.min(60) / 2))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
         assert!(!last_used_needs_stamp(Some(&recent_time)));
     }
 
@@ -678,6 +682,19 @@ mod tests {
         let verified = verify_key_credentials(&state, &token, "chat")
             .await
             .expect("verification succeeds during shutdown");
-        assert!(verified.last_used_at.is_some());
+
+        let key_id = verified.id;
+        let db_key = state
+            .db_pool()
+            .spawn_read(move |conn| {
+                core_api_keys::get_by_id(conn, key_id)?
+                    .ok_or_else(|| CoreError::Internal("key not found in db".into()))
+            })
+            .await
+            .expect("fetch db key");
+        assert!(
+            db_key.last_used_at.is_some(),
+            "DB row must have last_used_at persisted even after shutdown"
+        );
     }
 }

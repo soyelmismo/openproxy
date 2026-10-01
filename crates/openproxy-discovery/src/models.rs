@@ -81,3 +81,51 @@ pub fn upsert_many(
     sync::broadcast_notifications(conn, &events);
     Ok(upsert_result)
 }
+
+pub async fn refresh_models<A: openproxy_adapters::adapters::ProviderAdapter>(
+    pool: &openproxy_db::DbPool,
+    provider: &crate::ids::ProviderId,
+    api_key: &str,
+    adapter: &A,
+    upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
+    ttl_seconds: i64,
+    account_label: &str,
+) -> crate::error::Result<UpsertResult> {
+    let pool_reader = pool.clone();
+    let provider_clone = provider.clone();
+    let provider_row = tokio::task::spawn_blocking(move || {
+        let r = pool_reader.reader();
+        crate::providers::get(&r, &provider_clone)
+    })
+    .await
+    .map_err(|e| crate::error::CoreError::Internal(format!("join error: {e}")))??;
+
+    if provider_row.is_none() {
+        return Err(crate::error::CoreError::ProviderNotFound(
+            provider.to_string(),
+        ));
+    }
+
+    let discovered = adapter
+        .fetch_models_for_account(upstream_client, api_key, account_label)
+        .await?;
+    if discovered.is_empty() {
+        return Err(crate::error::CoreError::UpstreamConnection(format!(
+            "provider {provider} returned 0 models on /models; skipping update to preserve existing catalog"
+        )));
+    }
+    let ttl = std::time::Duration::from_secs(ttl_seconds.max(0) as u64);
+    let pool_writer = pool.clone();
+    let provider_clone = provider.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool_writer.writer();
+        if crate::providers::get(&conn, &provider_clone)?.is_none() {
+            return Err(crate::error::CoreError::ProviderNotFound(
+                provider_clone.to_string(),
+            ));
+        }
+        upsert_many(&conn, &provider_clone, &discovered, ttl)
+    })
+    .await
+    .map_err(|e| crate::error::CoreError::Internal(format!("join error: {e}")))?
+}

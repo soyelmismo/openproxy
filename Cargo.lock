@@ -1910,9 +1910,12 @@ dependencies = [
  "openproxy-analytics",
  "openproxy-compression",
  "openproxy-db",
+ "openproxy-discovery",
  "openproxy-notifications",
+ "openproxy-oauth",
  "openproxy-pipeline",
  "openproxy-pricing",
+ "openproxy-proxy-pool",
  "openproxy-types",
  "parking_lot",
  "rand 0.10.2",
@@ -1962,6 +1965,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "openproxy-discovery"
+version = "1.0.0"
+dependencies = [
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "openproxy-adapters",
+ "openproxy-db",
+ "openproxy-notifications",
+ "openproxy-pricing",
+ "openproxy-types",
+ "parking_lot",
+ "rand 0.10.2",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "openproxy-notifications"
 version = "1.0.0"
 dependencies = [
@@ -1973,6 +1999,37 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "openproxy-oauth"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures-util",
+ "governor",
+ "hex",
+ "http",
+ "openproxy-adapters",
+ "openproxy-db",
+ "openproxy-notifications",
+ "openproxy-pipeline",
+ "openproxy-types",
+ "parking_lot",
+ "rand 0.10.2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "urlencoding",
+ "uuid",
 ]
 
 [[package]]
@@ -2023,6 +2080,28 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+]
+
+[[package]]
+name = "openproxy-proxy-pool"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "futures",
+ "http",
+ "httpmock",
+ "openproxy-adapters",
+ "openproxy-db",
+ "openproxy-notifications",
+ "openproxy-types",
+ "parking_lot",
+ "rand 0.10.2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

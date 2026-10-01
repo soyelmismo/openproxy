@@ -1,16 +1,25 @@
-pub mod backfill;
-pub mod client;
-pub mod combos;
-pub mod enrich;
-pub mod provider_map;
-pub mod upsert;
+//! Facade for models_dev_sync, re-exporting openproxy-discovery models_dev_sync
+//! with ServiceContainer DI wrappers.
 
-#[cfg(test)]
-mod tests;
+pub use openproxy_discovery::models_dev_sync::*;
 
-pub use backfill::*;
-pub use client::*;
-pub use combos::*;
-pub use enrich::*;
-pub use provider_map::*;
-pub use upsert::*;
+pub mod client {
+    pub use openproxy_discovery::models_dev_sync::client::*;
+
+    pub async fn start_sync_scheduler_with_container(
+        services: &crate::di::ServiceContainer,
+        check_interval_secs: u64,
+    ) -> crate::error::Result<()> {
+        let db_pool = services.db_pool()?;
+        let upstream_client = services.upstream_client()?;
+        openproxy_discovery::models_dev_sync::client::start_sync_scheduler(
+            db_pool,
+            upstream_client,
+            check_interval_secs,
+        )
+        .await;
+        Ok(())
+    }
+}
+
+pub use client::start_sync_scheduler_with_container;

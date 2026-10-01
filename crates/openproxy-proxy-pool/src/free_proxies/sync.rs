@@ -16,7 +16,7 @@ pub async fn fetch_custom_proxy_source(
     use openproxy_adapters::upstream::{TimeoutProfile, UpstreamRequest, is_private_or_reserved};
 
     // Mitigación SSRF
-    let uri: axum::http::Uri = url.parse().map_err(|e| {
+    let uri: http::Uri = url.parse().map_err(|e| {
         crate::error::CoreError::Internal(format!("Invalid URL for custom proxy source: {e}"))
     })?;
 
@@ -87,14 +87,6 @@ pub async fn fetch_custom_proxy_source(
 pub async fn test_proxy_source_url(url: &str) -> crate::error::Result<usize> {
     let list = fetch_custom_proxy_source("test", url, 0).await?;
     Ok(list.len())
-}
-
-/// Sync all providers using a `ServiceContainer` for dependency injection.
-pub async fn sync_all_providers_with_container(
-    services: &crate::di::ServiceContainer,
-) -> crate::error::Result<SyncSummary> {
-    let db_pool = services.db_pool()?;
-    sync_all_providers(db_pool).await
 }
 
 async fn sync_single_source(src: ProxySource) -> (Vec<ScrapedProxy>, Option<String>) {
