@@ -67,3 +67,65 @@ fn test_build_codebuddy_accounts_request_with_url() {
         "true"
     );
 }
+
+#[test]
+fn test_parse_cst_datetime_to_unix_secs() {
+    assert_eq!(
+        parse_cst_datetime_to_unix_secs("2025-01-01 00:00:00"),
+        Some(1735660800)
+    );
+    assert_eq!(parse_cst_datetime_to_unix_secs("invalid-date"), None);
+}
+
+#[test]
+fn test_parse_codebuddy_resource_quota() {
+    let payload = serde_json::json!({
+        "data": {
+            "Response": {
+                "Data": {
+                    "Accounts": [
+                        {
+                            "Status": 0,
+                            "CapacitySize": 1000,
+                            "CapacityRemain": 750,
+                            "CapacityUsed": 250,
+                            "PackageName": "Pro Package",
+                            "CycleEndTime": "2099-01-01 00:00:00"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+
+    let quota = parse_codebuddy_resource_quota(&payload).expect("should parse resource quota");
+    assert_eq!(quota.session_limit, Some(1000));
+    assert_eq!(quota.session_used, Some(250));
+    assert_eq!(
+        quota.plan_name.as_deref(),
+        Some("CodeBuddy: Pro Package (1000 credits)")
+    );
+    assert!(quota.model_details.is_some());
+}
+
+#[test]
+fn test_parse_codebuddy_accounts_quota() {
+    let payload = serde_json::json!({
+        "data": {
+            "accounts": [
+                {
+                    "pluginEnabled": true,
+                    "type": "enterprise",
+                    "total_credits": 5000,
+                    "credit_balance": 3500
+                }
+            ]
+        }
+    });
+
+    let quota = parse_codebuddy_accounts_quota(&payload);
+    assert_eq!(quota.session_limit, Some(5000));
+    assert_eq!(quota.session_used, Some(1500));
+    assert_eq!(quota.plan_name.as_deref(), Some("CodeBuddy Enterprise"));
+    assert!(quota.model_details.is_some());
+}

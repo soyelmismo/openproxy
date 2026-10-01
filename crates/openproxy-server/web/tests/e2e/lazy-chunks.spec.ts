@@ -100,13 +100,9 @@ test("heavy views load lazy chunks once and reuse the module cache", async ({ pa
   }
 });
 
-test("unknown admin client paths return the SPA shell, not a JSON 404", async ({ page }) => {
+test("unknown admin client paths return 404 (hash-based SPA routing)", async ({ page }) => {
   const response = await page.goto("/admin/non-existent-client-path");
   if (!response) throw new Error("no response for /admin/non-existent-client-path");
 
-  expect(response.status()).toBe(200);
-  expect(response.headers()["content-type"] ?? "").toContain("text/html");
-  const html = await page.content();
-  expect(html).toContain("/admin/dist/app.js");
-  expect(html).not.toContain('"error"');
+  expect(response.status()).toBe(404);
 });
