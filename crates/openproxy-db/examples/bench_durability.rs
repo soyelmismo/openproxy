@@ -62,8 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Isolate benchmark storage: use RAII TempDir if no custom path was provided.
-    // If a custom path is specified, it must be a base directory or a non-pre-existing file path.
-    let (_temp_guard, db_path) = match custom_path {
+    // If a custom path is specified, it must be an existing base directory or a non-pre-existing file path.
+    let (_temp_guard, db_path) = match custom_path.as_ref() {
         Some(base_dir) if base_dir.is_dir() => {
             let pid = std::process::id();
             let nanos = std::time::SystemTime::now()
@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
-            (None, file_path)
+            (None, file_path.clone())
         }
         None => {
             let temp = openproxy_db::testing::TempDir::new("bench-durability")?;
@@ -120,10 +120,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Ensure database pool is completely closed before any temp cleanup
     drop(pool);
-
-    if custom_path.is_some() && db_path.exists() {
-        let _ = std::fs::remove_file(&db_path);
-    }
 
     latencies_us.sort_unstable();
     let p50_idx = ((num_txs as f64) * 0.50).floor() as usize;
