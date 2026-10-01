@@ -12,9 +12,13 @@ use openproxy_adapters::adapters;
 use openproxy_core::{AppConfig, providers};
 use openproxy_db as core_db;
 use openproxy_db::MasterKey;
-use openproxy_types::ids::ProviderId;
+use openproxy_pipeline::worker::BackgroundJob;
+use openproxy_types::endpoint::EndpointKind;
+use openproxy_types::ids::{ProviderId, RequestId};
+use openproxy_types::usage::UsageInput;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Build an in-process pool: temp dir on disk, migrations applied.
 fn fresh_pool() -> (core_db::DbPool, PathBuf) {
@@ -382,4 +386,302 @@ async fn test_enqueue_usage_db_failure_returns_explicit_error() {
         })
         .await
         .expect("drop failure trigger");
+}
+
+fn make_test_usage_input(request_id: RequestId) -> UsageInput {
+    UsageInput {
+        request_id,
+        trace_id: format!("trace_{request_id}"),
+        attempt: 1,
+        provider_id: ProviderId::new("test-provider"),
+        account_id: None,
+        combo_id: None,
+        combo_target_id: None,
+        model_row_id: None,
+        upstream_model_id: "test-model".to_string(),
+        prompt_tokens: Some(12),
+        completion_tokens: Some(24),
+        cached_tokens: None,
+        connect_ms: Some(4),
+        ttft_ms: Some(15),
+        total_ms: 60,
+        status_code: 200,
+        error_msg: None,
+        race_total: 1,
+        api_key_id: None,
+        request_body_json: None,
+        response_body_json: None,
+        request_headers: None,
+        response_headers: None,
+        error_message: None,
+        race_attempts: 1,
+        stop_reason: Some("stop".to_string()),
+        compression_savings_pct: None,
+        compression_techniques: None,
+        pii_redacted: None,
+        endpoint_kind: EndpointKind::Chat,
+        proxy_url: None,
+        proxy_status: None,
+        flags: 0,
+    }
+}
+
+#[tokio::test]
+async fn test_admin_shutdown_operational_drain_inflight_and_admitted_telemetry() {
+    let state = make_state().await;
+
+    let audit_id = "audit_shutdown_operational_1".to_string();
+    let unique_req_id = RequestId::new();
+    let req_id_str = unique_req_id.to_string();
+
+    let (oneshot_started_tx, oneshot_started_rx) = tokio::sync::oneshot::channel();
+    let (oneshot_latch_tx, oneshot_latch_rx) = tokio::sync::oneshot::channel();
+    let (oneshot_done_tx, oneshot_done_rx) = tokio::sync::oneshot::channel();
+    let (write_queued_tx, write_queued_rx) = tokio::sync::oneshot::channel();
+
+    let state_for_task = state.clone();
+    let audit_id_for_task = audit_id.clone();
+    let usage_for_task = make_test_usage_input(unique_req_id);
+
+    // 1. Admitted one-shot starts under supervisor before shutdown signal
+    let admitted = state.supervisor().spawn_one_shot("operational_admin_op", async move {
+        let _ = oneshot_started_tx.send(());
+        let _ = oneshot_latch_rx.await;
+
+        // Perform dedicated DB write in spawn_write
+        write_queued_tx.send(()).expect("signal queued write");
+        state_for_task
+            .db_pool()
+            .spawn_write({
+                let aid = audit_id_for_task.clone();
+                move |conn| {
+                    conn.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS admin_audit_events (id TEXT PRIMARY KEY, note TEXT);",
+                    )
+                    .map_err(openproxy_db::error::map_db_error)?;
+                    conn.execute(
+                        "INSERT INTO admin_audit_events (id, note) VALUES (?1, ?2);",
+                        rusqlite::params![aid, "operational_drain_write"],
+                    )
+                    .map_err(openproxy_db::error::map_db_error)?;
+                    Ok(())
+                }
+            })
+            .await
+            .expect("admin operation write must succeed");
+
+        // Admit RecordUsage into usage journal with backpressure
+        let job = BackgroundJob::RecordUsage(Box::new(usage_for_task));
+        state_for_task
+            .enqueue_usage(job)
+            .await
+            .expect("telemetry admission must succeed");
+
+        let _ = oneshot_done_tx.send(());
+    });
+    assert!(admitted, "one-shot must be admitted before shutdown");
+
+    // Wait deterministically for task start
+    oneshot_started_rx.await.expect("one-shot started");
+
+    // 2. Start shutdown_usage_worker pinned directly; verify it is pending
+    let shutdown_fut = state.shutdown_usage_worker();
+    tokio::pin!(shutdown_fut);
+    assert!(
+        futures::poll!(&mut shutdown_fut).is_pending(),
+        "shutdown must remain pending while in-flight task is unreleased"
+    );
+
+    // Verify new spawn_one_shot calls are rejected and future is never polled
+    let rejected_ran = Arc::new(AtomicBool::new(false));
+    let r_clone = Arc::clone(&rejected_ran);
+    let rejected_admitted =
+        state
+            .supervisor()
+            .spawn_one_shot("rejected_during_shutdown", async move {
+                r_clone.store(true, Ordering::SeqCst);
+            });
+    assert!(
+        !rejected_admitted,
+        "supervisor must reject new tasks after shutdown initiated"
+    );
+    assert!(
+        !rejected_ran.load(Ordering::SeqCst),
+        "rejected task future must never be executed"
+    );
+
+    // 3. Keep DB writer locked on a dedicated spawn_blocking thread to verify Tokio is not blocked
+    // and shutdown drain waits for DB operation completion
+    let (writer_locked_tx, writer_locked_rx) = tokio::sync::oneshot::channel();
+    let (writer_release_tx, writer_release_rx) = tokio::sync::oneshot::channel();
+    let pool_for_block = Arc::clone(state.db_pool());
+    let blocker_handle = tokio::task::spawn_blocking(move || {
+        let _guard = pool_for_block.writer();
+        let _ = writer_locked_tx.send(());
+        let _ = writer_release_rx.blocking_recv();
+    });
+    writer_locked_rx
+        .await
+        .expect("writer lock acquired on dedicated blocking thread");
+
+    // Release task latch: task proceeds to spawn_write, where it waits for the locked writer
+    oneshot_latch_tx.send(()).expect("release one-shot latch");
+    write_queued_rx
+        .await
+        .expect("one-shot reached database write");
+
+    // Poll shutdown_fut again; Tokio async thread remains responsive and shutdown stays pending
+    assert!(
+        futures::poll!(&mut shutdown_fut).is_pending(),
+        "shutdown must remain pending while DB writer lock is held"
+    );
+
+    // 4. Release resources in deterministic order:
+    // First release DB writer lock
+    let _ = writer_release_tx.send(());
+    blocker_handle.await.expect("blocker task finished");
+
+    // Wait for the one-shot task to finish its DB write and telemetry enqueue
+    oneshot_done_rx.await.expect("one-shot completed work");
+
+    // Now shutdown completes cleanly (draining supervisor and flushing usage journal to usage table)
+    shutdown_fut
+        .await
+        .expect("shutdown must complete successfully");
+
+    // 5. Verify row IDs are persisted exactly once
+    let audit_count: i64 = state
+        .db_pool()
+        .spawn_read({
+            let aid = audit_id.clone();
+            move |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM admin_audit_events WHERE id = ?1",
+                    rusqlite::params![aid],
+                    |row| row.get(0),
+                )
+                .map_err(openproxy_db::error::map_db_error)
+            }
+        })
+        .await
+        .expect("read audit row count");
+    assert_eq!(audit_count, 1, "admin audit record must exist exactly once");
+
+    let usage_count: i64 = state
+        .db_pool()
+        .spawn_read({
+            let rid = req_id_str.clone();
+            move |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM usage WHERE request_id = ?1",
+                    rusqlite::params![rid],
+                    |row| row.get(0),
+                )
+                .map_err(openproxy_db::error::map_db_error)
+            }
+        })
+        .await
+        .expect("read usage row count");
+    assert_eq!(
+        usage_count, 1,
+        "telemetry usage row must exist exactly once"
+    );
+
+    // 6. Verify usage_worker_stats shows pending 0 and no failed batches
+    let stats = state
+        .usage_worker_stats()
+        .await
+        .expect("fetch usage worker stats");
+    assert_eq!(
+        stats.pending, 0,
+        "usage journal depth must be 0 after drain"
+    );
+    assert_eq!(stats.failed_batches, 0, "failed batches must be 0");
+}
+
+#[tokio::test]
+async fn test_admin_shutdown_caller_dropped_mid_wait_next_caller_drains_same_task() {
+    let state = make_state().await;
+
+    let audit_id = "audit_caller_dropped_test".to_string();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (latch_tx, latch_rx) = tokio::sync::oneshot::channel();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+
+    let state_clone = state.clone();
+    let audit_id_clone = audit_id.clone();
+
+    let admitted = state.supervisor().spawn_one_shot("caller_drop_one_shot", async move {
+        let _ = started_tx.send(());
+        let _ = latch_rx.await;
+        state_clone
+            .db_pool()
+            .spawn_write(move |conn| {
+                conn.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS admin_audit_events (id TEXT PRIMARY KEY, note TEXT);",
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
+                conn.execute(
+                    "INSERT INTO admin_audit_events (id, note) VALUES (?1, ?2);",
+                    rusqlite::params![audit_id_clone, "caller_dropped_execution"],
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
+                Ok(())
+            })
+            .await
+            .expect("spawn_write in task must succeed");
+        let _ = done_tx.send(());
+    });
+    assert!(admitted, "one-shot must be admitted");
+    started_rx.await.expect("task started");
+
+    // Caller 1 starts shutdown_usage_worker, transfers task to drain_lock, and is dropped mid-wait
+    {
+        let caller1_fut = state.shutdown_usage_worker();
+        tokio::pin!(caller1_fut);
+        assert!(
+            futures::poll!(&mut caller1_fut).is_pending(),
+            "caller 1 shutdown must be pending because task is unreleased"
+        );
+        // caller1_fut is dropped at end of scope
+    }
+
+    // Caller 2 initiates shutdown_usage_worker: must acquire drain_lock and wait for the same retained task
+    let caller2_fut = state.shutdown_usage_worker();
+    tokio::pin!(caller2_fut);
+    assert!(
+        futures::poll!(&mut caller2_fut).is_pending(),
+        "caller 2 shutdown must still be pending on the retained task"
+    );
+
+    // Release task latch and confirm task completed
+    latch_tx.send(()).expect("release latch");
+    done_rx.await.expect("task completed execution");
+
+    // Caller 2 cleanly completes the shutdown
+    caller2_fut.await.expect("caller 2 shutdown must succeed");
+
+    // Verify task DB write executed exactly once
+    let count: i64 = state
+        .db_pool()
+        .spawn_read({
+            let aid = audit_id.clone();
+            move |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM admin_audit_events WHERE id = ?1",
+                    rusqlite::params![aid],
+                    |row| row.get(0),
+                )
+                .map_err(openproxy_db::error::map_db_error)
+            }
+        })
+        .await
+        .expect("read audit count");
+    assert_eq!(count, 1, "task must execute and persist exactly once");
+
+    // Verification: subsequent shutdown call is idempotent
+    state
+        .shutdown_usage_worker()
+        .await
+        .expect("subsequent shutdown must be idempotent");
 }
