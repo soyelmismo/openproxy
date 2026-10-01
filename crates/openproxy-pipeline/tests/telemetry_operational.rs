@@ -63,7 +63,9 @@ fn helper_crash_subprocess() {
 /// drain upon worker spawn, clean shutdown, and exact set parity.
 #[tokio::test]
 async fn test_backpressure_and_concurrent_load() {
-    let (_pool, conn, _path) = create_test_db("op-backpressure");
+    let (_pool, conn, _path) = tokio::task::spawn_blocking(|| create_test_db("op-backpressure"))
+        .await
+        .expect("spawn_blocking create_test_db");
     let coord = coordinator_for(&conn);
     let (sender, receiver) = tokio::sync::mpsc::channel(8);
     assert_eq!(sender.max_capacity(), 8);
@@ -181,11 +183,16 @@ async fn test_crash_subprocess_real_sigkill_recovery() {
     let db_path = temp_dir.path().join("crash_test.db");
 
     // 1. Initialize DB file and migrations
-    {
-        let pool = DbPool::open(&db_path).expect("open initial db pool");
-        let mut writer = pool.writer();
-        openproxy_db::migrations::run(&mut writer).expect("run migrations");
-    }
+    tokio::task::spawn_blocking({
+        let db_path = db_path.clone();
+        move || {
+            let pool = DbPool::open(&db_path).expect("open initial db pool");
+            let mut writer = pool.writer();
+            openproxy_db::migrations::run(&mut writer).expect("run migrations");
+        }
+    })
+    .await
+    .expect("spawn_blocking init db pool and migrations");
 
     // 2. Spawn child subprocess running `helper_crash_subprocess`
     let current_exe = std::env::current_exe().expect("resolve current_exe");
@@ -253,7 +260,12 @@ async fn test_crash_subprocess_real_sigkill_recovery() {
     }
 
     // 5. Reopen the database from the same file
-    let pool = DbPool::open(&db_path).expect("reopen db pool after crash");
+    let pool = tokio::task::spawn_blocking({
+        let db_path = db_path.clone();
+        move || DbPool::open(&db_path).expect("reopen db pool after crash")
+    })
+    .await
+    .expect("spawn_blocking reopen db pool");
     let conn = pool.writer_arc();
 
     let count = 128;
