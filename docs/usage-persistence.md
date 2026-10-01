@@ -56,6 +56,15 @@ Smart Warmup runners retain in-flight operations until completion and stop betwe
 cycles/accounts. A cancelled caller waiting for shutdown does not take ownership
 of, abort or detach the retained task handles; a subsequent caller resumes drain.
 
+Administrative provider refreshes, favicon fetches, proxy source synchronization
+and bulk proxy validation are registered one-shot tasks under the same supervisor.
+Admission closes at shutdown; accepted work is awaited without cancelling its
+in-flight database/network operations. Completed handles are reaped on subsequent
+admissions. Bulk validation returns HTTP 503 rather than `started` if rejected.
+A persisted source/account/provider mutation remains successful if its automatic
+follow-up cannot be admitted; that rejection is logged. A background provider
+refresh owns its favicon follow-up inline so shutdown cannot reject a late child.
+
 Library consumers using `AppState` can explicitly await
 `shutdown_usage_worker()` after their own request producers have stopped.
 `UsageRecordBuilder::record()` now returns a future and must be awaited; a
