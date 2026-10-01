@@ -705,5 +705,8 @@ pub(crate) fn execute_vacuum_cycle(
     }
 }
 
+pub mod scheduler_services;
+pub use scheduler_services::*;
+
 #[cfg(test)]
 mod tests;
