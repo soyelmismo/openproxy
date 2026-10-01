@@ -103,17 +103,33 @@ async fn try_proactive_oauth_refresh(
         provider = provider_id_str,
         "pipeline: proactive OAuth token refresh"
     );
-    match registry
-        .refresh_and_store(
-            provider_id_str,
-            refresh_token,
-            &pipeline.config.upstream_client,
-            account_id,
-            pipeline.db_pool.as_ref(),
-            &pipeline.config.master_key,
-        )
-        .await
-    {
+    let refresh_res = match pipeline.db_pool.as_ref() {
+        Some(pool) => {
+            registry
+                .refresh_and_store(
+                    provider_id_str,
+                    refresh_token,
+                    &pipeline.config.upstream_client,
+                    account_id,
+                    Some(pool),
+                    &pipeline.config.master_key,
+                )
+                .await
+        }
+        None => {
+            registry
+                .refresh_and_store_shared(
+                    provider_id_str,
+                    refresh_token,
+                    &pipeline.config.upstream_client,
+                    account_id,
+                    &pipeline.conn,
+                    &pipeline.config.master_key,
+                )
+                .await
+        }
+    };
+    match refresh_res {
         Ok(token) => {
             custom_meta.access_token = token.access_token;
             custom_meta.maybe_refresh = None;
