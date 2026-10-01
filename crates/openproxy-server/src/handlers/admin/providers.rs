@@ -11,6 +11,7 @@ use openproxy_core::accounts as core_accounts;
 use openproxy_core::admin as core_admin;
 use openproxy_core::oauth::OAuthProvider;
 use openproxy_core::providers as core_providers;
+use std::sync::Arc;
 
 #[derive(serde::Serialize)]
 pub struct ProviderWithOAuth {
