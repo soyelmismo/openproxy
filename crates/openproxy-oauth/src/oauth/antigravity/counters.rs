@@ -108,33 +108,24 @@ pub(crate) fn reset(account_id: AccountId) {
 
 /// Mark the account `Unhealthy` in the DB.
 ///
-/// Fire-and-forget: the write is offloaded to `tokio::spawn` + `DbPool::spawn_write`,
-/// so the synchronous write never stalls the runtime and the original
-/// `invalid_grant` error reaches the caller unencumbered. Logs its own backend
-/// outcome instead of returning it, because a secondary DB failure must not mask
-/// the original refresh failure.
-pub(crate) fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
-    let DbRef::Pool(pool) = db;
-    let pool = pool.clone();
-    tokio::spawn(async move {
-        if let Err(e) = pool
-            .spawn_write(move |conn| {
-                crate::accounts::set_health(
-                    conn,
-                    account_id,
-                    crate::accounts::HealthStatus::Unhealthy,
-                )
-            })
-            .await
-        {
-            tracing::warn!(
-                account = account_id.0,
-                error = %e,
-                path = "spawn_write",
-                "antigravity oauth: failed to set health to unhealthy"
-            );
-        }
-    });
+/// Dispatches writes to either `DbRef::Pool` or `DbRef::Shared` by offloading to
+/// a blocking task (`spawn_write` or `spawn_blocking`) with an owned handle and awaiting completion.
+/// Secondary DB failure is logged and not propagated, ensuring the original
+/// `invalid_grant` error is not obscured.
+pub(crate) async fn mark_account_unhealthy(db: DbRef<'_>, account_id: AccountId) {
+    let res = db
+        .with_conn_async(move |conn| {
+            crate::accounts::set_health(conn, account_id, crate::accounts::HealthStatus::Unhealthy)
+        })
+        .await;
+    if let Err(e) = res {
+        tracing::warn!(
+            account = account_id.0,
+            error = %e,
+            path = "mark_account_unhealthy",
+            "antigravity oauth: failed to set health to unhealthy"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -64,6 +64,67 @@ impl OAuthProviderRegistry {
         let guard = self.inner.lock();
         guard.get(name).cloned()
     }
+
+    async fn refresh_and_store_internal<'a>(
+        &'a self,
+        provider_id: &'a str,
+        refresh_token: &'a str,
+        upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
+        account_id: AccountId,
+        db: DbRef<'a>,
+        master_key: &'a MasterKey,
+    ) -> std::result::Result<openproxy_pipeline::oauth::TokenResponse, CoreError> {
+        let provider = self
+            .get(provider_id)
+            .ok_or_else(|| CoreError::ProviderNotFound(provider_id.to_string()))?;
+        let token = TokenRefreshCoordinator::global()
+            .refresh_and_store(OAuthRefreshParams {
+                provider_id,
+                provider,
+                refresh_token,
+                upstream_client,
+                account_id,
+                db,
+                master_key,
+            })
+            .await?;
+        Ok(openproxy_pipeline::oauth::TokenResponse {
+            access_token: token.access_token,
+            token_type: token.token_type,
+            expires_in: token.expires_in,
+            refresh_token: token.refresh_token,
+            scope: token.scope,
+            id_token: token.id_token,
+        })
+    }
+
+    /// Refresh and persist tokens for `account_id` using a shared connection handle.
+    pub fn refresh_and_store_shared<'a>(
+        &'a self,
+        provider_id: &'a str,
+        refresh_token: &'a str,
+        upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
+        account_id: AccountId,
+        conn: &'a Arc<parking_lot::Mutex<rusqlite::Connection>>,
+        master_key: &'a MasterKey,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        std::result::Result<openproxy_pipeline::oauth::TokenResponse, CoreError>,
+    > {
+        use futures_util::FutureExt;
+        async move {
+            self.refresh_and_store_internal(
+                provider_id,
+                refresh_token,
+                upstream_client,
+                account_id,
+                DbRef::Shared(conn),
+                master_key,
+            )
+            .await
+        }
+        .boxed()
+    }
 }
 
 impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry {
@@ -86,29 +147,38 @@ impl openproxy_pipeline::oauth::PipelineOAuthRegistry for OAuthProviderRegistry 
                     "oauth refresh requires a database pool".to_string(),
                 ));
             };
-            let provider = self
-                .get(provider_id)
-                .ok_or_else(|| CoreError::ProviderNotFound(provider_id.to_string()))?;
-            let token = TokenRefreshCoordinator::global()
-                .refresh_and_store(OAuthRefreshParams {
-                    provider_id,
-                    provider,
-                    refresh_token,
-                    upstream_client,
-                    account_id,
-                    db: DbRef::Pool(pool),
-                    master_key,
-                })
-                .await?;
-            Ok(openproxy_pipeline::oauth::TokenResponse {
-                access_token: token.access_token,
-                token_type: token.token_type,
-                expires_in: token.expires_in,
-                refresh_token: token.refresh_token,
-                scope: token.scope,
-                id_token: token.id_token,
-            })
+            self.refresh_and_store_internal(
+                provider_id,
+                refresh_token,
+                upstream_client,
+                account_id,
+                DbRef::Pool(pool),
+                master_key,
+            )
+            .await
         }
         .boxed()
+    }
+
+    fn refresh_and_store_shared<'a>(
+        &'a self,
+        provider_id: &'a str,
+        refresh_token: &'a str,
+        upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
+        account_id: AccountId,
+        conn: &'a Arc<parking_lot::Mutex<rusqlite::Connection>>,
+        master_key: &'a MasterKey,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        std::result::Result<openproxy_pipeline::oauth::TokenResponse, CoreError>,
+    > {
+        self.refresh_and_store_shared(
+            provider_id,
+            refresh_token,
+            upstream_client,
+            account_id,
+            conn,
+            master_key,
+        )
     }
 }

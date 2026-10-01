@@ -229,3 +229,96 @@ fn dummy_account(expires_at: Option<&str>) -> Account {
         current_proxy_id: None,
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_shared_lock_contention_and_token_reuse_without_http() {
+    let conn = openproxy_db::testing::open_in_memory();
+    conn.execute(
+        "INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('cline', 'Cline', 'https://api.cline.bot', 'oauth', 'openai')",
+        [],
+    )
+    .unwrap();
+
+    let master_key = openproxy_db::secrets::MasterKey::generate().unwrap();
+    let account_id = openproxy_db::accounts::create(
+        &conn,
+        &ProviderId::new("cline"),
+        None,
+        &master_key,
+        Some("test-cline-shared"),
+        0,
+        None,
+    )
+    .unwrap();
+
+    let fresh_expires_at = (chrono::Utc::now() + chrono::Duration::seconds(7200))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+
+    crate::accounts::store_oauth_tokens(
+        &conn,
+        account_id,
+        &master_key,
+        crate::accounts::StoreOAuthTokensParams {
+            access_token: "stored-fresh-access-token",
+            refresh_token: Some("stored-refresh-token"),
+            token_type: "Bearer",
+            expires_at: Some(&fresh_expires_at),
+            scope: Some("test-scope"),
+            provider_specific: None,
+            email: Some("cline@example.com"),
+        },
+    )
+    .unwrap();
+
+    let shared_conn = Arc::new(parking_lot::Mutex::new(conn));
+
+    // Lock contention: spawn an OS thread that holds the connection lock
+    // until released via a oneshot channel.
+    let (tx_acquired, rx_acquired) = tokio::sync::oneshot::channel::<()>();
+    let (tx_release, rx_release) = tokio::sync::oneshot::channel::<()>();
+    let lock_conn = Arc::clone(&shared_conn);
+
+    std::thread::spawn(move || {
+        let guard = lock_conn.lock();
+        let _ = tx_acquired.send(());
+        let _ = rx_release.blocking_recv();
+        drop(guard);
+    });
+
+    // Ensure the background thread has acquired the lock
+    rx_acquired.await.unwrap();
+
+    let reg = OAuthProviderRegistry::builtin();
+    let upstream_client = Arc::new(openproxy_adapters::upstream::UpstreamClient::new());
+    let shared_conn_task = Arc::clone(&shared_conn);
+
+    // Call refresh_and_store_shared concurrently while the lock is held.
+    // with_read_conn_async offloads to spawn_blocking, so the Tokio current_thread runtime
+    // is NOT stalled and can process releasing the lock.
+    let refresh_task = tokio::spawn(async move {
+        reg.refresh_and_store_shared(
+            "cline",
+            "param-refresh-token",
+            &upstream_client,
+            account_id,
+            &shared_conn_task,
+            &master_key,
+        )
+        .await
+    });
+
+    // Release the thread's lock
+    tx_release.send(()).unwrap();
+
+    let res = refresh_task
+        .await
+        .unwrap()
+        .expect("refresh with shared conn must succeed via double-checked lock reuse");
+
+    assert_eq!(res.access_token, "stored-fresh-access-token");
+    assert_eq!(res.token_type, "Bearer");
+    assert_eq!(res.refresh_token.as_deref(), Some("stored-refresh-token"));
+    assert_eq!(res.scope.as_deref(), Some("test-scope"));
+}
