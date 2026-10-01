@@ -234,7 +234,7 @@ impl Drop for ActiveGuard {
     }
 }
 
-pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
+pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
     if TESTING_ACTIVE
         .compare_exchange(
             false,
@@ -245,93 +245,93 @@ pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
         .is_err()
     {
         tracing::debug!(
-            "test_all_proxies_background: validation pass already running, skipping duplicate spawn"
+            "test_all_proxies: validation pass already running, skipping duplicate run"
         );
         return;
     }
 
+    let _guard = ActiveGuard;
+
     const READER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
-    tokio::spawn(async move {
-        let _guard = ActiveGuard;
-        let initial = {
-            let pool = Arc::clone(&db_pool);
-            tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
-                let r = pool.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
-                    crate::error::CoreError::Internal(format!(
-                        "test_all_proxies_background: reader lock not acquired within {READER_LOCK_TIMEOUT:?}"
-                    ))
-                })?;
-                let proxies = fetch_background_test_proxies(&r);
-                let test_url = openproxy_db::app_config::load_proxy_test_url(&r)
-                    .unwrap_or_else(|_| {
-                        openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string()
-                    });
-                Ok((proxies, test_url))
-            })
-            .await
-        };
-        let (proxies, test_url) = match initial {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(e)) => {
-                tracing::error!("test_all_proxies_background: initial load failed: {e}");
-                return;
-            }
-            Err(e) => {
-                tracing::error!("test_all_proxies_background: spawn_blocking join: {e}");
-                return;
-            }
-        };
-
-        if proxies.is_empty() {
+    let initial = {
+        let pool = Arc::clone(&db_pool);
+        tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
+            let r = pool.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
+                crate::error::CoreError::Internal(format!(
+                    "test_all_proxies: reader lock not acquired within {READER_LOCK_TIMEOUT:?}"
+                ))
+            })?;
+            let proxies = fetch_background_test_proxies(&r);
+            let test_url = openproxy_db::app_config::load_proxy_test_url(&r)
+                .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string());
+            Ok((proxies, test_url))
+        })
+        .await
+    };
+    let (proxies, test_url) = match initial {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(e)) => {
+            tracing::error!("test_all_proxies: initial load failed: {e}");
             return;
         }
+        Err(e) => {
+            tracing::error!("test_all_proxies: spawn_blocking join: {e}");
+            return;
+        }
+    };
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
-        let pool_writer = Arc::clone(&db_pool);
+    if proxies.is_empty() {
+        return;
+    }
 
-        let writer_handle = tokio::spawn(async move {
-            while let Some(first) = rx.recv().await {
-                let mut batch = vec![first];
-                while batch.len() < 50 {
-                    match rx.try_recv() {
-                        Ok(item) => batch.push(item),
-                        Err(_) => break,
-                    }
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
+    let pool_writer = Arc::clone(&db_pool);
+
+    let writer_handle = tokio::spawn(async move {
+        while let Some(first) = rx.recv().await {
+            let mut batch = vec![first];
+            while batch.len() < 50 {
+                match rx.try_recv() {
+                    Ok(item) => batch.push(item),
+                    Err(_) => break,
                 }
-
-                let pool = Arc::clone(&pool_writer);
-                let _ =
-                    tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
-                        let mut w = pool.writer();
-                        execute_proxy_batch_update(&mut w, &batch)
-                    })
-                    .await;
             }
-        });
 
-        let test_url_ref = &test_url;
-        futures::stream::iter(proxies)
-            .for_each_concurrent(20, |(id, r#type, host, port, username, password)| {
-                let tx = tx.clone();
-                async move {
-                    let test_res = test_proxy_connection(
-                        test_url_ref,
-                        &r#type,
-                        &host,
-                        port,
-                        username.as_deref(),
-                        password.as_deref(),
-                    )
-                    .await;
-                    let _ = tx.send((id, test_res)).await;
-                }
+            let pool = Arc::clone(&pool_writer);
+            let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
+                let mut w = pool.writer();
+                execute_proxy_batch_update(&mut w, &batch)
             })
             .await;
-
-        drop(tx);
-        let _ = writer_handle.await;
+        }
     });
+
+    let test_url_ref = &test_url;
+    futures::stream::iter(proxies)
+        .for_each_concurrent(20, |(id, r#type, host, port, username, password)| {
+            let tx = tx.clone();
+            async move {
+                let test_res = test_proxy_connection(
+                    test_url_ref,
+                    &r#type,
+                    &host,
+                    port,
+                    username.as_deref(),
+                    password.as_deref(),
+                )
+                .await;
+                let _ = tx.send((id, test_res)).await;
+            }
+        })
+        .await;
+
+    drop(tx);
+    let _ = writer_handle.await;
+}
+
+pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {
+    tokio::spawn(test_all_proxies(db_pool));
 }
 
 pub(crate) fn build_probe_request(test_url: &str, proxy_url: String) -> UpstreamRequest {
@@ -675,6 +675,56 @@ mod tests {
         assert!(
             total_proxies >= 50,
             "Proxies must have been inserted and maintained"
+        );
+    }
+
+    static TEST_GUARD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn test_all_proxies_empty_db_and_guard_lifecycle() {
+        let _lock = TEST_GUARD_LOCK.lock().await;
+        let pool = std::sync::Arc::new(
+            openproxy_db::conn::DbPool::test_pool_with_prefix("openproxy-test-guard-lifecycle")
+                .expect("test pool"),
+        );
+
+        TESTING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        // 1. Empty DB async returns cleanly without contacting network
+        test_all_proxies(Arc::clone(&pool)).await;
+        assert!(
+            !TESTING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst),
+            "Guard must be dropped and TESTING_ACTIVE reset to false after empty DB pass"
+        );
+
+        // 2. Duplicate guard behavior: while active, duplicate invocation exits early
+        TESTING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+        test_all_proxies(Arc::clone(&pool)).await;
+        assert!(
+            TESTING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst),
+            "TESTING_ACTIVE remains true as held by initial holder"
+        );
+
+        // 3. Drop guard resets state and subsequent pass runs deterministically
+        TESTING_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        test_all_proxies(Arc::clone(&pool)).await;
+        assert!(
+            !TESTING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst),
+            "TESTING_ACTIVE must be false upon successful completion"
+        );
+    }
+
+    #[test]
+    fn test_active_guard_drop_resets_flag() {
+        let _lock = TEST_GUARD_LOCK.blocking_lock();
+        TESTING_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+        {
+            let _guard = ActiveGuard;
+            assert!(TESTING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst));
+        }
+        assert!(
+            !TESTING_ACTIVE.load(std::sync::atomic::Ordering::SeqCst),
+            "ActiveGuard::drop must reset TESTING_ACTIVE to false"
         );
     }
 }
