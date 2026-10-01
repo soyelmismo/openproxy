@@ -393,10 +393,12 @@ pub fn test_pipeline_with_pool(pool: DbPool, config: PipelineConfig) -> crate::P
         config,
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
         Arc::new(openproxy_types::SelectionRegistry::new()),
-        crate::circuit_breaker::CircuitBreakerRegistry::new(&openproxy_types::config::CircuitBreakerConfig {
-            failure_threshold: 5,
-            unhealthy_duration_ms: 60_000,
-        }),
+        crate::circuit_breaker::CircuitBreakerRegistry::new(
+            &openproxy_types::config::CircuitBreakerConfig {
+                failure_threshold: 5,
+                unhealthy_duration_ms: 60_000,
+            },
+        ),
         Arc::new(crate::predictive_rate_limit::PredictiveRateLimiter::new()),
         Arc::new(crate::session_affinity::SessionAffinityRegistry::new()),
     )
