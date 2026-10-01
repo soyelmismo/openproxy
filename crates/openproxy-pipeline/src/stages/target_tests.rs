@@ -320,9 +320,11 @@ impl PipelineOAuthRegistry for MockOAuthRegistry {
         self.pool_call_count.fetch_add(1, Ordering::SeqCst);
         let token = TokenResponse {
             access_token: self.refreshed_token.clone(),
-            expires_in: 3600,
-            refresh_token: None,
             token_type: "Bearer".to_string(),
+            expires_in: Some(3600),
+            refresh_token: None,
+            scope: None,
+            id_token: None,
         };
         Box::pin(async move { Ok(token) })
     }
@@ -339,9 +341,11 @@ impl PipelineOAuthRegistry for MockOAuthRegistry {
         self.shared_call_count.fetch_add(1, Ordering::SeqCst);
         let token = TokenResponse {
             access_token: self.refreshed_token.clone(),
-            expires_in: 3600,
-            refresh_token: None,
             token_type: "Bearer".to_string(),
+            expires_in: Some(3600),
+            refresh_token: None,
+            scope: None,
+            id_token: None,
         };
         Box::pin(async move { Ok(token) })
     }
@@ -362,9 +366,11 @@ impl PipelineOAuthRegistry for DefaultOnlyMockOAuthRegistry {
         Box::pin(async move {
             Ok(TokenResponse {
                 access_token: "pool_only_token".to_string(),
-                expires_in: 3600,
-                refresh_token: None,
                 token_type: "Bearer".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+                scope: None,
+                id_token: None,
             })
         })
     }
