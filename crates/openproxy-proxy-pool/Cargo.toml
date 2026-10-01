@@ -1,0 +1,31 @@
+[package]
+name = "openproxy-proxy-pool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openproxy-types = { path = "../openproxy-types" }
+openproxy-db = { path = "../openproxy-db" }
+openproxy-adapters = { path = "../openproxy-adapters" }
+openproxy-notifications = { path = "../openproxy-notifications" }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+futures = { workspace = true }
+http = { version = "1" }
+uuid = { workspace = true }
+
+[dev-dependencies]
+openproxy-adapters = { path = "../openproxy-adapters", features = ["ssrf-bypass"] }
+httpmock = { workspace = true }

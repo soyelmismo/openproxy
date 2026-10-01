@@ -4,11 +4,9 @@ use crate::accounts;
 use crate::error::{CoreError, Result};
 use crate::ids::{AccountId, ProviderId};
 use crate::quota::AccountQuota;
-use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::secrets::MasterKey;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Inputs for [`create_account`]. The plaintext `api_key` is encrypted via
 /// `master_key` before insertion.
@@ -224,60 +222,4 @@ pub fn account_for_quota_refresh(
 /// MiniMax (and its CN sibling), OpenRouter and Antigravity have fetchers. Any
 /// other provider id returns an `AccountQuota` with NULL numeric fields and a
 /// `fetch_error` saying the provider is unsupported.
-pub async fn fetch_account_quota_with_proxy(
-    provider_id: &str,
-    upstream: &Arc<UpstreamClient>,
-    api_key: &str,
-    access_token: Option<&str>,
-    provider_specific: Option<&str>,
-    proxy_url: Option<&str>,
-) -> AccountQuota {
-    let mut result_quota = None;
-
-    let mapped_id = match provider_id {
-        "minimax-cn" => "minimax",
-        "agy" => "antigravity",
-        "zcode" | "z.ai" => "zai",
-        other => other,
-    };
-
-    let adapters = openproxy_adapters::adapters::builtin_adapters();
-    if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == mapped_id)
-        && let Some(res) = adapter
-            .fetch_quota_with_proxy(
-                upstream,
-                api_key,
-                access_token,
-                provider_specific,
-                proxy_url,
-            )
-            .await
-    {
-        result_quota = Some(res.unwrap_or_else(|e| AccountQuota::with_error(e.to_string())));
-    }
-
-    result_quota.unwrap_or_else(|| {
-        AccountQuota::with_error(format!(
-            "quota fetching not implemented for provider '{provider_id}'"
-        ))
-    })
-}
-
-/// [`Self::fetch_quota_with_proxy`] without an explicit proxy.
-pub async fn fetch_account_quota(
-    provider_id: &str,
-    upstream: &Arc<UpstreamClient>,
-    api_key: &str,
-    access_token: Option<&str>,
-    provider_specific: Option<&str>,
-) -> AccountQuota {
-    fetch_account_quota_with_proxy(
-        provider_id,
-        upstream,
-        api_key,
-        access_token,
-        provider_specific,
-        None,
-    )
-    .await
-}
+pub use openproxy_oauth::{fetch_account_quota, fetch_account_quota_with_proxy};
