@@ -111,7 +111,6 @@ test("unknown admin paths and non-public assets return 404 without the SPA shell
   ]) {
     const response = await request.get(path);
     expect(response.status(), path).toBe(404);
-    expect(response.headers()["content-type"] ?? "", path).toContain("application/json");
-    expect(await response.json(), path).toEqual({ error: "not found" });
+    expect(await response.text(), path).toBe("");
   }
 });
