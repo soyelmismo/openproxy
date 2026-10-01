@@ -20,7 +20,7 @@
 
 services:
   openproxy:
-    image: ghcr.io/soyelmismo/openproxy:latest
+    image: ${OPENPROXY_IMAGE:-ghcr.io/dimasskuy/openproxy:latest}
     # build: .
     container_name: openproxy
     ports:

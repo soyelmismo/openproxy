@@ -547,7 +547,9 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.prepare-version.outputs.version }}"
-          REPO="ghcr.io/soyelmismo/openproxy"
+          # Convert github.repository to lowercase for docker image naming
+          REPO_LOWER="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          REPO="ghcr.io/${REPO_LOWER}"
           # On master: tag both :<version> and :latest. On PRs: skip push
           # entirely (handled by the `push` flag below), but we still
           # build for cache validation.
@@ -628,7 +630,7 @@ jobs:
             | `openproxy-${{ needs.prepare-version.outputs.version }}-x86_64-pc-windows-msvc.zip` | Windows x86_64 |
             | `openproxy-${{ needs.prepare-version.outputs.version }}-aarch64-apple-darwin.zip` | macOS Apple Silicon |
 
-            Docker image: `ghcr.io/soyelmismo/openproxy:${{ needs.prepare-version.outputs.version }}`
+            Docker image: `ghcr.io/${{ github.repository }}:${{ needs.prepare-version.outputs.version }}`
           files: release-assets/openproxy-*.zip
           fail_on_unmatched_files: false
           generate_release_notes: false

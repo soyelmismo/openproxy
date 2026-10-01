@@ -369,7 +369,7 @@ The engine resolves ONNX symbols via `dlopen` at runtime rather than link-time:
 
 ### 6.3 Docker Deployment
 
-The official Docker image (`ghcr.io/soyelmismo/openproxy`) bundles ONNX Runtime libraries for both `linux/amd64` and `linux/arm64` out of the box via multi-stage build. You do not need to install or mount any runtime libraries from the host.
+The official Docker image (`ghcr.io/dimasskuy/openproxy`) bundles ONNX Runtime libraries for both `linux/amd64` and `linux/arm64` out of the box via multi-stage build. You do not need to install or mount any runtime libraries from the host.
 
 #### Running with Sandboxed Laya Decision Routing
 
@@ -378,7 +378,7 @@ Mount your model weights folder into the container working directory (`/var/lib/
 ```yaml
 services:
   openproxy:
-    image: ghcr.io/soyelmismo/openproxy:latest
+    image: ghcr.io/dimasskuy/openproxy:latest
     ports:
       - "8787:8787"
     volumes:

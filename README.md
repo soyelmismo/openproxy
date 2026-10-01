@@ -2,10 +2,10 @@
 
 **Self-hosted LLM gateway that unifies, races, and failovers across multiple AI providers behind a single OpenAI-compatible API.**
 
-[![CI](https://github.com/soyelmismo/openproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/soyelmismo/openproxy/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/soyelmismo/openproxy)](https://github.com/soyelmismo/openproxy/releases)
+[![CI](https://github.com/Dimasskuy/openproxy/actions/workflows/ci.yml/badge.svg)](https://github.com/Dimasskuy/openproxy/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Dimasskuy/openproxy)](https://github.com/Dimasskuy/openproxy/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-[![Docker](https://img.shields.io/badge/ghcr.io-openproxy-blue)](https://github.com/soyelmismo/openproxy/pkgs/container/openproxy)
+[![Docker](https://img.shields.io/badge/ghcr.io-openproxy-blue)](https://github.com/Dimasskuy/openproxy/pkgs/container/openproxy)
 
 ```text
                ┌─────────────────────────────────────────────────────────┐
@@ -72,7 +72,7 @@ Run the official multi-arch image (`linux/amd64`, `linux/arm64`):
 
 ```bash
 # Pull the latest image
-docker pull ghcr.io/soyelmismo/openproxy:latest
+docker pull ghcr.io/dimasskuy/openproxy:latest
 
 # Run with a mounted config file and volume for SQLite data
 docker run -d \
@@ -81,7 +81,7 @@ docker run -d \
   -v $(pwd)/config.toml:/etc/openproxy/config.toml:ro \
   -v openproxy-data:/var/lib/openproxy \
   --restart unless-stopped \
-  ghcr.io/soyelmismo/openproxy:latest
+  ghcr.io/dimasskuy/openproxy:latest
 ```
 
 Or using **Docker Compose**:
@@ -120,7 +120,7 @@ trusted_proxies = ["172.16.0.0/12", "10.0.0.0/8"]
 
 ### Option B: Pre-Built Binary
 
-Download the executable for your architecture from [Releases](https://github.com/soyelmismo/openproxy/releases):
+Download the executable for your architecture from [Releases](https://github.com/Dimasskuy/openproxy/releases):
 
 | Target | Platform |
 | --- | --- |
@@ -141,7 +141,7 @@ Download the executable for your architecture from [Releases](https://github.com
 Requirements: **Rust 1.80+**, **Node 20+**, and **pnpm**.
 
 ```bash
-git clone https://github.com/soyelmismo/openproxy.git
+git clone https://github.com/Dimasskuy/openproxy.git
 cd openproxy
 
 # 1. Build the embedded web dashboard

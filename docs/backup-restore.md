@@ -118,7 +118,7 @@ docker run -d \
   -v openproxy-data:/data \
   -e OPENPROXY_CONFIG=/data/config.toml \
   -e OPENPROXY_MASTER_KEY="<YOUR_BASE64_KEY>" \
-  ghcr.io/soyelmismo/openproxy:latest
+  ghcr.io/dimasskuy/openproxy:latest
 ```
 
 ---

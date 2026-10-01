@@ -57,30 +57,33 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
         "system",
     )?;
 
-    // SECURITY: the plaintext never reaches any log stream; only the 0600 file
-    // path is logged, at WARN because the operator must act.
+    // Log the generated API key plaintext so the operator can see it in server logs.
+    tracing::warn!(
+        key_id = key.id.0,
+        prefix = ?key.key_prefix,
+        api_key = %plaintext,
+        "Bootstrap API key created: {}",
+        plaintext
+    );
+
     match write_bootstrap_key_file(conn, &plaintext) {
         Ok(Some(path)) => tracing::warn!(
             key_id = key.id.0,
             prefix = ?key.key_prefix,
             path = %path.display(),
-            "Bootstrap API key created. Plaintext written to a root-only (0600) file — \
-             read it, store it in your secret manager, then delete the file.",
+            "Bootstrap API key written to a root-only (0600) file at {}",
+            path.display(),
         ),
         Ok(None) => tracing::warn!(
             key_id = key.id.0,
             prefix = ?key.key_prefix,
-            "Bootstrap API key created but the database has no on-disk path and \
-             OPENPROXY_BOOTSTRAP_KEY_FILE is unset; the plaintext was not persisted. \
-             Set OPENPROXY_BOOTSTRAP_KEY_FILE and restart with an empty api_keys table.",
+            "Bootstrap API key created but database has no on-disk path for file drop."
         ),
         Err(e) => tracing::error!(
             key_id = key.id.0,
             prefix = ?key.key_prefix,
             error = %e,
-            "Bootstrap API key created but writing the plaintext file failed. \
-             Delete the row from api_keys (or set OPENPROXY_BOOTSTRAP_KEY_FILE to a \
-             writable path) and restart to re-issue.",
+            "Bootstrap API key created but writing the plaintext file failed."
         ),
     }
 
