@@ -574,12 +574,30 @@ mod tests {
         assert_eq!(SqliteSynchronous::Full.as_pragma_str(), "FULL");
         assert_eq!(SqliteSynchronous::Normal.as_pragma_str(), "NORMAL");
 
-        assert_eq!(SqliteSynchronous::parse("full"), Ok(SqliteSynchronous::Full));
-        assert_eq!(SqliteSynchronous::parse("FULL"), Ok(SqliteSynchronous::Full));
-        assert_eq!(SqliteSynchronous::parse("Full"), Ok(SqliteSynchronous::Full));
-        assert_eq!(SqliteSynchronous::parse("normal"), Ok(SqliteSynchronous::Normal));
-        assert_eq!(SqliteSynchronous::parse("NORMAL"), Ok(SqliteSynchronous::Normal));
-        assert_eq!(SqliteSynchronous::parse("Normal"), Ok(SqliteSynchronous::Normal));
+        assert_eq!(
+            SqliteSynchronous::parse("full"),
+            Ok(SqliteSynchronous::Full)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("FULL"),
+            Ok(SqliteSynchronous::Full)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("Full"),
+            Ok(SqliteSynchronous::Full)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("normal"),
+            Ok(SqliteSynchronous::Normal)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("NORMAL"),
+            Ok(SqliteSynchronous::Normal)
+        );
+        assert_eq!(
+            SqliteSynchronous::parse("Normal"),
+            Ok(SqliteSynchronous::Normal)
+        );
         assert!(SqliteSynchronous::parse("off").is_err());
         assert!(SqliteSynchronous::parse("invalid").is_err());
     }
