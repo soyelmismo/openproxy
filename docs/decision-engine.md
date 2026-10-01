@@ -50,7 +50,7 @@ OpenProxy supports two backends for decision routing:
    [CLS] choice question: <instructions> [SEP] [MASK] <desc_0> [MASK] <desc_1> ... [SEP] <prompt> [SEP]
    ```
 4. **Calibrated evaluation:** The model calculates logits for each target marker, applies temperature scaling, and normalizes output through softmax.
-5. **Elastic hysteresis:** If a session is already pinned to a target, switching requires a confidence difference of at least 0.15 ($\Delta p \ge 0.15$). This prevents route oscillations and preserves upstream KV-cache.
+5. **Elastic hysteresis:** If a session is already pinned to a target, switching requires a confidence difference of at least 0.05 ($\Delta p \ge 0.05$). This prevents route oscillations and preserves upstream KV-cache.
 6. **Target reordering:** The pipeline swaps the winning target to index `0` for immediate dispatch.
 
 ### 2.2 Hierarchical Sub-Combos

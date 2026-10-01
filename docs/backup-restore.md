@@ -42,16 +42,19 @@ You can automate backup and restore in CI/CD, backup cron jobs, or container ini
 ### Export Backup
 
 **Plain JSON:**
+> Plain (unencrypted) export is opt-in only: the endpoint refuses it unless the query parameter `?plaintext=confirmed` is present, because the bundle contains every upstream credential in cleartext.
 ```bash
 curl -s -H "Authorization: Bearer <ADMIN_KEY>" \
-  http://localhost:8080/admin/api/backup/export \
+  "http://localhost:8787/admin/api/backup/export?plaintext=confirmed" \
   -o openproxy-backup.json
 ```
 
 **Encrypted with Passphrase:**
+> Send the passphrase in the `x-backup-passphrase` header (or in the restore/validate payload). It is never accepted as a query parameter: `?passphrase=...` is rejected with a validation error so the secret does not leak into access logs or shell history.
 ```bash
 curl -s -H "Authorization: Bearer <ADMIN_KEY>" \
-  "http://localhost:8080/admin/api/backup/export?passphrase=my-secret-passphrase" \
+  -H "x-backup-passphrase: my-secret-passphrase" \
+  "http://localhost:8787/admin/api/backup/export" \
   -o openproxy-backup.json
 ```
 
@@ -62,7 +65,7 @@ curl -X POST \
   -H "Authorization: Bearer <ADMIN_KEY>" \
   -H "Content-Type: application/json" \
   -d @openproxy-backup.json \
-  http://localhost:8080/admin/api/backup/validate
+  http://localhost:8787/admin/api/backup/validate
 ```
 
 *(If encrypted, supply the passphrase via `X-Backup-Passphrase: my-secret-passphrase` header or payload).*
@@ -74,7 +77,7 @@ curl -X POST \
   -H "Authorization: Bearer <ADMIN_KEY>" \
   -H "Content-Type: application/json" \
   -d @openproxy-backup.json \
-  http://localhost:8080/admin/api/backup/restore
+  http://localhost:8787/admin/api/backup/restore
 ```
 
 ---
@@ -111,7 +114,7 @@ docker volume create openproxy-data
 # 2. Run OpenProxy with persistent storage and master key
 docker run -d \
   --name openproxy \
-  -p 8080:8080 \
+  -p 8787:8787 \
   -v openproxy-data:/data \
   -e OPENPROXY_CONFIG=/data/config.toml \
   -e OPENPROXY_MASTER_KEY="<YOUR_BASE64_KEY>" \

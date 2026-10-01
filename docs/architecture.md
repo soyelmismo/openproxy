@@ -102,7 +102,7 @@ reader_count = 0 # automatic, bounded reader count
 ```
 
 Configuration validation rejects empty or identical public/admin bind strings.
-`OPENPROXY_ADMIN_BIND` and `OPENPROXY_DB_READERS` provide environment overrides.
+`OPENPROXY_SERVER__ADMIN_BIND` and `OPENPROXY_STORAGE__READER_COUNT` provide environment overrides.
 These are plain HTTP listeners: expose them through a TLS-terminating reverse proxy
 when needed. Non-loopback binds generate warnings. Trusted-proxy configuration
 governs forwarded client-IP resolution; arbitrary forwarded headers are not trusted.

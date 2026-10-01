@@ -54,7 +54,7 @@ async fn resolve_initial_targets(
 
 ### 2.2 Decoupled Sub-Combo Policies
 When flattening the list to individual models:
-* The child combo is never evaluated as an entity with its own strategy (`priority`, `round_robin`, `decision`, etc.).
+* The child combo is never evaluated as an entity with its own strategy (`priority`, `round_robin`, `shuffle`, `decision`, etc.).
 * The child combo's `priority_mode: Decision` property is never executed.
 
 ---
@@ -69,7 +69,7 @@ flowchart TD
     RStage --> CheckMode{"Combo has priority_mode == Decision?"}
     
     CheckMode -- Yes --> EvalDecision["Evaluate Jev across Current Level Targets\n(Direct models or Sub-combos with description)"]
-    CheckMode -- No --> EvalStandard["Sort by priority / standard strategy"]
+    CheckMode -- No --> EvalStandard["Sort by priority / standard strategy (priority, round_robin, shuffle)"]
     
     EvalDecision --> Winner["Identify Winning Target"]
     EvalStandard --> Winner
@@ -88,7 +88,7 @@ flowchart TD
 
 ### 3.2 Stop Rules and Resilience
 1. **Depth Limit:** Maximum 5 levels (`MAX_SUB_COMBO_DEPTH = 5`). Cycle detection prevents infinite loops at runtime.
-2. **Timeout or Jev Error Fallback:** If the Jev call at any level exceeds `decision_timeout_ms` (default 150ms) or fails, the router at that level falls back to the default static priority order and continues the flow without disrupting the user's request.
+2. **Timeout or Jev Error Fallback:** If the Jev call at any level exceeds `decision_timeout_ms` (default 100ms) or fails, the router at that level falls back to the default static priority order and continues the flow without disrupting the user's request.
 3. **Unhealthy Sub-Combo Pruning:** A sub-combo is only eligible for Jev classification if it has at least one healthy model in the `CircuitBreaker`. If a sub-combo is fully degraded, it is omitted from the options passed to Jev.
 
 ### 3.3 Audit Trail and Telemetry (`combo_walk_log`)

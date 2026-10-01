@@ -8,20 +8,20 @@
 - API-key auth per provider; no OAuth, no browser flows.
 - Live model discovery from upstream `/models` endpoints.
 - Multi-account per provider, with per-account priority and health tracking.
-- Combo routing strategies: `priority` and `round_robin`.
+- Combo routing strategies: `priority`, `round_robin` and `shuffle`.
 - Cost tracking per request, with per-model pricing tables.
 - Lightweight analytics: aggregate queries over recorded usage.
 - SSE streaming with deterministic, traceable output.
 - Explicit per-phase timeouts (connect / read / idle).
 - Structured logging with `request_id` and `trace_id`.
 - SQLite storage with a versioned migration runner.
-- Optional admin API and dashboard (feature-gated).
-- Headless by default: server runs without a UI.
+- Dashboard SPA and admin API: always built in, with the SPA embedded in the server
+  binary via `rust-embed` (no feature gate; the binary is self-contained).
 
 ### Out of scope (MVP) & Implementation Status
 - [x] **Tool calling & function-calling translation**: Implemented (bidirectional schema mapping and translation for tool calls between OpenAI, Anthropic, and Gemini).
-- [ ] **Responses API & Assistants API**: Post-MVP (out of current scope).
-- [ ] **HTTP response compression (`gzip` / `br`)**: Post-MVP (transport-level compression for static assets and JSON endpoints; prompt/payload compression is implemented in `openproxy-compression`).
+- [x] **Responses API**: Implemented (`/v1/responses` endpoint with full translation to/from Chat Completions upstreams).
+- [x] **HTTP response compression (`gzip`)**: Implemented (transport-level gzip via `tower-http` `compression-gzip`; `br`/`zstd` are not enabled; prompt/payload compression is implemented in `openproxy-compression`).
 - [x] **Prompt payload compression**: Implemented in `openproxy-compression` crate (Lite and RTK command filtering modes).
 - [ ] **MCP (Model Context Protocol), A2A, agent frameworks**: Post-MVP.
 - [ ] **Persistent memory, conversation history, vector stores**: Post-MVP.
@@ -37,7 +37,8 @@
 
 All public endpoints are OpenAI-compatible. All admin endpoints are JSON over HTTP and
 require `Authorization: Bearer <admin_api_key>`. The public `GET /v1/health` endpoint
-is unauthenticated and returns `{ "status": "ok", "version": "<semver>" }`.
+is unauthenticated and returns `{ "status": "ok" }` (no version fingerprint; the
+build version is exposed only behind admin auth at `GET /admin/api/version`).
 
 ### 2.1 `POST /v1/chat/completions`
 
@@ -144,38 +145,36 @@ verbatim, so the proxy-level id becomes `<provider>/<upstream_id_with_slashes>`
 
 ### 2.3 Admin endpoints
 
-All under `/v1/admin/*`, all require `Authorization: Bearer <admin_api_key>`.
+All under `/admin/api/*`, all require `Authorization: Bearer <admin_api_key>`.
 
 | Method | Path                          | Purpose                                       |
 |--------|-------------------------------|-----------------------------------------------|
-| GET    | `/v1/admin/providers`         | List configured providers.                    |
-| POST   | `/v1/admin/providers`         | Add a provider.                               |
-| DELETE | `/v1/admin/providers/{id}`    | Remove a provider and its accounts/models.    |
-| GET    | `/v1/admin/accounts`          | List accounts.                                |
-| POST   | `/v1/admin/accounts`          | Add an account (API key stored encrypted).    |
-| PATCH  | `/v1/admin/accounts/{id}`     | Update label, priority, health.               |
-| DELETE | `/v1/admin/accounts/{id}`     | Remove an account.                            |
-| GET    | `/v1/admin/combos`            | List combos.                                  |
-| POST   | `/v1/admin/combos`            | Create a combo (strategy + ordered targets).  |
-| DELETE | `/v1/admin/combos/{id}`       | Delete a combo.                               |
-| POST   | `/v1/admin/refresh-models`    | Force a model discovery sweep.                |
-| GET    | `/v1/admin/providers/{id}/timeouts` | Read per-provider timeout overrides.    |
-| PUT    | `/v1/admin/providers/{id}/timeouts` | Update per-provider timeout overrides. Body: `{ "connect_ms": int, "request_send_ms": int, "total_ms": int }`. |
-| GET    | `/v1/admin/models/{id}/timeouts`    | Read per-model timeout overrides.       |
-| PUT    | `/v1/admin/models/{id}/timeouts`    | Update per-model timeout overrides. Body: `{ "ttft_ms"?: int, "idle_chunk_ms"?: int }`. Unknown keys rejected with 400. Empty body clears overrides. |
+| GET    | `/admin/api/providers`         | List configured providers.                    |
+| POST   | `/admin/api/providers`         | Add a provider.                               |
+| DELETE | `/admin/api/providers/{id}`    | Remove a provider and its accounts/models.    |
+| GET    | `/admin/api/accounts`          | List accounts.                                |
+| POST   | `/admin/api/accounts`          | Add an account (API key stored encrypted).    |
+| PATCH  | `/admin/api/accounts/{id}`     | Update label, priority, health.               |
+| DELETE | `/admin/api/accounts/{id}`     | Remove an account.                            |
+| GET    | `/admin/api/combos`            | List combos.                                  |
+| POST   | `/admin/api/combos`            | Create a combo (strategy + ordered targets).  |
+| DELETE | `/admin/api/combos/{id}`       | Delete a combo.                               |
+| POST   | `/admin/api/refresh-models`    | Force a model discovery sweep.                |
+| GET    | `/admin/api/models/{id}/timeouts`    | Read per-model timeout overrides.       |
+| PUT    | `/admin/api/models/{id}/timeouts`    | Update per-model timeout overrides. Body: `{ "ttft_ms"?: int, "idle_chunk_ms"?: int }`. Unknown keys rejected with 400. Empty body clears overrides. |
 
-The five usage analytics endpoints live under `/v1/admin/usage/*` and are documented
+The five usage analytics endpoints live under `/admin/api/usage/*` and are documented
 in §7:
 
-- `GET /v1/admin/usage/summary`
-- `GET /v1/admin/usage/by-model`
-- `GET /v1/admin/usage/by-account`
-- `GET /v1/admin/usage/by-status`
-- `GET /v1/admin/usage/errors?limit=100`
+- `GET /admin/api/usage/summary`
+- `GET /admin/api/usage/by-model`
+- `GET /admin/api/usage/by-account`
+- `GET /admin/api/usage/by-status`
+- `GET /admin/api/usage/errors?limit=100`
 
 In addition:
 
-- `GET /v1/admin/usage/latency?provider=&model=&from=&to=` returns latency
+- `GET /admin/api/usage/latency?provider=&model=&from=&to=` returns latency
   percentiles (p50/p95) for `connect_ms`, `ttft_ms`, and `tokens_per_sec`. The
   response carries **only aggregated percentiles**; individual token counts or
   raw rows are never exported through this endpoint. Response shape:
@@ -190,7 +189,7 @@ In addition:
     "samples": 1234
   }
   ```
-- `GET /v1/admin/usage/races?from=&to=` returns race statistics over
+- `GET /admin/api/usage/races?from=&to=` returns race statistics over
   `usage` rows where `race_total > 1`. Response shape:
 
   ```json
@@ -266,15 +265,13 @@ For each per-phase timeout (`connect`, `request_send`, `ttft`, `idle_chunk`,
 `total`) the engine resolves the value at request time as:
 
 1. `models.timeout_overrides_json` for the resolved model (applies to `ttft`
-   and `idle_chunk` only).
-2. `provider_timeouts` for the resolved provider (applies to `connect`,
-   `request_send`, `total` only).
-3. `[timeouts]` defaults from `config.toml`.
+   and `idle_chunk_ms` only).
+2. `[timeouts]` defaults from `config.toml` (or the persisted override set via
+   `PUT /admin/api/config/timeouts`).
 
-See architecture.md §8 for the full phase table and provider_timeouts schema
-in §8.
+See architecture.md §8 for the full phase table.
 
-Validation for `PUT /v1/admin/models/{id}/timeouts`:
+Validation for `PUT /admin/api/models/{id}/timeouts`:
 - Parse body with serde_json::Value.
 - Reject if body is not a JSON object.
 - Allowed keys: ttft_ms, idle_chunk_ms. Reject 400 if unknown keys.
@@ -292,7 +289,7 @@ Model discovery has two triggers:
    a fixed enum).
 2. **Periodic refresh.** Every `config.model_refresh_interval_secs` (default 900s)
    the registry re-queries enabled providers and upserts results into `models`.
-3. **On-demand refresh.** `POST /v1/admin/refresh-models` forces a sweep and returns
+3. **On-demand refresh.** `POST /admin/api/refresh-models` forces a sweep and returns
    `{ added, updated, removed }` counts.
 
 ### Refresh algorithm
@@ -476,7 +473,7 @@ race_size=1 fast-path:
 Interaction with circuit breaker:
 - Health snapshot is taken at race start. Eligible targets = targets whose account is healthy AND not rate-limited at race start.
 - Changes in health during the race do not affect already-launched lanes (they will be cancelled by the abort_grace_ms if they lose).
-- Acceptance criterion §12 #22: "race_size=2 with one account going unhealthy mid-race (simulated by external PUT /v1/admin/accounts/{id} {health_status: unhealthy} after the race starts): the race continues with the original 2 lanes; the newly-unhealthy account's lane is not retroactively cancelled."
+- Acceptance criterion §12 #22: "race_size=2 with one account going unhealthy mid-race (simulated by external PUT /admin/api/accounts/{id} {health_status: unhealthy} after the race starts): the race continues with the original 2 lanes; the newly-unhealthy account's lane is not retroactively cancelled."
 
 ## 6. Cost Calculation
 
@@ -509,11 +506,11 @@ endpoints accept `?from=<rfc3339>&to=<rfc3339>&group_by=<...>` and return JSON.
 
 | Endpoint                                | Output shape                                  |
 |-----------------------------------------|-----------------------------------------------|
-| `GET /v1/admin/usage/summary`           | totals: requests, prompt/completion tokens, USD |
-| `GET /v1/admin/usage/by-model`          | grouped by `(provider_id, model_id)`          |
-| `GET /v1/admin/usage/by-account`        | grouped by `(provider_id, account_id)`        |
-| `GET /v1/admin/usage/by-status`         | grouped by HTTP `status_code`                 |
-| `GET /v1/admin/usage/errors?limit=100`  | recent error rows with `error_msg`            |
+| `GET /admin/api/usage/summary`           | totals: requests, prompt/completion tokens, USD |
+| `GET /admin/api/usage/by-model`          | grouped by `(provider_id, model_id)`          |
+| `GET /admin/api/usage/by-account`        | grouped by `(provider_id, account_id)`        |
+| `GET /admin/api/usage/by-status`         | grouped by HTTP `status_code`                 |
+| `GET /admin/api/usage/errors?limit=100`  | recent error rows with `error_msg`            |
 
 Example summary query (illustrative):
 
@@ -531,16 +528,16 @@ WHERE created_at BETWEEN ?1 AND ?2;
 A read-only SQLite connection (separate from the writer pool) serves analytics so
 that long-running scans never block request handling.
 
-`/v1/admin/usage/latency` percentile algorithm:
+`/admin/api/usage/latency` percentile algorithm:
 - Algorithm: t-digest via the `tdigest` crate. One TDigest per (provider, model, phase) dimension.
 - Cardinality budget: <1M rows per 24h window. On-demand recomputation acceptable.
-- On each request to /v1/admin/usage/latency:
+- On each request to /admin/api/usage/latency:
   1. Parse ?from=&to=&provider=&model= filters.
   2. Stream rows from SQLite (paginated 10K rows at a time).
   3. Feed into per-dimension TDigest. Memory: O(k) per digest where k=200.
   4. Extract p50, p95 from each digest.
 - For initial MVP, recompute on every request (no cache). If latency > 200ms, add a 60s cache.
-- Acceptance criterion §12 #21: "Given a uniform distribution of 10K samples between 0 and 1000ms, /v1/admin/usage/latency returns p50 ≈ 500ms ± 5% and p95 ≈ 950ms ± 5%."
+- Acceptance criterion §12 #21: "Given a uniform distribution of 10K samples between 0 and 1000ms, /admin/api/usage/latency returns p50 ≈ 500ms ± 5% and p95 ≈ 950ms ± 5%."
 
 `usage` is_winner semantics:
 - `race_lost=1` rows are losers. `race_lost=0` rows are winners OR non-race rows.
@@ -548,9 +545,9 @@ that long-running scans never block request handling.
 - For "unique requests" aggregation, COUNT(DISTINCT request_id).
 - For "total attempts" (raw rows), COUNT(*).
 - Endpoints:
-  - /v1/admin/usage/summary: returns both `unique_requests` (DISTINCT request_id) and `total_rows` (COUNT(*)).
-  - /v1/admin/usage/latency: filters WHERE race_lost=0 (only winners contribute to latency metrics).
-  - /v1/admin/usage/races: COUNT(DISTINCT request_id) WHERE race_total > 1.
+  - /admin/api/usage/summary: returns both `unique_requests` (DISTINCT request_id) and `total_rows` (COUNT(*)).
+  - /admin/api/usage/latency: filters WHERE race_lost=0 (only winners contribute to latency metrics).
+  - /admin/api/usage/races: COUNT(DISTINCT request_id) WHERE race_total > 1.
 - Add acceptance criterion §12 #20: "A combo with race_size=2 and max_attempts=3, where 1 race has 1 winner and 1 loser, and 2 retry rounds each with 1 winner and 1 loser, produces 6 usage rows total: 1 winner + 1 loser (attempt 1), 1 winner + 1 loser (attempt 2), 1 winner + 1 loser (attempt 3). unique_requests=1, total_rows=6."
 
 ## 8. SQLite Schema
@@ -601,17 +598,17 @@ CREATE TABLE models (
   expires_at             TEXT,
   active                 INTEGER NOT NULL DEFAULT 1,
   UNIQUE(provider_id, model_id),
-  CHECK (target_format IN ('openai','anthropic'))
+  CHECK (target_format IN ('openai','anthropic','gemini','responses','atomesus','commandcodego','systemone'))
 );
 CREATE INDEX idx_models_active ON models(active);
 
 CREATE TABLE combos (
   id         INTEGER PRIMARY KEY,
   name       TEXT NOT NULL UNIQUE,
-  strategy   TEXT NOT NULL,                     -- 'priority' | 'round_robin'
+  strategy   TEXT NOT NULL,                     -- 'priority' | 'round_robin' | 'shuffle'
   race_size  INTEGER NOT NULL DEFAULT 1,         -- 1 = sequential; N = parallel race across first N targets
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  CHECK (strategy IN ('priority','round_robin')),
+  CHECK (strategy IN ('priority','round_robin','shuffle')),
   CHECK (race_size >= 1 AND race_size <= 8)
 );
 
@@ -645,14 +642,14 @@ CREATE TABLE usage (
                                                         -- - Persisted as integer ms if and only if the upstream sent at least one byte of response body.
                                                         -- - NULL if: timeout before first byte, race_lost before first byte, 5xx pre-body, client disconnect before first byte.
                                                         -- - tokens_per_sec guard (C3) handles NULL and zero-difference cases.
-                                                        -- - /v1/admin/usage/latency filters WHERE ttft_ms IS NOT NULL for ttft percentiles.
+                                                        -- - /admin/api/usage/latency filters WHERE ttft_ms IS NOT NULL for ttft percentiles.
   total_ms           INTEGER NOT NULL,                  -- request enter → last byte out (canonical timing field)
   tokens_per_sec     REAL,                              -- completion_tokens / (total_ms - ttft_ms) * 1000
                                                         -- Formula: completion_tokens * 1000.0 / NULLIF(total_ms - ttft_ms, 0)
                                                         -- Computed at write time in Rust using f64 division with explicit zero-check.
                                                         -- If completion_tokens == 0 OR ttft_ms IS NULL OR (total_ms - ttft_ms) <= 0, tokens_per_sec is persisted as NULL.
                                                         -- A structured log with phase=usage_record, level=WARN, fields={request_id, trace_id, reason} is emitted when the guard fires.
-                                                        -- The /v1/admin/usage/latency endpoint filters with WHERE tokens_per_sec IS NOT NULL for tps percentiles.
+                                                        -- The /admin/api/usage/latency endpoint filters with WHERE tokens_per_sec IS NOT NULL for tps percentiles.
   race_total         INTEGER NOT NULL DEFAULT 1,        -- race_size of the combo at request time
   race_lost          INTEGER NOT NULL DEFAULT 0,        -- 1 if this attempt lost the race
   status_code        INTEGER NOT NULL,
@@ -671,14 +668,18 @@ CREATE TABLE api_keys (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE provider_timeouts (
-  provider_id     TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
-  connect_ms      INTEGER NOT NULL DEFAULT 5000,
-  request_send_ms INTEGER NOT NULL DEFAULT 10000,
-  total_ms        INTEGER NOT NULL DEFAULT 300000,
-  created_at      TEXT NOT NULL DEFAULT (datetime('now')),  -- ISO-8601
-  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))   -- ISO-8601
-);
+-- Historical (dropped by migration 000040_drop_provider_timeouts.sql):
+-- CREATE TABLE provider_timeouts (
+--   provider_id     TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+--   connect_ms      INTEGER NOT NULL DEFAULT 5000,
+--   request_send_ms INTEGER NOT NULL DEFAULT 10000,
+--   total_ms        INTEGER NOT NULL DEFAULT 300000,
+--   created_at      TEXT NOT NULL DEFAULT (datetime('now')),  -- ISO-8601
+--   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))   -- ISO-8601
+-- );
+-- Per-provider timeout overrides no longer exist; per-model overrides live in
+-- `models.timeout_overrides_json` and the global values are updated through
+-- `PUT /admin/api/config/timeouts`.
 ```
 
 `models.timeout_overrides_json` (nullable) carries per-model overrides for the
@@ -694,12 +695,12 @@ CREATE TABLE provider_timeouts (
 Unknown keys are ignored. Resolution order for a given phase is:
 
 1. `models.timeout_overrides_json` (per-model).
-2. `provider_timeouts` (per-provider; `connect_ms`, `request_send_ms`, `total_ms`).
-3. `[timeouts]` defaults from `config.toml`.
+2. `[timeouts]` defaults from `config.toml` (or the persisted override set via
+   `PUT /admin/api/config/timeouts`).
 
 ## 9. Migration Strategy
 
-Migration files (under crates/openproxy-core/migrations/):
+Migration files (under `crates/openproxy-db/migrations/`):
 - 000001_initial_schema.sql
     CREATE TABLE providers
     CREATE TABLE accounts
@@ -742,10 +743,10 @@ Error message capture:
 - error_msg stores the upstream's first 512 bytes of error body, UTF-8.
 - error_msg_redacted stores a version with secrets redacted: regex removes sk-..., x-api-key: ..., Authorization: Bearer ..., and any header that starts with case-insensitive "auth" or "key".
 - Both fields are capped at 2KB.
-- The /v1/admin/usage/errors endpoint returns error_msg_redacted, NEVER error_msg.
+- The /admin/api/usage/errors endpoint returns error_msg_redacted, NEVER error_msg.
 - The unredacted error_msg is only used in structured logs (with phase=error) for debugging and is NEVER returned in any API response.
 
-- Migrations are SQL files under `openproxy-core/migrations/`, named
+- Migrations are SQL files under `crates/openproxy-db/migrations/`, named
   `NNNNNN_description.sql` (six-digit monotonic sequence).
 - A `schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT)` table tracks
   applied versions.
@@ -753,8 +754,9 @@ Error message capture:
   migration list; missing versions are applied in order inside a single transaction.
 - Migrations are append-only. Destructive changes use the
   `NNNNNN_drop_xxx.sql → NNNNNN_recreate_xxx.sql` pattern.
-- The writer pool holds the migration lock (SQLite `BEGIN IMMEDIATE`); the reader
-  pool only opens after migrations are applied.
+- The pool opens its reader connections first (`DbPool::open_with_readers`); the
+  migration lock is then taken by the writer, which applies pending migrations
+  inside a single transaction (SQLite `BEGIN IMMEDIATE` → `COMMIT`).
 - **Idempotence test (required):** the runner is exercised by running the full
   migration set against an empty DB, then invoking the runner a second time on the
   same untouched DB file. The test asserts that the second run applies **zero** new
@@ -785,8 +787,10 @@ trusted_proxies = ["127.0.0.1", "::1"] # optional: trusted proxy CIDRs/IPs for X
 # Requests from untrusted peers ignore forwarding headers to prevent IP spoofing in audit logs.
 
 [storage]
-path = "./openproxy.db"
-encryption_key = "base64:..."   # 32 bytes, used for api_key_encrypted
+database_path = "~/.openproxy/data.db"
+reader_count = 0                      # 0 = automatic bounded count (max 32)
+encryption_key_source = "env"         # env | file
+# encryption_key_file = "/etc/openproxy/master.key"   # required when encryption_key_source = "file" (0600)
 
 [timeouts]  -- canonical block
 connect_ms = 5000
@@ -798,8 +802,11 @@ total_ms = 300000
 Deprecated aliases (accepted, logged as WARN at startup, mapped to canonical): read_chunk_ms -> idle_chunk_ms, idle_ms -> idle_chunk_ms.
 ```
 
-Per-provider overrides live in the `provider_timeouts` DB table
-(§8) and are managed via `GET/PUT /v1/admin/providers/{id}/timeouts`.
+Per-model timeout overrides live in `models.timeout_overrides_json`
+(`PUT /admin/api/models/{id}/timeouts`); the global `[timeouts]` values are
+updated at runtime via `PUT /admin/api/config/timeouts`. There are no
+per-provider timeout overrides: the `provider_timeouts` table was dropped
+(migration `000040_drop_provider_timeouts.sql`).
 
 [racing]
 default_race_size = 1           # default for newly-created combos
@@ -864,15 +871,16 @@ new sections, e.g.:
 - `OPENPROXY_TIMEOUTS__TTFT_MS=45000`
 - `OPENPROXY_TIMEOUTS__IDLE_CHUNK_MS=180000`
 
-**Reload semantics (MVP).** All `[racing]` and `[timeouts]` values are read
-once at process start. Changes to `config.toml` require a process restart.
-Hot-reload of timeouts is **not** part of MVP. Per-provider timeouts
-(`provider_timeouts` table) are reloadable without restart because they are
-read from the DB on each request.
+**Reload semantics.** `[racing]` values are read once at process start; changes
+to `config.toml` require a process restart. Timeouts are reloadable without
+restart: `PUT /admin/api/config/timeouts` persists the new `[timeouts]` block in
+the `app_config` table and updates the live state, and per-model overrides
+(`models.timeout_overrides_json`, updated via `PUT /admin/api/models/{id}/timeouts`)
+are read from the DB on each request.
 
-provider_timeouts cache:
-- Read on every request, no cache. Justification: the row is a single PK lookup, latency < 1ms with the r2d2 pool. The simplicity of no cache invalidation is worth the SELECT overhead.
-- If profiling shows the SELECT is hot, add a `tokio::sync::RwLock<HashMap<ProviderId, ProviderTimeouts>>` with 5s TTL, invalidated on PUT.
+Per-model timeout override cache:
+- Read on every request, no cache. Justification: the overrides are a single indexed lookup on `models`, latency < 1ms with the `DbPool` reader. The simplicity of no cache invalidation is worth the SELECT overhead.
+- If profiling shows the SELECT is hot, add a `tokio::sync::RwLock<HashMap<ModelId, TimeoutOverrides>>` with a TTL, invalidated on PUT.
 - MVP: no cache. Document in §11 as a profiling TODO.
 
 max_race_size enforcement (runtime):
@@ -972,7 +980,7 @@ The MVP is "done" when **all** of the following hold:
     in CI.
 13. Every `usage` row persists `connect_ms`, `ttft_ms`, `total_ms`, and
     `tokens_per_sec` for each request (successful or not) and the per-phase
-    percentiles are exposed via `GET /v1/admin/usage/latency`.
+    percentiles are exposed via `GET /admin/api/usage/latency`.
 14. A combo with `race_size = 2` and two healthy targets: the first response
     wins, the loser is cancelled in under 500ms, both rows exist in `usage`
     with the same `request_id` and distinct `trace_id`s, and the loser row has
@@ -991,11 +999,11 @@ The MVP is "done" when **all** of the following hold:
     returning a valid 200: the 200 target wins, the 503 is discarded, the
     client receives 200, both rows exist in `usage`, the 503 row has
     `status_code=503` and `race_lost=1`.
-18. Modifying a value in `provider_timeouts` via
-    `PUT /v1/admin/providers/{id}/timeouts` is reflected in the next request
-    without restart. Modifying `[timeouts]` in `config.toml` requires restart
-    (verified by a test that changes the file, makes a request, and observes
-    the old value).
+18. A timeout change made through `PUT /admin/api/config/timeouts` (or a
+    per-model override via `PUT /admin/api/models/{id}/timeouts`) is reflected
+    in the next request without restart. Modifying `[timeouts]` in
+    `config.toml` requires restart (verified by a test that changes the file,
+    makes a request, and observes the old value).
 19. A combo with `race_size=1` produces usage rows with `race_total=1`,
     `race_lost=0`, and no race-related log lines (`race_started`,
     `race_winner`, `race_loser`).
@@ -1005,10 +1013,10 @@ The MVP is "done" when **all** of the following hold:
     + 1 loser (attempt 2), 1 winner + 1 loser (attempt 3).
     `unique_requests=1`, `total_rows=6`.
 21. Given a uniform distribution of 10K samples between 0 and 1000ms,
-    `GET /v1/admin/usage/latency` returns `p50 ≈ 500ms ± 5%` and
+    `GET /admin/api/usage/latency` returns `p50 ≈ 500ms ± 5%` and
     `p95 ≈ 950ms ± 5%`.
 22. `race_size=2` with one account going unhealthy mid-race (simulated by
-    external `PUT /v1/admin/accounts/{id} {"health_status": "unhealthy"}`
+    external `PUT /admin/api/accounts/{id} {"health_status": "unhealthy"}`
     after the race starts): the race continues with the original 2 lanes;
     the newly-unhealthy account's lane is not retroactively cancelled.
 
@@ -1024,7 +1032,7 @@ demoable artifact.
 - CI: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace`.
 
 ### Phase 1: Storage and migrations (1 day)
-- Implement `openproxy-core::storage` (rusqlite pool, migration runner).
+- Implement `openproxy-db` (`DbPool` reader/writer pool, migration runner).
 - Add all tables from §8 plus the migration files.
 - Add storage tests: schema round-trip, migration idempotence, FK enforcement.
 
@@ -1043,7 +1051,7 @@ demoable artifact.
 ### Phase 4: Cost and analytics (1 day)
 - Pricing tables; per-request cost computation.
 - Analytics queries (§7) on a read-only connection.
-- Admin endpoints under `/v1/admin/*` with bearer-key auth.
+- Admin endpoints under `/admin/api/*` with bearer-key auth.
 
 ### Phase 5: Polish and release (1 day)
 - Structured logging, configuration loading, env overrides.

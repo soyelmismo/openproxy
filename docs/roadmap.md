@@ -8,7 +8,7 @@ Technical roadmap and task list for planned post-MVP capabilities.
 
 | Tier | Area / Feature | Status | Complexity | Impact |
 | :--- | :--- | :--- | :--- | :--- |
-| **P1** | **HTTP Transport Compression (`gzip` / `br` / `zstd`)** | ✅ Completed | Low | High |
+| **P1** | **HTTP Transport Compression (`gzip`)** | ✅ Completed | Low | High |
 | **P2** | **MCP (Model Context Protocol) & Tool Gateway** | 📋 Pending | Medium | High |
 | **P3** | **Horizontal Scalability & Distributed State** | 📋 Pending | High | High |
 | **P4** | **Persistent Memory & Conversation Stores** | 📋 Pending | Medium | Medium |
@@ -25,7 +25,7 @@ Technical roadmap and task list for planned post-MVP capabilities.
 *Objective:* Reduce transfer size for embedded SPA dashboard assets and JSON responses without increasing TTFT latency on SSE streams.
 
 - [x] **Compression Middleware in `openproxy-server`**
-  - [x] Integrate `tower-http::compression::CompressionLayer` with support for `gzip`, `brotli` (`br`), and `zstd`.
+  - [x] Integrate `tower-http::compression::CompressionLayer` with `gzip` support. `brotli` (`br`) and `zstd` are not enabled.
   - [x] Configure transport compression predicate enforcing strict MIME filtering and bypass rules.
 - [x] **Compression of Embedded Static Assets**
   - [x] Enable dynamic on-the-fly compression for frontend bundles (`/admin/dist/*`, CSS, JS, favicons, fonts).
@@ -100,7 +100,7 @@ Technical roadmap and task list for planned post-MVP capabilities.
 
 - [ ] **Guardrails & Safety Filters**
   - [ ] Detect prompt injections and jailbreaks in incoming requests.
-  - [ ] PII (Personally Identifiable Information) masking and redaction.
+  - [x] PII (Personally Identifiable Information) masking and redaction.
 - [ ] **Production Evaluations and Benchmarking**
   - [ ] Shadow evaluation (silent parallel execution against a control model).
   - [ ] A/B routing via weighted combos.
