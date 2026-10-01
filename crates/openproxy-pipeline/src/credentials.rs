@@ -3,6 +3,7 @@ use crate::repository::{KiroMeta, RawAccount};
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::combos::ComboTarget;
 use openproxy_types::error::CoreError;
+use openproxy_types::ids::{ComboId, ComboTargetId};
 use openproxy_types::models::Model;
 use std::collections::HashMap;
 
@@ -22,6 +23,27 @@ pub fn antigravity_project_from_value(value: &serde_json::Value) -> Option<Strin
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RejectedTarget {
+    pub(crate) target: ComboTarget,
+    pub(crate) model: Model,
+    pub(crate) combo_name: String,
+    pub(crate) reason: String,
+}
+
+pub(crate) fn format_missing_account_context(
+    target_id: i64,
+    combo_id: i64,
+    combo_name: &str,
+    provider: &str,
+    model_id: &str,
+    model_row_id: i64,
+) -> String {
+    format!(
+        "combo_target {target_id} has no account_id after expansion (combo '{combo_name}' [{combo_id}], provider '{provider}', model '{model_id}' [row_id {model_row_id}])"
+    )
+}
+
 pub struct CredentialManager;
 
 pub struct ResolutionMaps<'a> {
@@ -39,32 +61,108 @@ impl CredentialManager {
         master_key: &MasterKey,
         oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
     ) -> Vec<ResolvedTarget> {
+        Self::resolve_credentials_with_rejects(
+            eligible,
+            maps,
+            master_key,
+            oauth_registry,
+            None,
+            None,
+        )
+        .0
+    }
+
+    pub(crate) fn resolve_credentials_with_rejects(
+        eligible: Vec<ComboTarget>,
+        maps: &ResolutionMaps<'_>,
+        master_key: &MasterKey,
+        oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
+        combo_names: Option<&HashMap<ComboId, String>>,
+        active_cooldowns: Option<
+            &HashMap<ComboId, std::collections::HashSet<ComboTargetId>>,
+        >,
+    ) -> (Vec<ResolvedTarget>, Vec<RejectedTarget>) {
         let mut resolved = Vec::with_capacity(eligible.len());
+        let mut rejected = Vec::new();
+
         for t in eligible {
             let Some(model) = resolve_target_model(&t, maps.models_map) else {
                 continue;
             };
 
-            let creds = match t.account_id {
-                Some(account_id) => {
-                    resolve_account_credentials(&t, account_id.0, maps, master_key, oauth_registry)
+            if let Some(account_id) = t.account_id {
+                let creds = resolve_account_credentials(
+                    &t,
+                    account_id.0,
+                    maps,
+                    master_key,
+                    oauth_registry,
+                );
+                if let Some((api_key, api_key_label, custom_meta)) = creds {
+                    resolved.push(ResolvedTarget {
+                        target: t,
+                        model,
+                        api_key,
+                        api_key_label,
+                        custom_meta,
+                    });
                 }
-                None => resolve_anonymous_credentials(&t, maps.providers_map),
-            };
+            } else if is_anonymous_target(&t, maps.providers_map) {
+                resolved.push(ResolvedTarget {
+                    target: t,
+                    model,
+                    api_key: String::new(),
+                    api_key_label: None,
+                    custom_meta: None,
+                });
+            } else {
+                let is_already_cooled_down = active_cooldowns
+                    .and_then(|m| m.get(&t.combo_id))
+                    .is_some_and(|set| set.contains(&t.id));
 
-            let Some((api_key, api_key_label, custom_meta)) = creds else {
-                continue;
-            };
+                let combo_name = combo_names
+                    .and_then(|m| m.get(&t.combo_id))
+                    .cloned()
+                    .unwrap_or_else(|| format!("combo_{}", t.combo_id.0));
 
-            resolved.push(ResolvedTarget {
-                target: t,
-                model,
-                api_key,
-                api_key_label,
-                custom_meta,
-            });
+                let context_msg = format_missing_account_context(
+                    t.id.0,
+                    t.combo_id.0,
+                    &combo_name,
+                    t.provider_id.as_str(),
+                    model.model_id.as_str(),
+                    model.row_id.0,
+                );
+
+                if is_already_cooled_down {
+                    tracing::debug!(
+                        combo_id = t.combo_id.0,
+                        combo_name = %combo_name,
+                        provider = %t.provider_id.as_str(),
+                        model = %model.model_id.as_str(),
+                        target_id = t.id.0,
+                        "combo target has no account_id but is already in active cooldown; skipping reject reporting"
+                    );
+                } else {
+                    tracing::error!(
+                        combo_id = t.combo_id.0,
+                        combo_name = %combo_name,
+                        provider = %t.provider_id.as_str(),
+                        model = %model.model_id.as_str(),
+                        target_id = t.id.0,
+                        "{context_msg}"
+                    );
+                    rejected.push(RejectedTarget {
+                        target: t,
+                        model,
+                        combo_name,
+                        reason: context_msg,
+                    });
+                }
+            }
         }
-        resolved
+
+        (resolved, rejected)
     }
 }
 
@@ -99,21 +197,12 @@ fn resolve_target_model(t: &ComboTarget, models_map: &HashMap<i64, Model>) -> Op
     }
 }
 
-fn resolve_anonymous_credentials(
-    t: &ComboTarget,
-    providers_map: &HashMap<String, String>,
-) -> Option<(String, Option<String>, Option<CustomProviderMeta>)> {
+fn is_anonymous_target(t: &ComboTarget, providers_map: &HashMap<String, String>) -> bool {
     let auth_type = providers_map
         .get(&t.provider_id.0)
         .map(std::string::String::as_str);
-    if auth_type == Some("none")
+    auth_type == Some("none")
         || openproxy_adapters::adapters::is_anonymous_fallback(&t.provider_id.0)
-    {
-        Some((String::new(), None, None))
-    } else {
-        tracing::error!("combo_target {} has no account_id after expansion", t.id.0);
-        None
-    }
 }
 
 #[derive(Default)]
@@ -420,5 +509,99 @@ mod tests {
         model.active = true;
         models_map.insert(10, model);
         assert!(resolve_target_model(&target, &models_map).is_some());
+    }
+
+    #[test]
+    fn test_format_missing_account_context() {
+        let msg = format_missing_account_context(4384, 12, "my-combo", "openai", "gpt-4o", 99);
+        assert!(msg.starts_with("combo_target 4384 has no account_id after expansion"));
+        assert!(msg.contains("my-combo"));
+        assert!(msg.contains("12"));
+        assert!(msg.contains("openai"));
+        assert!(msg.contains("gpt-4o"));
+        assert!(msg.contains("99"));
+        assert!(!msg.contains("sk-"));
+    }
+
+    #[test]
+    fn test_resolve_credentials_with_rejects_behavior() {
+        use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
+        use openproxy_types::models::Model;
+        use std::collections::{HashMap, HashSet};
+
+        let target = ComboTarget {
+            id: ComboTargetId(4384),
+            combo_id: ComboId(77),
+            provider_id: ProviderId("openai".into()),
+            account_id: None,
+            model_row_id: Some(ModelRowId(10)),
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+            active: true,
+            ..Default::default()
+        };
+
+        let mut models_map = HashMap::new();
+        models_map.insert(
+            10,
+            Model {
+                row_id: ModelRowId(10),
+                model_id: ModelId("gpt-4o".into()),
+                active: true,
+                ..Default::default()
+            },
+        );
+
+        let mut providers_map = HashMap::new();
+        providers_map.insert("openai".into(), "bearer".into());
+
+        let accounts_map = HashMap::new();
+        let kiro_map = HashMap::new();
+        let antigravity_map = HashMap::new();
+        let maps = ResolutionMaps {
+            models_map: &models_map,
+            accounts_map: &accounts_map,
+            kiro_map: &kiro_map,
+            antigravity_map: &antigravity_map,
+            providers_map: &providers_map,
+        };
+
+        let master_key = MasterKey::generate().unwrap();
+
+        let mut combo_names = HashMap::new();
+        combo_names.insert(ComboId(77), "test-combo".to_string());
+
+        // Case 1: not in active cooldown -> rejected target returned
+        let (resolved, rejected) = CredentialManager::resolve_credentials_with_rejects(
+            vec![target.clone()],
+            &maps,
+            &master_key,
+            None,
+            Some(&combo_names),
+            None,
+        );
+        assert!(resolved.is_empty());
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].target.id, ComboTargetId(4384));
+        assert_eq!(rejected[0].combo_name, "test-combo");
+        assert_eq!(rejected[0].model.model_id.as_str(), "gpt-4o");
+
+        // Case 2: already in active cooldown -> skipped from rejected list
+        let mut active_cooldowns = HashMap::new();
+        let mut set = HashSet::new();
+        set.insert(ComboTargetId(4384));
+        active_cooldowns.insert(ComboId(77), set);
+
+        let (resolved2, rejected2) = CredentialManager::resolve_credentials_with_rejects(
+            vec![target],
+            &maps,
+            &master_key,
+            None,
+            Some(&combo_names),
+            Some(&active_cooldowns),
+        );
+        assert!(resolved2.is_empty());
+        assert!(rejected2.is_empty());
     }
 }
