@@ -4,15 +4,15 @@ use rusqlite::{Connection, params};
 
 pub const MAX_PENDING_JOBS: u64 = 100_000;
 
+/// Appends a new payload to the usage journal synchronously.
+/// Returns `Err(CoreError::JournalCapacityExhausted)` if `MAX_PENDING_JOBS` is reached.
 pub fn append(conn: &mut Connection, payload: &str) -> Result<i64> {
     crate::with_busy_retry("usage_journal::append", || {
         let transaction = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::map_db_error)?;
         if depth(&transaction)? >= MAX_PENDING_JOBS {
-            return Err(openproxy_types::CoreError::Internal(
-                "usage journal capacity exhausted; admission rejected".into(),
-            ));
+            return Err(openproxy_types::CoreError::JournalCapacityExhausted);
         }
         transaction
             .execute("INSERT INTO usage_journal(payload) VALUES (?1)", [payload])
@@ -21,6 +21,14 @@ pub fn append(conn: &mut Connection, payload: &str) -> Result<i64> {
         transaction.commit().map_err(crate::error::map_db_error)?;
         Ok(id)
     })
+}
+
+/// Helper predicate to check whether an error indicates that the usage journal
+/// has reached maximum capacity and cannot admit more entries until drained.
+#[inline]
+#[must_use]
+pub fn is_capacity_exhausted(err: &openproxy_types::CoreError) -> bool {
+    err.is_journal_capacity_exhausted()
 }
 
 pub fn pending(conn: &Connection, limit: usize) -> Result<Vec<(i64, String)>> {
@@ -81,7 +89,13 @@ mod tests {
             INSERT INTO usage_journal(payload) SELECT 'pending' FROM n;",
         )
         .unwrap();
-        assert!(append(&mut conn, "overflow").is_err());
+        let err = append(&mut conn, "overflow").unwrap_err();
+        assert!(is_capacity_exhausted(&err));
+        assert!(err.is_journal_capacity_exhausted());
+        assert_eq!(
+            err.to_string(),
+            "usage journal capacity exhausted; admission rejected"
+        );
         assert_eq!(depth(&conn).unwrap(), MAX_PENDING_JOBS);
     }
 }

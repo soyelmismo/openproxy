@@ -14,7 +14,7 @@ pub mod accounts;
 pub mod account_scanner;
 
 pub mod admin;
-pub mod analytics;
+pub use openproxy_analytics::{analytics, usage};
 pub mod audio;
 pub mod images;
 pub use images::{
@@ -36,10 +36,10 @@ pub mod free_proxies;
 pub mod model_normalize;
 pub mod models;
 pub mod models_dev_sync;
-pub mod notifications;
+pub use openproxy_notifications as notifications;
 pub mod oauth;
 
-pub mod pricing;
+pub use openproxy_pricing as pricing;
 pub use pricing::{cost, quota};
 pub mod codex_resets;
 pub mod minimax_checkin;
@@ -53,7 +53,6 @@ pub mod smart_warmup;
 pub mod token_estimate;
 
 pub mod rate_limit;
-pub mod usage;
 
 // Gate 0: hyper-based upstream client (`upstream-hyper` feature) coexists with
 // existing hyper call sites; it migrates none of them.
