@@ -33,6 +33,9 @@ openproxy-pipeline = { path = "../openproxy-pipeline" }
 openproxy-notifications = { path = "../openproxy-notifications" }
 openproxy-analytics = { path = "../openproxy-analytics" }
 openproxy-pricing = { path = "../openproxy-pricing" }
+openproxy-oauth = { path = "../openproxy-oauth" }
+openproxy-discovery = { path = "../openproxy-discovery" }
+openproxy-proxy-pool = { path = "../openproxy-proxy-pool" }
 tokio = { workspace = true }
 axum.workspace = true
 rusqlite = { workspace = true }

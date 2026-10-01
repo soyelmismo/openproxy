@@ -1,0 +1,37 @@
+[package]
+name = "openproxy-oauth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openproxy-types = { path = "../openproxy-types" }
+openproxy-db = { path = "../openproxy-db" }
+openproxy-adapters = { path = "../openproxy-adapters" }
+openproxy-notifications = { path = "../openproxy-notifications" }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+aes-gcm = { workspace = true }
+http = { version = "1" }
+governor = "0.10.4"
+parking_lot = { workspace = true }
+urlencoding = { workspace = true }
+dashmap = { workspace = true }
+futures-util = "0.3"
+bytes = "1"
+tokio-util = { workspace = true, features = ["rt"] }
+openproxy-pipeline = { path = "../openproxy-pipeline" }
