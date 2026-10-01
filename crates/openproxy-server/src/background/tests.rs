@@ -408,3 +408,129 @@ async fn cancellation_bridge_passes_precancelled_token_to_runner() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn spawn_one_shot_returns_false_on_shutdown_and_future_not_executed() {
+    let supervisor = BackgroundSupervisor::new();
+    supervisor.shutdown();
+
+    let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let executed_clone = Arc::clone(&executed);
+
+    let spawned = supervisor.spawn_one_shot("test_rejected", async move {
+        executed_clone.store(true, Ordering::SeqCst);
+    });
+
+    assert!(
+        !spawned,
+        "spawn_one_shot must return false when supervisor is closed"
+    );
+    assert!(
+        !executed.load(Ordering::SeqCst),
+        "rejected one-shot future must never be executed"
+    );
+}
+
+#[tokio::test]
+async fn spawn_one_shot_shutdown_waits_until_release() {
+    let supervisor = BackgroundSupervisor::new();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+    let spawned = supervisor.spawn_one_shot("admitted_operation", async move {
+        let _ = started_tx.send(());
+        let _ = release_rx.await;
+    });
+    assert!(spawned, "task must be admitted");
+
+    started_rx.await.expect("task must start");
+
+    let shutdown_fut = supervisor.shutdown_and_wait();
+    tokio::pin!(shutdown_fut);
+
+    assert!(
+        futures::poll!(&mut shutdown_fut).is_pending(),
+        "shutdown must remain pending while in-flight task is unreleased"
+    );
+
+    release_tx.send(()).expect("release task");
+    shutdown_fut.await;
+}
+
+#[tokio::test]
+async fn spawn_one_shot_cancellation_of_first_shutdown_caller_retains_handle_for_second() {
+    let supervisor = BackgroundSupervisor::new();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+    let spawned = supervisor.spawn_one_shot("cancel_drain_task", async move {
+        let _ = started_tx.send(());
+        let _ = release_rx.await;
+    });
+    assert!(spawned);
+    started_rx.await.expect("task started");
+
+    // Scope 1: caller 1 starts shutdown_and_wait, polls it, transferring tasks to drain_lock.
+    // Dropping caller 1 cancels its await while keeping the handle in drain_lock.
+    {
+        let caller1_fut = supervisor.shutdown_and_wait();
+        tokio::pin!(caller1_fut);
+        assert!(
+            futures::poll!(&mut caller1_fut).is_pending(),
+            "caller 1 must be pending before task release"
+        );
+    }
+
+    // Verify the cancelled caller 1 retained the handle in drain_lock
+    {
+        let drain = supervisor.drain_lock.lock().await;
+        assert_eq!(drain.len(), 1, "retained handle must remain in drain_lock");
+    }
+
+    // Caller 2 initiates shutdown_and_wait directly
+    let caller2_fut = supervisor.shutdown_and_wait();
+    tokio::pin!(caller2_fut);
+
+    assert!(
+        futures::poll!(&mut caller2_fut).is_pending(),
+        "caller 2 must still wait for the retained task"
+    );
+
+    release_tx.send(()).expect("release task");
+    caller2_fut.await;
+}
+
+#[tokio::test]
+async fn spawn_one_shot_many_completed_tasks_do_not_grow_unboundedly() {
+    let supervisor = BackgroundSupervisor::new();
+
+    for i in 0..50 {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let spawned = supervisor.spawn_one_shot("short_task", async move {
+            let _ = tx.send(i);
+        });
+        assert!(spawned);
+        let res = rx.await.expect("task finished");
+        assert_eq!(res, i);
+
+        // Ensure task has completed before next admission
+        while {
+            let reg = supervisor.registry.lock();
+            reg.tasks.iter().any(|h| !h.is_finished())
+        } {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    let (final_tx, final_rx) = tokio::sync::oneshot::channel();
+    assert!(supervisor.spawn_one_shot("final_task", async move {
+        let _ = final_tx.send(());
+    }));
+    final_rx.await.expect("final task finished");
+
+    assert!(
+        supervisor.task_count() <= 1,
+        "finished tasks must be pruned on admission; task_count={}",
+        supervisor.task_count()
+    );
+}

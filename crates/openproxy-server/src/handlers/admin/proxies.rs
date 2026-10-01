@@ -178,7 +178,16 @@ pub async fn test_proxy(
 pub async fn test_all_proxies(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(s.db_pool()));
+    let supervisor = Arc::clone(s.supervisor());
+    let pool = Arc::clone(s.db_pool());
+    let admitted = supervisor.spawn_one_shot("test_all_proxies", async move {
+        openproxy_core::free_proxies::test_all_proxies(pool).await;
+    });
+    if !admitted {
+        return Err(ApiError(CoreError::ServiceUnavailable(
+            "supervisor is closed; rejecting test_all_proxies".into(),
+        )));
+    }
     Ok(Json(serde_json::json!({ "status": "started" })))
 }
 
@@ -291,10 +300,11 @@ pub async fn update_proxy_test_url(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    async fn create_test_state() -> (AppState, openproxy_db::testing::TempDir) {
+    pub(in crate::handlers::admin) async fn create_test_state()
+    -> (AppState, openproxy_db::testing::TempDir) {
         let temp_dir =
             openproxy_db::testing::TempDir::new("openproxy-proxies-test").expect("mkdir");
         let pool = std::sync::Arc::new(
@@ -602,5 +612,31 @@ mod tests {
             "https://[2606:4700:4700::1111]/generate_204 should be accepted: {:?}",
             res_valid_ipv6.err()
         );
+    }
+
+    #[tokio::test]
+    async fn test_all_proxies_endpoint_rejects_with_503_when_supervisor_closed() {
+        let (state, _temp_dir) = create_test_state().await;
+        state
+            .shutdown_usage_worker()
+            .await
+            .expect("shutdown usage worker");
+
+        let res = test_all_proxies(State(state)).await;
+        assert!(res.is_err(), "test-all must fail when supervisor is closed");
+        let err = res.unwrap_err();
+        assert_eq!(err.0.http_status(), 503);
+    }
+
+    #[tokio::test]
+    async fn test_all_proxies_endpoint_returns_started_when_admitted() {
+        let (state, _temp_dir) = create_test_state().await;
+
+        let res = test_all_proxies(State(state.clone())).await;
+        assert!(res.is_ok(), "test-all must succeed when supervisor is open");
+        let json = res.unwrap().0;
+        assert_eq!(json.get("status").and_then(|s| s.as_str()), Some("started"));
+
+        state.shutdown_usage_worker().await.expect("shutdown clean");
     }
 }

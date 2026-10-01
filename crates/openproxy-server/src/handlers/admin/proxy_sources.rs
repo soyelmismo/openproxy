@@ -37,16 +37,24 @@ fn validate_create_source_input(body: &CreateProxySourceInput) -> Result<(), Api
     Ok(())
 }
 
-fn spawn_source_sync_and_test(pool: Arc<openproxy_db::DbPool>) {
-    tokio::spawn(async move {
-        let Ok(summary) = openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await
-        else {
-            return;
-        };
-        if summary.added > 0 || summary.fetched > 0 {
-            openproxy_core::free_proxies::test_all_proxies_background(pool);
+fn spawn_source_sync_and_test(state: &crate::state::AppState) {
+    let supervisor = Arc::clone(state.supervisor());
+    let pool = Arc::clone(state.db_pool());
+    let admitted = supervisor.spawn_one_shot("source_sync_and_test", async move {
+        match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await {
+            Ok(summary) => {
+                if summary.added > 0 || summary.fetched > 0 {
+                    openproxy_core::free_proxies::test_all_proxies(pool).await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("failed to sync proxy sources: {e}");
+            }
         }
     });
+    if !admitted {
+        tracing::warn!("supervisor is closed; rejecting proxy source sync and test followup");
+    }
 }
 
 pub async fn create_source(
@@ -58,7 +66,7 @@ pub async fn create_source(
     let src = DbWriter(w)
         .run(move |w| Ok(create_proxy_source(w, &body)?))
         .await?;
-    spawn_source_sync_and_test(Arc::clone(state.db_pool()));
+    spawn_source_sync_and_test(&state);
     Ok(Json(src))
 }
 
@@ -163,4 +171,42 @@ pub async fn reorder_proxy_sources(
             Ok(Json(serde_json::json!({ "reordered": true })))
         })
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::proxies::tests::create_test_state;
+    use super::*;
+
+    #[tokio::test]
+    async fn create_source_succeeds_even_when_supervisor_is_closed() {
+        let (state, _temp_dir) = create_test_state().await;
+        state
+            .shutdown_usage_worker()
+            .await
+            .expect("shutdown usage worker");
+
+        let input = CreateProxySourceInput {
+            name: "test-source".to_string(),
+            url: "https://example.com/proxies.txt".to_string(),
+            priority: None,
+            active: None,
+        };
+
+        let res = create_source(
+            axum::extract::State(state.clone()),
+            DbWriter(Arc::clone(state.db_pool())),
+            Json(input),
+        )
+        .await;
+
+        assert!(
+            res.is_ok(),
+            "persisted proxy source creation must not fail when followup sync is rejected: {:?}",
+            res.err()
+        );
+        let src = res.unwrap().0;
+        assert_eq!(src.name, "test-source");
+        assert_eq!(state.supervisor().task_count(), 0);
+    }
 }

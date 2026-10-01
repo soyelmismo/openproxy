@@ -281,20 +281,29 @@ pub(crate) fn spawn_background_provider_refresh(
     provider_id: String,
     account_id: Option<i64>,
 ) {
-    tokio::spawn(async move {
-        let q = ProviderRefreshQuery {
-            account_id,
-            ttl_seconds: None,
-        };
-        match run_provider_refresh(s, &provider_id, q).await {
-            Ok(_) => {
-                tracing::info!(provider_id = %provider_id, "background provider refresh succeeded");
+    let supervisor = Arc::clone(s.supervisor());
+    let pid_log = provider_id.clone();
+    let admitted = supervisor
+        .spawn_one_shot("background_provider_refresh", async move {
+            let q = ProviderRefreshQuery {
+                account_id,
+                ttl_seconds: None,
+            };
+            match run_provider_refresh_with_favicon_mode(s, &provider_id, q, true).await {
+                Ok(_) => {
+                    tracing::info!(provider_id = %provider_id, "background provider refresh succeeded");
+                }
+                Err(e) => {
+                    tracing::warn!(provider_id = %provider_id, error = %e, "background provider refresh failed");
+                }
             }
-            Err(e) => {
-                tracing::warn!(provider_id = %provider_id, error = %e, "background provider refresh failed");
-            }
-        }
-    });
+        });
+    if !admitted {
+        tracing::warn!(
+            provider_id = %pid_log,
+            "supervisor is closed; rejecting background provider refresh"
+        );
+    }
 }
 
 async fn resolve_refresh_key_and_label(
@@ -351,40 +360,59 @@ async fn apply_provider_auto_activation(
     .map_err(|e| ApiError(CoreError::Internal(format!("join error: {e}"))))?
 }
 
-fn spawn_favicon_fetch_if_needed(s: &AppState, provider: &ProviderId) {
+async fn fetch_favicon_if_needed(s: &AppState, provider: &ProviderId) {
     let pid_clone = provider.clone();
     let upstream_clone = std::sync::Arc::clone(s.upstream_client());
     let pool_clone = std::sync::Arc::clone(s.db_pool());
-    tokio::spawn(async move {
-        // Blocking thread: the sync SQLite read must not land on a Tokio worker.
-        let p_opt = {
-            let pool = std::sync::Arc::clone(&pool_clone);
-            let pid = pid_clone.clone();
-            tokio::task::spawn_blocking(move || {
-                core_providers::get(&pool.reader(), &pid).ok().flatten()
-            })
-            .await
-            .ok()
-            .flatten()
-        };
-        if let Some(p) = p_opt
-            && !p.has_favicon
-        {
-            let _ = core_providers::fetch_and_cache_favicon(
-                &pool_clone,
-                &pid_clone,
-                &p.base_url,
-                &upstream_clone,
-            )
-            .await;
-        }
+    // Blocking thread: the sync SQLite read must not land on a Tokio worker.
+    let p_opt = {
+        let pool = std::sync::Arc::clone(&pool_clone);
+        let pid = pid_clone.clone();
+        tokio::task::spawn_blocking(move || {
+            core_providers::get(&pool.reader(), &pid).ok().flatten()
+        })
+        .await
+        .ok()
+        .flatten()
+    };
+    if let Some(p) = p_opt
+        && !p.has_favicon
+    {
+        let _ = core_providers::fetch_and_cache_favicon(
+            &pool_clone,
+            &pid_clone,
+            &p.base_url,
+            &upstream_clone,
+        )
+        .await;
+    }
+}
+
+fn spawn_favicon_fetch_if_needed(s: &AppState, provider: &ProviderId) {
+    let supervisor = Arc::clone(s.supervisor());
+    let s_clone = s.clone();
+    let pid_clone = provider.clone();
+    let admitted = supervisor.spawn_one_shot("favicon_fetch", async move {
+        fetch_favicon_if_needed(&s_clone, &pid_clone).await;
     });
+    if !admitted {
+        tracing::warn!(provider_id = %provider, "supervisor is closed; rejecting favicon fetch");
+    }
 }
 
 pub(crate) async fn run_provider_refresh(
     s: AppState,
     provider_id_str: &str,
     q: ProviderRefreshQuery,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    run_provider_refresh_with_favicon_mode(s, provider_id_str, q, false).await
+}
+
+async fn run_provider_refresh_with_favicon_mode(
+    s: AppState,
+    provider_id_str: &str,
+    q: ProviderRefreshQuery,
+    inline_favicon: bool,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let provider = ProviderId::new(provider_id_str);
     let ttl_seconds = q.ttl_seconds.unwrap_or(PROVIDER_REFRESH_DEFAULT_TTL_SECS);
@@ -415,7 +443,11 @@ pub(crate) async fn run_provider_refresh(
         Err(e) => return Err(ApiError(e)),
     };
 
-    spawn_favicon_fetch_if_needed(&s, &provider);
+    if inline_favicon {
+        fetch_favicon_if_needed(&s, &provider).await;
+    } else {
+        spawn_favicon_fetch_if_needed(&s, &provider);
+    }
     let activated = apply_provider_auto_activation(&s, &provider).await?;
 
     openproxy_types::models::publish_models_refreshed(
@@ -494,4 +526,29 @@ pub async fn refresh_provider_models(
     Query(q): Query<ProviderRefreshQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     run_provider_refresh(s, &provider_id, q).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::proxies::tests::create_test_state;
+    use super::*;
+
+    #[tokio::test]
+    async fn background_provider_refresh_rejected_when_supervisor_is_closed() {
+        let (state, _temp_dir) = create_test_state().await;
+        state.shutdown_usage_worker().await.expect("clean shutdown");
+
+        spawn_background_provider_refresh(state.clone(), "openai".to_string(), None);
+        assert_eq!(state.supervisor().task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn spawn_favicon_fetch_rejected_when_supervisor_is_closed() {
+        let (state, _temp_dir) = create_test_state().await;
+        state.shutdown_usage_worker().await.expect("clean shutdown");
+
+        let pid = ProviderId::new("openai");
+        spawn_favicon_fetch_if_needed(&state, &pid);
+        assert_eq!(state.supervisor().task_count(), 0);
+    }
 }
