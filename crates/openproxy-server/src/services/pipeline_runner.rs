@@ -110,6 +110,7 @@ impl PipelineRunner {
             state.predictive_limiter(),
             state.session_affinity(),
         )
+        .with_journal_coordinator(Arc::clone(state.usage_worker().coordinator()))
     }
 
     /// Calculate watchdog budget in milliseconds respecting `x-request-deadline-ms` header.
