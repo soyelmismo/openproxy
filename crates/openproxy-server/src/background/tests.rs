@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct TestCounterService {
     count: Arc<AtomicUsize>,
+    started: Arc<tokio::sync::Notify>,
 }
 
 impl BackgroundService for TestCounterService {
@@ -16,7 +17,8 @@ impl BackgroundService for TestCounterService {
             tokio::select! {
                 () = cancel.cancelled() => break,
                 _ = tick.tick() => {
-                    self.count.fetch_add(1, Ordering::SeqCst);
+                    self.count.fetch_add(1, Ordering::Relaxed);
+                    self.started.notify_one();
                 }
             }
         }
@@ -27,29 +29,24 @@ impl BackgroundService for TestCounterService {
 async fn supervisor_spawns_and_shuts_down_service() {
     let supervisor = BackgroundSupervisor::new();
     let count = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(tokio::sync::Notify::new());
 
-    let handle = supervisor.spawn(TestCounterService {
+    let spawned = supervisor.spawn(TestCounterService {
         count: Arc::clone(&count),
+        started: Arc::clone(&started),
     });
+    assert!(spawned);
 
-    // Let the service run for a short duration
-    for _ in 0..20 {
-        if count.load(Ordering::SeqCst) > 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(count.load(Ordering::SeqCst) > 0);
+    // Wait deterministically for the first tick
+    started.notified().await;
+    assert!(count.load(Ordering::Relaxed) > 0);
 
-    // Signal graceful shutdown
-    supervisor.shutdown();
+    // Signal graceful shutdown and drain
+    supervisor.shutdown_and_wait().await;
+    let stopped_at = count.load(Ordering::Relaxed);
 
-    // Ensure task completes
-    handle.await.expect("join handle");
-    let stopped_at = count.load(Ordering::SeqCst);
-
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(count.load(Ordering::SeqCst), stopped_at);
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    assert_eq!(count.load(Ordering::Relaxed), stopped_at);
 }
 
 /// Smoke test for [`BackfillService`]: a fresh empty DB should
@@ -68,11 +65,12 @@ async fn backfill_service_completes_initial_pass_on_empty_db() {
         crate::state::BackfillStatus::default(),
     ));
     let supervisor = BackgroundSupervisor::new();
-    let handle = supervisor.spawn(BackfillService {
+    let spawned = supervisor.spawn(BackfillService {
         db_pool: Arc::clone(&pool),
         backfill_status: Arc::clone(&status),
         interval: Duration::from_secs(60),
     });
+    assert!(spawned);
 
     // Poll the status for up to 5s waiting for the first pass to
     // finish. On an empty DB the backfill is fast (just seeding
@@ -85,8 +83,7 @@ async fn backfill_service_completes_initial_pass_on_empty_db() {
             break;
         }
     }
-    supervisor.shutdown();
-    handle.await.expect("join handle");
+    supervisor.shutdown_and_wait().await;
 
     let s = status.read().clone();
     assert!(completed, "backfill pass did not complete; status={s:?}");
@@ -170,4 +167,159 @@ async fn memory_cleanup_service_prunes_abandoned_inflight_and_trims() {
 
     // Clean up
     openproxy_core::usage::INFLIGHT_REGISTRY.remove(&fresh_key);
+}
+
+struct SlowInflightService {
+    started: Arc<tokio::sync::Notify>,
+    finished: Arc<tokio::sync::Notify>,
+}
+
+impl BackgroundService for SlowInflightService {
+    fn name(&self) -> &'static str {
+        "slow_inflight"
+    }
+
+    async fn run(&self, cancel: CancellationToken) {
+        self.started.notify_one();
+        cancel.cancelled().await;
+        // Simulate in-flight work that must be drained before task termination
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.finished.notify_one();
+    }
+}
+
+#[tokio::test]
+async fn supervisor_shutdown_and_wait_drains_inflight_service() {
+    let supervisor = BackgroundSupervisor::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let finished = Arc::new(tokio::sync::Notify::new());
+
+    let spawned = supervisor.spawn(SlowInflightService {
+        started: Arc::clone(&started),
+        finished: Arc::clone(&finished),
+    });
+    assert!(spawned);
+
+    // Deterministically wait until service has started
+    started.notified().await;
+
+    // Concurrent shutdown_and_wait calls: both must wait until drain is complete
+    let s1 = supervisor.clone();
+    let s2 = supervisor.clone();
+    let (res1, res2) = tokio::join!(
+        tokio::spawn(async move { s1.shutdown_and_wait().await }),
+        tokio::spawn(async move { s2.shutdown_and_wait().await }),
+    );
+    res1.expect("s1 join");
+    res2.expect("s2 join");
+
+    // After shutdown_and_wait, finished must have been notified
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), finished.notified())
+            .await
+            .is_ok(),
+        "finished must be notified before shutdown_and_wait returns"
+    );
+}
+
+#[tokio::test]
+async fn supervisor_stops_new_spawns_after_shutdown() {
+    let supervisor = BackgroundSupervisor::new();
+    supervisor.shutdown();
+
+    let started = Arc::new(tokio::sync::Notify::new());
+    let spawned = supervisor.spawn(SlowInflightService {
+        started: Arc::clone(&started),
+        finished: Arc::new(tokio::sync::Notify::new()),
+    });
+
+    assert!(
+        !spawned,
+        "spawn must return false after supervisor shutdown"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), started.notified())
+            .await
+            .is_err(),
+        "rejected service must never be started"
+    );
+}
+
+struct CancelDrainService {
+    started: Arc<tokio::sync::Notify>,
+    cancelled_seen: Arc<tokio::sync::Notify>,
+    step1_gate: Arc<tokio::sync::Notify>,
+    completed: Arc<tokio::sync::Notify>,
+}
+
+impl BackgroundService for CancelDrainService {
+    fn name(&self) -> &'static str {
+        "cancel_drain"
+    }
+
+    async fn run(&self, cancel: CancellationToken) {
+        self.started.notify_one();
+        cancel.cancelled().await;
+        self.cancelled_seen.notify_one();
+        self.step1_gate.notified().await;
+        self.completed.notify_one();
+    }
+}
+
+#[tokio::test]
+async fn supervisor_cancellation_of_one_shutdown_caller_does_not_block_next() {
+    let supervisor = BackgroundSupervisor::new();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let cancelled_seen = Arc::new(tokio::sync::Notify::new());
+    let step1_gate = Arc::new(tokio::sync::Notify::new());
+    let completed = Arc::new(tokio::sync::Notify::new());
+
+    let spawned = supervisor.spawn(CancelDrainService {
+        started: Arc::clone(&started),
+        cancelled_seen: Arc::clone(&cancelled_seen),
+        step1_gate: Arc::clone(&step1_gate),
+        completed: Arc::clone(&completed),
+    });
+    assert!(spawned);
+
+    // Deterministically ensure service is actively running
+    started.notified().await;
+
+    // Caller 1 starts shutdown_and_wait(), but is dropped/cancelled early while waiting for drain
+    let trigger_cancel = Arc::new(tokio::sync::Notify::new());
+    let s1 = supervisor.clone();
+    let trigger_clone = Arc::clone(&trigger_cancel);
+
+    let caller1 = tokio::spawn(async move {
+        tokio::select! {
+            () = s1.shutdown_and_wait() => {
+                panic!("caller 1 should have been cancelled before drain completion");
+            }
+            () = trigger_clone.notified() => {}
+        }
+    });
+
+    // Wait until supervisor has triggered cancellation and caller1 is awaiting the task handle
+    cancelled_seen.notified().await;
+
+    // Trigger cancellation of caller 1 (drops caller 1's shutdown_and_wait future & mutex guard)
+    trigger_cancel.notify_one();
+    caller1.await.expect("caller 1 select task joined");
+
+    // Unblock the background service to allow it to finish
+    step1_gate.notify_one();
+
+    // Caller 2 initiates shutdown_and_wait(): must acquire lock without deadlocking and complete drain
+    supervisor.shutdown_and_wait().await;
+
+    // Ensure the service finished cleanly
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), completed.notified())
+            .await
+            .is_ok(),
+        "service completed notification must be received"
+    );
+
+    // Caller 3 verifies idempotence after drain
+    supervisor.shutdown_and_wait().await;
 }

@@ -1838,6 +1838,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "openproxy-analytics"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "dashmap",
+ "openproxy-db",
+ "openproxy-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tdigest",
+ "tokio",
+]
+
+[[package]]
 name = "openproxy-api-client"
 version = "1.0.0"
 dependencies = [
@@ -1892,9 +1907,12 @@ dependencies = [
  "hyper-util",
  "miniz_oxide",
  "openproxy-adapters",
+ "openproxy-analytics",
  "openproxy-compression",
  "openproxy-db",
+ "openproxy-notifications",
  "openproxy-pipeline",
+ "openproxy-pricing",
  "openproxy-types",
  "parking_lot",
  "rand 0.10.2",
@@ -1944,6 +1962,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "openproxy-notifications"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "openproxy-db",
+ "openproxy-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "openproxy-pipeline"
 version = "1.0.0"
 dependencies = [
@@ -1975,6 +2007,22 @@ dependencies = [
  "tracing",
  "unicode-normalization",
  "uuid",
+]
+
+[[package]]
+name = "openproxy-pricing"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "openproxy-analytics",
+ "openproxy-db",
+ "openproxy-types",
+ "parking_lot",
+ "regex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
