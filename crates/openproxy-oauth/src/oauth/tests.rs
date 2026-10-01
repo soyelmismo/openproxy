@@ -322,3 +322,62 @@ async fn test_shared_lock_contention_and_token_reuse_without_http() {
     assert_eq!(res.refresh_token.as_deref(), Some("stored-refresh-token"));
     assert_eq!(res.scope.as_deref(), Some("test-scope"));
 }
+
+#[tokio::test]
+async fn test_run_refresh_scheduler_pre_cancelled_returns_before_db() {
+    let pool = Arc::new(openproxy_db::testing::fresh_pool_only());
+
+    let cancel = CancellationToken::new();
+    cancel.cancel(); // Pre-cancelled!
+
+    let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
+    let upstream_client = openproxy_adapters::upstream::UpstreamClient::new();
+    let registry = Arc::new(OAuthProviderRegistry::builtin());
+
+    // Runner must return immediately before touching DB (without waiting for writer_guard or making network calls)
+    tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        run_refresh_scheduler(
+            Arc::clone(&pool),
+            master_key,
+            upstream_client,
+            registry,
+            60,
+            cancel,
+        ),
+    )
+    .await
+    .expect("runner should return before DB when pre-cancelled");
+}
+
+#[tokio::test]
+async fn test_run_refresh_scheduler_cancel_during_idle_tick() {
+    let pool = Arc::new(openproxy_db::testing::fresh_pool_only());
+    let cancel = CancellationToken::new();
+    let cancel_task = cancel.clone();
+
+    let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
+    let upstream_client = openproxy_adapters::upstream::UpstreamClient::new();
+    let registry = Arc::new(OAuthProviderRegistry::builtin());
+
+    let handle = tokio::spawn(async move {
+        run_refresh_scheduler(
+            pool,
+            master_key,
+            upstream_client,
+            registry,
+            3600,
+            cancel_task,
+        )
+        .await;
+    });
+
+    // Yield to let the runner enter the idle tick loop
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    cancel.cancel();
+
+    tokio::time::timeout(std::time::Duration::from_millis(500), handle)
+        .await
+        .expect("runner must exit cleanly on cancellation during idle tick")
+        .unwrap();
+}
