@@ -1,6 +1,6 @@
 # openproxy: Architecture
 
-This document describes the current eight-crate workspace, not the original MVP.
+This document describes the current fourteen-crate workspace, not the original MVP.
 The authoritative boundaries are the crate manifests and the modules referenced below.
 
 ## 1. Runtime overview
@@ -55,7 +55,13 @@ This is a runtime sketch; the exact compile-time dependencies are listed below.
 | `openproxy-adapters` | Provider implementations and registry, target-format serialization, response/SSE normalization, shared upstream transport, SSRF protection, and the optional native Laya worker. |
 | `openproxy-compression` | Payload compression policies, Lite/RTK filtering and compression statistics. |
 | `openproxy-pipeline` | Combo/target resolution, account rotation, selection, races, retries, quotas, circuit breakers, cooldowns, session affinity, PII processing, SSE execution and usage worker coordination. |
-| `openproxy-core` | Headless service orchestration: configuration, provider seeding and catalog synchronization, discovery scheduling, OAuth refresh, proxy services, notifications and non-chat endpoint executors. Reexports preserve existing consumers' interfaces. |
+| `openproxy-notifications` | Persisted notifications and notification publication. |
+| `openproxy-analytics` | Usage feeds, latency percentiles, race statistics and inflight telemetry. |
+| `openproxy-pricing` | Model pricing, cost calculation and quota interpretation. |
+| `openproxy-oauth` | OAuth provider flows, refresh coordination, encrypted token persistence and credential scanning. |
+| `openproxy-discovery` | Provider model discovery, models.dev enrichment and bounded discovery scheduling. |
+| `openproxy-proxy-pool` | Opt-in proxy source management, scraping, validation and pool synchronization. |
+| `openproxy-core` | Headless orchestration: configuration, bootstrap/seeding, quota/check-in workflows, dependency-injection facades and non-chat endpoint executors. Reexports preserve consumers' domain paths. |
 | `openproxy-server` | Executable and server library: listeners, routes, HTTP middleware, authentication, request validation, runtime state, lifecycle wiring, admin API/WebSocket and embedded SPA. |
 | `openproxy-api-client` | Typed Rust client for administrative HTTP operations; no direct SQLite access. Uses shared types and the upstream HTTP infrastructure. |
 
@@ -67,14 +73,21 @@ openproxy-db          -> types
 openproxy-adapters    -> types
 openproxy-compression -> types
 openproxy-pipeline    -> types, db, adapters, compression
-openproxy-core        -> types, db, adapters, compression, pipeline
+openproxy-notifications -> types, db
+openproxy-analytics   -> types, db
+openproxy-pricing     -> types, db, analytics
+openproxy-oauth       -> types, db, adapters, notifications, pipeline
+openproxy-discovery   -> types, db, adapters, notifications, pricing
+openproxy-proxy-pool  -> types, db, adapters, notifications
+openproxy-core        -> types, db, adapters, compression, pipeline,
+                         notifications, analytics, pricing, oauth, discovery, proxy-pool
 openproxy-server      -> types, db, adapters, compression, pipeline, core
 openproxy-api-client  -> types, adapters, core
 ```
 
 Names on the right abbreviate the `openproxy-` prefix. The graph is acyclic; the
 server and API client are consumers, and neither is imported by the lower layers.
-The frontend is a source tree inside `openproxy-server/web`, not a ninth crate.
+The frontend is a source tree inside `openproxy-server/web`, not another crate.
 SQL belongs in `openproxy-db`; handlers invoke its operations through asynchronous
 scheduling boundaries rather than implementing SQL in HTTP code.
 
@@ -99,10 +112,12 @@ admin_bind = "127.0.0.1:8788" # omit for one-listener mode
 
 [storage]
 reader_count = 0 # automatic, bounded reader count
+synchronous = "full" # default; "normal" explicitly trades power-loss durability for throughput
 ```
 
 Configuration validation rejects empty or identical public/admin bind strings.
 `OPENPROXY_SERVER__ADMIN_BIND` and `OPENPROXY_STORAGE__READER_COUNT` provide environment overrides.
+`OPENPROXY_STORAGE__SYNCHRONOUS` selects `full` or `normal` at startup.
 These are plain HTTP listeners: expose them through a TLS-terminating reverse proxy
 when needed. Non-loopback binds generate warnings. Trusted-proxy configuration
 governs forwarded client-IP resolution; arbitrary forwarded headers are not trusted.
@@ -226,8 +241,11 @@ clamped to **2–8**, while `1..=32` selects that exact number of readers. Openi
 out-of-range count fails configuration validation. Reader acquisition scans the
 bounded set opportunistically to avoid waiting behind one busy reader when another
 is free. Readers and writer use WAL, foreign keys and SQLite busy timeouts. Current
-connections use `synchronous=NORMAL`, disabled mmap, small per-connection caches and
-file-backed temporary storage.
+connections default to `synchronous=FULL`; `[storage].synchronous="normal"` is an
+explicit throughput/durability tradeoff. The selected policy applies to readers,
+writer, extra connections and reopen. Connections use disabled mmap, small caches
+and file-backed temporary storage. `FULL` depends on storage honoring flushes; it
+does not guarantee survival of hardware failures or unsuccessful writes.
 
 SQLite is synchronous. `DbPool::spawn_read` and `spawn_write` acquire guards inside
 `tokio::task::spawn_blocking` closures. The pipeline's `AsyncPipelineRepository`
@@ -249,8 +267,10 @@ The in-memory worker channel is a bounded wake-up mechanism, not the durable sou
 of truth. `UsageTracker::enqueue` reserves channel capacity, serializes and commits
 the job to SQLite's `usage_journal` on a blocking thread, then sends `JournalWake`.
 Admission succeeds only after the journal append commits. Closed workers, database
-errors or the **100,000 pending-job** capacity limit reject admission; records are
-not silently overwritten to make room.
+errors reject admission. At the **100,000 pending-job** capacity limit, async
+producers wait for effective ACK notifications or worker closure while retaining
+their bounded channel reservation; they do not poll SQLite or overwrite records.
+Synchronous append callers receive the typed capacity error instead of waiting.
 
 The worker replays journal entries in ID order, in groups of up to 32, with periodic
 wake-ups so committed entries are retried even if a wake signal is lost. Failed
@@ -274,9 +294,9 @@ Shutdown closes admission, drains accepted work and joins the worker. Pending jo
 depth and failed batches are available as worker statistics; a drain that leaves
 pending durable jobs reports an error rather than claiming a clean shutdown.
 The guarantee covers **successfully admitted** jobs, not calls rejected before
-journal commit. SQLite WAL with `synchronous=NORMAL` supports process-crash/restart
-replay but is not a promise that every acknowledged commit survives sudden power
-loss. See [usage-persistence.md](usage-persistence.md) for the detailed contract.
+journal commit. SQLite WAL defaults to `synchronous=FULL` for commit synchronization;
+`NORMAL` remains available explicitly and has weaker power-loss durability.
+See [usage-persistence.md](usage-persistence.md) for the detailed contract.
 
 ## 8. Local Laya worker isolation
 
