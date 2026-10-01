@@ -316,3 +316,67 @@ async fn test_api_key_cache_refresh_prevents_eviction() {
         "un-refreshed oldest key_hash_1 must be evicted"
     );
 }
+
+#[tokio::test]
+async fn test_enqueue_usage_when_closed_returns_error() {
+    let state = make_state().await;
+
+    state
+        .shutdown_usage_worker()
+        .await
+        .expect("shutdown usage worker");
+
+    let job = openproxy_pipeline::worker::BackgroundJob::MarkClientResponse {
+        request_id: "req_closed_test".into(),
+        attempt: 1,
+        target_id: openproxy_types::ids::ComboTargetId(1),
+    };
+
+    let result = state.enqueue_usage(job).await;
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().contains("closed"),
+        "error must indicate usage worker is closed, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_enqueue_usage_db_failure_returns_explicit_error() {
+    let state = make_state().await;
+
+    state
+        .db_pool()
+        .spawn_write(|conn| {
+            conn.execute_batch(
+                "CREATE TRIGGER test_fail_disk BEFORE INSERT ON usage_journal \
+                 BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
+            )
+            .map_err(openproxy_db::error::map_db_error)
+        })
+        .await
+        .expect("install failure trigger");
+
+    let job = openproxy_pipeline::worker::BackgroundJob::MarkClientResponse {
+        request_id: "req_disk_full_test".into(),
+        attempt: 1,
+        target_id: openproxy_types::ids::ComboTargetId(1),
+    };
+
+    let result = state.enqueue_usage(job).await;
+    assert!(result.is_err(), "enqueue_usage must fail when DB write fails");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, openproxy_types::CoreError::Database { .. }),
+        "expected CoreError::Database, got: {err:?}"
+    );
+
+    state
+        .db_pool()
+        .spawn_write(|conn| {
+            conn.execute_batch("DROP TRIGGER test_fail_disk")
+                .map_err(openproxy_db::error::map_db_error)
+        })
+        .await
+        .expect("drop failure trigger");
+}
