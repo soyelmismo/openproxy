@@ -374,3 +374,37 @@ async fn supervisor_supervises_minimax_checkin_service() {
 
     supervisor.shutdown_and_wait().await;
 }
+
+#[tokio::test]
+async fn cancellation_bridge_retains_inflight_work_until_released() {
+    let cancel = CancellationToken::new();
+    let runner_cancel = cancel.clone();
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (cancelled_tx, cancelled_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let mut handle = tokio::spawn(async move {
+        scheduler_services::with_core_cancellation(runner_cancel, |core_cancel| async move {
+            started_tx.send(()).expect("signal started");
+            core_cancel.cancelled().await;
+            cancelled_tx.send(()).expect("signal cancellation observed");
+            release_rx.await.expect("release inflight work");
+        })
+        .await;
+    });
+    started_rx.await.expect("runner started");
+    cancel.cancel();
+    cancelled_rx.await.expect("cancellation mirrored");
+    assert!(futures::poll!(&mut handle).is_pending());
+    release_tx.send(()).expect("release runner");
+    handle.await.expect("runner joined");
+}
+
+#[tokio::test]
+async fn cancellation_bridge_passes_precancelled_token_to_runner() {
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    scheduler_services::with_core_cancellation(cancel, |core_cancel| async move {
+        assert!(core_cancel.is_cancelled());
+    })
+    .await;
+}

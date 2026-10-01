@@ -36,6 +36,7 @@ openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
 openproxy-compression = { path = "../openproxy-compression" }
 tokio = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 base64 = { workspace = true }
 # The `multipart` feature is required for the
 # `POST /v1/audio/transcriptions` (Whisper) handler, which uses

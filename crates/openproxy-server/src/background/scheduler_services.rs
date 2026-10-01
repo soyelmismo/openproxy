@@ -9,6 +9,28 @@ use openproxy_db::secrets::MasterKey;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
+/// Mirror transport cancellation without dropping a runner's in-flight work.
+pub(super) async fn with_core_cancellation<F, Fut>(cancel: CancellationToken, run: F)
+where
+    F: FnOnce(tokio_util::sync::CancellationToken) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let core_cancel = tokio_util::sync::CancellationToken::new();
+    if cancel.is_cancelled() {
+        core_cancel.cancel();
+    }
+    let runner = run(core_cancel.clone());
+    tokio::pin!(runner);
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => {
+            core_cancel.cancel();
+            runner.await;
+        }
+        () = &mut runner => {}
+    }
+}
+
 /// Background daemon for synchronizing upstream provider quota and model usage.
 pub struct QuotaSyncService {
     pub db_pool: Arc<DbPool>,
@@ -25,39 +47,18 @@ impl BackgroundService for QuotaSyncService {
     }
 
     async fn run(&self, cancel: CancellationToken) {
-        let core_cancel = Default::default();
-        let runner_cancel = Clone::clone(&core_cancel);
-
-        let runner = openproxy_core::quota_sync::run_quota_sync_scheduler(
-            Arc::clone(&self.db_pool),
-            self.config.clone(),
-            Arc::clone(&self.upstream_client),
-            Arc::clone(&self.master_key),
-            Arc::clone(&self.adapters),
-            Arc::clone(&self.oauth_provider_registry),
-            runner_cancel,
-        );
-        tokio::pin!(runner);
-
-        if cancel.is_cancelled() {
-            core_cancel.cancel();
-            runner.await;
-            return;
-        }
-
-        let mirror = async {
-            cancel.cancelled().await;
-            core_cancel.cancel();
-        };
-        tokio::pin!(mirror);
-
-        tokio::select! {
-            biased;
-            () = &mut runner => {}
-            () = &mut mirror => {
-                runner.await;
-            }
-        }
+        with_core_cancellation(cancel, |core_cancel| {
+            openproxy_core::quota_sync::run_quota_sync_scheduler(
+                Arc::clone(&self.db_pool),
+                self.config.clone(),
+                Arc::clone(&self.upstream_client),
+                Arc::clone(&self.master_key),
+                Arc::clone(&self.adapters),
+                Arc::clone(&self.oauth_provider_registry),
+                core_cancel,
+            )
+        })
+        .await;
     }
 }
 
@@ -74,35 +75,40 @@ impl BackgroundService for MiniMaxCheckinService {
     }
 
     async fn run(&self, cancel: CancellationToken) {
-        let core_cancel = Default::default();
-        let runner_cancel = Clone::clone(&core_cancel);
+        with_core_cancellation(cancel, |core_cancel| {
+            openproxy_core::minimax_checkin::run_checkin_scheduler(
+                Arc::clone(&self.db_pool),
+                Arc::clone(&self.upstream_client),
+                Arc::clone(&self.master_key),
+                core_cancel,
+            )
+        })
+        .await;
+    }
+}
 
-        let runner = openproxy_core::minimax_checkin::run_checkin_scheduler(
-            Arc::clone(&self.db_pool),
-            Arc::clone(&self.upstream_client),
-            Arc::clone(&self.master_key),
-            runner_cancel,
-        );
-        tokio::pin!(runner);
+pub struct SmartWarmupService {
+    pub db_pool: Arc<DbPool>,
+    pub config: AppConfig,
+    pub upstream_client: Arc<UpstreamClient>,
+    pub master_key: Arc<MasterKey>,
+}
 
-        if cancel.is_cancelled() {
-            core_cancel.cancel();
-            runner.await;
-            return;
-        }
+impl BackgroundService for SmartWarmupService {
+    fn name(&self) -> &'static str {
+        "smart_warmup"
+    }
 
-        let mirror = async {
-            cancel.cancelled().await;
-            core_cancel.cancel();
-        };
-        tokio::pin!(mirror);
-
-        tokio::select! {
-            biased;
-            () = &mut runner => {}
-            () = &mut mirror => {
-                runner.await;
-            }
-        }
+    async fn run(&self, cancel: CancellationToken) {
+        with_core_cancellation(cancel, |core_cancel| {
+            openproxy_core::smart_warmup::run_smart_warmup_scheduler(
+                Arc::clone(&self.db_pool),
+                self.config.clone(),
+                Arc::clone(&self.upstream_client),
+                Arc::clone(&self.master_key),
+                core_cancel,
+            )
+        })
+        .await;
     }
 }

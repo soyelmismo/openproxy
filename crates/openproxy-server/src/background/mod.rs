@@ -523,7 +523,7 @@ async fn sync_proxies_iteration(db_pool: &Arc<openproxy_db::DbPool>, interval_ho
                 tracing::warn!("0 proxies fetched, retrying in 5 minutes");
                 300
             } else {
-                openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(db_pool));
+                openproxy_core::free_proxies::test_all_proxies(Arc::clone(db_pool)).await;
                 interval_hours * 3600
             }
         }
@@ -558,7 +558,7 @@ impl BackgroundService for FreeProxiesValidatorService {
         }
 
         loop {
-            openproxy_core::free_proxies::test_all_proxies_background(Arc::clone(&self.db_pool));
+            openproxy_core::free_proxies::test_all_proxies(Arc::clone(&self.db_pool)).await;
 
             tokio::select! {
                 () = cancel.cancelled() => break,
@@ -582,16 +582,17 @@ impl BackgroundService for OAuthRefreshService {
     }
 
     async fn run(&self, cancel: CancellationToken) {
-        tokio::select! {
-            () = cancel.cancelled() => {}
-            () = openproxy_core::oauth::start_refresh_scheduler(
+        scheduler_services::with_core_cancellation(cancel, |core_cancel| {
+            openproxy_core::oauth::run_refresh_scheduler(
                 Arc::clone(&self.db_pool),
                 Arc::clone(&self.master_key),
                 Arc::clone(&self.upstream_client),
                 Arc::clone(&self.oauth_provider_registry),
                 60,
-            ) => {}
-        }
+                core_cancel,
+            )
+        })
+        .await;
     }
 }
 
@@ -608,14 +609,13 @@ impl BackgroundService for ModelsDevSyncService {
     }
 
     async fn run(&self, cancel: CancellationToken) {
-        tokio::select! {
-            () = cancel.cancelled() => {}
-            () = openproxy_core::models_dev_sync::start_sync_scheduler(
-                Arc::clone(&self.db_pool),
-                Arc::clone(&self.upstream_client),
-                self.interval_secs,
-            ) => {}
-        }
+        openproxy_core::models_dev_sync::run_sync_scheduler(
+            Arc::clone(&self.db_pool),
+            Arc::clone(&self.upstream_client),
+            self.interval_secs,
+            cancel,
+        )
+        .await;
     }
 }
 

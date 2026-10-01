@@ -95,12 +95,12 @@ impl AppState {
             Arc::clone(&upstream_client),
         ));
 
-        openproxy_core::smart_warmup::start_smart_warmup_scheduler(
-            Arc::clone(&db_pool),
-            config.clone(),
-            Arc::clone(&upstream_client),
-            Arc::clone(&master_key),
-        );
+        supervisor.spawn(crate::background::scheduler_services::SmartWarmupService {
+            db_pool: Arc::clone(&db_pool),
+            config: config.clone(),
+            upstream_client: Arc::clone(&upstream_client),
+            master_key: Arc::clone(&master_key),
+        });
 
         let timeouts_initial = config.timeouts;
         let rate_limiter_config = openproxy_core::rate_limit::RateLimitConfig {
