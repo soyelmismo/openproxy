@@ -1,5 +1,8 @@
 //! Configuration and scheduler handle definitions.
 
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Per-provider refresh cadence. Spec: 1 hour. Bumped in tests via
@@ -35,12 +38,27 @@ impl Default for DiscoverySchedulerConfig {
 pub struct DiscoveryScheduler {
     pub(crate) cancel: CancellationToken,
     pub task_count: usize,
+    pub(crate) handles: Arc<Mutex<Vec<JoinHandle<()>>>>,
 }
 
 impl DiscoveryScheduler {
     /// Signal all per-provider tasks to stop. Idempotent.
     pub fn cancel(&self) {
         self.cancel.cancel();
+    }
+
+    /// Signal all background tasks to stop and await their completion.
+    ///
+    /// This method is cancel-safe and idempotent for concurrent callers.
+    pub async fn shutdown_and_wait(&self) {
+        self.cancel();
+        let mut handles = self.handles.lock().await;
+        while let Some(handle) = handles.last_mut() {
+            if let Err(error) = handle.await {
+                tracing::error!(%error, "discovery scheduler task failed during shutdown");
+            }
+            handles.pop();
+        }
     }
 }
 

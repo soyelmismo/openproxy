@@ -18,7 +18,7 @@ async fn adv_concurrent_invalid_grant_same_account() {
             let _ = drive_invalid_grant_retry(
                 account_id,
                 || async { Err(invalid_grant_err()) },
-                |_| {},
+                |_| async {},
             )
             .await;
         }));
@@ -43,7 +43,8 @@ async fn adv_invalid_grant_then_success_different_account() {
     clear_counter(acc_a);
     clear_counter(acc_b);
 
-    let _ = drive_invalid_grant_retry(acc_a, || async { Err(invalid_grant_err()) }, |_| {}).await;
+    let _ =
+        drive_invalid_grant_retry(acc_a, || async { Err(invalid_grant_err()) }, |_| async {}).await;
     assert!(INVALID_GRANT_COUNTERS.contains_key(&acc_a.0));
 
     let _ = drive_invalid_grant_retry(
@@ -58,7 +59,7 @@ async fn adv_invalid_grant_then_success_different_account() {
                 id_token: None,
             })
         },
-        |_| {},
+        |_| async {},
     )
     .await;
 
@@ -84,9 +85,12 @@ async fn adv_counter_does_not_crash_at_threshold_boundary() {
     clear_counter(account_id);
 
     for _ in 0..5 {
-        let _ =
-            drive_invalid_grant_retry(account_id, || async { Err(invalid_grant_err()) }, |_| {})
-                .await;
+        let _ = drive_invalid_grant_retry(
+            account_id,
+            || async { Err(invalid_grant_err()) },
+            |_| async {},
+        )
+        .await;
     }
 
     // each call starts saturated, so the post-bump count is still >= threshold
@@ -116,7 +120,7 @@ async fn adv_cancel_during_backoff_leaves_counter_coherent() {
                 calls.fetch_add(1, Ordering::Relaxed);
                 async { Err(invalid_grant_err()) }
             },
-            |_| {},
+            |_| async {},
         ),
     )
     .await;
@@ -154,7 +158,7 @@ async fn adv_cancel_during_op_leaves_counter_coherent() {
                 calls.fetch_add(1, Ordering::Relaxed);
                 async { Err(invalid_grant_err()) }
             },
-            |_| {},
+            |_| async {},
         ),
     )
     .await;
@@ -186,7 +190,7 @@ async fn adv_success_resets_counter_after_multiple_invalid_grants() {
     let _ = drive_invalid_grant_retry(
         account_id,
         || async { Err(invalid_grant_err()) },
-        |_| {
+        |_| async {
             unhealthy.store(true, Ordering::Relaxed);
         },
     )
@@ -212,7 +216,7 @@ async fn adv_success_resets_counter_after_multiple_invalid_grants() {
                 id_token: None,
             })
         },
-        |_| {},
+        |_| async {},
     )
     .await;
     assert!(
@@ -228,7 +232,8 @@ async fn adv_network_error_does_not_bump_counter() {
     let account_id = AccountId(11_007);
     clear_counter(account_id);
 
-    let _ = drive_invalid_grant_retry(account_id, || async { Err(network_err()) }, |_| {}).await;
+    let _ =
+        drive_invalid_grant_retry(account_id, || async { Err(network_err()) }, |_| async {}).await;
 
     assert!(
         !INVALID_GRANT_COUNTERS.contains_key(&account_id.0),
@@ -247,7 +252,7 @@ async fn adv_on_unhealthy_cell_fires_exactly_once() {
     let _ = drive_invalid_grant_retry(
         account_id,
         || async { Err(invalid_grant_err()) },
-        |_| {
+        |_| async {
             calls.fetch_add(1, Ordering::Relaxed);
         },
     )
@@ -275,7 +280,7 @@ async fn adv_counter_grows_across_multiple_calls_beyond_threshold() {
         let _ = drive_invalid_grant_retry(
             account_id,
             || async { Err(invalid_grant_err()) },
-            |_| {
+            |_| async {
                 unhealthy_count.fetch_add(1, Ordering::Relaxed);
             },
         )
@@ -312,7 +317,7 @@ async fn adv_counter_capped_under_concurrent_bumps() {
             let _ = drive_invalid_grant_retry(
                 account_id,
                 || async { Err(invalid_grant_err()) },
-                |_| {},
+                |_| async {},
             )
             .await;
         }));
@@ -336,9 +341,12 @@ async fn adv_counter_capped_single_thread() {
     clear_counter(account_id);
 
     for _ in 0..5 {
-        let _ =
-            drive_invalid_grant_retry(account_id, || async { Err(invalid_grant_err()) }, |_| {})
-                .await;
+        let _ = drive_invalid_grant_retry(
+            account_id,
+            || async { Err(invalid_grant_err()) },
+            |_| async {},
+        )
+        .await;
     }
 
     let val = get_counter_val(account_id);

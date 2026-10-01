@@ -51,33 +51,57 @@ pub use util::*;
 
 /// A borrowed database handle for OAuth paths.
 ///
-/// Only the pool form exists: every caller hands the shared [`openproxy_db::DbPool`],
-/// so reads and writes are offloaded to the pool's blocking tasks and no SQLite
-/// connection or lock is ever held across an `.await`.
+/// Supports either the pooled database ([`openproxy_db::DbPool`]) or a shared
+/// connection handle ([`Arc<parking_lot::Mutex<rusqlite::Connection>>`]).
+///
+/// In both variants, writes and reads are offloaded to blocking tasks (`spawn_write`
+/// or `spawn_blocking`) where the connection lock is acquired inside the blocking closure,
+/// ensuring no SQLite connection or lock is ever held across an `.await` on a Tokio worker thread.
 #[derive(Clone, Copy)]
 pub enum DbRef<'a> {
     Pool(&'a openproxy_db::DbPool),
+    Shared(&'a Arc<parking_lot::Mutex<rusqlite::Connection>>),
 }
 
 impl DbRef<'_> {
-    /// Pool writes are offloaded to the serialized writer; the closure never
-    /// observes a Tokio worker thread and no guard outlives the `.await`.
+    /// Writes are offloaded to the serialized writer for Pool, or a blocking task
+    /// that acquires the shared connection lock inside. The closure never observes
+    /// a Tokio worker thread and no lock guard outlives an `.await`.
     pub async fn with_conn_async<R: Send + 'static>(
         &self,
         f: impl FnOnce(&rusqlite::Connection) -> Result<R> + Send + 'static,
     ) -> Result<R> {
         match self {
             Self::Pool(pool) => pool.spawn_write(move |conn| f(conn)).await,
+            Self::Shared(conn) => {
+                let conn = Arc::clone(conn);
+                tokio::task::spawn_blocking(move || {
+                    let guard = conn.lock();
+                    f(&guard)
+                })
+                .await
+                .map_err(|e| CoreError::Internal(format!("spawn_blocking join failed: {e}")))?
+            }
         }
     }
 
-    /// Read-only pool queries use a reader rather than the serialized writer.
+    /// Read-only pool queries use a reader rather than the serialized writer, or a
+    /// blocking task acquiring the shared connection lock inside.
     pub async fn with_read_conn_async<R: Send + 'static>(
         &self,
         f: impl FnOnce(&rusqlite::Connection) -> Result<R> + Send + 'static,
     ) -> Result<R> {
         match self {
             Self::Pool(pool) => pool.spawn_read(f).await,
+            Self::Shared(conn) => {
+                let conn = Arc::clone(conn);
+                tokio::task::spawn_blocking(move || {
+                    let guard = conn.lock();
+                    f(&guard)
+                })
+                .await
+                .map_err(|e| CoreError::Internal(format!("spawn_blocking join failed: {e}")))?
+            }
         }
     }
 }

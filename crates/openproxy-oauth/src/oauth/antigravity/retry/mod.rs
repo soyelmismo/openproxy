@@ -17,14 +17,16 @@ use super::counters::{ANTIGRAVITY_BACKOFF_MS, ANTIGRAVITY_INVALID_GRANT_THRESHOL
 ///
 /// Backoff sleeps are wrapped in `tokio::time::timeout` so a cancelled caller does
 /// not stall (cross-spec fix N5).
-pub(super) async fn drive_invalid_grant_retry<F, Fut>(
+pub(super) async fn drive_invalid_grant_retry<F, Fut, O, OFut>(
     account_id: AccountId,
     mut op: F,
-    on_unhealthy: impl FnOnce(AccountId) + Send,
+    on_unhealthy: O,
 ) -> Result<TokenResponse>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<TokenResponse>>,
+    O: FnOnce(AccountId) -> OFut + Send,
+    OFut: std::future::Future<Output = ()> + Send,
 {
     let mut on_unhealthy = OnUnhealthyCell::new(on_unhealthy);
     let mut last_invalid_grant_err: Option<CoreError> = None;
@@ -64,7 +66,7 @@ where
                         consecutive_failures = count,
                         "antigravity oauth: marking account unhealthy after {count} consecutive invalid_grant"
                     );
-                    on_unhealthy.call(account_id);
+                    on_unhealthy.call(account_id).await;
                     return Err(last_invalid_grant_err.take().unwrap_or_else(|| {
                         CoreError::Auth("antigravity refresh: invalid_grant".into())
                     }));
@@ -97,19 +99,23 @@ where
         .unwrap_or_else(|| CoreError::Auth("antigravity refresh: exhausted retries".into())))
 }
 
-/// Lets a `FnOnce(AccountId)` move into the retry helper and still stay uncalled
+/// Lets a `FnOnce(AccountId) -> Fut` move into the retry helper and still stay uncalled
 /// when the loop succeeds before the threshold.
-pub(super) struct OnUnhealthyCell<F: FnOnce(AccountId)> {
+pub(super) struct OnUnhealthyCell<F> {
     inner: Option<F>,
 }
 
-impl<F: FnOnce(AccountId)> OnUnhealthyCell<F> {
+impl<F, Fut> OnUnhealthyCell<F>
+where
+    F: FnOnce(AccountId) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send,
+{
     fn new(f: F) -> Self {
         Self { inner: Some(f) }
     }
-    fn call(&mut self, account_id: AccountId) {
+    async fn call(&mut self, account_id: AccountId) {
         if let Some(f) = self.inner.take() {
-            f(account_id);
+            f(account_id).await;
         }
     }
 }
