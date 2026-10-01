@@ -165,11 +165,39 @@ pub async fn start_sync_scheduler(
     upstream_client: Arc<UpstreamClient>,
     check_interval_secs: u64,
 ) {
-    let mut tick = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
+    let cancel = CancellationToken::new();
+    run_sync_scheduler(db_pool, upstream_client, check_interval_secs, cancel).await;
+}
+
+pub async fn run_sync_scheduler(
+    db_pool: std::sync::Arc<openproxy_db::DbPool>,
+    upstream_client: Arc<UpstreamClient>,
+    check_interval_secs: u64,
+    cancel: CancellationToken,
+) {
+    if cancel.is_cancelled() {
+        return;
+    }
+
+    let interval_secs = check_interval_secs.max(1);
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
 
     loop {
-        tick.tick().await;
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            _ = tick.tick() => {},
+        }
+
+        if cancel.is_cancelled() {
+            return;
+        }
+
         run_single_sync_iteration(&db_pool, &upstream_client).await;
+
+        if cancel.is_cancelled() {
+            return;
+        }
     }
 }
 
