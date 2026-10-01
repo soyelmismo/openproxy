@@ -100,13 +100,18 @@ test("heavy views load lazy chunks once and reuse the module cache", async ({ pa
   }
 });
 
-test("unknown admin client paths return the SPA shell, not a JSON 404", async ({ page }) => {
-  const response = await page.goto("/admin/non-existent-client-path");
-  if (!response) throw new Error("no response for /admin/non-existent-client-path");
-
-  expect(response.status()).toBe(200);
-  expect(response.headers()["content-type"] ?? "").toContain("text/html");
-  const html = await page.content();
-  expect(html).toContain("/admin/dist/app.js");
-  expect(html).not.toContain('"error"');
+test("unknown admin paths and non-public assets return 404 without the SPA shell", async ({ request }) => {
+  // Dashboard views use hash routes. The server only exposes allowlisted assets;
+  // unknown paths must not become an HTML fallback that hides missing files.
+  for (const path of [
+    "/admin/non-existent-client-path",
+    "/admin/dist/missing.js",
+    "/admin/dist/app.js.map",
+    "/admin/src/main.ts",
+  ]) {
+    const response = await request.get(path);
+    expect(response.status(), path).toBe(404);
+    expect(response.headers()["content-type"] ?? "", path).toContain("application/json");
+    expect(await response.json(), path).toEqual({ error: "not found" });
+  }
 });
