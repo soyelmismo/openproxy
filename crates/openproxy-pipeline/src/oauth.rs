@@ -21,6 +21,35 @@ pub trait PipelineOAuthRegistry: Send + Sync {
         db_pool: Option<&'a openproxy_db::DbPool>,
         master_key: &'a MasterKey,
     ) -> futures_util::future::BoxFuture<'a, Result<TokenResponse, CoreError>>;
+
+    /// Refresh and persist tokens for `account_id` using a shared connection.
+    ///
+    /// Provided for backward compatibility with legacy pipelines built without
+    /// a database pool (`Pipeline::new`). Default implementation returns an
+    /// explicit error for external custom implementations.
+    fn refresh_and_store_shared<'a>(
+        &'a self,
+        provider_id: &'a str,
+        refresh_token: &'a str,
+        upstream_client: &'a Arc<openproxy_adapters::upstream::UpstreamClient>,
+        account_id: AccountId,
+        conn: &'a Arc<parking_lot::Mutex<rusqlite::Connection>>,
+        master_key: &'a MasterKey,
+    ) -> futures_util::future::BoxFuture<'a, Result<TokenResponse, CoreError>> {
+        let _ = (
+            provider_id,
+            refresh_token,
+            upstream_client,
+            account_id,
+            conn,
+            master_key,
+        );
+        Box::pin(async move {
+            Err(CoreError::Internal(
+                "refresh_and_store_shared not implemented for this OAuth registry".to_string(),
+            ))
+        })
+    }
 }
 
 pub fn pipeline_token_needs_refresh(
