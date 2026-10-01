@@ -15,6 +15,7 @@ use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 /// 4-hour cooldown (since Pro quota resets every 5h).
 const COOLDOWN_SECS: i64 = 14_400;
@@ -62,8 +63,45 @@ pub fn start_smart_warmup_scheduler(
     upstream: Arc<UpstreamClient>,
     master_key: Arc<MasterKey>,
 ) {
+    let _ = start_smart_warmup_scheduler_with_cancel(db_pool, config, upstream, master_key, None);
+}
+
+pub fn start_smart_warmup_scheduler_with_cancel(
+    db_pool: Arc<DbPool>,
+    config: AppConfig,
+    upstream: Arc<UpstreamClient>,
+    master_key: Arc<MasterKey>,
+    cancel_token: Option<CancellationToken>,
+) -> Option<CancellationToken> {
     if !config.smart_warmup.enabled {
         tracing::debug!("Smart warmup is disabled in config; not starting scheduler");
+        return None;
+    }
+
+    let interval = config.smart_warmup.interval_secs;
+    if interval == 0 {
+        return None;
+    }
+
+    let cancel = cancel_token.unwrap_or_default();
+    let token = cancel.clone();
+
+    tokio::spawn(async move {
+        run_smart_warmup_scheduler(db_pool, config, upstream, master_key, token).await;
+    });
+
+    Some(cancel)
+}
+
+pub async fn run_smart_warmup_scheduler(
+    db_pool: Arc<DbPool>,
+    config: AppConfig,
+    upstream: Arc<UpstreamClient>,
+    master_key: Arc<MasterKey>,
+    cancel: CancellationToken,
+) {
+    if !config.smart_warmup.enabled {
+        tracing::debug!("Smart warmup is disabled in config; not running scheduler");
         return;
     }
 
@@ -78,19 +116,31 @@ pub fn start_smart_warmup_scheduler(
         config.smart_warmup.models.len()
     );
 
-    tokio::spawn(async move {
-        loop {
-            run_warmup_cycle(&db_pool, &config, &upstream, &master_key).await;
-            sleep(Duration::from_secs(interval)).await;
+    loop {
+        if cancel.is_cancelled() {
+            tracing::info!("[SmartWarmup] Scheduler shutting down");
+            break;
         }
-    });
+
+        run_warmup_cycle_with_cancel(&db_pool, &config, &upstream, &master_key, Some(&cancel))
+            .await;
+
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::info!("[SmartWarmup] Scheduler shutting down");
+                break;
+            }
+            () = sleep(Duration::from_secs(interval)) => {}
+        }
+    }
 }
 
-async fn run_warmup_cycle(
+async fn run_warmup_cycle_with_cancel(
     db_pool: &Arc<DbPool>,
     config: &AppConfig,
     upstream: &Arc<UpstreamClient>,
     master_key: &Arc<MasterKey>,
+    cancel: Option<&CancellationToken>,
 ) {
     struct WarmupAccount {
         id: i64,
@@ -164,6 +214,11 @@ async fn run_warmup_cycle(
     let models_to_ping = &config.smart_warmup.models;
 
     for acc in account_list {
+        if cancel.is_some_and(|c| c.is_cancelled()) {
+            tracing::info!("[SmartWarmup] Cycle cancelled between accounts");
+            break;
+        }
+
         // Fetch fresh quota
         let quota = match fetch_antigravity_quota(upstream, &acc.token, &acc.project_id).await {
             Some(Ok(q)) => q,
@@ -194,6 +249,11 @@ async fn run_warmup_cycle(
         }
 
         for model_alias in models_to_ping {
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                tracing::info!("[SmartWarmup] Cycle cancelled between models");
+                break;
+            }
+
             let true_model_id = {
                 let db_pool = Arc::clone(db_pool);
                 let alias = model_alias.to_owned();
@@ -301,11 +361,29 @@ async fn run_warmup_cycle(
             }
 
             // Pausa entre modelos para no acribillar la API
-            tokio::time::sleep(Duration::from_secs(6)).await;
+            if let Some(token) = cancel {
+                tokio::select! {
+                    () = token.cancelled() => break,
+                    () = sleep(Duration::from_secs(6)) => {}
+                }
+            } else {
+                sleep(Duration::from_secs(6)).await;
+            }
         }
 
         // Pausa entre cuentas: evita detección anti-DDoS/bot
-        tokio::time::sleep(Duration::from_secs(15)).await;
+        if let Some(token) = cancel {
+            tokio::select! {
+                () = token.cancelled() => break,
+                () = sleep(Duration::from_secs(15)) => {}
+            }
+        } else {
+            sleep(Duration::from_secs(15)).await;
+        }
+    }
+
+    if cancel.is_some_and(|c| c.is_cancelled()) {
+        return;
     }
 
     // Limpia historial de más de 24h para acotar el crecimiento de la tabla
@@ -662,134 +740,4 @@ fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> Option<Strin
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn warmup_request_shapes_for_claude_and_gemini() {
-        let claude = super::build_warmup_request("claude-sonnet-4-6");
-        assert_eq!(claude.model, "claude-sonnet-4-6");
-        assert_eq!(
-            claude.messages[0].content.as_ref().and_then(|v| v.as_str()),
-            Some("Say hi")
-        );
-        assert_eq!(claude.max_tokens, None);
-        assert_eq!(claude.temperature, Some(0.0));
-
-        let gemini = super::build_warmup_request("gemini-pro-agent");
-        assert_eq!(gemini.model, "gemini-pro-agent");
-        let content = gemini.messages[0]
-            .content
-            .as_ref()
-            .and_then(|v| v.as_str())
-            .unwrap();
-        assert!(content.contains("Fibonacci"));
-        assert_eq!(gemini.max_tokens, Some(1024));
-        assert_eq!(gemini.temperature, Some(0.2));
-    }
-
-    #[test]
-    fn smart_warmup_extract_reads_snake_case_canonical() {
-        use serde_json::json;
-        let v = json!({"project_id":"canonical"});
-        assert_eq!(
-            openproxy_pipeline::credentials::antigravity_project_from_value(&v),
-            Some("canonical".to_string())
-        );
-    }
-
-    #[test]
-    fn test_is_model_quota_ready_for_warmup() {
-        use openproxy_types::{AccountQuota, ModelQuotaDetail};
-
-        let now = 1700000000;
-        let future_str = chrono::DateTime::from_timestamp(now + 3600, 0)
-            .unwrap()
-            .to_rfc3339();
-        let past_str = chrono::DateTime::from_timestamp(now - 3600, 0)
-            .unwrap()
-            .to_rfc3339();
-
-        let detail = |id: &str, used, reset, frac| ModelQuotaDetail {
-            model_id: id.to_string(),
-            session_used: used,
-            session_limit: 1000,
-            session_reset_at: reset,
-            remaining_fraction: frac,
-        };
-
-        // 1. Claude model with future reset and usage is NOT ready
-        let claude_ticking = AccountQuota {
-            model_details: Some(
-                vec![detail(
-                    "claude-sonnet-4-6",
-                    1,
-                    Some(future_str.clone()),
-                    0.999,
-                )]
-                .into_boxed_slice(),
-            ),
-            ..AccountQuota::empty()
-        };
-        assert!(!super::is_model_quota_ready_for_warmup(
-            &claude_ticking,
-            "claude-sonnet-4-6",
-            now
-        ));
-
-        // 2. Claude model with expired reset and 100% capacity IS ready
-        let claude_ready = AccountQuota {
-            model_details: Some(
-                vec![detail("claude-sonnet-4-6", 0, Some(past_str), 1.0)].into_boxed_slice(),
-            ),
-            ..AccountQuota::empty()
-        };
-        assert!(super::is_model_quota_ready_for_warmup(
-            &claude_ready,
-            "claude-sonnet-4-6",
-            now
-        ));
-
-        // 3. Model matching Claude summary bucket "Claude (5h)"
-        let claude_summary_ticking = AccountQuota {
-            model_details: Some(
-                vec![detail("Claude (5h)", 1, Some(future_str.clone()), 0.999)].into_boxed_slice(),
-            ),
-            ..AccountQuota::empty()
-        };
-        assert!(!super::is_model_quota_ready_for_warmup(
-            &claude_summary_ticking,
-            "claude-opus-4-6-thinking",
-            now
-        ));
-
-        // 4. Gemini account with 0 weekly used IS ready (kickstarts weekly countdown)
-        let gemini_ready = AccountQuota {
-            weekly_used: Some(0),
-            weekly_limit: Some(1000),
-            weekly_reset_at: Some(future_str.clone()),
-            session_used: Some(0),
-            session_limit: Some(1000),
-            session_reset_at: Some(future_str.clone()),
-            ..AccountQuota::empty()
-        };
-        assert!(super::is_model_quota_ready_for_warmup(
-            &gemini_ready,
-            "gemini-2.5-pro",
-            now
-        ));
-
-        // 5. Gemini account with weekly usage already ticking is NOT ready
-        let gemini_ticking = AccountQuota {
-            weekly_used: Some(1),
-            weekly_limit: Some(1000),
-            weekly_reset_at: Some(future_str),
-            session_used: Some(1),
-            session_limit: Some(1000),
-            ..AccountQuota::empty()
-        };
-        assert!(!super::is_model_quota_ready_for_warmup(
-            &gemini_ticking,
-            "gemini-2.5-pro",
-            now
-        ));
-    }
-}
+mod tests;
