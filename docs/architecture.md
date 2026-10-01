@@ -117,7 +117,8 @@ synchronous = "full" # default; "normal" explicitly trades power-loss durability
 
 Configuration validation rejects empty or identical public/admin bind strings.
 `OPENPROXY_SERVER__ADMIN_BIND` and `OPENPROXY_STORAGE__READER_COUNT` provide environment overrides.
-`OPENPROXY_STORAGE__SYNCHRONOUS` selects `full` or `normal` at startup.
+`[storage].synchronous` selects `full` or `normal` at startup; it does not
+currently have an environment override.
 These are plain HTTP listeners: expose them through a TLS-terminating reverse proxy
 when needed. Non-loopback binds generate warnings. Trusted-proxy configuration
 governs forwarded client-IP resolution; arbitrary forwarded headers are not trusted.
