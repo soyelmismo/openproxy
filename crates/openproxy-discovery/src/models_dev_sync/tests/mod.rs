@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 
+mod client;
 mod combos;
 mod sync;
 
