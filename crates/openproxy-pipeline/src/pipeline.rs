@@ -225,6 +225,7 @@ impl Pipeline {
             cooldown_max_secs: config.cooldown_max_secs,
             cooldown_factor: config.cooldown_factor,
             repo: Arc::clone(&repo) as Arc<dyn crate::repository::PipelineRepository>,
+            coordinator: None,
         };
         let dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
             Arc::clone(&conn),
@@ -270,6 +271,14 @@ impl Pipeline {
                 session_affinity,
             },
         )
+    }
+
+    pub fn with_journal_coordinator(
+        mut self,
+        coordinator: Arc<crate::worker::JournalCoordinator>,
+    ) -> Self {
+        self.tracker.coordinator = Some(coordinator);
+        self
     }
 
     pub fn selection_registry(&self) -> &Arc<SelectionRegistry> {

@@ -124,6 +124,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         cooldown_factor: 2,
         repo: std::sync::Arc::clone(&repo)
             as std::sync::Arc<dyn crate::repository::PipelineRepository>,
+        coordinator: None,
     };
     let cfg = crate::PipelineConfig {
         defaults: crate::timeouts::Timeouts::from_config(
