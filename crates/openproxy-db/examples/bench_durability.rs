@@ -62,8 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Isolate benchmark storage: use RAII TempDir if no custom path was provided.
-    // If a custom path is specified, it must be a base directory or a non-pre-existing file path.
-    let (_temp_guard, db_path) = match custom_path {
+    // If a custom path is specified, it must be an existing base directory or a non-pre-existing file path.
+    let (_temp_guard, db_path) = match custom_path.as_ref() {
         Some(base_dir) if base_dir.is_dir() => {
             let pid = std::process::id();
             let nanos = std::time::SystemTime::now()
@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
-            (None, file_path)
+            (None, file_path.clone())
         }
         None => {
             let temp = openproxy_db::testing::TempDir::new("bench-durability")?;
@@ -89,11 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let path_display = db_path.display();
     println!(
-        "Benchmarking SQLite Durability: Mode={:?}, Path={}, Transactions={}",
-        mode,
-        db_path.display(),
-        num_txs
+        "Benchmarking SQLite Durability: Mode={mode:?}, Path={path_display}, Transactions={num_txs}"
     );
 
     let pool = DbPool::open_with_options(&db_path, 2, mode)?;
@@ -121,10 +119,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure database pool is completely closed before any temp cleanup
     drop(pool);
 
-    if custom_path.is_some() && db_path.exists() {
-        let _ = std::fs::remove_file(&db_path);
-    }
-
     latencies_us.sort_unstable();
     let p50_idx = ((num_txs as f64) * 0.50).floor() as usize;
     let p99_idx = ((num_txs as f64) * 0.99).min((num_txs - 1) as f64) as usize;
@@ -136,12 +130,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tx_per_sec = (num_txs as f64) / total_elapsed.as_secs_f64();
 
     println!("--- Benchmark Results ---");
-    println!("Synchronous: {:?}", mode);
-    println!("Total Time:  {:?}", total_elapsed);
-    println!("Throughput:  {:.2} tx/sec", tx_per_sec);
-    println!("Avg Latency: {:.2} µs/tx", avg_us);
-    println!("p50 Latency: {} µs/tx", p50_us);
-    println!("p99 Latency: {} µs/tx", p99_us);
+    println!("Synchronous: {mode:?}");
+    println!("Total Time:  {total_elapsed:?}");
+    println!("Throughput:  {tx_per_sec:.2} tx/sec");
+    println!("Avg Latency: {avg_us:.2} µs/tx");
+    println!("p50 Latency: {p50_us} µs/tx");
+    println!("p99 Latency: {p99_us} µs/tx");
 
     Ok(())
 }

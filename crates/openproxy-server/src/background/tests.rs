@@ -292,10 +292,10 @@ async fn supervisor_cancellation_of_one_shutdown_caller_does_not_block_next() {
 
     let caller1 = tokio::spawn(async move {
         tokio::select! {
-            _ = s1.shutdown_and_wait() => {
+            () = s1.shutdown_and_wait() => {
                 panic!("caller 1 should have been cancelled before drain completion");
             }
-            _ = trigger_clone.notified() => {}
+            () = trigger_clone.notified() => {}
         }
     });
 

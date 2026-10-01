@@ -24,6 +24,7 @@ pub struct UsageTracker {
     pub cooldown_max_secs: u64,
     pub cooldown_factor: u32,
     pub repo: Arc<dyn crate::repository::PipelineRepository>,
+    pub coordinator: Option<Arc<crate::worker::JournalCoordinator>>,
 }
 
 pub trait UsageTrackerTrait: Send + Sync {
@@ -42,6 +43,11 @@ impl UsageTrackerTrait for UsageTracker {
 }
 
 impl UsageTracker {
+    pub fn with_coordinator(mut self, coordinator: Arc<crate::worker::JournalCoordinator>) -> Self {
+        self.coordinator = Some(coordinator);
+        self
+    }
+
     pub fn is_recording(&self) -> bool {
         self.record_bodies_and_headers.load(Ordering::Relaxed)
     }
@@ -73,17 +79,13 @@ impl UsageTracker {
     }
 
     async fn enqueue(&self, job: crate::worker::BackgroundJob) -> Result<()> {
-        let permit = self.background_tx.reserve().await.map_err(|_| {
-            CoreError::Internal("usage worker is closed; record was not accepted".into())
-        })?;
-        let conn = Arc::clone(&self.conn);
-        tokio::task::spawn_blocking(move || crate::worker::admit_job(&conn, &job))
-            .await
-            .map_err(|error| {
-                CoreError::Internal(format!("usage admission join failed: {error}"))
-            })??;
-        permit.send(crate::worker::BackgroundJob::JournalWake);
-        Ok(())
+        crate::worker::enqueue_with_backpressure(
+            &self.conn,
+            &self.background_tx,
+            job,
+            self.coordinator.as_deref(),
+        )
+        .await
     }
 
     pub(crate) async fn record_no_healthy_targets_row(

@@ -83,6 +83,7 @@ fn make_test_tracker() -> UsageTracker {
         cooldown_max_secs: 3600,
         cooldown_factor: 2,
         repo: Arc::clone(&repo) as Arc<dyn crate::repository::PipelineRepository>,
+        coordinator: None,
     }
 }
 
