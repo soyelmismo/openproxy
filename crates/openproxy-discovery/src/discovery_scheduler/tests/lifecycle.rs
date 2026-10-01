@@ -238,3 +238,148 @@ async fn scheduler_skips_providers_without_an_adapter() {
     );
     assert_eq!(sched.task_count, 0, "no providers had an adapter");
 }
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn scheduler_start0_immediate_shutdown() {
+    let (pool, _path) = fresh_pool();
+    let mk = MasterKey::generate().unwrap();
+    let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
+
+    let sched = start(
+        Arc::clone(&pool),
+        Arc::new(mk),
+        adapters,
+        UpstreamClient::new(),
+        fast_config(),
+    );
+    assert_eq!(sched.task_count, 0, "no providers had an adapter");
+    assert!(sched.handles.lock().await.is_empty());
+
+    // Immediate shutdown on task_count == 0 must be idempotent and cancel-safe
+    sched.shutdown_and_wait().await;
+    sched.shutdown_and_wait().await;
+    assert!(sched.handles.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn scheduler_shutdown_and_wait_held_worker_barrier_and_concurrent_callers() {
+    let (pool, _path) = fresh_pool();
+    let mk = MasterKey::generate().unwrap();
+    let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
+
+    let sched = Arc::new(start(
+        Arc::clone(&pool),
+        Arc::new(mk),
+        adapters,
+        UpstreamClient::new(),
+        fast_config(),
+    ));
+
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+    let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let completed_clone = Arc::clone(&completed);
+
+    let handle = tokio::spawn(async move {
+        let _ = start_tx.send(());
+        let _ = finish_rx.await;
+        completed_clone.store(true, Ordering::SeqCst);
+    });
+
+    sched.handles.lock().await.push(handle);
+    let _ = start_rx.await;
+
+    // Launch concurrent callers to shutdown_and_wait
+    let sched_c1 = Arc::clone(&sched);
+    let task1 = tokio::spawn(async move {
+        sched_c1.shutdown_and_wait().await;
+    });
+
+    let sched_c2 = Arc::clone(&sched);
+    let task2 = tokio::spawn(async move {
+        sched_c2.shutdown_and_wait().await;
+    });
+
+    // Verify worker in-flight is held; tasks have not completed
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !completed.load(Ordering::SeqCst),
+        "in-flight worker should be held by barrier"
+    );
+    assert!(!task1.is_finished());
+    assert!(!task2.is_finished());
+
+    // Release in-flight worker
+    let _ = finish_tx.send(());
+
+    // Both callers must finish cleanly
+    task1.await.unwrap();
+    task2.await.unwrap();
+
+    assert!(
+        completed.load(Ordering::SeqCst),
+        "held worker must finish on shutdown_and_wait"
+    );
+    assert!(
+        sched.handles.lock().await.is_empty(),
+        "handles must be drained after shutdown"
+    );
+
+    // Calling shutdown_and_wait again is idempotent
+    sched.shutdown_and_wait().await;
+    assert!(sched.handles.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn scheduler_shutdown_and_wait_cancel_safe_preserves_uncompleted_handles() {
+    let (pool, _path) = fresh_pool();
+    let mk = MasterKey::generate().unwrap();
+    let adapters: Arc<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>> = Arc::new(vec![]);
+
+    let sched = Arc::new(start(
+        Arc::clone(&pool),
+        Arc::new(mk),
+        adapters,
+        UpstreamClient::new(),
+        fast_config(),
+    ));
+
+    let (finish_tx, finish_rx) = tokio::sync::oneshot::channel::<()>();
+    let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let completed_clone = Arc::clone(&completed);
+
+    let handle = tokio::spawn(async move {
+        let _ = finish_rx.await;
+        completed_clone.store(true, Ordering::SeqCst);
+    });
+
+    sched.handles.lock().await.push(handle);
+
+    // Call shutdown_and_wait with a timeout to cancel the awaiting caller midway
+    let sched_c = Arc::clone(&sched);
+    let res = tokio::time::timeout(Duration::from_millis(30), sched_c.shutdown_and_wait()).await;
+    assert!(res.is_err(), "shutdown_and_wait timed out as expected");
+
+    // The handle MUST still be present in the registry (not popped or dropped)
+    {
+        let handles = sched.handles.lock().await;
+        assert_eq!(
+            handles.len(),
+            1,
+            "uncompleted handle must remain in registry on caller cancel"
+        );
+    }
+    assert!(!completed.load(Ordering::SeqCst));
+
+    // Release the barrier
+    let _ = finish_tx.send(());
+
+    // Subsequent shutdown_and_wait call picks up the handle and completes
+    sched.shutdown_and_wait().await;
+
+    assert!(completed.load(Ordering::SeqCst), "worker must finish");
+    assert!(
+        sched.handles.lock().await.is_empty(),
+        "handle must now be popped"
+    );
+}

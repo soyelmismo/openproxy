@@ -105,6 +105,7 @@ pub fn start(
         return DiscoveryScheduler {
             cancel: parent_cancel,
             task_count: 0,
+            handles: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         };
     }
 
@@ -115,6 +116,7 @@ pub fn start(
 
     // Pool acotado de workers concurrentes
     let worker_count = DISCOVERY_WORKER_POOL_SIZE.min(task_count).max(1);
+    let mut handles = Vec::with_capacity(worker_count + 1);
     for _ in 0..worker_count {
         let worker_cancel = parent_cancel.child_token();
         let rx = Arc::clone(&rx);
@@ -123,7 +125,7 @@ pub fn start(
         let key = Arc::clone(&master_key);
         let upstream = Arc::clone(&upstream_client);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             loop {
                 if worker_cancel.is_cancelled() {
                     return;
@@ -161,6 +163,7 @@ pub fn start(
                 in_flight.lock().remove(&provider);
             }
         });
+        handles.push(handle);
     }
 
     // Coordinator loop: schedules provider ticks and periodically discovers new DB providers
@@ -195,7 +198,7 @@ pub fn start(
     let coordinator_adapters = Arc::clone(&adapters);
     let default_interval_secs = config.interval_secs.max(1);
 
-    tokio::spawn(async move {
+    let coordinator_handle = tokio::spawn(async move {
         let db_check_interval = Duration::from_secs(default_interval_secs.min(60));
         let mut last_db_check = tokio::time::Instant::now();
 
@@ -299,9 +302,11 @@ pub fn start(
             }
         }
     });
+    handles.push(coordinator_handle);
 
     DiscoveryScheduler {
         cancel: parent_cancel,
         task_count,
+        handles: Arc::new(tokio::sync::Mutex::new(handles)),
     }
 }
