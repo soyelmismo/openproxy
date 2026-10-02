@@ -337,3 +337,95 @@ pub struct RestoreReport {
     pub migrations_applied: usize,
     pub message: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_backup_bundle_defaults_and_serde() {
+        let json = r#"{
+            "version": 1,
+            "exported_at": "2025-01-01T00:00:00Z",
+            "openproxy_version": "1.0.0"
+        }"#;
+
+        let bundle: BackupBundle = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(bundle.version, BACKUP_FORMAT_VERSION);
+        assert_eq!(bundle.exported_at, "2025-01-01T00:00:00Z");
+        assert_eq!(bundle.openproxy_version, "1.0.0");
+        assert!(!bundle.encrypted);
+        assert!(bundle.payload.is_none());
+
+        let serialized = serde_json::to_string(&bundle).expect("should serialize");
+        assert!(serialized.contains(r#""version":1"#));
+        assert!(!serialized.contains(r#""kdf""#));
+    }
+
+    #[test]
+    fn test_backup_payload_defaults() {
+        let payload = BackupPayload::default();
+        assert!(payload.providers.is_empty());
+        assert!(payload.accounts.is_empty());
+        assert!(payload.models.is_empty());
+        assert!(payload.combos.is_empty());
+        assert!(payload.combo_targets.is_empty());
+        assert!(payload.proxy_sources.is_empty());
+        assert!(payload.api_keys.is_empty());
+        assert!(payload.app_config.is_empty());
+    }
+
+    #[test]
+    fn test_backup_provider_deserialization_defaults() {
+        let json = r#"{
+            "id": "openai",
+            "name": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "auth_type": "bearer",
+            "format": "openai"
+        }"#;
+
+        let provider: BackupProvider = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(provider.id.as_str(), "openai");
+        assert!(provider.active);
+        assert_eq!(provider.proxy_rotation_errors, "403,429");
+        assert_eq!(provider.proxy_rotation_mode, "global");
+    }
+
+    #[test]
+    fn test_backup_account_deserialization_defaults() {
+        let json = r#"{
+            "id": 1,
+            "provider_id": "openai"
+        }"#;
+
+        let account: BackupAccount = serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(account.id, 1);
+        assert_eq!(account.priority, 100);
+        assert_eq!(account.health_status, "healthy");
+    }
+
+    #[test]
+    fn test_backup_validation_summary_serde() {
+        let summary = BackupValidationSummary {
+            version: 1,
+            encrypted: false,
+            exported_at: "2025-01-01T00:00:00Z".into(),
+            openproxy_version: "1.0.0".into(),
+            providers_count: 2,
+            accounts_count: 3,
+            models_count: 5,
+            combos_count: 1,
+            combo_targets_count: 2,
+            proxy_sources_count: 0,
+            api_keys_count: 1,
+            app_config_count: 4,
+            warnings: vec!["test warning".into()],
+        };
+
+        let json = serde_json::to_string(&summary).expect("should serialize");
+        let deserialized: BackupValidationSummary =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(summary, deserialized);
+    }
+}
