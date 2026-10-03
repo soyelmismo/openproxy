@@ -485,4 +485,20 @@ mod tests {
         assert!(!db_form.contains("topsecret"));
         assert!(!db_form.contains("ya31.aaa.bbb"));
     }
+
+    #[test]
+    fn compute_returns_zero_cost_and_none_tps_on_error_status_code() {
+        let input = UsageInput {
+            status_code: 500,
+            prompt_tokens: Some(1_000_000),
+            completion_tokens: Some(1_000_000),
+            total_ms: 10_000,
+            ttft_ms: Some(1_000),
+            ..make_input()
+        };
+        let price = pricing::lookup("openrouter", "openai/gpt-4o");
+        let (cost, tps) = compute(price, &input);
+        assert_eq!(cost, 0.0);
+        assert!(tps.is_none());
+    }
 }
