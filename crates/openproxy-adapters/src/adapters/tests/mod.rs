@@ -15,3 +15,4 @@ mod general;
 mod laya_engine_tests;
 mod opencode;
 mod providers;
+mod trait_parity;

@@ -322,6 +322,15 @@ macro_rules! define_provider_adapter {
             fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
                 self.config()
             }
+            fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
+                ProviderAdapterEnum::config_mut(self)
+            }
+            fn metadata(&self) -> openproxy_types::ProviderMetadata {
+                ProviderAdapterEnum::metadata(self)
+            }
+            fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
+                ProviderAdapterEnum::models_dev_canonical_ids(self)
+            }
             fn build_chat_url(&self, target_format: openproxy_types::TargetFormat, model: &openproxy_types::ModelId) -> String {
                 self.build_chat_url(target_format, model)
             }

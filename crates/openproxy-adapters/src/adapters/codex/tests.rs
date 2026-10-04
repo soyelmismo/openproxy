@@ -516,3 +516,47 @@ fn test_parse_codex_reset_credits_count() {
     });
     assert_eq!(quota::parse_codex_reset_credits_count(&usage), Some(3));
 }
+
+#[test]
+fn test_patch_codex_request_object_sanitizes_input_image_parameters() {
+    let mut obj = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_image",
+                        "image": "aGVsbG8=",
+                        "mime_type": "image/png"
+                    },
+                    {
+                        "type": "input_text",
+                        "text": "what is this?"
+                    }
+                ]
+            }
+        ]
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    patch_codex_request_object(&mut obj);
+
+    let input = obj["input"].as_array().unwrap();
+    let content = input[0]["content"].as_array().unwrap();
+    let img_part = &content[0];
+
+    assert_eq!(img_part["type"], "input_image");
+    assert_eq!(img_part["image_url"], "data:image/png;base64,aGVsbG8=");
+    assert!(
+        img_part.get("image").is_none(),
+        "image parameter must be stripped for Codex"
+    );
+    assert!(
+        img_part.get("mime_type").is_none(),
+        "mime_type parameter must be stripped for Codex"
+    );
+}
+

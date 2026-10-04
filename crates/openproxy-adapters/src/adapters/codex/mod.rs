@@ -242,4 +242,66 @@ pub fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::
             }),
         );
     }
+
+    // Sanitize any input items or content parts with image data
+    // OpenAI Responses API strictly rejects unknown parameter 'image' or 'mime_type'
+    if let Some(input_arr) = obj.get_mut("input").and_then(serde_json::Value::as_array_mut) {
+        for item in input_arr {
+            sanitize_codex_input_item(item);
+        }
+    }
+}
+
+fn sanitize_codex_image_part(part_obj: &mut serde_json::Map<String, serde_json::Value>) {
+    let is_image = part_obj
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|t| t == "input_image" || t == "image");
+    if is_image {
+        part_obj.insert(
+            "type".to_string(),
+            serde_json::Value::String("input_image".to_string()),
+        );
+        let legacy_image = part_obj.remove("image").and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            _ => None,
+        });
+        let legacy_mime = part_obj.remove("mime_type").and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s),
+            _ => None,
+        });
+        if !part_obj.contains_key("image_url")
+            && let Some(data) = legacy_image
+        {
+            let mime = legacy_mime.as_deref().unwrap_or("image/jpeg");
+            let url = if data.starts_with("data:") {
+                data
+            } else {
+                format!("data:{mime};base64,{data}")
+            };
+            part_obj.insert("image_url".to_string(), serde_json::Value::String(url));
+        }
+    }
+}
+
+fn sanitize_codex_input_item(item: &mut serde_json::Value) {
+    if let Some(item_obj) = item.as_object_mut() {
+        if let Some(content_arr) = item_obj
+            .get_mut("content")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for part in content_arr {
+                if let Some(part_obj) = part.as_object_mut() {
+                    sanitize_codex_image_part(part_obj);
+                }
+            }
+        } else if let Some(content_obj) = item_obj
+            .get_mut("content")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            sanitize_codex_image_part(content_obj);
+        } else {
+            sanitize_codex_image_part(item_obj);
+        }
+    }
 }
