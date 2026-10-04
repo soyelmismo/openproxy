@@ -5,6 +5,9 @@ pub mod export;
 pub mod restore;
 pub mod validate;
 
+#[cfg(test)]
+mod error_contract_tests;
+
 pub use crypto::{decrypt_bundle_payload, encrypt_bundle_payload};
 pub use export::export_backup;
 pub use restore::restore_backup;

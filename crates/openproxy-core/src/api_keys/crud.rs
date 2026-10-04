@@ -6,6 +6,7 @@ use super::models::{
 use crate::error::{CoreError, Result};
 use crate::ids::ApiKeyId;
 use crate::validation::Validatable;
+use openproxy_db::error::map_db_error_ctx;
 use openproxy_types::UpdateField;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -96,10 +97,7 @@ pub fn get_by_id(conn: &Connection, id: ApiKeyId) -> Result<Option<ApiKey>> {
             row_to_api_key,
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("get api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("get api_key {}", id.0))(e))?;
     Ok(row)
 }
 
@@ -160,10 +158,7 @@ pub fn revoke(conn: &Connection, id: ApiKeyId) -> Result<()> {
              WHERE id = ?1",
             params![id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("revoke api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("revoke api_key {}", id.0))(e))?;
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
     }
@@ -173,10 +168,7 @@ pub fn revoke(conn: &Connection, id: ApiKeyId) -> Result<()> {
 /// Hard delete an API key by id.
 pub fn hard_delete(conn: &Connection, id: ApiKeyId) -> Result<()> {
     conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id.0])
-        .map_err(|e| CoreError::Database {
-            message: format!("delete api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("delete api_key {}", id.0))(e))?;
     Ok(())
 }
 
@@ -194,10 +186,7 @@ fn update_key_hash_row(
              WHERE id = ?3",
             params![key_hash, key_prefix, id.0],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("regenerate api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("regenerate api_key {}", id.0))(e))?;
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
     }
@@ -227,10 +216,7 @@ pub fn touch_last_used(conn: &Connection, id: ApiKeyId) -> Result<()> {
                     OR (julianday('now') - julianday(last_used_at)) * 86400 > ?2)",
             params![id.0, LAST_USED_THROTTLE_SECS],
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("touch_last_used api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("touch_last_used api_key {}", id.0))(e))?;
     let _ = affected;
     Ok(())
 }
@@ -319,10 +305,7 @@ fn verify_api_key_exists(conn: &Connection, id: ApiKeyId) -> Result<()> {
             params![id.0],
             |r| r.get(0),
         )
-        .map_err(|e| CoreError::Database {
-            message: format!("count api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("count api_key {}", id.0))(e))?;
     if present == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
     }
@@ -384,10 +367,7 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
 
     let affected = conn
         .execute(&sql, rusqlite::params_from_iter(param_refs))
-        .map_err(|e| CoreError::Database {
-            message: format!("update api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("update api_key {}", id.0))(e))?;
     if affected == 0 {
         return Err(CoreError::Internal(format!("api_key {} not found", id.0)));
     }
@@ -411,10 +391,7 @@ fn fetch_key_usage_stats(conn: &Connection, id: ApiKeyId) -> Result<(i64, i64, i
             Ok((total, unique, errors.unwrap_or(0), cost))
         },
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("usage_summary for api_key {}: {e}", id.0),
-        source: Some(std::sync::Arc::new(e)),
-    })
+    .map_err(|e| map_db_error_ctx(format!("usage_summary for api_key {}", id.0))(e))
 }
 
 pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
@@ -426,10 +403,7 @@ pub fn usage_summary(conn: &Connection, id: ApiKeyId) -> Result<UsageSummary> {
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| CoreError::Database {
-            message: format!("select last_used_at for api_key {}: {e}", id.0),
-            source: Some(std::sync::Arc::new(e)),
-        })?
+        .map_err(|e| map_db_error_ctx(format!("select last_used_at for api_key {}", id.0))(e))?
         .flatten();
 
     Ok(UsageSummary {

@@ -2,6 +2,7 @@
 
 use super::crypto::decrypt_bundle_payload;
 use openproxy_db::MasterKey;
+use openproxy_db::error::{map_db_error, map_db_error_ctx};
 use openproxy_types::backup::{BACKUP_FORMAT_VERSION, BackupBundle, RestoreOptions, RestoreReport};
 use openproxy_types::{CoreError, Result};
 use rusqlite::{Connection, params};
@@ -42,17 +43,11 @@ pub fn restore_backup(
 
     // 3. Run restore in an immediate transaction with FK checks
     conn.execute_batch("PRAGMA foreign_keys = OFF;")
-        .map_err(|e| CoreError::Database {
-            message: format!("disable foreign keys: {e}"),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx("disable foreign keys")(e))?;
 
     let tx = conn
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|e| CoreError::Database {
-            message: format!("begin restore transaction: {e}"),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx("begin restore transaction")(e))?;
 
     // Clear dependent and existing tables
     tx.execute_batch(
@@ -72,10 +67,7 @@ pub fn restore_backup(
          DELETE FROM app_config; \
          DELETE FROM sqlite_sequence WHERE name IN ('combo_targets', 'combos', 'accounts', 'models', 'api_keys');",
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("clean tables for restore: {e}"),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    .map_err(|e| map_db_error_ctx("clean tables for restore")(e))?;
 
     // Restore providers
     let mut stmt = tx
@@ -87,23 +79,11 @@ pub fn restore_backup(
                 proxy_rotation_mode \
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut providers_restored = 0;
     for p in &payload.providers {
-        let safe_proxy_id = if let Some(pid) = &p.current_proxy_id {
-            let exists: bool = tx
-                .query_row("SELECT 1 FROM free_proxies WHERE id = ?1", [pid], |_| {
-                    Ok(true)
-                })
-                .unwrap_or(false);
-            if exists { Some(pid.as_str()) } else { None }
-        } else {
-            None
-        };
+        let safe_proxy_id = existing_proxy_id(&tx, p.current_proxy_id.as_deref());
 
         stmt.execute(params![
             p.id.as_str(),
@@ -121,10 +101,7 @@ pub fn restore_backup(
             p.notif_keyword_only as i64,
             p.proxy_rotation_mode,
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore provider {}: {e}", p.id),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore provider {}", p.id))(e))?;
         providers_restored += 1;
     }
     drop(stmt);
@@ -135,10 +112,7 @@ pub fn restore_backup(
          VALUES ('combo', 'Virtual Combo Provider', 'http://virtual.combo', 'bearer', 'openai', 'account')",
         [],
     )
-    .map_err(|e| CoreError::Database {
-        message: format!("seed virtual combo provider: {e}"),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    .map_err(|e| map_db_error_ctx("seed virtual combo provider")(e))?;
 
     // Restore accounts with re-encryption using local MasterKey
     let mut stmt = tx
@@ -150,10 +124,7 @@ pub fn restore_backup(
                 access_token_encrypted, refresh_token_encrypted, current_proxy_id \
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut accounts_restored = 0;
     for a in &payload.accounts {
@@ -180,16 +151,7 @@ pub fn restore_backup(
             None
         };
 
-        let safe_acc_proxy_id = if let Some(pid) = &a.current_proxy_id {
-            let exists: bool = tx
-                .query_row("SELECT 1 FROM free_proxies WHERE id = ?1", [pid], |_| {
-                    Ok(true)
-                })
-                .unwrap_or(false);
-            if exists { Some(pid.as_str()) } else { None }
-        } else {
-            None
-        };
+        let safe_acc_proxy_id = existing_proxy_id(&tx, a.current_proxy_id.as_deref());
 
         stmt.execute(params![
             a.id,
@@ -209,10 +171,7 @@ pub fn restore_backup(
             refresh_token_enc,
             safe_acc_proxy_id,
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore account {}: {e}", a.id),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore account {}", a.id))(e))?;
         accounts_restored += 1;
     }
     drop(stmt);
@@ -227,10 +186,7 @@ pub fn restore_backup(
                 input_modalities_json, output_modalities_json, manually_disabled_at \
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut models_restored = 0;
     for m in &payload.models {
@@ -252,10 +208,7 @@ pub fn restore_backup(
             m.output_modalities_json,
             m.manually_disabled_at,
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore model {}: {e}", m.model_id),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore model {}", m.model_id))(e))?;
         models_restored += 1;
     }
     drop(stmt);
@@ -270,10 +223,7 @@ pub fn restore_backup(
                 selection_window_secs, decision_model, decision_timeout_ms \
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut combos_restored = 0;
     for c in &payload.combos {
@@ -294,10 +244,7 @@ pub fn restore_backup(
             c.decision_model,
             c.decision_timeout_ms.map(|v| v as i64),
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore combo {}: {e}", c.name),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore combo {}", c.name))(e))?;
         combos_restored += 1;
     }
     drop(stmt);
@@ -312,10 +259,7 @@ pub fn restore_backup(
                 cooldown_max_secs, cooldown_factor, thinking_effort, description \
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let valid_account_ids: std::collections::HashSet<i64> =
         payload.accounts.iter().map(|a| a.id).collect();
@@ -348,10 +292,7 @@ pub fn restore_backup(
             t.thinking_effort,
             t.description,
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore combo target {}: {e}", t.id),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore combo target {}", t.id))(e))?;
         combo_targets_restored += 1;
     }
     drop(stmt);
@@ -362,10 +303,7 @@ pub fn restore_backup(
             "INSERT INTO proxy_sources (id, name, url, priority, active, is_builtin) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut proxy_sources_restored = 0;
     for ps in &payload.proxy_sources {
@@ -377,10 +315,7 @@ pub fn restore_backup(
             ps.active as i64,
             ps.is_builtin as i64,
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore proxy source {}: {e}", ps.name),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore proxy source {}", ps.name))(e))?;
         proxy_sources_restored += 1;
     }
     drop(stmt);
@@ -395,10 +330,7 @@ pub fn restore_backup(
                 blacklisted_models_json \
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut api_keys_restored = 0;
     for k in &payload.api_keys {
@@ -417,10 +349,7 @@ pub fn restore_backup(
             k.blacklisted_providers_json,
             k.blacklisted_models_json,
         ])
-        .map_err(|e| CoreError::Database {
-            message: format!("restore api key {}: {e}", k.id),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx(format!("restore api key {}", k.id))(e))?;
         api_keys_restored += 1;
     }
     drop(stmt);
@@ -431,18 +360,12 @@ pub fn restore_backup(
             "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         )
-        .map_err(|e| CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(map_db_error)?;
 
     let mut app_config_restored = 0;
     for cfg in &payload.app_config {
         stmt.execute(params![cfg.key, cfg.value, cfg.updated_at])
-            .map_err(|e| CoreError::Database {
-                message: format!("restore app_config {}: {e}", cfg.key),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
+            .map_err(|e| map_db_error_ctx(format!("restore app_config {}", cfg.key))(e))?;
         app_config_restored += 1;
     }
     drop(stmt);
@@ -450,10 +373,7 @@ pub fn restore_backup(
     // Verify foreign keys
     let mut fk_stmt = tx
         .prepare("PRAGMA foreign_key_check;")
-        .map_err(|e| CoreError::Database {
-            message: format!("prepare foreign_key_check: {e}"),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx("prepare foreign_key_check")(e))?;
 
     let fk_violations = fk_stmt
         .query_map([], |row| {
@@ -465,15 +385,9 @@ pub fn restore_backup(
                 "{table} (rowid {rowid}) references invalid {target_table} (fkid {fkid})"
             ))
         })
-        .map_err(|e| CoreError::Database {
-            message: format!("query foreign_key_check: {e}"),
-            source: Some(std::sync::Arc::new(e)),
-        })?
+        .map_err(|e| map_db_error_ctx("query foreign_key_check")(e))?
         .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| CoreError::Database {
-            message: format!("collect foreign_key_check: {e}"),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx("collect foreign_key_check")(e))?;
 
     if !fk_violations.is_empty() {
         return Err(CoreError::Validation(format!(
@@ -484,17 +398,12 @@ pub fn restore_backup(
     drop(fk_stmt);
 
     // Commit transaction
-    tx.commit().map_err(|e| CoreError::Database {
-        message: format!("commit restore transaction: {e}"),
-        source: Some(std::sync::Arc::new(e)),
-    })?;
+    tx.commit()
+        .map_err(|e| map_db_error_ctx("commit restore transaction")(e))?;
 
     // Re-enable foreign keys
     conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .map_err(|e| CoreError::Database {
-            message: format!("re-enable foreign keys: {e}"),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
+        .map_err(|e| map_db_error_ctx("re-enable foreign keys")(e))?;
 
     Ok(RestoreReport {
         success: true,
@@ -513,3 +422,15 @@ pub fn restore_backup(
         ),
     })
 }
+
+fn existing_proxy_id<'a>(conn: &Connection, proxy_id: Option<&'a str>) -> Option<&'a str> {
+    proxy_id.filter(|pid| {
+        conn.query_row("SELECT 1 FROM free_proxies WHERE id = ?1", [pid], |_| {
+            Ok(true)
+        })
+        .unwrap_or(false)
+    })
+}
+
+#[cfg(test)]
+mod proxy_tests;

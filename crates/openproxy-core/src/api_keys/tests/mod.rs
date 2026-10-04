@@ -3,6 +3,7 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 
 mod crud;
+mod error_contract;
 mod matching;
 
 pub(crate) fn fresh_pool() -> (Connection, PathBuf) {
