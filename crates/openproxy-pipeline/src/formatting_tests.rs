@@ -734,3 +734,56 @@ fn test_responses_formatter_sanitizes_reasoning_content_array() {
         Some("inner thought")
     );
 }
+
+#[test]
+fn test_responses_formatter_formats_image_inputs_correctly() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let messages = [OpenAIMessage {
+        role: "user".into(),
+        content: Some(json!([
+            { "type": "text", "text": "What is in this picture?" },
+            { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,dGVzdA==" } },
+            { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "YW50aHJvcGlj" } }
+        ])),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    }];
+
+    let req = test_req(OpenAIRequest {
+        model: "gpt-6.1-sol".into(),
+        messages: messages.to_vec(),
+        extra: Default::default(),
+        ..Default::default()
+    });
+
+    let mut model = test_model();
+    model.target_format = TargetFormat::Responses;
+
+    let formatted = ResponsesFormatter
+        .format_request(&req, &model, &messages, false, &adapter)
+        .expect("formatted");
+    let val: Value = serde_json::from_slice(&formatted).unwrap();
+    let input = val.get("input").unwrap().as_array().unwrap();
+
+    let user_msg = input
+        .iter()
+        .find(|item| item.get("role").and_then(Value::as_str) == Some("user"))
+        .expect("user message present");
+    let content = user_msg["content"].as_array().expect("content array");
+
+    assert_eq!(content[0]["type"], "input_text");
+    assert_eq!(content[0]["text"], "What is in this picture?");
+
+    assert_eq!(content[1]["type"], "input_image");
+    assert_eq!(content[1]["image_url"], "data:image/jpeg;base64,dGVzdA==");
+    assert!(content[1].get("image").is_none(), "Must not emit 'image'");
+    assert!(content[1].get("mime_type").is_none(), "Must not emit 'mime_type'");
+
+    assert_eq!(content[2]["type"], "input_image");
+    assert_eq!(content[2]["image_url"], "data:image/png;base64,YW50aHJvcGlj");
+    assert!(content[2].get("image").is_none(), "Must not emit 'image'");
+    assert!(content[2].get("mime_type").is_none(), "Must not emit 'mime_type'");
+}
+

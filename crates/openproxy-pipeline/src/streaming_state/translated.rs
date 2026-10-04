@@ -1,6 +1,5 @@
 use super::processor::ChunkProcessor;
 use super::{StreamContext, StreamingState};
-use crate::SSE_DONE_BYTES;
 use crate::sse::merge_usage;
 use crate::streaming::{StreamAction, StreamingChunkStage};
 use openproxy_types::error::CoreError;
@@ -116,24 +115,7 @@ impl ChunkProcessor<'_> {
             }
         }
 
-        if let Some(residual) = self.state.pii_stage.as_mut().and_then(|s| s.finalize()) {
-            let sse_bytes = crate::sse::build_sse_frame(&residual);
-            let _ = self.send_to_sink(ctx, sse_bytes).await;
-        }
-
-        if let Err(crate::race_sink::StreamSinkError::Lost) = self
-            .send_to_sink(ctx, bytes::Bytes::clone(&SSE_DONE_BYTES))
-            .await
-        {
-            let fail_ctx = self.state.make_failure_context(ctx);
-            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher
-                    .fail_on_sink_send_error(crate::race_sink::StreamSinkError::Lost, fail_ctx)
-                    .await,
-            )));
-        }
-        self.state.done_sent = true;
-        Ok(crate::streaming::ChunkEvent::Done)
+        self.finish_chat_stream(ctx).await
     }
 
     pub(super) async fn handle_translated_chunk(

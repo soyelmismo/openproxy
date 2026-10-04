@@ -107,17 +107,10 @@ impl ChunkProcessor<'_> {
         ctx.sink.send(chunk).await
     }
 
-    pub(super) async fn handle_done_sentinel(
+    pub(super) async fn finish_chat_stream(
         &mut self,
         ctx: &StreamContext<'_>,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
-        if let Some(event) = self.check_race_cancelled(ctx).await {
-            return Ok(event);
-        }
-        if let Some(residual) = self.state.normalizer.finalize() {
-            let sse_bytes = crate::sse::build_sse_frame(&residual);
-            let _ = self.send_to_sink(ctx, sse_bytes).await;
-        }
         if let Some(residual) = self.state.pii_stage.as_mut().and_then(|s| s.finalize()) {
             let sse_bytes = crate::sse::build_sse_frame(&residual);
             let _ = self.send_to_sink(ctx, sse_bytes).await;
@@ -135,5 +128,19 @@ impl ChunkProcessor<'_> {
         }
         self.state.done_sent = true;
         Ok(crate::streaming::ChunkEvent::Done)
+    }
+
+    pub(super) async fn handle_done_sentinel(
+        &mut self,
+        ctx: &StreamContext<'_>,
+    ) -> Result<crate::streaming::ChunkEvent, CoreError> {
+        if let Some(event) = self.check_race_cancelled(ctx).await {
+            return Ok(event);
+        }
+        if let Some(residual) = self.state.normalizer.finalize() {
+            let sse_bytes = crate::sse::build_sse_frame(&residual);
+            let _ = self.send_to_sink(ctx, sse_bytes).await;
+        }
+        self.finish_chat_stream(ctx).await
     }
 }

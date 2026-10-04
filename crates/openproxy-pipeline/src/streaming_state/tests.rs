@@ -182,3 +182,208 @@ fn test_anthropic_multi_event_stream_with_comments_and_empty_lines() {
         "state must be clean after stream ends"
     );
 }
+
+fn setup_test_harness(
+    sink: &crate::race_sink::StreamSink,
+) -> (
+    crate::Pipeline,
+    openproxy_types::combos::Combo,
+    openproxy_types::combos::ComboTarget,
+    openproxy_types::models::Model,
+    crate::PipelineRequest,
+    crate::timeouts::Timeouts,
+) {
+    let (pool, conn_arc, _path) = crate::test_utils::fresh_pool();
+    let master_key = std::sync::Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
+    let config = crate::test_utils::test_config(std::sync::Arc::clone(&master_key));
+    let pipeline = crate::test_utils::test_pipeline_with_pool(pool, config);
+
+    let (combo_id, _account_id) = {
+        let conn = conn_arc.lock();
+        crate::test_utils::seed_solo_combo_at_url(
+            &conn,
+            "prov-test",
+            "https://example.com",
+            &master_key,
+        )
+    };
+
+    let combo = openproxy_types::combos::Combo {
+        id: combo_id,
+        name: "test-combo".to_string(),
+        strategy: openproxy_types::combos::Strategy::Priority,
+        race_size: 1,
+        ..Default::default()
+    };
+
+    let target = openproxy_types::combos::ComboTarget {
+        id: openproxy_types::ids::ComboTargetId(1),
+        combo_id,
+        provider_id: openproxy_types::ids::ProviderId::new("prov-test"),
+        model_row_id: Some(openproxy_types::ids::ModelRowId(1)),
+        priority_order: 1,
+        ..Default::default()
+    };
+
+    let model = openproxy_types::models::Model {
+        row_id: openproxy_types::ids::ModelRowId(1),
+        provider_id: openproxy_types::ids::ProviderId::new("prov-test"),
+        model_id: openproxy_types::ids::ModelId::new("m"),
+        target_format: openproxy_types::TargetFormat::Openai,
+        active: true,
+        ..Default::default()
+    };
+
+    let (mut req, _rx) = crate::test_utils::make_request(combo_id);
+    req.stream_sink = Some(sink.clone());
+
+    let timeouts =
+        crate::timeouts::Timeouts::from_config(&openproxy_types::config::TimeoutsConfig::default());
+
+    (pipeline, combo, target, model, req, timeouts)
+}
+
+struct TestStreamHarness {
+    pipeline: crate::Pipeline,
+    combo: openproxy_types::combos::Combo,
+    target: openproxy_types::combos::ComboTarget,
+    model: openproxy_types::models::Model,
+    req: crate::PipelineRequest,
+    timeouts: crate::timeouts::Timeouts,
+    started: std::time::Instant,
+}
+
+impl TestStreamHarness {
+    fn new(sink: &crate::race_sink::StreamSink) -> Self {
+        let (pipeline, combo, target, model, req, timeouts) = setup_test_harness(sink);
+        Self {
+            pipeline,
+            combo,
+            target,
+            model,
+            req,
+            timeouts,
+            started: std::time::Instant::now(),
+        }
+    }
+
+    fn context<'a>(&'a self, sink: &'a crate::race_sink::StreamSink) -> super::StreamContext<'a> {
+        super::StreamContext {
+            req: &self.req,
+            combo: &self.combo,
+            target: &self.target,
+            model: &self.model,
+            target_format: openproxy_types::TargetFormat::Openai,
+            sink,
+            trace_id: "test-trace",
+            chunk_id: "test-chunk",
+            model_name: "m",
+            started: self.started,
+            attempt: 1,
+            race_size: 1,
+            created: 1000,
+            connect_and_send_ms: 5,
+            resolved_timeouts: &self.timeouts,
+            proxy_url: None,
+            proxy_status: None,
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_finish_chat_stream_terminal_done_received() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let sink = crate::race_sink::StreamSink::Direct(tx);
+    let harness = TestStreamHarness::new(&sink);
+    let ctx = harness.context(&sink);
+    let mut state = super::StreamingState::new(false);
+    assert!(!state.done_sent);
+
+    let mut processor = super::processor::ChunkProcessor {
+        state: &mut state,
+        dispatcher: &harness.pipeline.dispatcher,
+    };
+
+    let res = processor.finish_chat_stream(&ctx).await;
+    assert!(matches!(res, Ok(crate::streaming::ChunkEvent::Done)));
+    assert!(processor.state.done_sent);
+
+    let frame = rx.recv().await.expect("must receive terminal frame");
+    assert_eq!(frame, crate::SSE_DONE_BYTES);
+    assert!(
+        rx.try_recv().is_err(),
+        "must receive exactly 1 terminal frame"
+    );
+}
+
+#[tokio::test]
+async fn test_finish_chat_stream_flushes_pii_prior_to_terminal_done() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let sink = crate::race_sink::StreamSink::Direct(tx);
+    let harness = TestStreamHarness::new(&sink);
+    let ctx = harness.context(&sink);
+    let mut state = super::StreamingState::new(false);
+
+    let mut mapping = std::collections::HashMap::new();
+    mapping.insert("[EMAIL_1]".to_string(), "alice@example.com".to_string());
+    let mut pii = crate::pii::PiiRestorationStage::from_mapping(mapping);
+    let partial_chunk = r#"{"choices":[{"delta":{"content":"prefix [EMAIL_"}}]}"#;
+    pii.process_chunk(partial_chunk);
+    state.pii_stage = Some(pii);
+
+    let mut processor = super::processor::ChunkProcessor {
+        state: &mut state,
+        dispatcher: &harness.pipeline.dispatcher,
+    };
+
+    let res = processor.finish_chat_stream(&ctx).await;
+    assert!(matches!(res, Ok(crate::streaming::ChunkEvent::Done)));
+    assert!(processor.state.done_sent);
+
+    let frame1 = rx.recv().await.expect("must receive flushed PII frame");
+    let frame1_str = std::str::from_utf8(&frame1).expect("valid utf8");
+    assert!(frame1_str.starts_with("data: "));
+    assert!(frame1_str.ends_with("\n\n"));
+    assert!(frame1_str.contains("[EMAIL_"));
+
+    let frame2 = rx.recv().await.expect("must receive terminal frame");
+    assert_eq!(frame2, crate::SSE_DONE_BYTES);
+    assert!(rx.try_recv().is_err(), "must receive exactly 2 frames");
+}
+
+#[tokio::test]
+async fn test_finish_chat_stream_sink_lost_preserves_done_sent_false() {
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let (race_sink, _tokens) = crate::race_sink::RaceSink::new(tx, 2);
+    let winner = race_sink.handle(0);
+    winner
+        .send(bytes::Bytes::from_static(b"winner-first"))
+        .await
+        .expect("winner claim");
+
+    let loser = race_sink.handle(1);
+    let sink = crate::race_sink::StreamSink::Race(loser);
+
+    let harness = TestStreamHarness::new(&sink);
+    let ctx = harness.context(&sink);
+    let mut state = super::StreamingState::new(false);
+    assert!(!state.done_sent);
+
+    let mut processor = super::processor::ChunkProcessor {
+        state: &mut state,
+        dispatcher: &harness.pipeline.dispatcher,
+    };
+
+    let res = processor.finish_chat_stream(&ctx).await;
+    let Ok(crate::streaming::ChunkEvent::Return(boxed_res)) = res else {
+        panic!("expected ChunkEvent::Return on StreamSinkError::Lost");
+    };
+    assert!(matches!(
+        boxed_res.error,
+        Some(openproxy_types::error::CoreError::RaceLost)
+    ));
+    assert!(
+        !processor.state.done_sent,
+        "done_sent must remain false when sink returned Lost"
+    );
+}
