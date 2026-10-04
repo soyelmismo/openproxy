@@ -220,20 +220,24 @@ pub async fn sync_oneproxy(url: &str) -> crate::error::Result<Vec<ScrapedProxy>>
 }
 
 #[derive(serde::Deserialize)]
-struct ProxyScrapeCdnItem {
+struct ProtocolProxyItem {
     ip: String,
     port: u16,
     protocol: String,
     country_code: Option<String>,
 }
 
-pub async fn sync_proxyscrape_cdn(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<ProxyScrapeCdnItem> = fetch_upstream_json(url, "ProxyScrape CDN").await?;
+async fn fetch_protocol_proxies(
+    url: &str,
+    source: &str,
+    label: &str,
+) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let items: Vec<ProtocolProxyItem> = fetch_upstream_json(url, label).await?;
 
     let list = items
         .into_iter()
         .map(|item| ScrapedProxy {
-            source: "proxyscrape_cdn".to_string(),
+            source: source.to_string(),
             host: item.ip,
             port: item.port,
             r#type: item.protocol.to_lowercase(),
@@ -244,6 +248,10 @@ pub async fn sync_proxyscrape_cdn(url: &str) -> crate::error::Result<Vec<Scraped
         })
         .collect();
     Ok(list)
+}
+
+pub async fn sync_proxyscrape_cdn(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    fetch_protocol_proxies(url, "proxyscrape_cdn", "ProxyScrape CDN").await
 }
 
 #[derive(serde::Deserialize)]
@@ -315,31 +323,8 @@ pub async fn sync_geonode(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> 
     Ok(list)
 }
 
-#[derive(serde::Deserialize)]
-struct ClearProxyItem {
-    ip: String,
-    port: u16,
-    protocol: String,
-    country_code: Option<String>,
-}
-
 pub async fn sync_clearproxy(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
-    let items: Vec<ClearProxyItem> = fetch_upstream_json(url, "ClearProxy").await?;
-
-    let list = items
-        .into_iter()
-        .map(|item| ScrapedProxy {
-            source: "clearproxy".to_string(),
-            host: item.ip,
-            port: item.port,
-            r#type: item.protocol.to_lowercase(),
-            country_code: item.country_code.filter(|c| !c.is_empty()),
-            username: None,
-            password: None,
-            priority: 0,
-        })
-        .collect();
-    Ok(list)
+    fetch_protocol_proxies(url, "clearproxy", "ClearProxy").await
 }
 
 #[derive(serde::Deserialize)]

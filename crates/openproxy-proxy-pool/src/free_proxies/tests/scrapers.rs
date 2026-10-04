@@ -301,3 +301,121 @@ async fn sync_proxifly_returns_err_on_non_200() {
     let res = sync_proxifly(&url).await;
     assert!(res.is_err(), "non-200 must surface a CoreError");
 }
+
+async fn dispatch_protocol_scraper(
+    source: &str,
+    url: &str,
+) -> crate::error::Result<Vec<ScrapedProxy>> {
+    match source {
+        "proxyscrape_cdn" => sync_proxyscrape_cdn(url).await,
+        "clearproxy" => sync_clearproxy(url).await,
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test]
+async fn protocol_scrapers_table_driven_shared_payload() {
+    use httpmock::prelude::*;
+
+    let payload = r#"[
+        {"ip":"1.2.3.4","port":8080,"protocol":"HTTP","country_code":"US"},
+        {"ip":"2.3.4.5","port":80,"protocol":"HTTPS","country_code":""},
+        {"ip":"3.4.5.6","port":1080,"protocol":"SOCKS5","country_code":null},
+        {"ip":"4.5.6.7","port":3128,"protocol":"HTTP","country_code":"   "},
+        {"ip":"5.6.7.8","port":9050,"protocol":"HTTP\u0130","country_code":"TR"},
+        {"ip":"6.7.8.9","port":0,"protocol":"http","country_code":"DE"},
+        {"ip":"7.8.9.10","port":65535,"protocol":"socks4","country_code":"FR"},
+        {"ip":"1.2.3.4","port":8080,"protocol":"HTTP","country_code":"US"}
+    ]"#;
+
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/proxies");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(payload);
+    });
+
+    let url = format!("{}/proxies", server.base_url());
+    let expected = [
+        ("1.2.3.4", 8080, "http", Some("US")),
+        ("2.3.4.5", 80, "https", None),
+        ("3.4.5.6", 1080, "socks5", None),
+        ("4.5.6.7", 3128, "http", Some("   ")),
+        ("5.6.7.8", 9050, "httpi\u{0307}", Some("TR")),
+        ("6.7.8.9", 0, "http", Some("DE")),
+        ("7.8.9.10", 65535, "socks4", Some("FR")),
+        ("1.2.3.4", 8080, "http", Some("US")),
+    ];
+
+    for src in ["proxyscrape_cdn", "clearproxy"] {
+        let proxies = dispatch_protocol_scraper(src, &url)
+            .await
+            .expect("sync success");
+        assert_eq!(proxies.len(), expected.len());
+        for (p, &(host, port, proto, country)) in proxies.iter().zip(&expected) {
+            assert_eq!(p.source, src);
+            assert_eq!(p.host, host);
+            assert_eq!(p.port, port);
+            assert_eq!(p.r#type, proto);
+            assert_eq!(p.country_code.as_deref(), country);
+            assert_eq!(
+                (p.username.as_deref(), p.password.as_deref(), p.priority),
+                (None, None, 0)
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn protocol_scrapers_table_driven_errors_and_labels() {
+    use httpmock::prelude::*;
+
+    let server = MockServer::start();
+    let error_cases = [
+        (
+            "/overflow",
+            200,
+            r#"[{"ip":"1.2.3.4","port":65536,"protocol":"http"}]"#,
+            "JSON error:",
+        ),
+        (
+            "/negative",
+            200,
+            r#"[{"ip":"1.2.3.4","port":-1,"protocol":"http"}]"#,
+            "JSON error:",
+        ),
+        (
+            "/missing-proto",
+            200,
+            r#"[{"ip":"1.2.3.4","port":8080}]"#,
+            "JSON error:",
+        ),
+        ("/malformed", 200, "not-valid-json", "JSON error:"),
+        ("/non200", 503, "", "HTTP status: 503"),
+    ];
+
+    for &(path, status, body, _) in &error_cases {
+        server.mock(|when, then| {
+            when.method(GET).path(path);
+            then.status(status).body(body);
+        });
+    }
+
+    let sources = [
+        ("proxyscrape_cdn", "ProxyScrape CDN"),
+        ("clearproxy", "ClearProxy"),
+    ];
+
+    for (src, label) in sources {
+        for &(path, _, _, expected_suffix) in &error_cases {
+            let url = format!("{}{path}", server.base_url());
+            let err = dispatch_protocol_scraper(src, &url).await.unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains(&format!("{label} {expected_suffix}")),
+                "{src} on {path}: expected suffix '{expected_suffix}'"
+            );
+        }
+    }
+}
