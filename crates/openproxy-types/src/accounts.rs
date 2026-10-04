@@ -137,4 +137,39 @@ mod tests {
             Some("2026-09-18")
         );
     }
+
+    #[test]
+    fn test_store_oauth_tokens_params_default_and_fields() {
+        let params = StoreOAuthTokensParams::default();
+        assert_eq!(params.access_token, "");
+        assert!(params.refresh_token.is_none());
+        assert_eq!(params.token_type, "");
+        assert!(params.expires_at.is_none());
+        assert!(params.scope.is_none());
+        assert!(params.provider_specific.is_none());
+        assert!(params.email.is_none());
+
+        let custom_params = StoreOAuthTokensParams {
+            access_token: "access_123",
+            refresh_token: Some("refresh_456"),
+            token_type: "Bearer",
+            expires_at: Some("2026-10-01T00:00:00Z"),
+            scope: Some("read write"),
+            provider_specific: Some("custom_data"),
+            email: Some("user@example.com"),
+        };
+
+        let copied_params = custom_params;
+        assert_eq!(copied_params.access_token, "access_123");
+        assert_eq!(copied_params.refresh_token, Some("refresh_456"));
+        assert_eq!(copied_params.token_type, "Bearer");
+        assert_eq!(copied_params.expires_at, Some("2026-10-01T00:00:00Z"));
+        assert_eq!(copied_params.scope, Some("read write"));
+        assert_eq!(copied_params.provider_specific, Some("custom_data"));
+        assert_eq!(copied_params.email, Some("user@example.com"));
+
+        let debug_str = format!("{custom_params:?}");
+        assert!(debug_str.contains("StoreOAuthTokensParams"));
+        assert!(debug_str.contains("access_123"));
+    }
 }
