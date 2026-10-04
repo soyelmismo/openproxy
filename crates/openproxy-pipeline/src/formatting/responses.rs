@@ -1,7 +1,7 @@
 use crate::PipelineRequest;
+use openproxy_types::OpenAIMessage;
 use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
-use openproxy_types::OpenAIMessage;
 use serde_json::{Value, json};
 
 use super::TargetFormatter;
@@ -288,7 +288,10 @@ pub(crate) fn convert_image_url_part(item: &Value) -> Option<Value> {
 
 pub(crate) fn convert_image_source_part(item: &Value) -> Option<Value> {
     if let Some(source) = item.get("source").and_then(Value::as_object)
-        && let Some(data) = source.get("data").and_then(Value::as_str).filter(|d| !d.is_empty())
+        && let Some(data) = source
+            .get("data")
+            .and_then(Value::as_str)
+            .filter(|d| !d.is_empty())
     {
         let mime = source
             .get("media_type")

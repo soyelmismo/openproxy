@@ -116,7 +116,8 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
                     if t == "output_text" || t == "input_text" {
                         return true;
                     }
-                    if t == "image_url" || t == "input_image" || t == "input_audio" || t == "image" {
+                    if t == "image_url" || t == "input_image" || t == "input_audio" || t == "image"
+                    {
                         has_media = true;
                     }
                 }
@@ -143,9 +144,9 @@ fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
         patched.content = Some(Value::String(patched.extract_text()));
     } else if let Some(Value::Array(parts)) = &patched.content {
         let has_media = parts.iter().any(|p| {
-            p.get("type")
-                .and_then(|v| v.as_str())
-                .is_some_and(|t| t == "image_url" || t == "input_image" || t == "input_audio" || t == "image")
+            p.get("type").and_then(|v| v.as_str()).is_some_and(|t| {
+                t == "image_url" || t == "input_image" || t == "input_audio" || t == "image"
+            })
         });
         if !has_media {
             patched.content = Some(Value::String(patched.extract_text()));

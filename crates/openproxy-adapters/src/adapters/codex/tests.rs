@@ -559,4 +559,3 @@ fn test_patch_codex_request_object_sanitizes_input_image_parameters() {
         "mime_type parameter must be stripped for Codex"
     );
 }
-

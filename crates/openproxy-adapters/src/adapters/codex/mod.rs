@@ -245,7 +245,10 @@ pub fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::
 
     // Sanitize any input items or content parts with image data
     // OpenAI Responses API strictly rejects unknown parameter 'image' or 'mime_type'
-    if let Some(input_arr) = obj.get_mut("input").and_then(serde_json::Value::as_array_mut) {
+    if let Some(input_arr) = obj
+        .get_mut("input")
+        .and_then(serde_json::Value::as_array_mut)
+    {
         for item in input_arr {
             sanitize_codex_input_item(item);
         }

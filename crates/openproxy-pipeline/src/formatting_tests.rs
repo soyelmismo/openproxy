@@ -779,11 +779,19 @@ fn test_responses_formatter_formats_image_inputs_correctly() {
     assert_eq!(content[1]["type"], "input_image");
     assert_eq!(content[1]["image_url"], "data:image/jpeg;base64,dGVzdA==");
     assert!(content[1].get("image").is_none(), "Must not emit 'image'");
-    assert!(content[1].get("mime_type").is_none(), "Must not emit 'mime_type'");
+    assert!(
+        content[1].get("mime_type").is_none(),
+        "Must not emit 'mime_type'"
+    );
 
     assert_eq!(content[2]["type"], "input_image");
-    assert_eq!(content[2]["image_url"], "data:image/png;base64,YW50aHJvcGlj");
+    assert_eq!(
+        content[2]["image_url"],
+        "data:image/png;base64,YW50aHJvcGlj"
+    );
     assert!(content[2].get("image").is_none(), "Must not emit 'image'");
-    assert!(content[2].get("mime_type").is_none(), "Must not emit 'mime_type'");
+    assert!(
+        content[2].get("mime_type").is_none(),
+        "Must not emit 'mime_type'"
+    );
 }
-
