@@ -16,6 +16,7 @@
 //! integer math (`count * den >= total * num`): `0.8 * 5 = 4.000000001` would
 //! silently raise the coverage threshold.
 
+use crate::text_search::contains_case_insensitive_ascii;
 use openproxy_types::OpenAIMessage;
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
@@ -222,19 +223,6 @@ fn try_lossless_csv(arr: &[Value]) -> Option<String> {
         write_csv_row(&mut out, obj, &fields);
     }
     Some(out)
-}
-
-fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if haystack.len() < needle.len() {
-        return false;
-    }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// True if `s` contains any error token (case-insensitive substring).

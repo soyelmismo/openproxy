@@ -14,6 +14,7 @@
 //! - Skips content with no scoreable lines (no errors/warnings/summaries/
 //!   headers/stack traces).
 
+use crate::text_search::contains_case_insensitive_ascii;
 use openproxy_types::OpenAIMessage;
 use serde_json::Value;
 use std::fmt::Write;
@@ -273,19 +274,6 @@ fn classify_line(line: &str) -> LineKind {
     } else {
         LineKind::Other
     }
-}
-
-fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if haystack.len() < needle.len() {
-        return false;
-    }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// Whether a line contains an error token (case-insensitive substring match).

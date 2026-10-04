@@ -8,6 +8,7 @@ pub mod log_compressor;
 pub mod rtk;
 pub mod smart_crusher;
 pub mod stats;
+mod text_search;
 pub mod token_estimate;
 pub mod visitor;
 
