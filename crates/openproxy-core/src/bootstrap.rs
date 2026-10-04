@@ -32,6 +32,25 @@ pub struct BootstrapResult {
     pub key_prefix: Option<String>,
 }
 
+/// Environment variable to explicitly opt-in to logging the bootstrap key plaintext to stdout/stderr.
+///
+/// SECURITY: This should only be used in ephemeral container environments (e.g. Koyeb Free,
+/// Railway, Fly.io without persistent storage) where the 0600 drop file cannot be accessed.
+pub const LOG_BOOTSTRAP_KEY_ENV: &str = "OPENPROXY_LOG_BOOTSTRAP_KEY";
+
+/// Check if the operator explicitly opted in to logging the bootstrap administrative API key.
+pub fn is_bootstrap_key_log_enabled() -> bool {
+    std::env::var(LOG_BOOTSTRAP_KEY_ENV).is_ok_and(|v| parse_bool_env(&v))
+}
+
+/// Helper function to parse truthy boolean environment values.
+pub fn parse_bool_env(val: &str) -> bool {
+    matches!(
+        val.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 /// If `api_keys` is empty, insert a single bootstrap key with
 /// `["manage", "chat"]` scope. The plaintext is returned to the
 /// caller and printed to logs (WARN level) so the operator can save
@@ -57,8 +76,25 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
         "system",
     )?;
 
-    // SECURITY: the plaintext never reaches any log stream; only the 0600 file
+    // SECURITY: by default, the plaintext never reaches any log stream; only the 0600 file
     // path is logged, at WARN because the operator must act.
+    // Explicit opt-in via OPENPROXY_LOG_BOOTSTRAP_KEY is supported for ephemeral/distroless environments.
+    if is_bootstrap_key_log_enabled() {
+        tracing::warn!(
+            "============================== SECURITY WARNING ==============================\n\
+             OPENPROXY_LOG_BOOTSTRAP_KEY is enabled. The bootstrap administrative API key\n\
+             will be printed to logs. Ensure log access is strictly restricted.\n\
+             =============================================================================="
+        );
+        tracing::warn!(
+            key_id = key.id.0,
+            prefix = ?key.key_prefix,
+            api_key = %plaintext,
+            "Bootstrap API key created: {}",
+            plaintext
+        );
+    }
+
     match write_bootstrap_key_file(conn, &plaintext) {
         Ok(Some(path)) => tracing::warn!(
             key_id = key.id.0,
@@ -72,7 +108,7 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
             prefix = ?key.key_prefix,
             "Bootstrap API key created but the database has no on-disk path and \
              OPENPROXY_BOOTSTRAP_KEY_FILE is unset; the plaintext was not persisted. \
-             Set OPENPROXY_BOOTSTRAP_KEY_FILE and restart with an empty api_keys table.",
+             Set OPENPROXY_BOOTSTRAP_KEY_FILE (or OPENPROXY_LOG_BOOTSTRAP_KEY=1) and restart with an empty api_keys table.",
         ),
         Err(e) => tracing::error!(
             key_id = key.id.0,
@@ -80,7 +116,7 @@ pub fn ensure_bootstrap_key(conn: &Connection, label: &str) -> Result<Option<Boo
             error = %e,
             "Bootstrap API key created but writing the plaintext file failed. \
              Delete the row from api_keys (or set OPENPROXY_BOOTSTRAP_KEY_FILE to a \
-             writable path) and restart to re-issue.",
+             writable path, or OPENPROXY_LOG_BOOTSTRAP_KEY=1) and restart to re-issue.",
         ),
     }
 
@@ -199,5 +235,33 @@ mod tests {
 
         let r = ensure_bootstrap_key(&conn, "bootstrap").expect("bootstrap");
         assert!(r.is_none(), "no-op on populated table");
+    }
+
+    #[test]
+    fn test_parse_bool_env() {
+        assert!(parse_bool_env("1"));
+        assert!(parse_bool_env("true"));
+        assert!(parse_bool_env("TRUE"));
+        assert!(parse_bool_env("True"));
+        assert!(parse_bool_env("yes"));
+        assert!(parse_bool_env("YES"));
+        assert!(parse_bool_env("on"));
+        assert!(parse_bool_env("ON"));
+        assert!(parse_bool_env("  true  "));
+
+        assert!(!parse_bool_env("0"));
+        assert!(!parse_bool_env("false"));
+        assert!(!parse_bool_env("no"));
+        assert!(!parse_bool_env("off"));
+        assert!(!parse_bool_env(""));
+        assert!(!parse_bool_env("random_string"));
+    }
+
+    #[test]
+    fn test_bootstrap_log_flag_default() {
+        // By default, if the env var is not set, logging is disabled
+        if std::env::var_os(LOG_BOOTSTRAP_KEY_ENV).is_none() {
+            assert!(!is_bootstrap_key_log_enabled());
+        }
     }
 }

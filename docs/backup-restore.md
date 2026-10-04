@@ -105,6 +105,14 @@ In ephemeral container environments, container filesystems are reset on redeploy
    - Always download an `openproxy-backup.json` from the Dashboard or API.
    - If an unexpected volume wipe occurs, simply upload `openproxy-backup.json` to immediately restore all providers, accounts, and combos.
 
+### Ephemeral / Distroless Deployments (Without Persistent Volumes)
+
+If running on an ephemeral container platform without attached volumes where the 0600 file (`bootstrap-api-key.txt`) cannot be retrieved via shell or platform console, you can explicitly opt in to logging the bootstrap key:
+
+- Set `OPENPROXY_LOG_BOOTSTRAP_KEY=1` (or `true`) in your environment variables.
+- When enabled, OpenProxy logs a high-visibility security warning and prints the bootstrap API key once to standard server logs upon initial generation.
+- **Security Note:** Anyone with access to platform logs will be able to read the bootstrap administrative key. Disable this variable once the initial key has been saved.
+
 ### Docker Run with Persistent Volume
 
 ```bash
