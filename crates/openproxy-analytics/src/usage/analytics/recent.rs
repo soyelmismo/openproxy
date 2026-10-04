@@ -182,24 +182,26 @@ pub(crate) fn map_usage_row(row: &Row<'_>) -> rusqlite::Result<RecentUsageRow> {
     })
 }
 
+openproxy_db::def_table_select!(
+    recent_usage_select,
+    "usage",
+    "id, request_id, trace_id, provider_id, upstream_model_id, \
+     status_code, total_ms, prompt_tokens, completion_tokens, \
+     cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
+     request_headers, response_headers, error_msg_redacted, error_msg, \
+     race_total, race_attempts, is_streaming, stream_complete, \
+     race_lost, created_at, stop_reason, \
+     compression_savings_pct, compression_techniques, \
+     client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+     endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted",
+);
+
 pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<RecentUsageRow>> {
     let limit_param: i64 = i64::from(limit);
     let mut stmt = conn
-        .prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
-                    request_headers, response_headers, error_msg_redacted, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at, stop_reason, \
-                    compression_savings_pct, compression_techniques, \
-                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
-             FROM usage \
-             WHERE id > ?1 \
-             ORDER BY id ASC \
-             LIMIT ?2",
-        )
+        .prepare(recent_usage_select!(
+            "WHERE id > ?1 ORDER BY id ASC LIMIT ?2"
+        ))
         .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
@@ -212,20 +214,7 @@ pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<Recent
 pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>> {
     let limit_param: i64 = i64::from(limit);
     let mut stmt = conn
-        .prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
-                    request_headers, response_headers, error_msg_redacted, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at, stop_reason, \
-                    compression_savings_pct, compression_techniques, \
-                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
-             FROM usage \
-             ORDER BY id DESC \
-             LIMIT ?1",
-        )
+        .prepare(recent_usage_select!("ORDER BY id DESC LIMIT ?1"))
         .map_err(openproxy_db::error::map_db_error)?;
 
     let rows = stmt
@@ -237,19 +226,7 @@ pub fn recent_desc(conn: &Connection, limit: u32) -> Result<Vec<RecentUsageRow>>
 
 pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<RecentUsageRow>> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, request_id, trace_id, provider_id, upstream_model_id, \
-                    status_code, total_ms, prompt_tokens, completion_tokens, \
-                    cost_usd, connect_ms, ttft_ms, request_body_json, response_body_json, \
-                    request_headers, response_headers, error_msg_redacted, error_msg, \
-                    race_total, race_attempts, is_streaming, stream_complete, \
-                    race_lost, created_at, stop_reason, \
-                    compression_savings_pct, compression_techniques, \
-                    client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-                    endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted \
-             FROM usage \
-             WHERE id = ?1",
-        )
+        .prepare(recent_usage_select!("WHERE id = ?1"))
         .map_err(openproxy_db::error::map_db_error)?;
 
     let mut rows = stmt
@@ -262,3 +239,6 @@ pub fn row_for_broadcast_by_id(conn: &Connection, id: i64) -> Result<Option<Rece
         None => Ok(None),
     }
 }
+
+#[cfg(test)]
+mod projection_tests;
