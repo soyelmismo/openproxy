@@ -37,13 +37,27 @@ impl SelectionRegistry {
         Self::default()
     }
 
+    fn update_entry(&self, target_id: ComboTargetId, update: impl FnOnce(&SelectionRegistryEntry)) {
+        {
+            let g = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(e) = g.get(&target_id.0) {
+                update(e);
+                return;
+            }
+        }
+
+        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        let e = g.entry(target_id.0).or_default();
+        update(e);
+    }
+
     pub fn record_success(&self, target_id: ComboTargetId) {
         self.record_success_with_latency(target_id, 0);
     }
 
     pub fn record_success_with_latency(&self, target_id: ComboTargetId, latency_ms: u64) {
         let now = now_ms();
-        let update = |e: &SelectionRegistryEntry| {
+        self.update_entry(target_id, |e| {
             e.last_success_ms.store(now, Ordering::Relaxed);
             e.last_activity_ms.store(now, Ordering::Relaxed);
             e.request_count.fetch_add(1, Ordering::Relaxed);
@@ -52,21 +66,7 @@ impl SelectionRegistry {
                 e.total_latency_ms.fetch_add(latency_ms, Ordering::Relaxed);
                 e.latency_samples.fetch_add(1, Ordering::Relaxed);
             }
-        };
-
-        if let Some(e) = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&target_id.0)
-        {
-            update(e);
-            return;
-        }
-
-        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let e = g.entry(target_id.0).or_default();
-        update(e);
+        });
     }
 
     pub fn record_failure(&self, target_id: ComboTargetId) {
@@ -75,7 +75,7 @@ impl SelectionRegistry {
 
     pub fn record_failure_with_kind(&self, target_id: ComboTargetId, is_timeout: bool) {
         let now = now_ms();
-        let update = |e: &SelectionRegistryEntry| {
+        self.update_entry(target_id, |e| {
             e.last_activity_ms.store(now, Ordering::Relaxed);
             e.last_success_ms.store(0, Ordering::Relaxed);
             e.request_count.fetch_add(1, Ordering::Relaxed);
@@ -83,21 +83,7 @@ impl SelectionRegistry {
             if is_timeout {
                 e.timeout_count.fetch_add(1, Ordering::Relaxed);
             }
-        };
-
-        if let Some(e) = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&target_id.0)
-        {
-            update(e);
-            return;
-        }
-
-        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let e = g.entry(target_id.0).or_default();
-        update(e);
+        });
     }
 
     /// Composite reputation score in [0.05, 1.0]: successes / (successes +
@@ -184,29 +170,14 @@ impl SelectionRegistry {
 
     pub fn record_request(&self, target_id: ComboTargetId) {
         let now = now_ms();
-        if let Some(e) = self
-            .inner
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&target_id.0)
-        {
+        self.update_entry(target_id, |e| {
             e.last_activity_ms.store(now, Ordering::Relaxed);
             let _ = e
                 .request_count
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
                     Some(v.saturating_add(1))
                 });
-            return;
-        }
-
-        let mut g = self.inner.write().unwrap_or_else(|e| e.into_inner());
-        let e = g.entry(target_id.0).or_default();
-        e.last_activity_ms.store(now, Ordering::Relaxed);
-        let _ = e
-            .request_count
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
-                Some(v.saturating_add(1))
-            });
+        });
     }
 
     pub fn last_success_within(&self, target_id: ComboTargetId, window_secs: u64) -> u64 {
@@ -453,5 +424,131 @@ mod tests {
         assert_eq!(metrics.success_count, 5);
         assert_eq!(metrics.failure_count, 5);
         assert_eq!(metrics.timeout_count, 5);
+    }
+
+    #[test]
+    fn test_update_entry_invocation_and_len() {
+        let registry = SelectionRegistry::new();
+        let target = ComboTargetId(101);
+        let mut calls = 0;
+
+        registry.update_entry(target, |_| {
+            calls += 1;
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(registry.len(), 1);
+
+        registry.update_entry(target, |_| {
+            calls += 1;
+        });
+        assert_eq!(calls, 2);
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn test_reader_concurrency_fastpath() {
+        let registry = std::sync::Arc::new(SelectionRegistry::new());
+        let target = ComboTargetId(202);
+        registry.record_request(target);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reg_clone = std::sync::Arc::clone(&registry);
+
+        let read_guard = registry.inner.read().unwrap_or_else(|e| e.into_inner());
+
+        let handle = std::thread::spawn(move || {
+            reg_clone.record_success(target);
+            let _ = tx.send(());
+        });
+
+        let recv_res = rx.recv_timeout(Duration::from_secs(2));
+        drop(read_guard);
+        let join_res = handle.join();
+
+        assert!(
+            recv_res.is_ok(),
+            "Fastpath update should not block on existing read guard"
+        );
+        assert!(join_res.is_ok());
+        assert_eq!(registry.target_metrics(target).success_count, 1);
+    }
+
+    #[test]
+    fn test_concurrent_lazy_init_same_id() {
+        let registry = std::sync::Arc::new(SelectionRegistry::new());
+        let target = ComboTargetId(303);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let mut handles = Vec::new();
+
+        for _ in 0..4 {
+            let reg = std::sync::Arc::clone(&registry);
+            let bar = std::sync::Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                bar.wait();
+                for _ in 0..100 {
+                    reg.record_success(target);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("worker thread should not panic");
+        }
+
+        let metrics = registry.target_metrics(target);
+        assert_eq!(metrics.success_count, 400);
+        assert_eq!(metrics.failure_count, 0);
+        assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn test_poison_recovery_write_panic() {
+        let registry = std::sync::Arc::new(SelectionRegistry::new());
+        let reg_clone = std::sync::Arc::clone(&registry);
+
+        let _ = std::thread::spawn(move || {
+            let _guard = reg_clone.inner.write().unwrap();
+            panic!("intentional panic while holding write lock");
+        })
+        .join();
+
+        assert!(registry.inner.is_poisoned());
+
+        let target = ComboTargetId(404);
+        registry.record_request(target);
+        registry.record_success(target);
+        registry.record_failure(target);
+
+        assert_eq!(registry.len(), 1);
+        let metrics = registry.target_metrics(target);
+        assert_eq!(metrics.success_count, 1);
+        assert_eq!(metrics.failure_count, 1);
+    }
+
+    #[test]
+    fn test_saturated_request_count_vs_success_wrap() {
+        let registry = SelectionRegistry::new();
+        let target = ComboTargetId(505);
+
+        registry.record_request(target);
+        {
+            let g = registry.inner.write().unwrap_or_else(|e| e.into_inner());
+            let entry = g.get(&target.0).expect("entry must exist");
+            entry.request_count.store(u64::MAX, Ordering::Relaxed);
+        }
+
+        registry.record_request(target);
+        {
+            let g = registry.inner.read().unwrap_or_else(|e| e.into_inner());
+            let entry = g.get(&target.0).expect("entry must exist");
+            assert_eq!(entry.request_count.load(Ordering::Relaxed), u64::MAX);
+        }
+
+        registry.record_success(target);
+        {
+            let g = registry.inner.read().unwrap_or_else(|e| e.into_inner());
+            let entry = g.get(&target.0).expect("entry must exist");
+            assert_eq!(entry.request_count.load(Ordering::Relaxed), 0);
+        }
     }
 }
