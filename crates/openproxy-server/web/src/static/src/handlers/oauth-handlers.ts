@@ -12,6 +12,7 @@ import { api } from "../state/api.js";
 import { html, render } from "lit-html";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
+import { subscribeOAuthCode } from "./oauth-code-listener.js";
 
 interface AuthData {
   authorization_url: string;
@@ -54,8 +55,7 @@ export const OAuthLogin: OAuthLoginShape = {
     const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("openproxy_oauth") : null;
     const code: string = await new Promise((resolve, reject) => {
       const cleanup = () => {
-        window.removeEventListener("message", handler);
-        window.removeEventListener("storage", storageHandler);
+        unsubscribe();
         if (bc) bc.close();
       };
       const onCode = (receivedCode: string) => {
@@ -63,37 +63,7 @@ export const OAuthLogin: OAuthLoginShape = {
         popup?.close();
         resolve(receivedCode);
       };
-      const handler = (event: MessageEvent): void => {
-        const isAllowedOrigin =
-          event.origin === window.location.origin ||
-          event.origin.replace("127.0.0.1", "localhost") === window.location.origin.replace("127.0.0.1", "localhost");
-        if (!isAllowedOrigin) return;
-        const data = event.data as { type?: string; code?: string } | null;
-        if (data && data.type === "oauth_code" && typeof data.code === "string") {
-          onCode(data.code);
-        }
-      };
-      const storageHandler = (event: StorageEvent): void => {
-        if (event.key === "openproxy_oauth_code" && event.newValue) {
-          try {
-            const parsed = JSON.parse(event.newValue) as { code?: string };
-            if (parsed && typeof parsed.code === "string") {
-              localStorage.removeItem("openproxy_oauth_code");
-              onCode(parsed.code);
-            }
-          } catch {}
-        }
-      };
-      if (bc) {
-        bc.onmessage = (event: MessageEvent) => {
-          const data = event.data as { type?: string; code?: string } | null;
-          if (data && data.type === "oauth_code" && typeof data.code === "string") {
-            onCode(data.code);
-          }
-        };
-      }
-      window.addEventListener("message", handler);
-      window.addEventListener("storage", storageHandler);
+      const unsubscribe = subscribeOAuthCode(onCode, bc, true);
       setTimeout(() => { cleanup(); reject(new Error("OAuth timeout")); }, 300000);
     });
     const exchangeResp = await api(`/oauth/${provider}/exchange`, {
@@ -126,7 +96,7 @@ export const OAuthLogin: OAuthLoginShape = {
 
     const bc = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("openproxy_oauth") : null;
     const cleanup = () => {
-      window.removeEventListener("storage", storageHandler);
+      unsubscribe();
       if (bc) bc.close();
     };
     const onAutoCode = (receivedCode: string) => {
@@ -134,26 +104,7 @@ export const OAuthLogin: OAuthLoginShape = {
       if (callbackInput) callbackInput.value = receivedCode;
       this.submitManualCallback();
     };
-    const storageHandler = (e: StorageEvent) => {
-      if (e.key === "openproxy_oauth_code" && e.newValue) {
-        try {
-          const parsed = JSON.parse(e.newValue) as { code?: string };
-          if (parsed && typeof parsed.code === "string") {
-            localStorage.removeItem("openproxy_oauth_code");
-            onAutoCode(parsed.code);
-          }
-        } catch {}
-      }
-    };
-    if (bc) {
-      bc.onmessage = (e: MessageEvent) => {
-        const data = e.data as { type?: string; code?: string } | null;
-        if (data && data.type === "oauth_code" && typeof data.code === "string") {
-          onAutoCode(data.code);
-        }
-      };
-    }
-    window.addEventListener("storage", storageHandler);
+    const unsubscribe = subscribeOAuthCode(onAutoCode, bc);
   },
   async submitManualCallback(): Promise<void> {
     const inputEl = document.getElementById("oauth-callback-input") as HTMLInputElement | null;

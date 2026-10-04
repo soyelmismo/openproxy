@@ -338,40 +338,39 @@ export async function updateCooldownMode(id: number, e: Event | null): Promise<v
   await patchComboField(id, "cooldown_mode", val);
 }
 
-export async function updateCooldownBase(id: number, e: Event | null): Promise<void> {
+type NumericComboField =
+  | "cooldown_base_secs"
+  | "cooldown_factor"
+  | "cooldown_max_secs"
+  | "selection_window_secs";
+
+async function updateNumericComboField(
+  id: number,
+  e: Event | null,
+  field: NumericComboField,
+  label: string,
+): Promise<void> {
   if (e && e.type === "input") return;
   const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
   const val: number | null = raw === "" ? null : parseInt(raw, 10);
   if (raw !== "" && !Number.isFinite(val)) {
-    showToast("Base must be a number or empty", "error");
+    showToast(`${label} must be a number or empty`, "error");
     requestUpdate();
     return;
   }
-  await patchComboField(id, "cooldown_base_secs", val);
+  await patchComboField(id, field, val);
+}
+
+export async function updateCooldownBase(id: number, e: Event | null): Promise<void> {
+  await updateNumericComboField(id, e, "cooldown_base_secs", "Base");
 }
 
 export async function updateCooldownFactor(id: number, e: Event | null): Promise<void> {
-  if (e && e.type === "input") return;
-  const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
-  const val: number | null = raw === "" ? null : parseInt(raw, 10);
-  if (raw !== "" && !Number.isFinite(val)) {
-    showToast("Factor must be a number or empty", "error");
-    requestUpdate();
-    return;
-  }
-  await patchComboField(id, "cooldown_factor", val);
+  await updateNumericComboField(id, e, "cooldown_factor", "Factor");
 }
 
 export async function updateCooldownMax(id: number, e: Event | null): Promise<void> {
-  if (e && e.type === "input") return;
-  const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
-  const val: number | null = raw === "" ? null : parseInt(raw, 10);
-  if (raw !== "" && !Number.isFinite(val)) {
-    showToast("Max must be a number or empty", "error");
-    requestUpdate();
-    return;
-  }
-  await patchComboField(id, "cooldown_max_secs", val);
+  await updateNumericComboField(id, e, "cooldown_max_secs", "Max");
 }
 
 export async function updateLkgpExplorationRate(id: number, e: Event | null): Promise<void> {
@@ -392,15 +391,7 @@ export async function updateLkgpExplorationRate(id: number, e: Event | null): Pr
 }
 
 export async function updateSelectionWindow(id: number, e: Event | null): Promise<void> {
-  if (e && e.type === "input") return;
-  const raw = e && e.target ? (e.target as HTMLInputElement).value.trim() : "";
-  const val: number | null = raw === "" ? null : parseInt(raw, 10);
-  if (raw !== "" && !Number.isFinite(val)) {
-    showToast("Window must be a number or empty", "error");
-    requestUpdate();
-    return;
-  }
-  await patchComboField(id, "selection_window_secs", val);
+  await updateNumericComboField(id, e, "selection_window_secs", "Window");
 }
 
 // testAllTargets receives (comboId, e); e.target is the clicked button, whose "Testing…"
