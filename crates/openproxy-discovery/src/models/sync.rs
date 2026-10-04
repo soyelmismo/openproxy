@@ -1,6 +1,9 @@
 use crate::error::Result;
-use crate::ids::{ModelRowId, ProviderId};
+use crate::ids::ProviderId;
 use crate::models::{DiscoveredModel, UpsertResult};
+use openproxy_db::models::upsert::{
+    DISCOVERED_MODEL_UPSERT_SQL, prune_obsolete_models, reconnect_inserted_combo_targets,
+};
 use rusqlite::{Connection, params};
 use std::time::Duration;
 
@@ -90,35 +93,8 @@ pub fn execute_sync_transaction(
                 .collect();
 
             let mut stmt = tx
-            .prepare(
-                "INSERT INTO models (\
-                    provider_id, model_id, display_name, target_format, \
-                    discovered_at, expires_at, \
-                    context_length, max_output_tokens, \
-                    input_modalities_json, output_modalities_json, \
-                    model_type, family, capabilities_json, model_id_normalized\
-                 ) VALUES (\
-                    ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
-                    ?, ?, ?, ?, ?, ?, ?, ?\
-                 ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-                    display_name = excluded.display_name, \
-                    target_format = excluded.target_format, \
-                    context_length = COALESCE(excluded.context_length, context_length), \
-                    max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
-                    input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
-                    output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                    model_type = CASE \
-                        WHEN models.custom = 1 THEN COALESCE(models.model_type, excluded.model_type) \
-                        WHEN models.model_type = 'audio' AND excluded.model_type = 'chat' THEN excluded.model_type \
-                        WHEN models.model_type = 'chat' AND excluded.model_type != 'chat' THEN excluded.model_type \
-                        WHEN models.model_type = 'embedding' AND excluded.model_type = 'rerank' THEN excluded.model_type \
-                        ELSE COALESCE(models.model_type, excluded.model_type) \
-                    END, \
-                    family = COALESCE(excluded.family, family), \
-                    capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
-                    model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
-            )
-            .map_err(openproxy_db::error::map_db_error)?;
+                .prepare(DISCOVERED_MODEL_UPSERT_SQL)
+                .map_err(openproxy_db::error::map_db_error)?;
 
             for d in discovered {
                 let model_id_str = d.model_id.as_str();
@@ -181,66 +157,23 @@ pub fn execute_sync_transaction(
             }
         }
 
-        if discovered.is_empty() {
-            tx.execute(
-                "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
-                params![provider.as_str()],
-            )
-            .map_err(openproxy_db::error::map_db_error)?;
-        } else {
-            let discovered_ids: Vec<&str> =
-                discovered.iter().map(|d| d.model_id.as_str()).collect();
-            let discovered_json =
-                serde_json::to_string(&discovered_ids).unwrap_or_else(|_| "[]".to_string());
-            let sql = "DELETE FROM models \
-             WHERE provider_id = ? AND custom = 0 \
-               AND model_id NOT IN (SELECT value FROM json_each(?))";
-            tx.execute(sql, params![provider.as_str(), discovered_json])
-                .map_err(openproxy_db::error::map_db_error)?;
-        }
+        prune_obsolete_models(&tx, provider, discovered)?;
 
         let events = generate_events(&tx, provider, diff)?;
 
-        if !inserted_model_ids.is_empty() {
-            let inserted_json =
-                serde_json::to_string(&inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
-            let sql = "SELECT id, model_id FROM models \
-             WHERE provider_id = ? AND model_id IN (SELECT value FROM json_each(?))";
-            let mut stmt = tx.prepare(sql).map_err(openproxy_db::error::map_db_error)?;
-            let rows = stmt
-                .query_map(params![provider.as_str(), inserted_json], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })
-                .map_err(openproxy_db::error::map_db_error)?;
-            let new_rows: Vec<(i64, String)> = rows
-                .map(|r| r.map_err(openproxy_db::error::map_db_error))
-                .collect::<Result<Vec<_>>>()?;
-            drop(stmt);
-
-            let combo_targets_present: bool = tx
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'combo_targets'",
-                [],
-                |r| r.get::<_, i64>(0),
-            )
-            .is_ok_and(|n| n != 0);
-
-            if combo_targets_present && !new_rows.is_empty() {
-                let pairs: Vec<(ModelRowId, &str)> = new_rows
-                    .iter()
-                    .map(|(new_id, upstream)| (ModelRowId(*new_id), upstream.as_str()))
-                    .collect();
-                let updated =
-                    openproxy_db::combos::reconnect_orphan_targets_batch(&tx, provider, &pairs)?;
-                if updated > 0 {
-                    tracing::info!(
-                        target: "openproxy.core.models",
-                        provider = %provider,
-                        reconnected_targets = updated,
-                        "gate F1: reconnected orphan combo_targets to re-inserted model",
-                    );
-                }
-            }
+        let updated = reconnect_inserted_combo_targets(
+            &tx,
+            provider,
+            &inserted_model_ids,
+            openproxy_db::error::map_db_error,
+        )?;
+        if updated > 0 {
+            tracing::info!(
+                target: "openproxy.core.models",
+                provider = %provider,
+                reconnected_targets = updated,
+                "gate F1: reconnected orphan combo_targets to re-inserted model",
+            );
         }
 
         tx.commit().map_err(openproxy_db::error::map_db_error)?;

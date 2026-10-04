@@ -119,4 +119,6 @@ mod cascade;
 mod custom;
 mod lifecycle;
 mod reconnect;
+mod reconnect_inserted;
+mod sync_catalog;
 mod upsert;

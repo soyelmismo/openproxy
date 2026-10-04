@@ -22,6 +22,34 @@ fn fetch_existing_model_ids(
     Ok(existing_rows.into_iter().map(|(m, _, _)| m).collect())
 }
 
+pub const DISCOVERED_MODEL_UPSERT_SQL: &str = "\
+    INSERT INTO models (\
+        provider_id, model_id, display_name, target_format, \
+        discovered_at, expires_at, \
+        context_length, max_output_tokens, \
+        input_modalities_json, output_modalities_json, \
+        model_type, family, capabilities_json, model_id_normalized\
+     ) VALUES (\
+        ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
+        ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?, ?\
+     ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+        display_name = excluded.display_name, \
+        target_format = excluded.target_format, \
+        context_length = COALESCE(excluded.context_length, context_length), \
+        max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
+        input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
+        output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
+        model_type = CASE \
+            WHEN models.custom = 1 THEN COALESCE(models.model_type, excluded.model_type) \
+            WHEN models.model_type = 'audio' AND excluded.model_type = 'chat' THEN excluded.model_type \
+            WHEN models.model_type = 'chat' AND excluded.model_type != 'chat' THEN excluded.model_type \
+            WHEN models.model_type = 'embedding' AND excluded.model_type = 'rerank' THEN excluded.model_type \
+            ELSE COALESCE(models.model_type, excluded.model_type) \
+        END, \
+        family = COALESCE(excluded.family, family), \
+        capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
+        model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)";
+
 fn upsert_discovered_models<'a>(
     tx: &rusqlite::Transaction,
     provider: &ProviderId,
@@ -32,34 +60,7 @@ fn upsert_discovered_models<'a>(
     inserted_model_ids: &mut Vec<&'a str>,
 ) -> Result<usize> {
     let mut stmt = tx
-        .prepare(
-            "INSERT INTO models (\
-                provider_id, model_id, display_name, target_format, \
-                discovered_at, expires_at, \
-                context_length, max_output_tokens, \
-                input_modalities_json, output_modalities_json, \
-                model_type, family, capabilities_json, model_id_normalized\
-             ) VALUES (\
-                ?, ?, ?, ?, datetime('now'), datetime('now', '+' || ? || ' seconds'), \
-                ?, ?, ?, ?, COALESCE(?, 'chat'), ?, ?, ?\
-             ) ON CONFLICT(provider_id, model_id) DO UPDATE SET \
-                display_name = excluded.display_name, \
-                target_format = excluded.target_format, \
-                context_length = COALESCE(excluded.context_length, context_length), \
-                max_output_tokens = COALESCE(excluded.max_output_tokens, max_output_tokens), \
-                input_modalities_json = COALESCE(excluded.input_modalities_json, input_modalities_json), \
-                output_modalities_json = COALESCE(excluded.output_modalities_json, output_modalities_json), \
-                model_type = CASE \
-                    WHEN models.custom = 1 THEN COALESCE(models.model_type, excluded.model_type) \
-                    WHEN models.model_type = 'audio' AND excluded.model_type = 'chat' THEN excluded.model_type \
-                    WHEN models.model_type = 'chat' AND excluded.model_type != 'chat' THEN excluded.model_type \
-                    WHEN models.model_type = 'embedding' AND excluded.model_type = 'rerank' THEN excluded.model_type \
-                    ELSE COALESCE(models.model_type, excluded.model_type) \
-                END, \
-                family = COALESCE(excluded.family, family), \
-                capabilities_json = COALESCE(excluded.capabilities_json, capabilities_json), \
-                model_id_normalized = COALESCE(excluded.model_id_normalized, model_id_normalized)",
-        )
+        .prepare(DISCOVERED_MODEL_UPSERT_SQL)
         .map_err(map_db_error)?;
 
     let sync_routing_overrides: std::collections::HashMap<String, openproxy_types::TargetFormat> =
@@ -139,7 +140,14 @@ fn upsert_discovered_models<'a>(
     Ok(total)
 }
 
-fn prune_obsolete_models(
+/// Prunes models belonging to `provider` that were not present in `discovered`.
+///
+/// # Transaction Contract
+/// Operates on a caller-borrowed [`rusqlite::Transaction`]. This function does **not**
+/// commit or roll back the transaction; transaction boundary, retries and eventual
+/// commit/abort are the sole responsibility of the caller.
+/// Preserves `custom = 1` rows even if omitted from `discovered`.
+pub fn prune_obsolete_models(
     tx: &rusqlite::Transaction,
     provider: &ProviderId,
     discovered: &[DiscoveredModel],
@@ -163,26 +171,36 @@ fn prune_obsolete_models(
     Ok(())
 }
 
-fn reconnect_inserted_combo_targets(
+/// Reconnects orphan targets to the selected models within a caller-owned transaction.
+///
+/// The mapper applies only to model lookup errors; batch errors retain their context.
+/// This function neither commits nor rolls back the transaction.
+pub fn reconnect_inserted_combo_targets(
     tx: &rusqlite::Transaction,
     provider: &ProviderId,
     inserted_model_ids: &[&str],
-) -> Result<()> {
+    map_lookup_error: impl Fn(rusqlite::Error) -> openproxy_types::CoreError,
+) -> Result<usize> {
     if inserted_model_ids.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let inserted_json =
         serde_json::to_string(inserted_model_ids).unwrap_or_else(|_| "[]".to_string());
-    let new_rows: Vec<(i64, String)> = crate::db_query_all!(
-        tx,
-        model_inserted_select!(
+    let new_rows: Vec<(i64, String)> = {
+        let sql = model_inserted_select!(
             "WHERE provider_id = ?1 AND model_id IN (SELECT value FROM json_each(?2))"
-        ),
-        params![provider.as_str(), inserted_json],
-        |r| crate::map_row_tuple!(r => (0, 1)),
-        "query inserted models"
-    )?;
+        );
+        let mut stmt = tx.prepare(sql).map_err(&map_lookup_error)?;
+        let rows = stmt
+            .query_map(
+                params![provider.as_str(), inserted_json],
+                |r| crate::map_row_tuple!(r => ((0, i64), (1, String))),
+            )
+            .map_err(&map_lookup_error)?;
+        rows.map(|r| r.map_err(&map_lookup_error))
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    };
 
     let combo_targets_present: bool = tx
         .query_row(
@@ -198,9 +216,10 @@ fn reconnect_inserted_combo_targets(
             .iter()
             .map(|(new_id, upstream)| (ModelRowId(*new_id), upstream.as_str()))
             .collect();
-        let _ = crate::combos::reconnect_orphan_targets_batch(tx, provider, &pairs)?;
+        crate::combos::reconnect_orphan_targets_batch(tx, provider, &pairs)
+    } else {
+        Ok(0)
     }
-    Ok(())
 }
 
 pub fn upsert_many(
@@ -228,7 +247,9 @@ pub fn upsert_many(
         )?;
 
         prune_obsolete_models(&tx, provider, discovered)?;
-        reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids)?;
+        let _ = reconnect_inserted_combo_targets(&tx, provider, &inserted_model_ids, |e| {
+            crate::error::map_db_error_ctx("query inserted models")(e)
+        })?;
 
         tx.commit().map_err(map_db_error)?;
 

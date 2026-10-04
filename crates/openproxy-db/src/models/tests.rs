@@ -209,3 +209,6 @@ fn test_notify_auto_activated_models_substring_matching() {
     // even on a loaded parallel-test machine.
     assert!(elapsed < Duration::from_millis(200));
 }
+
+mod reconnect_inserted;
+mod upsert_catalog;
