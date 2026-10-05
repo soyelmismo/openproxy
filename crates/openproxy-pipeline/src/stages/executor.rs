@@ -130,6 +130,10 @@ pub(super) async fn execute_sequential_targets(
     mut failed_models: std::collections::HashSet<openproxy_types::ids::ModelRowId>,
 ) -> Result<PipelineResult, CoreError> {
     let mut overall_attempt: u8 = (failed_targets.len() as u8).saturating_add(1);
+    let mut failed_provider_models: std::collections::HashSet<(
+        openproxy_types::ProviderId,
+        openproxy_types::ids::ModelRowId,
+    )> = std::collections::HashSet::new();
 
     for (idx, target) in to_run.iter().enumerate() {
         if target_has_failed(&failed_targets, &target.target) {
@@ -142,18 +146,29 @@ pub(super) async fn execute_sequential_targets(
             );
             continue;
         }
-        if let Some(m) = target.target.model_row_id
-            && failed_models.contains(&m)
-        {
-            tracing::info!(
-                combo_id = combo.id.0,
-                target_id = target.target.id.0,
-                account_id = ?target.target.account_id,
-                model_row_id = m.0,
-                provider = %target.target.provider_id,
-                "skipping target whose model already failed in this request"
-            );
-            continue;
+        if let Some(m) = target.target.model_row_id {
+            if failed_models.contains(&m) {
+                tracing::info!(
+                    combo_id = combo.id.0,
+                    target_id = target.target.id.0,
+                    account_id = ?target.target.account_id,
+                    model_row_id = m.0,
+                    provider = %target.target.provider_id,
+                    "skipping target whose model already failed in this request"
+                );
+                continue;
+            }
+            if failed_provider_models.contains(&(target.target.provider_id.clone(), m)) {
+                tracing::info!(
+                    combo_id = combo.id.0,
+                    target_id = target.target.id.0,
+                    account_id = ?target.target.account_id,
+                    model_row_id = m.0,
+                    provider = %target.target.provider_id,
+                    "skipping target whose provider+model already failed with request error"
+                );
+                continue;
+            }
         }
 
         match execute_single_target_step(ctx, combo, to_run, idx, race_size, &mut overall_attempt)
@@ -166,10 +181,18 @@ pub(super) async fn execute_sequential_targets(
                     && (crate::pipeline::is_upstream_health_issue(err) || err.is_hard_skip())
                 {
                     failed_targets.insert(TargetExecutionId::from_target(&target.target));
-                    if crate::pipeline::is_model_wide_failure(&target.target, err)
-                        && let Some(m) = target.target.model_row_id
-                    {
-                        failed_models.insert(m);
+                    if let Some(m) = target.target.model_row_id {
+                        if crate::pipeline::is_model_wide_failure(&target.target, err) {
+                            failed_models.insert(m);
+                        }
+                        if matches!(err, CoreError::UpstreamError { status: 400, .. })
+                            || err.upstream_error_class()
+                                == Some(openproxy_types::UpstreamErrorClass::InvalidPayload)
+                            || err.upstream_error_class()
+                                == Some(openproxy_types::UpstreamErrorClass::MalformedToolCall)
+                        {
+                            failed_provider_models.insert((target.target.provider_id.clone(), m));
+                        }
                     }
                 }
                 last_result = res;

@@ -47,14 +47,22 @@ pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
             return UpstreamErrorClass::ResourceExhausted;
         }
         if !body.is_empty()
-            && (body.contains("Base64")
-                || body.contains("base64")
-                || body.contains("Invalid value")
-                || body.contains("invalid_request_error")
-                || body.contains("INVALID_ARGUMENT")
-                || body.contains("malformed")
-                || body.contains("decoding failed")
-                || body.contains("Input required"))
+            && (lower.contains("base64")
+                || lower.contains("invalid value")
+                || lower.contains("invalid_request_error")
+                || lower.contains("invalid_argument")
+                || lower.contains("malformed")
+                || lower.contains("decoding failed")
+                || lower.contains("input required")
+                || lower.contains("extra data:")
+                || lower.contains("unterminated string")
+                || lower.contains("expecting ',' delimiter")
+                || lower.contains("expecting value")
+                || lower.contains("must be valid json")
+                || lower.contains("must be a valid json")
+                || lower.contains("validation:")
+                || lower.contains("invalid json")
+                || lower.contains("jsondecodeerror"))
         {
             return UpstreamErrorClass::InvalidPayload;
         }
@@ -171,6 +179,38 @@ mod tests {
             classify_upstream_error(
                 400,
                 r#"{"error":{"message":"Input required: specify \"prompt\" or \"messages\"","code":400},"user_id":"org_123"}"#,
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(400, "Extra data: line 1 column 7186 (char 7185)"),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                "Unterminated string starting at: line 1 column 13 (char 12)"
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                r#"{"message":"Validation: `messages[32].tool_calls[0].function.arguments` must be a valid JSON object string: trailing characters at line 1 column 7186","type":"Bad Request","code":400}"#
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                r#"{"error":{"message":"Error from provider (Console): arguments must be valid JSON","type":"invalid_request_error"}}"#
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                "Expecting ',' delimiter: line 1 column 2386 (char 2385)"
             ),
             UpstreamErrorClass::InvalidPayload
         );

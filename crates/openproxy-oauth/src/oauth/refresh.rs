@@ -665,8 +665,17 @@ async fn handle_refresh_failure(
     let acc_id = account.id;
     let count_val = *count;
     let provider_id_str = account.provider_id.as_str().to_string();
+    let err_str = err.to_string();
+    let is_unrecoverable = err_str.contains("invalid_grant")
+        || err_str.contains("Invalid refresh token")
+        || err_str.contains("invalid_client")
+        || err_str.contains("unauthorized_client");
+
     let _ = tokio::task::spawn_blocking(move || {
         let conn = db_pool.writer();
+        if is_unrecoverable {
+            let _ = crate::accounts::clear_oauth_expires_at(&conn, acc_id.0);
+        }
         if let Err(update_err) = crate::accounts::set_health(&conn, acc_id, new_health) {
             tracing::warn!(
                 account = account_id,

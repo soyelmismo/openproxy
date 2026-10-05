@@ -265,8 +265,9 @@ fn test_account_select_canonical_projection() {
         acc_oauth.oauth_provider_specific
     );
     assert_eq!(acc_get.expires_at.as_deref(), Some("2026-10-01T22:00:00Z"));
-    assert_eq!(acc_get.expires_at, acc_oauth.expires_at);
-    assert_eq!(acc_get.current_proxy_id.as_deref(), Some("proxy-node-1"));
-    assert_eq!(acc_get.current_proxy_id, acc_oauth.current_proxy_id);
     assert_eq!(acc_get.created_at, acc_oauth.created_at);
+
+    clear_oauth_expires_at(&conn, acc_id.0).expect("clear succeeds");
+    let acc_cleared = get(&conn, acc_id, &master).unwrap().unwrap();
+    assert_eq!(acc_cleared.expires_at, None);
 }

@@ -127,7 +127,103 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
             return true;
         }
     }
+    if let Some(ref tcs) = m.tool_calls
+        && tool_calls_need_normalization(tcs)
+    {
+        return true;
+    }
     false
+}
+
+fn tool_calls_need_normalization(tool_calls: &[Value]) -> bool {
+    tool_calls.iter().any(|tc| {
+        let Some(func) = tc.get("function") else {
+            return false;
+        };
+        match func.get("arguments") {
+            Some(Value::String(s)) => {
+                let trimmed = s.trim();
+                trimmed.is_empty() || serde_json::from_str::<Value>(trimmed).is_err()
+            }
+            Some(Value::Object(_) | Value::Array(_)) => true,
+            Some(_) => true,
+            None => false,
+        }
+    })
+}
+
+pub fn sanitize_tool_call_arguments(args: &str) -> String {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return "{}".to_string();
+    }
+    if serde_json::from_str::<Value>(trimmed).is_ok() {
+        return trimmed.to_string();
+    }
+    let mut de = serde_json::Deserializer::from_str(trimmed).into_iter::<Value>();
+    if let Some(Ok(val)) = de.next() {
+        return val.to_string();
+    }
+    let mut in_quote = false;
+    let mut escaped = false;
+    let mut stack = Vec::new();
+    for ch in trimmed.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_quote = !in_quote;
+        } else if !in_quote {
+            match ch {
+                '{' => stack.push('}'),
+                '[' => stack.push(']'),
+                '}' | ']' if stack.last() == Some(&ch) => {
+                    stack.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut repaired = trimmed.to_string();
+    if in_quote {
+        repaired.push('"');
+    }
+    while let Some(closing) = stack.pop() {
+        repaired.push(closing);
+    }
+    if let Ok(val) = serde_json::from_str::<Value>(&repaired) {
+        return val.to_string();
+    }
+    "{}".to_string()
+}
+
+fn sanitize_tool_calls(tool_calls: &[Value]) -> Vec<Value> {
+    tool_calls
+        .iter()
+        .map(|tc| {
+            let Some(obj) = tc.as_object() else {
+                return tc.clone();
+            };
+            let mut new_obj = obj.clone();
+            if let Some(func_val) = new_obj.get_mut("function")
+                && let Some(func_obj) = func_val.as_object_mut()
+                && let Some(args) = func_obj.get("arguments")
+            {
+                let sanitized = match args {
+                    Value::String(s) => sanitize_tool_call_arguments(s),
+                    Value::Object(_) | Value::Array(_) => args.to_string(),
+                    _ => "{}".to_string(),
+                };
+                func_obj.insert("arguments".to_string(), Value::String(sanitized));
+            }
+            Value::Object(new_obj)
+        })
+        .collect()
 }
 
 fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
@@ -137,6 +233,10 @@ fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
         patched.role = "system".to_string();
     }
     patched.sanitize_name();
+
+    if let Some(ref tcs) = patched.tool_calls {
+        patched.tool_calls = Some(sanitize_tool_calls(tcs));
+    }
 
     if matches!(patched.role.as_str(), "assistant" | "system" | "tool")
         && matches!(&patched.content, Some(Value::Array(_) | Value::Object(_)))
@@ -252,3 +352,6 @@ pub(crate) use serde_json::json;
 #[cfg(test)]
 #[path = "../formatting_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod tool_calls_tests;

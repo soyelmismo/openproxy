@@ -553,3 +553,13 @@ pub fn read_antigravity_project(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty()))
 }
+
+pub fn clear_oauth_expires_at(conn: &Connection, account_id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE accounts SET expires_at = NULL WHERE id = ?1",
+        params![account_id],
+    )
+    .map_err(crate::error::map_db_error_ctx("clear oauth expires_at"))?;
+    Ok(())
+}
+
