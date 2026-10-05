@@ -73,10 +73,30 @@ impl TargetFormatter for OpenaiFormatter {
                 view.extra.to_mut().remove(*key);
             }
         }
+        strip_provider_configured_params(&mut view.extra, &adapter.config().extra_headers);
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
             Err(e) => Err(CoreError::Parse(format!("serialize openai request: {e}"))),
+        }
+    }
+}
+
+/// Strips custom parameters specified per-provider in `extra_headers` (e.g. `X-OpenProxy-Strip-Params`).
+pub fn strip_provider_configured_params(
+    extra: &mut std::borrow::Cow<'_, serde_json::Map<String, serde_json::Value>>,
+    extra_headers: &[(String, String)],
+) {
+    for (k, v) in extra_headers {
+        if k.eq_ignore_ascii_case("x-openproxy-strip-params")
+            || k.eq_ignore_ascii_case("x-strip-params")
+        {
+            for param in v.split(',') {
+                let clean = param.trim();
+                if !clean.is_empty() && extra.contains_key(clean) {
+                    extra.to_mut().remove(clean);
+                }
+            }
         }
     }
 }
@@ -355,3 +375,6 @@ mod tests;
 
 #[cfg(test)]
 mod tool_calls_tests;
+
+#[cfg(test)]
+mod strip_params_tests;

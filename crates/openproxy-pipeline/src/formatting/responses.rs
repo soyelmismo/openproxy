@@ -83,6 +83,18 @@ impl TargetFormatter for ResponsesFormatter {
         }
 
         strip_responses_disallowed_keys(&mut obj);
+        for (k, v) in &_adapter.config().extra_headers {
+            if k.eq_ignore_ascii_case("x-openproxy-strip-params")
+                || k.eq_ignore_ascii_case("x-strip-params")
+            {
+                for param in v.split(',') {
+                    let clean = param.trim();
+                    if !clean.is_empty() {
+                        obj.remove(clean);
+                    }
+                }
+            }
+        }
         apply_responses_reasoning_and_tier(&mut obj, effort_from_model);
 
         if obj

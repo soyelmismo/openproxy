@@ -140,7 +140,9 @@ where
     I: IntoIterator<Item = &'a (String, String)>,
 {
     for (k, v) in extra {
-        upsert_header(headers, k, v.clone());
+        if !k.to_ascii_lowercase().starts_with("x-openproxy-") {
+            upsert_header(headers, k, v.clone());
+        }
     }
 }
 

@@ -13,12 +13,15 @@ use std::time::Instant;
 
 /// Inserta los pares (k, v) que parseen como `HeaderName`/`HeaderValue`.
 /// Los malformados se descartan.
-pub(super) fn populate_upstream_headers(
+pub(crate) fn populate_upstream_headers(
     upstream_request: &mut UpstreamRequest,
     headers: &[(String, String)],
 ) {
     upstream_request.headers.reserve(headers.len());
     for (k, v) in headers {
+        if k.to_ascii_lowercase().starts_with("x-openproxy-") {
+            continue;
+        }
         if let (Ok(name), Ok(value)) = (
             http::HeaderName::from_bytes(k.as_bytes()),
             http::HeaderValue::from_str(v),

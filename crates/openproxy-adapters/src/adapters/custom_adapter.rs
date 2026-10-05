@@ -98,7 +98,9 @@ fn build_custom_headers<'a>(
         headers.push((k, v));
     }
     for (k, v) in extra_headers {
-        headers.push((k.as_str(), v.as_str()));
+        if !k.to_ascii_lowercase().starts_with("x-openproxy-") {
+            headers.push((k.as_str(), v.as_str()));
+        }
     }
     headers
 }

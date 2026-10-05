@@ -26,15 +26,27 @@ export function showEditProviderHeaders(
   const wrapper = document.createElement("div");
   root.appendChild(wrapper);
 
+  const STRIP_PARAMS_KEY = "X-OpenProxy-Strip-Params";
+  let removeParams = "";
+
   let initialRows: HeaderRow[] = [];
   if (currentHeadersJson && currentHeadersJson.trim() !== "") {
     try {
       const parsed = JSON.parse(currentHeadersJson.trim());
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-        initialRows = Object.entries(parsed).map(([k, v]) => ({
-          key: k,
-          value: typeof v === "string" ? v : JSON.stringify(v),
-        }));
+        for (const [k, v] of Object.entries(parsed)) {
+          if (
+            k.toLowerCase() === "x-openproxy-strip-params" ||
+            k.toLowerCase() === "x-strip-params"
+          ) {
+            removeParams = typeof v === "string" ? v : JSON.stringify(v);
+          } else {
+            initialRows.push({
+              key: k,
+              value: typeof v === "string" ? v : JSON.stringify(v),
+            });
+          }
+        }
       }
     } catch {
       // Ignored: fall back to empty visual rows.
@@ -44,12 +56,15 @@ export function showEditProviderHeaders(
   let rows: HeaderRow[] = [...initialRows];
   let rawMode = false;
   let rawJson = "";
-  if (initialRows.length > 0) {
+  if (initialRows.length > 0 || removeParams.trim() !== "") {
     const obj: Record<string, string> = {};
     for (const r of initialRows) {
       if (r.key.trim()) {
         obj[r.key.trim()] = r.value;
       }
+    }
+    if (removeParams.trim()) {
+      obj[STRIP_PARAMS_KEY] = removeParams.trim();
     }
     rawJson = Object.keys(obj).length > 0 ? JSON.stringify(obj, null, 2) : "";
   }
@@ -76,6 +91,9 @@ export function showEditProviderHeaders(
         obj[r.key.trim()] = r.value;
       }
     }
+    if (removeParams.trim()) {
+      obj[STRIP_PARAMS_KEY] = removeParams.trim();
+    }
     rawJson = Object.keys(obj).length > 0 ? JSON.stringify(obj, null, 2) : "";
   }
 
@@ -83,6 +101,7 @@ export function showEditProviderHeaders(
     const trimmed = rawJson.trim();
     if (trimmed === "") {
       rows = [];
+      removeParams = "";
       errorMsg = null;
       return true;
     }
@@ -92,15 +111,39 @@ export function showEditProviderHeaders(
         errorMsg = "JSON must be an object with key-value pairs";
         return false;
       }
-      rows = Object.entries(parsed).map(([k, v]) => ({
-        key: k,
-        value: typeof v === "string" ? v : JSON.stringify(v),
-      }));
+      rows = [];
+      removeParams = "";
+      for (const [k, v] of Object.entries(parsed)) {
+        if (
+          k.toLowerCase() === "x-openproxy-strip-params" ||
+          k.toLowerCase() === "x-strip-params"
+        ) {
+          removeParams = typeof v === "string" ? v : JSON.stringify(v);
+        } else {
+          rows.push({
+            key: k,
+            value: typeof v === "string" ? v : JSON.stringify(v),
+          });
+        }
+      }
       errorMsg = null;
       return true;
     } catch (e: unknown) {
       errorMsg = "Invalid JSON syntax: " + (e instanceof Error ? e.message : String(e));
       return false;
+    }
+  }
+
+  function addStripParam(paramName: string): void {
+    const parts = removeParams
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    if (!parts.includes(paramName)) {
+      parts.push(paramName);
+      removeParams = parts.join(", ");
+      syncRowsToRaw();
+      updateView();
     }
   }
 
@@ -178,6 +221,9 @@ export function showEditProviderHeaders(
       if (!k) continue;
       obj[k] = r.value;
     }
+    if (removeParams.trim()) {
+      obj[STRIP_PARAMS_KEY] = removeParams.trim();
+    }
 
     const payload = Object.keys(obj).length > 0 ? JSON.stringify(obj) : null;
 
@@ -242,6 +288,50 @@ export function showEditProviderHeaders(
                   </div>
                 `
               : html``}
+
+            <div class="headers-strip-params-section">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <label style="font-weight: 600; font-size: var(--fs-xs); color: var(--color-text);">
+                  Remove Parameters (Request Body)
+                </label>
+                <div style="display: flex; gap: var(--space-1); align-items: center;">
+                  <button
+                    type="button"
+                    class="headers-preset-chip"
+                    style="padding: 0.1rem 0.4rem; font-size: 0.7rem;"
+                    ?disabled=${rawMode || isSaving}
+                    @click=${() => addStripParam("session_id")}
+                    title="Add session_id to remove list"
+                  >
+                    + session_id
+                  </button>
+                  <button
+                    type="button"
+                    class="headers-preset-chip"
+                    style="padding: 0.1rem 0.4rem; font-size: 0.7rem;"
+                    ?disabled=${rawMode || isSaving}
+                    @click=${() => addStripParam("conversation_id")}
+                    title="Add conversation_id to remove list"
+                  >
+                    + conversation_id
+                  </button>
+                </div>
+              </div>
+              <input
+                type="text"
+                class="headers-strip-input"
+                placeholder="e.g. session_id, conversation_id (comma-separated)"
+                .value=${removeParams}
+                ?disabled=${rawMode || isSaving}
+                @input=${(e: Event) => {
+                  removeParams = (e.target as HTMLInputElement).value;
+                  syncRowsToRaw();
+                }}
+              />
+              <p style="margin: var(--space-1) 0 0; font-size: 0.75rem; color: var(--color-text-muted);">
+                Parameters stripped from JSON payload before forwarding upstream. Crucial for vLLM, Gonka, or strict OpenAI backends that reject non-standard fields with 400.
+              </p>
+            </div>
 
             <div class="headers-presets">
               <span class="headers-presets-label">Quick Presets:</span>
