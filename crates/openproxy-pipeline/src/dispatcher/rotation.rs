@@ -100,16 +100,41 @@ pub(super) fn apply_proxy_rotation(args: ProxyRotationArgs<'_>) -> bool {
         args.bad_proxy,
         cooldown_duration,
     );
-    if args.is_per_account {
-        if let Some(acc_id) = args.account_id {
-            let _ = openproxy_db::accounts::clear_current_proxy_id(args.conn, acc_id);
+    let provider = openproxy_db::providers::get(args.conn, args.provider_id).unwrap_or(None);
+    let direct_first = provider.as_ref().is_some_and(|p| p.direct_first);
+
+    if direct_first {
+        let assigned = openproxy_db::free_proxies::assign_new_proxy(
+            args.conn,
+            args.provider_id,
+            args.account_id.as_ref(),
+            args.is_per_account,
+        );
+        match assigned {
+            Ok(Some(_)) => true,
+            _ => {
+                if args.is_per_account {
+                    if let Some(acc_id) = args.account_id {
+                        let _ = openproxy_db::accounts::clear_current_proxy_id(args.conn, acc_id);
+                    }
+                } else {
+                    let _ = openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
+                }
+                false
+            }
         }
     } else {
-        let _ = openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
-    }
+        if args.is_per_account {
+            if let Some(acc_id) = args.account_id {
+                let _ = openproxy_db::accounts::clear_current_proxy_id(args.conn, acc_id);
+            }
+        } else {
+            let _ = openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
+        }
 
-    openproxy_db::free_proxies::get_candidate_proxies_for_provider(args.conn, args.provider_id, 1)
-        .is_ok_and(|c| !c.is_empty())
+        openproxy_db::free_proxies::get_candidate_proxies_for_provider(args.conn, args.provider_id, 1)
+            .is_ok_and(|c| !c.is_empty())
+    }
 }
 
 impl UpstreamDispatcher {
@@ -144,25 +169,39 @@ impl UpstreamDispatcher {
                 account_id,
             );
 
-            if should_rotate_proxy(&provider, trigger)
-                && let Some(ref bad_proxy) = bad_proxy_id
-            {
-                tracing::warn!(
-                    provider = %provider_id,
-                    account_id = ?account_id,
-                    proxy_id = %bad_proxy,
-                    trigger = ?trigger,
-                    "proxy rotation triggered: clearing binding and adding cooldown for provider"
-                );
-                return apply_proxy_rotation(ProxyRotationArgs {
-                    conn: &conn,
-                    provider_id: &provider_id,
-                    bad_proxy,
-                    trigger,
-                    is_per_account,
-                    account_id,
-                    cooldown_ms,
-                });
+            if should_rotate_proxy(&provider, trigger) {
+                if let Some(ref bad_proxy) = bad_proxy_id {
+                    tracing::warn!(
+                        provider = %provider_id,
+                        account_id = ?account_id,
+                        proxy_id = %bad_proxy,
+                        trigger = ?trigger,
+                        "proxy rotation triggered: clearing binding and adding cooldown for provider"
+                    );
+                    return apply_proxy_rotation(ProxyRotationArgs {
+                        conn: &conn,
+                        provider_id: &provider_id,
+                        bad_proxy,
+                        trigger,
+                        is_per_account,
+                        account_id,
+                        cooldown_ms,
+                    });
+                } else if provider.direct_first {
+                    tracing::warn!(
+                        provider = %provider_id,
+                        account_id = ?account_id,
+                        trigger = ?trigger,
+                        "direct connection error with direct_first enabled: rotating to proxy pool"
+                    );
+                    let assigned = openproxy_db::free_proxies::assign_new_proxy(
+                        &conn,
+                        &provider_id,
+                        account_id.as_ref(),
+                        is_per_account,
+                    );
+                    return assigned.is_ok_and(|opt| opt.is_some());
+                }
             }
             false
         })
@@ -286,5 +325,98 @@ mod tests {
         );
 
         drop(c);
+    }
+
+    #[test]
+    fn test_direct_first_rotation_eagerly_assigns_candidate() {
+        let pool = openproxy_db::DbPool::test_pool_with_prefix("openproxy-direct-first-test")
+            .expect("open pool");
+
+        let conn_arc = std::sync::Arc::new(parking_lot::Mutex::new(
+            pool.open_connection().expect("open connection"),
+        ));
+
+        let provider_id = openproxy_types::ids::ProviderId::new("df-test");
+        {
+            let c = conn_arc.lock();
+            c.execute(
+                "INSERT INTO free_proxies (id, source, host, port, type, status) \
+                 VALUES ('cand-1', 'custom', 'host-1', 8080, 'http', 'alive'), \
+                        ('cand-2', 'custom', 'host-2', 8080, 'http', 'alive')",
+                [],
+            )
+            .expect("seed proxies");
+
+            openproxy_db::providers::create(
+                &c,
+                openproxy_db::providers::NewProvider {
+                    id: &provider_id,
+                    name: "df-test",
+                    base_url: "https://example.com",
+                    auth_type: openproxy_types::providers::AuthType::Bearer,
+                    format: openproxy_types::providers::ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                    rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
+                },
+            )
+            .expect("seed provider");
+
+            c.execute(
+                "UPDATE providers SET use_proxies = 1, direct_first = 1, \
+                 proxy_rotation_errors = '429,connect_error,timeout', \
+                 proxy_rotation_mode = 'global' WHERE id = ?1",
+                rusqlite::params![provider_id.as_str()],
+            )
+            .expect("enable direct_first");
+        }
+
+        // Initially with direct_first, get_or_assign_provider_proxy returns None (direct host connection)
+        {
+            let c = conn_arc.lock();
+            let initial_proxy = openproxy_db::free_proxies::get_or_assign_provider_proxy(&c, &provider_id, None)
+                .expect("get_or_assign");
+            assert_eq!(initial_proxy, None, "direct_first must return None initially (using direct IP)");
+        }
+
+        // Direct IP encounters error: assign proxy from pool
+        {
+            let c = conn_arc.lock();
+            let assigned = openproxy_db::free_proxies::assign_new_proxy(&c, &provider_id, None, false)
+                .expect("assign proxy");
+            assert!(assigned.is_some(), "must assign candidate from pool");
+
+            let current: Option<String> = c
+                .query_row(
+                    "SELECT current_proxy_id FROM providers WHERE id = ?1",
+                    rusqlite::params![provider_id.as_str()],
+                    |r| r.get(0),
+                )
+                .expect("current_proxy_id");
+            assert!(current.is_some(), "current_proxy_id must be bound");
+            let bound_id = current.unwrap();
+
+            // When bound proxy fails, apply_proxy_rotation eagerly assigns next candidate
+            let rotated = apply_proxy_rotation(ProxyRotationArgs {
+                conn: &c,
+                provider_id: &provider_id,
+                bad_proxy: &bound_id,
+                trigger: ProxyRotationTrigger::ConnectError,
+                is_per_account: false,
+                account_id: None,
+                cooldown_ms: Some(60_000),
+            });
+            assert!(rotated, "rotation must succeed and assign next candidate");
+
+            let new_current: Option<String> = c
+                .query_row(
+                    "SELECT current_proxy_id FROM providers WHERE id = ?1",
+                    rusqlite::params![provider_id.as_str()],
+                    |r| r.get(0),
+                )
+                .expect("new current_proxy_id");
+            assert!(new_current.is_some());
+            assert_ne!(new_current.as_deref(), Some(bound_id.as_str()), "must rotate to different candidate");
+        }
     }
 }

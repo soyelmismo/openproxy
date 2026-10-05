@@ -8,7 +8,7 @@ pub use openproxy_types::providers::{NewProvider, VIRTUAL_COMBO_PROVIDER_ID};
 crate::def_table_select!(
     provider_select,
     "providers",
-    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only"
+    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only, direct_first"
 );
 
 define_column_updaters! {
@@ -57,6 +57,8 @@ pub struct UpdateProviderParams<'a> {
     pub proxy_rotation_mode: Option<&'a str>,
     pub rate_limit_scope: Option<RateLimitScope>,
     pub notif_keyword_only: Option<Option<bool>>,
+    pub direct_first: Option<bool>,
+    pub current_proxy_id: Option<Option<&'a str>>,
 }
 
 fn build_provider_update_clauses(
@@ -99,6 +101,14 @@ fn build_provider_update_clauses(
     if let Some(v) = params.notif_keyword_only {
         sets.push("notif_keyword_only = ?");
         bound_values.push(Box::new(i64::from(v.unwrap_or(false))));
+    }
+    if let Some(v) = params.direct_first {
+        sets.push("direct_first = ?");
+        bound_values.push(Box::new(i64::from(v)));
+    }
+    if let Some(v) = params.current_proxy_id {
+        sets.push("current_proxy_id = ?");
+        bound_values.push(Box::new(v.map(std::string::ToString::to_string)));
     }
 }
 
@@ -219,6 +229,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         proxy_rotation_mode: @box_str(13),
         has_favicon: @bool(14),
         notif_keyword_only: @bool(15),
+        direct_first: @bool(16),
     })
 }
 

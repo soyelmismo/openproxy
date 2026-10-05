@@ -13,7 +13,7 @@ pub(super) fn export_providers(conn: &Connection) -> Result<Vec<BackupProvider>>
             "SELECT id, name, base_url, auth_type, format, extra_headers_json, \
              auto_activate_keyword, active, use_proxies, current_proxy_id, \
              proxy_rotation_errors, rate_limit_scope, notif_keyword_only, \
-             proxy_rotation_mode FROM providers ORDER BY id",
+             proxy_rotation_mode, direct_first FROM providers ORDER BY id",
         )
         .map_err(map_db_error)?;
 
@@ -42,6 +42,7 @@ pub(super) fn export_providers(conn: &Connection) -> Result<Vec<BackupProvider>>
                 rate_limit_scope,
                 notif_keyword_only: row.get::<_, i64>(12)? != 0,
                 proxy_rotation_mode: row.get(13)?,
+                direct_first: row.get::<_, i64>(14)? != 0,
             })
         })
         .map_err(map_db_error)?

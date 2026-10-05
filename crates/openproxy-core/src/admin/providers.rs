@@ -106,6 +106,8 @@ pub struct UpdateProviderInput {
     /// is a no-op, `true` / `false` sets the flag, explicit `null` normalises to 0
     /// since the column is `NOT NULL DEFAULT 0`.
     pub notif_keyword_only: Option<Option<bool>>,
+    pub direct_first: Option<bool>,
+    pub current_proxy_id: Option<Option<String>>,
 }
 
 impl Validatable for UpdateProviderInput {
@@ -134,6 +136,8 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             ProxyRotationMode,
             RateLimitScope,
             NotifKeywordOnly,
+            DirectFirst,
+            CurrentProxyId,
         }
 
         struct V;
@@ -199,6 +203,19 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                                     )));
                                 });
                         }
+                        Field::DirectFirst => out.direct_first = Some(map.next_value()?),
+                        Field::CurrentProxyId => {
+                            let raw: serde_json::Value = map.next_value()?;
+                            out.current_proxy_id = Some(if let serde_json::Value::String(s) = raw {
+                                Some(s)
+                            } else if raw.is_null() {
+                                None
+                            } else {
+                                return Err(serde::de::Error::custom(format!(
+                                    "current_proxy_id must be string or null, got {raw}"
+                                )));
+                            });
+                        }
                     }
                 }
                 Ok(out)
@@ -234,6 +251,7 @@ pub fn update_provider(
         Some(opt) => Some(opt.as_deref()),
         None => None,
     };
+    let current_proxy = input.current_proxy_id.as_ref().map(|o| o.as_deref());
     providers::update(
         conn,
         id,
@@ -247,6 +265,8 @@ pub fn update_provider(
             proxy_rotation_mode: input.proxy_rotation_mode.as_deref(),
             rate_limit_scope: input.rate_limit_scope,
             notif_keyword_only: input.notif_keyword_only,
+            direct_first: input.direct_first,
+            current_proxy_id: current_proxy,
         },
     )
 }

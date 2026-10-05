@@ -234,6 +234,10 @@ pub struct Provider {
     /// Whether a cached favicon BLOB exists for this provider.
     #[serde(default)]
     pub has_favicon: bool,
+    /// When true with use_proxies enabled, initial requests use the direct host IP
+    /// and only rotate to a proxy when a proxy rotation error occurs.
+    #[serde(default)]
+    pub direct_first: bool,
 }
 
 fn default_proxy_rotation_mode() -> Box<str> {

@@ -260,6 +260,7 @@ async fn test_backup_restore_with_existing_satellite_tables_and_missing_proxy() 
                 rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
                 notif_keyword_only: false,
                 proxy_rotation_mode: "global".into(),
+                direct_first: false,
             }],
             accounts: vec![],
             models: vec![],

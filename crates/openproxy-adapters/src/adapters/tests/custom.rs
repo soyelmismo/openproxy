@@ -24,6 +24,7 @@ fn make_custom_provider(
         proxy_rotation_errors: "429,connect_error,timeout".into(),
         proxy_rotation_mode: "global".into(),
         has_favicon: false,
+        direct_first: false,
     }
 }
 

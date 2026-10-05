@@ -376,6 +376,15 @@ pub async fn report_proxy_failure(
         };
 
         let Some(bad_proxy) = bad_proxy_id else {
+            if provider.direct_first {
+                let assigned = openproxy_db::free_proxies::assign_new_proxy(
+                    &conn,
+                    &pid,
+                    account_id.as_ref(),
+                    is_per_account,
+                );
+                return Ok(assigned.is_ok_and(|opt| opt.is_some()));
+            }
             return Ok(false);
         };
 
@@ -397,6 +406,15 @@ pub async fn report_proxy_failure(
             }
         } else {
             let _ = openproxy_db::providers::update_current_proxy(&conn, &pid, None);
+        }
+
+        if provider.direct_first {
+            let _ = openproxy_db::free_proxies::assign_new_proxy(
+                &conn,
+                &pid,
+                account_id.as_ref(),
+                is_per_account,
+            );
         }
 
         let payload = serde_json::json!({

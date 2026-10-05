@@ -160,10 +160,11 @@ impl UpstreamDispatcher {
             body
         };
 
-        if is_proxy_rotated && let Some(ref purl) = dctx.proxy_url {
+        if is_proxy_rotated {
+            let old_proxy = dctx.proxy_url.as_deref().unwrap_or("direct IP");
             self.broadcast_proxy_rotated_notification(
                 target.provider_id.as_ref(),
-                purl,
+                old_proxy,
                 "connection error",
             )
             .await;
@@ -300,15 +301,16 @@ impl UpstreamDispatcher {
             )
             .await;
 
-        if is_proxy_rotated && let Some(ref purl) = dctx.proxy_url {
+        if is_proxy_rotated {
             let trigger_desc = if is_rate_limited_status {
                 "rate limited"
             } else {
                 "upstream status error"
             };
+            let old_proxy = dctx.proxy_url.as_deref().unwrap_or("direct IP");
             self.broadcast_proxy_rotated_notification(
                 target.provider_id.as_ref(),
-                purl,
+                old_proxy,
                 trigger_desc,
             )
             .await;

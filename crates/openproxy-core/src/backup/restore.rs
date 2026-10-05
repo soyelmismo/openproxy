@@ -76,8 +76,8 @@ pub fn restore_backup(
                 id, name, base_url, auth_type, format, extra_headers_json, \
                 auto_activate_keyword, active, use_proxies, current_proxy_id, \
                 proxy_rotation_errors, rate_limit_scope, notif_keyword_only, \
-                proxy_rotation_mode \
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                proxy_rotation_mode, direct_first \
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         )
         .map_err(map_db_error)?;
 
@@ -100,6 +100,7 @@ pub fn restore_backup(
             p.rate_limit_scope.as_str(),
             p.notif_keyword_only as i64,
             p.proxy_rotation_mode,
+            p.direct_first as i64,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore provider {}", p.id))(e))?;
         providers_restored += 1;

@@ -98,6 +98,7 @@ fn test_restore_duplicate_provider_preserves_downcast_and_rolls_back() {
         rate_limit_scope: RateLimitScope::Account,
         notif_keyword_only: false,
         proxy_rotation_mode: "global".into(),
+        direct_first: false,
     };
     let bundle = BackupBundle {
         version: BACKUP_FORMAT_VERSION,

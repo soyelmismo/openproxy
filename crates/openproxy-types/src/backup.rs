@@ -111,6 +111,8 @@ pub struct BackupProvider {
     pub notif_keyword_only: bool,
     #[serde(default = "default_proxy_rotation_mode_str")]
     pub proxy_rotation_mode: String,
+    #[serde(default)]
+    pub direct_first: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

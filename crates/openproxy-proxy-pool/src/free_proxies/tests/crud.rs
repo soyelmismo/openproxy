@@ -308,3 +308,38 @@ fn test_proxy_sources_crud() {
     assert_eq!(list_after.len(), 1);
     assert!(list_after[0].active);
 }
+
+#[test]
+fn test_direct_first_get_or_assign_provider_proxy() {
+    let conn = setup_test_db();
+
+    let provider_id = crate::ids::ProviderId::new("df-provider");
+
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format, use_proxies, direct_first) \
+         VALUES (?1, 'DF Provider', 'http://localhost', 'bearer', 'openai', 1, 1)",
+        rusqlite::params![provider_id.0],
+    )
+    .unwrap();
+
+    let p = add_custom_proxy(&conn, "1.1.1.1", 8080, "socks5", None, None, None).unwrap();
+    update_proxy_status(&conn, &p.id, "alive", Some(100)).unwrap();
+
+    // With direct_first = 1 and current_proxy_id = None, must return None (direct host connection)
+    let proxy = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
+    assert_eq!(proxy, None, "must return None when direct_first is enabled and no proxy assigned yet");
+
+    // Assign proxy from pool on rotation
+    let assigned = openproxy_db::free_proxies::assign_new_proxy(&conn, &provider_id, None, false).unwrap();
+    assert_eq!(assigned, Some("socks5://1.1.1.1:8080".to_string()));
+
+    // Now get_or_assign_provider_proxy returns the assigned proxy
+    let proxy_after = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
+    assert_eq!(proxy_after, Some("socks5://1.1.1.1:8080".to_string()));
+
+    // Resetting current_proxy_id back to None restores direct IP connection
+    openproxy_db::providers::update_current_proxy(&conn, &provider_id, None).unwrap();
+    let proxy_reset = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
+    assert_eq!(proxy_reset, None, "must return None again after resetting current_proxy_id");
+}
+

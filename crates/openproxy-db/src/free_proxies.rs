@@ -148,21 +148,6 @@ fn fetch_alive_proxy_url(
     )
 }
 
-fn check_current_proxy(
-    conn: &Connection,
-    provider_id: &ProviderId,
-    provider: &openproxy_types::Provider,
-    account_id: Option<&AccountId>,
-    is_per_account: bool,
-) -> Result<Option<String>> {
-    let current_proxy_id = resolve_current_proxy_id(conn, provider, account_id, is_per_account)?;
-    if let Some(proxy_id) = current_proxy_id {
-        fetch_alive_proxy_url(conn, provider_id, &proxy_id)
-    } else {
-        Ok(None)
-    }
-}
-
 fn fetch_accounts_in_use_proxies(
     conn: &Connection,
     provider_id: &ProviderId,
@@ -234,7 +219,7 @@ fn save_assigned_proxy(
     Ok(())
 }
 
-fn assign_new_proxy(
+pub fn assign_new_proxy(
     conn: &Connection,
     provider_id: &ProviderId,
     account_id: Option<&AccountId>,
@@ -276,10 +261,14 @@ pub fn get_or_assign_provider_proxy(
     };
 
     let is_per_account = provider.proxy_rotation_mode.as_ref() == "account";
-    if let Some(url) =
-        check_current_proxy(conn, provider_id, &provider, account_id, is_per_account)?
-    {
-        return Ok(Some(url));
+    let current_proxy_id = resolve_current_proxy_id(conn, &provider, account_id, is_per_account)?;
+
+    if let Some(proxy_id) = current_proxy_id {
+        if let Some(url) = fetch_alive_proxy_url(conn, provider_id, &proxy_id)? {
+            return Ok(Some(url));
+        }
+    } else if provider.direct_first {
+        return Ok(None);
     }
 
     assign_new_proxy(conn, provider_id, account_id, is_per_account)

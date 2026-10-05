@@ -35,6 +35,7 @@ export interface Provider {
   active_models?: number;
   total_models?: number;
   notif_keyword_only?: boolean;
+  direct_first?: boolean;
 }
 
 export interface CreateProviderInput {
@@ -51,6 +52,11 @@ export interface UpdateProviderInput {
   base_url?: string;
   extra_headers_json?: string;
   auto_activate_keyword?: string | null;
+  use_proxies?: boolean;
+  direct_first?: boolean;
+  current_proxy_id?: string | null;
+  proxy_rotation_errors?: string;
+  proxy_rotation_mode?: string;
 }
 
 export interface ModelQuotaDetail {

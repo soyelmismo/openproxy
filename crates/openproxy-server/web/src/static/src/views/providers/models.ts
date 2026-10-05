@@ -235,6 +235,44 @@ async function onToggleIncrementalRace(
   }
 }
 
+async function onToggleDirectFirst(
+  providerId: string,
+  e: Event,
+): Promise<void> {
+  const target = e.target instanceof HTMLInputElement ? e.target : null;
+  if (!target) return;
+  const value = target.checked;
+  const body: { direct_first: boolean; current_proxy_id?: null } = {
+    direct_first: value,
+  };
+  if (value) {
+    body.current_proxy_id = null;
+  }
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error');
+  }
+}
+
+async function onResetToDirectIp(providerId: string): Promise<void> {
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ current_proxy_id: null }),
+    });
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error');
+  }
+}
+
 
 function renderSortableTh(
   col: SortableColumn,
@@ -359,6 +397,12 @@ export function renderModelsSection(
           Use proxies for this provider
         </label>
         ${provider.use_proxies ? html`
+          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="Send requests directly using server real IP first; rotate to proxy pool only when proxy rotation errors appear">
+            <input type="checkbox"
+                   .checked=${!!provider.direct_first}
+                   @change=${(e: Event) => onToggleDirectFirst(provider.id, e)}>
+            Use real IP first (rotate to proxy on error)
+          </label>
           <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; flex: 1;">
             Rotate proxy on errors:
             <input type="text"
@@ -385,12 +429,17 @@ export function renderModelsSection(
             </select>
           </label>
           ${provider.current_proxy_id ? html`
-            <span style="font-size: var(--fs-sm); color: var(--color-text-muted); background: var(--color-surface-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
-              Bound Proxy: <code>${provider.current_proxy_id}</code>
+            <span style="display: inline-flex; align-items: center; gap: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted); background: var(--color-surface-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+              <span>Bound Proxy: <code>${provider.current_proxy_id}</code></span>
+              ${provider.direct_first ? html`
+                <button type="button" class="btn btn-xs" style="padding: 0.1rem 0.4rem; font-size: 0.75rem;" title="Clear bound proxy and return to direct real IP" @click=${() => onResetToDirectIp(provider.id)}>
+                  Reset to real IP
+                </button>
+              ` : html``}
             </span>
           ` : html`
-            <span style="font-size: var(--fs-sm); color: var(--color-warn); background: var(--color-warn-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
-              No active proxy bound
+            <span style="font-size: var(--fs-sm); color: ${provider.direct_first ? 'var(--color-primary, #38bdf8)' : 'var(--color-warn)'}; background: ${provider.direct_first ? 'var(--color-primary-soft, rgba(56, 189, 248, 0.1))' : 'var(--color-warn-soft)'}; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+              ${provider.direct_first ? 'Using real IP (direct first)' : 'No active proxy bound'}
             </span>
           `}
         ` : html``}
