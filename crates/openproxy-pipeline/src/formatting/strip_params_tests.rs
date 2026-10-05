@@ -69,9 +69,10 @@ fn test_strip_provider_configured_params_helper() {
     map.insert("keep_me".into(), json!("val"));
     let mut cow = std::borrow::Cow::Borrowed(&map);
 
-    let headers = vec![
-        ("X-OpenProxy-Strip-Params".to_string(), "session_id, conversation_id, non_existent".to_string()),
-    ];
+    let headers = vec![(
+        "X-OpenProxy-Strip-Params".to_string(),
+        "session_id, conversation_id, non_existent".to_string(),
+    )];
 
     strip_provider_configured_params(&mut cow, &headers);
     assert!(!cow.contains_key("session_id"));
@@ -81,9 +82,10 @@ fn test_strip_provider_configured_params_helper() {
 
 #[test]
 fn test_openai_formatter_strips_session_id_when_configured() {
-    let adapter = make_custom_adapter(vec![
-        ("X-OpenProxy-Strip-Params".into(), "session_id".into()),
-    ]);
+    let adapter = make_custom_adapter(vec![(
+        "X-OpenProxy-Strip-Params".into(),
+        "session_id".into(),
+    )]);
 
     let mut extra = serde_json::Map::new();
     extra.insert("session_id".into(), json!("sess-abc"));
@@ -105,20 +107,31 @@ fn test_openai_formatter_strips_session_id_when_configured() {
 
     let req = test_req(openai_req.clone());
     let formatted = OpenaiFormatter
-        .format_request(&req, &test_model("dahl"), &openai_req.messages, true, &adapter)
+        .format_request(
+            &req,
+            &test_model("dahl"),
+            &openai_req.messages,
+            true,
+            &adapter,
+        )
         .expect("formatting should succeed");
 
     let val: Value = serde_json::from_slice(&formatted).unwrap();
-    assert!(val.get("session_id").is_none(), "session_id must be stripped for dahl");
-    assert_eq!(val.get("preserve_field"), Some(&json!("keep")), "other fields preserved");
+    assert!(
+        val.get("session_id").is_none(),
+        "session_id must be stripped for dahl"
+    );
+    assert_eq!(
+        val.get("preserve_field"),
+        Some(&json!("keep")),
+        "other fields preserved"
+    );
 }
 
 #[test]
 fn test_openai_formatter_preserves_session_id_when_not_configured() {
     // Providers that require session_id in the body do NOT set X-OpenProxy-Strip-Params
-    let adapter = make_custom_adapter(vec![
-        ("User-Agent".into(), "CustomClient/1.0".into()),
-    ]);
+    let adapter = make_custom_adapter(vec![("User-Agent".into(), "CustomClient/1.0".into())]);
 
     let mut extra = serde_json::Map::new();
     extra.insert("session_id".into(), json!("sess-required-by-provider"));
@@ -140,7 +153,13 @@ fn test_openai_formatter_preserves_session_id_when_not_configured() {
 
     let req = test_req(openai_req.clone());
     let formatted = OpenaiFormatter
-        .format_request(&req, &test_model("dahl"), &openai_req.messages, true, &adapter)
+        .format_request(
+            &req,
+            &test_model("dahl"),
+            &openai_req.messages,
+            true,
+            &adapter,
+        )
         .expect("formatting should succeed");
 
     let val: Value = serde_json::from_slice(&formatted).unwrap();
@@ -158,7 +177,10 @@ fn test_populate_upstream_headers_never_leaks_openproxy_internal_headers() {
         bytes::Bytes::new(),
     );
     let headers = vec![
-        ("X-OpenProxy-Strip-Params".to_string(), "session_id".to_string()),
+        (
+            "X-OpenProxy-Strip-Params".to_string(),
+            "session_id".to_string(),
+        ),
         ("x-openproxy-custom".to_string(), "hidden".to_string()),
         ("User-Agent".to_string(), "OpenProxy/1.0".to_string()),
         ("X-Custom-Public".to_string(), "hello".to_string()),
@@ -166,14 +188,29 @@ fn test_populate_upstream_headers_never_leaks_openproxy_internal_headers() {
 
     crate::dispatcher::unary::populate_upstream_headers(&mut upstream_req, &headers);
 
-    assert!(upstream_req.headers.get("x-openproxy-strip-params").is_none());
+    assert!(
+        upstream_req
+            .headers
+            .get("x-openproxy-strip-params")
+            .is_none()
+    );
     assert!(upstream_req.headers.get("x-openproxy-custom").is_none());
     assert_eq!(
-        upstream_req.headers.get("user-agent").unwrap().to_str().unwrap(),
+        upstream_req
+            .headers
+            .get("user-agent")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "OpenProxy/1.0"
     );
     assert_eq!(
-        upstream_req.headers.get("x-custom-public").unwrap().to_str().unwrap(),
+        upstream_req
+            .headers
+            .get("x-custom-public")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "hello"
     );
 }
