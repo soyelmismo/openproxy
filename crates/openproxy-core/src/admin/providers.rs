@@ -206,15 +206,16 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::DirectFirst => out.direct_first = Some(map.next_value()?),
                         Field::CurrentProxyId => {
                             let raw: serde_json::Value = map.next_value()?;
-                            out.current_proxy_id = Some(if let serde_json::Value::String(s) = raw {
-                                Some(s)
-                            } else if raw.is_null() {
-                                None
-                            } else {
-                                return Err(serde::de::Error::custom(format!(
-                                    "current_proxy_id must be string or null, got {raw}"
-                                )));
-                            });
+                            out.current_proxy_id =
+                                Some(if let serde_json::Value::String(s) = raw {
+                                    Some(s)
+                                } else if raw.is_null() {
+                                    None
+                                } else {
+                                    return Err(serde::de::Error::custom(format!(
+                                        "current_proxy_id must be string or null, got {raw}"
+                                    )));
+                                });
                         }
                     }
                 }

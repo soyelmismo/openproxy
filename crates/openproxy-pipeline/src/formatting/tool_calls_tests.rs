@@ -16,8 +16,7 @@ fn test_sanitize_tool_call_arguments_trailing_characters() {
     // trailing characters after valid JSON document at col 7186 / char 7185
     let trailing = r#"{"AbsolutePath":"/root/file.rs"} trailing extra data after json"#;
     let sanitized = sanitize_tool_call_arguments(trailing);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&sanitized).expect("must be valid JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&sanitized).expect("must be valid JSON");
     assert_eq!(parsed["AbsolutePath"], "/root/file.rs");
     assert!(!sanitized.contains("trailing extra data"));
 }

@@ -562,4 +562,3 @@ pub fn clear_oauth_expires_at(conn: &Connection, account_id: i64) -> Result<()> 
     .map_err(crate::error::map_db_error_ctx("clear oauth expires_at"))?;
     Ok(())
 }
-

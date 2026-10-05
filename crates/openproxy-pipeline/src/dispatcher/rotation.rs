@@ -118,7 +118,11 @@ pub(super) fn apply_proxy_rotation(args: ProxyRotationArgs<'_>) -> bool {
                         let _ = openproxy_db::accounts::clear_current_proxy_id(args.conn, acc_id);
                     }
                 } else {
-                    let _ = openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
+                    let _ = openproxy_db::providers::update_current_proxy(
+                        args.conn,
+                        args.provider_id,
+                        None,
+                    );
                 }
                 false
             }
@@ -129,11 +133,16 @@ pub(super) fn apply_proxy_rotation(args: ProxyRotationArgs<'_>) -> bool {
                 let _ = openproxy_db::accounts::clear_current_proxy_id(args.conn, acc_id);
             }
         } else {
-            let _ = openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
+            let _ =
+                openproxy_db::providers::update_current_proxy(args.conn, args.provider_id, None);
         }
 
-        openproxy_db::free_proxies::get_candidate_proxies_for_provider(args.conn, args.provider_id, 1)
-            .is_ok_and(|c| !c.is_empty())
+        openproxy_db::free_proxies::get_candidate_proxies_for_provider(
+            args.conn,
+            args.provider_id,
+            1,
+        )
+        .is_ok_and(|c| !c.is_empty())
     }
 }
 
@@ -374,16 +383,21 @@ mod tests {
         // Initially with direct_first, get_or_assign_provider_proxy returns None (direct host connection)
         {
             let c = conn_arc.lock();
-            let initial_proxy = openproxy_db::free_proxies::get_or_assign_provider_proxy(&c, &provider_id, None)
-                .expect("get_or_assign");
-            assert_eq!(initial_proxy, None, "direct_first must return None initially (using direct IP)");
+            let initial_proxy =
+                openproxy_db::free_proxies::get_or_assign_provider_proxy(&c, &provider_id, None)
+                    .expect("get_or_assign");
+            assert_eq!(
+                initial_proxy, None,
+                "direct_first must return None initially (using direct IP)"
+            );
         }
 
         // Direct IP encounters error: assign proxy from pool
         {
             let c = conn_arc.lock();
-            let assigned = openproxy_db::free_proxies::assign_new_proxy(&c, &provider_id, None, false)
-                .expect("assign proxy");
+            let assigned =
+                openproxy_db::free_proxies::assign_new_proxy(&c, &provider_id, None, false)
+                    .expect("assign proxy");
             assert!(assigned.is_some(), "must assign candidate from pool");
 
             let current: Option<String> = c
@@ -416,7 +430,11 @@ mod tests {
                 )
                 .expect("new current_proxy_id");
             assert!(new_current.is_some());
-            assert_ne!(new_current.as_deref(), Some(bound_id.as_str()), "must rotate to different candidate");
+            assert_ne!(
+                new_current.as_deref(),
+                Some(bound_id.as_str()),
+                "must rotate to different candidate"
+            );
         }
     }
 }

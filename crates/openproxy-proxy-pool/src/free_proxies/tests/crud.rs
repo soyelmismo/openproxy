@@ -327,10 +327,14 @@ fn test_direct_first_get_or_assign_provider_proxy() {
 
     // With direct_first = 1 and current_proxy_id = None, must return None (direct host connection)
     let proxy = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
-    assert_eq!(proxy, None, "must return None when direct_first is enabled and no proxy assigned yet");
+    assert_eq!(
+        proxy, None,
+        "must return None when direct_first is enabled and no proxy assigned yet"
+    );
 
     // Assign proxy from pool on rotation
-    let assigned = openproxy_db::free_proxies::assign_new_proxy(&conn, &provider_id, None, false).unwrap();
+    let assigned =
+        openproxy_db::free_proxies::assign_new_proxy(&conn, &provider_id, None, false).unwrap();
     assert_eq!(assigned, Some("socks5://1.1.1.1:8080".to_string()));
 
     // Now get_or_assign_provider_proxy returns the assigned proxy
@@ -340,6 +344,8 @@ fn test_direct_first_get_or_assign_provider_proxy() {
     // Resetting current_proxy_id back to None restores direct IP connection
     openproxy_db::providers::update_current_proxy(&conn, &provider_id, None).unwrap();
     let proxy_reset = get_or_assign_provider_proxy(&conn, &provider_id, None).unwrap();
-    assert_eq!(proxy_reset, None, "must return None again after resetting current_proxy_id");
+    assert_eq!(
+        proxy_reset, None,
+        "must return None again after resetting current_proxy_id"
+    );
 }
-
