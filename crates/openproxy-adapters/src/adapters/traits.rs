@@ -18,6 +18,29 @@ pub struct ProviderAdapterConfig {
     pub rate_limit_scope: String,
 }
 
+impl ProviderAdapterConfig {
+    /// Returns `Some(true)` to force streaming, `Some(false)` to force non-streaming (unary),
+    /// or `None` for default/automatic behavior.
+    pub fn forced_streaming(&self) -> Option<bool> {
+        for (k, v) in &self.extra_headers {
+            let k_lower = k.to_ascii_lowercase();
+            if k_lower == "x-openproxy-stream"
+                || k_lower == "x-openproxy-streaming"
+                || k_lower == "x-openproxy-stream-mode"
+                || k_lower == "x-openproxy-force-stream"
+            {
+                let v_lower = v.trim().to_ascii_lowercase();
+                if v_lower == "false" || v_lower == "0" || v_lower == "off" || v_lower == "unary" || v_lower == "never" {
+                    return Some(false);
+                } else if v_lower == "true" || v_lower == "1" || v_lower == "on" || v_lower == "stream" || v_lower == "streaming" || v_lower == "always" {
+                    return Some(true);
+                }
+            }
+        }
+        None
+    }
+}
+
 pub type AdapterAuthType = openproxy_types::AuthType;
 pub type AdapterFormat = openproxy_types::ProviderFormat;
 
@@ -251,6 +274,10 @@ pub trait ProviderAdapter: Send + Sync {
             headers.push((k.clone(), v.clone()));
         }
         headers
+    }
+
+    fn forced_streaming(&self) -> Option<bool> {
+        self.config().forced_streaming()
     }
 
     fn models_url(&self) -> Option<String> {

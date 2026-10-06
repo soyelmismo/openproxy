@@ -117,7 +117,7 @@ impl UpstreamDispatcher {
         dctx: types::DispatchContext<'_>,
         upstream_request: UpstreamRequest,
     ) -> PipelineResult {
-        if params.req.stream_sink.is_some() {
+        if params.is_streaming && params.req.stream_sink.is_some() {
             self.dispatch_upstream_streaming(types::StreamDispatchParams {
                 target: params.target,
                 combo: params.combo,
@@ -154,7 +154,7 @@ impl UpstreamDispatcher {
                 .await;
         }
 
-        upstream_request.is_streaming = true;
+        upstream_request.is_streaming = params.is_streaming;
         unary::populate_upstream_headers(&mut upstream_request, params.headers);
 
         self.dispatch_by_stream_mode(params, dctx, upstream_request)

@@ -172,24 +172,30 @@ pub enum RoutingPlan {
     },
 }
 
-/// Resolve a model string to a routing plan.
-///
-/// `model_str` is the raw `model` field from the chat request: strip a matching
-/// `<provider>/` prefix, try a `models` row (active, not expired), then a combo
-/// (after an optional `combo:` prefix), then `NotFound`.
-///
-/// Matching is case-sensitive. `ComBo:nerd` does not resolve to combo `nerd`,
-/// the same convention stored names use.
-pub fn resolve(conn: &Connection, model_str: &str) -> Result<RoutingPlan> {
-    let (stripped, provider_prefix) = strip_proxy_prefix(conn, model_str);
+/// Resolve a model string to a routing plan with optional provider and account pinning.
+pub fn resolve_with_options(
+    conn: &Connection,
+    model_str: &str,
+    provider_override: Option<&str>,
+    account_override: Option<AccountId>,
+) -> Result<RoutingPlan> {
+    let (stripped, mut provider_prefix) = strip_proxy_prefix(conn, model_str);
+    if provider_prefix.is_none() && let Some(po) = provider_override {
+        provider_prefix = Some(po);
+    }
 
-    if let Some(plan) = try_resolve_direct_model(conn, stripped, provider_prefix)? {
+    if let Some(plan) =
+        try_resolve_direct_model(conn, stripped, provider_prefix, account_override)?
+    {
         return Ok(plan);
     }
 
     let combo_name = stripped.strip_prefix("combo:").unwrap_or(stripped);
     if let Some(combo) = combos::get_combo_by_name(conn, combo_name)? {
-        let targets = combos::list_targets(conn, combo.id)?;
+        let mut targets = combos::list_targets(conn, combo.id)?;
+        if let Some(aid) = account_override {
+            pin_account_to_targets(conn, &mut targets, aid)?;
+        }
         return Ok(RoutingPlan::Combo {
             combo_id: combo.id,
             combo_name: combo.name,
@@ -211,6 +217,18 @@ pub fn resolve(conn: &Connection, model_str: &str) -> Result<RoutingPlan> {
     })
 }
 
+/// Resolve a model string to a routing plan.
+///
+/// `model_str` is the raw `model` field from the chat request: strip a matching
+/// `<provider>/` prefix, try a `models` row (active, not expired), then a combo
+/// (after an optional `combo:` prefix), then `NotFound`.
+///
+/// Matching is case-sensitive. `ComBo:nerd` does not resolve to combo `nerd`,
+/// the same convention stored names use.
+pub fn resolve(conn: &Connection, model_str: &str) -> Result<RoutingPlan> {
+    resolve_with_options(conn, model_str, None, None)
+}
+
 /// [`resolve`] on the blocking pool: its `SELECT`s take the [`DbPool`] reader
 /// mutex, a blocking `parking_lot` lock that must not be held on a Tokio
 /// worker (AGENTS §4.3).
@@ -229,10 +247,57 @@ pub async fn resolve_routing(db_pool: &DbPool, model: &str) -> Result<RoutingPla
     .map_err(|e| CoreError::Internal(format!("resolve_routing join error: {e}")))?
 }
 
+pub async fn resolve_routing_with_options(
+    db_pool: &DbPool,
+    model: &str,
+    provider_override: Option<String>,
+    account_override: Option<AccountId>,
+) -> Result<RoutingPlan> {
+    let pool = db_pool.clone();
+    let model = model.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.reader();
+        resolve_with_options(&conn, &model, provider_override.as_deref(), account_override)
+    })
+    .await
+    .map_err(|e| CoreError::Internal(format!("resolve_routing join error: {e}")))?
+}
+
+fn pin_account_to_targets(
+    conn: &Connection,
+    targets: &mut Vec<ComboTarget>,
+    aid: AccountId,
+) -> Result<()> {
+    let prov_row: Option<String> = conn
+        .query_row(
+            "SELECT provider_id FROM accounts WHERE id = ?1",
+            rusqlite::params![aid.0],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(openproxy_db::error::map_db_error_ctx("pin_account_to_targets"))?;
+
+    let Some(prov) = prov_row else {
+        return Ok(());
+    };
+
+    let has_matching = targets.iter().any(|t| t.provider_id.as_str() == prov);
+    if has_matching {
+        for t in &mut *targets {
+            if t.provider_id.as_str() == prov {
+                t.account_id = Some(aid);
+            }
+        }
+        targets.retain(|t| t.provider_id.as_str() == prov || t.sub_combo_id.is_some());
+    }
+    Ok(())
+}
+
 fn try_resolve_direct_model(
     conn: &Connection,
     model_id: &str,
     provider_prefix: Option<&str>,
+    account_override: Option<AccountId>,
 ) -> Result<Option<RoutingPlan>> {
     let model: Option<Model> = if let Some(prefix) = provider_prefix {
         models::find_active_by_provider_and_name(conn, &ProviderId::new(prefix), model_id)?
@@ -250,9 +315,27 @@ fn try_resolve_direct_model(
         return Ok(None);
     }
 
-    // `account_id = None` on the synthetic target hands the choice to the
-    // pipeline's auto-rotation path.
-    let account_id = None;
+    let account_id = if let Some(aid) = account_override {
+        let belongs_to_provider: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = ?1 AND provider_id = ?2)",
+                rusqlite::params![aid.0, model.provider_id.as_str()],
+                |row| row.get::<_, i64>(0),
+            )
+            .is_ok_and(|v| v != 0);
+        if belongs_to_provider {
+            Some(aid)
+        } else {
+            tracing::warn!(
+                account_id = aid.0,
+                provider_id = model.provider_id.as_str(),
+                "pinned account does not belong to provider, falling back to auto-rotation"
+            );
+            None
+        }
+    } else {
+        None
+    };
 
     let (combo, targets) = build_synthetic_combo(
         model.provider_id.clone(),
@@ -566,5 +649,30 @@ mod tests {
         assert_eq!(targets[0].provider_id, ProviderId::new("openrouter"));
         assert_eq!(targets[0].account_id, Some(AccountId(42)));
         assert_eq!(targets[0].model_row_id, Some(ModelRowId(7)));
+    }
+
+    #[test]
+    fn resolve_with_options_pins_provider_and_account() {
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "justwoker");
+        let account_id = seed_healthy_account(&conn, "justwoker");
+        let model_row = seed_model(&conn, "justwoker", "claude-opus-4-8");
+
+        let plan = resolve_with_options(
+            &conn,
+            "claude-opus-4-8",
+            Some("justwoker"),
+            Some(account_id),
+        )
+        .expect("resolve_with_options");
+
+        let RoutingPlan::Combo { targets, .. } = plan else {
+            panic!("expected Combo, got {plan:?}");
+        };
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].provider_id, ProviderId::new("justwoker"));
+        assert_eq!(targets[0].model_row_id, Some(model_row));
+        assert_eq!(targets[0].account_id, Some(account_id));
     }
 }

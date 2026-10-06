@@ -127,6 +127,14 @@ function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
               </select>
             </div>
             <div class="field">
+              <label for="provider-stream-mode">Stream Mode</label>
+              <select id="provider-stream-mode" name="stream_mode">
+                <option value="auto">auto (default)</option>
+                <option value="unary">unary (forced non-streaming)</option>
+                <option value="streaming">streaming (forced SSE)</option>
+              </select>
+            </div>
+            <div class="field">
               <label for="provider-extra-headers">Extra Headers (JSON)</label>
               <textarea id="provider-extra-headers" name="extra_headers_json" rows="3" placeholder='{"User-Agent": "Mozilla/5.0...", "Origin": "https://..."}' style="width: 100%; font-family: monospace; font-size: 0.85em; resize: vertical;"></textarea>
             </div>

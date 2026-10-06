@@ -176,6 +176,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
                 format: "openai".into(),
                 extra_headers_json: None,
                 rate_limit_scope: None,
+                stream_mode: None,
             },
         )
         .expect("prov");

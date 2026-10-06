@@ -53,6 +53,7 @@ export interface PlaygroundState {
   customModelInput: string;
   modelSearchQuery: string;
   keySource: 'session' | 'key' | 'custom';
+  selectedApiKeyId: number | null;
   selectedApiKeyPrefix: string;
   customApiKey: string;
 
@@ -124,6 +125,7 @@ export function createInitialPlaygroundState(): PlaygroundState {
     customModelInput: '',
     modelSearchQuery: '',
     keySource: 'session',
+    selectedApiKeyId: null,
     selectedApiKeyPrefix: '',
     customApiKey: '',
 

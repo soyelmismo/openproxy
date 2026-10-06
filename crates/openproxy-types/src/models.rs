@@ -58,6 +58,13 @@ impl Default for Model {
 }
 
 impl Model {
+    /// Parses the model capabilities from `capabilities_json` if present.
+    pub fn capabilities(&self) -> Option<crate::capabilities::ModelCapabilities> {
+        self.capabilities_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok())
+    }
+
     /// Returns the parsed compact typed model kind.
     pub fn kind(&self) -> ModelKind {
         ModelKind::parse_kind(&self.model_type)

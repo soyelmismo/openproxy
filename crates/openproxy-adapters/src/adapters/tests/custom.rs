@@ -25,6 +25,7 @@ fn make_custom_provider(
         proxy_rotation_mode: "global".into(),
         has_favicon: false,
         direct_first: false,
+        stream_mode: "auto".into(),
     }
 }
 

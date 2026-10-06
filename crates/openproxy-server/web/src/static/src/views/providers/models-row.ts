@@ -35,6 +35,36 @@ export async function onChangeModelType(rowId: number, e: Event): Promise<void> 
   }
 }
 
+export async function onChangeModelStreaming(rowId: number, e: Event): Promise<void> {
+  const target = e.target instanceof HTMLSelectElement ? e.target : null;
+  if (!target) return;
+  const val = target.value;
+  const streaming = val === 'streaming' ? true : val === 'unary' ? false : null;
+  try {
+    await api(`/models/${rowId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ streaming }),
+    });
+    const m = (state.models || []).find((x) => x.row_id === rowId);
+    if (m) {
+      let caps: Record<string, unknown> = {};
+      try {
+        if (m.capabilities_json) caps = JSON.parse(m.capabilities_json) as Record<string, unknown>;
+      } catch {}
+      if (streaming === null) {
+        delete caps['streaming'];
+      } else {
+        caps['streaming'] = streaming;
+      }
+      m.capabilities_json = Object.keys(caps).length > 0 ? JSON.stringify(caps) : null;
+    }
+    showToast(`Model streaming updated`, 'success');
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error');
+  }
+}
+
 export async function onToggleModel(rowId: number, newActive: boolean): Promise<void> {
   try {
     await api('/models/' + rowId + '/toggle', {
@@ -156,6 +186,14 @@ export function renderModelRow(m: Model): TemplateResult {
 
   const usageModel = `${m.provider_id}/${m.model_id}`;
 
+  let modelStreaming: boolean | undefined = undefined;
+  if (m.capabilities_json) {
+    try {
+      const parsed = JSON.parse(m.capabilities_json) as Record<string, unknown>;
+      if (typeof parsed['streaming'] === 'boolean') modelStreaming = parsed['streaming'];
+    } catch {}
+  }
+
   return html`<tr id=${`model-row-${m.row_id}`} class=${'model-card-row ' + (m.active ? '' : 'inactive') + (isSelected ? ' selected' : '')}>
     <td class="col-model-select"><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}></td>
     <td class="col-model-name" data-label="Model">
@@ -169,7 +207,7 @@ export function renderModelRow(m: Model): TemplateResult {
     <td class="col-model-max-output" data-label="Max Output"><span class="model-spec-val">${formatContextBadge(m.max_output_tokens)}</span></td>
     <td class="col-model-modality" data-label="Modality & Capabilities">
       <div class="model-modality-block">
-        <div class="model-type-row">
+        <div class="model-type-row" style="display:flex;gap:4px;align-items:center;">
           <select
             class="model-type-select"
             title="Model modality / type (Chat, Image, Embedding, Audio, Rerank, Decision)"
@@ -182,6 +220,15 @@ export function renderModelRow(m: Model): TemplateResult {
             <option value="audio" ?selected=${m.model_type === 'audio'}>Audio</option>
             <option value="rerank" ?selected=${m.model_type === 'rerank'}>Rerank</option>
             <option value="decision" ?selected=${m.model_type === 'decision'}>Decision</option>
+          </select>
+          <select
+            class="model-type-select"
+            title="Stream override: auto (provider default), unary (forced non-streaming), stream (forced SSE)"
+            @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
+          >
+            <option value="auto" ?selected=${modelStreaming === undefined}>auto stream</option>
+            <option value="unary" ?selected=${modelStreaming === false}>unary</option>
+            <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
           </select>
         </div>
         <div class="model-caps-row">
@@ -247,6 +294,19 @@ export function renderModelRow(m: Model): TemplateResult {
           <span class="config-val-upstream" title="${m.model_id}">
             ${m.model_id}
           </span>
+        </div>
+        <div class="config-item">
+          <span class="config-label">Stream</span>
+          <select
+            class="custom-mobile-select"
+            style="font-size:0.75rem;padding:1px 3px;"
+            title="Stream override"
+            @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
+          >
+            <option value="auto" ?selected=${modelStreaming === undefined}>auto</option>
+            <option value="unary" ?selected=${modelStreaming === false}>unary</option>
+            <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
+          </select>
         </div>
         <div class="config-item">
           <span class="config-label">Test</span>

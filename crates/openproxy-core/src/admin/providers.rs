@@ -18,6 +18,8 @@ pub struct CreateProviderInput {
     pub format: String,
     pub extra_headers_json: Option<String>,
     pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
+    #[serde(default)]
+    pub stream_mode: Option<String>,
 }
 
 impl Validatable for CreateProviderInput {
@@ -25,6 +27,13 @@ impl Validatable for CreateProviderInput {
         validate_base_url(&self.base_url)?;
         AuthType::parse(&self.auth_type).map_err(CoreError::Validation)?;
         ProviderFormat::parse(&self.format).map_err(CoreError::Validation)?;
+        if let Some(ref sm) = self.stream_mode
+            && !matches!(sm.as_str(), "auto" | "streaming" | "unary")
+        {
+            return Err(CoreError::Validation(format!(
+                "invalid stream_mode '{sm}'; expected 'auto', 'streaming', or 'unary'"
+            )));
+        }
         Ok(())
     }
 }
@@ -37,6 +46,7 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
     let id = ProviderId::new(input.id);
     let auth = AuthType::parse(&input.auth_type).map_err(CoreError::Validation)?;
     let format = ProviderFormat::parse(&input.format).map_err(CoreError::Validation)?;
+    let stream_mode = input.stream_mode.clone();
     providers::create(
         conn,
         providers::NewProvider {
@@ -52,6 +62,16 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
                 .unwrap_or(crate::providers::RateLimitScope::Account),
         },
     )?;
+    if let Some(sm) = stream_mode {
+        update_provider(
+            conn,
+            &id,
+            &UpdateProviderInput {
+                stream_mode: Some(sm),
+                ..Default::default()
+            },
+        )?;
+    }
     Ok(id)
 }
 
@@ -108,12 +128,20 @@ pub struct UpdateProviderInput {
     pub notif_keyword_only: Option<Option<bool>>,
     pub direct_first: Option<bool>,
     pub current_proxy_id: Option<Option<String>>,
+    pub stream_mode: Option<String>,
 }
 
 impl Validatable for UpdateProviderInput {
     fn validate(&self) -> Result<()> {
         if let Some(ref url) = self.base_url {
             validate_base_url(url)?;
+        }
+        if let Some(ref sm) = self.stream_mode
+            && !matches!(sm.as_str(), "auto" | "streaming" | "unary")
+        {
+            return Err(CoreError::Validation(format!(
+                "invalid stream_mode '{sm}'; expected 'auto', 'streaming', or 'unary'"
+            )));
         }
         Ok(())
     }
@@ -138,6 +166,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             NotifKeywordOnly,
             DirectFirst,
             CurrentProxyId,
+            StreamMode,
         }
 
         struct V;
@@ -217,6 +246,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                                     )));
                                 });
                         }
+                        Field::StreamMode => {
+                            out.stream_mode = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(out)
@@ -268,6 +300,7 @@ pub fn update_provider(
             notif_keyword_only: input.notif_keyword_only,
             direct_first: input.direct_first,
             current_proxy_id: current_proxy,
+            stream_mode: input.stream_mode.as_deref(),
         },
     )
 }

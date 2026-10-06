@@ -51,8 +51,9 @@ function getFilteredModels(st: PlaygroundState): Array<{ id: string; name: strin
   for (const m of matchingModels) {
     const inferredType = inferModelTypeFrontend(m.model_id, m.model_type);
     if (inferredType === st.modality) {
+      const qualifiedId = m.provider_id ? `${m.provider_id}/${m.model_id}` : m.model_id;
       result.push({
-        id: m.model_id,
+        id: qualifiedId,
         name: m.display_name ? `${m.display_name} (${m.model_id})` : m.model_id,
         type: inferredType,
         provider: m.provider_id,
@@ -205,15 +206,26 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
           <div class="field">
              <label class="field-label">${t('playground.sidebar.api_key_auth')}</label>
             <select
-              .value=${st.keySource}
+              .value=${st.keySource === 'key' && st.selectedApiKeyId ? `key:${st.selectedApiKeyId}` : st.keySource}
               @change=${(e: Event) => {
-                st.keySource = (e.target as HTMLSelectElement).value as typeof st.keySource;
+                const val = (e.target as HTMLSelectElement).value;
+                if (val.startsWith('key:')) {
+                  st.keySource = 'key';
+                  const keyId = Number(val.slice(4));
+                  st.selectedApiKeyId = keyId;
+                  const found = apiKeys.find((k) => k.id === keyId);
+                  st.selectedApiKeyPrefix = found?.key_prefix || '';
+                } else {
+                  st.keySource = val as 'session' | 'custom';
+                  st.selectedApiKeyId = null;
+                  st.selectedApiKeyPrefix = '';
+                }
                 requestUpdate();
               }}
             >
                <option value="session">${t('playground.sidebar.session_token')}</option>
               ${apiKeys.map(
-                (k) => html`<option value="key:${k.key_prefix}">${k.label || 'API Key'} (${k.key_prefix}…)</option>`,
+                (k) => html`<option value="key:${k.id}">${k.label || 'API Key'} (${k.key_prefix}…)</option>`,
               )}
               <option value="custom">Custom Bearer Key</option>
             </select>

@@ -330,3 +330,18 @@ pub fn update_model_details(
     update_model_type_opt(conn, id, model_type)?;
     update_model_target_format(conn, id, target_format)
 }
+
+pub fn update_model_capabilities_json(
+    conn: &Connection,
+    id: ModelRowId,
+    capabilities_json: Option<&str>,
+) -> Result<()> {
+    crate::db_update_field!(
+        conn,
+        "models",
+        capabilities_json = capabilities_json,
+        WHERE id = id.0,
+        format!("update capabilities_json for model {id}")
+    )?;
+    Ok(())
+}

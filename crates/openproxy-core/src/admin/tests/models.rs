@@ -19,6 +19,7 @@ fn seed_prov(conn: &rusqlite::Connection, id: &str) {
             auth_type: "bearer".into(),
             format: "openai".into(),
             extra_headers_json: None,
+            stream_mode: None,
         },
     )
     .expect("seed");
@@ -130,6 +131,8 @@ fn create_custom_model_wraps_validation() {
             display_name: Some("Updated Display".into()),
             model_type: Some("embedding".into()),
             target_format: None,
+            streaming: Some(Some(false)),
+            capabilities_json: None,
         },
     )
     .expect("update");
@@ -138,4 +141,8 @@ fn create_custom_model_wraps_validation() {
         .expect("present");
     assert_eq!(updated_m.display_name.as_deref(), Some("Updated Display"));
     assert_eq!(&*updated_m.model_type, "embedding");
+    assert_eq!(
+        updated_m.capabilities().and_then(|c| c.streaming),
+        Some(false)
+    );
 }

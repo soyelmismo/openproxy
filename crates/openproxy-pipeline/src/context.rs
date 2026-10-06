@@ -28,6 +28,7 @@ pub struct PipelineContext {
     pub resolved_timeouts: Option<crate::timeouts::Timeouts>,
     pub target_format: Option<openproxy_types::TargetFormat>,
     pub body_bytes: Option<bytes::Bytes>,
+    pub is_streaming: Option<bool>,
 }
 
 impl PipelineContext {
@@ -50,6 +51,7 @@ impl PipelineContext {
             resolved_timeouts: None,
             target_format: None,
             body_bytes: None,
+            is_streaming: None,
         }
     }
 }

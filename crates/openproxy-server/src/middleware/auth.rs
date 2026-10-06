@@ -181,7 +181,43 @@ pub(crate) async fn authenticate(
         return check_anonymous_fallback(state).await;
     };
 
-    let key = verify_key_credentials(state, token, "chat").await?;
+    let key = match verify_key_credentials(state, token, "chat").await {
+        Ok(k) => k,
+        Err(e) => {
+            if let Ok(admin_key) = verify_key_credentials(state, token, "manage").await {
+                admin_key
+            } else {
+                return Err(e);
+            }
+        }
+    };
+
+    if key.scopes.iter().any(|s| s == "manage")
+        && let Some(target_key_id) = headers
+            .get("x-openproxy-api-key-id")
+            .or_else(|| headers.get("x-openproxy-key-id"))
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.trim().parse::<i64>().ok())
+    {
+        let target_key = state
+            .db_pool()
+            .spawn_read(move |r| core_api_keys::get_by_id(r, ApiKeyId(target_key_id)))
+            .await
+            .map_err(|e| {
+                tracing::error!(%e, "db error looking up simulated api key");
+                ApiError(CoreError::Auth("invalid simulated api key".into()))
+            })?
+            .ok_or_else(|| {
+                ApiError(CoreError::Auth(format!("api key id #{target_key_id} not found")))
+            })?;
+
+        validate_key_record(&target_key, "chat")?;
+
+        return Ok(Some(ValidatedApiToken {
+            key_id: target_key.id,
+            key: Arc::new(target_key),
+        }));
+    }
 
     Ok(Some(ValidatedApiToken {
         key_id: key.id,
@@ -413,7 +449,7 @@ pub async fn auth_middleware(
 
     let requested_model = &parsed.model;
     if let Some(token) = &auth_result {
-        if !token.key.scopes.iter().any(|s| s == "chat") {
+        if !token.key.scopes.iter().any(|s| s == "chat" || s == "manage") {
             return Err(ApiError(CoreError::Auth(
                 "api key lacks required scope".into(),
             )));

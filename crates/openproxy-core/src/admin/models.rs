@@ -40,6 +40,10 @@ pub struct UpdateModelInput {
     pub display_name: Option<String>,
     pub model_type: Option<String>,
     pub target_format: Option<String>,
+    #[serde(default)]
+    pub streaming: Option<Option<bool>>,
+    #[serde(default)]
+    pub capabilities_json: Option<Option<String>>,
 }
 
 /// Create a hand-picked model row, returning the id of the new (or upserted) row.
@@ -59,7 +63,7 @@ pub fn create_custom_model(conn: &Connection, input: CreateCustomModelInput) -> 
     )
 }
 
-/// Update display_name, model_type and target_format on an existing model row.
+/// Update display_name, model_type, target_format and capabilities on an existing model row.
 pub fn update_model(conn: &Connection, id: ModelRowId, input: UpdateModelInput) -> Result<()> {
     let target_format = if let Some(tf) = input.target_format.as_deref() {
         Some(models::TargetFormat::parse(tf)?)
@@ -72,7 +76,26 @@ pub fn update_model(conn: &Connection, id: ModelRowId, input: UpdateModelInput) 
         input.display_name.as_deref(),
         input.model_type.as_deref(),
         target_format,
-    )
+    )?;
+
+    if let Some(opt_caps) = input.capabilities_json {
+        models::update_model_capabilities_json(conn, id, opt_caps.as_deref())?;
+    } else if let Some(opt_streaming) = input.streaming {
+        let existing = models::get_by_row_id(conn, id)?;
+        let mut caps = existing
+            .as_ref()
+            .and_then(|m| m.capabilities())
+            .unwrap_or_default();
+        caps.streaming = opt_streaming;
+        let new_caps_json = if caps.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&caps).ok()
+        };
+        models::update_model_capabilities_json(conn, id, new_caps_json.as_deref())?;
+    }
+
+    Ok(())
 }
 
 pub use openproxy_discovery::models::refresh_models;

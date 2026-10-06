@@ -16,6 +16,7 @@ fn cp(id: &str, name: &str) -> CreateProviderInput {
         auth_type: "bearer".into(),
         format: "openai".into(),
         extra_headers_json: None,
+        stream_mode: None,
     }
 }
 

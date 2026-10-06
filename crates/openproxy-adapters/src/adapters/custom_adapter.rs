@@ -42,7 +42,7 @@ impl CustomAdapter {
 
         let format = provider.format;
 
-        let extra_headers: Vec<(String, String)> = provider
+        let mut extra_headers: Vec<(String, String)> = provider
             .extra_headers_json
             .as_deref()
             .and_then(|raw| {
@@ -50,6 +50,13 @@ impl CustomAdapter {
             })
             .map(|map| map.into_iter().collect())
             .unwrap_or_default();
+
+        if provider.stream_mode.as_ref() != "auto" {
+            extra_headers.push((
+                "x-openproxy-stream-mode".to_string(),
+                provider.stream_mode.to_string(),
+            ));
+        }
 
         Self {
             config: ProviderAdapterConfig {

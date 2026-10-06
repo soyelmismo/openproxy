@@ -36,6 +36,7 @@ export interface Provider {
   total_models?: number;
   notif_keyword_only?: boolean;
   direct_first?: boolean;
+  stream_mode?: 'auto' | 'streaming' | 'unary';
 }
 
 export interface CreateProviderInput {
@@ -45,6 +46,7 @@ export interface CreateProviderInput {
   auth_type: string;
   format: string;
   extra_headers_json: string | null;
+  stream_mode?: 'auto' | 'streaming' | 'unary';
 }
 
 export interface UpdateProviderInput {
@@ -57,6 +59,7 @@ export interface UpdateProviderInput {
   current_proxy_id?: string | null;
   proxy_rotation_errors?: string;
   proxy_rotation_mode?: string;
+  stream_mode?: 'auto' | 'streaming' | 'unary';
 }
 
 export interface ModelQuotaDetail {

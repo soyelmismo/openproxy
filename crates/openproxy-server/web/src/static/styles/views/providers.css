@@ -195,6 +195,11 @@
   border: var(--border-w) var(--border-style) var(--color-info);
   margin: 0 0.15rem 0.15rem 0;
 }
+.cap-badge.warn {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+}
 .badge.custom {
   background: var(--color-warn-soft);
   color: var(--color-warn);

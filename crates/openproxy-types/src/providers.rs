@@ -238,6 +238,13 @@ pub struct Provider {
     /// and only rotate to a proxy when a proxy rotation error occurs.
     #[serde(default)]
     pub direct_first: bool,
+    /// Upstream streaming mode: "auto" (default), "streaming", "unary".
+    #[serde(default = "default_stream_mode")]
+    pub stream_mode: Box<str>,
+}
+
+fn default_stream_mode() -> Box<str> {
+    "auto".into()
 }
 
 fn default_proxy_rotation_mode() -> Box<str> {

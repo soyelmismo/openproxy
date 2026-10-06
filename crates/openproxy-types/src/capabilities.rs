@@ -97,6 +97,12 @@ pub struct ModelCapabilities {
         deserialize_with = "deserialize_flex_bool"
     )]
     pub decisions: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
+    pub streaming: Option<bool>,
 }
 
 impl ModelCapabilities {
@@ -114,6 +120,7 @@ impl ModelCapabilities {
             self.structured_output,
             self.temperature,
             self.decisions,
+            self.streaming,
         ]
         .iter()
         .all(Option::is_none)

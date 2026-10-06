@@ -301,8 +301,11 @@ pub fn expand_account_rotation(
     targets: Vec<ComboTarget>,
 ) -> Result<Vec<ComboTarget>> {
     let mut out = Vec::with_capacity(targets.len());
-    for t in targets {
-        expand_single_target_rotation(conn, t, &mut out)?;
+    for t in &targets {
+        expand_single_target_rotation(conn, t.clone(), &mut out)?;
+    }
+    if out.is_empty() && !targets.is_empty() {
+        return Ok(targets);
     }
     Ok(out)
 }

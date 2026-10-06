@@ -90,6 +90,7 @@ fn setup_test_db() -> Connection {
           updated_at TEXT NOT NULL DEFAULT (datetime('now')),
           notif_keyword_only INTEGER NOT NULL DEFAULT 0 CHECK (notif_keyword_only IN (0, 1)),
           direct_first INTEGER NOT NULL DEFAULT 0 CHECK (direct_first IN (0, 1)),
+          stream_mode TEXT NOT NULL DEFAULT 'auto' CHECK (stream_mode IN ('auto', 'streaming', 'unary')),
           CHECK (format IN ('openai', 'anthropic', 'mixed', 'gemini', 'responses'))
         );
         CREATE TABLE accounts (

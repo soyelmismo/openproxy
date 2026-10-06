@@ -8,13 +8,19 @@ import type { PlaygroundState } from './shared.js';
 
 
 function buildAuthHeaders(
+  st: PlaygroundState,
   key: string,
-  accountId: string,
   extra?: Record<string, string>,
 ): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
   if (key) headers['Authorization'] = `Bearer ${key}`;
-  if (accountId) headers['x-openproxy-account'] = accountId;
+  if (st.selectedProviderId && st.selectedProviderId !== 'combo') {
+    headers['x-openproxy-provider'] = st.selectedProviderId;
+  }
+  if (st.selectedAccountId) headers['x-openproxy-account'] = st.selectedAccountId;
+  if (st.keySource === 'key' && st.selectedApiKeyId) {
+    headers['x-openproxy-api-key-id'] = String(st.selectedApiKeyId);
+  }
   return headers;
 }
 
@@ -47,9 +53,7 @@ export async function executeImageRequest(
   let endpoint = '/v1/images/generations';
   let reqInit: RequestInit;
 
-  const headers: Record<string, string> = {};
-  if (key) headers['Authorization'] = `Bearer ${key}`;
-  if (st.selectedAccountId) headers['x-openproxy-account'] = st.selectedAccountId;
+  const headers: Record<string, string> = buildAuthHeaders(st, key);
 
   if (st.imageMode === 'generation') {
     if (!st.imagePrompt.trim()) {
@@ -196,7 +200,7 @@ export async function executeEmbeddingRequest(
     payload['dimensions'] = st.embeddingDimensions;
   }
 
-  const headers = buildAuthHeaders(key, st.selectedAccountId, {
+  const headers = buildAuthHeaders(st, key, {
     'Content-Type': 'application/json',
   });
 
@@ -243,7 +247,7 @@ export async function executeAudioRequest(
   formData.append('temperature', String(st.audioTemperature));
   formData.append('response_format', st.audioResponseFormat);
 
-  const headers = buildAuthHeaders(key, st.selectedAccountId);
+  const headers = buildAuthHeaders(st, key);
 
   const reqInit: RequestInit = {
     method: 'POST',
@@ -292,7 +296,7 @@ export async function executeDecisionRequest(
     questions,
   };
 
-  const headers = buildAuthHeaders(key, st.selectedAccountId, {
+  const headers = buildAuthHeaders(st, key, {
     'Content-Type': 'application/json',
   });
 

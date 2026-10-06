@@ -48,6 +48,7 @@ fn seed_prov(conn: &Connection, pid: &str) {
             auth_type: "bearer".into(),
             format: "openai".into(),
             extra_headers_json: None,
+            stream_mode: None,
         },
     )
     .expect("seed provider");

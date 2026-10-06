@@ -2,12 +2,20 @@
 // modality, plus active-key resolution from `keySource` (session token,
 // saved API key prefix, or custom).
 
-import { state } from '../../state/index.js';
 import { getToken } from '../../state/auth.js';
 import type { PlaygroundState } from './shared.js';
 
 function getEffectiveChatModel(st: PlaygroundState): string {
-  return st.selectedModelId || st.customModelInput.trim() || 'gpt-4o';
+  let model = st.selectedModelId || st.customModelInput.trim() || 'gpt-4o';
+  if (
+    st.selectedProviderId &&
+    st.selectedProviderId !== 'combo' &&
+    !model.includes('/') &&
+    !model.startsWith('combo:')
+  ) {
+    model = `${st.selectedProviderId}/${model}`;
+  }
+  return model;
 }
 
 export function generateCurlCommand(st: PlaygroundState): string {
@@ -17,6 +25,15 @@ export function generateCurlCommand(st: PlaygroundState): string {
   const accountHeader = st.selectedAccountId
     ? ` \\\n  -H "x-openproxy-account: ${st.selectedAccountId}"`
     : '';
+  const providerHeader =
+    st.selectedProviderId && st.selectedProviderId !== 'combo'
+      ? ` \\\n  -H "x-openproxy-provider: ${st.selectedProviderId}"`
+      : '';
+  const apiKeyIdHeader =
+    st.keySource === 'key' && st.selectedApiKeyId
+      ? ` \\\n  -H "x-openproxy-api-key-id: ${st.selectedApiKeyId}"`
+      : '';
+  const extraHeaders = `${providerHeader}${accountHeader}${apiKeyIdHeader}`;
 
   if (st.modality === 'chat') {
     const messages: Array<{ role: string; content: string }> = [];
@@ -47,7 +64,7 @@ export function generateCurlCommand(st: PlaygroundState): string {
       payload['response_format'] = { type: 'json_object' };
     }
     const body = JSON.stringify(payload, null, 2);
-    return `curl -X POST "${host}/v1/chat/completions" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${accountHeader} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+    return `curl -X POST "${host}/v1/chat/completions" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${extraHeaders} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
   } else if (st.modality === 'image') {
     if (st.imageMode === 'generation') {
       const payload: Record<string, unknown> = {
@@ -63,9 +80,9 @@ export function generateCurlCommand(st: PlaygroundState): string {
       if (st.imageAspectRatio) payload['aspect_ratio'] = st.imageAspectRatio;
       if (st.imagePostProcessing.length > 0) payload['post_processing'] = st.imagePostProcessing;
       const body = JSON.stringify(payload, null, 2);
-      return `curl -X POST "${host}/v1/images/generations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${accountHeader} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+      return `curl -X POST "${host}/v1/images/generations" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${extraHeaders} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
     } else if (st.imageMode === 'edit') {
-      let cmd = `curl -X POST "${host}/v1/images/edits" \\\n  -H "Authorization: Bearer ${key}"${accountHeader} \\\n  -F "image=@${st.imageSourceFile ? st.imageSourceFile.name : 'image.png'}" \\\n  -F "prompt=${st.imagePrompt}" \\\n  -F "model=${model}" \\\n  -F "size=${st.imageSize}" \\\n  -F "quality=${st.imageQuality}" \\\n  -F "n=${st.imageN}" \\\n  -F "denoising_strength=${st.imageDenoisingStrength}"`;
+      let cmd = `curl -X POST "${host}/v1/images/edits" \\\n  -H "Authorization: Bearer ${key}"${extraHeaders} \\\n  -F "image=@${st.imageSourceFile ? st.imageSourceFile.name : 'image.png'}" \\\n  -F "prompt=${st.imagePrompt}" \\\n  -F "model=${model}" \\\n  -F "size=${st.imageSize}" \\\n  -F "quality=${st.imageQuality}" \\\n  -F "n=${st.imageN}" \\\n  -F "denoising_strength=${st.imageDenoisingStrength}"`;
       if (st.imageMaskFile) cmd += ` \\\n  -F "mask=@${st.imageMaskFile.name}"`;
       if (st.imageSourceProcessing) cmd += ` \\\n  -F "source_processing=${st.imageSourceProcessing}"`;
       for (const pp of st.imagePostProcessing) cmd += ` \\\n  -F "post_processing=${pp}"`;
@@ -75,7 +92,7 @@ export function generateCurlCommand(st: PlaygroundState): string {
       if (st.imageSeed !== null && !isNaN(st.imageSeed)) cmd += ` \\\n  -F "seed=${st.imageSeed}"`;
       return cmd;
     } else {
-      let cmd = `curl -X POST "${host}/v1/images/variations" \\\n  -H "Authorization: Bearer ${key}"${accountHeader} \\\n  -F "image=@${st.imageSourceFile ? st.imageSourceFile.name : 'image.png'}" \\\n  -F "model=${model}" \\\n  -F "size=${st.imageSize}" \\\n  -F "quality=${st.imageQuality}" \\\n  -F "n=${st.imageN}" \\\n  -F "denoising_strength=${st.imageDenoisingStrength}"`;
+      let cmd = `curl -X POST "${host}/v1/images/variations" \\\n  -H "Authorization: Bearer ${key}"${extraHeaders} \\\n  -F "image=@${st.imageSourceFile ? st.imageSourceFile.name : 'image.png'}" \\\n  -F "model=${model}" \\\n  -F "size=${st.imageSize}" \\\n  -F "quality=${st.imageQuality}" \\\n  -F "n=${st.imageN}" \\\n  -F "denoising_strength=${st.imageDenoisingStrength}"`;
       if (st.imageMaskFile) cmd += ` \\\n  -F "mask=@${st.imageMaskFile.name}"`;
       if (st.imagePrompt.trim()) cmd += ` \\\n  -F "prompt=${st.imagePrompt.trim()}"`;
       if (st.imageSourceProcessing) cmd += ` \\\n  -F "source_processing=${st.imageSourceProcessing}"`;
@@ -96,7 +113,7 @@ export function generateCurlCommand(st: PlaygroundState): string {
       payload['dimensions'] = st.embeddingDimensions;
     }
     const body = JSON.stringify(payload, null, 2);
-    return `curl -X POST "${host}/v1/embeddings" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${accountHeader} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+    return `curl -X POST "${host}/v1/embeddings" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${extraHeaders} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
   } else if (st.modality === 'decision') {
     let questions: Record<string, unknown>;
     try {
@@ -110,23 +127,18 @@ export function generateCurlCommand(st: PlaygroundState): string {
       questions,
     };
     const body = JSON.stringify(payload, null, 2);
-    return `curl -X POST "${host}/v1/systemone" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${accountHeader} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
+    return `curl -X POST "${host}/v1/systemone" \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json"${extraHeaders} \\\n  -d '${body.replace(/'/g, "'\\''")}'`;
   } else {
-    return `curl -X POST "${host}/v1/audio/transcriptions" \\\n  -H "Authorization: Bearer ${key}"${accountHeader} \\\n  -F "file=@${st.audioFile ? st.audioFile.name : 'audio.mp3'}" \\\n  -F "model=${model}"`;
+    return `curl -X POST "${host}/v1/audio/transcriptions" \\\n  -H "Authorization: Bearer ${key}"${extraHeaders} \\\n  -F "file=@${st.audioFile ? st.audioFile.name : 'audio.mp3'}" \\\n  -F "model=${model}"`;
   }
 }
 
 export function getEffectiveApiKeyFromState(st: PlaygroundState): string {
-  if (st.keySource === 'session') {
+  if (st.keySource === 'session' || st.keySource === 'key') {
     return getToken() || '';
   }
   if (st.keySource === 'custom') {
     return st.customApiKey.trim();
-  }
-  const keys = (state.apiKeys as Array<{ key_prefix?: string; id?: number; label?: string }>) || [];
-  const found = keys.find((k) => k.key_prefix === st.selectedApiKeyPrefix);
-  if (found && found.key_prefix) {
-    return st.customApiKey.trim() || getToken() || '';
   }
   return getToken() || '';
 }

@@ -380,6 +380,7 @@ impl TestHarness {
                     format: "openai".into(),
                     extra_headers_json: None,
                     rate_limit_scope: None,
+                    stream_mode: None,
                 },
             )
             .expect("create mock provider");

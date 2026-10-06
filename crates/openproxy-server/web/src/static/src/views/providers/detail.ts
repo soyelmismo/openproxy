@@ -85,6 +85,32 @@ async function onEditHeaders(
   requestUpdate();
 }
 
+async function onCycleStreamMode(
+  providerId: string,
+  currentMode: string | undefined,
+): Promise<void> {
+  const modes: Array<'auto' | 'unary' | 'streaming'> = ['auto', 'unary', 'streaming'];
+  const cur = currentMode || 'auto';
+  const idx = modes.indexOf(cur as 'auto' | 'unary' | 'streaming');
+  const nextMode = modes[(idx + 1) % modes.length];
+  try {
+    await api('/providers/' + encodeURIComponent(providerId), {
+      method: 'PATCH',
+      body: JSON.stringify({ stream_mode: nextMode }),
+    });
+    const label = nextMode === 'unary'
+      ? 'unary (forced non-streaming)'
+      : nextMode === 'streaming'
+        ? 'streaming (forced SSE)'
+        : 'auto';
+    showToast(`Stream mode set to ${label}`, 'success');
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating stream mode');
+  }
+}
+
 async function onRefreshProvider(
   providerId: string,
   e: Event | null,
@@ -239,6 +265,14 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
             <span class="chip auth-chip">${provider.auth_type}</span>
             <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
             <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
+            <span
+              class=${'chip stream-chip' + (provider.stream_mode === 'unary' ? ' warn' : provider.stream_mode === 'streaming' ? ' combo-chip' : '')}
+              title="Stream mode: auto, unary (forced non-streaming), streaming (forced SSE). Click to cycle."
+              style="cursor: pointer;"
+              @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)}
+            >
+              stream: ${provider.stream_mode || 'auto'}
+            </span>
             ${provider.extra_headers_json
               ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
               : html``}
@@ -246,6 +280,9 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
         </div>
       </div>
       <div class="actions provider-detail-actions">
+        <button @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)} title="Cycle stream mode: auto -> unary -> streaming">
+          ${icons.lightning()} Stream: ${provider.stream_mode || 'auto'}
+        </button>
         <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()} Endpoint</button>
         <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${icons.pencil()} Headers</button>
         <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>${icons.refresh()} Sync Models</button>

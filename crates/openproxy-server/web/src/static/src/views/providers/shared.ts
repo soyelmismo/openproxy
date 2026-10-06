@@ -236,6 +236,8 @@ export function renderCapabilityBadges(
     }
     if (caps && typeof caps === 'object') {
       const c = caps as Record<string, unknown>;
+      if (c['streaming'] === false) badges.push(html`<span class="cap-badge warn" title="Forced unary (non-streaming)">unary</span>`);
+      if (c['streaming'] === true) badges.push(html`<span class="cap-badge" title="Forced streaming (SSE)">stream</span>`);
       if (c['vision']) badges.push(html`<span class="cap-badge">vision</span>`);
       if (c['tool_calling']) badges.push(html`<span class="cap-badge">tools</span>`);
       if (c['reasoning']) badges.push(html`<span class="cap-badge">reasoning</span>`);

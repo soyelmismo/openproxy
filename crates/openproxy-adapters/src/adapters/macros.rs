@@ -67,6 +67,9 @@ macro_rules! define_provider_adapter {
                     c.extra_headers.extend(extra);
                 }
             }
+            pub fn forced_streaming(&self) -> Option<bool> {
+                self.config().forced_streaming()
+            }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 match self {
                     $( Self::$b_variant(inner) => inner.metadata(), )+

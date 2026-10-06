@@ -25,6 +25,7 @@ async fn test_tier3_combo_resolution_failover_cooldown() {
                 format: "openai".into(),
                 extra_headers_json: None,
                 rate_limit_scope: None,
+                stream_mode: None,
             },
         )
         .unwrap();

@@ -11,8 +11,9 @@ use openproxy_core::routing::{self, RoutingPlan, SYNTHETIC_COMBO_ID};
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::{
     CoreError, OpenAIRequest,
-    ids::{ApiKeyId, ComboId, RequestId},
+    ids::{AccountId, ApiKeyId, ComboId, RequestId},
 };
+use rusqlite::OptionalExtension as _;
 
 use crate::{
     error::ApiError,
@@ -72,13 +73,36 @@ pub async fn routing_middleware(
 fn resolve_raw_routing_plan(
     state: &AppState,
     legacy_combo_name: Option<&str>,
+    provider_override: Option<&str>,
+    account_override: Option<AccountId>,
     model: &str,
 ) -> Result<RoutingPlan, ApiError> {
     let r = state.db_pool().reader();
     if let Some(name) = legacy_combo_name {
         match openproxy_db::combos::get_combo_by_name(&r, name)? {
             Some(combo) => {
-                let targets = openproxy_db::combos::list_targets(&r, combo.id)?;
+                let mut targets = openproxy_db::combos::list_targets(&r, combo.id)?;
+                if let Some(aid) = account_override {
+                    let prov_row: Option<String> = r
+                        .query_row(
+                            "SELECT provider_id FROM accounts WHERE id = ?1",
+                            rusqlite::params![aid.0],
+                            |row| row.get(0),
+                        )
+                        .optional()
+                        .ok()
+                        .flatten();
+                    if let Some(prov) = prov_row {
+                        for t in &mut targets {
+                            if t.provider_id.as_str() == prov {
+                                t.account_id = Some(aid);
+                            }
+                        }
+                        targets.retain(|t| {
+                            t.provider_id.as_str() == prov || t.sub_combo_id.is_some()
+                        });
+                    }
+                }
                 Ok(RoutingPlan::Combo {
                     combo_id: combo.id,
                     combo_name: combo.name,
@@ -90,7 +114,12 @@ fn resolve_raw_routing_plan(
             None => Err(ApiError(CoreError::ComboNotFound(0))),
         }
     } else {
-        Ok(routing::resolve(&r, model)?)
+        Ok(routing::resolve_with_options(
+            &r,
+            model,
+            provider_override,
+            account_override,
+        )?)
     }
 }
 
@@ -167,8 +196,24 @@ fn resolve_routing_plan(
     let legacy_combo_name = headers
         .get("x-openproxy-combo")
         .and_then(|v| v.to_str().ok());
+    let provider_override = headers
+        .get("x-openproxy-provider")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let account_override = headers
+        .get("x-openproxy-account")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .map(AccountId);
 
-    let mut plan = resolve_raw_routing_plan(state, legacy_combo_name, &openai_req.model)?;
+    let mut plan = resolve_raw_routing_plan(
+        state,
+        legacy_combo_name,
+        provider_override,
+        account_override,
+        &openai_req.model,
+    )?;
     let has_restrictions = match auth_result {
         Some(auth) => apply_auth_restrictions_to_plan(state, &mut plan, auth)?,
         None => false,

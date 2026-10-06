@@ -85,6 +85,7 @@ pub(crate) struct DispatchParams<'a> {
     pub attempt: u8,
     pub race_size: u8,
     pub trace_id: String,
+    pub is_streaming: bool,
 }
 
 pub(crate) struct NonStreamingSuccessArgs {

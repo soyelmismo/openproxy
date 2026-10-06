@@ -60,10 +60,18 @@ export async function executeRequest(st: PlaygroundState, ensureDefaultModel: (s
   }
 
   ensureDefaultModel(st);
-  const effectiveModel = st.selectedModelId || st.customModelInput.trim();
+  let effectiveModel = st.selectedModelId || st.customModelInput.trim();
   if (!effectiveModel) {
     showToast(t('playground.request.model_error'), 'error');
     return;
+  }
+  if (
+    st.selectedProviderId &&
+    st.selectedProviderId !== 'combo' &&
+    !effectiveModel.includes('/') &&
+    !effectiveModel.startsWith('combo:')
+  ) {
+    effectiveModel = `${st.selectedProviderId}/${effectiveModel}`;
   }
 
   commitComposerContent(st);

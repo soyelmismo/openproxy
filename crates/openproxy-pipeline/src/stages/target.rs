@@ -207,7 +207,13 @@ impl PipelineStage for FormattingStage {
         };
 
         let target_format = resolve_target_format(adapter, current.model.target_format);
-        let stream = ctx.req.openai_request.stream || ctx.req.stream_sink.is_some();
+        let model_streaming = current.model.capabilities().and_then(|c| c.streaming);
+        let adapter_streaming = adapter.forced_streaming();
+        let stream = match (model_streaming, adapter_streaming) {
+            (Some(forced), _) => forced,
+            (None, Some(forced)) => forced,
+            (None, None) => ctx.req.openai_request.stream || ctx.req.stream_sink.is_some(),
+        };
         let messages_ref = prepare_messages_for_formatting(ctx);
 
         let mut req_override;
@@ -235,6 +241,7 @@ impl PipelineStage for FormattingStage {
 
         ctx.target_format = Some(target_format);
         ctx.body_bytes = Some(body_bytes);
+        ctx.is_streaming = Some(stream);
         next.execute(ctx).await
     }
 }
@@ -421,6 +428,7 @@ impl PipelineStage for DispatchStage {
                 attempt,
                 race_size,
                 trace_id,
+                is_streaming: ctx.is_streaming.unwrap_or(false),
             })
             .await;
 

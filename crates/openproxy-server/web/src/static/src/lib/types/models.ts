@@ -9,6 +9,7 @@ export interface ModelCapabilities {
   structured_output: boolean | null;
   temperature: boolean | null;
   decisions: boolean | null;
+  streaming?: boolean | null;
 }
 
 export interface Model {
@@ -52,6 +53,15 @@ export interface CreateCustomModelInput {
   display_name: string | null;
   target_format: string;
   ttl_seconds: number;
+  streaming?: boolean;
+}
+
+export interface UpdateModelInput {
+  display_name?: string | null;
+  model_type?: string | null;
+  target_format?: string | null;
+  streaming?: boolean | null;
+  capabilities_json?: string | null;
 }
 
 export interface BulkToggleInput {

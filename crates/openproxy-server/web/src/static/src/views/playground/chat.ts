@@ -263,8 +263,14 @@ export async function executeChatRequest(
   if (key) {
     headers['Authorization'] = `Bearer ${key}`;
   }
+  if (st.selectedProviderId && st.selectedProviderId !== 'combo') {
+    headers['x-openproxy-provider'] = st.selectedProviderId;
+  }
   if (st.selectedAccountId) {
     headers['x-openproxy-account'] = st.selectedAccountId;
+  }
+  if (st.keySource === 'key' && st.selectedApiKeyId) {
+    headers['x-openproxy-api-key-id'] = String(st.selectedApiKeyId);
   }
 
   const reqInit: RequestInit = {

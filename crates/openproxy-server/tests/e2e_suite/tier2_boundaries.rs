@@ -292,6 +292,7 @@ async fn test_tier2_retry_on_500_switches_target() {
                 format: "openai".into(),
                 extra_headers_json: None,
                 rate_limit_scope: None,
+                stream_mode: None,
             },
         )
         .expect("create fallback provider");
@@ -421,4 +422,53 @@ async fn test_tier2_circuit_breaker_tripping() {
         cb.is_healthy(key),
         openproxy_pipeline::circuit_breaker::Health::Healthy
     );
+}
+
+#[tokio::test]
+async fn test_tier2_routing_with_provider_and_account_headers() {
+    let harness = TestHarness::new().await;
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {}", harness.client_key))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-openproxy-provider", "mock-prov")
+        .header("x-openproxy-account", "1")
+        .body(Body::from(
+            json!({
+                "model": "mock-gpt-4",
+                "messages": [{"role": "user", "content": "Pin test"}],
+                "stream": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let (status, resp) = harness.oneshot_json(req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["object"], "chat.completion");
+}
+
+#[tokio::test]
+async fn test_tier2_admin_key_simulation_header() {
+    let harness = TestHarness::new().await;
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header(header::AUTHORIZATION, format!("Bearer {}", harness.admin_key))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-openproxy-api-key-id", "1")
+        .body(Body::from(
+            json!({
+                "model": "mock-gpt-4",
+                "messages": [{"role": "user", "content": "Simulate key test"}],
+                "stream": false
+            })
+            .to_string(),
+        ))
+        .unwrap();
+
+    let (status, resp) = harness.oneshot_json(req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["object"], "chat.completion");
 }
