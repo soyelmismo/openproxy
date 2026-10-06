@@ -268,17 +268,22 @@ impl ProviderAdapter for AntigravityAdapter {
                 .and_then(|m| m.antigravity_project.as_deref())
                 .unwrap_or_default();
             let physical_model = map_antigravity_physical_model(model.as_str());
+            let is_claude = physical_model.to_ascii_lowercase().contains("claude");
 
             if let Some(contents) = json.get_mut("contents") {
+                sanitize_antigravity_contents(contents);
                 tokens::inject_sentinel_thought_signatures(contents, physical_model);
             }
 
-            if !crate::adapters::gemini::gemini_model_supports_thinking(physical_model)
-                && let Some(gen_cfg) = json
-                    .get_mut("generationConfig")
-                    .and_then(|v| v.as_object_mut())
+            if let Some(gen_cfg) = json
+                .get_mut("generationConfig")
+                .and_then(|v| v.as_object_mut())
             {
-                gen_cfg.remove("thinkingConfig");
+                if !crate::adapters::gemini::gemini_model_supports_thinking(physical_model) {
+                    gen_cfg.remove("thinkingConfig");
+                } else if is_claude {
+                    adjust_claude_thinking_config(gen_cfg);
+                }
             }
 
             let wrapped = serde_json::json!({
@@ -377,3 +382,89 @@ async fn fetch_antigravity_models_from_endpoint(
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).ok()?;
     AntigravityAdapter::parse_models_response(&json)
 }
+
+fn sanitize_antigravity_contents(contents: &mut serde_json::Value) {
+    let Some(arr) = contents.as_array_mut() else {
+        return;
+    };
+    let mut last_call_ids: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+
+    for msg in arr {
+        // Antigravity upstream strictly rejects role 'function' with 400 for Gemini
+        // and crashes with 500 for Claude. Normalize all 'function' roles to 'user'.
+        if msg.get("role").and_then(|r| r.as_str()) == Some("function") {
+            msg["role"] = serde_json::json!("user");
+        }
+
+        let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) else {
+            continue;
+        };
+
+        for part in parts.iter_mut() {
+            if let Some(fc) = part.get_mut("functionCall").and_then(|f| f.as_object_mut()) {
+                let name = fc
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let id = fc
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple()), str::to_string);
+                fc.insert("id".to_string(), serde_json::json!(id));
+                if !name.is_empty() {
+                    last_call_ids.insert(name, id);
+                }
+            }
+
+            if let Some(fr) = part
+                .get_mut("functionResponse")
+                .and_then(|f| f.as_object_mut())
+            {
+                let has_valid_id = fr
+                    .get("id")
+                    .and_then(|i| i.as_str())
+                    .is_some_and(|s| !s.is_empty());
+                if !has_valid_id {
+                    let name = fr.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let id = last_call_ids
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple()));
+                    fr.insert("id".to_string(), serde_json::json!(id));
+                }
+            }
+        }
+    }
+}
+
+fn adjust_claude_thinking_config(gen_cfg: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(tc) = gen_cfg
+        .get_mut("thinkingConfig")
+        .and_then(|v| v.as_object_mut())
+        && let Some(budget) = tc.get("thinkingBudget").and_then(|b| b.as_i64())
+    {
+        if budget <= 0 {
+            gen_cfg.remove("thinkingConfig");
+        } else {
+            let adjusted_budget = budget.max(1024);
+            tc.insert(
+                "thinkingBudget".to_string(),
+                serde_json::json!(adjusted_budget),
+            );
+            let current_max = gen_cfg
+                .get("maxOutputTokens")
+                .and_then(|m| m.as_u64())
+                .unwrap_or(8192) as i64;
+            if current_max <= adjusted_budget {
+                gen_cfg.insert(
+                    "maxOutputTokens".to_string(),
+                    serde_json::json!(adjusted_budget + 1024),
+                );
+            }
+        }
+    }
+}
+

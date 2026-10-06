@@ -56,6 +56,8 @@ pub struct GeminiFunctionCall {
 pub struct GeminiFunctionResponse {
     pub name: String,
     pub response: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]

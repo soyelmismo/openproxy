@@ -449,3 +449,149 @@ fn test_antigravity_default_headers_contract() {
     );
     assert!(get("x-vscode-sessionid").is_some_and(|s| !s.is_empty()));
 }
+
+#[test]
+fn test_claude_opus_4_6_thinking_no_sentinel_thought_signatures() {
+    let mut contents = json!([
+        {
+            "role": "model",
+            "parts": [
+                {
+                    "thought": true,
+                    "text": "reasoning...",
+                    "thought_signature": "fake-sig"
+                },
+                {
+                    "functionCall": {
+                        "name": "get_file",
+                        "args": {}
+                    }
+                }
+            ]
+        }
+    ]);
+
+    tokens::inject_sentinel_thought_signatures(&mut contents, "claude-opus-4-6-thinking");
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+
+    // Must NOT have thoughtSignature injected for Claude
+    for part in parts {
+        assert!(
+            part.get("thoughtSignature").is_none(),
+            "Claude must never receive Gemini thoughtSignature"
+        );
+        assert!(
+            part.get("thought_signature").is_none(),
+            "snake_case thought_signature must be purged"
+        );
+    }
+}
+
+#[test]
+fn test_wrap_request_body_claude_sanitizes_role_function_and_correlates_ids() {
+    let adapter = AntigravityAdapter::new();
+    let body_json = json!({
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "call"}]
+            },
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "calc",
+                            "args": {}
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "function",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "calc",
+                            "response": {"result": 42}
+                        }
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 2048,
+            "thinkingConfig": {
+                "thinkingBudget": 500
+            }
+        }
+    });
+
+    let raw_bytes = bytes::Bytes::from(serde_json::to_vec(&body_json).unwrap());
+    let target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ComboTargetId(1),
+            combo_id: openproxy_types::ComboId(1),
+            provider_id: openproxy_types::ProviderId::new("antigravity"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+            active: true,
+            rate_limit_scope: openproxy_types::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+        },
+        model: openproxy_types::Model {
+            row_id: openproxy_types::ModelRowId(1),
+            provider_id: openproxy_types::ProviderId::new("antigravity"),
+            model_id: openproxy_types::ModelId::new("claude-opus-4-6-thinking"),
+            target_format: openproxy_types::TargetFormat::Gemini,
+            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+            ..Default::default()
+        },
+        api_key: "k".to_string(),
+        api_key_label: None,
+        custom_meta: None,
+    };
+
+    let wrapped = adapter
+        .wrap_request_body(
+            raw_bytes,
+            TargetFormat::Gemini,
+            &ModelId::new("claude-opus-4-6-thinking"),
+            &target,
+        )
+        .expect("wrap_request_body should succeed");
+
+    let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    let req = &val["request"];
+    let contents = req["contents"].as_array().unwrap();
+
+    // 1. Role "function" must be converted to "user"
+    assert_eq!(contents[2]["role"], "user");
+
+    // 2. Both functionCall and functionResponse must have matching IDs
+    let fc_id = contents[1]["parts"][0]["functionCall"]["id"]
+        .as_str()
+        .unwrap();
+    let fr_id = contents[2]["parts"][0]["functionResponse"]["id"]
+        .as_str()
+        .unwrap();
+    assert!(!fc_id.is_empty());
+    assert_eq!(fc_id, fr_id);
+
+    // 3. thinkingBudget clamped to at least 1024, and maxOutputTokens has headroom (> 1024)
+    let gen_cfg = &req["generationConfig"];
+    assert_eq!(
+        gen_cfg["thinkingConfig"]["thinkingBudget"].as_i64(),
+        Some(1024)
+    );
+    assert!(gen_cfg["maxOutputTokens"].as_i64().unwrap() > 1024);
+}
+

@@ -222,6 +222,7 @@ fn partition_messages_for_gemini(
                             "name": name,
                             "content": response_val,
                         }),
+                        id: m.tool_call_id.clone(),
                     }),
                     ..Default::default()
                 };

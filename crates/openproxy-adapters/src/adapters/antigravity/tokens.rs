@@ -112,11 +112,11 @@ pub(crate) fn should_inject_thought_signatures(model: &str) -> bool {
         || m.contains("imagen")
         || m.contains("embed")
         || m.contains("lite")
+        || m.contains("claude")
     {
         return false;
     }
-    m.contains("claude")
-        || m.contains("gemini")
+    m.contains("gemini")
         || m.contains("flash")
         || m.contains("pro")
         || m.contains("agent")
