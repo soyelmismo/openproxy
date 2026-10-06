@@ -208,7 +208,9 @@ pub(crate) async fn authenticate(
                 ApiError(CoreError::Auth("invalid simulated api key".into()))
             })?
             .ok_or_else(|| {
-                ApiError(CoreError::Auth(format!("api key id #{target_key_id} not found")))
+                ApiError(CoreError::Auth(format!(
+                    "api key id #{target_key_id} not found"
+                )))
             })?;
 
         validate_key_record(&target_key, "chat")?;
@@ -449,7 +451,12 @@ pub async fn auth_middleware(
 
     let requested_model = &parsed.model;
     if let Some(token) = &auth_result {
-        if !token.key.scopes.iter().any(|s| s == "chat" || s == "manage") {
+        if !token
+            .key
+            .scopes
+            .iter()
+            .any(|s| s == "chat" || s == "manage")
+        {
             return Err(ApiError(CoreError::Auth(
                 "api key lacks required scope".into(),
             )));

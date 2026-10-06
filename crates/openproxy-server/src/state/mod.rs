@@ -270,8 +270,9 @@ impl AppState {
             if openproxy_core::seed::is_builtin(p.id.as_str()) {
                 if let Some(adapter) = new_adapters.iter_mut().find(|a| a.id() == &p.id) {
                     if let Some(ref json_str) = p.extra_headers_json
-                        && let Ok(map) =
-                            serde_json::from_str::<std::collections::BTreeMap<String, String>>(json_str)
+                        && let Ok(map) = serde_json::from_str::<
+                            std::collections::BTreeMap<String, String>,
+                        >(json_str)
                     {
                         adapter.append_extra_headers(map.into_iter().collect());
                     }

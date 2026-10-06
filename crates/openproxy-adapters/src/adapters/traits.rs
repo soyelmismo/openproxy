@@ -30,9 +30,20 @@ impl ProviderAdapterConfig {
                 || k_lower == "x-openproxy-force-stream"
             {
                 let v_lower = v.trim().to_ascii_lowercase();
-                if v_lower == "false" || v_lower == "0" || v_lower == "off" || v_lower == "unary" || v_lower == "never" {
+                if v_lower == "false"
+                    || v_lower == "0"
+                    || v_lower == "off"
+                    || v_lower == "unary"
+                    || v_lower == "never"
+                {
                     return Some(false);
-                } else if v_lower == "true" || v_lower == "1" || v_lower == "on" || v_lower == "stream" || v_lower == "streaming" || v_lower == "always" {
+                } else if v_lower == "true"
+                    || v_lower == "1"
+                    || v_lower == "on"
+                    || v_lower == "stream"
+                    || v_lower == "streaming"
+                    || v_lower == "always"
+                {
                     return Some(true);
                 }
             }

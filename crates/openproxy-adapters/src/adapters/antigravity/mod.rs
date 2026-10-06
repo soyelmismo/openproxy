@@ -399,9 +399,7 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
         let has_fr = msg
             .get("parts")
             .and_then(|p| p.as_array())
-            .is_some_and(|parts| {
-                parts.iter().any(|p| p.get("functionResponse").is_some())
-            });
+            .is_some_and(|parts| parts.iter().any(|p| p.get("functionResponse").is_some()));
         if has_fr || msg.get("role").and_then(|r| r.as_str()) == Some("function") {
             msg["role"] = serde_json::json!(target_role);
         }
@@ -438,7 +436,11 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
                 fr.remove("thoughtSignature");
                 fr.remove("thought_signature");
 
-                let name = fr.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                let name = fr
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let raw_id = fr.get("id").and_then(|i| i.as_str()).unwrap_or("");
                 let norm_id = if raw_id.is_empty() {
                     last_call_ids
@@ -457,7 +459,8 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
                     if let Some(resp_obj) = resp.as_object_mut() {
                         if let Some(content) = resp_obj.remove("content") {
                             if let Some(content_obj) = content.as_object()
-                                && (content_obj.contains_key("output") || content_obj.contains_key("result"))
+                                && (content_obj.contains_key("output")
+                                    || content_obj.contains_key("result"))
                             {
                                 content
                             } else {
@@ -478,7 +481,8 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
                 };
 
                 let final_resp = if let Some(mut map) = norm_output.as_object().cloned() {
-                    if !map.contains_key("output") && map.contains_key("result")
+                    if !map.contains_key("output")
+                        && map.contains_key("result")
                         && let Some(r) = map.remove("result")
                     {
                         map.insert("output".to_string(), r);
@@ -503,22 +507,17 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
         let is_tool_response_turn = msg
             .get("parts")
             .and_then(|p| p.as_array())
-            .is_some_and(|parts| {
-                parts.iter().any(|p| p.get("functionResponse").is_some())
-            });
+            .is_some_and(|parts| parts.iter().any(|p| p.get("functionResponse").is_some()));
 
-        if is_tool_response_turn
-            && let Some(prev) = merged.last_mut()
-        {
+        if is_tool_response_turn && let Some(prev) = merged.last_mut() {
             let prev_is_tool_response_turn = prev
                 .get("parts")
                 .and_then(|p| p.as_array())
-                .is_some_and(|parts| {
-                    parts.iter().any(|p| p.get("functionResponse").is_some())
-                });
+                .is_some_and(|parts| parts.iter().any(|p| p.get("functionResponse").is_some()));
             let same_role = prev.get("role") == msg.get("role");
 
-            if prev_is_tool_response_turn && same_role
+            if prev_is_tool_response_turn
+                && same_role
                 && let (Some(prev_parts), Some(curr_parts)) = (
                     prev.get_mut("parts").and_then(|p| p.as_array_mut()),
                     msg.get("parts").and_then(|p| p.as_array()),
@@ -623,4 +622,3 @@ fn adjust_claude_thinking_config(gen_cfg: &mut serde_json::Map<String, serde_jso
         }
     }
 }
-

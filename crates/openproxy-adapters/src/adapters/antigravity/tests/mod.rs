@@ -732,7 +732,11 @@ fn test_wrap_request_body_gemini_sanitizes_role_function_to_model_and_formats_ou
 
     // 4. Tools expanded to individual declarations with uppercase types
     let tools = req["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 2, "tools must be split into single-declaration objects");
+    assert_eq!(
+        tools.len(),
+        2,
+        "tools must be split into single-declaration objects"
+    );
     let t0_params = &tools[0]["functionDeclarations"][0]["parameters"];
     assert_eq!(t0_params["type"], "OBJECT");
     assert_eq!(t0_params["properties"]["cmd"]["type"], "STRING");
@@ -740,4 +744,3 @@ fn test_wrap_request_body_gemini_sanitizes_role_function_to_model_and_formats_ou
     // 5. Envelope has no enabledCreditTypes
     assert_eq!(val.get("enabledCreditTypes"), None);
 }
-

@@ -98,9 +98,8 @@ fn resolve_raw_routing_plan(
                                 t.account_id = Some(aid);
                             }
                         }
-                        targets.retain(|t| {
-                            t.provider_id.as_str() == prov || t.sub_combo_id.is_some()
-                        });
+                        targets
+                            .retain(|t| t.provider_id.as_str() == prov || t.sub_combo_id.is_some());
                     }
                 }
                 Ok(RoutingPlan::Combo {

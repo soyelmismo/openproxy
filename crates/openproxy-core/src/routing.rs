@@ -180,12 +180,13 @@ pub fn resolve_with_options(
     account_override: Option<AccountId>,
 ) -> Result<RoutingPlan> {
     let (stripped, mut provider_prefix) = strip_proxy_prefix(conn, model_str);
-    if provider_prefix.is_none() && let Some(po) = provider_override {
+    if provider_prefix.is_none()
+        && let Some(po) = provider_override
+    {
         provider_prefix = Some(po);
     }
 
-    if let Some(plan) =
-        try_resolve_direct_model(conn, stripped, provider_prefix, account_override)?
+    if let Some(plan) = try_resolve_direct_model(conn, stripped, provider_prefix, account_override)?
     {
         return Ok(plan);
     }
@@ -257,7 +258,12 @@ pub async fn resolve_routing_with_options(
     let model = model.to_owned();
     tokio::task::spawn_blocking(move || {
         let conn = pool.reader();
-        resolve_with_options(&conn, &model, provider_override.as_deref(), account_override)
+        resolve_with_options(
+            &conn,
+            &model,
+            provider_override.as_deref(),
+            account_override,
+        )
     })
     .await
     .map_err(|e| CoreError::Internal(format!("resolve_routing join error: {e}")))?
@@ -275,7 +281,9 @@ fn pin_account_to_targets(
             |row| row.get(0),
         )
         .optional()
-        .map_err(openproxy_db::error::map_db_error_ctx("pin_account_to_targets"))?;
+        .map_err(openproxy_db::error::map_db_error_ctx(
+            "pin_account_to_targets",
+        ))?;
 
     let Some(prov) = prov_row else {
         return Ok(());
