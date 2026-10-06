@@ -179,10 +179,7 @@ fn test_antigravity_golden_contract_spec_parity() {
     );
     assert_eq!(val["requestType"], "agent");
     assert_eq!(val["userAgent"], "antigravity");
-    assert_eq!(
-        val["enabledCreditTypes"],
-        serde_json::json!(["GOOGLE_ONE_AI"])
-    );
+    assert_eq!(val.get("enabledCreditTypes"), None);
     assert!(val.get("requestId").is_some());
 
     // snake_case thought_signature is rejected by the Google API: normalize to

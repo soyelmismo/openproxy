@@ -128,6 +128,7 @@ pub(crate) fn should_inject_thought_signatures(model: &str) -> bool {
 
 pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Value, model: &str) {
     let is_thinking_enabled = should_inject_thought_signatures(model);
+    let is_claude = model.to_ascii_lowercase().contains("claude");
     let Some(arr) = contents.as_array_mut() else {
         return;
     };
@@ -139,6 +140,19 @@ pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Valu
         let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) else {
             continue;
         };
+
+        if is_claude {
+            // Claude models in Antigravity:
+            // 1. Never use thoughtSignature or thought_signature
+            // 2. Must preserve {"thought": true, "text": "..."} blocks without stripping thought flag
+            for part in parts.iter_mut() {
+                if let Some(obj) = part.as_object_mut() {
+                    obj.remove("thought_signature");
+                    obj.remove("thoughtSignature");
+                }
+            }
+            continue;
+        }
 
         if !is_thinking_enabled {
             let mut cleaned_parts = Vec::with_capacity(parts.len());

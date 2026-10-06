@@ -593,5 +593,151 @@ fn test_wrap_request_body_claude_sanitizes_role_function_and_correlates_ids() {
         Some(1024)
     );
     assert!(gen_cfg["maxOutputTokens"].as_i64().unwrap() > 1024);
+
+    // 4. functionResponse.response strictly normalized to { "output": 42 }
+    let fr_resp = &contents[2]["parts"][0]["functionResponse"]["response"];
+    assert_eq!(fr_resp["output"], 42);
+
+    // 5. Envelope has no enabledCreditTypes
+    assert_eq!(val.get("enabledCreditTypes"), None);
+}
+
+#[test]
+fn test_wrap_request_body_gemini_sanitizes_role_function_to_model_and_formats_output() {
+    let adapter = AntigravityAdapter::new();
+    let body_json = json!({
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "run"}]
+            },
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "shell",
+                            "args": {"cmd": "echo hi"}
+                        }
+                    }
+                ]
+            },
+            {
+                "role": "function",
+                "parts": [
+                    {
+                        "functionResponse": {
+                            "name": "shell",
+                            "response": {
+                                "name": "shell",
+                                "content": "hello world"
+                            }
+                        }
+                    }
+                ]
+            }
+        ],
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "shell",
+                        "description": "run shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "cmd": {"type": "string"}
+                            }
+                        }
+                    },
+                    {
+                        "name": "read_file",
+                        "description": "read a file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"}
+                            }
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+
+    let raw_bytes = bytes::Bytes::from(serde_json::to_vec(&body_json).unwrap());
+    let target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ComboTargetId(1),
+            combo_id: openproxy_types::ComboId(1),
+            provider_id: openproxy_types::ProviderId::new("antigravity"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 1,
+            weight: 1,
+            active: true,
+            rate_limit_scope: openproxy_types::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+        },
+        model: openproxy_types::Model {
+            row_id: openproxy_types::ModelRowId(1),
+            provider_id: openproxy_types::ProviderId::new("antigravity"),
+            model_id: openproxy_types::ModelId::new("gemini-3.8-flash-high"),
+            target_format: openproxy_types::TargetFormat::Gemini,
+            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+            ..Default::default()
+        },
+        api_key: "k".to_string(),
+        api_key_label: None,
+        custom_meta: None,
+    };
+
+    let wrapped = adapter
+        .wrap_request_body(
+            raw_bytes,
+            TargetFormat::Gemini,
+            &ModelId::new("gemini-3.8-flash-high"),
+            &target,
+        )
+        .expect("wrap_request_body should succeed");
+
+    let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    let req = &val["request"];
+    let contents = req["contents"].as_array().unwrap();
+
+    // 1. Role "function" must be converted to "model" for Gemini
+    assert_eq!(contents[2]["role"], "model");
+
+    // 2. Both functionCall and functionResponse must have matching call_... IDs
+    let fc_part = contents[1]["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p.get("functionCall").is_some())
+        .expect("functionCall part must exist");
+    let fc_id = fc_part["functionCall"]["id"].as_str().unwrap();
+    let fr = &contents[2]["parts"][0]["functionResponse"];
+    let fr_id = fr["id"].as_str().unwrap();
+    assert!(fc_id.starts_with("call_"));
+    assert_eq!(fc_id, fr_id);
+
+    // 3. functionResponse.response strictly formatted to { "output": "hello world" }
+    assert_eq!(fr["response"]["output"], "hello world");
+
+    // 4. Tools expanded to individual declarations with uppercase types
+    let tools = req["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 2, "tools must be split into single-declaration objects");
+    let t0_params = &tools[0]["functionDeclarations"][0]["parameters"];
+    assert_eq!(t0_params["type"], "OBJECT");
+    assert_eq!(t0_params["properties"]["cmd"]["type"], "STRING");
+
+    // 5. Envelope has no enabledCreditTypes
+    assert_eq!(val.get("enabledCreditTypes"), None);
 }
 

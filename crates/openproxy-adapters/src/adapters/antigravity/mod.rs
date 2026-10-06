@@ -271,8 +271,12 @@ impl ProviderAdapter for AntigravityAdapter {
             let is_claude = physical_model.to_ascii_lowercase().contains("claude");
 
             if let Some(contents) = json.get_mut("contents") {
-                sanitize_antigravity_contents(contents);
+                sanitize_antigravity_contents(contents, physical_model);
                 tokens::inject_sentinel_thought_signatures(contents, physical_model);
+            }
+
+            if let Some(tools) = json.get_mut("tools") {
+                normalize_antigravity_tools(tools);
             }
 
             if let Some(gen_cfg) = json
@@ -292,8 +296,7 @@ impl ProviderAdapter for AntigravityAdapter {
                 "requestType": "agent",
                 "requestId": uuid::Uuid::new_v4().to_string(),
                 "userAgent": "antigravity",
-                "request": json,
-                "enabledCreditTypes": ["GOOGLE_ONE_AI"]
+                "request": json
             });
             let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
                 CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
@@ -383,18 +386,24 @@ async fn fetch_antigravity_models_from_endpoint(
     AntigravityAdapter::parse_models_response(&json)
 }
 
-fn sanitize_antigravity_contents(contents: &mut serde_json::Value) {
+fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_model: &str) {
     let Some(arr) = contents.as_array_mut() else {
         return;
     };
+    let is_claude = physical_model.to_ascii_lowercase().contains("claude");
+    let target_role = if is_claude { "user" } else { "model" };
     let mut last_call_ids: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
-    for msg in arr {
-        // Antigravity upstream strictly rejects role 'function' with 400 for Gemini
-        // and crashes with 500 for Claude. Normalize all 'function' roles to 'user'.
-        if msg.get("role").and_then(|r| r.as_str()) == Some("function") {
-            msg["role"] = serde_json::json!("user");
+    for msg in arr.iter_mut() {
+        let has_fr = msg
+            .get("parts")
+            .and_then(|p| p.as_array())
+            .is_some_and(|parts| {
+                parts.iter().any(|p| p.get("functionResponse").is_some())
+            });
+        if has_fr || msg.get("role").and_then(|r| r.as_str()) == Some("function") {
+            msg["role"] = serde_json::json!(target_role);
         }
 
         let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) else {
@@ -408,14 +417,17 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value) {
                     .and_then(|n| n.as_str())
                     .unwrap_or("")
                     .to_string();
-                let id = fc
-                    .get("id")
-                    .and_then(|i| i.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple()), str::to_string);
-                fc.insert("id".to_string(), serde_json::json!(id));
+                let raw_id = fc.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                let norm_id = if raw_id.is_empty() {
+                    format!("call_{}", uuid::Uuid::new_v4().simple())
+                } else if !raw_id.starts_with("call_") {
+                    format!("call_{raw_id}")
+                } else {
+                    raw_id.to_string()
+                };
+                fc.insert("id".to_string(), serde_json::json!(norm_id));
                 if !name.is_empty() {
-                    last_call_ids.insert(name, id);
+                    last_call_ids.insert(name, norm_id);
                 }
             }
 
@@ -423,20 +435,164 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value) {
                 .get_mut("functionResponse")
                 .and_then(|f| f.as_object_mut())
             {
-                let has_valid_id = fr
-                    .get("id")
-                    .and_then(|i| i.as_str())
-                    .is_some_and(|s| !s.is_empty());
-                if !has_valid_id {
-                    let name = fr.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    let id = last_call_ids
-                        .get(name)
+                fr.remove("thoughtSignature");
+                fr.remove("thought_signature");
+
+                let name = fr.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                let raw_id = fr.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                let norm_id = if raw_id.is_empty() {
+                    last_call_ids
+                        .get(&name)
                         .cloned()
-                        .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple()));
-                    fr.insert("id".to_string(), serde_json::json!(id));
-                }
+                        .unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple()))
+                } else if !raw_id.starts_with("call_") {
+                    format!("call_{raw_id}")
+                } else {
+                    raw_id.to_string()
+                };
+                fr.insert("id".to_string(), serde_json::json!(norm_id));
+
+                // Normalize response payload strictly to { "output": ... } (aligned with native HAR ground truth)
+                let norm_output = if let Some(mut resp) = fr.remove("response") {
+                    if let Some(resp_obj) = resp.as_object_mut() {
+                        if let Some(content) = resp_obj.remove("content") {
+                            if let Some(content_obj) = content.as_object()
+                                && (content_obj.contains_key("output") || content_obj.contains_key("result"))
+                            {
+                                content
+                            } else {
+                                serde_json::json!({ "output": content })
+                            }
+                        } else if let Some(out) = resp_obj.remove("output") {
+                            serde_json::json!({ "output": out })
+                        } else if let Some(res) = resp_obj.remove("result") {
+                            serde_json::json!({ "output": res })
+                        } else {
+                            serde_json::json!({ "output": resp })
+                        }
+                    } else {
+                        serde_json::json!({ "output": resp })
+                    }
+                } else {
+                    serde_json::json!({ "output": "" })
+                };
+
+                let final_resp = if let Some(mut map) = norm_output.as_object().cloned() {
+                    if !map.contains_key("output") && map.contains_key("result")
+                        && let Some(r) = map.remove("result")
+                    {
+                        map.insert("output".to_string(), r);
+                    }
+                    if !map.contains_key("output") {
+                        serde_json::json!({ "output": serde_json::Value::Object(map) })
+                    } else {
+                        serde_json::Value::Object(map)
+                    }
+                } else {
+                    serde_json::json!({ "output": norm_output })
+                };
+
+                fr.insert("response".to_string(), final_resp);
             }
         }
+    }
+
+    // Merge consecutive tool response turns into a single content block
+    let mut merged: Vec<serde_json::Value> = Vec::with_capacity(arr.len());
+    for msg in arr.drain(..) {
+        let is_tool_response_turn = msg
+            .get("parts")
+            .and_then(|p| p.as_array())
+            .is_some_and(|parts| {
+                parts.iter().any(|p| p.get("functionResponse").is_some())
+            });
+
+        if is_tool_response_turn
+            && let Some(prev) = merged.last_mut()
+        {
+            let prev_is_tool_response_turn = prev
+                .get("parts")
+                .and_then(|p| p.as_array())
+                .is_some_and(|parts| {
+                    parts.iter().any(|p| p.get("functionResponse").is_some())
+                });
+            let same_role = prev.get("role") == msg.get("role");
+
+            if prev_is_tool_response_turn && same_role
+                && let (Some(prev_parts), Some(curr_parts)) = (
+                    prev.get_mut("parts").and_then(|p| p.as_array_mut()),
+                    msg.get("parts").and_then(|p| p.as_array()),
+                )
+            {
+                prev_parts.extend(curr_parts.clone());
+                continue;
+            }
+        }
+        merged.push(msg);
+    }
+    *arr = merged;
+}
+
+fn normalize_antigravity_tools(tools_val: &mut serde_json::Value) {
+    let Some(tools_arr) = tools_val.as_array_mut() else {
+        return;
+    };
+    let mut expanded: Vec<serde_json::Value> = Vec::new();
+    for tool in tools_arr.drain(..) {
+        if let Some(obj) = tool.as_object() {
+            if let Some(decls) = obj
+                .get("functionDeclarations")
+                .or_else(|| obj.get("function_declarations"))
+                .and_then(|v| v.as_array())
+            {
+                for decl in decls {
+                    let mut decl_clone = decl.clone();
+                    if let Some(params) = decl_clone.get_mut("parameters") {
+                        enforce_uppercase_schema_types(params);
+                    }
+                    expanded.push(serde_json::json!({
+                        "functionDeclarations": [decl_clone]
+                    }));
+                }
+            } else {
+                expanded.push(tool);
+            }
+        } else {
+            expanded.push(tool);
+        }
+    }
+    *tools_arr = expanded;
+}
+
+fn enforce_uppercase_schema_types(val: &mut serde_json::Value) {
+    match val {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::String(s)) = map.get_mut("type") {
+                *s = s.to_uppercase();
+            }
+            if !map.contains_key("type") {
+                map.insert("type".to_string(), serde_json::json!("OBJECT"));
+            }
+            if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT")
+                && !map.contains_key("properties")
+            {
+                map.insert("properties".to_string(), serde_json::json!({}));
+            }
+            if let Some(serde_json::Value::Object(props)) = map.get_mut("properties") {
+                for prop in props.values_mut() {
+                    enforce_uppercase_schema_types(prop);
+                }
+            }
+            if let Some(items) = map.get_mut("items") {
+                enforce_uppercase_schema_types(items);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                enforce_uppercase_schema_types(item);
+            }
+        }
+        _ => {}
     }
 }
 
