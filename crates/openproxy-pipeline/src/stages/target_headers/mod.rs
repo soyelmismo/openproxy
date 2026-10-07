@@ -320,6 +320,8 @@ pub fn propagate_provider_target_headers(
         propagate_commandcode_headers(headers, req_headers);
     } else if matches("codebuddy") {
         propagate_codebuddy_headers(headers, req_headers, openai_req);
+    } else if matches("claude") {
+        propagate_claude_headers(headers, req_headers);
     }
 
     apply_provider_session_affinity(headers, provider_id, adapter_id, req_headers, openai_req);
@@ -353,6 +355,45 @@ pub fn propagate_codebuddy_headers(
 
     let canonical = resolve_canonical_session(request_headers, openai_req);
     CodeBuddySessionTranslator.apply_session(headers, &canonical);
+}
+
+/// Forwards `anthropic-beta`, `x-claude-code-session-id`, `x-client-request-id`,
+/// `anthropic-dangerous-direct-browser-access`, and `x-app`.
+/// Merges downstream `anthropic-beta` values with existing upstream betas without duplicates.
+pub fn propagate_claude_headers(
+    headers: &mut Vec<(String, String)>,
+    request_headers: &std::collections::BTreeMap<String, String>,
+) {
+    for (k, v) in request_headers {
+        let lk = k.to_ascii_lowercase();
+        if lk == "x-claude-code-session-id"
+            || lk == "x-client-request-id"
+            || lk == "anthropic-dangerous-direct-browser-access"
+            || lk == "x-app"
+        {
+            upsert_header(headers, k, v.clone());
+        } else if lk == "anthropic-beta" {
+            if let Some(pos) = headers
+                .iter()
+                .position(|(hk, _)| hk.eq_ignore_ascii_case("anthropic-beta"))
+            {
+                let existing = &headers[pos].1;
+                let mut set: Vec<String> = existing
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                for requested in v.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                    if !set.iter().any(|item| item.eq_ignore_ascii_case(requested)) {
+                        set.push(requested.to_string());
+                    }
+                }
+                headers[pos].1 = set.join(",");
+            } else {
+                headers.push((k.clone(), v.clone()));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

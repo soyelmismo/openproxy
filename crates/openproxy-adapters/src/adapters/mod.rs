@@ -25,6 +25,7 @@ pub use traits::*;
 
 pub mod antigravity;
 pub mod atomesus;
+pub mod claude_code;
 pub mod cline;
 pub mod cloudflare_workers_ai;
 pub mod codebuddy;
@@ -67,6 +68,7 @@ define_provider_adapter! {
         builtins {
             "antigravity" => Antigravity(antigravity, AntigravityAdapter),
             "atomesus" => Atomesus(atomesus, AtomesusAdapter),
+            "claude-code" => ClaudeCode(claude_code, ClaudeCodeAdapter),
             "cline" => Cline(cline, ClineAdapter),
             "cloudflare-workers-ai" => CloudflareWorkersAI(cloudflare_workers_ai, CloudflareWorkersAIAdapter),
             "codebuddy" => CodeBuddy(codebuddy, CodeBuddyAdapter),

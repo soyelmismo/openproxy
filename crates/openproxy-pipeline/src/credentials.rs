@@ -208,6 +208,8 @@ struct ProviderCustomFields {
     antigravity_project: Option<String>,
     antigravity_metadata: Option<String>,
     codex_workspace_id: Option<String>,
+    claude_account_uuid: Option<String>,
+    claude_metadata: Option<String>,
 }
 
 fn extract_provider_custom_meta(
@@ -262,6 +264,28 @@ fn extract_provider_custom_meta(
                 });
             ProviderCustomFields {
                 codex_workspace_id: workspace_id,
+                ..Default::default()
+            }
+        }
+        "claude-code" | "claude" => {
+            let account_uuid = raw_account
+                .oauth_provider_specific
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .and_then(|meta| {
+                    meta.get("account_uuid")
+                        .or_else(|| meta.get("accountUuid"))
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.is_empty())
+                        .map(ToString::to_string)
+                });
+            let metadata = raw_account
+                .oauth_provider_specific
+                .as_deref()
+                .map(ToString::to_string);
+            ProviderCustomFields {
+                claude_account_uuid: account_uuid,
+                claude_metadata: metadata,
                 ..Default::default()
             }
         }
@@ -331,6 +355,8 @@ fn resolve_account_oauth_meta(
         antigravity_project: fields.antigravity_project,
         antigravity_metadata: fields.antigravity_metadata,
         codex_workspace_id: fields.codex_workspace_id,
+        claude_account_uuid: fields.claude_account_uuid,
+        claude_metadata: fields.claude_metadata,
     })
 }
 

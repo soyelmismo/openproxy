@@ -615,17 +615,14 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
         }
     });
 
-    let quota = parse_codebuddy_resource_quota(&val).expect("parsed resource quota");
+    let quota = parse_codebuddy_resource_quota_at(&val, 1788000000).expect("parsed resource quota");
     assert_eq!(quota.session_limit, Some(350));
     assert_eq!(quota.session_used, Some(0));
     assert_eq!(
         quota.plan_name.as_deref(),
         Some("CodeBuddy: Bonus Pack (250 credits) + Free Plan Subscription (100 credits)")
     );
-    assert!(
-        quota.session_reset_at.as_deref() == Some("1790783999")
-            || quota.session_reset_at.as_deref() == Some("1791298424")
-    );
+    assert_eq!(quota.session_reset_at.as_deref(), Some("1790783999"));
 
     let details = quota.model_details.unwrap();
     // minimax-m3: 350 / 0.25 = 1400 calls

@@ -491,6 +491,7 @@ pub fn inject_opencode_agent_quartet_tools(
                     "name": tool.name,
                     "description": tool.desc,
                     "parameters": parameters,
+                    "strict": false,
                 }),
                 _ => serde_json::json!({
                     "type": "function",
@@ -502,6 +503,16 @@ pub fn inject_opencode_agent_quartet_tools(
                 }),
             };
             tools_arr.push(tool_val);
+        }
+    }
+
+    if target_format == TargetFormat::Responses {
+        for t in &mut tools_arr {
+            if let Some(t_obj) = t.as_object_mut()
+                && !t_obj.contains_key("strict")
+            {
+                t_obj.insert("strict".to_string(), serde_json::Value::Bool(false));
+            }
         }
     }
 
@@ -649,5 +660,36 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         self.wrap_request_body(body, target_format, model, resolved_target)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn test_inject_opencode_agent_quartet_tools_responses_strict_false() {
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            "tools".to_string(),
+            serde_json::json!([
+                {
+                    "type": "function",
+                    "name": "edit",
+                    "description": "Edit file",
+                    "parameters": { "type": "object" }
+                }
+            ]),
+        );
+
+        inject_opencode_agent_quartet_tools(&mut obj, TargetFormat::Responses);
+
+        let tools = obj.get("tools").and_then(Value::as_array).expect("tools array");
+        assert_eq!(tools.len(), 5);
+
+        for tool in tools {
+            assert_eq!(tool.get("strict"), Some(&Value::Bool(false)));
+        }
     }
 }

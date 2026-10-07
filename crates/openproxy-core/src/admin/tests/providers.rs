@@ -58,6 +58,7 @@ fn test_quota_capability_anti_drift() {
         "commandcodego",
         "zai",
         "codebuddy",
+        "claude-code",
     ];
     for adapter in adapters {
         let id = adapter.id().as_str();
@@ -235,4 +236,34 @@ fn delete_provider_allows_custom() {
     delete_provider(&conn, &id).expect("delete");
     assert!(crate::providers::get(&conn, &id).expect("get").is_none());
     delete_provider(&conn, &id).expect("idempotent");
+}
+
+#[test]
+fn update_provider_patch_sets_prune_models() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.writer();
+    create_provider(&conn, cp("p_prune", "Prune Provider")).expect("create custom");
+    let id = ProviderId::new("p_prune");
+
+    let initial_prune: i64 = conn
+        .query_row(
+            "SELECT prune_models FROM providers WHERE id = 'p_prune'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query initial prune_models");
+    assert_eq!(initial_prune, 1, "default prune_models must be 1");
+
+    let patch: UpdateProviderInput =
+        serde_json::from_str(r#"{"prune_models": false}"#).expect("deserialize patch");
+    update_provider(&conn, &id, &patch).expect("update provider");
+
+    let updated_prune: i64 = conn
+        .query_row(
+            "SELECT prune_models FROM providers WHERE id = 'p_prune'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query updated prune_models");
+    assert_eq!(updated_prune, 0, "prune_models must be updated to 0");
 }

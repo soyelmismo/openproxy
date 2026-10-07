@@ -23,7 +23,7 @@ fn seed_combo_targets_schema(conn: &Connection) -> i64 {
                  combo_id          INTEGER NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
                  provider_id       TEXT NOT NULL REFERENCES providers(id),
                  account_id        INTEGER REFERENCES accounts(id),
-                 model_row_id      INTEGER REFERENCES models(id) ON DELETE CASCADE,
+                 model_row_id      INTEGER REFERENCES models(id) ON DELETE SET NULL,
                  sub_combo_id      INTEGER REFERENCES combos(id) ON DELETE CASCADE,
                  upstream_model_id TEXT,
                  priority_order    INTEGER NOT NULL,
@@ -54,9 +54,6 @@ fn read_target_row(conn: &Connection, combo_id: i64) -> (Option<i64>, Option<Str
 }
 
 #[test]
-#[ignore = "Gate F1 reconnect path is dead code under migration 000030 \
-                (ON DELETE CASCADE removes combo_targets rows with their model); \
-                the reconnect logic in upsert_many is retained for forward-compat"]
 fn upsert_many_reconnects_orphan_combo_targets() {
     let conn = fresh_db();
     let provider = ProviderId::new("provA");
@@ -129,9 +126,6 @@ fn upsert_many_reconnects_orphan_combo_targets() {
 }
 
 #[test]
-#[ignore = "Gate F1 reconnect path is dead code under migration 000030 \
-                (ON DELETE CASCADE removes combo_targets rows with their model); \
-                the reconnect logic in upsert_many is retained for forward-compat"]
 fn upsert_many_does_not_reconnect_wrong_model() {
     let conn = fresh_db();
     let provider = ProviderId::new("provA");
@@ -185,9 +179,6 @@ fn upsert_many_does_not_reconnect_wrong_model() {
 }
 
 #[test]
-#[ignore = "Gate F1 reconnect path is dead code under migration 000030 \
-                (ON DELETE CASCADE removes combo_targets rows with their model); \
-                the reconnect logic in upsert_many is retained for forward-compat"]
 fn upsert_many_atomic_orphan_reconnection() {
     let conn = fresh_db();
     let provider = ProviderId::new("provA");

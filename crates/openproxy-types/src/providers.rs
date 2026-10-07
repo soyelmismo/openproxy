@@ -241,6 +241,10 @@ pub struct Provider {
     /// Upstream streaming mode: "auto" (default), "streaming", "unary".
     #[serde(default = "default_stream_mode")]
     pub stream_mode: Box<str>,
+    /// Whether models missing from upstream discovery are pruned from DB.
+    /// Default true. Disabled for volatile P2P sources (e.g. antseed).
+    #[serde(default = "default_true")]
+    pub prune_models: bool,
 }
 
 fn default_stream_mode() -> Box<str> {

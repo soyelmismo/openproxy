@@ -131,6 +131,26 @@ async function onToggleNotifKeywordOnly(
   }
 }
 
+async function onTogglePruneModels(
+  providerId: string,
+  e: Event,
+): Promise<void> {
+  const target = e.target instanceof HTMLInputElement ? e.target : null;
+  if (!target) return;
+  const body = { prune_models: target.checked };
+  try {
+    await api(`/providers/${encodeURIComponent(providerId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    const p = (state.providers || []).find((x) => x.id === providerId);
+    if (p) p.prune_models = target.checked;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error');
+  }
+}
+
 async function onUpdateAutoActivate(
   providerId: string,
   e: Event | null,
@@ -390,6 +410,12 @@ export function renderModelsSection(
         : html``}
 
       <div class="auto-activate-bar" style="margin-top: 1rem; display: flex; gap: 2rem; align-items: center; flex-wrap: wrap;">
+        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="When enabled (default), models omitted from upstream /models are deleted (unless pinned in combos). Disable for volatile/P2P providers like antseed to retain all discovered models.">
+          <input type="checkbox"
+                 .checked=${provider.prune_models !== false}
+                 @change=${(e: Event) => onTogglePruneModels(provider.id, e)}>
+          Prune missing models on refresh
+        </label>
         <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
           <input type="checkbox"
                  .checked=${!!provider.use_proxies}

@@ -10,6 +10,8 @@ pub struct CustomProviderMeta {
     pub antigravity_project: Option<String>,
     pub antigravity_metadata: Option<String>,
     pub codex_workspace_id: Option<String>,
+    pub claude_account_uuid: Option<String>,
+    pub claude_metadata: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -36,6 +38,8 @@ mod tests {
             antigravity_project: Some("proj_1".to_string()),
             antigravity_metadata: Some("meta_data".to_string()),
             codex_workspace_id: Some("ws_123".to_string()),
+            claude_account_uuid: Some("acc_123".to_string()),
+            claude_metadata: Some("meta_json".to_string()),
         };
 
         let cloned = meta.clone();
@@ -46,6 +50,8 @@ mod tests {
         assert_eq!(cloned.antigravity_project.as_deref(), Some("proj_1"));
         assert_eq!(cloned.antigravity_metadata.as_deref(), Some("meta_data"));
         assert_eq!(cloned.codex_workspace_id.as_deref(), Some("ws_123"));
+        assert_eq!(cloned.claude_account_uuid.as_deref(), Some("acc_123"));
+        assert_eq!(cloned.claude_metadata.as_deref(), Some("meta_json"));
 
         let debug_str = format!("{meta:?}");
         assert!(debug_str.contains("CustomProviderMeta"));

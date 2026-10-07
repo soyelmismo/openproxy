@@ -86,6 +86,7 @@ impl OAuthProviderRegistry {
                 account_id,
                 db,
                 master_key,
+                force: false,
             })
             .await?;
         Ok(openproxy_pipeline::oauth::TokenResponse {

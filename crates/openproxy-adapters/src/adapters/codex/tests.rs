@@ -236,6 +236,7 @@ fn test_codex_default_headers_contract() {
         "originator",
         "version",
         "user-agent",
+        "x-codex-routing-hint",
     ]
     .into_iter()
     .map(String::from)
@@ -252,6 +253,7 @@ fn test_codex_default_headers_contract() {
     assert_eq!(find("originator"), Some("codex_cli_rs"));
     assert_eq!(find("version"), Some(current_codex_version().as_str()));
     assert_eq!(find("user-agent"), Some(current_codex_ua().as_str()));
+    assert_eq!(find("x-codex-routing-hint"), Some("model=gpt-5.6-luna"));
 }
 
 #[test]

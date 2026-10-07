@@ -416,6 +416,8 @@ fn make_test_target(
             antigravity_project: None,
             antigravity_metadata: None,
             codex_workspace_id: None,
+            claude_account_uuid: None,
+            claude_metadata: None,
         }),
     }
 }

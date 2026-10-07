@@ -498,4 +498,55 @@ mod tests {
             Some("Be accurate and concise.")
         );
     }
+
+    #[test]
+    fn test_responses_encrypted_reasoning_preservation() {
+        let p = json!({
+            "model": "muse-spark-1.3-contributor-free",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_enc123",
+                    "encrypted_content": "gAAAAABencryptedToken123",
+                    "summary": [{ "type": "summary_text", "text": "Plan: read file" }]
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read",
+                    "arguments": "{\"path\":\"README.md\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "# Title\nContents"
+                }
+            ]
+        });
+
+        let req: ResponsesRequest = serde_json::from_value(p).unwrap();
+        let openai_req = crate::middleware::auth::translate_responses_to_openai(&req);
+
+        assert_eq!(openai_req.messages.len(), 2);
+        let asst_msg = &openai_req.messages[0];
+        assert_eq!(asst_msg.role, "assistant");
+        assert_eq!(
+            asst_msg.extra.get("reasoning_id").and_then(|v| v.as_str()),
+            Some("rs_enc123")
+        );
+        assert_eq!(
+            asst_msg
+                .extra
+                .get("reasoning_encrypted_content")
+                .and_then(|v| v.as_str()),
+            Some("gAAAAABencryptedToken123")
+        );
+        assert_eq!(
+            asst_msg
+                .extra
+                .get("reasoning_content")
+                .and_then(|v| v.as_str()),
+            Some("Plan: read file")
+        );
+    }
 }

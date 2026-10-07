@@ -140,6 +140,8 @@ fn test_antigravity_golden_contract_spec_parity() {
             antigravity_project: Some("p-proj-123".into()),
             antigravity_metadata: None,
             codex_workspace_id: None,
+            claude_account_uuid: None,
+            claude_metadata: None,
         }),
     };
 

@@ -328,6 +328,8 @@ pub fn build_custom_provider_meta(
             antigravity_project,
             antigravity_metadata: None,
             codex_workspace_id: None,
+            claude_account_uuid: None,
+            claude_metadata: None,
         })
     } else if provider_id == "kiro" {
         let (region, profile_arn) = extract_kiro_meta(raw_account_opt);
@@ -339,6 +341,8 @@ pub fn build_custom_provider_meta(
             antigravity_project: None,
             antigravity_metadata: None,
             codex_workspace_id: None,
+            claude_account_uuid: None,
+            claude_metadata: None,
         })
     } else if provider_id == "codex" {
         let codex_workspace_id = raw_account_opt
@@ -359,6 +363,33 @@ pub fn build_custom_provider_meta(
             antigravity_project: None,
             antigravity_metadata: None,
             codex_workspace_id,
+            claude_account_uuid: None,
+            claude_metadata: None,
+        })
+    } else if provider_id == "claude-code" || provider_id == "claude" {
+        let account_uuid = raw_account_opt
+            .and_then(|a| a.oauth_provider_specific.as_deref())
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .and_then(|meta| {
+                meta.get("account_uuid")
+                    .or_else(|| meta.get("accountUuid"))
+                    .and_then(|v| v.as_str())
+                    .filter(|v| !v.is_empty())
+                    .map(ToString::to_string)
+            });
+        let claude_metadata = raw_account_opt
+            .and_then(|a| a.oauth_provider_specific.as_deref())
+            .map(ToString::to_string);
+        Some(openproxy_types::context::CustomProviderMeta {
+            access_token: api_key.to_string(),
+            maybe_refresh: None,
+            kiro_region: None,
+            kiro_profile_arn: None,
+            antigravity_project: None,
+            antigravity_metadata: None,
+            codex_workspace_id: None,
+            claude_account_uuid: account_uuid,
+            claude_metadata,
         })
     } else {
         None

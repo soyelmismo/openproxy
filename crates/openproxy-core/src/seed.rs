@@ -252,7 +252,7 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 22, "first call inserts all twenty-two");
+        assert_eq!(n, 23, "first call inserts all twenty-three");
 
         // all twenty-two present and reachable by id
         for id in [
@@ -278,6 +278,7 @@ mod tests {
             "zai",
             "typesafe",
             "laya",
+            "claude-code",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -291,14 +292,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 22);
+        assert_eq!(first, 23);
 
         // running again must not insert more rows
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 22, "still exactly twenty-two rows");
+        assert_eq!(count, 23, "still exactly twenty-three rows");
     }
 
     #[test]
@@ -322,7 +323,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 21, "only the twenty-one missing ones");
+        assert_eq!(n, 22, "only the twenty-two missing ones");
 
         // the pre-seeded row's name was not overwritten
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -426,12 +427,19 @@ mod tests {
             .unwrap();
         assert_eq!(codebuddy.auth_type, AuthType::OAuth);
         assert_eq!(codebuddy.format, ProviderFormat::Openai);
+
+        let claude_code = providers::get(&conn, &ProviderId::new("claude-code"))
+            .expect("get")
+            .unwrap();
+        assert_eq!(claude_code.auth_type, AuthType::OAuth);
+        assert_eq!(claude_code.format, ProviderFormat::Anthropic);
     }
 
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 22);
+        assert_eq!(ids.len(), 23);
+        assert!(ids.iter().any(|s| s == "claude-code"));
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
         assert!(ids.iter().any(|s| s == "minimax"));

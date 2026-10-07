@@ -201,7 +201,7 @@ export function renderConnectionsSection(
               <td class="col-account-actions" data-label="Actions">
                 <div class="account-actions-wrap">
                   ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>${icons.refresh()} Quota</button>` : html``}
-                  ${provider.id === 'antigravity' ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>${icons.desktop()} Apply Local</button>` : html``}
+                  ${(provider.id === 'antigravity' || provider.id === 'claude-code' || provider.id === 'claude') ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>${icons.desktop()} Apply Local</button>` : html``}
                   ${provider.id === 'codex' && isOAuth ? html`<button class="small" title="Inspect & Redeem Codex Banked Reset Credits" @click=${() => showCodexResetsModal(a.id, a.label || a.email || undefined)}>⚡ Reset</button>` : html``}
                   <button class="small" title="Copy API Key" @click=${() => copyAccountApiKey(a.id)}>${icons.copy()} Copy</button>
                   ${isOAuth

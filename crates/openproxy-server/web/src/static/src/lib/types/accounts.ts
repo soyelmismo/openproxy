@@ -37,6 +37,7 @@ export interface Provider {
   notif_keyword_only?: boolean;
   direct_first?: boolean;
   stream_mode?: 'auto' | 'streaming' | 'unary';
+  prune_models?: boolean;
 }
 
 export interface CreateProviderInput {

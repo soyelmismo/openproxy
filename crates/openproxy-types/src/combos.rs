@@ -219,6 +219,8 @@ pub struct ComboTargetWithModel {
     pub active: bool,
     #[serde(default = "default_true")]
     pub provider_active: bool,
+    #[serde(default)]
+    pub is_missing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cooldown_mode: Option<crate::config::CooldownMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

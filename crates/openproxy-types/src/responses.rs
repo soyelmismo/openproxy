@@ -214,8 +214,9 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
                                 name,
                                 arguments,
                             }
-                        } else if map.contains_key("summary")
-                            && (map.contains_key("content") || map.contains_key("id"))
+                        } else if map.contains_key("encrypted_content")
+                            || (map.contains_key("summary")
+                                && (map.contains_key("content") || map.contains_key("id")))
                         {
                             let id = map.remove("id").and_then(|v| match v {
                                 Value::String(s) => Some(s),
@@ -244,6 +245,29 @@ impl<'de> Deserialize<'de> for ResponsesInputItem {
 }
 
 impl ResponsesInputItem {
+    pub fn reasoning_id(&self) -> Option<&str> {
+        match self {
+            ResponsesInputItem::Reasoning { id, .. } => id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn reasoning_encrypted_content(&self) -> Option<&str> {
+        match self {
+            ResponsesInputItem::Reasoning { extra, .. } => {
+                extra.get("encrypted_content").and_then(Value::as_str)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn reasoning_summary(&self) -> Option<&Value> {
+        match self {
+            ResponsesInputItem::Reasoning { summary, .. } => summary.as_ref(),
+            _ => None,
+        }
+    }
+
     pub fn reasoning_text(&self) -> Option<String> {
         match self {
             ResponsesInputItem::Reasoning {

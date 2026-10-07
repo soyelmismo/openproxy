@@ -213,6 +213,30 @@ pub fn generate_events(
         return Ok(events);
     }
 
+    let (prune_models, notif_keyword_only, auto_activate_keyword) = tx
+        .query_row(
+            "SELECT prune_models, notif_keyword_only, auto_activate_keyword FROM providers WHERE id = ?1",
+            rusqlite::params![provider.as_str()],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0).unwrap_or(1) != 0,
+                    r.get::<_, i64>(1).unwrap_or(0) != 0,
+                    r.get::<_, Option<String>>(2).unwrap_or_default(),
+                ))
+            },
+        )
+        .unwrap_or((true, false, None));
+
+    let kw = auto_activate_keyword.as_deref().unwrap_or_default();
+    let matches_keyword = |id: &str, name: Option<&str>| -> bool {
+        if kw.is_empty() {
+            return true;
+        }
+        let kw_lower = kw.to_ascii_lowercase();
+        id.to_ascii_lowercase().contains(&kw_lower)
+            || name.is_some_and(|n| n.to_ascii_lowercase().contains(&kw_lower))
+    };
+
     let already_notified: std::collections::HashSet<String> = {
         let mut stmt = tx
             .prepare(
@@ -232,6 +256,7 @@ pub fn generate_events(
     let new_models_rows: Vec<_> = diff
         .new_models
         .iter()
+        .filter(|d| !notif_keyword_only || matches_keyword(d.model_id.as_str(), d.display_name.as_deref()))
         .filter_map(|d| {
             let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
             if already_notified.contains(&dedup) {
@@ -260,18 +285,42 @@ pub fn generate_events(
         }
     }
 
-    let deleted_models_rows: Vec<_> = diff
-        .deleted_models()
-        .map(|(model_id, display_name)| {
-            let payload = serde_json::json!({
-                "provider_id": provider.as_str(),
-                "model_id": model_id,
-                "display_name": display_name,
-            });
-            let dedup = format!("{}:{}", provider.as_str(), model_id);
-            (payload, Some(dedup), Some(provider.as_str().to_string()))
-        })
-        .collect();
+    let deleted_models_rows: Vec<_> = if prune_models {
+        let still_existing: std::collections::HashSet<String> = {
+            let mut stmt = tx
+                .prepare("SELECT model_id FROM models WHERE provider_id = ?1")
+                .map_err(openproxy_db::error::map_db_error)?;
+            let rows = stmt
+                .query_map(rusqlite::params![provider.as_str()], |r| {
+                    r.get::<_, String>(0)
+                })
+                .map_err(openproxy_db::error::map_db_error)?;
+            rows.filter_map(std::result::Result::ok).collect()
+        };
+
+        diff.deleted_models()
+            .filter(|(model_id, display_name)| {
+                if still_existing.contains(*model_id) {
+                    return false;
+                }
+                if notif_keyword_only && !matches_keyword(model_id, *display_name) {
+                    return false;
+                }
+                true
+            })
+            .map(|(model_id, display_name)| {
+                let payload = serde_json::json!({
+                    "provider_id": provider.as_str(),
+                    "model_id": model_id,
+                    "display_name": display_name,
+                });
+                let dedup = format!("{}:{}", provider.as_str(), model_id);
+                (payload, Some(dedup), Some(provider.as_str().to_string()))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     if let Ok(results) = crate::notifications::insert_many_gated(
         tx,

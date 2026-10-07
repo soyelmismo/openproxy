@@ -158,3 +158,126 @@ fn test_sync_calls_shared_prune_obsolete_models() {
         "keep_me remains and remove_me pruned"
     );
 }
+
+#[test]
+fn test_sync_with_prune_models_disabled_emits_no_model_gone_events() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("prov_no_prune_sync");
+    conn.execute(
+        "INSERT INTO providers (id, display_name, base_url, auth_kind, prune_models) \
+         VALUES (?1, 'prov_no_prune_sync', 'http://127.0.0.1', 'none', 0)",
+        [provider.as_str()],
+    )
+    .expect("insert provider with prune_models=0");
+
+    let initial = [minimal("m1"), minimal("m2")];
+    let diff0 = crate::models::sync::compute_diff(&conn, &provider, &initial).expect("diff0");
+    crate::models::sync::execute_sync_transaction(
+        &conn,
+        &provider,
+        &initial,
+        &diff0,
+        Duration::from_hours(1),
+    )
+    .expect("sync initial");
+
+    let next = [minimal("m1")];
+    let diff = crate::models::sync::compute_diff(&conn, &provider, &next).expect("diff");
+    let (_res, events) = crate::models::sync::execute_sync_transaction(
+        &conn,
+        &provider,
+        &next,
+        &diff,
+        Duration::from_hours(1),
+    )
+    .expect("sync next");
+
+    let has_gone_event = events
+        .iter()
+        .any(|(_, kind, _)| *kind == crate::notifications::KIND_MODEL_GONE);
+    assert!(
+        !has_gone_event,
+        "no model_gone events should be emitted when prune_models=0"
+    );
+
+    let m2_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM models WHERE provider_id = ?1 AND model_id = 'm2')",
+            [provider.as_str()],
+            |r| r.get(0),
+        )
+        .expect("check m2 exists");
+    assert!(m2_exists, "m2 must be retained in DB");
+}
+
+#[test]
+fn test_sync_with_model_in_combo_emits_no_model_gone_and_preserves_target() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    openproxy_db::migrations::run(&mut conn).unwrap();
+    let provider = ProviderId::new("prov_combo_sync");
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format, prune_models) \
+         VALUES (?1, 'prov_combo_sync', 'http://127.0.0.1', 'none', 'openai', 0)",
+        [provider.as_str()],
+    )
+    .expect("insert provider");
+
+    let initial = [minimal("pinned"), minimal("unpinned")];
+    let diff0 = crate::models::sync::compute_diff(&conn, &provider, &initial).expect("diff0");
+    crate::models::sync::execute_sync_transaction(
+        &conn,
+        &provider,
+        &initial,
+        &diff0,
+        Duration::from_hours(1),
+    )
+    .expect("sync initial");
+
+    let pinned_id: i64 = conn
+        .query_row(
+            "SELECT id FROM models WHERE provider_id = ?1 AND model_id = 'pinned'",
+            [provider.as_str()],
+            |r| r.get(0),
+        )
+        .expect("get pinned id");
+
+    conn.execute(
+        "INSERT INTO combos (name, strategy) VALUES ('c_test', 'priority')",
+        [],
+    )
+    .expect("insert combo");
+    let combo_id: i64 = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO combo_targets (combo_id, provider_id, model_row_id, priority_order) \
+         VALUES (?1, ?2, ?3, 1)",
+        rusqlite::params![combo_id, provider.as_str(), pinned_id],
+    )
+    .expect("insert combo target");
+
+    // Next sync discovers empty list
+    let next: [crate::models::DiscoveredModel; 0] = [];
+    let diff = crate::models::sync::compute_diff(&conn, &provider, &next).expect("diff");
+    let (_res, events) = crate::models::sync::execute_sync_transaction(
+        &conn,
+        &provider,
+        &next,
+        &diff,
+        Duration::from_hours(1),
+    )
+    .expect("sync empty");
+
+    // Events should NOT contain model_gone when prune_models=0
+    let any_gone = events
+        .iter()
+        .any(|(_, kind, _)| *kind == crate::notifications::KIND_MODEL_GONE);
+    assert!(!any_gone, "no model_gone events should be emitted when prune_models=0");
+
+    let target_exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM combo_targets WHERE combo_id = ?1 AND model_row_id = ?2)",
+            rusqlite::params![combo_id, pinned_id],
+            |r| r.get(0),
+        )
+        .expect("check target exists");
+    assert!(target_exists, "combo target must survive when prune_models=0");
+}

@@ -123,6 +123,7 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     authUrl: string,
     redirectUri: string,
     codeVerifier: string,
+    authState?: string | null,
   ): Promise<void> => {
     const popup = window.open(
       authUrl,
@@ -172,6 +173,7 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
         code,
         redirect_uri: redirectUri,
         code_verifier: codeVerifier,
+        state: authState,
       };
       if (accountId != null) {
         exchangePayload["account_id"] = accountId;
@@ -236,6 +238,7 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
           authUrl,
           resp.redirect_uri || "",
           resp.code_verifier || "",
+          resp.state ?? null,
         );
       } else {
         manualAuthData = {

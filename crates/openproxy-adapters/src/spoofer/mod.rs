@@ -147,6 +147,7 @@ where
 }
 
 pub mod antigravity;
+pub mod claude_code;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
@@ -157,6 +158,7 @@ pub mod minimax;
 pub mod opencode;
 
 pub use antigravity::*;
+pub use claude_code::*;
 pub use cline::*;
 pub use codebuddy::*;
 pub use codex::*;

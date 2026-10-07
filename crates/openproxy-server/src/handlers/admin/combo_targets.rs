@@ -485,6 +485,7 @@ mod tests {
             context_length: Some(4096),
             max_output_tokens: Some(4096),
             provider_active: true,
+            is_missing: false,
             sub_combo_id: None,
             sub_combo_name: None,
             thinking_effort: None,

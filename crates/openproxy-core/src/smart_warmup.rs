@@ -1,9 +1,21 @@
-//! Background daemon for Smart Warmup.
+//! Background daemon for Smart Warmup across providers (Antigravity, Codex, Claude Code).
 //!
-//! Scans all active Antigravity accounts on a timer. If an account's
-//! quota is 100% full, it sends a tiny request through the same
-//! Antigravity executor used by normal API traffic.
-//! A 4-hour cooldown prevents pinging the model repeatedly.
+//! Periodically scans accounts whose quota is 100% full and sends a minimal dummy
+//! request to kickstart the sliding reset window early. A 4-hour cooldown prevents
+//! repeated pings.
+
+pub mod antigravity;
+pub mod claude_code;
+pub mod codex;
+pub mod traits;
+
+#[cfg(test)]
+mod tests;
+
+pub use antigravity::{AntigravityWarmupStrategy, build_warmup_request, resolve_antigravity_model};
+pub use claude_code::ClaudeCodeWarmupStrategy;
+pub use codex::CodexWarmupStrategy;
+pub use traits::{WarmupAccountContext, WarmupStrategy, WarmupStrategyEnum};
 
 use crate::accounts;
 use crate::config::AppConfig;
@@ -11,50 +23,21 @@ use crate::ids::ProviderId;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
-use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
-/// 4-hour cooldown (since Pro quota resets every 5h).
-const COOLDOWN_SECS: i64 = 14_400;
+/// 4-hour cooldown (since typical Pro/Team quotas reset every 3-5h).
+pub const COOLDOWN_SECS: i64 = 14_400;
 
-fn build_warmup_request(model: &str) -> OpenAIRequest {
-    let lower = model.to_lowercase();
-    let is_gemini = lower.contains("gemini");
-
-    let (prompt, max_tokens, temperature) = if is_gemini {
-        (
-            "Write a complete, detailed Python module with functions to compute Fibonacci numbers, check for prime numbers, and calculate the greatest common divisor using Euclidean algorithm. Include docstrings, type annotations, and full unit tests for all functions.",
-            Some(1024),
-            Some(0.2),
-        )
-    } else {
-        ("Say hi", None, Some(0.0))
-    };
-
-    OpenAIRequest {
-        model: model.to_string(),
-        messages: vec![OpenAIMessage {
-            role: "user".to_string(),
-            content: Some(serde_json::Value::String(prompt.to_string())),
-            name: None,
-            tool_call_id: None,
-            tool_calls: None,
-            extra: serde_json::Map::new(),
-        }],
-        max_tokens,
-        temperature,
-        stream: false,
-        top_p: None,
-        stop: None,
-        tools: None,
-        tool_choice: None,
-        top_k: None,
-        user: None,
-        extra: serde_json::Map::new(),
-    }
+/// Default list of all built-in warmup strategies.
+pub fn default_strategies() -> Vec<WarmupStrategyEnum> {
+    vec![
+        WarmupStrategyEnum::Antigravity(AntigravityWarmupStrategy::new()),
+        WarmupStrategyEnum::Codex(CodexWarmupStrategy::new()),
+        WarmupStrategyEnum::ClaudeCode(ClaudeCodeWarmupStrategy::new()),
+    ]
 }
 
 pub fn start_smart_warmup_scheduler(
@@ -135,250 +118,225 @@ pub async fn run_smart_warmup_scheduler(
     }
 }
 
-async fn run_warmup_cycle_with_cancel(
+pub async fn run_warmup_cycle_with_cancel(
     db_pool: &Arc<DbPool>,
     config: &AppConfig,
     upstream: &Arc<UpstreamClient>,
     master_key: &Arc<MasterKey>,
     cancel: Option<&CancellationToken>,
 ) {
-    struct WarmupAccount {
-        id: i64,
-        token: String,
-        project_id: String,
-        account_desc: String,
-    }
+    let strategies = default_strategies();
+    run_warmup_cycle_with_strategies(db_pool, config, upstream, master_key, &strategies, cancel)
+        .await;
+}
 
-    // Read the account list inside spawn_blocking so no DB guard is held across the
-    // network calls below.
-    let account_list: Vec<WarmupAccount> = {
-        let db_pool = Arc::clone(db_pool);
-        let master_key = Arc::clone(master_key);
-        tokio::task::spawn_blocking(move || {
-            let conn = db_pool.writer();
-
-            let provider_id = ProviderId::new("antigravity");
-            let accounts = match accounts::list(&conn, Some(&provider_id), &master_key) {
-                Ok(accs) => accs,
-                Err(e) => {
-                    tracing::warn!(
-                        provider = "antigravity",
-                        error = %e,
-                        "[SmartWarmup] Failed to list accounts for provider 'antigravity': {}",
-                        e
-                    );
-                    return Vec::new();
-                }
-            };
-
-            accounts
-                .into_iter()
-                .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
-                .filter_map(|a| {
-                    let acc_id = a.id.0;
-                    let token = accounts::decrypt_access_token(&conn, a.id, &master_key).ok()?;
-                    let meta = a.oauth_provider_specific?;
-                    let v: serde_json::Value = serde_json::from_str(&meta).ok()?;
-                    let project_id =
-                        openproxy_pipeline::credentials::antigravity_project_from_value(&v)?;
-                    let acc_id_str = acc_id.to_string();
-                    let label = a
-                        .label
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty() && *s != acc_id_str);
-                    let email = a.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
-                    let account_desc = match (label, email) {
-                        (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
-                        (Some(l), None) => format!("{acc_id} ({l})"),
-                        (None, Some(e)) => format!("{acc_id} ({e})"),
-                        (None, None) => acc_id_str,
-                    };
-                    Some(WarmupAccount {
-                        id: acc_id,
-                        token,
-                        project_id,
-                        account_desc,
-                    })
-                })
-                .collect()
-        })
-        .await
-        .unwrap_or_default()
-    };
-
+pub async fn run_warmup_cycle_with_strategies(
+    db_pool: &Arc<DbPool>,
+    config: &AppConfig,
+    upstream: &Arc<UpstreamClient>,
+    master_key: &Arc<MasterKey>,
+    strategies: &[WarmupStrategyEnum],
+    cancel: Option<&CancellationToken>,
+) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    let models_to_ping = &config.smart_warmup.models;
 
-    for acc in account_list {
+    for strategy in strategies {
         if cancel.is_some_and(|c| c.is_cancelled()) {
-            tracing::info!("[SmartWarmup] Cycle cancelled between accounts");
             break;
         }
 
-        // Fetch fresh quota
-        let quota = match fetch_antigravity_quota(upstream, &acc.token, &acc.project_id).await {
-            Some(Ok(q)) => q,
-            Some(Err(e)) => {
-                tracing::debug!(
-                    provider = "antigravity",
-                    account_id = acc.id,
-                    error = %e,
-                    "[SmartWarmup] Failed to fetch quota for account {} (provider: 'antigravity'): {}",
-                    acc.account_desc,
-                    e
-                );
-                continue;
-            }
-            None => continue,
+        let provider_name = strategy.provider_id().to_string();
+        let provider_id = ProviderId::new(&provider_name);
+
+        // Read candidate accounts for this provider inside spawn_blocking
+        let accounts_list: Vec<WarmupAccountContext> = {
+            let db_pool = Arc::clone(db_pool);
+            let master_key = Arc::clone(master_key);
+            let p_id = provider_id.clone();
+            let strategy_clone = strategy.clone();
+            tokio::task::spawn_blocking(move || {
+                let conn = db_pool.writer();
+                let accounts = match accounts::list(&conn, Some(&p_id), &master_key) {
+                    Ok(accs) => accs,
+                    Err(e) => {
+                        tracing::warn!(
+                            provider = %p_id,
+                            error = %e,
+                            "[SmartWarmup] Failed to list accounts: {e}"
+                        );
+                        return Vec::new();
+                    }
+                };
+
+                accounts
+                    .into_iter()
+                    .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
+                    .filter_map(|a| strategy_clone.extract_account(&a, &conn, &master_key))
+                    .collect()
+            })
+            .await
+            .unwrap_or_default()
         };
 
-        // Persist the fresh quota so the UI sees it
-        {
-            let db_pool = Arc::clone(db_pool);
-            let quota = quota.clone();
-            let acc_id = acc.id;
-            let _ = tokio::task::spawn_blocking(move || {
-                let conn = db_pool.writer();
-                let _ = crate::accounts::set_quota(&conn, crate::ids::AccountId(acc_id), &quota);
-            })
-            .await;
-        }
-
-        for model_alias in models_to_ping {
+        for acc in accounts_list {
             if cancel.is_some_and(|c| c.is_cancelled()) {
-                tracing::info!("[SmartWarmup] Cycle cancelled between models");
                 break;
             }
 
-            let true_model_id = {
+            // 1. Fetch fresh quota
+            let quota = match strategy.fetch_quota(upstream, &acc).await {
+                Some(Ok(q)) => q,
+                Some(Err(e)) => {
+                    tracing::debug!(
+                        provider = %provider_name,
+                        account_id = acc.account_id,
+                        error = %e,
+                        "[SmartWarmup] Failed to fetch quota for account {}: {e}",
+                        acc.account_desc
+                    );
+                    continue;
+                }
+                None => continue,
+            };
+
+            // 2. Persist fresh quota so the UI / dashboard sees it
+            {
                 let db_pool = Arc::clone(db_pool);
-                let alias = model_alias.to_owned();
+                let q_persist = quota.clone();
+                let acc_id = acc.account_id;
+                let _ = tokio::task::spawn_blocking(move || {
+                    let conn = db_pool.writer();
+                    let _ = crate::accounts::set_quota(
+                        &conn,
+                        crate::ids::AccountId(acc_id),
+                        &q_persist,
+                    );
+                })
+                .await;
+            }
+
+            // 3. Resolve target models for this strategy
+            let models_to_ping = {
+                let db_pool = Arc::clone(db_pool);
+                let config_models = config.smart_warmup.models.to_vec();
+                let strategy_clone = strategy.clone();
                 tokio::task::spawn_blocking(move || {
                     let conn = db_pool.reader();
-                    resolve_warmup_target(&conn, &alias)
+                    strategy_clone.resolve_models(&conn, &config_models)
                 })
                 .await
-                .unwrap_or(None)
+                .unwrap_or_default()
             };
 
-            let Some(true_model_id) = true_model_id else {
-                continue;
-            };
+            for true_model_id in models_to_ping {
+                if cancel.is_some_and(|c| c.is_cancelled()) {
+                    break;
+                }
 
-            if !is_model_quota_ready_for_warmup(&quota, &true_model_id, now) {
-                tracing::debug!(
-                    provider = "antigravity",
-                    account_id = acc.id,
+                // 4. Check if quota is ready for warmup
+                if !strategy.is_quota_ready(&quota, &true_model_id, now) {
+                    tracing::debug!(
+                        provider = %provider_name,
+                        account_id = acc.account_id,
+                        model = %true_model_id,
+                        "[SmartWarmup] Skipping model '{true_model_id}' on account {}: window already ticking or quota not full",
+                        acc.account_desc
+                    );
+                    continue;
+                }
+
+                let history_key = format!("{}:{provider_name}:{true_model_id}", acc.account_id);
+                let legacy_key = format!("{}:{true_model_id}", acc.account_id);
+
+                // 5. Check cooldown from DB history
+                let last_ts = {
+                    let db_pool = Arc::clone(db_pool);
+                    let k1 = history_key.clone();
+                    let k2 = legacy_key.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let conn = db_pool.reader();
+                        conn.query_row(
+                            "SELECT last_ts FROM smart_warmup_history WHERE history_key IN (?1, ?2) ORDER BY last_ts DESC LIMIT 1",
+                            rusqlite::params![k1, k2],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .ok()
+                    })
+                    .await
+                    .unwrap_or(None)
+                };
+
+                if let Some(ts) = last_ts
+                    && now - ts < COOLDOWN_SECS
+                {
+                    continue; // Skip, still in cooldown
+                }
+
+                tracing::info!(
+                    provider = %provider_name,
+                    account_id = acc.account_id,
                     model = %true_model_id,
-                    alias = %model_alias,
-                    "[SmartWarmup] Skipping model '{}' on account {}: quota is not full or window is already ticking",
-                    true_model_id,
+                    "[SmartWarmup] 🔥 Triggering dummy ping for model '{true_model_id}' on account {} (provider: '{provider_name}')",
                     acc.account_desc
                 );
-                continue;
-            }
 
-            let history_key = format!("{}:{true_model_id}", acc.id);
+                // 6. Execute dummy ping
+                let success = strategy.ping_model(upstream, &acc, &true_model_id).await;
 
-            let last_ts = {
-                let db_pool = Arc::clone(db_pool);
-                let history_key_check = history_key.clone();
-                tokio::task::spawn_blocking(move || {
-                    let conn = db_pool.reader();
-                    conn.query_row(
-                        "SELECT last_ts FROM smart_warmup_history WHERE history_key = ?1",
-                        rusqlite::params![history_key_check],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .ok()
-                })
-                .await
-                .unwrap_or(None)
-            };
+                if success {
+                    {
+                        let db_pool = Arc::clone(db_pool);
+                        let k_save = history_key.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let conn = db_pool.writer();
+                            let _ = conn.execute(
+                                "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
+                                 ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
+                                rusqlite::params![k_save, now],
+                            );
+                        })
+                        .await;
+                    }
 
-            if let Some(ts) = last_ts
-                && now - ts < COOLDOWN_SECS
-            {
-                continue; // Skip, still in cooldown
-            }
-
-            tracing::info!(
-                provider = "antigravity",
-                account_id = acc.id,
-                model = %true_model_id,
-                alias = %model_alias,
-                "[SmartWarmup] 🔥 Triggering dummy ping for model '{}' (alias: '{}') on account {} (provider: 'antigravity')",
-                true_model_id,
-                model_alias,
-                acc.account_desc
-            );
-
-            let success = ping_antigravity_model(
-                upstream,
-                &acc.token,
-                &acc.project_id,
-                &true_model_id,
-                acc.id,
-                &acc.account_desc,
-            )
-            .await;
-
-            if success {
-                {
-                    let db_pool = Arc::clone(db_pool);
-                    let history_key = history_key.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let conn = db_pool.writer();
-                        let _ = conn.execute(
-                            "INSERT INTO smart_warmup_history (history_key, last_ts) VALUES (?1, ?2) \
-                             ON CONFLICT(history_key) DO UPDATE SET last_ts = excluded.last_ts",
-                            rusqlite::params![history_key, now],
-                        );
-                    })
-                    .await;
+                    // Refresh and persist quota immediately so UI shows the newly ticking timer
+                    if let Some(Ok(fresh_quota)) = strategy.fetch_quota(upstream, &acc).await {
+                        let db_pool = Arc::clone(db_pool);
+                        let acc_id = acc.account_id;
+                        let _ = tokio::task::spawn_blocking(move || {
+                            let conn = db_pool.writer();
+                            let _ = crate::accounts::set_quota(
+                                &conn,
+                                crate::ids::AccountId(acc_id),
+                                &fresh_quota,
+                            );
+                        })
+                        .await;
+                    }
                 }
 
-                // Refresh and persist quota immediately so UI shows updated quota / ticking reset timer
-                if let Some(Ok(fresh_quota)) =
-                    fetch_antigravity_quota(upstream, &acc.token, &acc.project_id).await
-                {
-                    let db_pool = Arc::clone(db_pool);
-                    let acc_id = acc.id;
-                    let _ = tokio::task::spawn_blocking(move || {
-                        let conn = db_pool.writer();
-                        let _ = crate::accounts::set_quota(
-                            &conn,
-                            crate::ids::AccountId(acc_id),
-                            &fresh_quota,
-                        );
-                    })
-                    .await;
+                // Pause between models
+                if let Some(token) = cancel {
+                    tokio::select! {
+                        () = token.cancelled() => break,
+                        () = sleep(Duration::from_secs(6)) => {}
+                    }
+                } else {
+                    sleep(Duration::from_secs(6)).await;
                 }
             }
 
-            // Pausa entre modelos para no acribillar la API
+            // Pause between accounts
             if let Some(token) = cancel {
                 tokio::select! {
                     () = token.cancelled() => break,
-                    () = sleep(Duration::from_secs(6)) => {}
+                    () = sleep(Duration::from_secs(15)) => {}
                 }
             } else {
-                sleep(Duration::from_secs(6)).await;
+                sleep(Duration::from_secs(15)).await;
             }
-        }
-
-        // Pausa entre cuentas: evita detección anti-DDoS/bot
-        if let Some(token) = cancel {
-            tokio::select! {
-                () = token.cancelled() => break,
-                () = sleep(Duration::from_secs(15)) => {}
-            }
-        } else {
-            sleep(Duration::from_secs(15)).await;
         }
     }
 
@@ -386,7 +344,7 @@ async fn run_warmup_cycle_with_cancel(
         return;
     }
 
-    // Limpia historial de más de 24h para acotar el crecimiento de la tabla
+    // Prune entries older than 24h
     let cutoff = now - 86_400;
     {
         let db_pool = Arc::clone(db_pool);
@@ -401,343 +359,16 @@ async fn run_warmup_cycle_with_cancel(
     }
 }
 
-async fn fetch_antigravity_quota(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    project_id: &str,
-) -> Option<crate::error::Result<openproxy_types::AccountQuota>> {
-    let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Antigravity(Box::new(
-        openproxy_adapters::adapters::AntigravityAdapter::new(),
-    ));
-    adapter
-        .fetch_quota(upstream, project_id, Some(access_token), None)
-        .await
+/// Backwards compatibility helper for Antigravity target resolution.
+pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option<String> {
+    antigravity::resolve_antigravity_model(conn, alias)
 }
 
-async fn ping_antigravity_model(
-    upstream: &Arc<UpstreamClient>,
-    access_token: &str,
-    project_id: &str,
-    model: &str,
-    account_id: i64,
-    account_desc: &str,
-) -> bool {
-    let physical_model =
-        openproxy_adapters::adapters::antigravity::map_antigravity_physical_model(model);
-    let request = build_warmup_request(model);
-    let request_payload = serde_json::to_value(
-        openproxy_adapters::adapters::gemini::openai_to_gemini(&request, &request.messages),
-    )
-    .unwrap_or_else(|_| serde_json::json!({}));
-
-    let wrapped = serde_json::json!({
-        "project": project_id,
-        "model": physical_model,
-        "requestType": "agent",
-        "requestId": uuid::Uuid::new_v4().to_string(),
-        "userAgent": "antigravity",
-        "request": request_payload,
-        "enabledCreditTypes": ["GOOGLE_ONE_AI"]
-    });
-
-    let payload = match serde_json::to_vec(&wrapped) {
-        Ok(b) => bytes::Bytes::from(b),
-        Err(_) => return false,
-    };
-
-    let endpoints = [
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-        "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
-    ];
-
-    for url in &endpoints {
-        let mut req =
-            openproxy_adapters::upstream::UpstreamRequest::post_json(*url, payload.clone());
-        if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-            req.headers.insert(http::header::AUTHORIZATION, v);
-        }
-        openproxy_adapters::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
-
-        let cancel = openproxy_adapters::upstream::CancellationToken::new();
-        match upstream
-            .call(
-                req,
-                openproxy_adapters::upstream::TimeoutProfile::ModelDiscovery,
-                cancel,
-            )
-            .await
-        {
-            Ok(resp) => {
-                let status = resp.status;
-                let body = resp.collect().await.unwrap_or_default();
-                if status.is_success() {
-                    return true;
-                }
-                let body_str = String::from_utf8_lossy(&body);
-                let snippet = if body_str.len() > 200 {
-                    let boundary = body_str
-                        .char_indices()
-                        .map(|(i, _)| i)
-                        .take_while(|&i| i <= 200)
-                        .last()
-                        .unwrap_or(0);
-                    &body_str[..boundary]
-                } else {
-                    &body_str
-                };
-                tracing::warn!(
-                    provider = "antigravity",
-                    account_id = account_id,
-                    model = %model,
-                    status = %status,
-                    endpoint = %url,
-                    response = %snippet,
-                    "[SmartWarmup] Ping failed with status {} on '{}' for model '{}' on account {}: {}",
-                    status,
-                    url,
-                    model,
-                    account_desc,
-                    snippet
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    provider = "antigravity",
-                    account_id = account_id,
-                    model = %model,
-                    endpoint = %url,
-                    error = %e,
-                    "[SmartWarmup] Ping request failed on '{}' for model '{}' on account {}: {}",
-                    url,
-                    model,
-                    account_desc,
-                    e
-                );
-            }
-        }
-    }
-
-    false
-}
-
-fn is_future_reset(reset_str: Option<&str>, now: i64) -> bool {
-    reset_str
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .is_some_and(|dt| dt.timestamp() > now)
-}
-
-fn is_model_quota_ready_for_warmup(
+/// Backwards compatibility helper for tests.
+pub fn is_model_quota_ready_for_warmup(
     quota: &openproxy_types::AccountQuota,
     true_model_id: &str,
     now: i64,
 ) -> bool {
-    let lower_target = true_model_id.to_lowercase();
-    let is_claude = lower_target.contains("claude");
-    let is_gemini = lower_target.contains("gemini");
-
-    if is_claude && let Some(details) = &quota.model_details {
-        let weekly_detail = details.iter().find(|d| d.model_id == "Claude (Weekly)");
-        let session_detail = details
-            .iter()
-            .find(|d| d.model_id == "Claude (5h)")
-            .or_else(|| details.iter().find(|d| d.model_id == true_model_id));
-
-        if let Some(w) = weekly_detail
-            && w.session_used > 0
-            && is_future_reset(w.session_reset_at.as_deref(), now)
-        {
-            return false;
-        }
-
-        if let Some(s) = session_detail
-            && s.session_used > 0
-            && is_future_reset(s.session_reset_at.as_deref(), now)
-        {
-            return false;
-        }
-
-        if let Some(detail) = session_detail.or(weekly_detail) {
-            return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
-        }
-    }
-
-    if is_gemini {
-        if let Some(used) = quota.weekly_used
-            && used > 0
-            && is_future_reset(quota.weekly_reset_at.as_deref(), now)
-        {
-            return false;
-        }
-
-        if let Some(used) = quota.weekly_used {
-            return used == 0;
-        }
-
-        if let Some(details) = &quota.model_details {
-            let matched = details.iter().find(|d| d.model_id == true_model_id);
-            if let Some(d) = matched
-                && d.session_used > 0
-                && is_future_reset(d.session_reset_at.as_deref(), now)
-            {
-                return false;
-            }
-        }
-
-        if let Some(used) = quota.session_used
-            && used > 0
-            && is_future_reset(quota.session_reset_at.as_deref(), now)
-        {
-            return false;
-        }
-
-        return quota.session_used.unwrap_or(0) == 0;
-    }
-
-    // Fallback for any other provider / model:
-    if let Some(details) = &quota.model_details
-        && let Some(detail) = details.iter().find(|d| d.model_id == true_model_id)
-    {
-        if detail.session_used > 0 && is_future_reset(detail.session_reset_at.as_deref(), now) {
-            return false;
-        }
-        return detail.session_used == 0 && detail.remaining_fraction >= 0.999;
-    }
-
-    if quota.session_used.unwrap_or(0) > 0
-        && is_future_reset(quota.session_reset_at.as_deref(), now)
-    {
-        return false;
-    }
-
-    quota.session_used == Some(0)
+    AntigravityWarmupStrategy::new().is_quota_ready(quota, true_model_id, now)
 }
-
-/// Helper: maps a config string or family name (like "gemini-pro", "claude", "claude-sonnet-4-6")
-/// into the true active provider model_id (like "gemini-2.5-pro", "claude-sonnet-4-6")
-/// dynamically resolving against the combos and models tables.
-pub fn resolve_warmup_target(conn: &rusqlite::Connection, alias: &str) -> Option<String> {
-    // 1. Try exact lookup as combo or exact active model name
-    if let Some(exact) = resolve_model_alias(conn, alias) {
-        return Some(exact);
-    }
-
-    let lower = alias.to_lowercase();
-    let is_claude = lower.contains("claude");
-    let is_gemini = lower.contains("gemini");
-    let wants_pro = lower.contains("pro");
-
-    if !is_claude && !is_gemini {
-        return None;
-    }
-
-    // 2. Dynamic resolution against active models for Antigravity, ordered DESC for newest versions
-    let mut stmt = conn
-        .prepare(
-            "SELECT model_id FROM models \
-             WHERE provider_id = 'antigravity' AND active = 1 \
-             ORDER BY model_id DESC",
-        )
-        .ok()?;
-
-    let models: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .ok()?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    if is_claude {
-        // Preferred: newest Claude Sonnet
-        if let Some(m) = models
-            .iter()
-            .find(|m| m.contains("claude") && m.contains("sonnet"))
-        {
-            return Some(m.clone());
-        }
-        // Fallback: any newest Claude model (e.g. opus)
-        if let Some(m) = models.iter().find(|m| m.contains("claude")) {
-            return Some(m.clone());
-        }
-    }
-
-    if is_gemini {
-        if wants_pro {
-            // Preferred for pro: active flagship agentic Gemini Pro (gemini-3.1-pro-high / gemini-pro-agent)
-            // Note: gemini-2.5-pro is capacity-exhausted (503/429) on Google Cloud Code.
-            if let Some(m) = models.iter().find(|m| {
-                m.contains("gemini")
-                    && m.contains("pro")
-                    && (m.contains("high") || m.contains("agent"))
-            }) {
-                return Some(m.clone());
-            }
-            if let Some(m) = models.iter().find(|m| {
-                m.contains("gemini")
-                    && m.contains("pro")
-                    && !m.contains("low")
-                    && !m.contains("2.5")
-            }) {
-                return Some(m.clone());
-            }
-            // Fallback: any newest pro
-            if let Some(m) = models
-                .iter()
-                .find(|m| m.contains("gemini") && m.contains("pro"))
-            {
-                return Some(m.clone());
-            }
-        }
-        // Fallback for flash / generic: newest flash-low or flash
-        if let Some(m) = models
-            .iter()
-            .find(|m| m.contains("gemini") && m.contains("flash") && m.contains("low"))
-        {
-            return Some(m.clone());
-        }
-        if let Some(m) = models.iter().find(|m| m.contains("gemini")) {
-            return Some(m.clone());
-        }
-    }
-
-    None
-}
-
-/// Helper: maps a config string (like "gpt-oss-120b-medium") into the true provider model_id
-/// (like "gemini-3.1-pro-low") by resolving it against the `combos` and `models` tables.
-/// If it can't find a combo or model, it assumes the string itself is the target.
-fn resolve_model_alias(conn: &rusqlite::Connection, alias: &str) -> Option<String> {
-    use crate::ids::ProviderId;
-
-    // Try to lookup as a combo
-    if let Ok(Some(combo)) = openproxy_db::combos::get_combo_by_name(conn, alias) {
-        let mut visited = Vec::new();
-        if let Ok(targets) = openproxy_pipeline::repository::resolve_combo_to_targets(
-            conn,
-            combo.id,
-            &mut visited,
-            0,
-        ) {
-            for target in targets {
-                if let Some(row_id) = target.model_row_id
-                    && let Ok(Some(model)) = crate::models::get_by_row_id(conn, row_id)
-                    && model.provider_id.as_str() == "antigravity"
-                {
-                    return Some(model.model_id.0);
-                }
-            }
-        }
-    }
-
-    // Try to lookup as an exact model name for antigravity
-    if let Ok(Some(model)) = crate::models::find_active_by_provider_and_name(
-        conn,
-        &ProviderId::new("antigravity"),
-        alias,
-    ) {
-        return Some(model.model_id.0);
-    }
-
-    None
-}
-
-#[cfg(test)]
-mod tests;

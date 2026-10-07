@@ -325,6 +325,7 @@ async fn test_codebuddy_oauth_full_device_code_wire_mock() {
             account_id,
             db: DbRef::Pool(&pool),
             master_key: &master_key,
+            force: true,
         })
         .await
         .expect("refresh_and_store succeeds");

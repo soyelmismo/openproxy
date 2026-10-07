@@ -251,8 +251,14 @@ pub async fn oauth_exchange(
         )))
     })?;
 
+    let code_with_state = if code.contains('#') || code.contains("state=") {
+        code.to_string()
+    } else {
+        format!("{code}#{state_param}")
+    };
+
     let token = provider_impl
-        .exchange_code(code, &code_verifier, s.upstream_client(), &redirect_uri)
+        .exchange_code(&code_with_state, &code_verifier, s.upstream_client(), &redirect_uri)
         .await?;
 
     let account_id = resolve_or_create_oauth_account(&s, &provider, account_id_input).await?;
@@ -558,6 +564,7 @@ async fn execute_oauth_refresh(
             account_id: account.id,
             db: openproxy_core::oauth::DbRef::Pool(s.db_pool().as_ref()),
             master_key: s.master_key().as_ref(),
+            force: true,
         })
         .await
     {

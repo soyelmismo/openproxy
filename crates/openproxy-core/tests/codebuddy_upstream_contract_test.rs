@@ -260,7 +260,7 @@ fn test_codebuddy_builtin_seed_and_registration() {
     let conn = pool.writer();
 
     let seeded = seed_builtin_providers(&conn).expect("seed");
-    assert_eq!(seeded, 22, "should seed all 22 built-in providers");
+    assert_eq!(seeded, 23, "should seed all 23 built-in providers");
 
     let cb = providers::get(&conn, &ProviderId::new("codebuddy"))
         .expect("get")

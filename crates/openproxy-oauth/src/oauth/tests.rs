@@ -381,3 +381,68 @@ async fn test_run_refresh_scheduler_cancel_during_idle_tick() {
         .expect("runner must exit cleanly on cancellation during idle tick")
         .unwrap();
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn test_token_refresh_coordinator_unforced_reuses_unexpired_token() {
+    let conn = openproxy_db::testing::open_in_memory();
+    conn.execute(
+        "INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('cline', 'Cline', 'https://api.cline.bot', 'oauth', 'openai')",
+        [],
+    )
+    .unwrap();
+
+    let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
+    let account_id = openproxy_db::accounts::create(
+        &conn,
+        &ProviderId::new("cline"),
+        None,
+        &master_key,
+        Some("test-unforced-reuse"),
+        0,
+        None,
+    )
+    .unwrap();
+
+    let fresh_expires_at = (chrono::Utc::now() + chrono::Duration::seconds(7200))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+
+    crate::accounts::store_oauth_tokens(
+        &conn,
+        account_id,
+        &master_key,
+        crate::accounts::StoreOAuthTokensParams {
+            access_token: "old-access-token",
+            refresh_token: Some("same-refresh-token"),
+            token_type: "Bearer",
+            expires_at: Some(&fresh_expires_at),
+            scope: Some("test-scope"),
+            provider_specific: None,
+            email: Some("test@example.com"),
+        },
+    )
+    .unwrap();
+
+    let shared_conn = Arc::new(parking_lot::Mutex::new(conn));
+    let client = Arc::new(openproxy_adapters::upstream::UpstreamClient::new());
+    let reg = OAuthProviderRegistry::builtin();
+    let provider = reg.get("cline").expect("cline provider");
+
+    // Case 1: force = false on unexpired token -> reuses old-access-token without network
+    let res_cached = TokenRefreshCoordinator::new()
+        .refresh_and_store(OAuthRefreshParams {
+            provider_id: "cline",
+            provider,
+            refresh_token: "same-refresh-token",
+            upstream_client: &client,
+            account_id,
+            db: DbRef::Shared(&shared_conn),
+            master_key: &master_key,
+            force: false,
+        })
+        .await
+        .expect("unforced refresh reuses unexpired token");
+
+    assert_eq!(res_cached.access_token, "old-access-token");
+}

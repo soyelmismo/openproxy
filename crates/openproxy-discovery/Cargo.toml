@@ -29,4 +29,5 @@ base64 = { workspace = true }
 bytes = "1"
 
 [dev-dependencies]
+openproxy-adapters = { path = "../openproxy-adapters", features = ["test-utils"] }
 tokio = { workspace = true, features = ["test-util"] }

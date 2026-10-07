@@ -129,6 +129,7 @@ pub struct UpdateProviderInput {
     pub direct_first: Option<bool>,
     pub current_proxy_id: Option<Option<String>>,
     pub stream_mode: Option<String>,
+    pub prune_models: Option<bool>,
 }
 
 impl Validatable for UpdateProviderInput {
@@ -167,6 +168,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             DirectFirst,
             CurrentProxyId,
             StreamMode,
+            PruneModels,
         }
 
         struct V;
@@ -249,6 +251,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::StreamMode => {
                             out.stream_mode = Some(map.next_value()?);
                         }
+                        Field::PruneModels => {
+                            out.prune_models = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(out)
@@ -301,6 +306,7 @@ pub fn update_provider(
             direct_first: input.direct_first,
             current_proxy_id: current_proxy,
             stream_mode: input.stream_mode.as_deref(),
+            prune_models: input.prune_models,
         },
     )
 }

@@ -369,6 +369,18 @@ fn extract_workspace_id(claims: &serde_json::Value) -> Option<String> {
             return Some(value.to_string());
         }
     }
+    if let Some(auth) = claims.get("https://api.openai.com/auth") {
+        if let Some(acc_id) = auth.get("chatgpt_account_id").and_then(|v| v.as_str())
+            && !acc_id.is_empty()
+        {
+            return Some(acc_id.to_string());
+        }
+        if let Some(acc_id) = auth.get("account_id").and_then(|v| v.as_str())
+            && !acc_id.is_empty()
+        {
+            return Some(acc_id.to_string());
+        }
+    }
     claims
         .get("https://api.openai.com/auth.chatgpt_account_id")
         .and_then(|v| v.get("account_id"))
@@ -429,6 +441,13 @@ mod tests {
             extract_workspace_id(&claims4).as_deref(),
             Some("acc_nested")
         );
+
+        let claims5 = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acc_real"
+            }
+        });
+        assert_eq!(extract_workspace_id(&claims5).as_deref(), Some("acc_real"));
 
         let empty = serde_json::json!({ "account_id": "" });
         assert_eq!(extract_workspace_id(&empty), None);

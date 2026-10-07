@@ -28,7 +28,7 @@ fn mutate_via_trait<A: ProviderAdapter>(adapter: &mut A, k: &str, v: &str) -> bo
 #[test]
 fn test_trait_parity_metadata_and_canonical_ids_all_adapters() {
     let mut adapters = builtin_adapters();
-    assert_eq!(adapters.len(), 22);
+    assert_eq!(adapters.len(), 23);
     adapters.push(make_custom_enum());
 
     for adapter in &adapters {

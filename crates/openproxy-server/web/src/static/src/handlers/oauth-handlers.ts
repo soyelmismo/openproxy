@@ -68,7 +68,12 @@ export const OAuthLogin: OAuthLoginShape = {
     });
     const exchangeResp = await api(`/oauth/${provider}/exchange`, {
       method: "POST",
-      body: JSON.stringify({ code, redirect_uri: authData.redirect_uri, code_verifier: authData.code_verifier }),
+      body: JSON.stringify({
+        code,
+        redirect_uri: authData.redirect_uri,
+        code_verifier: authData.code_verifier,
+        state: authData.state,
+      }),
     }) as { error?: string };
     if (exchangeResp.error) throw new Error(exchangeResp.error);
     showToast(`Logged in with ${provider}`, "success");

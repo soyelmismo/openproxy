@@ -290,14 +290,38 @@ impl ProviderAdapter for AntigravityAdapter {
                 }
             }
 
-            let wrapped = serde_json::json!({
-                "project": project,
+            if json.get("sessionId").is_none() {
+                let sid = generate_stable_antigravity_session_id(json.get("contents"));
+                json["sessionId"] = serde_json::Value::String(sid);
+            }
+            if let Some(obj) = json.as_object_mut() {
+                obj.remove("safetySettings");
+            }
+
+            let is_image = physical_model.to_ascii_lowercase().contains("image");
+            let (req_type, request_id) = if is_image {
+                (
+                    "image_gen",
+                    format!(
+                        "image_gen/{}/{}/12",
+                        openproxy_types::time::now_ms(),
+                        uuid::Uuid::new_v4()
+                    ),
+                )
+            } else {
+                ("agent", format!("agent-{}", uuid::Uuid::new_v4()))
+            };
+
+            let mut wrapped = serde_json::json!({
                 "model": physical_model,
-                "requestType": "agent",
-                "requestId": uuid::Uuid::new_v4().to_string(),
+                "requestType": req_type,
+                "requestId": request_id,
                 "userAgent": "antigravity",
                 "request": json
             });
+            if !project.is_empty() {
+                wrapped["project"] = serde_json::Value::String(project.to_string());
+            }
             let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
                 CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
             })?);
@@ -621,4 +645,33 @@ fn adjust_claude_thinking_config(gen_cfg: &mut serde_json::Map<String, serde_jso
             }
         }
     }
+}
+
+pub(crate) fn generate_stable_antigravity_session_id(
+    contents: Option<&serde_json::Value>,
+) -> String {
+    if let Some(contents_arr) = contents.and_then(|v| v.as_array()) {
+        for msg in contents_arr {
+            if msg.get("role").and_then(|r| r.as_str()) == Some("user")
+                && let Some(parts) = msg.get("parts").and_then(|p| p.as_array())
+            {
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str())
+                        && !text.is_empty()
+                    {
+                        use sha2::{Digest, Sha256};
+                        let mut hasher = Sha256::new();
+                        hasher.update(text.as_bytes());
+                        let hash = hasher.finalize();
+                        let mut bytes = [0u8; 8];
+                        bytes.copy_from_slice(&hash[0..8]);
+                        let val = (u64::from_be_bytes(bytes) & 0x7FFF_FFFF_FFFF_FFFF) as i64;
+                        return format!("-{val}");
+                    }
+                }
+            }
+        }
+    }
+    let rand_val = (uuid::Uuid::new_v4().as_u128() as u64) & 0x7FFF_FFFF_FFFF_FFFF;
+    format!("-{rand_val}")
 }

@@ -383,6 +383,7 @@ pub async fn refresh_single_account_quota(
                     account_id,
                     db: DbRef::Pool(db_pool.as_ref()),
                     master_key,
+                    force: true,
                 })
                 .await
             {

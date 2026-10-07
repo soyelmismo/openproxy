@@ -14,6 +14,7 @@
 .badge-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); }
 .badge-cooldown{ background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn); }
 .badge-inactive{ background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error); font-size: var(--fs-xs); }
+.badge-missing { background: var(--color-warn-soft);    color: var(--color-warn);    border: var(--border-w) dashed var(--color-warn); font-size: var(--fs-xs); }
 .badge-virtual { background: var(--color-phase-soft);   color: var(--color-phase-text);   border-color: var(--color-border-soft); font-style: italic; }
 
 .chip {

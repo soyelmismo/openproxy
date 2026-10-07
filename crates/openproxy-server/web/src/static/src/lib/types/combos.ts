@@ -54,6 +54,7 @@ export interface ComboTargetWithModel extends ComboTarget {
   context_length: number | null;
   max_output_tokens: number | null;
   provider_active: boolean;
+  is_missing?: boolean;
 }
 
 export interface ComboSummary {

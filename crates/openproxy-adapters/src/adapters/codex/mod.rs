@@ -106,13 +106,22 @@ impl ProviderAdapter for CodexAdapter {
         &self,
         api_key: &str,
         _target_format: TargetFormat,
-        _model: &ModelId,
+        model: &ModelId,
     ) -> Vec<(String, String)> {
-        super::build_spoofer_headers(
+        let mut headers = super::build_spoofer_headers(
             self.build_auth_header(api_key),
             &CodexSpoofer,
             &self.config.extra_headers,
-        )
+        );
+        let slug = model.as_str();
+        if !slug.is_empty()
+            && !headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("x-codex-routing-hint"))
+        {
+            headers.push(("x-codex-routing-hint".to_string(), format!("model={slug}")));
+        }
+        headers
     }
 
     fn wrap_request_body(

@@ -155,3 +155,92 @@ fn test_shared_prune_obsolete_models_contract_with_retained_and_obsolete() {
         "retained & custom exist, obsolete pruned"
     );
 }
+
+#[test]
+fn test_prune_obsolete_models_respects_prune_models_disabled() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.open_connection().expect("open connection");
+    let provider = CoreProviderId::new("prov_no_prune");
+    seed_provider(&conn, &provider);
+    conn.execute(
+        "UPDATE providers SET prune_models = 0 WHERE id = ?1",
+        [provider.as_str()],
+    )
+    .expect("disable prune");
+    seed_models(&conn, &provider, &["m1", "m2"]);
+
+    let tx = conn.unchecked_transaction().expect("tx");
+    prune_obsolete_models(&tx, &provider, &[]).expect("prune with empty discovered");
+    tx.commit().expect("commit");
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM models WHERE provider_id = ?1",
+            [provider.as_str()],
+            |r| r.get(0),
+        )
+        .expect("count models");
+    assert_eq!(count, 2, "all models must be retained when prune_models = 0");
+}
+
+#[test]
+fn test_prune_obsolete_models_disabled_preserves_combo_targets() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.open_connection().expect("open connection");
+    let provider = CoreProviderId::new("prov_pinned_combo");
+    seed_provider(&conn, &provider);
+    conn.execute(
+        "UPDATE providers SET prune_models = 0 WHERE id = ?1",
+        [provider.as_str()],
+    )
+    .expect("disable prune");
+    seed_models(&conn, &provider, &["m_pinned", "m_unpinned"]);
+
+    let model_row_id: i64 = conn
+        .query_row(
+            "SELECT id FROM models WHERE provider_id = ?1 AND model_id = 'm_pinned'",
+            [provider.as_str()],
+            |r| r.get(0),
+        )
+        .expect("get model row id");
+
+    conn.execute(
+        "INSERT INTO combos (name, strategy) VALUES ('test_combo', 'priority')",
+        [],
+    )
+    .expect("insert combo");
+    let combo_id: i64 = conn.last_insert_rowid();
+
+    conn.execute(
+        "INSERT INTO combo_targets (combo_id, provider_id, model_row_id, priority_order) \
+         VALUES (?1, ?2, ?3, 1)",
+        rusqlite::params![combo_id, provider.as_str(), model_row_id],
+    )
+    .expect("insert combo target");
+
+    let tx = conn.unchecked_transaction().expect("tx");
+    prune_obsolete_models(&tx, &provider, &[]).expect("prune with empty discovered");
+    tx.commit().expect("commit");
+
+    let (pinned_exists, unpinned_exists): (bool, bool) = conn
+        .query_row(
+            "SELECT \
+                EXISTS(SELECT 1 FROM models WHERE provider_id = ?1 AND model_id = 'm_pinned'), \
+                EXISTS(SELECT 1 FROM models WHERE provider_id = ?1 AND model_id = 'm_unpinned')",
+            [provider.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("query existence");
+
+    assert!(pinned_exists, "pinned model must NOT be pruned when prune_models = 0");
+    assert!(unpinned_exists, "unpinned model must NOT be pruned when prune_models = 0");
+
+    let target_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM combo_targets WHERE combo_id = ?1",
+            [combo_id],
+            |r| r.get(0),
+        )
+        .expect("query combo_targets count");
+    assert_eq!(target_count, 1, "combo_targets row must NOT be deleted by cascade when prune_models = 0");
+}

@@ -520,6 +520,14 @@
   font-size: var(--fs-xs);
   margin-right: auto;
 }
+.combo-target-card-row.target-ghost,
+.subcombo-child-row.target-ghost {
+  opacity: 0.65;
+}
+.combo-target-card-row.target-ghost:hover,
+.subcombo-child-row.target-ghost:hover {
+  opacity: 0.85;
+}
 /* Responsive mobile rules live in combos_mobile.css. */
 
 

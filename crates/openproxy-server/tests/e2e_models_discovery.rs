@@ -408,7 +408,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
         assert_eq!(&*before[0].model_id, "c");
     }
 
-    // Refresh dropping c with active target -> cascade delete
+    // Refresh dropping c with active target -> target preserved as ghost (model_row_id = NULL)
     mock.replace(vec!["a".into(), "b".into()]);
     call_refresh(&state, &provider, "sk-e2e-fake")
         .await
@@ -417,12 +417,13 @@ async fn e2e_discovery_and_delete_on_disappear() {
         let w = state.db_pool().writer();
         let rows = select_models(&w, &provider);
         assert!(!rows.iter().map(|r| r.model_id.as_str()).any(|id| id == "c"));
-        assert_eq!(
-            combos::list_targets_with_model(&w, combo_id)
-                .expect("list after")
-                .len(),
-            0
-        );
+        let detailed = combos::list_targets_with_model(&w, combo_id).expect("list after");
+        assert_eq!(detailed.len(), 1, "ghost target row survives in combo");
+        assert_eq!(&*detailed[0].model_id, "c");
+        assert!(detailed[0].is_missing, "ghost target is marked as missing");
+        assert_eq!(detailed[0].model_row_id, None);
+
+        // Routing skips missing/ghost targets
         assert_eq!(
             combos::list_targets(&w, combo_id)
                 .expect("list plain")
@@ -436,10 +437,10 @@ async fn e2e_discovery_and_delete_on_disappear() {
                 |r| r.get(0),
             )
             .expect("count");
-        assert_eq!(raw_orphan, 0);
+        assert_eq!(raw_orphan, 1, "target row is kept in combo_targets");
     }
 
-    // Re-introducing c and re-adding target
+    // Re-introducing c -> automatically reconnects orphan target to new model row
     mock.replace(vec!["a".into(), "b".into(), "c".into()]);
     let r4 = call_refresh(&state, &provider, "sk-e2e-fake")
         .await
@@ -455,25 +456,16 @@ async fn e2e_discovery_and_delete_on_disappear() {
             )
             .expect("new c id");
         assert_ne!(new_c_id, c_row_id.0);
-        let new_target_id: ComboTargetId = combos::add_target(
-            &w,
-            combos::AddTargetInput {
-                combo_id,
-                provider_id: provider.clone(),
-                account_id: Some(account_id),
-                model_row_id: Some(ModelRowId(new_c_id)),
-                sub_combo_id: None,
-                priority_order: 1,
-                description: None,
-            },
-        )
-        .expect("re-add target");
+
+        // Target was automatically reconnected without manual add_target
         let routable = combos::list_targets(&w, combo_id).expect("list");
         assert_eq!(routable.len(), 1);
-        assert_eq!(routable[0].id, new_target_id);
+        assert_eq!(routable[0].id, c_target_id);
+
         let detailed = combos::list_targets_with_model(&w, combo_id).expect("detailed");
         assert_eq!(detailed.len(), 1);
         assert_eq!(&*detailed[0].model_id, "c");
+        assert!(!detailed[0].is_missing);
         assert_eq!(detailed[0].model_row_id, Some(ModelRowId(new_c_id)));
     }
 }

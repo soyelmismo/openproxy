@@ -98,6 +98,7 @@ async fn try_refresh_codex_token(
             account_id,
             db: DbRef::Pool(db_pool.as_ref()),
             master_key: master_key.as_ref(),
+            force: true,
         })
         .await?;
 

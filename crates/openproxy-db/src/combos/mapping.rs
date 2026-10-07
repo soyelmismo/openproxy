@@ -43,7 +43,7 @@ crate::def_table_select!(
      ) mc ON mc.model_row_id = ct.model_row_id",
     "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
      ct.sub_combo_id, sc.name as sub_combo_name, \
-     COALESCE(m.model_id, ''), m.display_name, ct.priority_order, \
+     COALESCE(m.model_id, ct.upstream_model_id, ''), m.display_name, ct.priority_order, \
      COALESCE(tc.cooldown_until, mc.model_cooldown_until), \
      CASE WHEN (tc.cooldown_until IS NOT NULL AND datetime(tc.cooldown_until) > datetime('now')) \
                OR mc.model_cooldown_until IS NOT NULL \
@@ -139,13 +139,17 @@ pub(crate) fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
 }
 
 pub(crate) fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboTargetWithModel> {
+    let model_row_id: Option<ModelRowId> = crate::map_row_fields!(row, @opt_id(4, ModelRowId));
+    let sub_combo_id: Option<ComboId> = crate::map_row_fields!(row, @opt_id(5, ComboId));
+    let is_missing = sub_combo_id.is_none() && model_row_id.is_none();
+
     crate::map_row_struct!(row, ComboTargetWithModel {
         id: @id(0, ComboTargetId),
         combo_id: @id(1, ComboId),
         provider_id: @id_str(2, ProviderId),
         account_id: @opt_id(3, AccountId),
-        model_row_id: @opt_id(4, ModelRowId),
-        sub_combo_id: @opt_id(5, ComboId),
+        model_row_id: @expr(model_row_id),
+        sub_combo_id: @expr(sub_combo_id),
         sub_combo_name: @opt_box_str(6),
         model_id: @box_str(7),
         model_display_name: @opt_box_str(8),
@@ -158,6 +162,7 @@ pub(crate) fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboT
         max_output_tokens: 14,
         active: @opt_default(17, bool, true),
         provider_active: @bool(16),
+        is_missing: @expr(is_missing),
         cooldown_mode: @opt_enum_parse(18, CooldownMode),
         cooldown_base_secs: @opt_u64(19),
         cooldown_max_secs: @opt_u64(20),

@@ -37,6 +37,7 @@ pub(crate) fn map_upstream_err(
 }
 
 pub mod antigravity;
+pub mod claude_code;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
@@ -379,6 +380,7 @@ define_oauth_provider! {
     pub enum OAuthProviderEnum {
         builtins {
             Antigravity(self::antigravity::AntigravityOAuthProvider),
+            ClaudeCode(self::claude_code::ClaudeCodeOAuthProvider),
             CodeBuddy(self::codebuddy::CodeBuddyOAuthProvider),
             Codex(self::codex::CodexOAuthProvider),
             Cline(self::cline::ClineOAuthProvider),

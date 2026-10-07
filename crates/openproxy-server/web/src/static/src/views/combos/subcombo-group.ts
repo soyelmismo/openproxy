@@ -654,6 +654,9 @@ export function renderSubComboAccordion(
                         const cdBadge = st.in_cooldown
                           ? html` <span class="badge badge-cooldown">⏸ CD</span>`
                           : html``;
+                        const missingBadge = st.is_missing
+                          ? html` <span class="badge badge-missing" title="Model is currently missing from provider catalog. Automatically skipped during routing and will re-enable when rediscovered.">👻 missing</span>`
+                          : html``;
                         const tr = state.comboTestResults[subComboId]?.find((r) => r.target_id === st.id);
                         const testStatus = !tr
                           ? html`<span class="muted">—</span>`
@@ -662,7 +665,7 @@ export function renderSubComboAccordion(
                           : html`<span class=${"status-pill " + statusPillClass(tr.status)}>${String(tr.status)}</span>${tr.elapsed_ms != null ? html` <small>${tr.elapsed_ms}ms</small>` : html``}`;
 
                         return html`
-                          <tr class="subcombo-child-row">
+                          <tr class="subcombo-child-row ${st.is_missing ? "target-ghost" : ""}">
                             <td class="sub-col-order">${st.priority_order}</td>
                             <td class="sub-col-provider">
                               <a href="#/providers/${encodeURIComponent(st.provider_id)}">${st.provider_id}</a>
@@ -671,11 +674,11 @@ export function renderSubComboAccordion(
                               ${st.account_id ? html`#${st.account_id}` : html`<em>rotate</em>`}
                             </td>
                             <td class="sub-col-model">
-                              <span class="sub-model-name">${st.model_display_name || st.model_id || "row #" + st.model_row_id}</span>
-                              ${cdBadge}${inactBadge}
+                              <span class="sub-model-name">${st.model_display_name || st.model_id || "missing"}</span>
+                              ${cdBadge}${inactBadge}${missingBadge}
                             </td>
                             <td class="sub-col-ctx">
-                              ${st.context_length != null ? formatTokens(st.context_length) : "—"}
+                              ${st.is_missing ? html`<span class="muted">— (missing)</span>` : (st.context_length != null ? formatTokens(st.context_length) : "—")}
                             </td>
                             <td class="sub-col-thinking">
                               ${st.thinking_effort ? html`<span class="chip chip-sm">${st.thinking_effort}</span>` : html`—`}
@@ -688,7 +691,8 @@ export function renderSubComboAccordion(
                               <div class="sub-actions-wrap">
                                 <button
                                   class="small primary"
-                                  title="Test model"
+                                  ?disabled=${st.is_missing}
+                                  title=${st.is_missing ? "Model is missing upstream" : "Test model"}
                                   @click=${(e: Event) => onTestNestedTarget(subComboId, st.id, st.model_row_id, e, onUpdate)}>
                                   ${icons.flask()}
                                 </button>

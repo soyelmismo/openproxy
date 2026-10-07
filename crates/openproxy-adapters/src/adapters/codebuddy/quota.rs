@@ -213,6 +213,13 @@ pub fn parse_cst_datetime_to_unix_secs(s: &str) -> Option<u64> {
 #[must_use]
 pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<AccountQuota> {
     let now_utc = chrono::Utc::now().timestamp().max(0) as u64;
+    parse_codebuddy_resource_quota_at(val, now_utc)
+}
+
+/// [`AccountQuota`] from a `get-user-resource` or `get-user-resource-summary`
+/// payload evaluated at reference timestamp `now_utc`.
+#[must_use]
+pub fn parse_codebuddy_resource_quota_at(val: &serde_json::Value, now_utc: u64) -> Option<AccountQuota> {
     let mut total_capacity = 0i64;
     let mut total_remain = 0i64;
     let mut total_used = 0i64;

@@ -181,6 +181,7 @@ async fn oauth_coordinator_reuses_stored_token_on_current_thread_runtime() {
             account_id,
             db: DbRef::Pool(&pool),
             master_key: &master_key,
+            force: false,
         })
         .await
         .expect("reuse existing token without network");

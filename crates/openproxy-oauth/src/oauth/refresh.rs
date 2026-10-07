@@ -19,6 +19,7 @@ pub struct OAuthRefreshParams<'a> {
     pub account_id: AccountId,
     pub db: DbRef<'a>,
     pub master_key: &'a MasterKey,
+    pub force: bool,
 }
 
 type AccountMutexKey = (Box<str>, i64);
@@ -78,14 +79,16 @@ impl TokenRefreshCoordinator {
             account_id,
             db,
             master_key,
+            force,
         } = params;
         let mutex = self.mutex_for_account(provider_id, account_id)?;
         let _guard = mutex.lock().await;
 
         // Double-checked locking against the database:
         // Check if another concurrent task already refreshed this account while
-        // we waited for the account lock. If `expires_at` is safely in the future,
-        // reuse the freshly stored access token to avoid burning rotating refresh tokens.
+        // we waited for the account lock (i.e. DB's latest refresh token differs
+        // from the caller's parameter). If so, reuse the freshly stored tokens to
+        // avoid burning rotating refresh tokens.
         let check_master_key = master_key.clone();
         let check_provider_id = provider_id.to_owned();
         let check_res = db
@@ -118,7 +121,14 @@ impl TokenRefreshCoordinator {
             })
             .await?;
 
-        if let Some((false, Some(access_token), maybe_rt, acc)) = check_res {
+        let token_rotated = match &check_res {
+            Some((_, _, Some(latest_rt), _)) => !latest_rt.is_empty() && latest_rt != refresh_token,
+            _ => false,
+        };
+
+        if (token_rotated || (!force && matches!(&check_res, Some((false, Some(_), _, _)))))
+            && let Some((_, Some(access_token), maybe_rt, acc)) = check_res
+        {
             tracing::info!(
                 account = account_id.0,
                 provider = provider_id,
@@ -252,6 +262,7 @@ pub async fn resolve_oauth_token(
             account_id: account.id,
             db: DbRef::Pool(db_pool),
             master_key,
+            force: false,
         })
         .await?;
 
@@ -533,6 +544,7 @@ async fn tick_refresh_cycle(
                     account_id: account.id,
                     db: DbRef::Pool(&db_pool),
                     master_key: &master_key,
+                    force: false,
                 })
                 .await;
 

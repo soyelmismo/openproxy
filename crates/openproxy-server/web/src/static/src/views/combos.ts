@@ -259,6 +259,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const isSub = target.sub_combo_id != null;
   const cdBadge = target.in_cooldown ? html` <span class="badge badge-cooldown">⏸</span>` : html``;
   const inactBadge = (target.provider_active === false || target.active === false) ? html` <span class="badge badge-inactive">⏸ inactive</span>` : html``;
+  const missingBadge = target.is_missing ? html` <span class="badge badge-missing" title="Model is currently missing from provider catalog. Automatically skipped during routing and will re-enable when rediscovered.">👻 missing</span>` : html``;
 
   if (isSub) {
     const isExpanded = isSubComboExpanded(target.id);
@@ -398,10 +399,12 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
                requestUpdate();
              }}>
     </div>`;
-  const modelCell = html`${target.model_display_name || target.model_id || "row #" + target.model_row_id}${cdBadge}${inactBadge}${descTag}`;
+  const modelCell = html`${target.model_display_name || target.model_id || "missing"}${cdBadge}${inactBadge}${missingBadge}${descTag}`;
   const providerCell = html`<a href="#/providers/${encodeURIComponent(target.provider_id)}">${target.provider_id}</a>`;
   const accountCell = target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`;
-  const contextCell = target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`;
+  const contextCell = target.is_missing
+    ? html`<span class="muted" title="Model is missing upstream">— (missing)</span>`
+    : (target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`);
   const weightCell = showWeight ? html`<td class="col-target-weight"><input type="number" min="1" draggable="false" @dragstart=${(e: DragEvent) => e.stopPropagation()} .value=${String(target.weight ?? 1)} @change=${async (e: Event) => {
     const val = parseInt((e.target as HTMLInputElement).value, 10) || 1;
     await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ weight: val }) });
@@ -435,7 +438,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   const tr = detailComboId != null ? state.comboTestResults[detailComboId]?.find((r) => r.target_id === target.id) : undefined;
   const lastTestCell = !tr ? html`<span class="muted">—</span>` : (tr.skipped ? html`<span class="status-pill off">skipped</span>` : html`<span class=${"status-pill " + statusPillClass(tr.status)}>${String(tr.status)}</span>${tr.elapsed_ms != null ? html` <small>${tr.elapsed_ms}ms</small>` : html``}`);
 
-  return html`<tr draggable="true" data-drag-id=${String(target.id)} class="combo-target-card-row"
+  return html`<tr draggable="true" data-drag-id=${String(target.id)} class="combo-target-card-row ${target.is_missing ? "target-ghost" : ""}"
     @dragstart=${(e: DragEvent) => onTargetDragStart(target.id, e)}
     @dragend=${onTargetDragEnd}
     @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("drag-over"); }}

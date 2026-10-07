@@ -25,7 +25,7 @@ pub use quota::{
     build_codebuddy_resource_request, calculate_next_midnight_cst_unix_secs, codebuddy_base_url,
     codebuddy_candidate_origins, codebuddy_origin_from_base_url, fetch_codebuddy_quota_unified,
     is_codebuddy_auth_error, parse_codebuddy_accounts_quota, parse_codebuddy_provider_specific,
-    parse_codebuddy_resource_quota, parse_cst_datetime_to_unix_secs,
+    parse_codebuddy_resource_quota, parse_codebuddy_resource_quota_at, parse_cst_datetime_to_unix_secs,
 };
 
 pub fn apply_codebuddy_spoofing_headers(req: &mut UpstreamRequest) {

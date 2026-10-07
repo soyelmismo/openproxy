@@ -26,6 +26,7 @@ fn make_custom_provider(
         has_favicon: false,
         direct_first: false,
         stream_mode: "auto".into(),
+        prune_models: true,
     }
 }
 

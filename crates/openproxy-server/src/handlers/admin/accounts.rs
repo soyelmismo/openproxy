@@ -448,39 +448,79 @@ pub async fn apply_account_local_cli(
 
         let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
             .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
-
-        if account.provider_id.as_str() != "antigravity" {
-            return Err(CoreError::Validation(
-                "Only antigravity accounts can be injected into agy-cli".into(),
-            )
-            .into());
-        }
-
         let access_token =
             core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
         let refresh_token =
             core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
 
-        let payload = serde_json::json!({
-            "token": {
-                "access_token": access_token,
-                "token_type": "Bearer",
-                "refresh_token": refresh_token.as_deref().unwrap_or_default(),
-                "expiry": account.expires_at.as_deref().unwrap_or_default(),
-            },
-            "auth_method": "consumer"
-        });
+        let provider = account.provider_id.as_str();
+        let token_file = if provider == "antigravity" {
+            let payload = serde_json::json!({
+                "token": {
+                    "access_token": access_token,
+                    "token_type": "Bearer",
+                    "refresh_token": refresh_token.as_deref().unwrap_or_default(),
+                    "expiry": account.expires_at.as_deref().unwrap_or_default(),
+                },
+                "auth_method": "consumer"
+            });
 
-        let payload_str = serde_json::to_string(&payload)
-            .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
+            let payload_str = serde_json::to_string(&payload)
+                .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
 
-        let token_file = write_antigravity_token_file(
-            &payload_str,
-            &access_token,
-            refresh_token.as_deref(),
-            account.expires_at.as_deref(),
-            account.email.as_deref(),
-        )?;
+            write_antigravity_token_file(
+                &payload_str,
+                &access_token,
+                refresh_token.as_deref(),
+                account.expires_at.as_deref(),
+                account.email.as_deref(),
+            )?
+        } else if provider == "claude-code" || provider == "claude" {
+            let (account_uuid, org_uuid, sub_type, rate_tier) = account
+                .oauth_provider_specific
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .map_or((None, None, None, None), |val| {
+                    let acc_uuid = val.get("account_uuid").and_then(|v| v.as_str()).map(str::to_string);
+                    let org_uuid = val.get("organization_uuid").and_then(|v| v.as_str()).map(str::to_string);
+                    let sub = val.get("subscription_type").and_then(|v| v.as_str()).map(str::to_string);
+                    let tier = val.get("rate_limit_tier").and_then(|v| v.as_str()).map(str::to_string);
+                    (acc_uuid, org_uuid, sub, tier)
+                });
+
+            let inferred_sub_type = sub_type.as_deref().or_else(|| {
+                account.quota_plan_name.as_deref().and_then(|p| {
+                    let p_low = p.to_lowercase();
+                    if p_low.contains("pro") {
+                        Some("pro")
+                    } else if p_low.contains("max") {
+                        Some("max")
+                    } else if p_low.contains("team") {
+                        Some("team")
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            core_account_scanner::write_claude_code_credentials(
+                core_account_scanner::ClaudeCodeWriteOptions {
+                    access_token: &access_token,
+                    refresh_token: refresh_token.as_deref(),
+                    expires_at: account.expires_at.as_deref(),
+                    email: account.email.as_deref(),
+                    account_uuid: account_uuid.as_deref(),
+                    org_uuid: org_uuid.as_deref(),
+                    subscription_type: inferred_sub_type,
+                    rate_limit_tier: rate_tier.as_deref(),
+                },
+            )?
+        } else {
+            return Err(CoreError::Validation(
+                "Only antigravity and claude-code accounts can be injected into local CLI".into(),
+            )
+            .into());
+        };
         super::auth::audit_secret_read(
             &identity,
             "oauth_tokens_written_to_cli",
@@ -589,7 +629,7 @@ pub async fn scan_accounts(
                     token_type: "Bearer",
                     expires_at: None,
                     scope: None,
-                    provider_specific: None,
+                    provider_specific: entry_clone.oauth_provider_specific.as_deref(),
                     email: entry_clone.email.as_deref(),
                 },
             )?;

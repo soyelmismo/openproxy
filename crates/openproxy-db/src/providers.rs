@@ -8,7 +8,7 @@ pub use openproxy_types::providers::{NewProvider, VIRTUAL_COMBO_PROVIDER_ID};
 crate::def_table_select!(
     provider_select,
     "providers",
-    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only, direct_first, stream_mode"
+    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only, direct_first, stream_mode, prune_models"
 );
 
 define_column_updaters! {
@@ -60,6 +60,7 @@ pub struct UpdateProviderParams<'a> {
     pub direct_first: Option<bool>,
     pub current_proxy_id: Option<Option<&'a str>>,
     pub stream_mode: Option<&'a str>,
+    pub prune_models: Option<bool>,
 }
 
 fn build_provider_update_clauses(
@@ -114,6 +115,10 @@ fn build_provider_update_clauses(
     if let Some(v) = params.stream_mode {
         sets.push("stream_mode = ?");
         bound_values.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = params.prune_models {
+        sets.push("prune_models = ?");
+        bound_values.push(Box::new(i64::from(v)));
     }
 }
 
@@ -236,6 +241,7 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         notif_keyword_only: @bool(15),
         direct_first: @bool(16),
         stream_mode: @box_str(17),
+        prune_models: @bool(18),
     })
 }
 

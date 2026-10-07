@@ -268,7 +268,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
 
   const sessionLabel = isAntigravity
     ? "Gemini 5h Window"
-    : (a.provider_id === "claude" || a.provider_id === "anthropic")
+    : (a.provider_id === "claude" || a.provider_id === "claude-code" || a.provider_id === "anthropic")
       ? "5h Window"
       : (a.provider_id === "codebuddy" ? "Credits" : "Session Window");
 

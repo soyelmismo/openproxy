@@ -152,6 +152,16 @@ pub fn prune_obsolete_models(
     provider: &ProviderId,
     discovered: &[DiscoveredModel],
 ) -> Result<()> {
+    let prune_models: bool = tx.query_row(
+        "SELECT prune_models FROM providers WHERE id = ?1",
+        params![provider.as_str()],
+        |r| r.get::<_, i64>(0),
+    ) != Ok(0);
+
+    if !prune_models {
+        return Ok(());
+    }
+
     if discovered.is_empty() {
         tx.execute(
             "DELETE FROM models WHERE provider_id = ?1 AND custom = 0",
