@@ -114,6 +114,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_account_quota_constructors_and_defaults() {
+        let default_quota = AccountQuota::default();
+        assert!(default_quota.is_empty());
+        assert!(default_quota.fetch_error.is_none());
+        assert!(default_quota.plan_name.is_none());
+
+        let err_quota = AccountQuota::with_error("rate limit exceeded");
+        assert!(!err_quota.is_empty());
+        assert_eq!(
+            err_quota.fetch_error.as_deref(),
+            Some("rate limit exceeded")
+        );
+
+        let plan_quota = AccountQuota::with_plan("pro");
+        assert_eq!(plan_quota.plan_name.as_deref(), Some("pro"));
+        assert!(plan_quota.fetch_error.is_none());
+    }
+
+    #[test]
     fn test_account_quota_is_empty() {
         let mut quota = AccountQuota {
             session_used: None,
