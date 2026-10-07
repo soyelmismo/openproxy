@@ -10,13 +10,22 @@ use serde::{Deserialize, Serialize};
 pub(crate) mod antigravity;
 pub(crate) mod claude_code;
 
+pub(crate) mod local_sync;
+
 #[cfg(test)]
 mod tests;
 
-pub use antigravity::{scan_antigravity_cli, scan_antigravity_oauth_creds};
+pub use antigravity::{
+    AntigravityWriteOptions, scan_antigravity_cli, scan_antigravity_oauth_creds,
+    write_antigravity_credentials,
+};
 pub use claude_code::{
     ClaudeCodeWriteOptions, claude_config_dir, scan_claude_code_cli, scan_claude_swap_backups,
     write_claude_code_credentials,
+};
+pub use local_sync::{
+    antigravity_account_matches, check_local_cli_updated_tokens, claude_code_account_matches,
+    sync_to_local_cli_if_active,
 };
 
 /// Home directory via `std::env::var_os("HOME")`, fallback to `USERPROFILE`.
@@ -42,6 +51,9 @@ pub struct DiscoveredAccount {
     pub source_path: PathBuf,
     /// Provider-specific metadata (e.g. account_uuid, organization_uuid).
     pub oauth_provider_specific: Option<String>,
+    /// Token expiry timestamp in RFC 3339 format if available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
 }
 
 impl DiscoveredAccount {
@@ -58,6 +70,7 @@ impl DiscoveredAccount {
             email: self.email.clone(),
             source_path: self.source_path.clone(),
             oauth_provider_specific: self.oauth_provider_specific.clone(),
+            expires_at: self.expires_at.clone(),
         }
     }
 }

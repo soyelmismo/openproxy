@@ -60,6 +60,25 @@ pub fn scan_claude_code_cli() -> Option<DiscoveredAccount> {
         .and_then(|s| s.as_str())
         .map(str::to_string);
 
+    let expires_at = oauth_obj
+        .get("expiresAt")
+        .or_else(|| oauth_obj.get("expires_at"))
+        .and_then(|v| {
+            if let Some(ms) = v.as_i64() {
+                chrono::DateTime::from_timestamp_millis(ms)
+                    .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+            } else if let Some(s) = v.as_str() {
+                if let Ok(ms) = s.parse::<i64>() {
+                    chrono::DateTime::from_timestamp_millis(ms)
+                        .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                } else {
+                    Some(s.to_string())
+                }
+            } else {
+                None
+            }
+        });
+
     // Read identity / email and UUIDs from ~/.claude.json (or config_dir/.config.json)
     let mut email = None;
     let mut account_uuid = None;
@@ -138,6 +157,7 @@ pub fn scan_claude_code_cli() -> Option<DiscoveredAccount> {
         email,
         source_path: creds_path,
         oauth_provider_specific,
+        expires_at,
     })
 }
 
@@ -211,6 +231,25 @@ pub fn scan_claude_swap_backups() -> Vec<DiscoveredAccount> {
                 .filter(|s| !s.trim().is_empty())
                 .map(str::to_string);
 
+            let expires_at = oauth_obj
+                .get("expiresAt")
+                .or_else(|| oauth_obj.get("expires_at"))
+                .and_then(|v| {
+                    if let Some(ms) = v.as_i64() {
+                        chrono::DateTime::from_timestamp_millis(ms)
+                            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                    } else if let Some(s) = v.as_str() {
+                        if let Ok(ms) = s.parse::<i64>() {
+                            chrono::DateTime::from_timestamp_millis(ms)
+                                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                        } else {
+                            Some(s.to_string())
+                        }
+                    } else {
+                        None
+                    }
+                });
+
             let email = val
                 .get("oauthAccount")
                 .and_then(|a| a.get("emailAddress"))
@@ -275,6 +314,7 @@ pub fn scan_claude_swap_backups() -> Vec<DiscoveredAccount> {
                 email,
                 source_path: path,
                 oauth_provider_specific,
+                expires_at,
             });
         }
     }

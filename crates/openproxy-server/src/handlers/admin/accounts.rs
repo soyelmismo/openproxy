@@ -11,7 +11,6 @@ use openproxy_core::account_scanner as core_account_scanner;
 use openproxy_core::accounts as core_accounts;
 use openproxy_core::admin as core_admin;
 use openproxy_core::providers as core_providers;
-use std::io::Write;
 
 /// Query string for `GET /admin/accounts` — supports `?provider_id=...`.
 #[derive(Debug, Default, Deserialize)]
@@ -344,98 +343,6 @@ pub(crate) async fn resolve_refresh_account(
     .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
-fn write_antigravity_token_file(
-    payload_str: &str,
-    access_token: &str,
-    refresh_token: Option<&str>,
-    expires_at: Option<&str>,
-    email: Option<&str>,
-) -> Result<std::path::PathBuf, CoreError> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| CoreError::Validation("Could not determine home directory".into()))?;
-    let gemini_dir = home.join(".gemini");
-    let cli_dir = gemini_dir.join("antigravity-cli");
-
-    std::fs::create_dir_all(&cli_dir).map_err(|e| {
-        CoreError::Validation(format!("Failed to create ~/.gemini/antigravity-cli: {e}"))
-    })?;
-
-    let token_file = cli_dir.join("antigravity-oauth-token");
-
-    let mut open_options = std::fs::OpenOptions::new();
-    open_options.write(true).create(true).truncate(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        open_options.mode(0o600);
-    }
-
-    let mut file = open_options.open(&token_file).map_err(|e| {
-        CoreError::Validation(format!("Failed to open {}: {}", token_file.display(), e))
-    })?;
-
-    file.write_all(payload_str.as_bytes()).map_err(|e| {
-        CoreError::Validation(format!(
-            "Failed to write to {}: {}",
-            token_file.display(),
-            e
-        ))
-    })?;
-
-    // Gemini CLI también lee ~/.gemini/oauth_creds.json (SSH y contenedores).
-    let creds_file = gemini_dir.join("oauth_creds.json");
-    let expiry_ms = expires_at
-        .and_then(|exp| chrono::DateTime::parse_from_rfc3339(exp).ok())
-        .map_or_else(
-            || (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp_millis(),
-            |dt| dt.timestamp_millis(),
-        );
-    let creds_payload = serde_json::json!({
-        "access_token": access_token,
-        "refresh_token": refresh_token.unwrap_or_default(),
-        "token_type": "Bearer",
-        "expiry_date": expiry_ms,
-        "scope": "https://www.googleapis.com/auth/userinfo.email openid https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.profile"
-    });
-    if let Ok(json_str) = serde_json::to_string_pretty(&creds_payload) {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        if let Ok(mut f) = opts.open(&creds_file) {
-            let _ = f.write_all(json_str.as_bytes());
-        }
-    }
-
-    if let Some(em) = email.filter(|s| !s.trim().is_empty()) {
-        let accounts_file = gemini_dir.join("google_accounts.json");
-        let accounts_payload = serde_json::json!({
-            "active": em,
-            "old": []
-        });
-        if let Ok(json_str) = serde_json::to_string_pretty(&accounts_payload) {
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create(true).truncate(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            if let Ok(mut f) = opts.open(&accounts_file) {
-                let _ = f.write_all(json_str.as_bytes());
-            }
-        }
-    }
-
-    Ok(token_file)
-}
-
 pub async fn apply_account_local_cli(
     State(s): State<AppState>,
     identity: super::auth::Identity,
@@ -448,32 +355,57 @@ pub async fn apply_account_local_cli(
 
         let account = core_accounts::get(&r, account_id, s.master_key().as_ref())?
             .ok_or_else(|| CoreError::AccountNotFound(account_id.0))?;
-        let access_token =
+        let mut access_token =
             core_accounts::decrypt_access_token(&r, account_id, s.master_key().as_ref())?;
-        let refresh_token =
+        let mut refresh_token =
             core_accounts::decrypt_refresh_token(&r, account_id, s.master_key().as_ref())?;
 
         let provider = account.provider_id.as_str();
-        let token_file = if provider == "antigravity" {
-            let payload = serde_json::json!({
-                "token": {
-                    "access_token": access_token,
-                    "token_type": "Bearer",
-                    "refresh_token": refresh_token.as_deref().unwrap_or_default(),
-                    "expiry": account.expires_at.as_deref().unwrap_or_default(),
+
+        if let Some(disc) = core_account_scanner::check_local_cli_updated_tokens(
+            provider,
+            &account,
+            Some(&access_token),
+            refresh_token.as_deref(),
+        )
+            && disc.refresh_token.as_deref() != refresh_token.as_deref()
+        {
+            tracing::info!(
+                account = account_id.0,
+                provider = provider,
+                "apply_local_cli: local CLI has newer refresh token on disk; updating DB"
+            );
+            let w = s
+                .db_pool()
+                .try_writer_for(std::time::Duration::from_secs(5))
+                .ok_or_else(|| CoreError::Internal("writer lock timeout".into()))?;
+            core_accounts::store_oauth_tokens(
+                &w,
+                account_id,
+                s.master_key().as_ref(),
+                core_accounts::StoreOAuthTokensParams {
+                    access_token: &disc.access_token,
+                    refresh_token: disc.refresh_token.as_deref(),
+                    token_type: "Bearer",
+                    expires_at: disc.expires_at.as_deref(),
+                    scope: None,
+                    provider_specific: disc.oauth_provider_specific.as_deref(),
+                    email: disc.email.as_deref(),
                 },
-                "auth_method": "consumer"
-            });
+            )?;
+            drop(w);
+            access_token = disc.access_token;
+            refresh_token = disc.refresh_token;
+        }
 
-            let payload_str = serde_json::to_string(&payload)
-                .map_err(|e| CoreError::Validation(format!("Failed to serialize payload: {e}")))?;
-
-            write_antigravity_token_file(
-                &payload_str,
-                &access_token,
-                refresh_token.as_deref(),
-                account.expires_at.as_deref(),
-                account.email.as_deref(),
+        let token_file = if provider == "antigravity" {
+            core_account_scanner::write_antigravity_credentials(
+                core_account_scanner::AntigravityWriteOptions {
+                    access_token: &access_token,
+                    refresh_token: refresh_token.as_deref(),
+                    expires_at: account.expires_at.as_deref(),
+                    email: account.email.as_deref(),
+                },
             )?
         } else if provider == "claude-code" || provider == "claude" {
             let (account_uuid, org_uuid, sub_type, rate_tier) = account

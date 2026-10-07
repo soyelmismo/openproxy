@@ -159,7 +159,11 @@ async fn fetch_accounts_to_sync(
             let pid = crate::ids::ProviderId::new(provider_str.as_str());
             if let Ok(accs) = accounts::list(&conn, Some(&pid), &master_key) {
                 for acc in accs {
-                    if acc.health_status != accounts::HealthStatus::Unhealthy {
+                    let is_local_cli = matches!(
+                        acc.provider_id.as_str(),
+                        "claude-code" | "claude" | "antigravity"
+                    );
+                    if acc.health_status != accounts::HealthStatus::Unhealthy || is_local_cli {
                         target_accounts.push(acc.id);
                     }
                 }
