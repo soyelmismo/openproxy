@@ -367,8 +367,7 @@ pub async fn apply_account_local_cli(
             &account,
             Some(&access_token),
             refresh_token.as_deref(),
-        )
-            && disc.refresh_token.as_deref() != refresh_token.as_deref()
+        ) && disc.refresh_token.as_deref() != refresh_token.as_deref()
         {
             tracing::info!(
                 account = account_id.0,

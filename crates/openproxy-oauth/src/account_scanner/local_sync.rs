@@ -29,12 +29,10 @@ pub fn claude_code_account_matches(
     if let (Some(acc_spec), Some(disc_spec)) = (
         account.oauth_provider_specific.as_deref(),
         discovered.oauth_provider_specific.as_deref(),
-    )
-        && let (Ok(acc_val), Ok(disc_val)) = (
-            serde_json::from_str::<serde_json::Value>(acc_spec),
-            serde_json::from_str::<serde_json::Value>(disc_spec),
-        )
-    {
+    ) && let (Ok(acc_val), Ok(disc_val)) = (
+        serde_json::from_str::<serde_json::Value>(acc_spec),
+        serde_json::from_str::<serde_json::Value>(disc_spec),
+    ) {
         let acc_u = acc_val.get("account_uuid").and_then(|v| v.as_str());
         let disc_u = disc_val.get("account_uuid").and_then(|v| v.as_str());
         if let (Some(u1), Some(u2)) = (acc_u, disc_u)

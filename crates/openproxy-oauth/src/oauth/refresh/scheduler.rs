@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use governor::{Quota, RateLimiter};
 use openproxy_adapters::upstream::UpstreamClient;
-use tokio_util::sync::CancellationToken;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::accounts::HealthStatus;
+use tokio_util::sync::CancellationToken;
 
 use crate::oauth::{
     DbRef, OAuthProviderRegistry, OAuthRefreshParams, TokenRefreshCoordinator, TokenResponse,

@@ -167,60 +167,58 @@ impl TokenRefreshCoordinator {
             )
         {
             tracing::info!(
+                account = account_id.0,
+                provider = provider_id,
+                "oauth refresh: host CLI on disk has updated tokens for account; syncing to database"
+            );
+            let disk_token = discovered.clone();
+            let store_master_key = master_key.clone();
+            let disk_access = disk_token.access_token.clone();
+            let disk_refresh = disk_token.refresh_token.clone();
+            let disk_expires = disk_token.expires_at.clone();
+            let disk_spec = disk_token.oauth_provider_specific.clone();
+            let disk_email = disk_token.email.clone();
+            db.with_conn_async(move |conn| {
+                store_oauth_tokens(
+                    conn,
+                    account_id,
+                    &store_master_key,
+                    StoreOAuthTokensParams {
+                        access_token: &disk_access,
+                        refresh_token: disk_refresh.as_deref(),
+                        token_type: "Bearer",
+                        expires_at: disk_expires.as_deref(),
+                        scope: None,
+                        provider_specific: disk_spec.as_deref(),
+                        email: disk_email.as_deref(),
+                    },
+                )
+            })
+            .await?;
+
+            let disk_needs_refresh =
+                pipeline_token_needs_refresh(disk_token.expires_at.as_deref(), provider_id);
+
+            if !force && !disk_needs_refresh {
+                tracing::info!(
                     account = account_id.0,
                     provider = provider_id,
-                    "oauth refresh: host CLI on disk has updated tokens for account; syncing to database"
+                    "oauth refresh: synced token from host CLI is fresh, reusing without upstream call"
                 );
-                let disk_token = discovered.clone();
-                let store_master_key = master_key.clone();
-                let disk_access = disk_token.access_token.clone();
-                let disk_refresh = disk_token.refresh_token.clone();
-                let disk_expires = disk_token.expires_at.clone();
-                let disk_spec = disk_token.oauth_provider_specific.clone();
-                let disk_email = disk_token.email.clone();
-                db.with_conn_async(move |conn| {
-                    store_oauth_tokens(
-                        conn,
-                        account_id,
-                        &store_master_key,
-                        StoreOAuthTokensParams {
-                            access_token: &disk_access,
-                            refresh_token: disk_refresh.as_deref(),
-                            token_type: "Bearer",
-                            expires_at: disk_expires.as_deref(),
-                            scope: None,
-                            provider_specific: disk_spec.as_deref(),
-                            email: disk_email.as_deref(),
-                        },
-                    )
-                })
-                .await?;
-
-                let disk_needs_refresh = pipeline_token_needs_refresh(
-                    disk_token.expires_at.as_deref(),
-                    provider_id,
-                );
-
-                if !force && !disk_needs_refresh {
-                    tracing::info!(
-                        account = account_id.0,
-                        provider = provider_id,
-                        "oauth refresh: synced token from host CLI is fresh, reusing without upstream call"
-                    );
-                    return Ok(TokenResponse {
-                        access_token: disk_token.access_token,
-                        token_type: "Bearer".to_string(),
-                        expires_in: None,
-                        refresh_token: disk_token.refresh_token,
-                        scope: None,
-                        id_token: None,
-                    });
-                }
-
-                if let Some(rt) = disk_token.refresh_token {
-                    effective_refresh_token = rt;
-                }
+                return Ok(TokenResponse {
+                    access_token: disk_token.access_token,
+                    token_type: "Bearer".to_string(),
+                    expires_in: None,
+                    refresh_token: disk_token.refresh_token,
+                    scope: None,
+                    id_token: None,
+                });
             }
+
+            if let Some(rt) = disk_token.refresh_token {
+                effective_refresh_token = rt;
+            }
+        }
 
         let token = match provider
             .refresh_token(&effective_refresh_token, upstream_client, account_id, db)
@@ -273,7 +271,8 @@ impl TokenRefreshCoordinator {
                     })
                     .await?;
 
-                    if !pipeline_token_needs_refresh(disk_token.expires_at.as_deref(), provider_id) {
+                    if !pipeline_token_needs_refresh(disk_token.expires_at.as_deref(), provider_id)
+                    {
                         return Ok(TokenResponse {
                             access_token: disk_token.access_token,
                             token_type: "Bearer".to_string(),
