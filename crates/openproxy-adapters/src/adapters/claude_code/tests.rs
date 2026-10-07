@@ -7,7 +7,10 @@ fn test_claude_code_adapter_defaults() {
     assert_eq!(adapter.config().name, "Claude Code");
     assert_eq!(adapter.config().format, AdapterFormat::Anthropic);
     assert_eq!(adapter.config().auth_type, AdapterAuthType::OAuth);
-    assert_eq!(adapter.models_dev_canonical_ids(), &["claude-code", "claude"]);
+    assert_eq!(
+        adapter.models_dev_canonical_ids(),
+        &["claude-code", "claude"]
+    );
     assert!(adapter.metadata().supports_quota);
     assert!(adapter.metadata().quota_refresh_supported);
     assert!(adapter.metadata().requires_oauth);
@@ -35,14 +38,25 @@ fn test_claude_code_headers() {
     let model = ModelId::new("claude-3-7-sonnet");
     let headers = adapter.build_headers("sk-ant-test-token", TargetFormat::Anthropic, &model);
 
-    let get = |k: &str| headers.iter().find(|(hk, _)| hk.eq_ignore_ascii_case(k)).map(|(_, v)| v.as_str());
+    let get = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
     assert_eq!(get("Authorization"), Some("Bearer sk-ant-test-token"));
-    assert_eq!(get("anthropic-version"), Some(CLAUDE_CODE_ANTHROPIC_VERSION));
+    assert_eq!(
+        get("anthropic-version"),
+        Some(CLAUDE_CODE_ANTHROPIC_VERSION)
+    );
     assert!(get("anthropic-beta").unwrap().contains("oauth-2025-04-20"));
     assert!(get("User-Agent").unwrap().starts_with("claude-cli/"));
     assert_eq!(get("Content-Type"), Some("application/json"));
     assert_eq!(get("X-App"), Some("cli"));
-    assert_eq!(get("Anthropic-Dangerous-Direct-Browser-Access"), Some("true"));
+    assert_eq!(
+        get("Anthropic-Dangerous-Direct-Browser-Access"),
+        Some("true")
+    );
     assert_eq!(get("X-Stainless-Retry-Count"), Some("0"));
     assert!(get("X-Claude-Code-Session-Id").is_some());
     assert!(get("x-client-request-id").is_some());
@@ -122,13 +136,21 @@ fn test_claude_code_wrap_request_body() {
 
     let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
 
-    let user_id_str = val["metadata"]["user_id"].as_str().expect("metadata.user_id must be string");
-    let user_id_obj: serde_json::Value = serde_json::from_str(user_id_str).expect("user_id must be JSON");
-    assert_eq!(user_id_obj["account_uuid"], "53098eb0-6bbd-4c76-9f9c-09bc956164bc");
+    let user_id_str = val["metadata"]["user_id"]
+        .as_str()
+        .expect("metadata.user_id must be string");
+    let user_id_obj: serde_json::Value =
+        serde_json::from_str(user_id_str).expect("user_id must be JSON");
+    assert_eq!(
+        user_id_obj["account_uuid"],
+        "53098eb0-6bbd-4c76-9f9c-09bc956164bc"
+    );
     assert!(user_id_obj["device_id"].as_str().is_some());
     assert!(user_id_obj["session_id"].as_str().is_some());
 
-    let sys_0 = val["system"][0]["text"].as_str().expect("system[0].text must be string");
+    let sys_0 = val["system"][0]["text"]
+        .as_str()
+        .expect("system[0].text must be string");
     assert!(sys_0.starts_with("x-anthropic-billing-header:"));
     assert!(sys_0.contains("cch="));
     assert!(!sys_0.contains("cch=00000;"));
@@ -161,10 +183,16 @@ fn test_parse_claude_code_usage_response() {
     let quota = parse_claude_code_usage_response(&raw);
     assert_eq!(quota.session_used, Some(22));
     assert_eq!(quota.session_limit, Some(100));
-    assert_eq!(quota.session_reset_at.as_deref(), Some("2026-10-07T05:00:00Z"));
+    assert_eq!(
+        quota.session_reset_at.as_deref(),
+        Some("2026-10-07T05:00:00Z")
+    );
     assert_eq!(quota.weekly_used, Some(62));
     assert_eq!(quota.weekly_limit, Some(100));
-    assert_eq!(quota.weekly_reset_at.as_deref(), Some("2026-10-12T12:00:00Z"));
+    assert_eq!(
+        quota.weekly_reset_at.as_deref(),
+        Some("2026-10-12T12:00:00Z")
+    );
 
     let details = quota.model_details.expect("model details");
     assert_eq!(details.len(), 1);
@@ -177,10 +205,26 @@ fn test_parse_claude_code_usage_response() {
 fn test_claude_code_builtin_models() {
     let models = claude_code_builtin_models();
     assert!(!models.is_empty());
-    assert!(models.iter().any(|m| m.model_id.as_str() == "claude-sonnet-5-5"));
-    assert!(models.iter().any(|m| m.model_id.as_str() == "claude-opus-4-6"));
-    assert!(models.iter().any(|m| m.model_id.as_str() == "claude-haiku-4-5-20251001"));
-    assert!(models.iter().all(|m| m.target_format == TargetFormat::Anthropic));
+    assert!(
+        models
+            .iter()
+            .any(|m| m.model_id.as_str() == "claude-sonnet-5-5")
+    );
+    assert!(
+        models
+            .iter()
+            .any(|m| m.model_id.as_str() == "claude-opus-4-6")
+    );
+    assert!(
+        models
+            .iter()
+            .any(|m| m.model_id.as_str() == "claude-haiku-4-5-20251001")
+    );
+    assert!(
+        models
+            .iter()
+            .all(|m| m.target_format == TargetFormat::Anthropic)
+    );
 }
 
 #[test]
@@ -221,7 +265,10 @@ fn test_parse_claude_code_usage_response_skips_generic_limits() {
     assert_eq!(quota.session_limit, Some(100));
     assert_eq!(quota.weekly_used, Some(100));
     assert_eq!(quota.weekly_limit, Some(100));
-    assert_eq!(quota.weekly_reset_at.as_deref(), Some("2026-10-09T10:59:59Z"));
+    assert_eq!(
+        quota.weekly_reset_at.as_deref(),
+        Some("2026-10-09T10:59:59Z")
+    );
     // Generic session/weekly limits must not produce fake "Model" entries
     assert!(quota.model_details.is_none());
 }
@@ -257,8 +304,14 @@ fn test_parse_claude_models_response() {
     assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 5.5"));
     assert_eq!(models[0].context_length, Some(1_000_000));
     assert_eq!(models[0].max_output_tokens, Some(128_000));
-    assert_eq!(models[0].capabilities.as_ref().and_then(|c| c.reasoning), Some(true));
+    assert_eq!(
+        models[0].capabilities.as_ref().and_then(|c| c.reasoning),
+        Some(true)
+    );
 
     assert_eq!(models[1].model_id.as_str(), "claude-haiku-4-5-20251001");
-    assert_eq!(models[1].capabilities.as_ref().and_then(|c| c.reasoning), Some(false));
+    assert_eq!(
+        models[1].capabilities.as_ref().and_then(|c| c.reasoning),
+        Some(false)
+    );
 }

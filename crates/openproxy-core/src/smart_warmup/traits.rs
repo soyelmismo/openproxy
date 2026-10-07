@@ -36,11 +36,7 @@ pub trait WarmupStrategy: Send + Sync {
     ) -> impl std::future::Future<Output = Option<Result<AccountQuota>>> + Send + 'a;
 
     /// Resolves target model IDs to evaluate for warmup against active DB models.
-    fn resolve_models(
-        &self,
-        conn: &rusqlite::Connection,
-        config_models: &[String],
-    ) -> Vec<String>;
+    fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String>;
 
     /// Returns `true` if the quota is full / unspent and ready to kickstart the reset window.
     /// Returns `false` if the window is already ticking or quota is exhausted.
@@ -97,11 +93,7 @@ impl WarmupStrategy for WarmupStrategyEnum {
         }
     }
 
-    fn resolve_models(
-        &self,
-        conn: &rusqlite::Connection,
-        config_models: &[String],
-    ) -> Vec<String> {
+    fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
         match self {
             Self::Antigravity(s) => s.resolve_models(conn, config_models),
             Self::Codex(s) => s.resolve_models(conn, config_models),

@@ -599,12 +599,21 @@ fn test_propagate_codebuddy_headers() {
 #[test]
 fn test_propagate_claude_headers() {
     let mut headers = vec![
-        ("anthropic-beta".into(), "oauth-2025-04-20,claude-code-20250219".into()),
+        (
+            "anthropic-beta".into(),
+            "oauth-2025-04-20,claude-code-20250219".into(),
+        ),
         ("x-claude-code-session-id".into(), "default-session".into()),
     ];
     let mut req_headers = std::collections::BTreeMap::new();
-    req_headers.insert("anthropic-beta".into(), "claude-code-20250219,context-1m-2025-08-07".into());
-    req_headers.insert("x-claude-code-session-id".into(), "custom-session-123".into());
+    req_headers.insert(
+        "anthropic-beta".into(),
+        "claude-code-20250219,context-1m-2025-08-07".into(),
+    );
+    req_headers.insert(
+        "x-claude-code-session-id".into(),
+        "custom-session-123".into(),
+    );
     req_headers.insert("x-client-request-id".into(), "client-req-456".into());
 
     propagate_claude_headers(&mut headers, &req_headers);
@@ -623,4 +632,3 @@ fn test_propagate_claude_headers() {
     assert_eq!(find("x-claude-code-session-id"), Some("custom-session-123"));
     assert_eq!(find("x-client-request-id"), Some("client-req-456"));
 }
-

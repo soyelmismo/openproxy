@@ -137,8 +137,7 @@ fn test_scanner_finds_antigravity_oauth_creds_file() {
         "expiry_date": 1740000000000i64,
         "scope": "openid email"
     });
-    std::fs::write(&creds_target, serde_json::to_vec(&creds_body).expect("ser"))
-        .expect("write");
+    std::fs::write(&creds_target, serde_json::to_vec(&creds_body).expect("ser")).expect("write");
 
     let accounts_body = serde_json::json!({
         "active": "bob@example.com",
@@ -291,7 +290,8 @@ fn test_scanner_finds_claude_swap_backups() {
         },
         "email": "swap2@example.com"
     });
-    let encoded = base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&b2_body).unwrap());
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&b2_body).unwrap());
     std::fs::write(&b2_file, encoded.as_bytes()).unwrap();
 
     let _guard = lock();
@@ -340,10 +340,7 @@ fn test_write_claude_code_credentials() {
         creds_json["claudeAiOauth"]["refreshToken"],
         "sk-ant-written-refresh"
     );
-    assert_eq!(
-        creds_json["claudeAiOauth"]["subscriptionType"],
-        "pro"
-    );
+    assert_eq!(creds_json["claudeAiOauth"]["subscriptionType"], "pro");
     assert_eq!(
         creds_json["claudeAiOauth"]["rateLimitTier"],
         "default_claude_ai"
@@ -357,14 +354,8 @@ fn test_write_claude_code_credentials() {
         global_json["oauthAccount"]["emailAddress"],
         "applied@example.com"
     );
-    assert_eq!(
-        global_json["oauthAccount"]["accountUuid"],
-        "acc-uuid-999"
-    );
-    assert_eq!(
-        global_json["hasAvailableSubscription"],
-        true
-    );
+    assert_eq!(global_json["oauthAccount"]["accountUuid"], "acc-uuid-999");
+    assert_eq!(global_json["hasAvailableSubscription"], true);
 
     // Verify claude-swap backup was synced
     let cswap_file = cswap_dir.join("account-applied_example.com.json");

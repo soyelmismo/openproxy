@@ -5,7 +5,9 @@ use crate::ids::ProviderId;
 use openproxy_adapters::adapters::claude_code::{
     CLAUDE_CODE_ANTHROPIC_VERSION, CLAUDE_CODE_BETA_HEADER, CLAUDE_CODE_USER_AGENT,
 };
-use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::AccountQuota;
 use sha2::{Digest, Sha256};
@@ -56,7 +58,11 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty() && *s != acc_id_str);
-        let email = account.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let email = account
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let account_desc = match (label, email) {
             (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
             (Some(l), None) => format!("{acc_id} ({l})"),
@@ -87,11 +93,7 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             .await
     }
 
-    fn resolve_models(
-        &self,
-        conn: &rusqlite::Connection,
-        config_models: &[String],
-    ) -> Vec<String> {
+    fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
         let mut resolved = Vec::new();
 
         // 1. Check if configured model explicitly matches claude-code / claude
@@ -138,7 +140,11 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             for detail in details {
                 let lower = detail.model_id.to_lowercase();
                 if lower.contains("weekly") || lower.contains("seven_day") {
-                    let limit = if detail.session_limit > 0 { detail.session_limit } else { 100 };
+                    let limit = if detail.session_limit > 0 {
+                        detail.session_limit
+                    } else {
+                        100
+                    };
                     if (detail.session_used >= limit || detail.remaining_fraction <= 0.001)
                         && detail
                             .session_reset_at
@@ -217,10 +223,8 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             Err(_) => return false,
         };
 
-        let mut req = UpstreamRequest::post_json(
-            "https://api.anthropic.com/v1/messages",
-            payload_bytes,
-        );
+        let mut req =
+            UpstreamRequest::post_json("https://api.anthropic.com/v1/messages", payload_bytes);
 
         if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {}", account.access_token)) {
             req.headers.insert(http::header::AUTHORIZATION, val);
@@ -247,7 +251,10 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
         );
 
         let cancel = CancellationToken::new();
-        match upstream.call(req, TimeoutProfile::ModelDiscovery, cancel).await {
+        match upstream
+            .call(req, TimeoutProfile::ModelDiscovery, cancel)
+            .await
+        {
             Ok(resp) => {
                 let status = resp.status;
                 let body = resp.collect().await.unwrap_or_default();

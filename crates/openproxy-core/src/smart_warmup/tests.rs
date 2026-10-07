@@ -393,5 +393,3 @@ fn test_antigravity_weekly_exhaustion_blocks_warmup() {
     };
     assert!(!strat.is_quota_ready(&quota_no_limit, "claude-sonnet-4-6", now));
 }
-
-

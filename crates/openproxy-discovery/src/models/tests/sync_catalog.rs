@@ -270,7 +270,10 @@ fn test_sync_with_model_in_combo_emits_no_model_gone_and_preserves_target() {
     let any_gone = events
         .iter()
         .any(|(_, kind, _)| *kind == crate::notifications::KIND_MODEL_GONE);
-    assert!(!any_gone, "no model_gone events should be emitted when prune_models=0");
+    assert!(
+        !any_gone,
+        "no model_gone events should be emitted when prune_models=0"
+    );
 
     let target_exists: bool = conn
         .query_row(
@@ -279,5 +282,8 @@ fn test_sync_with_model_in_combo_emits_no_model_gone_and_preserves_target() {
             |r| r.get(0),
         )
         .expect("check target exists");
-    assert!(target_exists, "combo target must survive when prune_models=0");
+    assert!(
+        target_exists,
+        "combo target must survive when prune_models=0"
+    );
 }

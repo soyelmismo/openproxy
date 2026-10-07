@@ -173,7 +173,9 @@ pub async fn run_warmup_cycle_with_strategies(
 
                 accounts
                     .into_iter()
-                    .filter(|a| !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy))
+                    .filter(|a| {
+                        !matches!(a.health_status, crate::accounts::HealthStatus::Unhealthy)
+                    })
                     .filter_map(|a| strategy_clone.extract_account(&a, &conn, &master_key))
                     .collect()
             })

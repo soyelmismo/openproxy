@@ -258,7 +258,12 @@ pub async fn oauth_exchange(
     };
 
     let token = provider_impl
-        .exchange_code(&code_with_state, &code_verifier, s.upstream_client(), &redirect_uri)
+        .exchange_code(
+            &code_with_state,
+            &code_verifier,
+            s.upstream_client(),
+            &redirect_uri,
+        )
         .await?;
 
     let account_id = resolve_or_create_oauth_account(&s, &provider, account_id_input).await?;

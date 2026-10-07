@@ -56,7 +56,8 @@ pub fn xxhash64(data: &[u8], seed: u64) -> u64 {
             v4 = round(v4, k4);
         }
 
-        h64 = v1.rotate_left(1)
+        h64 = v1
+            .rotate_left(1)
             .wrapping_add(v2.rotate_left(7))
             .wrapping_add(v3.rotate_left(12))
             .wrapping_add(v4.rotate_left(18));
@@ -76,14 +77,20 @@ pub fn xxhash64(data: &[u8], seed: u64) -> u64 {
     for chunk in &mut chunks8 {
         let k1 = u64::from_le_bytes(chunk.try_into().unwrap_or_default());
         h64 ^= round(0, k1);
-        h64 = h64.rotate_left(27).wrapping_mul(PRIME64_1).wrapping_add(PRIME64_4);
+        h64 = h64
+            .rotate_left(27)
+            .wrapping_mul(PRIME64_1)
+            .wrapping_add(PRIME64_4);
     }
     let remainder4 = chunks8.remainder();
     let mut chunks4 = remainder4.chunks_exact(4);
     for chunk in &mut chunks4 {
         let k1 = u32::from_le_bytes(chunk.try_into().unwrap_or_default()) as u64;
         h64 ^= k1.wrapping_mul(PRIME64_1);
-        h64 = h64.rotate_left(23).wrapping_mul(PRIME64_2).wrapping_add(PRIME64_3);
+        h64 = h64
+            .rotate_left(23)
+            .wrapping_mul(PRIME64_2)
+            .wrapping_add(PRIME64_3);
     }
     for &byte in chunks4.remainder() {
         h64 ^= (byte as u64).wrapping_mul(PRIME64_5);
@@ -333,7 +340,9 @@ pub fn normalize_claude_cch_input(body: &[u8]) -> Result<Vec<u8>, CoreError> {
     scanner.parse_value(true)?;
     scanner.skip_whitespace();
     if scanner.pos != body.len() {
-        return Err(CoreError::Validation("unexpected trailing JSON data".into()));
+        return Err(CoreError::Validation(
+            "unexpected trailing JSON data".into(),
+        ));
     }
 
     scanner.edits.sort_by_key(|e| e.start);
@@ -341,7 +350,9 @@ pub fn normalize_claude_cch_input(body: &[u8]) -> Result<Vec<u8>, CoreError> {
     let mut last = 0;
     for edit in &scanner.edits {
         if edit.start < last || edit.end > body.len() {
-            return Err(CoreError::Validation("overlapping normalization edit".into()));
+            return Err(CoreError::Validation(
+                "overlapping normalization edit".into(),
+            ));
         }
         normalized.extend_from_slice(&body[last..edit.start]);
         last = edit.end;
@@ -355,7 +366,9 @@ pub fn find_claude_cch_offset(body: &[u8]) -> Option<usize> {
     let target = b"x-anthropic-billing-header:";
     let pos = body.windows(target.len()).position(|w| w == target)?;
     let cch_prefix = b"cch=";
-    let relative = body[pos..].windows(cch_prefix.len()).position(|w| w == cch_prefix)?;
+    let relative = body[pos..]
+        .windows(cch_prefix.len())
+        .position(|w| w == cch_prefix)?;
     let digits = pos + relative + cch_prefix.len();
     if digits + CLAUDE_CCH_LENGTH < body.len()
         && body[digits + CLAUDE_CCH_LENGTH] == b';'
@@ -372,7 +385,9 @@ pub fn find_claude_cch_offset(body: &[u8]) -> Option<usize> {
 /// Computes the CCH signature for an Anthropic messages body and patches the 5 CCH digits in place.
 pub fn sign_anthropic_messages_body(body: &mut [u8]) -> Result<String, CoreError> {
     let Some(cch_offset) = find_claude_cch_offset(body) else {
-        return Err(CoreError::Validation("no CCH placeholder found in body".into()));
+        return Err(CoreError::Validation(
+            "no CCH placeholder found in body".into(),
+        ));
     };
 
     body[cch_offset..cch_offset + CLAUDE_CCH_LENGTH].copy_from_slice(CLAUDE_CCH_ZERO);
@@ -405,7 +420,11 @@ pub fn ensure_claude_billing_header(json: &mut serde_json::Value) {
             if arr.is_empty() {
                 arr.push(billing_block);
             } else {
-                let first_is_billing = arr.first().and_then(|v| v.get("text")).and_then(|t| t.as_str()).is_some_and(|t| t.starts_with("x-anthropic-billing-header:"));
+                let first_is_billing = arr
+                    .first()
+                    .and_then(|v| v.get("text"))
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| t.starts_with("x-anthropic-billing-header:"));
                 if !first_is_billing {
                     arr.insert(0, billing_block);
                 } else if let Some(first_obj) = arr.first_mut().and_then(|v| v.as_object_mut())

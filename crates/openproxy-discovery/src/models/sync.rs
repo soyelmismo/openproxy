@@ -256,7 +256,9 @@ pub fn generate_events(
     let new_models_rows: Vec<_> = diff
         .new_models
         .iter()
-        .filter(|d| !notif_keyword_only || matches_keyword(d.model_id.as_str(), d.display_name.as_deref()))
+        .filter(|d| {
+            !notif_keyword_only || matches_keyword(d.model_id.as_str(), d.display_name.as_deref())
+        })
         .filter_map(|d| {
             let dedup = format!("{}:{}", provider.as_str(), d.model_id.as_str());
             if already_notified.contains(&dedup) {

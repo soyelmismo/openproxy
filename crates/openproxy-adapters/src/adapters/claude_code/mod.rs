@@ -7,7 +7,8 @@ use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, ProviderMetadat
 pub const CLAUDE_CODE_DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 pub const CLAUDE_CODE_USAGE_PATH: &str = "/api/oauth/usage";
 pub const CLAUDE_CODE_ANTHROPIC_VERSION: &str = "2023-06-01";
-pub const CLAUDE_CODE_BETA_HEADER: &str = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14";
+pub const CLAUDE_CODE_BETA_HEADER: &str =
+    "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14";
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-code/0.2.29";
 
 pub mod signing;
@@ -56,10 +57,8 @@ impl ClaudeCodeAdapter {
 
         if token.starts_with("sk-ant-api") {
             if let Ok(val) = http::HeaderValue::from_str(token) {
-                req.headers.insert(
-                    http::header::HeaderName::from_static("x-api-key"),
-                    val,
-                );
+                req.headers
+                    .insert(http::header::HeaderName::from_static("x-api-key"), val);
             }
         } else if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {token}")) {
             req.headers.insert(http::header::AUTHORIZATION, val);
@@ -98,19 +97,85 @@ crate::adapters::derive_default_from_new!(ClaudeCodeAdapter);
 
 pub fn claude_code_builtin_models() -> Vec<DiscoveredModel> {
     let models = [
-        ("claude-sonnet-5-5", "Claude Sonnet 5.5", 1_000_000, 128_000, true),
-        ("claude-opus-5-5", "Claude Opus 5.5", 1_000_000, 128_000, true),
-        ("claude-fable-5-1", "Claude Fable 5.1", 1_000_000, 128_000, true),
+        (
+            "claude-sonnet-5-5",
+            "Claude Sonnet 5.5",
+            1_000_000,
+            128_000,
+            true,
+        ),
+        (
+            "claude-opus-5-5",
+            "Claude Opus 5.5",
+            1_000_000,
+            128_000,
+            true,
+        ),
+        (
+            "claude-fable-5-1",
+            "Claude Fable 5.1",
+            1_000_000,
+            128_000,
+            true,
+        ),
         ("claude-opus-5", "Claude Opus 5", 1_000_000, 128_000, true),
-        ("claude-sonnet-5", "Claude Sonnet 5", 1_000_000, 128_000, true),
+        (
+            "claude-sonnet-5",
+            "Claude Sonnet 5",
+            1_000_000,
+            128_000,
+            true,
+        ),
         ("claude-fable-5", "Claude Fable 5", 1_000_000, 128_000, true),
-        ("claude-opus-4-8", "Claude Opus 4.8", 1_000_000, 128_000, true),
-        ("claude-opus-4-7", "Claude Opus 4.7", 1_000_000, 128_000, true),
-        ("claude-sonnet-4-6", "Claude Sonnet 4.6", 1_000_000, 128_000, true),
-        ("claude-opus-4-6", "Claude Opus 4.6", 1_000_000, 128_000, true),
-        ("claude-opus-4-5-20251101", "Claude Opus 4.5", 200_000, 64_000, true),
-        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 200_000, 64_000, false),
-        ("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1_000_000, 64_000, false),
+        (
+            "claude-opus-4-8",
+            "Claude Opus 4.8",
+            1_000_000,
+            128_000,
+            true,
+        ),
+        (
+            "claude-opus-4-7",
+            "Claude Opus 4.7",
+            1_000_000,
+            128_000,
+            true,
+        ),
+        (
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6",
+            1_000_000,
+            128_000,
+            true,
+        ),
+        (
+            "claude-opus-4-6",
+            "Claude Opus 4.6",
+            1_000_000,
+            128_000,
+            true,
+        ),
+        (
+            "claude-opus-4-5-20251101",
+            "Claude Opus 4.5",
+            200_000,
+            64_000,
+            true,
+        ),
+        (
+            "claude-haiku-4-5-20251001",
+            "Claude Haiku 4.5",
+            200_000,
+            64_000,
+            false,
+        ),
+        (
+            "claude-sonnet-4-5-20250929",
+            "Claude Sonnet 4.5",
+            1_000_000,
+            64_000,
+            false,
+        ),
     ];
 
     models
@@ -130,7 +195,9 @@ pub fn claude_code_builtin_models() -> Vec<DiscoveredModel> {
                 target_format: TargetFormat::Anthropic,
                 context_length: Some(ctx),
                 max_output_tokens: Some(max_out),
-                input_modalities: Some(vec!["text".to_string(), "image".to_string()].into_boxed_slice()),
+                input_modalities: Some(
+                    vec!["text".to_string(), "image".to_string()].into_boxed_slice(),
+                ),
                 output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
                 model_type: Some("chat".to_string()),
                 family: Some("claude".to_string()),
@@ -186,7 +253,9 @@ pub fn parse_claude_models_response(body: &serde_json::Value) -> Option<Vec<Disc
             target_format: TargetFormat::Anthropic,
             context_length: Some(ctx),
             max_output_tokens: Some(max_out),
-            input_modalities: Some(vec!["text".to_string(), "image".to_string()].into_boxed_slice()),
+            input_modalities: Some(
+                vec!["text".to_string(), "image".to_string()].into_boxed_slice(),
+            ),
             output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
             model_type: Some("chat".to_string()),
             family: Some("claude".to_string()),
@@ -201,10 +270,7 @@ pub fn parse_claude_models_response(body: &serde_json::Value) -> Option<Vec<Disc
     }
 }
 
-pub fn merge_claude_models(
-    base: &mut Vec<DiscoveredModel>,
-    dynamic: Vec<DiscoveredModel>,
-) {
+pub fn merge_claude_models(base: &mut Vec<DiscoveredModel>, dynamic: Vec<DiscoveredModel>) {
     for dm in dynamic {
         if let Some(existing) = base.iter_mut().find(|m| m.model_id == dm.model_id) {
             existing.display_name = dm.display_name;
@@ -321,7 +387,8 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                 .or_insert_with(|| serde_json::json!({}));
             if let Some(meta_obj) = meta_val.as_object_mut() {
                 if let Some(existing_user_id) = meta_obj.get("user_id").and_then(|v| v.as_str()) {
-                    if let Ok(mut parsed_id) = serde_json::from_str::<serde_json::Value>(existing_user_id)
+                    if let Ok(mut parsed_id) =
+                        serde_json::from_str::<serde_json::Value>(existing_user_id)
                         && let Some(id_map) = parsed_id.as_object_mut()
                     {
                         id_map.insert("device_id".into(), serde_json::Value::String(device_id));
@@ -334,7 +401,8 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                             );
                         }
                         if !id_map.contains_key("session_id") {
-                            id_map.insert("session_id".into(), serde_json::Value::String(session_id));
+                            id_map
+                                .insert("session_id".into(), serde_json::Value::String(session_id));
                         }
                         meta_obj.insert(
                             "user_id".to_string(),
@@ -357,8 +425,9 @@ impl ProviderAdapter for ClaudeCodeAdapter {
 
         signing::ensure_claude_billing_header(&mut json);
 
-        let mut body_bytes = serde_json::to_vec(&json)
-            .map_err(|e| CoreError::Parse(format!("failed to serialize claude-code request: {e}")))?;
+        let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
+            CoreError::Parse(format!("failed to serialize claude-code request: {e}"))
+        })?;
 
         if let Err(e) = signing::sign_anthropic_messages_body(&mut body_bytes) {
             tracing::warn!(error = %e, "claude-code: cch signing failed");
@@ -416,7 +485,15 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             )));
         }
 
-        Some(fetch_claude_code_quota(upstream_client, &self.config.base_url, effective_token, proxy_url).await)
+        Some(
+            fetch_claude_code_quota(
+                upstream_client,
+                &self.config.base_url,
+                effective_token,
+                proxy_url,
+            )
+            .await,
+        )
     }
 }
 
@@ -432,9 +509,8 @@ pub(crate) async fn fetch_claude_code_quota(
     let mut req = UpstreamRequest::get(&usage_url);
     req.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {access_token}")).map_err(|e| {
-            CoreError::Validation(format!("invalid authorization header: {e}"))
-        })?,
+        http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+            .map_err(|e| CoreError::Validation(format!("invalid authorization header: {e}")))?,
     );
     req.headers.insert(
         http::header::HeaderName::from_static("anthropic-beta"),
@@ -472,9 +548,8 @@ pub(crate) async fn fetch_claude_code_quota(
         ));
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-        CoreError::Parse(format!("claude-code quota json parse error: {e}"))
-    })?;
+    let json: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|e| CoreError::Parse(format!("claude-code quota json parse error: {e}")))?;
 
     Ok(parse_claude_code_usage_response(&json))
 }
@@ -516,7 +591,10 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
             .or_else(|| opus.get("percent"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-        let resets_at = opus.get("resets_at").and_then(|v| v.as_str()).map(ToString::to_string);
+        let resets_at = opus
+            .get("resets_at")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
         let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
         model_details.push(ModelQuotaDetail {
             model_id: "Claude Opus (Weekly)".to_string(),
@@ -533,7 +611,10 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
             .or_else(|| sonnet.get("percent"))
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0);
-        let resets_at = sonnet.get("resets_at").and_then(|v| v.as_str()).map(ToString::to_string);
+        let resets_at = sonnet
+            .get("resets_at")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
         let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
         model_details.push(ModelQuotaDetail {
             model_id: "Claude Sonnet (Weekly)".to_string(),
@@ -564,7 +645,10 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
                 .or_else(|| lim.get("percent"))
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
-            let resets_at = lim.get("resets_at").and_then(|v| v.as_str()).map(ToString::to_string);
+            let resets_at = lim
+                .get("resets_at")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
             let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
             model_details.push(ModelQuotaDetail {
                 model_id: name.to_string(),

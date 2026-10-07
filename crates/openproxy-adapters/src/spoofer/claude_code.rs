@@ -4,8 +4,7 @@ pub const DEFAULT_CLAUDE_CODE_CLI_VERSION: &str = "2.1.280";
 pub const DEFAULT_CLAUDE_CODE_PACKAGE_VERSION: &str = "0.112.1";
 pub const DEFAULT_CLAUDE_CODE_RUNTIME_VERSION: &str = "v26.3.0";
 pub const DEFAULT_CLAUDE_CODE_UA: &str = "claude-cli/2.1.280 (external, cli)";
-pub const DEFAULT_CLAUDE_CODE_BETA: &str =
-    "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
+pub const DEFAULT_CLAUDE_CODE_BETA: &str = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
 pub const DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 static CLAUDE_CODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
@@ -104,15 +103,27 @@ impl ClientSpoofer for ClaudeCodeSpoofer {
         let mut list = vec![
             ("User-Agent".into(), ua),
             ("X-App".into(), "cli".into()),
-            ("Anthropic-Version".into(), DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION.into()),
-            ("Anthropic-Dangerous-Direct-Browser-Access".into(), "true".into()),
+            (
+                "Anthropic-Version".into(),
+                DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION.into(),
+            ),
+            (
+                "Anthropic-Dangerous-Direct-Browser-Access".into(),
+                "true".into(),
+            ),
             ("Anthropic-Beta".into(), DEFAULT_CLAUDE_CODE_BETA.into()),
             ("X-Stainless-Retry-Count".into(), "0".into()),
             ("X-Stainless-Runtime".into(), "node".into()),
             ("X-Stainless-Lang".into(), "js".into()),
             ("X-Stainless-Timeout".into(), "600".into()),
-            ("X-Stainless-Runtime-Version".into(), DEFAULT_CLAUDE_CODE_RUNTIME_VERSION.into()),
-            ("X-Stainless-Package-Version".into(), DEFAULT_CLAUDE_CODE_PACKAGE_VERSION.into()),
+            (
+                "X-Stainless-Runtime-Version".into(),
+                DEFAULT_CLAUDE_CODE_RUNTIME_VERSION.into(),
+            ),
+            (
+                "X-Stainless-Package-Version".into(),
+                DEFAULT_CLAUDE_CODE_PACKAGE_VERSION.into(),
+            ),
             ("X-Stainless-Os".into(), detect_os().into()),
             ("X-Stainless-Arch".into(), detect_arch().into()),
             ("X-Claude-Code-Session-Id".into(), session),
@@ -146,15 +157,27 @@ mod tests {
 
         assert_eq!(get("User-Agent"), Some(DEFAULT_CLAUDE_CODE_UA));
         assert_eq!(get("X-App"), Some("cli"));
-        assert_eq!(get("Anthropic-Version"), Some(DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION));
-        assert_eq!(get("Anthropic-Dangerous-Direct-Browser-Access"), Some("true"));
+        assert_eq!(
+            get("Anthropic-Version"),
+            Some(DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION)
+        );
+        assert_eq!(
+            get("Anthropic-Dangerous-Direct-Browser-Access"),
+            Some("true")
+        );
         assert_eq!(get("Anthropic-Beta"), Some(DEFAULT_CLAUDE_CODE_BETA));
         assert_eq!(get("X-Stainless-Retry-Count"), Some("0"));
         assert_eq!(get("X-Stainless-Runtime"), Some("node"));
         assert_eq!(get("X-Stainless-Lang"), Some("js"));
         assert_eq!(get("X-Stainless-Timeout"), Some("600"));
-        assert_eq!(get("X-Stainless-Runtime-Version"), Some(DEFAULT_CLAUDE_CODE_RUNTIME_VERSION));
-        assert_eq!(get("X-Stainless-Package-Version"), Some(DEFAULT_CLAUDE_CODE_PACKAGE_VERSION));
+        assert_eq!(
+            get("X-Stainless-Runtime-Version"),
+            Some(DEFAULT_CLAUDE_CODE_RUNTIME_VERSION)
+        );
+        assert_eq!(
+            get("X-Stainless-Package-Version"),
+            Some(DEFAULT_CLAUDE_CODE_PACKAGE_VERSION)
+        );
         assert_eq!(get("X-Claude-Code-Session-Id"), Some("fixed-session-123"));
         assert!(get("x-client-request-id").is_some());
     }
@@ -166,7 +189,10 @@ mod tests {
 
         set_dynamic_claude_code_version("2.1.290");
         assert_eq!(current_claude_code_version(), "2.1.290");
-        assert_eq!(current_claude_code_ua(), "claude-cli/2.1.290 (external, cli)");
+        assert_eq!(
+            current_claude_code_ua(),
+            "claude-cli/2.1.290 (external, cli)"
+        );
 
         set_dynamic_claude_code_ua("custom-claude-agent/1.0");
         assert_eq!(current_claude_code_ua(), "custom-claude-agent/1.0");
@@ -186,6 +212,9 @@ mod tests {
         assert_eq!(get("x-custom-test"), Some("val123"));
 
         reset_dynamic_claude_code_overrides();
-        assert_eq!(current_claude_code_version(), DEFAULT_CLAUDE_CODE_CLI_VERSION);
+        assert_eq!(
+            current_claude_code_version(),
+            DEFAULT_CLAUDE_CODE_CLI_VERSION
+        );
     }
 }

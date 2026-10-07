@@ -14,7 +14,9 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::generic::{code_challenge_s256, generate_code_verifier};
 use crate::oauth::util::{check_oauth_status, parse_oauth_callback_input};
-use crate::oauth::{DbRef, OAuthEndpointResolver, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err};
+use crate::oauth::{
+    DbRef, OAuthEndpointResolver, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -24,7 +26,8 @@ pub const CLAUDE_CODE_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 pub const CLAUDE_CODE_DEFAULT_AUTH_URL: &str = "https://claude.ai/oauth/authorize";
 pub const CLAUDE_CODE_DEFAULT_TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 pub const CLAUDE_CODE_DEFAULT_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-pub const CLAUDE_CODE_DEFAULT_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
+pub const CLAUDE_CODE_DEFAULT_REDIRECT_URI: &str =
+    "https://platform.claude.com/oauth/code/callback";
 pub const CLAUDE_CODE_SCOPES: &[&str] = &["org:create_api_key", "user:profile", "user:inference"];
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-code/0.2.29";
 pub const CLAUDE_CODE_AXIOS_USER_AGENT: &str = "axios/1.15.2";
@@ -168,15 +171,16 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
         let state = hex::encode(state_bytes);
 
         // Anthropic Claude Code client expects the registered callback URI
-        let effective_redirect = if redirect_uri.contains("localhost") || redirect_uri.contains("127.0.0.1") {
-            // Keep local dashboard callback when running locally with proxy redirect,
-            // or use the standard Claude Code callback URL.
-            CLAUDE_CODE_DEFAULT_REDIRECT_URI
-        } else if !redirect_uri.is_empty() {
-            redirect_uri
-        } else {
-            CLAUDE_CODE_DEFAULT_REDIRECT_URI
-        };
+        let effective_redirect =
+            if redirect_uri.contains("localhost") || redirect_uri.contains("127.0.0.1") {
+                // Keep local dashboard callback when running locally with proxy redirect,
+                // or use the standard Claude Code callback URL.
+                CLAUDE_CODE_DEFAULT_REDIRECT_URI
+            } else if !redirect_uri.is_empty() {
+                redirect_uri
+            } else {
+                CLAUDE_CODE_DEFAULT_REDIRECT_URI
+            };
 
         let scopes = CLAUDE_CODE_SCOPES.join(" ");
         let params = [
@@ -231,8 +235,9 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
             state: &state_val,
         };
 
-        let body_bytes = serde_json::to_vec(&payload)
-            .map_err(|e| CoreError::Parse(format!("serialize claude-code exchange payload: {e}")))?;
+        let body_bytes = serde_json::to_vec(&payload).map_err(|e| {
+            CoreError::Parse(format!("serialize claude-code exchange payload: {e}"))
+        })?;
 
         let mut req = UpstreamRequest::post_json(token_url, body_bytes.into());
         req.headers.insert(
@@ -282,7 +287,10 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
             .and_then(|v| v.as_str())
             .unwrap_or("Bearer")
             .to_string();
-        let scope = val.get("scope").and_then(|v| v.as_str()).map(ToString::to_string);
+        let scope = val
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
 
         let email = val
             .get("account")
@@ -410,7 +418,10 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
             .and_then(|v| v.as_str())
             .unwrap_or("Bearer")
             .to_string();
-        let scope = val.get("scope").and_then(|v| v.as_str()).map(ToString::to_string);
+        let scope = val
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string);
 
         let email = val
             .get("account")
@@ -454,11 +465,25 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
         let raw = token.id_token.as_ref()?;
         let val: serde_json::Value = serde_json::from_str(raw).ok()?;
         let meta = ClaudeCodeProviderMeta {
-            account_uuid: val.get("account_uuid").and_then(|v| v.as_str()).map(ToString::to_string),
-            organization_uuid: val.get("organization_uuid").and_then(|v| v.as_str()).map(ToString::to_string),
-            scopes: val.get("scopes").and_then(|v| serde_json::from_value(v.clone()).ok()),
-            subscription_type: val.get("subscription_type").and_then(|v| v.as_str()).map(ToString::to_string),
-            rate_limit_tier: val.get("rate_limit_tier").and_then(|v| v.as_str()).map(ToString::to_string),
+            account_uuid: val
+                .get("account_uuid")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            organization_uuid: val
+                .get("organization_uuid")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            scopes: val
+                .get("scopes")
+                .and_then(|v| serde_json::from_value(v.clone()).ok()),
+            subscription_type: val
+                .get("subscription_type")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
+            rate_limit_tier: val
+                .get("rate_limit_tier")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string),
         };
         serde_json::to_string(&meta).ok()
     }
@@ -498,9 +523,8 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
         let mut req = UpstreamRequest::get(profile_url);
         req.headers.insert(
             http::header::AUTHORIZATION,
-            http::HeaderValue::from_str(&format!("Bearer {access_token}")).map_err(|e| {
-                CoreError::Validation(format!("invalid authorization header: {e}"))
-            })?,
+            http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+                .map_err(|e| CoreError::Validation(format!("invalid authorization header: {e}")))?,
         );
         req.headers.insert(
             http::header::ACCEPT,
@@ -531,7 +555,10 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
                     .or_else(|| acc.get("email_address"))
                     .and_then(|v| v.as_str())
                     .map(ToString::to_string);
-                account_uuid = acc.get("uuid").and_then(|v| v.as_str()).map(ToString::to_string);
+                account_uuid = acc
+                    .get("uuid")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string);
                 if acc.get("has_claude_max").and_then(|v| v.as_bool()) == Some(true) {
                     subscription_type = Some("max".to_string());
                 } else if acc.get("has_claude_pro").and_then(|v| v.as_bool()) == Some(true) {
@@ -539,17 +566,24 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
                 }
             }
             if let Some(org) = data.get("organization").and_then(|v| v.as_object()) {
-                org_uuid = org.get("uuid").and_then(|v| v.as_str()).map(ToString::to_string);
-                rate_limit_tier = org.get("rate_limit_tier").and_then(|v| v.as_str()).map(ToString::to_string);
+                org_uuid = org
+                    .get("uuid")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string);
+                rate_limit_tier = org
+                    .get("rate_limit_tier")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string);
                 if subscription_type.is_none() {
-                    subscription_type = org.get("organization_type").and_then(|v| v.as_str()).map(|t| {
-                        match t {
-                            "claude_max" => "max".to_string(),
-                            "claude_team" => "team".to_string(),
-                            "claude_enterprise" => "enterprise".to_string(),
-                            _ => "pro".to_string(),
-                        }
-                    });
+                    subscription_type =
+                        org.get("organization_type")
+                            .and_then(|v| v.as_str())
+                            .map(|t| match t {
+                                "claude_max" => "max".to_string(),
+                                "claude_team" => "team".to_string(),
+                                "claude_enterprise" => "enterprise".to_string(),
+                                _ => "pro".to_string(),
+                            });
                 }
             }
         }
@@ -656,7 +690,13 @@ mod tests {
         assert_eq!(meta.organization_uuid.as_deref(), Some("org-67890"));
         assert_eq!(
             meta.scopes.as_deref(),
-            Some(&["org:create_api_key".to_string(), "user:profile".to_string(), "user:inference".to_string()][..])
+            Some(
+                &[
+                    "org:create_api_key".to_string(),
+                    "user:profile".to_string(),
+                    "user:inference".to_string()
+                ][..]
+            )
         );
     }
 
@@ -697,8 +737,8 @@ mod tests {
             refresh_token: "refresh-tok-789",
             scope: Some("user:inference user:profile"),
         };
-        let serialized_with_scope =
-            serde_json::to_string(&payload_with_scope).expect("serialize refresh payload with scope");
+        let serialized_with_scope = serde_json::to_string(&payload_with_scope)
+            .expect("serialize refresh payload with scope");
         assert_eq!(
             serialized_with_scope,
             r#"{"client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","grant_type":"refresh_token","refresh_token":"refresh-tok-789","scope":"user:inference user:profile"}"#

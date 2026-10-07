@@ -219,7 +219,10 @@ pub fn parse_codebuddy_resource_quota(val: &serde_json::Value) -> Option<Account
 /// [`AccountQuota`] from a `get-user-resource` or `get-user-resource-summary`
 /// payload evaluated at reference timestamp `now_utc`.
 #[must_use]
-pub fn parse_codebuddy_resource_quota_at(val: &serde_json::Value, now_utc: u64) -> Option<AccountQuota> {
+pub fn parse_codebuddy_resource_quota_at(
+    val: &serde_json::Value,
+    now_utc: u64,
+) -> Option<AccountQuota> {
     let mut total_capacity = 0i64;
     let mut total_remain = 0i64;
     let mut total_used = 0i64;

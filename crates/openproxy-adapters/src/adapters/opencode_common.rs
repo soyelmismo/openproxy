@@ -685,7 +685,10 @@ mod tests {
 
         inject_opencode_agent_quartet_tools(&mut obj, TargetFormat::Responses);
 
-        let tools = obj.get("tools").and_then(Value::as_array).expect("tools array");
+        let tools = obj
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
         assert_eq!(tools.len(), 5);
 
         for tool in tools {

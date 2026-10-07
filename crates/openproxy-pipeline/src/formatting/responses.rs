@@ -551,10 +551,7 @@ pub(crate) fn convert_single_message_to_responses_input(
         if has_encrypted || reasoning_text.is_some() || msg.extra.contains_key("reasoning_summary")
         {
             let mut r_item = serde_json::Map::new();
-            r_item.insert(
-                "type".to_string(),
-                Value::String("reasoning".to_string()),
-            );
+            r_item.insert("type".to_string(), Value::String("reasoning".to_string()));
             if let Some(id) = msg.extra.get("reasoning_id").and_then(Value::as_str) {
                 r_item.insert("id".to_string(), Value::String(id.to_string()));
             }

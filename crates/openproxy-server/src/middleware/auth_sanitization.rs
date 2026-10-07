@@ -250,9 +250,10 @@ pub(crate) fn translate_responses_to_openai(
             self.text.as_ref().is_none_or(String::is_empty)
                 && self.id.as_ref().is_none_or(String::is_empty)
                 && self.encrypted_content.as_ref().is_none_or(String::is_empty)
-                && self.summary.as_ref().is_none_or(|v| {
-                    v.is_null() || v.as_array().is_some_and(Vec::is_empty)
-                })
+                && self
+                    .summary
+                    .as_ref()
+                    .is_none_or(|v| v.is_null() || v.as_array().is_some_and(Vec::is_empty))
         }
 
         fn apply_to_extra(&self, extra: &mut serde_json::Map<String, serde_json::Value>) {
@@ -316,9 +317,9 @@ pub(crate) fn translate_responses_to_openai(
                 let has_data = r_text.as_ref().is_some_and(|s| !s.is_empty())
                     || r_id.as_ref().is_some_and(|s| !s.is_empty())
                     || r_enc.as_ref().is_some_and(|s| !s.is_empty())
-                    || r_sum.as_ref().is_some_and(|v| {
-                        !v.is_null() && !v.as_array().is_some_and(Vec::is_empty)
-                    });
+                    || r_sum
+                        .as_ref()
+                        .is_some_and(|v| !v.is_null() && !v.as_array().is_some_and(Vec::is_empty));
 
                 if has_data {
                     let state =

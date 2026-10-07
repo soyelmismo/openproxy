@@ -2,8 +2,12 @@ use super::traits::{WarmupAccountContext, WarmupStrategy, is_future_reset};
 use crate::accounts::{self, Account};
 use crate::error::Result;
 use crate::ids::ProviderId;
-use openproxy_adapters::adapters::codex::{apply_codex_spoofing_headers, quota::codex_workspace_header};
-use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use openproxy_adapters::adapters::codex::{
+    apply_codex_spoofing_headers, quota::codex_workspace_header,
+};
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::AccountQuota;
 use std::sync::Arc;
@@ -44,7 +48,11 @@ impl WarmupStrategy for CodexWarmupStrategy {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty() && *s != acc_id_str);
-        let email = account.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let email = account
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let account_desc = match (label, email) {
             (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
             (Some(l), None) => format!("{acc_id} ({l})"),
@@ -67,10 +75,7 @@ impl WarmupStrategy for CodexWarmupStrategy {
         upstream: &Arc<UpstreamClient>,
         account: &WarmupAccountContext,
     ) -> Option<Result<AccountQuota>> {
-        let workspace_id = account
-            .extra
-            .get("workspace_id")
-            .and_then(|v| v.as_str());
+        let workspace_id = account.extra.get("workspace_id").and_then(|v| v.as_str());
         let adapter = openproxy_adapters::adapters::ProviderAdapterEnum::Codex(Box::new(
             openproxy_adapters::adapters::CodexAdapter::new(),
         ));
@@ -79,11 +84,7 @@ impl WarmupStrategy for CodexWarmupStrategy {
             .await
     }
 
-    fn resolve_models(
-        &self,
-        conn: &rusqlite::Connection,
-        config_models: &[String],
-    ) -> Vec<String> {
+    fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
         let mut resolved = Vec::new();
 
         // 1. Check if any configured model explicitly targets codex / gpt
@@ -130,7 +131,11 @@ impl WarmupStrategy for CodexWarmupStrategy {
             for detail in details {
                 let lower = detail.model_id.to_lowercase();
                 if lower.contains("weekly") || lower.contains("secondary") {
-                    let limit = if detail.session_limit > 0 { detail.session_limit } else { 100 };
+                    let limit = if detail.session_limit > 0 {
+                        detail.session_limit
+                    } else {
+                        100
+                    };
                     if (detail.session_used >= limit || detail.remaining_fraction <= 0.001)
                         && detail
                             .session_reset_at
@@ -173,10 +178,7 @@ impl WarmupStrategy for CodexWarmupStrategy {
         account: &WarmupAccountContext,
         model: &str,
     ) -> bool {
-        let workspace_id = account
-            .extra
-            .get("workspace_id")
-            .and_then(|v| v.as_str());
+        let workspace_id = account.extra.get("workspace_id").and_then(|v| v.as_str());
 
         let payload_json = serde_json::json!({
             "model": model,
@@ -220,17 +222,22 @@ impl WarmupStrategy for CodexWarmupStrategy {
         apply_codex_spoofing_headers(&mut req);
 
         if let Ok(hint) = http::HeaderValue::from_str(&format!("model={model}")) {
-            req.headers.insert(http::HeaderName::from_static("x-codex-routing-hint"), hint);
+            req.headers
+                .insert(http::HeaderName::from_static("x-codex-routing-hint"), hint);
         }
 
         if let Some(ws) = workspace_id
             && let Ok(ws_val) = http::HeaderValue::from_str(ws)
         {
-            req.headers.insert(http::HeaderName::from_static("chatgpt-account-id"), ws_val);
+            req.headers
+                .insert(http::HeaderName::from_static("chatgpt-account-id"), ws_val);
         }
 
         let cancel = CancellationToken::new();
-        match upstream.call(req, TimeoutProfile::ModelDiscovery, cancel).await {
+        match upstream
+            .call(req, TimeoutProfile::ModelDiscovery, cancel)
+            .await
+        {
             Ok(resp) => {
                 let status = resp.status;
                 let body = resp.collect().await.unwrap_or_default();
@@ -284,11 +291,9 @@ pub fn resolve_codex_model(conn: &rusqlite::Connection, alias: &str) -> Option<S
         return None;
     }
 
-    if let Ok(Some(model)) = crate::models::find_active_by_provider_and_name(
-        conn,
-        &ProviderId::new("codex"),
-        alias,
-    ) {
+    if let Ok(Some(model)) =
+        crate::models::find_active_by_provider_and_name(conn, &ProviderId::new("codex"), alias)
+    {
         return Some(model.model_id.0);
     }
 
@@ -311,7 +316,10 @@ fn resolve_default_codex_model(conn: &rusqlite::Connection) -> Option<String> {
         .collect();
 
     // Prefer gpt-5 / gpt-6 if present
-    if let Some(m) = models.iter().find(|m| m.contains("gpt-5") || m.contains("gpt-6")) {
+    if let Some(m) = models
+        .iter()
+        .find(|m| m.contains("gpt-5") || m.contains("gpt-6"))
+    {
         return Some(m.clone());
     }
 

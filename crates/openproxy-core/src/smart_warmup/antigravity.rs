@@ -2,7 +2,9 @@ use super::traits::{WarmupAccountContext, WarmupStrategy, is_future_reset};
 use crate::accounts::{self, Account};
 use crate::error::Result;
 use crate::ids::ProviderId;
-use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
+};
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::{AccountQuota, OpenAIMessage, OpenAIRequest};
 use std::sync::Arc;
@@ -81,7 +83,11 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty() && *s != acc_id_str);
-        let email = account.email.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let email = account
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         let account_desc = match (label, email) {
             (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
             (Some(l), None) => format!("{acc_id} ({l})"),
@@ -115,11 +121,7 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
             .await
     }
 
-    fn resolve_models(
-        &self,
-        conn: &rusqlite::Connection,
-        config_models: &[String],
-    ) -> Vec<String> {
+    fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
         let mut resolved = Vec::new();
         for alias in config_models {
             if let Some(target) = resolve_antigravity_model(conn, alias)
@@ -157,7 +159,11 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
                 .or_else(|| details.iter().find(|d| d.model_id == true_model_id));
 
             if let Some(w) = weekly_detail {
-                let limit = if w.session_limit > 0 { w.session_limit } else { 1000 };
+                let limit = if w.session_limit > 0 {
+                    w.session_limit
+                } else {
+                    1000
+                };
                 if (w.session_used >= limit || w.remaining_fraction <= 0.001)
                     && w.session_reset_at
                         .as_deref()
@@ -255,7 +261,8 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
 
         for url in &endpoints {
             let mut req = UpstreamRequest::post_json(*url, payload.clone());
-            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", account.access_token)) {
+            if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", account.access_token))
+            {
                 req.headers.insert(http::header::AUTHORIZATION, v);
             }
             openproxy_adapters::antigravity_headers::inject_antigravity_headers(
@@ -264,7 +271,10 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
             );
 
             let cancel = CancellationToken::new();
-            match upstream.call(req, TimeoutProfile::ModelDiscovery, cancel).await {
+            match upstream
+                .call(req, TimeoutProfile::ModelDiscovery, cancel)
+                .await
+            {
                 Ok(resp) => {
                     let status = resp.status;
                     let body = resp.collect().await.unwrap_or_default();

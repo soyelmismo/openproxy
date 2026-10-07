@@ -15,8 +15,8 @@ mod tests;
 
 pub use antigravity::{scan_antigravity_cli, scan_antigravity_oauth_creds};
 pub use claude_code::{
-    claude_config_dir, scan_claude_code_cli, scan_claude_swap_backups,
-    write_claude_code_credentials, ClaudeCodeWriteOptions,
+    ClaudeCodeWriteOptions, claude_config_dir, scan_claude_code_cli, scan_claude_swap_backups,
+    write_claude_code_credentials,
 };
 
 /// Home directory via `std::env::var_os("HOME")`, fallback to `USERPROFILE`.

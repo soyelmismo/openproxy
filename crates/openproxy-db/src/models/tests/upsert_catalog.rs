@@ -180,7 +180,10 @@ fn test_prune_obsolete_models_respects_prune_models_disabled() {
             |r| r.get(0),
         )
         .expect("count models");
-    assert_eq!(count, 2, "all models must be retained when prune_models = 0");
+    assert_eq!(
+        count, 2,
+        "all models must be retained when prune_models = 0"
+    );
 }
 
 #[test]
@@ -232,8 +235,14 @@ fn test_prune_obsolete_models_disabled_preserves_combo_targets() {
         )
         .expect("query existence");
 
-    assert!(pinned_exists, "pinned model must NOT be pruned when prune_models = 0");
-    assert!(unpinned_exists, "unpinned model must NOT be pruned when prune_models = 0");
+    assert!(
+        pinned_exists,
+        "pinned model must NOT be pruned when prune_models = 0"
+    );
+    assert!(
+        unpinned_exists,
+        "unpinned model must NOT be pruned when prune_models = 0"
+    );
 
     let target_count: i64 = conn
         .query_row(
@@ -242,5 +251,8 @@ fn test_prune_obsolete_models_disabled_preserves_combo_targets() {
             |r| r.get(0),
         )
         .expect("query combo_targets count");
-    assert_eq!(target_count, 1, "combo_targets row must NOT be deleted by cascade when prune_models = 0");
+    assert_eq!(
+        target_count, 1,
+        "combo_targets row must NOT be deleted by cascade when prune_models = 0"
+    );
 }

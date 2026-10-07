@@ -481,10 +481,22 @@ pub async fn apply_account_local_cli(
                 .as_deref()
                 .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
                 .map_or((None, None, None, None), |val| {
-                    let acc_uuid = val.get("account_uuid").and_then(|v| v.as_str()).map(str::to_string);
-                    let org_uuid = val.get("organization_uuid").and_then(|v| v.as_str()).map(str::to_string);
-                    let sub = val.get("subscription_type").and_then(|v| v.as_str()).map(str::to_string);
-                    let tier = val.get("rate_limit_tier").and_then(|v| v.as_str()).map(str::to_string);
+                    let acc_uuid = val
+                        .get("account_uuid")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let org_uuid = val
+                        .get("organization_uuid")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let sub = val
+                        .get("subscription_type")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let tier = val
+                        .get("rate_limit_tier")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
                     (acc_uuid, org_uuid, sub, tier)
                 });
 

@@ -73,17 +73,26 @@ pub fn scan_claude_code_cli() -> Option<DiscoveredAccount> {
         {
             if let Some(acc) = cfg_v.get("oauthAccount").and_then(|v| v.as_object()) {
                 if email.is_none()
-                    && let Some(em) = acc.get("emailAddress").and_then(|s| s.as_str()).filter(|s| !s.trim().is_empty())
+                    && let Some(em) = acc
+                        .get("emailAddress")
+                        .and_then(|s| s.as_str())
+                        .filter(|s| !s.trim().is_empty())
                 {
                     email = Some(em.to_string());
                 }
                 if account_uuid.is_none()
-                    && let Some(u) = acc.get("accountUuid").or_else(|| acc.get("account_uuid")).and_then(|s| s.as_str())
+                    && let Some(u) = acc
+                        .get("accountUuid")
+                        .or_else(|| acc.get("account_uuid"))
+                        .and_then(|s| s.as_str())
                 {
                     account_uuid = Some(u.to_string());
                 }
                 if org_uuid.is_none()
-                    && let Some(o) = acc.get("organizationUuid").or_else(|| acc.get("organization_uuid")).and_then(|s| s.as_str())
+                    && let Some(o) = acc
+                        .get("organizationUuid")
+                        .or_else(|| acc.get("organization_uuid"))
+                        .and_then(|s| s.as_str())
                 {
                     org_uuid = Some(o.to_string());
                 }
@@ -110,10 +119,13 @@ pub fn scan_claude_code_cli() -> Option<DiscoveredAccount> {
     };
 
     let oauth_provider_specific = if account_uuid.is_some() || org_uuid.is_some() {
-        Some(serde_json::json!({
-            "account_uuid": account_uuid,
-            "organization_uuid": org_uuid,
-        }).to_string())
+        Some(
+            serde_json::json!({
+                "account_uuid": account_uuid,
+                "organization_uuid": org_uuid,
+            })
+            .to_string(),
+        )
     } else {
         None
     };
@@ -168,7 +180,8 @@ pub fn scan_claude_swap_backups() -> Vec<DiscoveredAccount> {
             {
                 Some(v)
             } else if let Ok(trimmed) = std::str::from_utf8(&raw_bytes)
-                && let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(trimmed.trim())
+                && let Ok(decoded) =
+                    base64::engine::general_purpose::STANDARD.decode(trimmed.trim())
                 && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&decoded)
             {
                 Some(v)
@@ -207,8 +220,12 @@ pub fn scan_claude_swap_backups() -> Vec<DiscoveredAccount> {
                 .filter(|s| !s.trim().is_empty())
                 .map(str::to_string)
                 .or_else(|| {
-                    crate::oauth::decode_jwt_payload(&access_token)
-                        .and_then(|claims| claims.get("email").and_then(|e| e.as_str()).map(str::to_string))
+                    crate::oauth::decode_jwt_payload(&access_token).and_then(|claims| {
+                        claims
+                            .get("email")
+                            .and_then(|e| e.as_str())
+                            .map(str::to_string)
+                    })
                 });
 
             let stem = path
@@ -230,16 +247,22 @@ pub fn scan_claude_swap_backups() -> Vec<DiscoveredAccount> {
 
             let org_uuid = val
                 .get("oauthAccount")
-                .and_then(|a| a.get("organizationUuid").or_else(|| a.get("organization_uuid")))
+                .and_then(|a| {
+                    a.get("organizationUuid")
+                        .or_else(|| a.get("organization_uuid"))
+                })
                 .or_else(|| val.get("organizationUuid"))
                 .and_then(|s| s.as_str())
                 .map(str::to_string);
 
             let oauth_provider_specific = if account_uuid.is_some() || org_uuid.is_some() {
-                Some(serde_json::json!({
-                    "account_uuid": account_uuid,
-                    "organization_uuid": org_uuid,
-                }).to_string())
+                Some(
+                    serde_json::json!({
+                        "account_uuid": account_uuid,
+                        "organization_uuid": org_uuid,
+                    })
+                    .to_string(),
+                )
             } else {
                 None
             };
@@ -293,7 +316,8 @@ pub fn write_claude_code_credentials(
 
     // Read existing credentials JSON to preserve other fields
     let mut creds_root = match std::fs::read(&creds_file) {
-        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_else(|_| serde_json::json!({})),
+        Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+            .unwrap_or_else(|_| serde_json::json!({})),
         Err(_) => serde_json::json!({}),
     };
 
@@ -362,17 +386,15 @@ pub fn write_claude_code_credentials(
     })?;
 
     f.write_all(creds_str.as_bytes()).map_err(|e| {
-        CoreError::Validation(format!(
-            "Failed to write to {}: {e}",
-            creds_file.display()
-        ))
+        CoreError::Validation(format!("Failed to write to {}: {e}", creds_file.display()))
     })?;
 
     // Update global ~/.claude.json oauthAccount and hasAvailableSubscription
     if let Some(home) = home_dir() {
         let global_config = home.join(".claude.json");
         let mut global_root = match std::fs::read(&global_config) {
-            Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes).unwrap_or_else(|_| serde_json::json!({})),
+            Ok(bytes) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                .unwrap_or_else(|_| serde_json::json!({})),
             Err(_) => serde_json::json!({}),
         };
 
@@ -408,7 +430,10 @@ pub fn write_claude_code_credentials(
 
         if let Some(obj) = global_root.as_object_mut() {
             obj.insert("oauthAccount".to_string(), oauth_account.clone());
-            obj.insert("hasAvailableSubscription".to_string(), serde_json::Value::Bool(true));
+            obj.insert(
+                "hasAvailableSubscription".to_string(),
+                serde_json::Value::Bool(true),
+            );
         }
 
         if let Ok(global_str) = serde_json::to_string_pretty(&global_root) {
@@ -423,7 +448,16 @@ pub fn write_claude_code_credentials(
         let cswap_backup_dir = home.join(".claude-swap-backup");
         if cswap_backup_dir.is_dir() {
             let backup_file_name = if let Some(em) = opts.email.filter(|s| !s.trim().is_empty()) {
-                let safe_em: String = em.chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
+                let safe_em: String = em
+                    .chars()
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '.' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
+                    .collect();
                 format!("account-{safe_em}.json")
             } else {
                 "account-current.json".to_string()
