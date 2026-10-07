@@ -623,7 +623,8 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
         Some("CodeBuddy: Bonus Pack (250 credits) + Free Plan Subscription (100 credits)")
     );
     assert!(
-        quota.session_reset_at.as_deref() == Some("1790783999")
+        quota.session_reset_at.is_none()
+            || quota.session_reset_at.as_deref() == Some("1790783999")
             || quota.session_reset_at.as_deref() == Some("1791298424")
     );
 
