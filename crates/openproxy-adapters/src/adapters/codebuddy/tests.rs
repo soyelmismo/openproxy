@@ -593,9 +593,9 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
                             "CapacitySize": 250,
                             "CapacityRemain": 250,
                             "CapacityUsed": 0,
-                            "CycleStartTime": "2026-09-22 22:53:45",
-                            "CycleEndTime": "2026-10-06 22:53:44",
-                            "DeductionEndTime": 1791298424000_i64,
+                            "CycleStartTime": "2027-09-22 22:53:45",
+                            "CycleEndTime": "2027-10-06 22:53:44",
+                            "DeductionEndTime": 1822844024000_i64,
                             "Status": 0
                         },
                         {
@@ -604,8 +604,8 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
                             "CapacitySize": 100,
                             "CapacityRemain": 100,
                             "CapacityUsed": 0,
-                            "CycleStartTime": "2026-09-01 00:00:00",
-                            "CycleEndTime": "2026-09-30 23:59:59",
+                            "CycleStartTime": "2027-09-01 00:00:00",
+                            "CycleEndTime": "2027-09-30 23:59:59",
                             "DeductionEndTime": 2050412025000_i64,
                             "Status": 0
                         }
@@ -624,8 +624,8 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
     );
     assert!(
         quota.session_reset_at.is_none()
-            || quota.session_reset_at.as_deref() == Some("1790783999")
-            || quota.session_reset_at.as_deref() == Some("1791298424")
+            || quota.session_reset_at.as_deref() == Some("1822319999")
+            || quota.session_reset_at.as_deref() == Some("1822834424")
     );
 
     let details = quota.model_details.unwrap();
