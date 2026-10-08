@@ -242,3 +242,54 @@ pub(crate) async fn run_proxy_tunnel(
         Err(io::Error::other(format!("Unsupported proxy scheme: {}", proxy.scheme)).into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_proxy_url_valid() {
+        let proxy = parse_proxy_url("http://user:pass@127.0.0.1:8080").expect("valid url");
+        assert_eq!(proxy.scheme, "http");
+        assert_eq!(proxy.host, "127.0.0.1");
+        assert_eq!(proxy.port, 8080);
+        assert_eq!(proxy.auth.as_deref(), Some("user:pass"));
+
+        let proxy_socks = parse_proxy_url("socks5://localhost:1080").expect("valid url");
+        assert_eq!(proxy_socks.scheme, "socks5");
+        assert_eq!(proxy_socks.host, "localhost");
+        assert_eq!(proxy_socks.port, 1080);
+        assert!(proxy_socks.auth.is_none());
+    }
+
+    #[test]
+    fn test_parse_proxy_url_invalid() {
+        assert!(parse_proxy_url("invalid-url").is_err());
+        assert!(parse_proxy_url("http://").is_err());
+        assert!(parse_proxy_url("http://localhost").is_err()); // missing port
+    }
+
+    #[test]
+    fn test_socks5_build_connect_req_ipv4() {
+        let req = socks5_build_connect_req("127.0.0.1", 8080);
+        assert_eq!(req, vec![0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x1f, 0x90]);
+    }
+
+    #[test]
+    fn test_socks5_build_connect_req_ipv6() {
+        let req = socks5_build_connect_req("::1", 8080);
+        let mut expected = vec![0x05, 0x01, 0x00, 0x04];
+        expected.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        expected.extend_from_slice(&[0x1f, 0x90]);
+        assert_eq!(req, expected);
+    }
+
+    #[test]
+    fn test_socks5_build_connect_req_domain() {
+        let req = socks5_build_connect_req("example.com", 80);
+        let mut expected = vec![0x05, 0x01, 0x00, 0x03, 11];
+        expected.extend_from_slice(b"example.com");
+        expected.extend_from_slice(&[0x00, 0x50]);
+        assert_eq!(req, expected);
+    }
+}
