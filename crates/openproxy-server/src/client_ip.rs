@@ -173,6 +173,27 @@ mod tests {
     }
 
     #[test]
+    fn test_is_ip_in_cidr_edge_cases() {
+        let ip4 = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50));
+        let ip6 = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+
+        // Prefix length 0 matches all addresses of the same family
+        assert!(is_ip_in_cidr(ip4, "0.0.0.0/0"));
+        assert!(is_ip_in_cidr(ip6, "::/0"));
+
+        // Invalid prefix length range (>32 for IPv4, >128 for IPv6)
+        assert!(!is_ip_in_cidr(ip4, "192.168.1.0/33"));
+        assert!(!is_ip_in_cidr(ip6, "2001:db8::/129"));
+
+        // Non-numeric prefix length
+        assert!(!is_ip_in_cidr(ip4, "192.168.1.0/abc"));
+
+        // IP version mismatch
+        assert!(!is_ip_in_cidr(ip4, "2001:db8::/32"));
+        assert!(!is_ip_in_cidr(ip6, "192.168.1.0/24"));
+    }
+
+    #[test]
     fn test_is_trusted_proxy_loopback() {
         let local_v4 = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let local_v4_alias = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 253));
