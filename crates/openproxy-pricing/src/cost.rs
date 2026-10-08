@@ -462,6 +462,18 @@ mod tests {
         assert!(sanitized.len() <= 2048 + "...[truncated]".len());
     }
 
+    #[test]
+    fn redact_caps_at_2kb_multibyte_utf8() {
+        // Construct a string where character boundary at index 2048 falls inside a multi-byte UTF-8 character (e.g. 🦀 = 4 bytes)
+        let prefix = "a".repeat(2047);
+        let raw = format!("{prefix}🦀🦀🦀🦀");
+        let (sanitized, _redacted) = redact_error_msg(&raw);
+        assert!(sanitized.ends_with("...[truncated]"));
+        assert!(sanitized.contains("...[truncated]"));
+        // Ensure no panic happened and string is valid UTF-8
+        assert!(std::str::from_utf8(sanitized.as_bytes()).is_ok());
+    }
+
     // The live-logs WebSocket terminal event goes through redact_error_msg, so a
     // new secret format needs an assertion here to keep WS and DB rows in sync.
 
