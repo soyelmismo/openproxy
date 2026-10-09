@@ -513,4 +513,21 @@ mod tests {
         assert_eq!(cost, 0.0);
         assert!(tps.is_none());
     }
+
+    #[test]
+    fn record_and_record_with_retry_inserts_row() {
+        let conn = openproxy_db::testing::open_in_memory();
+        let input = make_input();
+
+        let id1 = record(&conn, &input).expect("record should succeed");
+        assert!(id1.0 > 0);
+
+        let id2 = record_with_retry(&conn, &input).expect("record_with_retry should succeed");
+        assert!(id2.0 > id1.0);
+
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM usage", [], |r| r.get(0))
+            .expect("query usage count");
+        assert_eq!(count, 2);
+    }
 }
