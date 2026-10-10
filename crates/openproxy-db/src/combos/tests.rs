@@ -282,8 +282,8 @@ fn test_compute_effective_context_window_recursive_and_inactive_filters() {
     let cw_topics_inferred = compute_effective_context_window(&conn, ComboId(10)).unwrap();
     assert_eq!(cw_topics_inferred, Some(128_000));
 
-    // 6. Override capping: set context_window override on topics
-    // If override is 512k, but natural is 128k, capped to 128k
+    // 6. Override forcing: set context_window override on topics
+    // If override is 512k, it is FORCED even though natural is 128k
     conn.execute(
         "UPDATE combos SET context_window = 512000 WHERE id = 10",
         [],
@@ -291,10 +291,10 @@ fn test_compute_effective_context_window_recursive_and_inactive_filters() {
     .unwrap();
     assert_eq!(
         compute_effective_context_window(&conn, ComboId(10)).unwrap(),
-        Some(128_000)
+        Some(512_000)
     );
 
-    // If override is 64k (lower than 128k natural), capped lower to 64k
+    // If override is 64k (lower than 128k natural), it still wins
     conn.execute("UPDATE combos SET context_window = 64000 WHERE id = 10", [])
         .unwrap();
     assert_eq!(
@@ -348,40 +348,59 @@ fn test_deep_nested_combos_alternating_overrides_and_depth_limit() {
         Some(256_000)
     );
 
-    // Level 4 override = 300k, capped to natural 256k -> 256k
+    // Level 4 override = 300k, FORCED over natural 256k -> 300k
+    assert_eq!(
+        compute_effective_context_window(&conn, ComboId(4)).unwrap(),
+        Some(300_000)
+    );
+
+    // Level 3 natural = inherited from level 4 (300k) -> 300k
+    assert_eq!(
+        compute_effective_context_window(&conn, ComboId(3)).unwrap(),
+        Some(300_000)
+    );
+
+    // Level 2 override = 1M, FORCED over inherited 300k -> 1M
+    assert_eq!(
+        compute_effective_context_window(&conn, ComboId(2)).unwrap(),
+        Some(1_000_000)
+    );
+
+    // Level 1 top-level = inherited 1M (depth 0 to 4 within MAX_SUB_COMBO_DEPTH = 5)
+    assert_eq!(
+        compute_effective_context_window(&conn, ComboId(1)).unwrap(),
+        Some(1_000_000)
+    );
+
+    // Level 4 override 64k is forced at level 4, but level 2 still has its own
+    // override (1M), which wins over the inherited 64k when bubbling up.
+    conn.execute("UPDATE combos SET context_window = 64000 WHERE id = 4", [])
+        .unwrap();
+    assert_eq!(
+        compute_effective_context_window(&conn, ComboId(4)).unwrap(),
+        Some(64_000)
+    );
+    assert_eq!(
+        compute_effective_context_window(&conn, ComboId(1)).unwrap(),
+        Some(1_000_000)
+    );
+
+    // Reset level 4 override: level 4 falls back to its natural 256k leaf value,
+    // but level 2's override still wins at the top.
+    conn.execute("UPDATE combos SET context_window = NULL WHERE id = 4", [])
+        .unwrap();
     assert_eq!(
         compute_effective_context_window(&conn, ComboId(4)).unwrap(),
         Some(256_000)
     );
-
-    // Level 3 natural = inherited from level 4 (256k) -> 256k
-    assert_eq!(
-        compute_effective_context_window(&conn, ComboId(3)).unwrap(),
-        Some(256_000)
-    );
-
-    // Level 2 override = 1M, capped to inherited 256k -> 256k
-    assert_eq!(
-        compute_effective_context_window(&conn, ComboId(2)).unwrap(),
-        Some(256_000)
-    );
-
-    // Level 1 top-level = inherited 256k (depth 0 to 4 within MAX_SUB_COMBO_DEPTH = 5)
     assert_eq!(
         compute_effective_context_window(&conn, ComboId(1)).unwrap(),
-        Some(256_000)
+        Some(1_000_000)
     );
 
-    // If level 4 has lower override (64k < 256k natural), it constrains the whole chain upwards
-    conn.execute("UPDATE combos SET context_window = 64000 WHERE id = 4", [])
-        .unwrap();
-    assert_eq!(
-        compute_effective_context_window(&conn, ComboId(1)).unwrap(),
-        Some(64_000)
-    );
-
-    // Reset level 4 override
-    conn.execute("UPDATE combos SET context_window = NULL WHERE id = 4", [])
+    // Clear level 2's override too: no override anywhere, so the natural
+    // leaf minimum (256k) propagates up the whole chain.
+    conn.execute("UPDATE combos SET context_window = NULL WHERE id = 2", [])
         .unwrap();
     assert_eq!(
         compute_effective_context_window(&conn, ComboId(1)).unwrap(),

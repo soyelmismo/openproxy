@@ -136,10 +136,12 @@ fn compute_effective_context_window_recursive(
 
     let natural = aggregate_target_context_windows(conn, combo_id, visited, depth)?;
 
-    let res = match (cw, natural) {
-        (Some(o), Some(n)) => Ok(Some(std::cmp::min(o, n))),
-        (Some(o), None) => Ok(Some(o)),
-        (None, n) => Ok(n),
+    // An explicit context_window override is FORCED: it wins over whatever the
+    // targets declare. Without an override the effective window is the natural
+    // minimum across targets (a target that declares less caps the combo).
+    let res = match cw {
+        Some(o) => Ok(Some(o)),
+        None => Ok(natural),
     };
 
     visited.pop();
