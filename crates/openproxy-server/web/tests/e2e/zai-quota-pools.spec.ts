@@ -106,7 +106,7 @@ test('real production pools render with live figures', async ({ page }) => {
     id: p.id, source: p.source, plan_name: p.plan_name, status: p.status,
     unit: p.unit, used: p.used, limit: p.limit, remaining: p.remaining,
     reset_at: p.reset_at, expires_at: p.expires_at, starts_at: p.starts_at,
-    model_ids: p.model_ids, model_details: p.model_details,
+    model_ids: p.model_ids, model_details: p.model_details ?? null,
   }));
   await page.setViewportSize({ width: 1280, height: 900 });
   await renderAccount(page, pools);
