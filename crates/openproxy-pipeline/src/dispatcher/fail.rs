@@ -328,7 +328,7 @@ impl UpstreamDispatcher {
                 r#"{"error":{"code":"entitlement_exhausted","message":"Z.ai selected quota is exhausted or expired"}}"#.to_owned()
             } else {
                 format!(
-                    "Z.ai selected quota inference failed (HTTP {status_code}); paid fallback was not attempted"
+                    "Z.ai selected quota inference failed (HTTP {status_code}); paid fallback was not attempted; upstream: {body_str}"
                 )
             }
         } else if let Some(ref purl) = dctx.proxy_url {
