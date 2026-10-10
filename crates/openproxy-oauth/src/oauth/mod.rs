@@ -44,6 +44,7 @@ pub mod codex;
 pub mod generic;
 pub mod kiro;
 pub mod minimax;
+pub mod nous;
 pub mod tickets;
 pub mod util;
 pub mod zai;
@@ -386,6 +387,7 @@ define_oauth_provider! {
             Cline(self::cline::ClineOAuthProvider),
             Kiro(self::kiro::KiroOAuthProvider),
             MiniMax(self::minimax::MiniMaxOAuthProvider),
+            Nous(self::nous::NousOAuthProvider),
             Zai(self::zai::ZaiOAuthProvider),
         }
         custom {
