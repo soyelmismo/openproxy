@@ -56,6 +56,26 @@ impl MiniMaxAdapter {
 use crate::adapters::ProviderAdapter;
 crate::adapters::derive_default_from_new!(MiniMaxAdapter);
 
+/// MiniMax's Anthropic-compatible Messages endpoint ignores Anthropic's
+/// `thinking.budget_tokens` (verified: it is silently dropped upstream). It
+/// controls thinking depth with `output_config.effort` and requires
+/// `thinking.type == "adaptive"` (M3.1-Flash always thinks; "disabled" → HTTP 400).
+///
+/// The generic Anthropic translator has already turned the combo target's
+/// `thinking_effort` into `thinking.budget_tokens`; here we translate that into
+/// MiniMax's native dialect. Called from [`MiniMaxAdapter::wrap_request_body`].
+fn patch_minimax_thinking_object(obj: &mut serde_json::Map<String, serde_json::Value>, effort: Option<&str>) {
+    // Only rewrite when the translator actually produced a thinking block;
+    // otherwise leave the request untouched (MiniMax applies its own default).
+    if !obj.contains_key("thinking") {
+        return;
+    }
+    obj.insert("thinking".to_string(), serde_json::json!({"type": "adaptive"}));
+    if let Some(effort) = effort.filter(|e| *e != "none") {
+        obj.insert("output_config".to_string(), serde_json::json!({"effort": effort}));
+    }
+}
+
 impl ProviderAdapter for MiniMaxAdapter {
     fn config(&self) -> &ProviderAdapterConfig {
         &self.config
@@ -126,6 +146,22 @@ impl ProviderAdapter for MiniMaxAdapter {
         }
         crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
         headers
+    }
+
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: TargetFormat,
+        _model: &ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        if target_format != TargetFormat::Anthropic {
+            return Ok(body);
+        }
+        let effort = resolved_target.target.thinking_effort.as_deref();
+        crate::adapters::traits::patch_json_request_body(body, |obj| {
+            patch_minimax_thinking_object(obj, effort)
+        })
     }
 
     fn models_url(&self) -> Option<String> {
