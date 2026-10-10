@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::num::NonZero;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use governor::{Quota, RateLimiter};
 use openproxy_adapters::upstream::UpstreamClient;
