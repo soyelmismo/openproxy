@@ -114,6 +114,19 @@ impl OAuthProvider for NousOAuthProvider {
         OAuthFlow::DeviceCode
     }
 
+    /// Nous uses device code, not the PKCE authorization-code flow.
+    fn exchange_code(
+        &self,
+        _code: &str,
+        _code_verifier: &str,
+        _upstream_client: &Arc<UpstreamClient>,
+        _redirect_uri: &str,
+    ) -> impl std::future::Future<Output = Result<TokenResponse>> + Send {
+        std::future::ready(Err(crate::error::CoreError::Validation(
+            "nous uses device code flow, not authorization code".into(),
+        )))
+    }
+
     /// The Portal expects the absolute device-code URL. The generic provider
     /// posts to `resolved_device_auth_url()`, which is the bare path from the
     /// spec, so we resolve the full URL here before delegating.

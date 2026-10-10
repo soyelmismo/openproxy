@@ -28,11 +28,11 @@ declare_openai_adapter!(
         fn wrap_request_body(
             &self,
             body: bytes::Bytes,
-            target_format: TargetFormat,
-            _model: &ModelId,
+            target_format: openproxy_types::TargetFormat,
+            _model: &openproxy_types::ModelId,
             resolved_target: &openproxy_types::context::ResolvedTarget,
         ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-            if target_format != TargetFormat::Openai {
+            if target_format != openproxy_types::TargetFormat::Openai {
                 return Ok(body);
             }
 
@@ -177,6 +177,7 @@ fn synthetic_api_key_user(api_key: &str, account_label: Option<&str>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::traits::ProviderAdapter;
     use base64::Engine as _;
 
     fn make_jwt(claims: &serde_json::Value) -> String {
@@ -281,7 +282,7 @@ mod tests {
         let body = adapter
             .wrap_request_body(
                 bytes::Bytes::from_static(br#"{"model":"m","messages":[]}"#),
-                TargetFormat::Openai,
+                openproxy_types::TargetFormat::Openai,
                 &openproxy_types::ModelId::new("m"),
                 &target("", Some("hermes"), Some(&token)),
             )
@@ -297,7 +298,7 @@ mod tests {
         let body = adapter
             .wrap_request_body(
                 bytes::Bytes::from_static(br#"{"model":"m","messages":[]}"#),
-                TargetFormat::Openai,
+                openproxy_types::TargetFormat::Openai,
                 &openproxy_types::ModelId::new("m"),
                 &target("sk-nous-xyz", Some("hermes-main"), None),
             )
@@ -315,7 +316,7 @@ mod tests {
         let body = adapter
             .wrap_request_body(
                 bytes::Bytes::from_static(br#"{"model":"m","tags":["user=mine"]}"#),
-                TargetFormat::Openai,
+                openproxy_types::TargetFormat::Openai,
                 &openproxy_types::ModelId::new("m"),
                 &target("sk-nous-xyz", Some("hermes-main"), None),
             )
@@ -336,7 +337,7 @@ mod tests {
         let body = adapter
             .wrap_request_body(
                 bytes::Bytes::from_static(original),
-                TargetFormat::Anthropic,
+                openproxy_types::TargetFormat::Anthropic,
                 &openproxy_types::ModelId::new("m"),
                 &target("sk-nous-xyz", Some("hermes-main"), None),
             )
