@@ -10,7 +10,8 @@ crate::def_table_select!(
      quota_plan_name, quota_last_fetched_at, quota_fetch_error, \
      quota_model_details, \
      auth_type, email, oauth_scope, oauth_provider_specific, expires_at, \
-     created_at, current_proxy_id"
+     created_at, current_proxy_id, \
+     quota_pools"
 );
 
 pub mod crud;

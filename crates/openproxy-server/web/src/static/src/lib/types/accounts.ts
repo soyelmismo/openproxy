@@ -71,6 +71,42 @@ export interface ModelQuotaDetail {
   remaining_fraction: number;
 }
 
+/** Origin of a Z.ai quota pool. `zcode_starter` is the free one-time grant,
+ *  `coding_plan` is the paid subscription bucket. */
+export type QuotaPoolSource = "zcode_starter" | "coding_plan";
+
+/** Lifecycle of a single quota pool, independent of the others. */
+export type QuotaPoolStatus =
+  | "active"
+  | "absent"
+  | "exhausted"
+  | "expired"
+  | "unavailable";
+
+/** A single, independently-tracked Z.ai quota bucket. Pools never share a unit,
+ *  so figures from different pools must never be summed. */
+export interface QuotaPool {
+  id: string;
+  source: QuotaPoolSource;
+  plan_name: string | null;
+  status: QuotaPoolStatus;
+  /** Measurement unit for this pool, e.g. "tokens" or "requests". */
+  unit: string;
+  used: number | null;
+  limit: number | null;
+  remaining: number | null;
+  /** Rolling reset timestamp (paid plans). */
+  reset_at: string | null;
+  /** Hard expiry timestamp (one-time starter grants). */
+  expires_at: string | null;
+  starts_at: string | null;
+  model_ids: string[];
+  model_details?: ModelQuotaDetail[] | null;
+  /** Per-pool fetch failure. Must not hide sibling pools that fetched fine. */
+  fetch_error: string | null;
+  last_fetched_at: string;
+}
+
 export interface AccountQuota {
   session_used: number | null;
   session_limit: number | null;
@@ -82,6 +118,8 @@ export interface AccountQuota {
   last_fetched_at: string;
   fetch_error: string | null;
   model_details?: ModelQuotaDetail[] | null;
+  /** Z.ai dual-quota pools (Starter + Coding Plan). Absent for other providers. */
+  pools?: QuotaPool[] | null;
 }
 
 export interface Account {
@@ -102,6 +140,8 @@ export interface Account {
   quota_last_fetched_at: string | null;
   quota_fetch_error: string | null;
   quota_model_details?: ModelQuotaDetail[] | null;
+  /** Z.ai dual-quota pools (Starter + Coding Plan). Absent for other providers. */
+  quota_pools?: QuotaPool[] | null;
   auth_type: string;
   email: string | null;
   oauth_scope: string | null;

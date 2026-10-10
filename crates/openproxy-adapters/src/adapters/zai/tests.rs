@@ -61,10 +61,27 @@ fn zai_tokens_extraction_from_meta() {
 
     // Fallback to api_key
     let tokens2 = ZaiTokens::from_provider_specific_and_args("raw-api-key", None, None);
-    assert_eq!(tokens2.zcode_jwt_token.as_deref(), Some("raw-api-key"));
+    assert_eq!(tokens2.api_key.as_deref(), Some("raw-api-key"));
+    assert!(tokens2.zcode_jwt_token.is_none());
+    assert!(tokens2.business_access_token.is_none());
+}
+
+#[test]
+fn credential_shape_never_crosses_product_boundary() {
+    let jwt = ["header", "payload", "signature"].join(".");
+    let key = ["key", "secret"].join(".");
+    let tokens = ZaiTokens::from_provider_specific_and_args(&key, Some(&jwt), None);
+    assert_eq!(tokens.zcode_jwt_token.as_deref(), Some(jwt.as_str()));
+    assert_eq!(tokens.api_key.as_deref(), Some(key.as_str()));
+    assert!(tokens.business_access_token.is_none());
+    let metadata = serde_json::json!({"business_access_token":"business-opaque"}).to_string();
+    let tokens =
+        ZaiTokens::from_provider_specific_and_args("", Some("business-opaque"), Some(&metadata));
+    assert!(tokens.zcode_jwt_token.is_none());
+    assert!(tokens.api_key.is_none());
     assert_eq!(
-        tokens2.business_access_token.as_deref(),
-        Some("raw-api-key")
+        tokens.business_access_token.as_deref(),
+        Some("business-opaque")
     );
 }
 

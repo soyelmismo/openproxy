@@ -60,6 +60,7 @@ impl RetryPolicy {
             Cancelled, RaceLost, RateLimited, UpstreamConnection, UpstreamError, UpstreamTimeout,
         };
         match err {
+            UpstreamError { provider, .. } if provider == "zai" => false,
             UpstreamTimeout { phase, .. } => is_timeout_retryable(phase, idle_chunk_retryable),
             UpstreamConnection(_) => !err.to_string().starts_with("client disconnected"),
             RateLimited {

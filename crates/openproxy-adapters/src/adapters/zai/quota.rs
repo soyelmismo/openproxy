@@ -1,12 +1,19 @@
-use super::{
-    ZAI_APP_VERSION, ZAI_BUSINESS_LOGIN_URL, ZAI_QUOTA_LIMIT_URL, ZAI_SUBSCRIPTION_LIST_URL,
-};
+use super::{ZAI_APP_VERSION, ZAI_BUSINESS_LOGIN_URL};
 use crate::adapters::{
-    Arc, CancellationToken, CoreError, Result, TimeoutProfile, UpstreamClient, UpstreamRequest,
+    Arc, CancellationToken, Result, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use openproxy_types::{AccountQuota, ModelQuotaDetail};
 
-#[derive(Default, Debug, Clone)]
+mod coding_plan;
+mod dual;
+#[cfg(test)]
+mod dual_tests;
+mod envelope;
+mod zcode;
+
+use dual::fetch_dual_quota;
+
+#[derive(Default, Clone)]
 pub struct ZaiTokens {
     pub zcode_jwt_token: Option<String>,
     pub business_access_token: Option<String>,
@@ -54,29 +61,28 @@ impl ZaiTokens {
                 .map(ToString::to_string);
         }
 
-        if let Some(at) = access_token.map(str::trim).filter(|s| !s.is_empty()) {
-            if at.contains('.') {
-                if tokens.api_key.is_none() {
-                    tokens.api_key = Some(at.to_string());
-                }
-            } else if tokens.zcode_jwt_token.is_none() {
-                tokens.zcode_jwt_token = Some(at.to_string());
+        // Metadata is authoritative. Never send an opaque business token to
+        // ZCode, or a three-segment JWT to the Coding Plan key endpoint.
+        for credential in [access_token.unwrap_or_default(), api_key] {
+            let credential = credential.trim();
+            if credential.is_empty()
+                || [
+                    tokens.zcode_jwt_token.as_deref(),
+                    tokens.business_access_token.as_deref(),
+                    tokens.zai_access_token.as_deref(),
+                    tokens.api_key.as_deref(),
+                ]
+                .contains(&Some(credential))
+            {
+                continue;
             }
-        }
-
-        let key = api_key.trim();
-        if !key.is_empty() {
-            if key.contains('.') {
-                if tokens.api_key.is_none() {
-                    tokens.api_key = Some(key.to_string());
-                }
+            let parts: Vec<_> = credential.split('.').collect();
+            if parts.len() == 3 && parts.iter().all(|part| !part.is_empty()) {
+                tokens
+                    .zcode_jwt_token
+                    .get_or_insert_with(|| credential.to_owned());
             } else {
-                if tokens.business_access_token.is_none() {
-                    tokens.business_access_token = Some(key.to_string());
-                }
-                if tokens.zcode_jwt_token.is_none() {
-                    tokens.zcode_jwt_token = Some(key.to_string());
-                }
+                tokens.api_key.get_or_insert_with(|| credential.to_owned());
             }
         }
 
@@ -141,6 +147,9 @@ pub(crate) async fn exchange_business_token_on_the_fly(
 
     let resp_bytes = resp.collect().await.ok()?;
     let json: serde_json::Value = serde_json::from_slice(&resp_bytes).ok()?;
+    if !envelope::envelope_is_success(&json) {
+        return None;
+    }
 
     json.get("data")
         .and_then(|d| d.get("access_token").or_else(|| d.get("accessToken")))
@@ -150,86 +159,15 @@ pub(crate) async fn exchange_business_token_on_the_fly(
         .map(ToString::to_string)
 }
 
-pub(crate) async fn fetch_zai_coding_plan_quota(
-    upstream: &Arc<UpstreamClient>,
-    business_token: &str,
-    proxy_url: Option<&str>,
-) -> Result<Option<AccountQuota>> {
-    let token = business_token.trim();
-    if token.is_empty() {
-        return Ok(None);
-    }
-
-    // 1. Check subscriptions list
-    let sub_req = build_zai_get_request(ZAI_SUBSCRIPTION_LIST_URL, token, proxy_url);
-    let cancel = CancellationToken::new();
-    let sub_resp = upstream
-        .call(sub_req, TimeoutProfile::Quota, cancel)
-        .await
-        .map_err(|e| e.to_core_error(ZAI_SUBSCRIPTION_LIST_URL))?;
-
-    if sub_resp.status == http::StatusCode::UNAUTHORIZED {
-        return Err(CoreError::UpstreamConnection(format!(
-            "{ZAI_SUBSCRIPTION_LIST_URL}: HTTP status 401"
-        )));
-    }
-
-    let sub_json: Option<serde_json::Value> = if sub_resp.status.is_success() {
-        let body = sub_resp
-            .collect()
-            .await
-            .map_err(|e| e.to_core_error(ZAI_SUBSCRIPTION_LIST_URL))?;
-        serde_json::from_slice(&body).ok()
-    } else {
-        None
-    };
-
-    // 2. Query quota limits
-    let limit_req = build_zai_get_request(ZAI_QUOTA_LIMIT_URL, token, proxy_url);
-    let cancel_limit = CancellationToken::new();
-    let limit_resp = upstream
-        .call(limit_req, TimeoutProfile::Quota, cancel_limit)
-        .await
-        .map_err(|e| e.to_core_error(ZAI_QUOTA_LIMIT_URL))?;
-
-    if limit_resp.status == http::StatusCode::UNAUTHORIZED {
-        return Err(CoreError::UpstreamConnection(format!(
-            "{ZAI_QUOTA_LIMIT_URL}: HTTP status 401"
-        )));
-    }
-
-    let limit_json: Option<serde_json::Value> = if limit_resp.status.is_success() {
-        let body = limit_resp
-            .collect()
-            .await
-            .map_err(|e| e.to_core_error(ZAI_QUOTA_LIMIT_URL))?;
-        serde_json::from_slice(&body).ok()
-    } else {
-        if let Ok(body) = limit_resp.collect().await
-            && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&body)
-        {
-            let msg = json
-                .get("msg")
-                .or_else(|| json.get("message"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            if msg.contains("coding plan") || msg.contains("不存在") {
-                return Ok(None);
-            }
-        }
-        None
-    };
-
-    Ok(parse_zai_coding_plan_quota(
-        sub_json.as_ref(),
-        limit_json.as_ref(),
-    ))
-}
-
 pub(crate) fn parse_zai_coding_plan_quota(
     sub_json: Option<&serde_json::Value>,
     limit_json: Option<&serde_json::Value>,
 ) -> Option<AccountQuota> {
+    if sub_json.is_some_and(|v| !envelope::envelope_is_success(v))
+        || limit_json.is_some_and(|v| !envelope::envelope_is_success(v))
+    {
+        return None;
+    }
     let mut plan_name = None;
     let mut period_end_secs = None;
 
@@ -384,6 +322,7 @@ pub(crate) fn parse_zai_coding_plan_quota(
         plan_name,
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: if model_details.is_empty() {
             None
         } else {
@@ -409,33 +348,7 @@ pub(crate) async fn fetch_zai_quota_unified(
             exchange_business_token_on_the_fly(upstream, zai_tok, proxy_url).await;
     }
 
-    let effective_token = tokens
-        .business_access_token
-        .or(tokens.api_key)
-        .or(tokens.zcode_jwt_token);
-
-    let Some(tok) = effective_token else {
-        return Err(CoreError::Validation(
-            "missing API key or access token for zai quota".into(),
-        ));
-    };
-
-    match fetch_zai_coding_plan_quota(upstream, &tok, proxy_url).await {
-        Ok(Some(q)) => Ok(q),
-        Ok(None) => Ok(AccountQuota {
-            session_used: Some(0),
-            session_limit: None,
-            session_reset_at: None,
-            weekly_used: None,
-            weekly_limit: None,
-            weekly_reset_at: None,
-            plan_name: Some("No active Coding Plan".into()),
-            last_fetched_at: openproxy_types::now_unix_secs_str(),
-            fetch_error: None,
-            model_details: None,
-        }),
-        Err(e) => Err(e),
-    }
+    fetch_dual_quota(upstream, &tokens, proxy_url).await
 }
 
 fn normalize_unix_secs(ts: u64) -> u64 {

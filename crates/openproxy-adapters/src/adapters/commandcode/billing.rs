@@ -197,5 +197,6 @@ pub(crate) async fn fetch_commandcode_quota(
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
         model_details,
+        pools: None,
     })
 }

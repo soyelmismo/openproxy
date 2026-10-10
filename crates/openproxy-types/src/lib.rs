@@ -77,7 +77,10 @@ pub use config::{
     RacingConfig, RetriesConfig, ServerConfig, SmartWarmupConfig, SqliteSynchronous, StorageConfig,
     TimeoutsConfig,
 };
-pub use quota::{AccountQuota, ModelQuotaDetail, now_unix_secs_str};
+pub use quota::{
+    AccountQuota, ModelQuotaDetail, QuotaPool, QuotaPoolStatus, QuotaSource, now_unix_secs_str,
+    zai_remaining_fraction,
+};
 pub use responses::{ResponsesContent, ResponsesInputItem, ResponsesRequest};
 pub mod model_normalize;
 pub use model_normalize::{candidate_normalized_forms, normalize_model_id};

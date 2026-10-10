@@ -380,9 +380,35 @@ impl PipelineStage for DispatchStage {
         let target_format = ctx.target_format.ok_or_else(|| {
             CoreError::Internal("missing target_format in pipeline context".into())
         })?;
-        let url =
-            adapter.build_chat_url_for_account(target_format, &model.model_id, account_label_str);
-        let mut headers = adapter.build_headers(api_key, target_format, &model.model_id);
+        let mut zai_route = if target.provider_id.as_str() == "zai" {
+            match super::zai::prepare_zai_route(
+                &ctx.pipeline,
+                current,
+                &adapter.config().base_url,
+                ctx.req.proxy_override.as_ref(),
+            )
+            .await
+            {
+                Ok(route) => Some(route),
+                Err(err) => return fail_stage!(ctx, target, &err, Some(model), err.http_status()),
+            }
+        } else {
+            None
+        };
+        let url = zai_route.as_ref().map_or_else(
+            || {
+                adapter.build_chat_url_for_account(
+                    target_format,
+                    &model.model_id,
+                    account_label_str,
+                )
+            },
+            |prepared| prepared.route.url.clone(),
+        );
+        let effective_key = zai_route
+            .as_ref()
+            .map_or(api_key, |prepared| prepared.route.credential.as_str());
+        let mut headers = adapter.build_headers(effective_key, target_format, &model.model_id);
         let codex_ws = current
             .custom_meta
             .as_ref()
@@ -411,7 +437,7 @@ impl PipelineStage for DispatchStage {
             CoreError::Internal("missing resolved_timeouts in pipeline context".into())
         })?;
 
-        let result = ctx
+        let mut result = ctx
             .pipeline
             .dispatcher
             .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
@@ -422,7 +448,7 @@ impl PipelineStage for DispatchStage {
                 target_format,
                 url: &url,
                 headers: &headers,
-                body_bytes,
+                body_bytes: body_bytes.clone(),
                 resolved_timeouts: &resolved_timeouts,
                 started,
                 attempt,
@@ -432,6 +458,73 @@ impl PipelineStage for DispatchStage {
             })
             .await;
 
+        let starter_depleted = zai_route.as_ref().is_some_and(|prepared| {
+            prepared.route.source == openproxy_types::quota::QuotaSource::ZcodeStarter
+        }) && result
+            .error
+            .as_ref()
+            .is_some_and(openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion);
+        if starter_depleted
+            && !ctx.is_streaming.unwrap_or(false)
+            && ctx.req.stream_sink.is_none()
+            && let Some(prepared) = zai_route.as_mut()
+            && super::zai::prepare_zai_paid_fallback(
+                &ctx.pipeline,
+                prepared,
+                model.model_id.as_str(),
+                &adapter.config().base_url,
+            )
+            .await
+            .is_ok()
+            && !ctx
+                .race_cancel
+                .as_ref()
+                .is_some_and(|cancel| cancel.is_cancelled())
+        {
+            let mut paid_headers =
+                adapter.build_headers(&prepared.route.credential, target_format, &model.model_id);
+            propagate_provider_target_headers(
+                &mut paid_headers,
+                target.provider_id.as_str(),
+                adapter.id().as_str(),
+                &ctx.req.request_headers,
+                &ctx.req.openai_request,
+                codex_ws,
+            );
+            result = ctx
+                .pipeline
+                .dispatcher
+                .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
+                    target,
+                    combo,
+                    req: ctx.req.clone(),
+                    model,
+                    target_format,
+                    url: &prepared.route.url,
+                    headers: &paid_headers,
+                    body_bytes,
+                    resolved_timeouts: &resolved_timeouts,
+                    started,
+                    attempt,
+                    race_size,
+                    trace_id: ctx.trace_id.clone(),
+                    is_streaming: ctx.is_streaming.unwrap_or(false),
+                })
+                .await;
+        }
+
+        if let Some(prepared) = zai_route.as_mut()
+            && let Some(error) = result.error.as_ref()
+            && let Err(error) = super::zai::record_zai_route_failure(
+                &ctx.pipeline,
+                prepared,
+                model.model_id.as_str(),
+                error,
+            )
+            .await
+        {
+            return fail_stage!(ctx, target, &error, Some(model), error.http_status());
+        }
         update_circuit_breaker_on_result(&ctx.pipeline, target, model, &result);
         update_predictive_limiter_on_result(&ctx.pipeline, target, &result);
         update_account_rate_limited_until_on_result(&ctx.pipeline, target, &result);

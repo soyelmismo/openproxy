@@ -386,6 +386,7 @@ pub fn parse_codebuddy_resource_quota_at(
         plan_name: Some(plan_name),
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: Some(model_details.into_boxed_slice()),
     })
 }
@@ -481,6 +482,7 @@ pub fn parse_codebuddy_accounts_quota(val: &serde_json::Value) -> AccountQuota {
         plan_name: Some(plan_name),
         last_fetched_at: now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: Some(model_details.into_boxed_slice()),
     }
 }
@@ -712,6 +714,7 @@ pub async fn fetch_codebuddy_quota_unified(
             fetch_error: Some(format!(
                 "upstream connection error: failed to fetch CodeBuddy quota from billing meter endpoints ({last_err})"
             )),
+            pools: None,
             model_details: Some(model_details.into_boxed_slice()),
         });
     }

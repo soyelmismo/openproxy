@@ -1,5 +1,5 @@
 use crate::ids::{AccountId, ProviderId};
-use crate::quota::ModelQuotaDetail;
+use crate::quota::{ModelQuotaDetail, QuotaPool};
 use serde::{Deserialize, Serialize};
 
 impl_string_enum! {
@@ -33,6 +33,11 @@ pub struct Account {
     pub quota_fetch_error: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quota_model_details: Option<Box<[ModelQuotaDetail]>>,
+    /// Independently accounted Z.ai / ZCode entitlements. Additive: absent on
+    /// every pre-existing row and in every pre-existing serialized `Account`,
+    /// so old payloads still deserialize (`serde(default)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_pools: Option<Box<[QuotaPool]>>,
     pub auth_type: Box<str>,
     pub email: Option<Box<str>>,
     pub oauth_scope: Option<Box<str>>,
@@ -100,6 +105,7 @@ mod tests {
             quota_last_fetched_at: None,
             quota_fetch_error: None,
             quota_model_details: None,
+            quota_pools: None,
             auth_type: "oauth".into(),
             email: Some("test@example.com".into()),
             oauth_scope: None,

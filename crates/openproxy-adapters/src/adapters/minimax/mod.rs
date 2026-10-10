@@ -297,6 +297,7 @@ impl MiniMaxAdapter {
             plan_name: None,
             last_fetched_at: openproxy_types::now_unix_secs_str(),
             fetch_error: Some(last_err.unwrap_or_else(|| "unknown error".into())),
+            pools: None,
             model_details: None,
         })
     }
@@ -430,6 +431,7 @@ fn parse_minimax_quota(
         plan_name,
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: None,
     })
 }

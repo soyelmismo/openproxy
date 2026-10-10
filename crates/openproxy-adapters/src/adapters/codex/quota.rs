@@ -136,6 +136,7 @@ pub fn parse_codex_usage_quota(body: &serde_json::Value) -> Result<AccountQuota>
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
         model_details,
+        pools: None,
     })
 }
 

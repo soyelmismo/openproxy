@@ -316,7 +316,22 @@ impl UpstreamDispatcher {
             .await;
         }
 
-        let body_str = if let Some(ref purl) = dctx.proxy_url {
+        let body_str = if target.provider_id.as_str() == "zai" {
+            let probe = CoreError::upstream_error(
+                status_code,
+                "zai",
+                dctx.model.model_id.as_str(),
+                &body_str,
+                false,
+            );
+            if openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion(&probe) {
+                r#"{"error":{"code":"entitlement_exhausted","message":"Z.ai selected quota is exhausted or expired"}}"#.to_owned()
+            } else {
+                format!(
+                    "Z.ai selected quota inference failed (HTTP {status_code}); paid fallback was not attempted"
+                )
+            }
+        } else if let Some(ref purl) = dctx.proxy_url {
             if body_str.contains(purl) {
                 body_str
             } else {
@@ -326,7 +341,8 @@ impl UpstreamDispatcher {
             body_str
         };
 
-        if (status_code == 401 || status_code == 403)
+        if target.provider_id.as_str() != "zai"
+            && (status_code == 401 || status_code == 403)
             && let Some(aid) = target.account_id
         {
             self.broadcast_account_invalid_notification(
@@ -338,7 +354,25 @@ impl UpstreamDispatcher {
             .await;
         }
 
-        let err = if is_rate_limited_status {
+        let structured_depletion = target.provider_id.as_str() == "zai"
+            && openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion(
+                &CoreError::upstream_error(
+                    status_code,
+                    "zai",
+                    dctx.model.model_id.as_str(),
+                    &body_str,
+                    false,
+                ),
+            );
+        let err = if structured_depletion {
+            CoreError::upstream_error(
+                status_code,
+                "zai",
+                dctx.model.model_id.as_str(),
+                body_str,
+                false,
+            )
+        } else if is_rate_limited_status {
             // RESOURCE_EXHAUSTED marks this (account, model) pair
             // live-limited for 5 minutes. Fire-and-forget: the dispatch
             // path must not block on a SQLite write.

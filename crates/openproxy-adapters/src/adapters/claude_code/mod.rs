@@ -684,6 +684,7 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
         plan_name,
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: if model_details.is_empty() {
             None
         } else {

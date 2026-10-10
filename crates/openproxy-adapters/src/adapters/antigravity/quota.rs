@@ -228,6 +228,7 @@ pub fn parse_antigravity_models_response(
         weekly_reset_at: None,
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: Some(details.into()),
     })
 }
@@ -360,6 +361,7 @@ pub fn parse_antigravity_user_quota_summary(
         plan_name: Some(plan_name.unwrap_or_else(|| "Antigravity".to_string())),
         last_fetched_at: openproxy_types::now_unix_secs_str(),
         fetch_error: None,
+        pools: None,
         model_details: if claude_details.is_empty() {
             None
         } else {
