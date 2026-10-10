@@ -281,14 +281,6 @@ export function showEditProviderHeaders(
               this provider.
             </p>
 
-            ${currentHeadersJson?.trim() === "***redacted***" && rows.length === 0 && !rawJson
-              ? html`
-                  <div class="banner banner-info" style="margin-bottom: var(--space-3); font-size: var(--fs-xs);">
-                    Current extra headers are configured and redacted for security. Setting new headers below will replace them.
-                  </div>
-                `
-              : html``}
-
             <div class="headers-strip-params-section">
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <label style="font-weight: 600; font-size: var(--fs-xs); color: var(--color-text);">

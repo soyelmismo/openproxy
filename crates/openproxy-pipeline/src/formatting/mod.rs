@@ -73,7 +73,6 @@ impl TargetFormatter for OpenaiFormatter {
                 view.extra.to_mut().remove(*key);
             }
         }
-        strip_provider_configured_params(&mut view.extra, &adapter.config().extra_headers);
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
@@ -82,23 +81,40 @@ impl TargetFormatter for OpenaiFormatter {
     }
 }
 
-/// Strips custom parameters specified per-provider in `extra_headers` (e.g. `X-OpenProxy-Strip-Params`).
-pub fn strip_provider_configured_params(
-    extra: &mut std::borrow::Cow<'_, serde_json::Map<String, serde_json::Value>>,
+/// Strips custom parameters specified per-provider in `extra_headers` (e.g. `X-OpenProxy-Strip-Params`)
+/// from a fully-formatted upstream JSON body.
+///
+/// This is the single, format-agnostic choke point for parameter stripping: it runs once in the
+/// target stage, AFTER the body has been formatted into its target dialect (OpenAI, Anthropic,
+/// Gemini, Responses, …) and AFTER the provider adapter's `wrap_request_body`. Because it operates
+/// on the final serialized body rather than on a typed intermediate, it works for every schema
+/// without any per-provider or per-format hardcoding: each provider configures the keys to drop
+/// via the `X-OpenProxy-Strip-Params` header and this function honors them uniformly.
+pub fn strip_provider_configured_params_from_body(
+    body: bytes::Bytes,
     extra_headers: &[(String, String)],
-) {
-    for (k, v) in extra_headers {
-        if k.eq_ignore_ascii_case("x-openproxy-strip-params")
+) -> Result<bytes::Bytes, CoreError> {
+    let has_strip_config = extra_headers.iter().any(|(k, _)| {
+        k.eq_ignore_ascii_case("x-openproxy-strip-params")
             || k.eq_ignore_ascii_case("x-strip-params")
-        {
-            for param in v.split(',') {
-                let clean = param.trim();
-                if !clean.is_empty() && extra.contains_key(clean) {
-                    extra.to_mut().remove(clean);
+    });
+    if !has_strip_config {
+        return Ok(body);
+    }
+    openproxy_adapters::adapters::traits::patch_json_request_body(body, |obj| {
+        for (k, v) in extra_headers {
+            if k.eq_ignore_ascii_case("x-openproxy-strip-params")
+                || k.eq_ignore_ascii_case("x-strip-params")
+            {
+                for param in v.split(',') {
+                    let clean = param.trim();
+                    if !clean.is_empty() {
+                        obj.remove(clean);
+                    }
                 }
             }
         }
-    }
+    })
 }
 
 fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {

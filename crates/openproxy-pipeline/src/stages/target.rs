@@ -234,6 +234,12 @@ impl PipelineStage for FormattingStage {
             .format_request(req_ref, &current.model, messages_ref, stream, adapter)
             .and_then(|body| {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
+            })
+            .and_then(|body| {
+                crate::formatting::strip_provider_configured_params_from_body(
+                    body,
+                    &adapter.config().extra_headers,
+                )
             }) {
             Ok(b) => b,
             Err(e) => return fail_stage!(ctx, &current.target, &e, Some(&current.model)),
