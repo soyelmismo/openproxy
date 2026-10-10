@@ -279,4 +279,19 @@ mod tests {
         assert_eq!(candidate_normalized_forms("").count(), 0);
         assert_eq!(candidate_normalized_forms(":free").count(), 0);
     }
+
+    #[test]
+    fn test_candidate_normalized_forms_chained_suffixes() {
+        let forms: Vec<&str> = candidate_normalized_forms("model-fast:thinking:online").collect();
+        assert_eq!(forms, vec!["model-fast:thinking", "model-fast", "model"]);
+    }
+
+    #[test]
+    fn test_normalize_model_id_colons_and_suffixes() {
+        assert_eq!(
+            normalize_model_id("provider/custom-model:thinking:extended"),
+            "custom-model-thinking"
+        );
+        assert_eq!(normalize_model_id("provider/model-v2:free"), "model");
+    }
 }
