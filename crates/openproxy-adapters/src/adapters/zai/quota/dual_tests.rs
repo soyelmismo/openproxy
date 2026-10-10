@@ -182,7 +182,7 @@ async fn independent_paid_failure_preserves_active_starter() {
 }
 
 #[tokio::test]
-async fn missing_starter_credential_is_unknown_not_confirmed_absent() {
+async fn missing_starter_credential_is_absent_while_unverified_paid_is_unknown() {
     let quota = fetch_dual_at(
         &UpstreamClient::new(),
         &Default::default(),
@@ -196,10 +196,24 @@ async fn missing_starter_credential_is_unknown_not_confirmed_absent() {
     .await
     .unwrap();
     let pools = quota.pools.unwrap();
+    // No ZCode credential is absence confirmed by configuration, so the
+    // Starter pool is Absent and may release the paid pool. A Coding Plan
+    // whose credential could not be read stays Unavailable: an unreadable
+    // snapshot never authorises spending, and never reports a balance.
+    let starter = pools
+        .iter()
+        .find(|pool| pool.source == QuotaSource::ZcodeStarter)
+        .expect("starter pool");
+    let paid = pools
+        .iter()
+        .find(|pool| pool.source == QuotaSource::CodingPlan)
+        .expect("paid pool");
+    assert_eq!(starter.status, QuotaPoolStatus::Absent);
+    assert_eq!(paid.status, QuotaPoolStatus::Unavailable);
+    assert_eq!(starter.remaining, None);
+    assert_eq!(paid.remaining, None);
     assert!(
-        pools
-            .iter()
-            .all(|pool| pool.status == QuotaPoolStatus::Unavailable)
+        starter.fetch_error.is_some(),
+        "the reason must stay recorded for the dashboard"
     );
-    assert!(pools.iter().all(|pool| pool.remaining.is_none()));
 }

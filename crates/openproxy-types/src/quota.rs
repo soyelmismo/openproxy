@@ -235,15 +235,20 @@ impl QuotaPool {
 
     /// Only a readable, definitive negative can justify spending another source.
     /// Unknown models, timestamps or budget are never a negative verdict.
+    ///
+    /// A confirmed negative outranks its explanatory `fetch_error`: a missing
+    /// credential is `Absent` with a note, not an unreadable snapshot, and
+    /// treating it as ambiguous would trap a key-only account out of the paid
+    /// plan it does hold. An `Unavailable` status is always ambiguous.
     pub fn is_known_ineligible_for_model(&self, now_secs: u64, model: &str) -> bool {
-        if self.fetch_error.is_some() || self.status == QuotaPoolStatus::Unavailable {
-            return false;
-        }
         if matches!(
             self.status,
             QuotaPoolStatus::Absent | QuotaPoolStatus::Exhausted | QuotaPoolStatus::Expired
         ) {
             return true;
+        }
+        if self.fetch_error.is_some() || self.status == QuotaPoolStatus::Unavailable {
+            return false;
         }
         if self.source == QuotaSource::ZcodeStarter && self.model_ids.is_empty() {
             return false;

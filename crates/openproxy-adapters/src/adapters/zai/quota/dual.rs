@@ -166,7 +166,7 @@ pub(super) async fn fetch_dual_at(
             ),
             None => vec![status_pool(
                 QuotaSource::ZcodeStarter,
-                QuotaPoolStatus::Unavailable,
+                QuotaPoolStatus::Absent,
                 Some("ZCode OAuth credential is missing; Starter balance is unknown".into()),
                 now,
             )],

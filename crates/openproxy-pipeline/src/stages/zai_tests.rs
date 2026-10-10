@@ -15,7 +15,7 @@ use super::super::zai::{ZaiPreparedRoute, prepare_zai_paid_fallback, prepare_zai
 use crate::Pipeline;
 use crate::context::ResolvedTarget;
 use openproxy_adapters::ProviderAdapter;
-use openproxy_adapters::adapters::zai::{ZCODE_STARTER_BASE_URL, is_zcode_entitlement_exhaustion};
+use openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion;
 use openproxy_db::MasterKey;
 use openproxy_types::accounts::StoreOAuthTokensParams;
 use openproxy_types::combos::ComboTarget;
@@ -227,9 +227,11 @@ async fn starter_route_uses_fixed_production_url_and_jwt_not_paid_key() {
 
     assert_eq!(prepared.route.source, QuotaSource::ZcodeStarter);
     assert_eq!(
-        prepared.route.url,
-        format!("{ZCODE_STARTER_BASE_URL}/v1/messages"),
-        "Starter must use the fixed production zcode endpoint"
+        prepared.route.url, "https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages",
+        "Starter must use the fixed production zcode endpoint: the official \
+         client (zcodeEndpoint.ts:383 + normalizeAnthropicBaseURL, which \
+         appends /v1) and the Anthropic SDK's /messages suffix compose exactly \
+         this path, so the /v1 here is correct and not a duplicate"
     );
     assert_eq!(
         prepared.route.credential, JWT_SENTINEL,

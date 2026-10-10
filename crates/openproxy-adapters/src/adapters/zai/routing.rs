@@ -95,6 +95,14 @@ pub fn resolve_zai_inference_route(
         ),
         QuotaSource::CodingPlan => (
             paid_base_url,
+            // Deliberately api_key only, while the billing read above prefers
+            // business_access_token. The two are different contracts: the
+            // Anthropic-compatible inference endpoint authenticates with the
+            // API key, whereas /api/biz/ and /api/monitor/ are backoffice
+            // endpoints that take the business token. A key-only-business
+            // account fails here with Auth rather than spending an unverified
+            // credential against a billable endpoint. Do not "symmetrise" this
+            // without proving the inference endpoint accepts that token.
             tokens.api_key.as_deref().filter(|v| !v.trim().is_empty()),
         ),
     };
@@ -248,6 +256,48 @@ mod tests {
         assert!(matches!(
             select_zai_inference_source(&pools, "glm-5.3-flash", 1000),
             Err(CoreError::ServiceUnavailable(_))
+        ));
+    }
+
+    #[test]
+    fn key_only_account_with_confirmed_absent_starter_may_use_paid() {
+        // A key-only account has no ZCode OAuth credential at all. That is
+        // absence confirmed by configuration, not an unreadable snapshot, so
+        // it must not trap an account that is paying for a live paid plan.
+        let pools = [
+            pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Absent, &[]),
+            pool(
+                QuotaSource::CodingPlan,
+                QuotaPoolStatus::Active,
+                &["glm-5.3-flash"],
+            ),
+        ];
+        assert!(matches!(
+            select_zai_inference_source(&pools, "glm-5.3-flash", 1000),
+            Ok(QuotaSource::CodingPlan)
+        ));
+    }
+
+    #[test]
+    fn key_only_account_missing_oauth_credential_is_not_an_ambiguous_read() {
+        // dual.rs emits exactly this pool for an account with no ZCode JWT.
+        // Treating it as ambiguous would disable paid inference forever.
+        let pools = [
+            QuotaPool {
+                fetch_error: Some(
+                    "ZCode OAuth credential is missing; Starter balance is unknown".into(),
+                ),
+                ..pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Absent, &[])
+            },
+            pool(
+                QuotaSource::CodingPlan,
+                QuotaPoolStatus::Active,
+                &["glm-5.3-flash"],
+            ),
+        ];
+        assert!(matches!(
+            select_zai_inference_source(&pools, "glm-5.3-flash", 1000),
+            Ok(QuotaSource::CodingPlan)
         ));
     }
 
