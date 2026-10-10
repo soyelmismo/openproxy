@@ -288,4 +288,3 @@ fn test_infer_modality_json_helpers() {
     let output_json = infer_output_modalities_json("dall-e-3");
     assert_eq!(output_json, r#"["image"]"#);
 }
-=======
