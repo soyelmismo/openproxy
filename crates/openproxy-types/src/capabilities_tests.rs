@@ -256,7 +256,6 @@ fn test_model_capabilities_flexible_deserialization() {
     assert_eq!(caps_zero.tool_calling, Some(true));
     assert_eq!(caps_zero.reasoning, Some(false));
 }
-
 #[test]
 fn test_model_capabilities_to_json_and_merge_union() {
     let empty_caps = ModelCapabilities::empty();
@@ -289,3 +288,4 @@ fn test_infer_modality_json_helpers() {
     let output_json = infer_output_modalities_json("dall-e-3");
     assert_eq!(output_json, r#"["image"]"#);
 }
+=======

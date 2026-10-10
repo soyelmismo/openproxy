@@ -146,21 +146,40 @@ async fn run_fan_out_combo_tests(
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
     let fan_out = async {
-        let mut results = Vec::with_capacity(targets.len());
-        for t in targets {
-            if let Some(skipped) = build_skipped_target_entry(&t) {
-                results.push(skipped);
-                continue;
-            }
-            if let Some(ref rx) = cancel_rx
-                && rx.borrow().is_some()
-            {
-                tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
-                break;
-            }
-            results.push(run_and_format_single_combo_target(s, &t, cancel_rx.clone()).await);
+        if let Some(ref rx) = cancel_rx
+            && rx.borrow().is_some()
+        {
+            tracing::info!("test_combo_targets: client disconnected, aborting fan-out");
+            return Vec::new();
         }
-        results
+
+        let tasks = targets.into_iter().map(|t| {
+            let cancel_rx = cancel_rx.clone();
+            async move {
+                if let Some(skipped) = build_skipped_target_entry(&t) {
+                    return skipped;
+                }
+                if let Some(ref rx) = cancel_rx
+                    && rx.borrow().is_some()
+                {
+                    tracing::info!("test_combo_targets: client disconnected, aborting target test");
+                    return serde_json::json!({
+                        "target_id": t.id.0,
+                        "provider_id": t.provider_id.to_string(),
+                        "account_id": t.account_id.map(|a| a.0),
+                        "model_row_id": t.model_row_id.map(|m| m.0),
+                        "model_id": t.model_id,
+                        "model_display_name": t.model_display_name,
+                        "status": 0_i32,
+                        "elapsed_ms": serde_json::Value::Null,
+                        "error_msg": "client disconnected",
+                        "skipped": true,
+                    });
+                }
+                run_and_format_single_combo_target(s, &t, cancel_rx).await
+            }
+        });
+        futures::future::join_all(tasks).await
     };
 
     tokio::time::timeout(std::time::Duration::from_mins(3), fan_out)
@@ -520,5 +539,49 @@ mod tests {
         let mut t_active = t_cd;
         t_active.in_cooldown = false;
         assert!(build_skipped_target_entry(&t_active).is_none());
+    }
+
+    async fn create_test_app_state() -> (AppState, openproxy_db::testing::TempDir) {
+        let temp_dir = openproxy_db::testing::TempDir::new("openproxy-combo-test").expect("mkdir");
+        let pool = std::sync::Arc::new(
+            openproxy_db::DbPool::open(&temp_dir.path().join("test.db")).expect("open pool"),
+        );
+        {
+            let mut w = pool.writer();
+            openproxy_db::migrations::run(&mut w).expect("migrations");
+        }
+        let mk = openproxy_db::secrets::MasterKey::generate().unwrap();
+        let adapters = std::sync::Arc::new(parking_lot::RwLock::new(std::sync::Arc::new(
+            openproxy_adapters::adapters::builtin_adapters(),
+        )));
+        let state = AppState::for_test(
+            openproxy_core::AppConfig::default(),
+            pool,
+            std::sync::Arc::new(mk),
+            adapters,
+        );
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_run_fan_out_combo_tests_skipped_and_concurrent() {
+        let (state, _temp_dir) = create_test_app_state().await;
+        let (tx, _rx) = tokio::sync::watch::channel(None);
+        let mut t1 = make_test_target(101, 10);
+        t1.sub_combo_id = Some(ComboId(20));
+        let mut t2 = make_test_target(102, 10);
+        t2.in_cooldown = true;
+        t2.cooldown_reason = Some("test cooldown".into());
+
+        let targets = vec![t1, t2];
+        let results = run_fan_out_combo_tests(&state, 10, targets, Some(tx.subscribe()))
+            .await
+            .expect("fan out failed");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["target_id"], 101);
+        assert_eq!(results[0]["skipped"], true);
+        assert_eq!(results[1]["target_id"], 102);
+        assert_eq!(results[1]["skipped"], true);
     }
 }
