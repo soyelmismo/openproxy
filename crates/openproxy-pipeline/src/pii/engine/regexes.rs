@@ -48,15 +48,14 @@ pub static REGEX_JSON_KEY: LazyLock<Regex> =
 
 pub static REGEX_EMAIL: LazyLock<Regex> = LazyLock::new(|| {
     // Security: include common Unicode homoglyph variants of the separators
-    // (`@` U+0040 vs FULLWIDTH @ U+FF20; `.` U+002E vs FULLWIDTH FULL STOP
-    // U+FF0E) and allow any Unicode letter / decimal digit in local-part
-    // and domain. Zero-width characters (U+200B/C/D, U+FEFF) are matched
-    // around the separators so an input like `alice\u200B@example.com`
-    // does not slip past the regex. NFKC-equivalent variants are caught by
-    // the alternation; pure-script Cyrillic / Greek homoglyphs in the
-    // domain are caught by `\p{L}`.
+    // (`@` U+0040 vs FULLWIDTH @ U+FF20 vs SMALL COMMERCIAL AT U+FE6B;
+    // `.` U+002E vs FULLWIDTH FULL STOP U+FF0E vs IDEOGRAPHIC FULL STOP U+3002
+    // vs SMALL FULL STOP U+FE52 vs HALFWIDTH IDEOGRAPHIC FULL STOP U+FF61)
+    // and allow Unicode letters / decimal digits in local-part and domain.
+    // Zero-width characters (U+200B/C/D, U+FEFF) and Unicode hyphens are matched.
+    // Punycode TLDs (`xn--...`) and internationalized TLDs are supported.
     openproxy_types::static_regex!(
-        r"[\p{L}\p{N}._%+-]+[\u200B\u200C\u200D\uFEFF]*(?:@|\uFF20)[\u200B\u200C\u200D\uFEFF]*[\p{L}\p{N}.-]+[\u200B\u200C\u200D\uFEFF]*(?:\.|\uFF0E)[\p{L}]{2,}"
+        r"(?i)[\p{L}\p{N}._%+\-\u200B\u200C\u200D\uFEFF\uFF0E\u3002\uFE52\uFF61]+[\u200B\u200C\u200D\uFEFF]*(?:@|\uFF20|\uFE6B)[\u200B\u200C\u200D\uFEFF]*(?:[\p{L}\p{N}\-\u2010-\u2015\u2212\uFF0D]+[\u200B\u200C\u200D\uFEFF]*(?:\.|\uFF0E|\u3002|\uFE52|\uFF61)[\u200B\u200C\u200D\uFEFF]*)+(?:xn--[a-zA-Z0-9\-]+|\p{L}{2,})"
     )
 });
 
@@ -68,7 +67,7 @@ pub static REGEX_IPV4: LazyLock<Regex> = LazyLock::new(|| {
 
 pub static REGEX_IPV6: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
-        r"(?i)\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b|(?i)\b(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4}\b|(?i)\b[0-9a-f]{1,4}::(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4}\b|(?i)::(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4}\b|(?:::1\b)"
+        r"(?i)::(?:ffff:)?(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b|(?i)(?:[0-9a-f]{1,4}:){1,6}:(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\b|(?i)\b(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}\b|(?i)\b(?:[0-9a-f]{1,4}:){1,6}:(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4}\b|(?i)\b[0-9a-f]{1,4}::(?:[0-9a-f]{1,4}:){0,5}[0-9a-f]{1,4}\b|(?i)::(?:[0-9a-f]{1,4}:){0,6}[0-9a-f]{1,4}\b|(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){0,6}::|(?i)::"
     )
 });
 
@@ -145,7 +144,7 @@ pub static REGEX_SECRET_BASIC_AUTH: LazyLock<Regex> =
 
 pub static REGEX_SECRET_AI_CLOUD_PLATFORMS: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
-        r"\bsk-or-v1-[a-f0-9]{64}\b|\bhf_[a-zA-Z0-9]{34,}\b|\bgsk_[a-zA-Z0-9]{52}\b|\br8_[a-zA-Z0-9]{40}\b|\b(?:sk|rk|pk|op|mcp)_(?:live|test)_[0-9a-zA-Z]{20,}\b|\b[MN][A-Za-z0-9]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b|\b(?:AC|SK)[a-f0-9]{32}\b"
+        r"\bsk-or-v1-[a-f0-9]{64}\b|\bhf_[a-zA-Z0-9]{34,}\b|\bgsk_[a-zA-Z0-9]{52}\b|\br8_[a-zA-Z0-9]{40}\b|\b(?:sk|rk|pk|op|mcp)_(?:live|test)_[0-9a-zA-Z]{20,}\b|\b[MN][A-Za-z0-9]{23,25}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b|\b(?:AC|SK)[a-f0-9]{32}\b|\bglpat-[a-zA-Z0-9_-]{20,}\b|\bpplx-[a-zA-Z0-9]{40,}\b|\bnpm_[a-zA-Z0-9]{36}\b"
     )
 });
 
@@ -188,7 +187,7 @@ pub static REGEX_NATIONAL_ID_US: LazyLock<Regex> =
 
 pub static REGEX_SECRET_LABELED: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
-        r#"(?i)["']?\b([a-z0-9_.-]*(?:password|passwd|secret|token|api_?key|private_?key|access_?key|contrase[nñ]a|clave|id[_-]?de[_-]?cuenta|account[_-]?id)[a-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;\\()\[\]{}<>`|]{4,}))|(?i)\b(id\s+de\s+(?:cuenta|clave(?:\s+de\s+acceso)?)|token\s+de\s+(?:api|acceso)|clave\s+(?:de\s+acceso\s+)?secreta|clave\s+de\s+acceso)\s*[\r\n]+[ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;\\()\[\]{}<>`|]{4,}))"#,
+        r#"(?i)["']?\b([a-z0-9_.-]*(?:password|passwd|passphrase|pass|pwd|secret|token|api_?key|private_?key|access_?key|master_?key|signing_?key|encryption_?key|auth_?key|client_?key|client_?secret|app_?secret|webhook_?secret|signing_?secret|api_?hash|app_?hash|contrase[nñ]a|clave|id[_-]?de[_-]?cuenta|account[_-]?id)[a-z0-9_.-]*)["']?[ \t]*[:=][ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;\\()\[\]{}<>`|]{4,}))|(?i)\b(id\s+de\s+(?:cuenta|clave(?:\s+de\s+acceso)?)|token\s+de\s+(?:api|acceso)|clave\s+(?:de\s+acceso\s+)?secreta|clave\s+de\s+acceso|account\s+id|api\s+token|api\s+key|access\s+key(?:\s+id)?|secret\s+access\s+key|client\s+secret)\s*[\r\n]+[ \t]*(?:"([^"\r\n]{4,})"|'([^'\r\n]{4,})'|([^\s"'\r\n,;\\()\[\]{}<>`|]{4,}))"#
     )
 });
 
@@ -204,19 +203,19 @@ pub static REGEX_SECRET_JWT: LazyLock<Regex> = LazyLock::new(|| {
 
 pub static REGEX_HONORIFIC_NAME: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
-        r"\b(?:Mr\.|Mrs\.|Ms\.|Miss|Dr\.|Prof\.|Sir|Madam|Lord)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b"
+        r"\b(?:Mr\.|Mrs\.|Ms\.|Miss|Dr\.|Dra\.|Prof\.|Sir|Madam|Lord|Sr\.|Sra\.|Srta\.|Don|Doña|Dona)\s+([\p{Lu}][\p{Ll}]+(?:\s+[\p{Lu}][\p{Ll}]+){0,2})\b"
     )
 });
 
 pub static REGEX_CAPITALIZED_SEQUENCE: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
-        r"\b([A-Z][a-z]{1,15}[ \t]+[A-Z][a-z]{1,15}(?:[ \t]+[A-Z][a-z]{1,15})?)\b"
+        r"\b([\p{Lu}][\p{Ll}]{1,15}[ \t]+[\p{Lu}][\p{Ll}]{1,15}(?:[ \t]+[\p{Lu}][\p{Ll}]{1,15})?)\b"
     )
 });
 
 pub static REGEX_CONTEXTUAL_PERSON: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
-        r#"(?i)\b(?:User|Usuario|Autor|Author|Creator|Dueño|Dueno)\b[ \t*]*[:=][ \t*]*["']?([A-Za-z]{3,15})["']?|(?i)\b(?:DM\s+with|chat\s+con|hablar\s+con|relaci[oó]n\s+con)\s+["']?([A-Za-z]{3,15})["']?|(?i)\b(?:PC|Laptop|Desktop)\s+([A-Z][a-z]{2,15})\b"#,
+        r#"(?i)\b(?:User|Usuario|Autor|Author|Creator|Dueño|Dueno|Name|Nombre|Full\s+Name|Nombre\s+completo)\b[ \t*]*[:=][ \t*]*["']?([\p{L}]{3,15})["']?|(?i)\b(?:DM\s+with|chat\s+con|hablar\s+con|relaci[oó]n\s+con)\s+["']?([\p{L}]{3,15})["']?|(?i)\b(?:PC|Laptop|Desktop)\s+([\p{Lu}][\p{Ll}]{2,15})\b"#
     )
 });
 
@@ -228,7 +227,9 @@ pub static COMMON_FIRST_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|
         "Javier",
         "Fernando",
         "Alvaro",
+        "Álvaro",
         "Andres",
+        "Andrés",
         "Diego",
         "Mateo",
         "Gabriel",
@@ -242,16 +243,20 @@ pub static COMMON_FIRST_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|
         "Pedro",
         "Juan",
         "Jose",
+        "José",
         "Luis",
         "Maria",
+        "María",
         "Carmen",
         "Ana",
         "Laura",
         "Sofia",
+        "Sofía",
         "Isabel",
         "Elena",
         "Marta",
         "Lucia",
+        "Lucía",
         "Paula",
         "Sara",
         "Claudia",
@@ -278,10 +283,19 @@ pub static COMMON_FIRST_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new(|
         "Olivia",
         "Ava",
         "Isabella",
+        "Jesús",
+        "Ángel",
+        "Raúl",
+        "Martín",
+        "Joaquín",
+        "Tomás",
+        "Inés",
+        "Matías",
+        "Sebastián",
     ]
     .into_iter()
     .collect()
 });
 
 pub static REGEX_SINGLE_WORD_CAPITALIZED: LazyLock<Regex> =
-    LazyLock::new(|| openproxy_types::static_regex!(r"\b([A-Z][a-z]{2,15})\b"));
+    LazyLock::new(|| openproxy_types::static_regex!(r"\b([\p{Lu}][\p{Ll}]{2,15})\b"));

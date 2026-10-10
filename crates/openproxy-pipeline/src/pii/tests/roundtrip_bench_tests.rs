@@ -2,6 +2,142 @@ use super::super::*;
 use openproxy_types::config::{PiiConfig, PiiEntity};
 use openproxy_types::message::{OpenAIChoice, OpenAIMessage, OpenAIResponse};
 
+/// Exercise the real formatting -> HTTP upstream -> dispatcher -> client path.
+/// The upstream is a local echo fixture, so no real PII leaves this machine.
+#[tokio::test]
+async fn pii_http_roundtrip_unary_and_streaming() {
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    for streaming in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let (header_end, length) = loop {
+                let mut chunk = [0u8; 4096];
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0, "request ended before headers");
+                bytes.extend_from_slice(&chunk[..n]);
+                assert!(bytes.len() < 1024 * 1024);
+                if let Some(pos) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..pos]);
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (key, val) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| val.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    break (pos + 4, length);
+                }
+            };
+            while bytes.len() < header_end + length {
+                let mut chunk = [0u8; 4096];
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n > 0, "request ended before body");
+                bytes.extend_from_slice(&chunk[..n]);
+            }
+            let request: serde_json::Value =
+                serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
+            let text = request["messages"][0]["content"].as_str().unwrap();
+            assert!(!text.contains("alice@example.com"));
+            assert!(!text.contains("+34 600 123 456"));
+            let output = text.replace("+1-202-555-0111", "+12025550111");
+            let (content_type, body) = if streaming {
+                let split = output.find("alex.turner").unwrap() + 5;
+                let frames = [&output[..split], &output[split..]].map(|part| {
+                    format!("data: {}\n\n", serde_json::json!({"id": "pii-echo", "object": "chat.completion.chunk", "created": 1, "model": "m",
+                        "choices": [{"index": 0, "delta": {"content": part}}]}))
+                });
+                (
+                    "text/event-stream",
+                    format!(
+                        "{}{}data: {{\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n",
+                        frames[0], frames[1]
+                    ),
+                )
+            } else {
+                ("application/json", serde_json::json!({"id": "pii-echo", "object": "chat.completion", "created": 1, "model": "m",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": output}, "finish_reason": "stop"}]}).to_string())
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+        });
+        let (pool, conn, _) = crate::test_utils::fresh_pool();
+        let key = Arc::new(openproxy_db::MasterKey::generate().unwrap());
+        let combo_id = {
+            let conn = conn.lock();
+            let combo_id =
+                crate::test_utils::seed_solo_combo_at_url(&conn, "mock-openai", &url, &key).0;
+            conn.execute(
+                "UPDATE models SET capabilities_json = ?1 WHERE provider_id = 'mock-openai'",
+                [serde_json::json!({"streaming": streaming}).to_string()],
+            )
+            .unwrap();
+            combo_id
+        };
+        let mut config = crate::test_utils::test_config_with_mock(key, &url);
+        config.retries.max_attempts = 1;
+        config.pii_config = PiiConfig {
+            pii_enabled: true,
+            pii_reversible: true,
+            pii_redact_logs: true,
+            pii_entities: vec![PiiEntity::Email, PiiEntity::Phone],
+        };
+        let pipeline = crate::test_utils::test_pipeline_with_pool(pool, config);
+        let (mut req, _disconnect) = crate::test_utils::make_request(combo_id);
+        let original = "email alice@example.com phone +34 600 123 456.";
+        let openai = Arc::make_mut(&mut req.openai_request);
+        openai.stream = streaming;
+        openai.messages[0].content = Some(serde_json::json!(original));
+        let (sink, mut rx) = tokio::sync::mpsc::channel(32);
+        if streaming {
+            req.stream_sink = Some(crate::StreamSink::Direct(sink));
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), pipeline.run(req))
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(
+            result.status_code, 200,
+            "streaming={streaming}: {:?}",
+            result.error
+        );
+        if streaming {
+            let mut content = String::new();
+            let mut done = false;
+            while let Ok(chunk) = rx.try_recv() {
+                let chunk = std::str::from_utf8(&chunk).unwrap();
+                for line in chunk.lines().filter_map(|line| line.strip_prefix("data: ")) {
+                    if line == "[DONE]" {
+                        done = true;
+                    } else {
+                        let value: serde_json::Value = serde_json::from_str(line).unwrap();
+                        if let Some(part) = value["choices"][0]["delta"]["content"].as_str() {
+                            assert!(!done, "content emitted after terminal frame");
+                            content.push_str(part);
+                        }
+                    }
+                }
+            }
+            assert!(done);
+            assert_eq!(content, original);
+        } else {
+            assert_eq!(
+                resp_content(result.final_response.as_ref().unwrap()),
+                original
+            );
+        }
+    }
+}
+
 fn make_resp(content: &str) -> OpenAIResponse {
     OpenAIResponse {
         id: "resp-1".into(),

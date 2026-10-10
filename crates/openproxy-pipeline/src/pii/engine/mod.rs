@@ -124,9 +124,8 @@ impl PiiEngine {
         base64_len >= 64
     }
 
-    fn is_multimodal_or_metadata_field(key: &str, val: &serde_json::Value) -> bool {
-        // Structural / protocol metadata.
-        if matches!(
+    fn is_protocol_metadata_field(key: &str) -> bool {
+        matches!(
             key,
             "id" | "type"
                 | "name"
@@ -138,10 +137,59 @@ impl PiiEngine {
                 | "mediaType"
                 | "format"
                 | "detail"
-        ) {
-            return true;
-        }
+                | "tool_call_id"
+                | "finish_reason"
+        )
+    }
 
+    fn is_secret_field_name(key: &str) -> bool {
+        let lower = key.to_ascii_lowercase();
+        matches!(
+            lower.as_str(),
+            "secret"
+                | "password"
+                | "passwd"
+                | "passphrase"
+                | "pass"
+                | "pwd"
+                | "token"
+                | "api_key"
+                | "apikey"
+                | "private_key"
+                | "access_key"
+                | "master_key"
+                | "signing_key"
+                | "encryption_key"
+                | "auth_key"
+                | "client_secret"
+                | "app_secret"
+                | "webhook_secret"
+                | "signing_secret"
+                | "api_hash"
+                | "app_hash"
+                | "contraseña"
+                | "contrasena"
+                | "clave"
+        ) || lower.ends_with("_secret")
+            || lower.ends_with("_token")
+            || lower.ends_with("_key")
+            || lower.ends_with("_password")
+            || lower.ends_with("_passwd")
+            || lower.ends_with("_hash")
+            || lower.starts_with("secret_")
+            || lower.starts_with("token_")
+            || lower.starts_with("api_key_")
+    }
+
+    fn should_redact_secret_leaf(key: &str, s: &str) -> bool {
+        let trimmed = s.trim();
+        if trimmed.len() < 4 {
+            return false;
+        }
+        is_valid_secret_value(key, trimmed)
+    }
+
+    fn is_multimodal_payload_field(key: &str, val: &serde_json::Value) -> bool {
         if matches!(key, "inline_data" | "inlineData" | "input_audio" | "audio") {
             return true;
         }
@@ -171,11 +219,24 @@ impl PiiEngine {
         false
     }
 
+    fn is_multimodal_or_metadata_field(key: &str, val: &serde_json::Value) -> bool {
+        Self::is_protocol_metadata_field(key) || Self::is_multimodal_payload_field(key, val)
+    }
+
     /// Redacts leaf strings recursively, leaving structural JSON keys,
     /// function identifier names and multimodal payloads intact. A string that
     /// is itself serialized JSON (`tool_calls.arguments`) is parsed, redacted
     /// and re-serialized, so the output escaping stays valid.
     pub fn redact_json_value(&self, val: &mut serde_json::Value, session: &mut PiiSession) {
+        self.redact_json_value_internal(val, session, false);
+    }
+
+    fn redact_json_value_internal(
+        &self,
+        val: &mut serde_json::Value,
+        session: &mut PiiSession,
+        in_payload: bool,
+    ) {
         match val {
             serde_json::Value::String(s) => {
                 let trimmed = s.trim();
@@ -189,7 +250,7 @@ impl PiiEngine {
                     || (trimmed.starts_with('[') && trimmed.ends_with(']')))
                     && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(s)
                 {
-                    self.redact_json_value(&mut parsed, session);
+                    self.redact_json_value_internal(&mut parsed, session, true);
                     if let Ok(serialized) = serde_json::to_string(&parsed) {
                         *s = serialized;
                         return;
@@ -200,15 +261,78 @@ impl PiiEngine {
             }
             serde_json::Value::Array(arr) => {
                 for item in arr {
-                    self.redact_json_value(item, session);
+                    self.redact_json_value_internal(item, session, in_payload);
                 }
             }
             serde_json::Value::Object(map) => {
                 for (k, v) in map.iter_mut() {
-                    if Self::is_multimodal_or_metadata_field(k, v) {
-                        continue;
+                    if in_payload {
+                        if Self::is_multimodal_payload_field(k, v) {
+                            continue;
+                        }
+                        if self.has_entity(PiiEntity::Secret)
+                            && Self::is_secret_field_name(k)
+                            && let serde_json::Value::String(s) = v
+                            && Self::should_redact_secret_leaf(k, s)
+                        {
+                            let placeholder =
+                                session.get_or_create_placeholder(PiiEntity::Secret, s);
+                            *s = placeholder;
+                            continue;
+                        }
+                        if self.has_entity(PiiEntity::Secret)
+                            && let serde_json::Value::Number(number) = v
+                            && number.is_u64()
+                        {
+                            let token = number.to_string();
+                            let labeled = format!("\"{k}\": {token}");
+                            let is_sensitive_id = REGEX_SECRET_PLATFORM_ID.is_match(&labeled);
+                            if is_sensitive_id
+                                || (Self::is_secret_field_name(k)
+                                    && Self::should_redact_secret_leaf(k, &token))
+                            {
+                                let placeholder =
+                                    session.get_or_create_placeholder(PiiEntity::Secret, &token);
+                                if let Ok(replacement) = placeholder.parse::<serde_json::Number>() {
+                                    *number = replacement;
+                                }
+                                continue;
+                            }
+                        }
+                        self.redact_json_value_internal(v, session, true);
+                    } else {
+                        if Self::is_multimodal_or_metadata_field(k, v) {
+                            continue;
+                        }
+                        let child_in_payload = k == "arguments";
+                        self.redact_json_value_internal(v, session, child_in_payload);
                     }
-                    self.redact_json_value(v, session);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn seed_json_value(val: &serde_json::Value, session: &mut PiiSession) {
+        match val {
+            serde_json::Value::String(s) => {
+                session.seed_existing_placeholders(s);
+                let trimmed = s.trim();
+                if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+                    || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+                    && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s)
+                {
+                    Self::seed_json_value(&parsed, session);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    Self::seed_json_value(item, session);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for v in map.values() {
+                    Self::seed_json_value(v, session);
                 }
             }
             _ => {}
@@ -220,13 +344,31 @@ impl PiiEngine {
         messages: &[OpenAIMessage],
         session: &mut PiiSession,
     ) -> Vec<OpenAIMessage> {
+        // Preseed all messages to avoid placeholder collisions across turns
+        for msg in messages {
+            if let Some(ref content) = msg.content {
+                Self::seed_json_value(content, session);
+            }
+            for (k, v) in &msg.extra {
+                if k == "reasoning_content" || k == "thought" {
+                    Self::seed_json_value(v, session);
+                }
+            }
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    Self::seed_json_value(tc, session);
+                }
+            }
+        }
+
         messages
             .iter()
             .map(|msg| {
                 let mut cloned = msg.clone();
+                let is_tool_msg = cloned.role == "tool";
 
                 if let Some(ref mut content) = cloned.content {
-                    self.redact_json_value(content, session);
+                    self.redact_json_value_internal(content, session, is_tool_msg);
                 }
 
                 for (k, v) in &mut cloned.extra {

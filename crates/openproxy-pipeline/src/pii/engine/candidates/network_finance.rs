@@ -114,7 +114,52 @@ pub(crate) fn collect_network_finance_candidates<'a>(
         }
 
         for m in REGEX_IPV6.find_iter(text) {
+            if m.start() > 0 {
+                let prev = text.as_bytes()[m.start() - 1];
+                if prev == b':' || prev.is_ascii_hexdigit() {
+                    continue;
+                }
+            }
+            if m.end() < text.len() {
+                let next = text.as_bytes()[m.end()];
+                if next == b':' || next.is_ascii_hexdigit() {
+                    continue;
+                }
+            }
             let s = m.as_str();
+            if s == "::" {
+                let attached = text[..m.start()]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                    || text[m.end()..]
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                let previous_word = text[..m.start()]
+                    .trim_end_matches(|c: char| c.is_whitespace() || c == ':' || c == '=')
+                    .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()
+                    .unwrap_or("");
+                let network_context = [
+                    "ip",
+                    "ipv6",
+                    "host",
+                    "address",
+                    "bind",
+                    "listen",
+                    "listening",
+                    "interface",
+                    "gateway",
+                    "ip_address",
+                    "bind_address",
+                ]
+                .iter()
+                .any(|label| previous_word.eq_ignore_ascii_case(label));
+                if attached || (text.trim() != "::" && !network_context) {
+                    continue;
+                }
+            }
             if s.contains(':')
                 && Ipv6Addr::from_str(s).is_ok()
                 && !is_in_protected_range(syntax_protected, m.start(), m.end())
@@ -148,7 +193,10 @@ pub(crate) fn collect_network_finance_candidates<'a>(
             }
 
             let s = m.as_str();
-            let digit_count = s.chars().filter(|c| c.is_ascii_digit()).count();
+            let digit_count = s
+                .chars()
+                .filter(|c| c.is_ascii_digit() || ('\u{FF10}'..='\u{FF19}').contains(c))
+                .count();
             if (7..=15).contains(&digit_count)
                 && !REGEX_DATE_OR_TIME.is_match(s)
                 && !is_in_protected_range(syntax_protected, m.start(), m.end())
@@ -188,7 +236,10 @@ pub(crate) fn collect_network_finance_candidates<'a>(
             }
 
             let s = m.as_str();
-            let digit_count = s.chars().filter(|c| c.is_ascii_digit()).count();
+            let digit_count = s
+                .chars()
+                .filter(|c| c.is_ascii_digit() || ('\u{FF10}'..='\u{FF19}').contains(c))
+                .count();
             if (7..=15).contains(&digit_count)
                 && !REGEX_DATE_OR_TIME.is_match(s)
                 && !is_in_protected_range(syntax_protected, m.start(), m.end())
