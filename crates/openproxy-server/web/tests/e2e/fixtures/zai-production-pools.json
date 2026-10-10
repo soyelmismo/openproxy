@@ -1,0 +1,38 @@
+[
+  {
+    "id": "bucket_2108948872942952448",
+    "source": "zcode_starter",
+    "plan_name": "ZCode Weekend Build",
+    "status": "active",
+    "unit": "token",
+    "used": 25718,
+    "limit": 300000000,
+    "remaining": 299974282,
+    "reset_at": null,
+    "expires_at": "1791766800",
+    "starts_at": "1791644400",
+    "model_ids": [
+      "glm-5.3-flash"
+    ],
+    "model_details": null,
+    "fetch_error": null,
+    "last_fetched_at": "1791658362"
+  },
+  {
+    "id": "coding-plan",
+    "source": "coding_plan",
+    "plan_name": null,
+    "status": "absent",
+    "unit": "percentage",
+    "used": null,
+    "limit": null,
+    "remaining": null,
+    "reset_at": null,
+    "expires_at": null,
+    "starts_at": null,
+    "model_ids": [],
+    "model_details": null,
+    "fetch_error": null,
+    "last_fetched_at": "1791658362"
+  }
+]

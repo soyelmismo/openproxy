@@ -97,3 +97,28 @@ test('unreadable Starter stays independent and untrusted text stays escaped', as
   await expect(page.getByRole('progressbar')).toHaveCount(1);
   expect(await page.evaluate(() => 'bad' in window)).toBe(false);
 });
+
+test('real production pools render with live figures', async ({ page }) => {
+  // Captured from a live refresh of the Z.ai account: figures and labels only.
+  // No credential field (api_key, access_token, jwt, cookie) is ever read.
+  const real = JSON.parse(await readFile('tests/e2e/fixtures/zai-production-pools.json', 'utf8')) as QuotaPool[];
+  const pools = real.map((p) => pool({
+    id: p.id, source: p.source, plan_name: p.plan_name, status: p.status,
+    unit: p.unit, used: p.used, limit: p.limit, remaining: p.remaining,
+    reset_at: p.reset_at, expires_at: p.expires_at, starts_at: p.starts_at,
+    model_ids: p.model_ids, model_details: p.model_details,
+  }));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await renderAccount(page, pools);
+  const bars = page.locator('.quota-pool');
+  await expect(bars).toHaveCount(2);
+  // Starter first, free, with the real plan name and real token balance.
+  await expect(bars.nth(0)).toContainText('Starter · Free · ZCode Weekend Build');
+  await expect(bars.nth(0)).toContainText('299,974,282 / 300,000,000 token left');
+  await expect(bars.nth(0)).toContainText('glm-5.3-flash');
+  // Paid pool is genuinely absent: no fabricated zero, no progressbar.
+  await expect(bars.nth(1)).toContainText('Coding Plan');
+  await expect(bars.nth(1)).toContainText('No active Coding Plan');
+  await expect(page.getByRole('progressbar')).toHaveCount(1);
+  await expect(page.locator('#main')).not.toContainText('Session Window 0');
+});
