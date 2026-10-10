@@ -318,9 +318,9 @@ fn test_minimax_builtin_models_structure() {
 
 #[test]
 fn test_minimax_wrap_body_translates_thinking_effort() {
+    use openproxy_types::combos::ComboTarget;
     use openproxy_types::context::ResolvedTarget;
     use openproxy_types::models::Model;
-    use openproxy_types::combos::ComboTarget;
 
     let adapter = MiniMaxAdapter::new();
 
@@ -356,16 +356,28 @@ fn test_minimax_wrap_body_translates_thinking_effort() {
         .expect("wrap succeeds");
     let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
 
-    assert_eq!(v["thinking"]["type"], "adaptive", "thinking.type must be adaptive");
-    assert_eq!(v["output_config"]["effort"], "low", "effort must map to output_config.effort");
-    assert!(v["thinking"].get("budget_tokens").is_none(), "Anthropic budget_tokens must be stripped");
+    assert_eq!(
+        v["thinking"]["type"], "adaptive",
+        "thinking.type must be adaptive"
+    );
+    assert_eq!(
+        v["output_config"]["effort"], "low",
+        "effort must map to output_config.effort"
+    );
+    assert!(
+        v["thinking"].get("budget_tokens").is_none(),
+        "Anthropic budget_tokens must be stripped"
+    );
 
     // effort "none" => adaptive but no output_config
     let out_none = adapter
         .wrap_request_body(
-            bytes::Bytes::from(serde_json::to_vec(&serde_json::json!({
-                "thinking": {"type": "enabled", "budget_tokens": 2048}
-            })).unwrap()),
+            bytes::Bytes::from(
+                serde_json::to_vec(&serde_json::json!({
+                    "thinking": {"type": "enabled", "budget_tokens": 2048}
+                }))
+                .unwrap(),
+            ),
             TargetFormat::Anthropic,
             &ModelId::new("MiniMax-M3.1-Flash-Preview"),
             &make_target(Some("none")),
@@ -373,10 +385,15 @@ fn test_minimax_wrap_body_translates_thinking_effort() {
         .unwrap();
     let vn: serde_json::Value = serde_json::from_slice(&out_none).unwrap();
     assert_eq!(vn["thinking"]["type"], "adaptive");
-    assert!(vn.get("output_config").is_none(), "none must not emit output_config");
+    assert!(
+        vn.get("output_config").is_none(),
+        "none must not emit output_config"
+    );
 
     // No thinking key from translator => body untouched (MiniMax applies its default)
-    let plain = serde_json::to_vec(&serde_json::json!({"messages": [{"role":"user","content":"hi"}]})).unwrap();
+    let plain =
+        serde_json::to_vec(&serde_json::json!({"messages": [{"role":"user","content":"hi"}]}))
+            .unwrap();
     let out_plain = adapter
         .wrap_request_body(
             bytes::Bytes::from(plain),
@@ -386,19 +403,28 @@ fn test_minimax_wrap_body_translates_thinking_effort() {
         )
         .unwrap();
     let vp: serde_json::Value = serde_json::from_slice(&out_plain).unwrap();
-    assert!(vp.get("thinking").is_none(), "no translator thinking => no injection");
+    assert!(
+        vp.get("thinking").is_none(),
+        "no translator thinking => no injection"
+    );
 
     // Non-Anthropic target format => passthrough
     let passthrough = adapter
         .wrap_request_body(
-            bytes::Bytes::from(serde_json::to_vec(&serde_json::json!({"thinking": {"budget_tokens": 2048}})).unwrap()),
+            bytes::Bytes::from(
+                serde_json::to_vec(&serde_json::json!({"thinking": {"budget_tokens": 2048}}))
+                    .unwrap(),
+            ),
             TargetFormat::Openai,
             &ModelId::new("MiniMax-M3"),
             &make_target(Some("low")),
         )
         .unwrap();
     let vpt: serde_json::Value = serde_json::from_slice(&passthrough).unwrap();
-    assert_eq!(vpt["thinking"]["budget_tokens"], 2048, "non-Anthropic format is passthrough");
+    assert_eq!(
+        vpt["thinking"]["budget_tokens"], 2048,
+        "non-Anthropic format is passthrough"
+    );
 }
 
 #[test]

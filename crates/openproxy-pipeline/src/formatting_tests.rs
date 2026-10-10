@@ -833,7 +833,13 @@ fn anthropic_formatter_raises_max_tokens_to_model_ceiling_when_client_omits_it()
         ..Default::default()
     });
     let body_pinned = AnthropicFormatter
-        .format_request(&req_pinned, &model, &req_pinned.openai_request.messages, false, &adapter)
+        .format_request(
+            &req_pinned,
+            &model,
+            &req_pinned.openai_request.messages,
+            false,
+            &adapter,
+        )
         .expect("ok");
     let val_pinned: Value = serde_json::from_slice(&body_pinned).unwrap();
     assert_eq!(val_pinned["max_tokens"], json!(1000));
@@ -848,7 +854,13 @@ fn anthropic_formatter_raises_max_tokens_to_model_ceiling_when_client_omits_it()
         ..Default::default()
     });
     let body_nc = AnthropicFormatter
-        .format_request(&req_nc, &no_ceiling, &req_nc.openai_request.messages, false, &adapter)
+        .format_request(
+            &req_nc,
+            &no_ceiling,
+            &req_nc.openai_request.messages,
+            false,
+            &adapter,
+        )
         .expect("ok");
     let val_nc: Value = serde_json::from_slice(&body_nc).unwrap();
     assert_eq!(

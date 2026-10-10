@@ -113,17 +113,12 @@ fn nous_sticky_key(oauth_token: Option<&str>, account_label: Option<&str>) -> Op
 /// the attribution claims. Returns `None` for non-JWT or malformed tokens.
 pub fn jwt_claim_named(token: &str, claim: &str) -> Option<String> {
     let payload = token.split('.').nth(1)?;
-    let decoded = base64::Engine::decode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        payload,
-    )
-    .or_else(|_| {
-        base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD_NO_PAD,
-            payload,
-        )
-    })
-    .ok()?;
+    let decoded =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload)
+            .or_else(|_| {
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, payload)
+            })
+            .ok()?;
     let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
     let claim = value.get(claim)?.as_str()?;
     if claim.is_empty() {
@@ -166,11 +161,7 @@ fn synthetic_api_key_user(api_key: &str, account_label: Option<&str>) -> String 
     let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
     sha2::Digest::update(&mut hasher, api_key.as_bytes());
     let digest = sha2::Digest::finalize(hasher);
-    let short: String = digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let short: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
     format!("openproxy-key-{short}")
 }
 
@@ -243,14 +234,18 @@ mod tests {
 
     // --- wrap_request_body end to end -------------------------------------
 
-    fn target(api_key: &str, label: Option<&str>, oauth: Option<&str>) -> openproxy_types::context::ResolvedTarget {
+    fn target(
+        api_key: &str,
+        label: Option<&str>,
+        oauth: Option<&str>,
+    ) -> openproxy_types::context::ResolvedTarget {
         openproxy_types::context::ResolvedTarget {
             target: openproxy_types::combos::ComboTarget::default(),
             model: openproxy_types::models::Model::default(),
             api_key: api_key.to_string(),
             api_key_label: label.map(str::to_string),
-            custom_meta: oauth.map(|access_token| {
-                openproxy_types::context::CustomProviderMeta {
+            custom_meta: oauth.map(
+                |access_token| openproxy_types::context::CustomProviderMeta {
                     access_token: access_token.to_string(),
                     maybe_refresh: None,
                     kiro_region: None,
@@ -260,8 +255,8 @@ mod tests {
                     codex_workspace_id: None,
                     claude_account_uuid: None,
                     claude_metadata: None,
-                }
-            }),
+                },
+            ),
         }
     }
 

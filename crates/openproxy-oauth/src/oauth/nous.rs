@@ -18,7 +18,9 @@
 //! operator-overridable base URL, so a self-hosted or staging Portal can be
 //! pointed at without recompiling.
 
-use crate::oauth::generic::{urlencoded_string, GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
+use crate::oauth::generic::{
+    GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec, urlencoded_string,
+};
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use crate::{error::Result, ids::AccountId};
 use openproxy_adapters::adapters::nous_research::jwt_email;
@@ -137,16 +139,12 @@ impl OAuthProvider for NousOAuthProvider {
         let url = self.device_code_url();
         let client_id = self.generic.spec().client_id_default.to_string();
         async move {
-            nous_post_form(
-                upstream_client,
-                &url,
-                &[("client_id", client_id.as_str())],
-            )
-            .await
-            .and_then(|body| {
-                serde_json::from_slice::<DeviceAuthorizationResponse>(&body)
-                    .map_err(|e| crate::error::CoreError::Parse(e.to_string()))
-            })
+            nous_post_form(upstream_client, &url, &[("client_id", client_id.as_str())])
+                .await
+                .and_then(|body| {
+                    serde_json::from_slice::<DeviceAuthorizationResponse>(&body)
+                        .map_err(|e| crate::error::CoreError::Parse(e.to_string()))
+                })
         }
     }
 

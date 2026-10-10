@@ -327,7 +327,7 @@ impl TargetFormatter for AnthropicFormatter {
             Err(e) => {
                 return Err(CoreError::Parse(format!(
                     "serialize anthropic request: {e}"
-                )))
+                )));
             }
         };
         // Anthropic makes max_tokens mandatory, so the translator falls back to

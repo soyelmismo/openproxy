@@ -146,8 +146,6 @@ pub async fn list_models(
             ));
         }
 
-
-
         let is_anthropic =
             headers.contains_key("anthropic-version") || headers.contains_key("x-api-key");
         if is_anthropic {

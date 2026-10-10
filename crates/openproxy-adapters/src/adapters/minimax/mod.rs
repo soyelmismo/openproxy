@@ -64,15 +64,24 @@ crate::adapters::derive_default_from_new!(MiniMaxAdapter);
 /// The generic Anthropic translator has already turned the combo target's
 /// `thinking_effort` into `thinking.budget_tokens`; here we translate that into
 /// MiniMax's native dialect. Called from [`MiniMaxAdapter::wrap_request_body`].
-fn patch_minimax_thinking_object(obj: &mut serde_json::Map<String, serde_json::Value>, effort: Option<&str>) {
+fn patch_minimax_thinking_object(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    effort: Option<&str>,
+) {
     // Only rewrite when the translator actually produced a thinking block;
     // otherwise leave the request untouched (MiniMax applies its own default).
     if !obj.contains_key("thinking") {
         return;
     }
-    obj.insert("thinking".to_string(), serde_json::json!({"type": "adaptive"}));
+    obj.insert(
+        "thinking".to_string(),
+        serde_json::json!({"type": "adaptive"}),
+    );
     if let Some(effort) = effort.filter(|e| *e != "none") {
-        obj.insert("output_config".to_string(), serde_json::json!({"effort": effort}));
+        obj.insert(
+            "output_config".to_string(),
+            serde_json::json!({"effort": effort}),
+        );
     }
 }
 
