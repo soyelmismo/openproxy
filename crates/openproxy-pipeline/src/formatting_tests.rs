@@ -795,3 +795,64 @@ fn test_responses_formatter_formats_image_inputs_correctly() {
         "Must not emit 'mime_type'"
     );
 }
+
+#[test]
+fn anthropic_formatter_raises_max_tokens_to_model_ceiling_when_client_omits_it() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let user = OpenAIMessage {
+        role: "user".into(),
+        content: Some(json!("hi")),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    };
+
+    // Model declares a real output ceiling well above DEFAULT_MAX_TOKENS (4096).
+    let mut model = test_model();
+    model.target_format = TargetFormat::Anthropic;
+    model.max_output_tokens = Some(131_072);
+
+    // Client omits max_tokens => formatter raises emitted 4096 up to the ceiling.
+    let req = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: vec![user.clone()],
+        ..Default::default()
+    });
+    let body = AnthropicFormatter
+        .format_request(&req, &model, &req.openai_request.messages, false, &adapter)
+        .expect("ok");
+    let val: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(val["max_tokens"], json!(131_072));
+
+    // Client pins max_tokens => formatter must not override the client's choice.
+    let req_pinned = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: vec![user.clone()],
+        max_tokens: Some(1000),
+        ..Default::default()
+    });
+    let body_pinned = AnthropicFormatter
+        .format_request(&req_pinned, &model, &req_pinned.openai_request.messages, false, &adapter)
+        .expect("ok");
+    let val_pinned: Value = serde_json::from_slice(&body_pinned).unwrap();
+    assert_eq!(val_pinned["max_tokens"], json!(1000));
+
+    // No declared ceiling => DEFAULT_MAX_TOKENS (4096) stays untouched.
+    let mut no_ceiling = test_model();
+    no_ceiling.target_format = TargetFormat::Anthropic;
+    no_ceiling.max_output_tokens = None;
+    let req_nc = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: vec![user],
+        ..Default::default()
+    });
+    let body_nc = AnthropicFormatter
+        .format_request(&req_nc, &no_ceiling, &req_nc.openai_request.messages, false, &adapter)
+        .expect("ok");
+    let val_nc: Value = serde_json::from_slice(&body_nc).unwrap();
+    assert_eq!(
+        val_nc["max_tokens"],
+        json!(crate::translation::types::DEFAULT_MAX_TOKENS)
+    );
+}

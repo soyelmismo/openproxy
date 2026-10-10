@@ -315,12 +315,40 @@ impl TargetFormatter for AnthropicFormatter {
             messages_ref,
             stream,
         );
-        match serde_json::to_vec(&anthro) {
-            Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!(
-                "serialize anthropic request: {e}"
-            ))),
+        let client_supplied_max_tokens = req.openai_request.max_tokens.is_some()
+            || req
+                .openai_request
+                .extra
+                .get("max_completion_tokens")
+                .and_then(|v| v.as_u64())
+                .is_some();
+        let mut body = match serde_json::to_vec(&anthro) {
+            Ok(v) => bytes::Bytes::from(v),
+            Err(e) => {
+                return Err(CoreError::Parse(format!(
+                    "serialize anthropic request: {e}"
+                )))
+            }
+        };
+        // Anthropic makes max_tokens mandatory, so the translator falls back to
+        // DEFAULT_MAX_TOKENS (4096) when the client omits it. That floor is far
+        // below every real model's output ceiling and burns out on always-thinking
+        // models (thinking tokens count toward max_tokens). When the model row
+        // declares its true ceiling and the client didn't pin one, raise the
+        // emitted max_tokens to it. Anthropic rejects values above the model's
+        // cap, so never exceed the declared ceiling.
+        if !client_supplied_max_tokens
+            && let Some(ceiling) = model
+                .max_output_tokens
+                .filter(|&v| v > 0)
+                .map(|v| v.min(i64::from(u32::MAX)) as u32)
+            && anthro.max_tokens < ceiling
+        {
+            body = openproxy_adapters::adapters::traits::patch_json_request_body(body, |obj| {
+                obj.insert("max_tokens".to_string(), serde_json::json!(ceiling));
+            })?;
         }
+        Ok(body)
     }
 }
 
