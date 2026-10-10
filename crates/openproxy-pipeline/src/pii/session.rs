@@ -1,9 +1,9 @@
 //! Request-scoped session holding bidirectional PII mappings.
 
-use aho_corasick::{AhoCorasick, MatchKind};
+use super::replacer::StreamingWindowReplacer;
 use openproxy_types::config::PiiEntity;
 use openproxy_types::message::OpenAIResponse;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Default)]
 pub struct PiiSession {
@@ -13,6 +13,8 @@ pub struct PiiSession {
     pub reverse: HashMap<String, String>,
     pub counts: HashMap<PiiEntity, usize>,
     pub reversible: bool,
+    placeholder_entities: HashMap<String, PiiEntity>,
+    ambiguous_aliases: HashSet<String>,
 }
 
 #[inline]
@@ -40,6 +42,8 @@ impl PiiSession {
             reverse: HashMap::new(),
             counts: HashMap::new(),
             reversible,
+            placeholder_entities: HashMap::new(),
+            ambiguous_aliases: HashSet::new(),
         }
     }
 
@@ -143,7 +147,7 @@ impl PiiSession {
                     .next()
                     .unwrap_or("");
                 if let (Ok(x), Ok(y)) = (first.parse::<usize>(), second.parse::<usize>()) {
-                    let n = x * 254 + y;
+                    let n = x.saturating_mul(254).saturating_add(y);
                     let c = self.counts.entry(PiiEntity::Ip).or_insert(0);
                     *c = (*c).max(n);
                 }
@@ -254,17 +258,15 @@ impl PiiSession {
                 if let Some((first_ph, last_ph)) = placeholder.split_once(' ') {
                     let orig_first = original.split_whitespace().next().unwrap_or(original);
                     let orig_last = original.split_whitespace().last().unwrap_or(original);
-                    self.reverse
-                        .insert(first_ph.to_string(), orig_first.to_string());
-                    self.reverse
-                        .insert(last_ph.to_string(), orig_last.to_string());
+                    self.register_person_alias(first_ph, orig_first);
+                    self.register_person_alias(last_ph, orig_last);
                 }
             }
             return placeholder;
         }
 
         let count = self.counts.entry(entity).or_insert(0);
-        *count += 1;
+        *count = count.saturating_add(1);
         let c = *count;
 
         let placeholder = match entity {
@@ -305,16 +307,21 @@ impl PiiSession {
 
                 if original.chars().all(|ch| ch.is_ascii_digit()) && original.len() >= 6 {
                     let len = original.len();
-                    let prefix = "89410294";
-                    if len > prefix.len() {
-                        let width = len - prefix.len();
-                        let max_v = 10_usize.pow(width as u32);
-                        format!("{prefix}{:0width$}", (h as usize) % max_v, width = width)
+                    // A 20-digit u64 must remain representable as a JSON
+                    // number after pseudonymization (89... would overflow).
+                    let prefix = if len == 20 && original.parse::<u64>().is_ok() {
+                        "10"
                     } else {
-                        let width = len - 1;
-                        let max_v = 10_usize.pow(width as u32);
-                        format!("9{:0width$}", (h as usize) % max_v, width = width)
-                    }
+                        "89410294"
+                    };
+                    let (prefix, width) = if len > prefix.len() {
+                        (prefix, len - prefix.len())
+                    } else {
+                        ("9", len - 1)
+                    };
+                    let decimal = h.to_string();
+                    let suffix = &decimal[decimal.len().saturating_sub(width)..];
+                    format!("{prefix}{suffix:0>width$}")
                 } else {
                     const SECRET_PREFIX_MAP: &[(&str, &str)] = &[
                         ("sk-proj-", "sk-proj-"),
@@ -400,12 +407,35 @@ impl PiiSession {
         };
 
         let mut placeholder = placeholder;
-        if let Some(existing_original) = self.reverse.get(&placeholder)
-            && existing_original != original
+        if placeholder.bytes().all(|b| b.is_ascii_digit()) {
+            // Hash suffixes have a small domain for short numeric IDs. Resolve
+            // collisions within the numeric domain, never append `_1` to JSON
+            // number tokens or reveal an original by returning it unchanged.
+            while placeholder == original || self.reverse.contains_key(&placeholder) {
+                let mut digits = placeholder.into_bytes();
+                for digit in digits.iter_mut().rev() {
+                    if *digit == b'9' {
+                        *digit = b'0';
+                    } else {
+                        *digit += 1;
+                        break;
+                    }
+                }
+                placeholder = digits.into_iter().map(char::from).collect();
+                if placeholder.starts_with('0') {
+                    placeholder.replace_range(..1, "9");
+                }
+            }
+        } else if placeholder == original
+            || self
+                .reverse
+                .get(&placeholder)
+                .is_some_and(|existing| existing != original)
         {
+            let base = placeholder.clone();
             let mut tie_breaker = 1;
-            while self.reverse.contains_key(&placeholder) {
-                placeholder = format!("{placeholder}_{tie_breaker}");
+            while placeholder == original || self.reverse.contains_key(&placeholder) {
+                placeholder = format!("{base}_{tie_breaker}");
                 tie_breaker += 1;
             }
         }
@@ -414,6 +444,8 @@ impl PiiSession {
             .insert(original.to_string(), placeholder.clone());
         self.reverse
             .insert(placeholder.clone(), original.to_string());
+        self.placeholder_entities
+            .insert(placeholder.clone(), entity);
 
         if entity == PiiEntity::Person
             && let Some((first_ph, last_ph)) = placeholder.split_once(' ')
@@ -421,40 +453,124 @@ impl PiiSession {
             let orig_first = original.split_whitespace().next().unwrap_or(original);
             let orig_last = original.split_whitespace().last().unwrap_or(original);
 
-            self.reverse
-                .entry(first_ph.to_string())
-                .or_insert_with(|| orig_first.to_string());
-
-            self.reverse
-                .entry(last_ph.to_string())
-                .or_insert_with(|| orig_last.to_string());
+            let first_ph = first_ph.to_string();
+            let last_ph = last_ph.to_string();
+            self.register_person_alias(&first_ph, orig_first);
+            self.register_person_alias(&last_ph, orig_last);
         }
 
         placeholder
     }
 
-    /// Restores placeholders when `reversible`. LeftmostLongest Aho-Corasick
-    /// matching keeps multi-pattern replacement linear in the text length,
-    /// which a naive nested scan would not.
+    fn register_person_alias(&mut self, alias: &str, original: &str) {
+        if self.ambiguous_aliases.contains(alias) {
+            return;
+        }
+        if self
+            .reverse
+            .get(alias)
+            .is_some_and(|existing| existing != original)
+        {
+            let case_upgrade = self
+                .reverse
+                .get(alias)
+                .is_some_and(|existing| existing.eq_ignore_ascii_case(original));
+            if case_upgrade {
+                self.reverse.insert(alias.to_string(), original.to_string());
+            } else {
+                self.reverse.remove(alias);
+                self.ambiguous_aliases.insert(alias.to_string());
+            }
+        } else {
+            self.reverse.insert(alias.to_string(), original.to_string());
+        }
+    }
+
+    /// Only add lossless, unambiguous formatting aliases. Exact mappings win;
+    /// fuzzy or partial secrets must never guess which original to restore.
+    pub fn restoration_mapping(&self) -> HashMap<String, String> {
+        if !self.reversible {
+            return HashMap::new();
+        }
+        let mut aliases = HashMap::<String, String>::new();
+        let mut ambiguous = HashSet::new();
+        let mut add = |alias: String, original: &String| {
+            if self.reverse.contains_key(&alias) || ambiguous.contains(&alias) {
+                return;
+            }
+            if aliases
+                .get(&alias)
+                .is_some_and(|existing| existing != original)
+            {
+                aliases.remove(&alias);
+                ambiguous.insert(alias);
+            } else {
+                aliases.insert(alias, original.clone());
+            }
+        };
+        for (placeholder, original) in &self.reverse {
+            match self.placeholder_entities.get(placeholder) {
+                Some(PiiEntity::Phone) => {
+                    let digits: String = placeholder.chars().filter(char::is_ascii_digit).collect();
+                    add(format!("+{digits}"), original);
+                    add(digits, original);
+                    add(placeholder.replace('-', " "), original);
+                }
+                Some(PiiEntity::Secret) => {
+                    // Attached CLI password flags have no boundary between
+                    // `-p` and the value. Match the whole bounded flag instead
+                    // of allowing secret replacement inside arbitrary words.
+                    add(format!("-p{placeholder}"), &format!("-p{original}"));
+                }
+                Some(PiiEntity::CreditCard) => {
+                    add(placeholder.replace([' ', '-'], ""), original);
+                    add(placeholder.replace(' ', "-"), original);
+                }
+                Some(PiiEntity::Ip) => {
+                    if let Ok(ip) = placeholder.parse::<std::net::Ipv6Addr>() {
+                        add(ip.to_string(), original);
+                        let segments = ip.segments();
+                        add(
+                            segments
+                                .iter()
+                                .map(|s| format!("{s:04x}"))
+                                .collect::<Vec<_>>()
+                                .join(":"),
+                            original,
+                        );
+                        add(
+                            segments
+                                .iter()
+                                .map(|s| format!("{s:x}"))
+                                .collect::<Vec<_>>()
+                                .join(":"),
+                            original,
+                        );
+                    }
+                }
+                _ => {}
+            }
+            if placeholder.starts_with('<') && placeholder.ends_with('>') {
+                add(
+                    placeholder.replace('<', "&lt;").replace('>', "&gt;"),
+                    original,
+                );
+            }
+        }
+        aliases.extend(self.reverse.clone());
+        aliases
+    }
+
+    /// Use the same boundary-aware matcher for unary and streaming output.
     pub fn restore_text(&self, text: &str) -> String {
         if !self.reversible || self.reverse.is_empty() || text.is_empty() {
             return text.to_string();
         }
 
-        let mut pairs: Vec<(&String, &String)> = self.reverse.iter().collect();
-        pairs.sort_by_key(|(k, _)| std::cmp::Reverse(k.len()));
-
-        let patterns: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
-        let replacements: Vec<&str> = pairs.iter().map(|(_, v)| v.as_str()).collect();
-
-        match AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .match_kind(MatchKind::LeftmostLongest)
-            .build(&patterns)
-        {
-            Ok(ac) => ac.replace_all(text, &replacements),
-            Err(_) => text.to_string(),
-        }
+        let mut replacer = StreamingWindowReplacer::new(self.restoration_mapping());
+        let mut restored = replacer.process(text);
+        restored.push_str(&replacer.flush());
+        restored
     }
 
     /// Restore placeholders in an OpenAIResponse in-place.
@@ -469,7 +585,11 @@ impl PiiSession {
             }
             if let Some(tool_calls) = choice.message.tool_calls.as_mut() {
                 for tc in tool_calls {
-                    self.restore_json_value(tc);
+                    if let Some(arguments) =
+                        tc.get_mut("function").and_then(|f| f.get_mut("arguments"))
+                    {
+                        self.restore_json_value(arguments);
+                    }
                 }
             }
             for (_k, v) in &mut choice.message.extra {
@@ -509,6 +629,18 @@ impl PiiSession {
                     self.restore_json_value(v);
                 }
             }
+            serde_json::Value::Number(number)
+                // IDs/cards can be JSON numbers, not just strings. Never use
+                // substring replacement or convert them into quoted strings.
+                if (number.is_i64() || number.is_u64()) => {
+                    let token = number.to_string();
+                    if let Some(original) = self.restoration_mapping().get(&token)
+                        && let Ok(restored) = original.parse::<serde_json::Number>()
+                        && (restored.is_i64() || restored.is_u64())
+                    {
+                        *number = restored;
+                    }
+                }
             _ => {}
         }
     }

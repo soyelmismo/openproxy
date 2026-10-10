@@ -2,6 +2,210 @@ use super::super::*;
 use openproxy_types::config::PiiEntity;
 use openproxy_types::message::{OpenAIChoice, OpenAIMessage, OpenAIResponse};
 
+#[test]
+fn restoration_handles_equivalent_phone_card_and_ipv6_formats() {
+    let mut session = PiiSession::new(true);
+    let phone = session.get_or_create_placeholder(PiiEntity::Phone, "+34 600 123 456");
+    let card = session.get_or_create_placeholder(PiiEntity::CreditCard, "4532-0151-1283-0366");
+    let ipv6 = session.get_or_create_placeholder(PiiEntity::Ip, "2001:db8::42");
+    let compact_phone: String = phone
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '+')
+        .collect();
+    let compact_card: String = card.chars().filter(|c| c.is_ascii_digit()).collect();
+    let expanded_ip = ipv6
+        .parse::<std::net::Ipv6Addr>()
+        .unwrap()
+        .segments()
+        .iter()
+        .map(|segment| format!("{segment:04x}"))
+        .collect::<Vec<_>>()
+        .join(":");
+    assert_eq!(session.restore_text(&compact_phone), "+34 600 123 456");
+    assert_eq!(session.restore_text(&compact_card), "4532-0151-1283-0366");
+    assert_eq!(session.restore_text(&expanded_ip), "2001:db8::42");
+}
+
+#[test]
+fn restoration_numeric_tool_ids_are_redacted_before_upstream() {
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+    let args = serde_json::json!({"chat_id": 6077244180u64, "count": 6077244180u64});
+    let message = OpenAIMessage {
+        role: "assistant".into(),
+        content: None,
+        name: None,
+        tool_call_id: None,
+        extra: Default::default(),
+        tool_calls: Some(vec![
+            serde_json::json!({"id":"call_keep", "type":"function",
+            "function":{"name":"lookup", "arguments":args.to_string()}}),
+        ]),
+    };
+    let redacted = engine.redact_messages(&[message], &mut session);
+    let mut redacted_args: serde_json::Value = serde_json::from_str(
+        redacted[0].tool_calls.as_ref().unwrap()[0]["function"]["arguments"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(redacted_args["chat_id"], args["chat_id"]);
+    assert!(redacted_args["chat_id"].is_u64());
+    assert_eq!(redacted_args["count"], args["count"]);
+    session.restore_json_value(&mut redacted_args);
+    assert_eq!(redacted_args, args);
+}
+
+#[test]
+fn restoration_u64_max_secret_stays_reversible_as_a_json_integer() {
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+    let original = serde_json::json!({"token": u64::MAX});
+    let mut value = serde_json::Value::String(original.to_string());
+    engine.redact_json_value(&mut value, &mut session);
+    let mut redacted: serde_json::Value = serde_json::from_str(value.as_str().unwrap()).unwrap();
+    assert_ne!(redacted["token"], original["token"]);
+    assert!(redacted["token"].is_u64());
+    session.restore_json_value(&mut redacted);
+    assert_eq!(redacted, original);
+}
+
+#[test]
+fn restoration_restores_numeric_json_leaves_without_changing_their_type() {
+    let mut session = PiiSession::new(true);
+    let placeholder = session.get_or_create_placeholder(PiiEntity::Secret, "6077244180");
+    let mut value =
+        serde_json::json!({"chat_id": placeholder.parse::<u64>().unwrap(), "label": "keep"});
+    session.restore_json_value(&mut value);
+    assert_eq!(
+        value,
+        serde_json::json!({"chat_id": 6077244180u64, "label": "keep"})
+    );
+}
+
+#[test]
+fn restoration_does_not_modify_tool_protocol_identifiers() {
+    let mut session = PiiSession::new(true);
+    let placeholder = session.get_or_create_placeholder(PiiEntity::Person, "Miguel");
+    let mut response = OpenAIResponse {
+        id: "response".into(),
+        object: "chat.completion".into(),
+        created: 0,
+        model: "test".into(),
+        usage: None,
+        choices: vec![OpenAIChoice {
+            index: 0,
+            finish_reason: Some("tool_calls".into()),
+            message: OpenAIMessage {
+                role: "assistant".into(),
+                content: None,
+                name: None,
+                tool_call_id: None,
+                extra: Default::default(),
+                tool_calls: Some(vec![serde_json::json!({"id": "Alex", "type": "function",
+                    "function": {"name": "Alex", "arguments": serde_json::json!({"name": placeholder}).to_string()}})]),
+            },
+        }],
+    };
+    session.restore_openai_response(&mut response);
+    let call = &response.choices[0].message.tool_calls.as_ref().unwrap()[0];
+    assert_eq!(call["id"], "Alex");
+    assert_eq!(call["function"]["name"], "Alex");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(call["function"]["arguments"].as_str().unwrap())
+            .unwrap()["name"],
+        "Miguel"
+    );
+}
+
+#[test]
+fn restoration_does_not_guess_ambiguous_person_components() {
+    let mut session = PiiSession::new(true);
+    let first = session.get_or_create_placeholder(PiiEntity::Person, "Miguel Uno");
+    for i in 2..=20 {
+        session.get_or_create_placeholder(PiiEntity::Person, &format!("User {i}"));
+    }
+    let second = session.get_or_create_placeholder(PiiEntity::Person, "Carlos Dos");
+    assert!(first.starts_with("Alex ") && second.starts_with("Alex "));
+    assert_eq!(session.restore_text("Alex"), "Alex");
+    assert_eq!(
+        session.restore_text(&format!("{first}; {second}")),
+        "Miguel Uno; Carlos Dos"
+    );
+}
+
+#[test]
+fn restoration_case_upgrade_does_not_reintroduce_ambiguous_person_aliases() {
+    let mut session = PiiSession::new(true);
+    let first = session.get_or_create_placeholder(PiiEntity::Person, "miguel uno");
+    for i in 2..=20 {
+        session.get_or_create_placeholder(PiiEntity::Person, &format!("User {i}"));
+    }
+    let second = session.get_or_create_placeholder(PiiEntity::Person, "Carlos Dos");
+    assert_eq!(session.restore_text("Alex"), "Alex");
+    assert_eq!(
+        session.get_or_create_placeholder(PiiEntity::Person, "Miguel Uno"),
+        first
+    );
+    assert_eq!(session.restore_text("Alex"), "Alex");
+    assert_eq!(session.restore_text(&second), "Carlos Dos");
+    assert_eq!(session.restore_text(&first), "Miguel Uno");
+}
+
+#[test]
+fn restoration_does_not_restore_substrings_of_larger_contact_tokens() {
+    let mut session = PiiSession::new(true);
+    let email = session.get_or_create_placeholder(PiiEntity::Email, "alice@example.com");
+    for input in [
+        format!("prefix.{email}"),
+        format!("prefix+{email}"),
+        format!("{email}.evil"),
+    ] {
+        assert_eq!(session.restore_text(&input), input);
+    }
+    assert_eq!(
+        session.restore_text(&format!("Contact {email}.")),
+        "Contact alice@example.com."
+    );
+    let ip = session.get_or_create_placeholder(PiiEntity::Ip, "192.0.2.42");
+    let longer = format!("{ip}.9");
+    assert_eq!(session.restore_text(&longer), longer);
+}
+
+#[test]
+fn restoration_never_emits_the_original_as_a_phone_placeholder() {
+    let mut session = PiiSession::new(true);
+    let original = "+1-202-555-0111";
+    let placeholder = session.get_or_create_placeholder(PiiEntity::Phone, original);
+    assert_ne!(placeholder, original);
+    assert_eq!(session.restore_text(&placeholder), original);
+}
+
+#[test]
+fn restoration_numeric_collisions_preserve_digit_only_json_tokens() {
+    let mut session = PiiSession::new(true);
+    let mut placeholders = std::collections::HashSet::new();
+    for i in 0..300u64 {
+        let original = (6077244000 + i).to_string();
+        let placeholder = session.get_or_create_placeholder(PiiEntity::Secret, &original);
+        assert!(placeholder.chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(placeholder.len(), original.len());
+        assert_ne!(placeholder, original);
+        assert!(placeholders.insert(placeholder.clone()));
+        assert_eq!(session.restore_text(&placeholder), original);
+    }
+}
+
+#[test]
+fn restoration_long_numeric_secret_never_overflows() {
+    let mut session = PiiSession::new(true);
+    let original = "1234567890123456789012345678901234567890";
+    let placeholder = session.get_or_create_placeholder(PiiEntity::Secret, original);
+    assert_eq!(placeholder.len(), original.len());
+    assert_ne!(placeholder, original);
+    assert_eq!(session.restore_text(&placeholder), original);
+}
+
 fn msg(role: &str, content: &str) -> OpenAIMessage {
     OpenAIMessage {
         role: role.into(),
