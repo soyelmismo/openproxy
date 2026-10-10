@@ -128,7 +128,8 @@ pub(crate) fn update_circuit_breaker_on_result(
 
     // Terminal account fault (402 balance exhausted, 401 invalid key).
     // Mark unhealthy in SQLite immediately and force circuit breaker open in memory.
-    if let Some(err) = &result.error
+    if target.provider_id.as_str() != "zai"
+        && let Some(err) = &result.error
         && let Some(reason) = detect_account_terminal_error(err)
     {
         tracing::warn!(account_id = aid.0, provider = %target.provider_id.as_str(), reason = %reason, "terminal account error; marking unhealthy");

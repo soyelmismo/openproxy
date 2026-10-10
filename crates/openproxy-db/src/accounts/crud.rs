@@ -341,5 +341,6 @@ pub(crate) fn row_to_account(
         expires_at: @opt_box_str(21),
         created_at: @box_str(22),
         current_proxy_id: @opt_box_str(23),
+        quota_pools: @json(24),
     })
 }

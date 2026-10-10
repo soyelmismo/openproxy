@@ -555,6 +555,7 @@ impl KiroAdapter {
             plan_name,
             last_fetched_at: openproxy_types::now_unix_secs_str(),
             fetch_error: None,
+            pools: None,
             model_details: None,
         })
     }

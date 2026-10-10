@@ -1,6 +1,7 @@
 import { html, type TemplateResult } from 'lit-html';
 import type { Account, ModelQuotaDetail } from "../lib/types/api.js";
 import { showCodexResetsModal } from "../components/codex-resets-modal.js";
+import { renderQuotaPools } from "./quota-pools.js";
 
 // Format reset time as a short exact relative hint.
 const resetHint = (ts: string | null | undefined): string => {
@@ -191,12 +192,27 @@ function renderMetaBadges(meta: ProviderSpecificMeta | null, account?: Account):
 }
 
 export function renderQuotaCell(a: Account): TemplateResult {
-  if (a.quota_fetch_error) {
-    return html`<div class="quota-cell error"><small>✗ ${a.quota_fetch_error}</small></div>`;
-  }
   const meta = parseProviderSpecific(a.oauth_provider_specific);
   const badgesResult = renderMetaBadges(meta, a);
 
+  // Z.ai dual-quota path. Rendered from per-source pools, so a top-level fetch
+  // error or legacy SessionWindow 0 must never hide a healthy sibling pool.
+  const pools = a.quota_pools;
+  if (pools && pools.length > 0) {
+    const poolsHtml = renderQuotaPools(pools);
+    const topError = a.quota_fetch_error
+      ? html`<div class="quota-pool-error top" role="status"><small>✗ ${a.quota_fetch_error}</small></div>`
+      : null;
+    return html`<div class="quota-cell">
+      ${topError}
+      ${poolsHtml}
+      ${badgesResult}
+    </div>`;
+  }
+
+  if (a.quota_fetch_error) {
+    return html`<div class="quota-cell error"><small>✗ ${a.quota_fetch_error}</small></div>`;
+  }
   if (a.quota_session_used == null && a.quota_weekly_used == null) {
     if (a.quota_plan_name || badgesResult) {
       return html`<div class="quota-cell">

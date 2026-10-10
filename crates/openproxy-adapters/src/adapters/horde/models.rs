@@ -205,6 +205,7 @@ pub fn parse_horde_quota(
         plan_name: Some(plan_name),
         last_fetched_at: last_fetched_at.to_string(),
         fetch_error: None,
+        pools: None,
         model_details: None,
     }
 }

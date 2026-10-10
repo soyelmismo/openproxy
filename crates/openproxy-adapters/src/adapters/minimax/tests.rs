@@ -325,8 +325,10 @@ fn test_minimax_wrap_body_translates_thinking_effort() {
     let adapter = MiniMaxAdapter::new();
 
     let make_target = |effort: Option<&str>| {
-        let mut target = ComboTarget::default();
-        target.thinking_effort = effort.map(|s| s.to_string().into());
+        let target = ComboTarget {
+            thinking_effort: effort.map(str::to_string),
+            ..ComboTarget::default()
+        };
         ResolvedTarget {
             target,
             model: Model::default(),

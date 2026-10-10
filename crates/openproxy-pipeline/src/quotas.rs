@@ -144,6 +144,41 @@ pub(crate) fn evaluate_account_quota(
     account: &openproxy_types::accounts::Account,
     requested_model: &str,
 ) -> QuotaStatus {
+    if account.provider_id.as_str() == "zai" {
+        let Some(pools) = account.quota_pools.as_deref().filter(|p| !p.is_empty()) else {
+            return QuotaStatus::Available;
+        };
+        let now = openproxy_types::now_unix_secs_str()
+            .parse::<u64>()
+            .unwrap_or(0);
+        // Stale counters must reach route preparation, which refreshes both
+        // sources. Otherwise a depleted cached pool permanently retires a
+        // newly renewed entitlement before its balance can ever be read.
+        if !pools
+            .iter()
+            .any(|p| p.source == openproxy_types::QuotaSource::ZcodeStarter)
+            || !pools
+                .iter()
+                .any(|p| p.source == openproxy_types::QuotaSource::CodingPlan)
+            || pools.iter().any(|pool| {
+                pool.last_fetched_at.parse::<u64>().map_or(true, |fetched| {
+                    fetched > now || now.saturating_sub(fetched) > 60
+                })
+            })
+        {
+            return QuotaStatus::Available;
+        }
+        let remaining = openproxy_types::quota::zai_remaining_fraction(pools, requested_model, now);
+        return match remaining {
+            Some(value) if value <= 0.0 => QuotaStatus::Exhausted,
+            Some(value)
+                if quota_protection_enabled && value <= f64::from(threshold_percentage) / 100.0 =>
+            {
+                QuotaStatus::Protected
+            }
+            _ => QuotaStatus::Available,
+        };
+    }
     if check_quota_windows_exhausted(account) {
         return QuotaStatus::Exhausted;
     }
@@ -172,6 +207,15 @@ pub(crate) fn get_account_remaining_fraction(
     account: &openproxy_types::accounts::Account,
     requested_model: &str,
 ) -> f64 {
+    if account.provider_id.as_str() == "zai"
+        && let Some(pools) = account.quota_pools.as_deref()
+    {
+        let now = openproxy_types::now_unix_secs_str()
+            .parse::<u64>()
+            .unwrap_or(0);
+        return openproxy_types::quota::zai_remaining_fraction(pools, requested_model, now)
+            .unwrap_or(1.0);
+    }
     if is_credit_balance_exhausted(account) {
         return 0.0;
     }
@@ -233,7 +277,7 @@ fn enrich_target_with_quota(
     threshold_percentage: u32,
     repo: &dyn crate::repository::PipelineRepository,
     master_key: &MasterKey,
-    requested_model: &str,
+    _requested_model: &str,
     target_position: usize,
 ) -> TargetWithQuota {
     let Some(aid) = t.target.account_id else {
@@ -248,13 +292,18 @@ fn enrich_target_with_quota(
 
     match repo.get_account(aid, master_key) {
         Ok(Some(account)) => {
+            let model = if account.provider_id.as_str() == "zai" {
+                t.model.model_id.as_str()
+            } else {
+                _requested_model
+            };
             let status = evaluate_account_quota(
                 quota_protection_enabled,
                 threshold_percentage,
                 &account,
-                requested_model,
+                model,
             );
-            let remaining_fraction = get_account_remaining_fraction(&account, requested_model);
+            let remaining_fraction = get_account_remaining_fraction(&account, model);
             TargetWithQuota {
                 resolved_target: t,
                 status,
@@ -368,6 +417,7 @@ mod tests {
             quota_plan_name: Some("Free".into()),
             quota_last_fetched_at: None,
             quota_fetch_error: None,
+            quota_pools: None,
             quota_model_details: None,
             auth_type: "oauth".into(),
             email: None,

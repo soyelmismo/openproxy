@@ -470,7 +470,18 @@ pub async fn refresh_single_account_quota(
     // prune "live-limited" sentinels only after a healthy fetch. `clear_for_account`
     // applies the `until_ts <= now` filter, so a `mark_limited` racing this refresh
     // is not wiped (docs/specs/antigravity-gaps-p2.md §4.4).
-    if q.fetch_error.is_none() {
+    let source_health = q.pools.as_deref().map(quota_pool_health);
+    if let Some(health) = source_health {
+        let db_pool_health = Arc::clone(db_pool);
+        let _ = tokio::task::spawn_blocking(move || {
+            let conn = db_pool_health.writer();
+            accounts::set_health(&conn, account_id, health)
+        })
+        .await;
+        if health == accounts::HealthStatus::Healthy {
+            clear_live_limited_after_refresh(db_pool, account_id).await;
+        }
+    } else if q.fetch_error.is_none() {
         let db_pool_health = Arc::clone(db_pool);
         let _ = tokio::task::spawn_blocking(move || {
             let conn = db_pool_health.writer();
@@ -611,6 +622,25 @@ pub(crate) async fn clear_live_limited_after_refresh(db_pool: &Arc<DbPool>, acco
     })
     .await;
 }
+
+fn quota_pool_health(pools: &[openproxy_types::quota::QuotaPool]) -> accounts::HealthStatus {
+    use openproxy_types::quota::QuotaPoolStatus;
+    let usable_source = pools
+        .iter()
+        .any(|pool| pool.status == QuotaPoolStatus::Active && pool.fetch_error.is_none());
+    let unreadable_source = pools
+        .iter()
+        .any(|pool| pool.status == QuotaPoolStatus::Unavailable || pool.fetch_error.is_some());
+    if usable_source || !unreadable_source {
+        accounts::HealthStatus::Healthy
+    } else {
+        accounts::HealthStatus::Degraded
+    }
+}
+
+#[cfg(test)]
+#[path = "quota_sync_pool_tests.rs"]
+mod pool_tests;
 
 pub fn compute_low_quota_signal(q: &AccountQuota) -> Option<(&'static str, i64, i64)> {
     if let (Some(used), Some(limit)) = (q.session_used, q.session_limit) {

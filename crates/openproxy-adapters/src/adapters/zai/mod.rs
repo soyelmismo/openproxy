@@ -10,10 +10,14 @@
 pub mod api_key;
 pub mod models;
 pub mod quota;
+pub mod routing;
+pub mod routing_refresh;
 
 pub use api_key::*;
 pub use models::*;
 pub use quota::*;
+pub use routing::*;
+pub use routing_refresh::*;
 
 use super::{
     AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ModelId, ProviderAdapterConfig,

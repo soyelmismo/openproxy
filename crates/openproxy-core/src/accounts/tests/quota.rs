@@ -45,6 +45,7 @@ fn set_quota_roundtrip() {
         plan_name: Some("Coding Plan".into()),
         last_fetched_at: "1700000001".into(),
         fetch_error: None,
+        pools: None,
         model_details: None,
     };
     set_quota(&conn, id, &q).expect("set_quota");
@@ -98,6 +99,7 @@ fn set_quota_records_error() {
         plan_name: None,
         last_fetched_at: "1700000099".into(),
         fetch_error: Some("minimax 401".into()),
+        pools: None,
         model_details: None,
     };
     set_quota(&conn, id, &q).expect("set_quota");
@@ -124,6 +126,7 @@ fn set_quota_missing_account_errors() {
         plan_name: None,
         last_fetched_at: "0".into(),
         fetch_error: None,
+        pools: None,
         model_details: None,
     };
     let err = set_quota(&conn, AccountId(99999), &q).expect_err("missing");
@@ -165,6 +168,7 @@ fn set_quota_roundtrip_with_model_details() {
         plan_name: Some("Pro".into()),
         last_fetched_at: "1700000001".into(),
         fetch_error: None,
+        pools: None,
         model_details: Some(vec![detail.clone()].into_boxed_slice()),
     };
     set_quota(&conn, id, &q).expect("set_quota");
@@ -204,6 +208,7 @@ fn set_quota_roundtrip_adversarial_details() {
         plan_name: Some("Free".into()),
         last_fetched_at: "1700000002".into(),
         fetch_error: None,
+        pools: None,
         model_details: Some(Box::new([])),
     };
     set_quota(&conn, id, &q_empty).expect("set_quota empty");
@@ -246,6 +251,7 @@ fn set_quota_roundtrip_adversarial_details() {
         plan_name: Some("Pro".into()),
         last_fetched_at: "1700000003".into(),
         fetch_error: None,
+        pools: None,
         model_details: Some(extreme_details.clone()),
     };
     set_quota(&conn, id, &q_extreme).expect("set_quota extreme");
@@ -265,6 +271,7 @@ fn set_quota_roundtrip_adversarial_details() {
         plan_name: Some("Pro".into()),
         last_fetched_at: "1700000004".into(),
         fetch_error: None,
+        pools: None,
         model_details: None,
     };
     set_quota(&conn, id, &q_none).expect("set_quota none");

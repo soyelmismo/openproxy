@@ -1,0 +1,18 @@
+-- 000089_account_quota_pools.sql
+-- Add independently accounted quota pools to the accounts table.
+--
+-- Z.ai exposes two unrelated products under one login, and the legacy
+-- aggregate columns (quota_session_*/quota_weekly_*) can only describe one
+-- number for the whole account. Collapsing both entitlements into that number
+-- manufactures exhaustion neither product has: a Coding Plan that reports
+-- "no active plan" while a ZCode starter bucket still has balance is the
+-- common case, not an edge case.
+--
+-- The column stores a JSON array of QuotaPool objects (id, source, plan_name,
+-- status, unit, used, limit, remaining, reset_at, expires_at, starts_at,
+-- model_ids, model_details, fetch_error, last_fetched_at) under the
+-- quota_pools name of AccountQuota.pools.
+--
+-- Purely additive: NULL for every pre-existing row, so legacy accounts keep
+-- deserializing with pools = None and the aggregate columns keep working.
+ALTER TABLE accounts ADD COLUMN quota_pools TEXT;

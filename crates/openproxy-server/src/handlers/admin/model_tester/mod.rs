@@ -514,6 +514,42 @@ pub async fn run_test_for_model(
                 (pipeline_res.status_code, None)
             };
 
+            let diagnostic_url = if model.provider_id.as_str() == "zai" {
+                match _account_id_opt {
+                    Some(aid) => {
+                        let master_key = std::sync::Arc::clone(s.master_key());
+                        let latest = s
+                            .db_pool()
+                            .spawn_read(move |r| {
+                                openproxy_db::accounts::get(r, aid, master_key.as_ref())
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                        latest.and_then(|account| {
+                            let now = openproxy_types::now_unix_secs_str()
+                                .parse::<u64>()
+                                .unwrap_or(0);
+                            openproxy_adapters::adapters::zai::resolve_zai_inference_route(
+                                &account,
+                                &api_key,
+                                model.model_id.as_str(),
+                                now,
+                                &adapter.config().base_url,
+                            )
+                            .ok()
+                            .map(|route| route.url)
+                        })
+                    }
+                    None => None,
+                }
+            } else {
+                Some(adapter.build_chat_url_for_account(
+                    effective_target_format,
+                    &model.model_id,
+                    &account_label,
+                ))
+            };
             let debug_payload = if opts.in_combo_fanout {
                 None
             } else {
@@ -526,11 +562,7 @@ pub async fn run_test_for_model(
                 };
                 Some(serde_json::json!({
                     "request_headers": req_headers,
-                    "request_url": adapter.build_chat_url_for_account(
-                        effective_target_format,
-                        &model.model_id,
-                        &account_label,
-                    ),
+                    "request_url": diagnostic_url,
                     "request_body": openai_req,
                     "response_body": response_body,
                     "proxy_used": effective_proxy.clone(),

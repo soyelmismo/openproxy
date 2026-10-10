@@ -211,6 +211,7 @@ fn test_account_select_canonical_projection() {
         last_fetched_at: "2026-10-01T21:00:00Z".into(),
         fetch_error: None,
         model_details: None,
+        pools: None,
     };
     set_quota(&conn, acc_id, &quota).unwrap();
 
@@ -270,4 +271,265 @@ fn test_account_select_canonical_projection() {
     clear_oauth_expires_at(&conn, acc_id.0).expect("clear succeeds");
     let acc_cleared = get(&conn, acc_id, &master).unwrap().unwrap();
     assert_eq!(acc_cleared.expires_at, None);
+}
+
+// ===== quota_pools persistence (migration 000089) =====
+
+use openproxy_types::AccountId;
+use openproxy_types::quota::{
+    AccountQuota, QuotaPool, QuotaPoolStatus, QuotaSource, zai_remaining_fraction,
+};
+
+const NOW: u64 = 1_700_000_000;
+
+fn zai_account() -> (rusqlite::Connection, crate::secrets::MasterKey, AccountId) {
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let master = MasterKey::generate().unwrap();
+    let id = create(
+        &conn,
+        &openproxy_types::ProviderId::new("antigravity"),
+        None,
+        &master,
+        Some("zai-account"),
+        10,
+        None,
+    )
+    .unwrap();
+    (conn, master, id)
+}
+
+fn starter_pool(remaining: Option<i64>, status: QuotaPoolStatus) -> QuotaPool {
+    QuotaPool {
+        id: "starter-glm".into(),
+        source: QuotaSource::ZcodeStarter,
+        plan_name: Some("ZCode Starter".into()),
+        status,
+        unit: "requests".into(),
+        used: Some(100 - remaining.unwrap_or(0)),
+        limit: Some(100),
+        remaining,
+        reset_at: None,
+        expires_at: None,
+        starts_at: None,
+        model_ids: vec!["glm-4.6".into()],
+        model_details: None,
+        fetch_error: None,
+        last_fetched_at: "1700000000".into(),
+    }
+}
+
+fn coding_pool(remaining: Option<i64>, status: QuotaPoolStatus) -> QuotaPool {
+    QuotaPool {
+        id: "coding-plan".into(),
+        source: QuotaSource::CodingPlan,
+        plan_name: Some("Coding Plan Pro".into()),
+        status,
+        unit: "requests".into(),
+        used: Some(1000 - remaining.unwrap_or(0)),
+        limit: Some(1000),
+        remaining,
+        reset_at: None,
+        expires_at: None,
+        starts_at: None,
+        model_ids: Vec::new(),
+        model_details: None,
+        fetch_error: None,
+        last_fetched_at: "1700000000".into(),
+    }
+}
+
+#[test]
+fn migration_000089_adds_quota_pools_column() {
+    let conn = open_in_memory();
+    let has: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('accounts') WHERE name = 'quota_pools'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 1, "accounts.quota_pools must exist");
+
+    let versions: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT version FROM schema_migrations WHERE version = 89")
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    };
+    assert_eq!(
+        versions,
+        vec![89],
+        "migration 89 must be embedded and applied"
+    );
+}
+
+#[test]
+fn set_quota_roundtrips_both_pools_through_get_and_list() {
+    let (conn, master, id) = zai_account();
+    let pools: Vec<QuotaPool> = vec![
+        starter_pool(Some(40), QuotaPoolStatus::Active),
+        coding_pool(Some(250), QuotaPoolStatus::Active),
+    ];
+    let q = AccountQuota {
+        session_used: Some(7),
+        session_limit: Some(100),
+        pools: Some(pools.into_boxed_slice()),
+        ..AccountQuota::empty()
+    };
+    set_quota(&conn, id, &q).unwrap();
+
+    // get(): projection index 24 must land in quota_pools.
+    let acc = get(&conn, id, &master).unwrap().unwrap();
+    let stored = acc.quota_pools.as_deref().expect("pools present after get");
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].source, QuotaSource::ZcodeStarter);
+    assert_eq!(stored[0].remaining, Some(40));
+    assert_eq!(stored[1].source, QuotaSource::CodingPlan);
+    assert_eq!(stored[1].limit, Some(1000));
+    // Legacy aggregate columns untouched.
+    assert_eq!(acc.quota_session_used, Some(7));
+
+    // list(): same projection, so the mapper index must not have drifted.
+    let listed = list(&conn, None, &master).unwrap();
+    let listed = listed
+        .into_iter()
+        .find(|a| a.id == id)
+        .expect("account in list");
+    assert_eq!(listed.quota_pools, acc.quota_pools);
+
+    // The two pools stay independent: the starter's half-consumed bucket does
+    // not pull the coding plan's 0.25 down to 0.2.
+    let frac = zai_remaining_fraction(stored, "glm-4.6", NOW);
+    assert!((frac.unwrap() - 0.4).abs() < 1e-9, "got {frac:?}");
+
+    // And the starter is authoritative for its model only.
+    let other = zai_remaining_fraction(stored, "other-model", NOW);
+    assert!((other.unwrap() - 0.25).abs() < 1e-9, "got {other:?}");
+}
+
+#[test]
+fn account_without_pools_deserializes_as_none() {
+    let (conn, master, id) = zai_account();
+    let q = AccountQuota {
+        session_used: Some(3),
+        session_limit: Some(10),
+        ..AccountQuota::empty()
+    };
+    set_quota(&conn, id, &q).unwrap();
+
+    let acc = get(&conn, id, &master).unwrap().unwrap();
+    assert!(
+        acc.quota_pools.is_none(),
+        "legacy row must read pools = None"
+    );
+
+    // A pre-000089 row (column added by ALTER, therefore NULL) is the same case:
+    // serialize the account and confirm `quota_pools` is skipped, not emitted.
+    let json = serde_json::to_string(&acc).unwrap();
+    assert!(!json.contains("quota_pools"), "must skip None: {json}");
+}
+
+#[test]
+fn exhausted_starter_does_not_retire_the_coding_plan() {
+    let (conn, master, id) = zai_account();
+    let pools: Vec<QuotaPool> = vec![
+        starter_pool(Some(0), QuotaPoolStatus::Exhausted),
+        coding_pool(Some(500), QuotaPoolStatus::Active),
+    ];
+    let q = AccountQuota {
+        pools: Some(pools.into_boxed_slice()),
+        ..AccountQuota::empty()
+    };
+    set_quota(&conn, id, &q).unwrap();
+
+    let acc = get(&conn, id, &master).unwrap().unwrap();
+    let stored = acc.quota_pools.as_deref().unwrap();
+    let frac = zai_remaining_fraction(stored, "glm-4.6", NOW);
+    assert!((frac.unwrap() - 0.5).abs() < 1e-9, "got {frac:?}");
+}
+
+#[test]
+fn unreadable_source_stays_unknown_not_zero() {
+    let (conn, master, id) = zai_account();
+    let mut unreadable = coding_pool(None, QuotaPoolStatus::Unavailable);
+    unreadable.fetch_error = Some("upstream 500".into());
+    let q = AccountQuota {
+        pools: Some(vec![unreadable].into_boxed_slice()),
+        ..AccountQuota::empty()
+    };
+    set_quota(&conn, id, &q).unwrap();
+
+    let acc = get(&conn, id, &master).unwrap().unwrap();
+    let stored = acc.quota_pools.as_deref().unwrap();
+    assert_eq!(
+        zai_remaining_fraction(stored, "glm-4.6", NOW),
+        None,
+        "a fetch failure is unknown, not exhausted"
+    );
+}
+
+#[test]
+fn empty_pools_are_stored_as_null() {
+    let (conn, master, id) = zai_account();
+    let q = AccountQuota {
+        pools: Some(Vec::new().into_boxed_slice()),
+        ..AccountQuota::empty()
+    };
+    set_quota(&conn, id, &q).unwrap();
+
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT quota_pools FROM accounts WHERE id = ?1",
+            rusqlite::params![id.0],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(raw, None, "empty payload collapses to NULL on disk");
+    let acc = get(&conn, id, &master).unwrap().unwrap();
+    assert!(acc.quota_pools.is_none());
+}
+
+#[test]
+fn set_quota_clears_pools_without_touching_other_accounts() {
+    let (conn, master, id_a) = zai_account();
+    let id_b = create(
+        &conn,
+        &openproxy_types::ProviderId::new("antigravity"),
+        None,
+        &master,
+        Some("other"),
+        20,
+        None,
+    )
+    .unwrap();
+
+    let q = AccountQuota {
+        pools: Some(vec![starter_pool(Some(50), QuotaPoolStatus::Active)].into_boxed_slice()),
+        ..AccountQuota::empty()
+    };
+    set_quota(&conn, id_a, &q).unwrap();
+
+    // Explicit empty pool snapshot clears A only; missing pools is legacy data.
+    set_quota(
+        &conn,
+        id_a,
+        &AccountQuota {
+            pools: Some(Vec::new().into_boxed_slice()),
+            ..AccountQuota::empty()
+        },
+    )
+    .unwrap();
+    let a = get(&conn, id_a, &master).unwrap().unwrap();
+    assert!(a.quota_pools.is_none());
+    let b = get(&conn, id_b, &master).unwrap().unwrap();
+    assert!(b.quota_pools.is_none());
+
+    // Unknown account still reports not-found rather than silently succeeding.
+    let err = set_quota(&conn, AccountId(9_999_999), &AccountQuota::empty()).unwrap_err();
+    assert!(matches!(
+        err,
+        openproxy_types::CoreError::AccountNotFound(_)
+    ));
 }

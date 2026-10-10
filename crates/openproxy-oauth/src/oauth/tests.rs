@@ -217,6 +217,7 @@ fn dummy_account(expires_at: Option<&str>) -> Account {
         quota_last_fetched_at: None,
         quota_fetch_error: None,
         quota_model_details: None,
+        quota_pools: None,
         auth_type: "oauth".into(),
         email: Some("t@example.com".into()),
         oauth_scope: None,
