@@ -77,3 +77,53 @@ impl ServiceContainer {
         self.get::<Vec<openproxy_adapters::adapters::ProviderAdapterEnum>>()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct DummyService {
+        value: String,
+    }
+
+    #[test]
+    fn test_service_container_register_and_get() {
+        let mut container = ServiceContainer::new();
+        container.register_val(DummyService {
+            value: "hello".to_string(),
+        });
+
+        let service = container.get::<DummyService>();
+        assert!(service.is_ok());
+        assert_eq!(service.unwrap().value, "hello");
+
+        let try_service = container.try_get::<DummyService>();
+        assert!(try_service.is_some());
+        assert_eq!(try_service.unwrap().value, "hello");
+    }
+
+    #[test]
+    fn test_service_container_builder_pattern() {
+        let container = ServiceContainer::new()
+            .with_val(42i32)
+            .with(Arc::new("world".to_string()));
+
+        assert_eq!(*container.get::<i32>().unwrap(), 42);
+        assert_eq!(container.get::<String>().unwrap().as_str(), "world");
+    }
+
+    #[test]
+    fn test_service_container_missing_service() {
+        let container = ServiceContainer::new();
+
+        let res = container.get::<DummyService>();
+        assert!(res.is_err());
+        if let Err(CoreError::Internal(msg)) = res {
+            assert!(msg.contains("DummyService"));
+        } else {
+            panic!("expected CoreError::Internal");
+        }
+
+        assert!(container.try_get::<DummyService>().is_none());
+    }
+}
