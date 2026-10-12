@@ -324,16 +324,15 @@ fn test_minimax_wrap_body_translates_thinking_effort() {
 
     let adapter = MiniMaxAdapter::new();
 
-    let make_target = |effort: Option<&str>| {
-        let mut target = ComboTarget::default();
-        target.thinking_effort = effort.map(|s| s.to_string().into());
-        ResolvedTarget {
-            target,
-            model: Model::default(),
-            api_key: "dummy".to_string(),
-            api_key_label: None,
-            custom_meta: None,
-        }
+    let make_target = |effort: Option<&str>| ResolvedTarget {
+        target: ComboTarget {
+            thinking_effort: effort.map(|s| s.to_string()),
+            ..ComboTarget::default()
+        },
+        model: Model::default(),
+        api_key: "dummy".to_string(),
+        api_key_label: None,
+        custom_meta: None,
     };
 
     // The generic Anthropic translator emits thinking.budget_tokens for an effort;
