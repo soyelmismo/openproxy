@@ -385,4 +385,46 @@ mod tests {
         assert!(!target.is_cooldown_forced_disabled());
         assert!(target.is_cooldown_disabled(&combo));
     }
+
+    #[test]
+    fn test_target_execution_id() {
+        let target_id = ComboTargetId(10);
+        let account_id = AccountId::new(42);
+        let target = ComboTarget {
+            id: target_id,
+            account_id: Some(account_id),
+            ..ComboTarget::default()
+        };
+
+        let exec_id = TargetExecutionId::new(target_id, Some(account_id));
+        assert_eq!(exec_id.target_id, target_id);
+        assert_eq!(exec_id.account_id, Some(account_id));
+
+        let exec_from_target = TargetExecutionId::from_target(&target);
+        assert_eq!(exec_from_target, exec_id);
+
+        let exec_from_target_ref: TargetExecutionId = (&target).into();
+        assert_eq!(exec_from_target_ref, exec_id);
+
+        let exec_from_id: TargetExecutionId = target_id.into();
+        assert_eq!(exec_from_id.target_id, target_id);
+        assert_eq!(exec_from_id.account_id, None);
+
+        assert!(exec_id.matches_target(&target));
+        assert!(exec_from_id.matches_target(&target));
+
+        let other_target = ComboTarget {
+            id: ComboTargetId(99),
+            account_id: Some(account_id),
+            ..ComboTarget::default()
+        };
+        assert!(!exec_id.matches_target(&other_target));
+
+        let mism_account_target = ComboTarget {
+            id: target_id,
+            account_id: Some(AccountId::new(999)),
+            ..ComboTarget::default()
+        };
+        assert!(!exec_id.matches_target(&mism_account_target));
+    }
 }
