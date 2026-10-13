@@ -151,9 +151,10 @@ pub(super) async fn execute_sequential_targets(
                 && to_run[..idx]
                     .iter()
                     .any(|prev| prev.target.id == target.target.id);
-            let has_untried_account = target.target.account_id.is_some_and(|aid| {
-                !failed_targets.iter().any(|ft| ft.account_id == Some(aid))
-            });
+            let has_untried_account = target
+                .target
+                .account_id
+                .is_some_and(|aid| !failed_targets.iter().any(|ft| ft.account_id == Some(aid)));
 
             if !is_same_target_rotation {
                 if failed_models.contains(&m) {
@@ -208,7 +209,8 @@ pub(super) async fn execute_sequential_targets(
                                 || err.upstream_error_class()
                                     == Some(openproxy_types::UpstreamErrorClass::MalformedToolCall)
                             {
-                                failed_provider_models.insert((target.target.provider_id.clone(), m));
+                                failed_provider_models
+                                    .insert((target.target.provider_id.clone(), m));
                             }
                         }
                     }

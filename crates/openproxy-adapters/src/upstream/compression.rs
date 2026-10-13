@@ -476,10 +476,7 @@ impl BodyDecoding {
 
     /// Decompress the entire accumulated buffer for one-shot codecs (br, zstd).
     fn finish_one_shot(&mut self) -> UpstreamResult<Option<Bytes>> {
-        let codec = self
-            .stage
-            .as_ref()
-            .map_or(Codec::Gzip, |s| s.codec);
+        let codec = self.stage.as_ref().map_or(Codec::Gzip, |s| s.codec);
         let raw = std::mem::take(&mut self.pending);
         if raw.is_empty() {
             return Ok(None);
@@ -488,16 +485,18 @@ impl BodyDecoding {
         match codec {
             Codec::Brotli => {
                 let mut out_writer = Vec::new();
-                brotli_decompressor::BrotliDecompress(&mut std::io::Cursor::new(&raw[..]), &mut out_writer)
-                    .map_err(|e| UpstreamError::Decode(format!("br body: {e}")))?;
+                brotli_decompressor::BrotliDecompress(
+                    &mut std::io::Cursor::new(&raw[..]),
+                    &mut out_writer,
+                )
+                .map_err(|e| UpstreamError::Decode(format!("br body: {e}")))?;
                 out = out_writer;
             }
             Codec::Zstd => {
                 let mut reader = zstd::stream::read::Decoder::new(&raw[..])
                     .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
-                std::io::Read::read_to_end(&mut reader, &mut out).map_err(|e| {
-                    UpstreamError::Decode(format!("zstd body: {e}"))
-                })?;
+                std::io::Read::read_to_end(&mut reader, &mut out)
+                    .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
             }
             _ => unreachable!("finish_one_shot called with incremental codec"),
         }

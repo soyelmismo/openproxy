@@ -860,12 +860,18 @@ fn test_claude_code_legacy_and_modern_preserve_tools_and_cache() {
 
 #[test]
 fn test_title_case_tool_name() {
-    assert_eq!(cloaking::title_case_tool_name("browser_exec"), "BrowserExec");
+    assert_eq!(
+        cloaking::title_case_tool_name("browser_exec"),
+        "BrowserExec"
+    );
     assert_eq!(cloaking::title_case_tool_name("read_file"), "ReadFile");
     assert_eq!(cloaking::title_case_tool_name("read-file"), "ReadFile");
     assert_eq!(cloaking::title_case_tool_name("terminal"), "Terminal");
     assert_eq!(cloaking::title_case_tool_name("Read"), "Read");
-    assert_eq!(cloaking::title_case_tool_name("mcp__server__tool"), "McpServerTool");
+    assert_eq!(
+        cloaking::title_case_tool_name("mcp__server__tool"),
+        "McpServerTool"
+    );
     assert_eq!(cloaking::title_case_tool_name("gpt_4o"), "Gpt4o");
     assert_eq!(cloaking::title_case_tool_name("___"), "");
 }
@@ -880,7 +886,10 @@ fn test_tool_rename_map_skips_identity_and_collisions() {
         ]
     });
     let map = cloaking::build_tool_rename_map(&json);
-    assert_eq!(map.get("browser_exec").map(String::as_str), Some("BrowserExec"));
+    assert_eq!(
+        map.get("browser_exec").map(String::as_str),
+        Some("BrowserExec")
+    );
     assert_eq!(map.get("terminal").map(String::as_str), Some("Terminal"));
     // Already TitleCase names are identity and stay out of the map.
     assert!(!map.contains_key("Read"));
@@ -918,10 +927,7 @@ fn test_claude_code_tool_names_cloaked_and_roundtrippable() {
 
     // Declared tools, pinned choice and history all carry the cloaked names.
     let tools = json["tools"].as_array().expect("tools array");
-    let names: Vec<&str> = tools
-        .iter()
-        .map(|t| t["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(names, vec!["BrowserExec", "Read", "ToolSearch"]);
     assert_eq!(json["tool_choice"]["name"].as_str(), Some("ToolSearch"));
     assert_eq!(
@@ -931,8 +937,14 @@ fn test_claude_code_tool_names_cloaked_and_roundtrippable() {
 
     // The client can map every cloaked name back to what it sent.
     let forward = cloaking::build_tool_rename_map(&json_before_cloak(raw));
-    assert_eq!(forward.get("browser_exec").map(String::as_str), Some("BrowserExec"));
-    assert_eq!(forward.get("tool_search").map(String::as_str), Some("ToolSearch"));
+    assert_eq!(
+        forward.get("browser_exec").map(String::as_str),
+        Some("BrowserExec")
+    );
+    assert_eq!(
+        forward.get("tool_search").map(String::as_str),
+        Some("ToolSearch")
+    );
 }
 
 fn json_before_cloak(raw: &[u8]) -> serde_json::Value {

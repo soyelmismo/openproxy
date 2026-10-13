@@ -227,19 +227,24 @@ fn test_opencode_spoofer() {
 
     // x-opencode-request must NOT be present (not sent by real CLI)
     assert!(
-        !headers
-            .iter()
-            .any(|(k, _)| k == "x-opencode-request"),
+        !headers.iter().any(|(k, _)| k == "x-opencode-request"),
         "x-opencode-request should not be sent"
     );
 
     // Session aliases must all carry the same value as x-opencode-session
-    for alias in ["x-opencode-session-id", "x-session-affinity", "x-session-id"] {
+    for alias in [
+        "x-opencode-session-id",
+        "x-session-affinity",
+        "x-session-id",
+    ] {
         let alias_val = headers
             .iter()
             .find(|(k, _)| k == alias)
             .map_or_else(|| panic!("missing {alias}"), |(_, v)| v.as_str());
-        assert_eq!(alias_val, session_id, "{alias} must match x-opencode-session");
+        assert_eq!(
+            alias_val, session_id,
+            "{alias} must match x-opencode-session"
+        );
     }
 
     // W3C tracing headers must be present
@@ -285,7 +290,11 @@ fn test_opencode_spoofer_apply_to_request() {
 
     // Session aliases present with same value
     let session_val = session_id.to_str().unwrap();
-    for alias in ["x-opencode-session-id", "x-session-affinity", "x-session-id"] {
+    for alias in [
+        "x-opencode-session-id",
+        "x-session-affinity",
+        "x-session-id",
+    ] {
         assert_eq!(
             req.headers.get(alias).map(|v| v.to_str().unwrap_or("")),
             Some(session_val),
@@ -295,7 +304,10 @@ fn test_opencode_spoofer_apply_to_request() {
 
     // W3C tracing headers present
     assert!(req.headers.get("b3").is_some(), "missing b3");
-    assert!(req.headers.get("traceparent").is_some(), "missing traceparent");
+    assert!(
+        req.headers.get("traceparent").is_some(),
+        "missing traceparent"
+    );
 
     assert_eq!(
         req.headers.get("x-opencode-client").unwrap(),

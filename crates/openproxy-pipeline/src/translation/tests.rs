@@ -591,10 +591,7 @@ fn anthropic_sse_thinking_delta_emits_reasoning_content() {
         payload["choices"][0]["delta"]["reasoning_content"].as_str(),
         Some("Cogitando...")
     );
-    assert_eq!(
-        payload["choices"][0]["delta"]["content"].as_str(),
-        Some("")
-    );
+    assert_eq!(payload["choices"][0]["delta"]["content"].as_str(), Some(""));
 }
 
 #[test]
