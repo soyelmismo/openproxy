@@ -577,7 +577,7 @@ pub(crate) async fn fetch_claude_code_quota(
 
     let cancel = crate::upstream::CancellationToken::new();
     let resp = upstream
-        .call(req, crate::upstream::TimeoutProfile::Chat, cancel)
+        .call(req, crate::upstream::TimeoutProfile::Quota, cancel)
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("claude-code quota: {e}")))?;
 

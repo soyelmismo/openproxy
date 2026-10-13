@@ -480,7 +480,7 @@ pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Reque
             .headers_mut()
             .ok_or_else(|| UpstreamError::Invalid("failed to build request headers".to_string()))?;
         *headers = spec.headers;
-        super::compression::negotiate_request(headers);
+        super::compression::negotiate_request(headers, spec.is_streaming);
         if !headers.contains_key(http::header::USER_AGENT) {
             headers.insert(http::header::USER_AGENT, DEFAULT_USER_AGENT.clone());
         }

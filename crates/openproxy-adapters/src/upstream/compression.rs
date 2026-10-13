@@ -8,22 +8,27 @@
 //!
 //! # Negotiation
 //!
-//! When the caller named no `Accept-Encoding`, `gzip, deflate` is advertised.
-//! An explicit `Accept-Encoding` — including `identity` — is an **opt-out** and
-//! is forwarded verbatim. The request payload is never touched: no
-//! `Content-Encoding` is ever written, so uploads are only compressed if an
-//! upstream negotiates it itself, which this transport cannot observe.
+//! When the caller named no `Accept-Encoding`, the codecs this transport can
+//! invert are advertised. Which ones depends on the request: a **streaming**
+//! request gets only `gzip, deflate`, the two inverted incrementally on
+//! `miniz_oxide`, because a stream must yield plaintext per frame. A
+//! **non-streaming** request also gets `br, zstd`, which decode only at EOF
+//! but give better ratios — safe there because the body is collected in full
+//! anyway. An explicit `Accept-Encoding` — including `identity` — is an
+//! **opt-out** and is forwarded verbatim. The request payload is never
+//! touched: no `Content-Encoding` is ever written, so uploads are only
+//! compressed if an upstream negotiates it itself, which this transport
+//! cannot observe.
 //!
 //! # Scope
 //!
-//! Only `gzip` (RFC 1952 over raw DEFLATE) and `deflate` (RFC 1950 zlib, with a
+//! `gzip` (RFC 1952 over raw DEFLATE) and `deflate` (RFC 1950 zlib, with a
 //! raw-DEFLATE fallback for the servers that get it wrong) are negotiated and
-//! inverted, both on `miniz_oxide`, which is already a workspace dependency.
-//! `br` and `zstd` are **deliberately not advertised**: no crate in
-//! `Cargo.lock` provides them, and advertising a codec we cannot invert would
-//! hand raw compressed bytes to the JSON/SSE parsers. An upstream that answers
-//! with a codec outside this set fails with [`UpstreamError::Decode`] rather
-//! than silently corrupting the payload.
+//! inverted incrementally on `miniz_oxide`. `br` and `zstd` are negotiated
+//! too — via `brotli-decompressor` and `zstd` — but only for non-streaming
+//! responses, where they are decoded in one shot at EOF. An upstream that
+//! answers with a codec outside this set fails with
+//! [`UpstreamError::Decode`] rather than silently corrupting the payload.
 //!
 //! # Decoding
 //!
@@ -48,10 +53,15 @@ use super::error::{UpstreamError, UpstreamResult};
 /// needs no `q` parameter: RFC 9110 makes it acceptable unless a request says
 /// `identity;q=0`.
 ///
-/// `gzip` and `deflate` are inverted incrementally on `miniz_oxide` (safe for
-/// SSE streaming). `br` and `zstd` are also advertised — they give better
-/// ratios on large payloads — but are decoded in one shot at EOF, so they are
-/// only used on non-streaming responses (see [`Stage::codec_kind`]).
+/// Codecs inverted **incrementally** on `miniz_oxide`: each `push` yields
+/// plaintext immediately, so they are safe for SSE streaming.
+pub(crate) const INCREMENTAL_ACCEPT_ENCODING: &str = "gzip, deflate";
+
+/// Full set, including one-shot codecs with better ratios on large payloads.
+/// `br` and `zstd` can only be decoded at EOF (their streaming APIs are
+/// pull-based), so advertising them on a streaming request would make us
+/// buffer the whole response and emit nothing until the upstream closed the
+/// connection — the client would see silence instead of tokens.
 pub(crate) const ADVERTISED_ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
 
 /// Bound on a single gzip container header. `FCOMMENT`/`FNAME` are attacker
@@ -78,13 +88,24 @@ const INFLATE_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Advertise the codecs this transport can invert, unless the caller named an
 /// `Accept-Encoding` of their own (which is an opt-out and is left alone).
-pub(crate) fn negotiate_request(headers: &mut HeaderMap) {
+///
+/// On a streaming request only the incrementally-decoded codecs are offered:
+/// an upstream that answered `br`/`zstd` to a stream would have its whole
+/// response buffered here until EOF, which turns streaming into one final
+/// block. Non-streaming responses are collected in full anyway, so there the
+/// full set (better ratios) is safe.
+pub(crate) fn negotiate_request(headers: &mut HeaderMap, is_streaming: bool) {
     if headers.contains_key(header::ACCEPT_ENCODING) {
         return;
     }
+    let advertised = if is_streaming {
+        INCREMENTAL_ACCEPT_ENCODING
+    } else {
+        ADVERTISED_ACCEPT_ENCODING
+    };
     headers.insert(
         header::ACCEPT_ENCODING,
-        HeaderValue::from_static(ADVERTISED_ACCEPT_ENCODING),
+        HeaderValue::from_static(advertised),
     );
 }
 
@@ -936,7 +957,7 @@ mod codec_tests {
     #[test]
     fn negotiation_is_skipped_when_caller_named_one() {
         let mut headers = HeaderMap::new();
-        negotiate_request(&mut headers);
+        negotiate_request(&mut headers, false);
         assert_eq!(
             headers
                 .get(header::ACCEPT_ENCODING)
@@ -949,7 +970,7 @@ mod codec_tests {
             if let Ok(header) = HeaderValue::from_str(explicit) {
                 headers.insert(header::ACCEPT_ENCODING, header);
             }
-            negotiate_request(&mut headers);
+            negotiate_request(&mut headers, false);
             assert_eq!(
                 headers
                     .get(header::ACCEPT_ENCODING)
@@ -957,6 +978,53 @@ mod codec_tests {
                 Some(explicit),
                 "{explicit}"
             );
+        }
+    }
+
+    #[test]
+    fn streaming_requests_never_advertise_one_shot_codecs() {
+        // `br`/`zstd` decode only at EOF: an upstream that answered them on a
+        // stream would have the whole response buffered here, so streaming
+        // must be limited to the incrementally-decoded codecs.
+        for is_streaming in [true, false] {
+            let mut headers = HeaderMap::new();
+            negotiate_request(&mut headers, is_streaming);
+            let advertised = headers
+                .get(header::ACCEPT_ENCODING)
+                .and_then(|v| v.to_str().ok())
+                .expect("accept-encoding set");
+
+            assert_eq!(
+                advertised,
+                if is_streaming {
+                    INCREMENTAL_ACCEPT_ENCODING
+                } else {
+                    ADVERTISED_ACCEPT_ENCODING
+                },
+                "is_streaming={is_streaming}"
+            );
+        }
+    }
+
+    #[test]
+    fn built_hyper_request_carries_the_streaming_scoped_codecs() {
+        use crate::upstream::client::build_hyper_request;
+        use crate::upstream::UpstreamRequest;
+
+        for (is_streaming, expected) in [
+            (true, INCREMENTAL_ACCEPT_ENCODING),
+            (false, ADVERTISED_ACCEPT_ENCODING),
+        ] {
+            let mut spec = UpstreamRequest::get("https://example.invalid/v1/messages");
+            spec.is_streaming = is_streaming;
+            let request = build_hyper_request(spec).expect("request builds");
+            let advertised = request
+                .headers()
+                .get(header::ACCEPT_ENCODING)
+                .and_then(|v| v.to_str().ok())
+                .expect("accept-encoding negotiated on the wire request");
+
+            assert_eq!(advertised, expected, "is_streaming={is_streaming}");
         }
     }
 

@@ -238,8 +238,10 @@ fn test_opencode_spoofer() {
         let alias_val = headers
             .iter()
             .find(|(k, _)| k == alias)
-            .map(|(_, v)| v.as_str())
-            .unwrap_or_else(|| panic!("missing {alias}"));
+            .map_or_else(
+                || panic!("missing {alias}"),
+                |(_, v)| v.as_str(),
+            );
         assert_eq!(alias_val, session_id, "{alias} must match x-opencode-session");
     }
 

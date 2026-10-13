@@ -176,7 +176,7 @@ impl CodexAdapter {
         let req = quota::build_codex_quota_request(access_token, workspace_id);
         let cancel = CancellationToken::new();
         let response = upstream
-            .call(req, TimeoutProfile::Chat, cancel)
+            .call(req, TimeoutProfile::Quota, cancel)
             .await
             .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
 
