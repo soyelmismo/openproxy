@@ -190,6 +190,12 @@ pub fn parse_gemini_sse_line(
     if !text.is_empty() {
         delta["content"] = json!(text);
     }
+    if let Some(reasoning) = &delta_reasoning {
+        delta["reasoning_content"] = json!(reasoning);
+        if !delta.as_object().is_some_and(|o| o.contains_key("content")) {
+            delta["content"] = json!("");
+        }
+    }
     if !delta_tool_calls.is_empty() {
         delta["tool_calls"] = json!(delta_tool_calls);
     }

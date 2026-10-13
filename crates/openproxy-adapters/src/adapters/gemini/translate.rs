@@ -525,27 +525,22 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
 
     let candidate = candidates.first();
 
-    let content = candidate
+    let (content, reasoning) = candidate
         .and_then(|c| c.content.as_ref())
-        .map(|c| match c.parts.as_slice() {
-            [] => String::new(),
-            [part] => part.text.clone().unwrap_or_default(),
-            parts => {
-                let total_len: usize = parts
-                    .iter()
-                    .filter_map(|p| p.text.as_ref())
-                    .map(|s| s.len())
-                    .sum();
-                let mut out = String::with_capacity(total_len);
-                for p in parts {
+        .map(|c| {
+            let mut text_out = String::new();
+            let mut reasoning_out = String::new();
+            for p in &c.parts {
+                if p.thought == Some(true) {
                     if let Some(t) = &p.text {
-                        out.push_str(t);
+                        reasoning_out.push_str(t);
                     }
+                } else if let Some(t) = &p.text {
+                    text_out.push_str(t);
                 }
-                out
             }
+            (text_out, reasoning_out)
         })
-        .filter(|t| !t.is_empty())
         .unwrap_or_default();
 
     let mut tool_calls = Vec::new();
@@ -626,13 +621,22 @@ pub fn gemini_to_openai(resp: &GeminiResponse) -> openproxy_types::OpenAIRespons
         model: String::new(),
         choices: vec![openproxy_types::OpenAIChoice {
             index: 0,
-            message: openproxy_types::OpenAIMessage {
-                role: "assistant".to_string(),
-                content: content_val,
-                name: None,
-                tool_call_id: None,
-                tool_calls: tool_calls_opt,
-                extra: serde_json::Map::new(),
+            message: {
+                let mut extra = serde_json::Map::new();
+                if !reasoning.is_empty() {
+                    extra.insert(
+                        "reasoning_content".to_string(),
+                        serde_json::Value::String(reasoning),
+                    );
+                }
+                openproxy_types::OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: content_val,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: tool_calls_opt,
+                    extra,
+                }
             },
             finish_reason,
         }],

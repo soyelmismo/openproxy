@@ -110,6 +110,10 @@ impl ProviderAdapter for AtomesusAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn wrap_request_body(
         &self,
         body: bytes::Bytes,

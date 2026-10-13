@@ -6,6 +6,7 @@
 //! also polling the `CancellationToken` and the per-chunk deadline.
 
 use super::cancel::CancellationToken;
+use super::compression::BodyDecoding;
 use super::error::{UpstreamError, UpstreamResult};
 use super::phases::UpstreamPhase;
 use bytes::{Bytes, BytesMut};
@@ -67,6 +68,10 @@ pub struct UpstreamBodyStream {
     /// Cached watch receiver for async cancel notification.
     /// Polled via `changed()` in the hot loop, no per-chunk allocation.
     cancel_rx: watch::Receiver<bool>,
+    /// Inverts `content-encoding` before the caller sees any bytes. The
+    /// default is a passthrough, so an uncompressed response behaves exactly
+    /// as it did before this field existed.
+    decoding: BodyDecoding,
     last_chunk_at: Option<Instant>,
     body_chunk_ms: u64,
     ttft_deadline: Instant,
@@ -82,21 +87,23 @@ pub struct UpstreamBodyStream {
 }
 
 impl UpstreamBodyStream {
-    /// Wrap a `hyper::body::Incoming`, capping the total bytes read.
+    /// Wrap a `hyper::body::Incoming`, capping the total bytes read, and
+    /// install the content-decoding implied by the response headers.
     ///
     /// `body_chunk_ms` is the max gap between consecutive chunks, not a
     /// deadline relative to the request start: the first chunk is bounded by
     /// `ttft_deadline`, later ones by the gap.
     #[cfg(feature = "upstream-hyper")]
-    pub fn from_hyper(
+    pub(crate) fn from_hyper(
         body: hyper::body::Incoming,
+        decoding: BodyDecoding,
         cancel: CancellationToken,
         body_chunk_ms: u64,
-        ttft_deadline: Instant,
-        total_deadline: Instant,
+        deadlines: (Instant, Instant),
         limit: u64,
         is_streaming: bool,
     ) -> Self {
+        let (ttft_deadline, total_deadline) = deadlines;
         let limit_usize = usize::try_from(limit).unwrap_or(usize::MAX);
         let limited = http_body_util::Limited::new(body, limit_usize);
         let cancel_rx = cancel.subscribe();
@@ -109,6 +116,7 @@ impl UpstreamBodyStream {
             inner: Some(http_body_util::BodyStream::new(limited)),
             cancel_rx,
             cancel,
+            decoding,
             last_chunk_at: None,
             body_chunk_ms,
             ttft_deadline,
@@ -120,7 +128,14 @@ impl UpstreamBodyStream {
 
     /// A body stream that yields no data, for when the upstream call fails
     /// before a body is in hand.
-    pub fn empty(
+    ///
+    /// `pub(crate)` because [`BodyDecoding`] is crate-private decode state:
+    /// exposing a constructor that takes it would widen the public API past
+    /// what callers can construct. No caller uses it today; kept for the
+    /// failed-call path.
+    #[allow(dead_code)]
+    pub(crate) fn empty(
+        decoding: BodyDecoding,
         cancel: CancellationToken,
         body_chunk_ms: u64,
         ttft_deadline: Instant,
@@ -138,6 +153,7 @@ impl UpstreamBodyStream {
             inner: None,
             cancel_rx,
             cancel,
+            decoding,
             last_chunk_at: None,
             body_chunk_ms,
             ttft_deadline,
@@ -226,7 +242,13 @@ impl UpstreamBodyStream {
     /// Yield the next chunk: `Ok(Some(chunk))` on data, `Ok(None)` on EOF,
     /// `Err(Cancel)`, `Err(Timeout(Body))` on chunk-gap expiry,
     /// `Err(Timeout(Total))` on total-deadline expiry, `Err(Http)` on stream
-    /// error.
+    /// error, `Err(Decode)` when the wire format could not be inverted.
+    ///
+    /// When the response carried a `content-encoding`, every frame is inflated
+    /// here — before the caller's parser and before error classification — so
+    /// downstream code only ever sees plaintext. Decoding happens between
+    /// polls, not instead of them, so the cancel token and the chunk/total
+    /// deadlines keep bounding the read exactly as before.
     ///
     /// The caller calls [`note_content_chunk`] after parsing a chunk that
     /// carries real model output. Only real content resets the chunk-gap
@@ -234,46 +256,81 @@ impl UpstreamBodyStream {
     ///
     /// [`note_content_chunk`]: Self::note_content_chunk
     pub async fn next_chunk(&mut self) -> UpstreamResult<Option<Bytes>> {
-        if self.cancel.is_cancelled() {
-            return Err(UpstreamError::Cancel);
-        }
-
-        let min_deadline = Self::compute_min_deadline(
-            self.is_streaming,
-            self.last_chunk_at,
-            self.body_chunk_ms,
-            self.ttft_deadline,
-            self.total_deadline,
-        );
-
-        #[cfg(feature = "upstream-hyper")]
-        {
-            let Some(stream) = self.inner.as_mut() else {
-                return Ok(None);
-            };
-
-            // Reset the reusable Sleep in place instead of building a fresh
-            // `sleep_until`: no heap allocation, no register/deregister cycle.
-            self.sleep.as_mut().reset(min_deadline.into());
-
-            tokio::select! {
-                biased;
-                _ = self.cancel_rx.changed() => {
-                    Err(UpstreamError::Cancel)
-                }
-                () = &mut self.sleep => {
-                    Err(Self::timeout_error_for_gap(self.last_chunk_at, self.total_deadline))
-                }
-                res = futures_util::StreamExt::next(stream) => {
-                    Self::map_stream_frame(res)
-                }
+        loop {
+            if self.cancel.is_cancelled() {
+                return Err(UpstreamError::Cancel);
             }
-        }
 
-        #[cfg(not(feature = "upstream-hyper"))]
-        {
-            let _ = (min_deadline, self.body_chunk_ms, self.is_streaming);
-            Ok(None)
+            let min_deadline = Self::compute_min_deadline(
+                self.is_streaming,
+                self.last_chunk_at,
+                self.body_chunk_ms,
+                self.ttft_deadline,
+                self.total_deadline,
+            );
+
+            #[cfg(feature = "upstream-hyper")]
+            {
+                if Instant::now() >= min_deadline {
+                    return Err(Self::timeout_error_for_gap(
+                        self.last_chunk_at,
+                        self.total_deadline,
+                    ));
+                }
+                // Drain bounded decoder output before waiting for another wire
+                // frame. A live SSE connection may not send more input yet.
+                if let Some(decoded) = self.decoding.take_frame() {
+                    return Ok(Some(decoded));
+                }
+                if self.decoding.can_drain_without_input() {
+                    self.decoding.push(&[])?;
+                    continue;
+                }
+                let Some(stream) = self.inner.as_mut() else {
+                    return self.decoding.finish();
+                };
+
+                // Reset the reusable Sleep in place instead of building a fresh
+                // `sleep_until`: no heap allocation, no register/deregister cycle.
+                self.sleep.as_mut().reset(min_deadline.into());
+
+                let frame: UpstreamResult<Option<Bytes>> = tokio::select! {
+                    biased;
+                    _ = self.cancel_rx.changed() => Err(UpstreamError::Cancel),
+                    () = &mut self.sleep => {
+                        Err(Self::timeout_error_for_gap(self.last_chunk_at, self.total_deadline))
+                    }
+                    res = futures_util::StreamExt::next(stream) => {
+                        Self::map_stream_frame(res)
+                    }
+                };
+
+                // EOF: drain whatever the inflater still holds back before
+                // declaring the stream over, and surface that plaintext.
+                let Some(raw) = frame? else {
+                    self.inner = None;
+                    return self.decoding.finish();
+                };
+
+                // A frame that carried no input cannot produce plaintext
+                // either (trailers-only frames); hand it back untouched.
+                let carried_input = !raw.is_empty();
+                self.decoding.push(&raw)?;
+                if let Some(decoded) = self.decoding.take_frame() {
+                    return Ok(Some(decoded));
+                }
+                if !carried_input {
+                    return Ok(Some(Bytes::new()));
+                }
+                // The next iteration drains pending decoder output or polls
+                // for missing input, while checking cancellation and deadlines.
+            }
+
+            #[cfg(not(feature = "upstream-hyper"))]
+            {
+                let _ = (min_deadline, self.body_chunk_ms, self.is_streaming);
+                return Ok(None);
+            }
         }
     }
 

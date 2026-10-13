@@ -91,8 +91,18 @@ fn convert_anthropic_message_to_openai(m: AnthropicMessage, messages: &mut Vec<O
     let mut text_blocks = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_results = Vec::new();
+    let mut signed_thinking_blocks = Vec::new();
 
     if let Some(arr) = m.content.as_array() {
+        for b in arr {
+            if b.get("type").and_then(|t| t.as_str()) == Some("thinking")
+                && b.get("signature")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|s| !s.is_empty())
+            {
+                signed_thinking_blocks.push(b.clone());
+            }
+        }
         parse_anthropic_blocks(arr, &mut text_blocks, &mut tool_calls, &mut tool_results);
     } else if let Some(s) = m.content.as_str() {
         text_blocks.push(s.to_string());
@@ -101,7 +111,16 @@ fn convert_anthropic_message_to_openai(m: AnthropicMessage, messages: &mut Vec<O
     match m.role.as_str() {
         "assistant" => {
             let tc = (!tool_calls.is_empty()).then_some(tool_calls);
-            let content = if text_blocks.is_empty() && tc.is_some() {
+            let content = if !signed_thinking_blocks.is_empty() {
+                let mut parts = signed_thinking_blocks;
+                if !text_blocks.is_empty() {
+                    parts.push(serde_json::json!({
+                        "type": "text",
+                        "text": text_blocks.join("\n\n")
+                    }));
+                }
+                Some(serde_json::Value::Array(parts))
+            } else if text_blocks.is_empty() && tc.is_some() {
                 Some(serde_json::Value::Null)
             } else {
                 Some(serde_json::Value::String(text_blocks.join("\n\n")))

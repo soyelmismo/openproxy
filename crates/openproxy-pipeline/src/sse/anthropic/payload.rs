@@ -80,27 +80,9 @@ pub(crate) fn translate_anthropic_content_delta(
             .and_then(|t| t.as_str())
             .filter(|s| !s.is_empty())?;
 
-        let chunk = serde_json::json!({
-            "id": chunk_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"content": ""},
-                "finish_reason": null
-            }]
-        });
-        return Some(UpstreamSseChunk {
-            raw_payload: None,
-            payload: chunk,
-            done: false,
-            usage: None,
-            stop_reason: None,
-            delta_reasoning: Some(thinking.to_string()),
-            delta_tool_calls: Vec::new(),
-            has_content: true,
-        });
+        return Some(crate::sse::make_text_delta(
+            chunk_id, created, model, thinking, true,
+        ));
     }
 
     let text = data

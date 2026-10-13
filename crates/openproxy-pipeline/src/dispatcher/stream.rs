@@ -144,6 +144,9 @@ impl UpstreamDispatcher {
         {
             state.pii_stage = Some(crate::pii::PiiRestorationStage::new(session));
         }
+        if target.provider_id.as_str() == "claude-code" {
+            state.tool_name_restore = crate::claude_tool_names::build_restore_map(&req);
+        }
 
         let ctx = crate::streaming_state::StreamContext {
             req: &req,

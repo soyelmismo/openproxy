@@ -582,6 +582,14 @@ impl UpstreamDispatcher {
             choice.message.extra.remove("raw_response_body");
         }
 
+        // The Claude Code adapter renames tool names for the upstream; map them
+        // back so the client sees the names it declared.
+        if params.target.provider_id.as_str() == "claude-code"
+            && let Some(map) = crate::claude_tool_names::build_restore_map(&params.req)
+        {
+            crate::claude_tool_names::restore_response_tool_names(&mut openai_response, &map);
+        }
+
         if is_empty_response(&openai_response) {
             let err = CoreError::UpstreamConnection(
                 "upstream returned 200 but response is empty (content=null, finish_reason=null, no tool_calls, no reasoning) — treating as error for retry".to_string(),

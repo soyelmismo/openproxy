@@ -495,3 +495,162 @@ fn anthropic_to_openai_normalizes_cache_tokens() {
         Some(1000)
     );
 }
+
+#[test]
+fn anthropic_to_openai_preserves_thinking_as_reasoning_content() {
+    let raw = json!({
+        "id": "msg_think", "type": "message", "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Analyzing problem step 1..."},
+            {"type": "text", "text": "Final response"}
+        ],
+        "model": "claude-3-7-sonnet", "stop_reason": "end_turn",
+        "usage": { "input_tokens": 10, "output_tokens": 30 }
+    });
+    let out = anthropic_to_openai(&serde_json::from_value(raw).unwrap());
+    assert_eq!(
+        out.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(Value::as_str),
+        Some("Final response")
+    );
+    assert_eq!(
+        out.choices[0]
+            .message
+            .extra
+            .get("reasoning_content")
+            .and_then(Value::as_str),
+        Some("Analyzing problem step 1...")
+    );
+}
+
+#[test]
+fn gemini_to_openai_preserves_thought_as_reasoning_content() {
+    let resp = GeminiResponse {
+        candidates: vec![openproxy_adapters::adapters::gemini::GeminiCandidate {
+            content: Some(openproxy_adapters::adapters::gemini::GeminiContent {
+                role: "model".to_string(),
+                parts: vec![
+                    openproxy_adapters::adapters::gemini::GeminiPart {
+                        text: Some("Thinking through options...".to_string()),
+                        thought: Some(true),
+                        ..Default::default()
+                    },
+                    openproxy_adapters::adapters::gemini::GeminiPart {
+                        text: Some("The conclusion is clear.".to_string()),
+                        thought: None,
+                        ..Default::default()
+                    },
+                ],
+            }),
+            finish_reason: Some("STOP".to_string()),
+        }],
+        usage_metadata: None,
+        response: None,
+    };
+    let out = gemini_to_openai(&resp);
+    assert_eq!(
+        out.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(Value::as_str),
+        Some("The conclusion is clear.")
+    );
+    assert_eq!(
+        out.choices[0]
+            .message
+            .extra
+            .get("reasoning_content")
+            .and_then(Value::as_str),
+        Some("Thinking through options...")
+    );
+}
+
+#[test]
+fn anthropic_sse_thinking_delta_emits_reasoning_content() {
+    let payload_str = "content_block_delta\n{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Cogitando...\"}}";
+    let mut tool_use_acc = None;
+    let mut tool_call_counter = 0;
+    let chunk = crate::sse::translate_anthropic_sse_event(
+        payload_str,
+        "chk_1",
+        1234,
+        "claude-opus-4-7",
+        &mut tool_use_acc,
+        &mut tool_call_counter,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(chunk.delta_reasoning.as_deref(), Some("Cogitando..."));
+    let payload = chunk.payload;
+    assert_eq!(
+        payload["choices"][0]["delta"]["reasoning_content"].as_str(),
+        Some("Cogitando...")
+    );
+    assert_eq!(
+        payload["choices"][0]["delta"]["content"].as_str(),
+        Some("")
+    );
+}
+
+#[test]
+fn test_signed_thinking_preserved_and_unsigned_stripped() {
+    let make_msg = |role: &str, content: serde_json::Value| OpenAIMessage {
+        role: role.to_string(),
+        content: Some(content),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: serde_json::Map::new(),
+    };
+
+    let req = OpenAIRequest {
+        model: "claude-3-7-sonnet".to_string(),
+        messages: vec![
+            make_msg("user", json!("hello")),
+            // Signed thinking block: MUST be preserved
+            make_msg(
+                "assistant",
+                json!([
+                    {"type": "thinking", "thinking": "step 1", "signature": "valid_sig_123"},
+                    {"type": "text", "text": "Hi there"}
+                ]),
+            ),
+            make_msg("user", json!("question 2")),
+            // Unsigned thinking block: MUST be stripped to prevent HTTP 400
+            make_msg(
+                "assistant",
+                json!([
+                    {"type": "thinking", "thinking": "unsigned step"},
+                    {"type": "text", "text": "Answer 2"}
+                ]),
+            ),
+            make_msg("user", json!("question 3")),
+        ],
+        stream: false,
+        ..Default::default()
+    };
+
+    let anthro = openai_to_anthropic(&req, "claude-3-7-sonnet", &req.messages, false);
+    assert_eq!(anthro.messages.len(), 5);
+
+    // Turn 1 assistant: signed thinking block preserved
+    let m1 = &anthro.messages[1];
+    assert_eq!(m1.role, "assistant");
+    let arr1 = m1.content.as_array().expect("expected array content");
+    assert_eq!(arr1.len(), 2);
+    assert_eq!(arr1[0]["type"], "thinking");
+    assert_eq!(arr1[0]["thinking"], "step 1");
+    assert_eq!(arr1[0]["signature"], "valid_sig_123");
+    assert_eq!(arr1[1]["type"], "text");
+    assert_eq!(arr1[1]["text"], "Hi there");
+
+    // Turn 3 assistant: unsigned thinking block stripped, only text preserved
+    let m3 = &anthro.messages[3];
+    assert_eq!(m3.role, "assistant");
+    assert_eq!(m3.content.as_str(), Some("Answer 2"));
+}

@@ -1,3 +1,4 @@
+mod multi_account;
 mod rotation;
 
 use super::helpers::{is_max_request_timeout, should_skip_preventive_target};

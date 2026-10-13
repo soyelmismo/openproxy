@@ -217,6 +217,7 @@ fn extract_provider_custom_meta(
     provider_id: &str,
     account_id: i64,
     maps: &ResolutionMaps<'_>,
+    master_key: &MasterKey,
 ) -> ProviderCustomFields {
     match provider_id {
         "kiro" => {
@@ -229,30 +230,32 @@ fn extract_provider_custom_meta(
             }
         }
         "antigravity" => {
+            let decrypted = openproxy_db::accounts::decrypt_oauth_provider_specific(
+                raw_account.oauth_provider_specific.as_deref(),
+                master_key,
+            );
             let proj = maps
                 .antigravity_map
                 .get(&account_id)
                 .map(|s| s.to_string())
                 .or_else(|| {
-                    raw_account
-                        .oauth_provider_specific
+                    decrypted
                         .as_deref()
                         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
                         .and_then(|v| antigravity_project_from_value(&v))
                 });
-            let metadata = raw_account
-                .oauth_provider_specific
-                .as_deref()
-                .map(ToString::to_string);
             ProviderCustomFields {
                 antigravity_project: proj,
-                antigravity_metadata: metadata,
+                antigravity_metadata: decrypted,
                 ..Default::default()
             }
         }
         "codex" => {
-            let workspace_id = raw_account
-                .oauth_provider_specific
+            let decrypted = openproxy_db::accounts::decrypt_oauth_provider_specific(
+                raw_account.oauth_provider_specific.as_deref(),
+                master_key,
+            );
+            let workspace_id = decrypted
                 .as_deref()
                 .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
                 .and_then(|meta| {
@@ -268,8 +271,11 @@ fn extract_provider_custom_meta(
             }
         }
         "claude-code" | "claude" => {
-            let account_uuid = raw_account
-                .oauth_provider_specific
+            let decrypted = openproxy_db::accounts::decrypt_oauth_provider_specific(
+                raw_account.oauth_provider_specific.as_deref(),
+                master_key,
+            );
+            let account_uuid = decrypted
                 .as_deref()
                 .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
                 .and_then(|meta| {
@@ -279,13 +285,9 @@ fn extract_provider_custom_meta(
                         .filter(|v| !v.is_empty())
                         .map(ToString::to_string)
                 });
-            let metadata = raw_account
-                .oauth_provider_specific
-                .as_deref()
-                .map(ToString::to_string);
             ProviderCustomFields {
                 claude_account_uuid: account_uuid,
-                claude_metadata: metadata,
+                claude_metadata: decrypted,
                 ..Default::default()
             }
         }
@@ -344,8 +346,13 @@ fn resolve_account_oauth_meta(
         oauth_registry,
         adapters,
     );
-    let fields =
-        extract_provider_custom_meta(raw_account, t.provider_id.as_str(), account_id, maps);
+    let fields = extract_provider_custom_meta(
+        raw_account,
+        t.provider_id.as_str(),
+        account_id,
+        maps,
+        master_key,
+    );
 
     Some(CustomProviderMeta {
         access_token,

@@ -26,13 +26,13 @@ pub async fn test_proxy_connection(
     let req = build_probe_request(test_url, proxy_url);
 
     let profile = TimeoutProfile::Custom(ResolvedTimeouts {
-        dns_ms: 3000,
-        dial_ms: 5000,
-        tls_ms: 5000,
-        write_ms: 3000,
-        headers_ms: 8000,
-        body_chunk_ms: 3000,
-        total_ms: 8000,
+        dns_ms: 1500,
+        dial_ms: 2500,
+        tls_ms: 2500,
+        write_ms: 1500,
+        headers_ms: 3500,
+        body_chunk_ms: 1500,
+        total_ms: 3500,
     });
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
 
@@ -156,6 +156,10 @@ pub(crate) fn fetch_background_test_proxies_with_limit(
     let mut stmt = match conn.prepare(
         "
         SELECT id, type, host, port, username, password FROM free_proxies 
+        WHERE 
+            status = 'unknown' 
+            OR (status = 'alive' AND (last_validated IS NULL OR datetime(last_validated) < datetime('now', '-30 minutes')))
+            OR (status = 'dead' AND (last_validated IS NULL OR datetime(last_validated) < datetime('now', '-2 hours')))
         ORDER BY 
             CASE 
                 WHEN status = 'alive' AND last_validated IS NOT NULL AND datetime(last_validated) < datetime('now', '-30 minutes') THEN 1
@@ -253,81 +257,110 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
     let _guard = ActiveGuard;
 
     const READER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    const CONCURRENT_PROBES: usize = 60;
+    const MAX_BATCHES: usize = 30;
 
-    let initial = {
+    let test_url = {
         let pool = Arc::clone(&db_pool);
-        tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
+        match tokio::task::spawn_blocking(move || -> crate::error::Result<String> {
             let r = pool.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
                 crate::error::CoreError::Internal(format!(
                     "test_all_proxies: reader lock not acquired within {READER_LOCK_TIMEOUT:?}"
                 ))
             })?;
-            let proxies = fetch_background_test_proxies(&r);
-            let test_url = openproxy_db::app_config::load_proxy_test_url(&r)
-                .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string());
-            Ok((proxies, test_url))
+            Ok(openproxy_db::app_config::load_proxy_test_url(&r)
+                .unwrap_or_else(|_| openproxy_db::app_config::PROXY_TEST_URL_DEFAULT.to_string()))
         })
         .await
-    };
-    let (proxies, test_url) = match initial {
-        Ok(Ok(pair)) => pair,
-        Ok(Err(e)) => {
-            tracing::error!("test_all_proxies: initial load failed: {e}");
-            return;
-        }
-        Err(e) => {
-            tracing::error!("test_all_proxies: spawn_blocking join: {e}");
-            return;
-        }
-    };
-
-    if proxies.is_empty() {
-        return;
-    }
-
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
-    let pool_writer = Arc::clone(&db_pool);
-
-    let writer_handle = tokio::spawn(async move {
-        while let Some(first) = rx.recv().await {
-            let mut batch = vec![first];
-            while batch.len() < 50 {
-                match rx.try_recv() {
-                    Ok(item) => batch.push(item),
-                    Err(_) => break,
-                }
+        {
+            Ok(Ok(url)) => url,
+            Ok(Err(e)) => {
+                tracing::error!("test_all_proxies: load test_url failed: {e}");
+                return;
             }
+            Err(e) => {
+                tracing::error!("test_all_proxies: spawn_blocking join: {e}");
+                return;
+            }
+        }
+    };
 
-            let pool = Arc::clone(&pool_writer);
-            let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
-                let mut w = pool.writer();
-                execute_proxy_batch_update(&mut w, &batch)
+    for _ in 0..MAX_BATCHES {
+        let pool_reader = Arc::clone(&db_pool);
+        let proxies = match tokio::task::spawn_blocking(move || -> crate::error::Result<Vec<ProxyTestCandidate>> {
+            let r = pool_reader.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
+                crate::error::CoreError::Internal(format!(
+                    "test_all_proxies: reader lock not acquired within {READER_LOCK_TIMEOUT:?}"
+                ))
+            })?;
+            Ok(fetch_background_test_proxies(&r))
+        })
+        .await
+        {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
+                tracing::error!("test_all_proxies: candidate fetch failed: {e}");
+                break;
+            }
+            Err(e) => {
+                tracing::error!("test_all_proxies: spawn_blocking join: {e}");
+                break;
+            }
+        };
+
+        if proxies.is_empty() {
+            break;
+        }
+
+        let batch_count = proxies.len();
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
+        let pool_writer = Arc::clone(&db_pool);
+
+        let writer_handle = tokio::spawn(async move {
+            while let Some(first) = rx.recv().await {
+                let mut batch = vec![first];
+                while batch.len() < 50 {
+                    match rx.try_recv() {
+                        Ok(item) => batch.push(item),
+                        Err(_) => break,
+                    }
+                }
+
+                let pool = Arc::clone(&pool_writer);
+                let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
+                    let mut w = pool.writer();
+                    execute_proxy_batch_update(&mut w, &batch)
+                })
+                .await;
+            }
+        });
+
+        let test_url_ref = &test_url;
+        futures::stream::iter(proxies)
+            .for_each_concurrent(CONCURRENT_PROBES, |(id, r#type, host, port, username, password)| {
+                let tx = tx.clone();
+                async move {
+                    let test_res = test_proxy_connection(
+                        test_url_ref,
+                        &r#type,
+                        &host,
+                        port,
+                        username.as_deref(),
+                        password.as_deref(),
+                    )
+                    .await;
+                    let _ = tx.send((id, test_res)).await;
+                }
             })
             .await;
+
+        drop(tx);
+        let _ = writer_handle.await;
+
+        if batch_count < CANDIDATE_BATCH_LIMIT {
+            break;
         }
-    });
-
-    let test_url_ref = &test_url;
-    futures::stream::iter(proxies)
-        .for_each_concurrent(20, |(id, r#type, host, port, username, password)| {
-            let tx = tx.clone();
-            async move {
-                let test_res = test_proxy_connection(
-                    test_url_ref,
-                    &r#type,
-                    &host,
-                    port,
-                    username.as_deref(),
-                    password.as_deref(),
-                )
-                .await;
-                let _ = tx.send((id, test_res)).await;
-            }
-        })
-        .await;
-
-    drop(tx);
-    let _ = writer_handle.await;
+    }
 }
 
 pub fn test_all_proxies_background(db_pool: Arc<DbPool>) {

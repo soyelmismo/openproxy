@@ -41,6 +41,10 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Cloudflare's URL template needs the account label, so the label-less
         // path returns a descriptive sentinel rather than a plausible URL.

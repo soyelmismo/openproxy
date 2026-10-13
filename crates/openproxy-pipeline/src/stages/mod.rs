@@ -1,5 +1,8 @@
 pub mod decision;
 pub mod executor;
+#[cfg(test)]
+#[path = "protocol_finalization_tests.rs"]
+mod protocol_finalization_tests;
 pub mod quota;
 pub mod router;
 pub mod target;

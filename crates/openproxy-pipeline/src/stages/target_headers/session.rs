@@ -86,6 +86,7 @@ pub fn resolve_canonical_session(
         "x-opencode-session",
         "x-codex-session",
         "x-codebuddy-session-id",
+        "x-claude-code-session-id",
         "x-command-code-session-id",
         "x-commandcode-session-id",
         "x-mavis-session-id",
@@ -231,6 +232,17 @@ impl ProviderSessionTranslator for AntigravitySessionTranslator {
     }
 }
 
+/// Claude Code / Anthropic. Maps session continuity to `x-claude-code-session-id`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ClaudeCodeSessionTranslator;
+
+impl ProviderSessionTranslator for ClaudeCodeSessionTranslator {
+    fn apply_session(&self, headers: &mut Vec<(String, String)>, canonical_session: &str) {
+        let uuid_val = format_as_uuid(canonical_session);
+        upsert_header(headers, "x-claude-code-session-id", uuid_val);
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultSessionTranslator;
 
@@ -284,6 +296,8 @@ pub fn resolve_session_translator(
         &KiroSessionTranslator
     } else if matches("antigravity") || provider_id == "agy" || adapter_id == "agy" {
         &AntigravitySessionTranslator
+    } else if matches("claude") {
+        &ClaudeCodeSessionTranslator
     } else {
         &DefaultSessionTranslator
     }
@@ -571,6 +585,18 @@ mod tests {
             find_header(&cmd_headers, "x-session-id"),
             find_header(&cmd_headers, "x-session-affinity")
         );
+
+        let mut claude_headers = vec![];
+        apply_provider_session_affinity(
+            &mut claude_headers,
+            "claude-code",
+            "claude-code",
+            &req_headers,
+            &openai_req,
+        );
+        let claude_sess = find_header(&claude_headers, "x-claude-code-session-id");
+        assert!(claude_sess.is_some());
+        assert!(uuid::Uuid::parse_str(claude_sess.unwrap()).is_ok());
     }
 
     #[test]

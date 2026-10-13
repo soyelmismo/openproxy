@@ -4,7 +4,7 @@ pub const DEFAULT_CLAUDE_CODE_CLI_VERSION: &str = "2.1.280";
 pub const DEFAULT_CLAUDE_CODE_PACKAGE_VERSION: &str = "0.112.1";
 pub const DEFAULT_CLAUDE_CODE_RUNTIME_VERSION: &str = "v26.3.0";
 pub const DEFAULT_CLAUDE_CODE_UA: &str = "claude-cli/2.1.280 (external, cli)";
-pub const DEFAULT_CLAUDE_CODE_BETA: &str = "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
+pub const DEFAULT_CLAUDE_CODE_BETA: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
 pub const DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 static CLAUDE_CODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
@@ -31,6 +31,39 @@ pub fn current_claude_code_ua() -> String {
         })
 }
 
+/// Current dynamic package version of Claude Code CLI.
+pub fn current_claude_code_package_version() -> String {
+    if let Some(v) = CLAUDE_CODE_OVERRIDES.current_extra_header("x-stainless-package-version") {
+        return v;
+    }
+    CLAUDE_CODE_OVERRIDES.current_version(
+        "OPENPROXY_CLAUDE_CODE_PACKAGE_VERSION",
+        DEFAULT_CLAUDE_CODE_PACKAGE_VERSION,
+    )
+}
+
+/// Current dynamic runtime version of Claude Code CLI.
+pub fn current_claude_code_runtime_version() -> String {
+    if let Some(v) = CLAUDE_CODE_OVERRIDES.current_extra_header("x-stainless-runtime-version") {
+        return v;
+    }
+    CLAUDE_CODE_OVERRIDES.current_version(
+        "OPENPROXY_CLAUDE_CODE_RUNTIME_VERSION",
+        DEFAULT_CLAUDE_CODE_RUNTIME_VERSION,
+    )
+}
+
+/// Current dynamic Anthropic API version.
+pub fn current_claude_code_anthropic_version() -> String {
+    if let Some(v) = CLAUDE_CODE_OVERRIDES.current_extra_header("anthropic-version") {
+        return v;
+    }
+    CLAUDE_CODE_OVERRIDES.current_version(
+        "OPENPROXY_CLAUDE_CODE_ANTHROPIC_VERSION",
+        DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION,
+    )
+}
+
 /// Set dynamic version override for Claude Code CLI in memory at runtime without recompiling.
 pub fn set_dynamic_claude_code_version(ver: impl Into<String>) {
     CLAUDE_CODE_OVERRIDES.set_version(ver);
@@ -39,6 +72,21 @@ pub fn set_dynamic_claude_code_version(ver: impl Into<String>) {
 /// Set dynamic User-Agent override for Claude Code CLI in memory at runtime without recompiling.
 pub fn set_dynamic_claude_code_ua(ua: impl Into<String>) {
     CLAUDE_CODE_OVERRIDES.set_extra_header("user-agent", ua);
+}
+
+/// Set dynamic package version override for Claude Code CLI in memory at runtime without recompiling.
+pub fn set_dynamic_claude_code_package_version(ver: impl Into<String>) {
+    CLAUDE_CODE_OVERRIDES.set_extra_header("x-stainless-package-version", ver);
+}
+
+/// Set dynamic runtime version override for Claude Code CLI in memory at runtime without recompiling.
+pub fn set_dynamic_claude_code_runtime_version(ver: impl Into<String>) {
+    CLAUDE_CODE_OVERRIDES.set_extra_header("x-stainless-runtime-version", ver);
+}
+
+/// Set dynamic Anthropic API version override in memory at runtime without recompiling.
+pub fn set_dynamic_claude_code_anthropic_version(ver: impl Into<String>) {
+    CLAUDE_CODE_OVERRIDES.set_extra_header("anthropic-version", ver);
 }
 
 /// Set dynamic extra header override for Claude Code CLI in memory at runtime without recompiling.
@@ -74,20 +122,49 @@ fn detect_arch() -> &'static str {
 }
 
 /// Preset for Claude Code client identity and fingerprint headers.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ClaudeCodeSpoofer {
     pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub is_oauth: bool,
+}
+
+impl Default for ClaudeCodeSpoofer {
+    fn default() -> Self {
+        Self {
+            session_id: None,
+            model: None,
+            is_oauth: true,
+        }
+    }
 }
 
 impl ClaudeCodeSpoofer {
     pub fn new() -> Self {
-        Self { session_id: None }
+        Self::default()
     }
 
     pub fn with_session_id(session_id: impl Into<String>) -> Self {
         Self {
             session_id: Some(session_id.into()),
+            model: None,
+            is_oauth: true,
         }
+    }
+
+    pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
+        self
+    }
+
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn with_oauth(mut self, is_oauth: bool) -> Self {
+        self.is_oauth = is_oauth;
+        self
     }
 }
 
@@ -100,34 +177,42 @@ impl ClientSpoofer for ClaudeCodeSpoofer {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let request_id = uuid::Uuid::new_v4().to_string();
 
+        let betas = if let Some(ref m) = self.model {
+            crate::adapters::claude_code::cloaking::build_claude_code_betas(m, false, self.is_oauth)
+        } else {
+            DEFAULT_CLAUDE_CODE_BETA.to_string()
+        };
+
         let mut list = vec![
             ("User-Agent".into(), ua),
-            ("X-App".into(), "cli".into()),
+            ("x-app".into(), "cli".into()),
             (
-                "Anthropic-Version".into(),
-                DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION.into(),
+                "anthropic-version".into(),
+                current_claude_code_anthropic_version(),
             ),
             (
-                "Anthropic-Dangerous-Direct-Browser-Access".into(),
+                "anthropic-dangerous-direct-browser-access".into(),
                 "true".into(),
             ),
-            ("Anthropic-Beta".into(), DEFAULT_CLAUDE_CODE_BETA.into()),
+            ("anthropic-beta".into(), betas),
             ("X-Stainless-Retry-Count".into(), "0".into()),
             ("X-Stainless-Runtime".into(), "node".into()),
             ("X-Stainless-Lang".into(), "js".into()),
             ("X-Stainless-Timeout".into(), "600".into()),
             (
                 "X-Stainless-Runtime-Version".into(),
-                DEFAULT_CLAUDE_CODE_RUNTIME_VERSION.into(),
+                current_claude_code_runtime_version(),
             ),
             (
                 "X-Stainless-Package-Version".into(),
-                DEFAULT_CLAUDE_CODE_PACKAGE_VERSION.into(),
+                current_claude_code_package_version(),
             ),
-            ("X-Stainless-Os".into(), detect_os().into()),
+            ("X-Stainless-OS".into(), detect_os().into()),
             ("X-Stainless-Arch".into(), detect_arch().into()),
             ("X-Claude-Code-Session-Id".into(), session),
             ("x-client-request-id".into(), request_id),
+            ("Accept".into(), "application/json".into()),
+            ("Connection".into(), "keep-alive".into()),
         ];
 
         merge_header_refs(&mut list, &*CLAUDE_CODE_EXTRA_HEADERS);
@@ -199,6 +284,15 @@ mod tests {
 
         set_dynamic_claude_code_extra_header("x-custom-test", "val123");
 
+        set_dynamic_claude_code_package_version("0.120.0");
+        assert_eq!(current_claude_code_package_version(), "0.120.0");
+
+        set_dynamic_claude_code_runtime_version("v28.0.0");
+        assert_eq!(current_claude_code_runtime_version(), "v28.0.0");
+
+        set_dynamic_claude_code_anthropic_version("2024-05-01");
+        assert_eq!(current_claude_code_anthropic_version(), "2024-05-01");
+
         let spoofer = ClaudeCodeSpoofer::new();
         let headers = spoofer.headers();
         let get = |k: &str| {
@@ -210,11 +304,26 @@ mod tests {
 
         assert_eq!(get("User-Agent"), Some("custom-claude-agent/1.0"));
         assert_eq!(get("x-custom-test"), Some("val123"));
+        assert_eq!(get("X-Stainless-Package-Version"), Some("0.120.0"));
+        assert_eq!(get("X-Stainless-Runtime-Version"), Some("v28.0.0"));
+        assert_eq!(get("Anthropic-Version"), Some("2024-05-01"));
 
         reset_dynamic_claude_code_overrides();
         assert_eq!(
             current_claude_code_version(),
             DEFAULT_CLAUDE_CODE_CLI_VERSION
+        );
+        assert_eq!(
+            current_claude_code_package_version(),
+            DEFAULT_CLAUDE_CODE_PACKAGE_VERSION
+        );
+        assert_eq!(
+            current_claude_code_runtime_version(),
+            DEFAULT_CLAUDE_CODE_RUNTIME_VERSION
+        );
+        assert_eq!(
+            current_claude_code_anthropic_version(),
+            DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION
         );
     }
 }

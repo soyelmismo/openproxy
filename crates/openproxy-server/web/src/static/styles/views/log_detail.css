@@ -102,8 +102,20 @@
   border-color: var(--color-text-muted);
 }
 
+/* Shared Markdown rules come from playground_markdown.css, not copied here. */
+.log-detail-modal .tab-actions-right,
+.log-detail-markdown-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.log-detail-markdown-toggle { font-size: var(--fs-xs); white-space: nowrap; }
+.log-detail-markdown { padding: var(--space-3); min-width: 0; overflow-x: auto; }
+.log-detail-message-field { margin-top: var(--space-2); }
+.log-detail-modal .tabs-toolbar { flex-wrap: wrap; gap: var(--space-2); }
+
 /* Hide redundant headers inside tab content */
-.log-detail-section h4 {
+.log-detail-section > h4 {
   display: none;
 }
 

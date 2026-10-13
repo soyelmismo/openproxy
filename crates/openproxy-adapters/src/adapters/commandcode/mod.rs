@@ -104,6 +104,10 @@ impl ProviderAdapter for CommandCodeGoAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn metadata(&self) -> ProviderMetadata {
         ProviderMetadata {
             built_in: true,

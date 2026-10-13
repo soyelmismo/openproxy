@@ -131,10 +131,15 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
         let w = pool_for_sources.writer();
         for def in BUILTIN_PROXY_SOURCES {
             let _ = w.execute(
-                "INSERT OR IGNORE INTO proxy_sources (id, name, url, active, is_builtin) VALUES (?1, ?2, ?3, 1, 1)",
+                "INSERT INTO proxy_sources (id, name, url, active, is_builtin) VALUES (?1, ?2, ?3, 1, 1) \
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, is_builtin = 1",
                 rusqlite::params![def.id, def.name, def.url],
             );
         }
+        let _ = w.execute(
+            "DELETE FROM proxy_sources WHERE id = 'builtin_oneproxy'",
+            [],
+        );
         list_proxy_sources(&w)
     })
     .await;

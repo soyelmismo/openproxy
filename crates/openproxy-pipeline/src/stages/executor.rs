@@ -147,27 +147,39 @@ pub(super) async fn execute_sequential_targets(
             continue;
         }
         if let Some(m) = target.target.model_row_id {
-            if failed_models.contains(&m) {
-                tracing::info!(
-                    combo_id = combo.id.0,
-                    target_id = target.target.id.0,
-                    account_id = ?target.target.account_id,
-                    model_row_id = m.0,
-                    provider = %target.target.provider_id,
-                    "skipping target whose model already failed in this request"
-                );
-                continue;
-            }
-            if failed_provider_models.contains(&(target.target.provider_id.clone(), m)) {
-                tracing::info!(
-                    combo_id = combo.id.0,
-                    target_id = target.target.id.0,
-                    account_id = ?target.target.account_id,
-                    model_row_id = m.0,
-                    provider = %target.target.provider_id,
-                    "skipping target whose provider+model already failed with request error"
-                );
-                continue;
+            let is_same_target_rotation = idx > 0
+                && to_run[..idx]
+                    .iter()
+                    .any(|prev| prev.target.id == target.target.id);
+            let has_untried_account = target.target.account_id.is_some_and(|aid| {
+                !failed_targets.iter().any(|ft| ft.account_id == Some(aid))
+            });
+
+            if !is_same_target_rotation {
+                if failed_models.contains(&m) {
+                    tracing::info!(
+                        combo_id = combo.id.0,
+                        target_id = target.target.id.0,
+                        account_id = ?target.target.account_id,
+                        model_row_id = m.0,
+                        provider = %target.target.provider_id,
+                        "skipping target whose model already failed in this request"
+                    );
+                    continue;
+                }
+                if !has_untried_account
+                    && failed_provider_models.contains(&(target.target.provider_id.clone(), m))
+                {
+                    tracing::info!(
+                        combo_id = combo.id.0,
+                        target_id = target.target.id.0,
+                        account_id = ?target.target.account_id,
+                        model_row_id = m.0,
+                        provider = %target.target.provider_id,
+                        "skipping target whose provider+model already failed with request error"
+                    );
+                    continue;
+                }
             }
         }
 
@@ -182,16 +194,22 @@ pub(super) async fn execute_sequential_targets(
                 {
                     failed_targets.insert(TargetExecutionId::from_target(&target.target));
                     if let Some(m) = target.target.model_row_id {
-                        if crate::pipeline::is_model_wide_failure(&target.target, err) {
-                            failed_models.insert(m);
-                        }
-                        if matches!(err, CoreError::UpstreamError { status: 400, .. })
-                            || err.upstream_error_class()
-                                == Some(openproxy_types::UpstreamErrorClass::InvalidPayload)
-                            || err.upstream_error_class()
-                                == Some(openproxy_types::UpstreamErrorClass::MalformedToolCall)
-                        {
-                            failed_provider_models.insert((target.target.provider_id.clone(), m));
+                        let has_remaining_accounts = to_run[idx + 1..].iter().any(|next| {
+                            next.target.id == target.target.id
+                                && !target_has_failed(&failed_targets, &next.target)
+                        });
+                        if !has_remaining_accounts {
+                            if crate::pipeline::is_model_wide_failure(&target.target, err) {
+                                failed_models.insert(m);
+                            }
+                            if matches!(err, CoreError::UpstreamError { status: 400, .. })
+                                || err.upstream_error_class()
+                                    == Some(openproxy_types::UpstreamErrorClass::InvalidPayload)
+                                || err.upstream_error_class()
+                                    == Some(openproxy_types::UpstreamErrorClass::MalformedToolCall)
+                            {
+                                failed_provider_models.insert((target.target.provider_id.clone(), m));
+                            }
                         }
                     }
                 }

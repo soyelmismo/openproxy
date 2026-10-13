@@ -422,14 +422,14 @@ impl UpstreamClient {
 
         let response = race_dispatch(send_fut, &deadlines, phase_hint, cancel_for_send).await?;
 
-        Ok(wrap_upstream_response(
+        wrap_upstream_response(
             response,
             cancel,
             timeouts.body_chunk_ms,
             deadlines.headers_deadline,
             deadlines.total_deadline,
             is_streaming,
-        ))
+        )
     }
 }
 
@@ -480,6 +480,7 @@ pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Reque
             .headers_mut()
             .ok_or_else(|| UpstreamError::Invalid("failed to build request headers".to_string()))?;
         *headers = spec.headers;
+        super::compression::negotiate_request(headers);
         if !headers.contains_key(http::header::USER_AGENT) {
             headers.insert(http::header::USER_AGENT, DEFAULT_USER_AGENT.clone());
         }
@@ -519,6 +520,12 @@ fn handle_dispatch_error(e: UpstreamError) -> UpstreamError {
     }
 }
 
+/// Wrap the hyper response, installing the content-decoding the response
+/// headers call for.
+///
+/// Fails before any body byte is read when the upstream applied a codec this
+/// transport cannot invert, so a parser never sees compressed bytes presented
+/// as plaintext.
 #[cfg(feature = "upstream-hyper")]
 fn wrap_upstream_response(
     response: hyper::Response<hyper::body::Incoming>,
@@ -527,8 +534,10 @@ fn wrap_upstream_response(
     ttft_deadline: Instant,
     total_deadline: Instant,
     is_streaming: bool,
-) -> UpstreamResponse {
-    let (parts, body) = response.into_parts();
+) -> UpstreamResult<UpstreamResponse> {
+    let (mut parts, body) = response.into_parts();
+    let decoding = super::compression::BodyDecoding::from_response(&parts.headers)?;
+    decoding.strip_decoded_headers(&mut parts.headers);
     let limit = if is_streaming {
         super::response::STREAMING_BODY_LIMIT_BYTES
     } else {
@@ -536,18 +545,18 @@ fn wrap_upstream_response(
     };
     let body_stream = UpstreamBodyStream::from_hyper(
         body,
+        decoding,
         cancel,
         body_chunk_ms,
-        ttft_deadline,
-        total_deadline,
+        (ttft_deadline, total_deadline),
         limit,
         is_streaming,
     );
-    UpstreamResponse {
+    Ok(UpstreamResponse {
         status: parts.status,
         headers: parts.headers,
         body: body_stream,
-    }
+    })
 }
 
 #[cfg(feature = "upstream-hyper")]

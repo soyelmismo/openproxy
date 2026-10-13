@@ -3,14 +3,13 @@
 // vectors, audio transcription. Dispatched by modality from the inspector.
 
 import { html, type TemplateResult } from 'lit-html';
-import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
 import { showToast } from '../../components/toast.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { icons } from '../../lib/icons.js';
 import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 import { extractThinkingProcess, copyText } from './shared.js';
-import { renderMarkdownAndMath } from '../../lib/markdown.js';
+import { renderMarkdownContent } from '../../components/markdown-content.js';
 import { generateCurlCommand } from './curl.js';
 
 
@@ -100,8 +99,8 @@ function renderChatResponse(st: PlaygroundState): TemplateResult {
               </div>
               ${st.reasoningExpanded
                 ? html`
-                    <div class="playground-reasoning-body md-formatted-content">
-                      ${unsafeHTML(renderMarkdownAndMath(reasoning))}
+                    <div class="playground-reasoning-body">
+                      ${renderMarkdownContent(reasoning)}
                     </div>
                   `
                 : null}
@@ -118,9 +117,9 @@ function renderChatResponse(st: PlaygroundState): TemplateResult {
                 ? html`<span class="badge badge-info"><span class="pulse-dot"></span> ${t('playground.chat.reasoning')}</span>`
                 : html``)}
         </div>
-        <div class="bubble-content md-formatted-content">
+        <div class="bubble-content">
           ${content
-            ? unsafeHTML(renderMarkdownAndMath(content))
+            ? renderMarkdownContent(content)
             : (st.isLoading
                 ? html`<span class="bubble-placeholder-text">${t('playground.chat.drafting')}</span>`
                 : html``)}

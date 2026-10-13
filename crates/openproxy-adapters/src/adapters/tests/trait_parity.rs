@@ -62,7 +62,11 @@ fn test_trait_parity_config_mut_generic_mutation() {
         (make_custom_enum(), true),
         (
             ProviderAdapterEnum::from_provider_id("gemini").unwrap(),
-            false,
+            true,
+        ),
+        (
+            ProviderAdapterEnum::from_provider_id("nvidia-nim").unwrap(),
+            true,
         ),
     ];
 

@@ -100,6 +100,19 @@ macro_rules! define_provider_adapter {
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
                 }
             }
+            pub fn finalize_request(
+                &self,
+                body: bytes::Bytes,
+                headers: &mut Vec<(String, String)>,
+                target_format: TargetFormat,
+                model: &openproxy_types::ModelId,
+                resolved_target: &openproxy_types::context::ResolvedTarget,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                match self {
+                    $( Self::$b_variant(inner) => inner.finalize_request(body, headers, target_format, model, resolved_target), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.finalize_request(body, headers, target_format, model, resolved_target), )+
+                }
+            }
             pub fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
                 match self {
                     $( Self::$b_variant(inner) => inner.auth_type(), )+
@@ -454,6 +467,16 @@ macro_rules! define_provider_adapter {
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 self.wrap_request_body(body, target_format, model, resolved_target)
             }
+            fn finalize_request(
+                &self,
+                body: bytes::Bytes,
+                headers: &mut Vec<(String, String)>,
+                target_format: openproxy_types::TargetFormat,
+                model: &openproxy_types::ModelId,
+                resolved_target: &openproxy_types::context::ResolvedTarget,
+            ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+                self.finalize_request(body, headers, target_format, model, resolved_target)
+            }
             fn format_request(
                 &self,
                 target_format: openproxy_types::TargetFormat,
@@ -550,6 +573,10 @@ macro_rules! declare_openai_adapter {
         impl $crate::adapters::ProviderAdapter for $struct_name {
             fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
                 &self.config
+            }
+
+            fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
+                Some(&mut self.config)
             }
 
             $(

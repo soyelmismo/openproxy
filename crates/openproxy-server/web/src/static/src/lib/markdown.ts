@@ -374,7 +374,7 @@ export function renderMarkdownAndMath(rawText: string): string {
     const escapedCode = escapeHtml(cleanCode);
     const encodedForCopy = encodeURIComponent(cleanCode);
     // No inline `onclick`: CSP (`script-src 'self'`) blocks inline handlers. A delegated click
-    // listener on `button.md-copy-btn` in `views/playground/shared.ts` reads `data-code`.
+    // listener in `components/markdown-content.ts` reads `data-code` for both views.
     const codeBlockHtml = `<div class="md-code-block"><div class="md-code-header"><span class="md-code-lang">${escapeHtml(cleanLang || 'code')}</span><button class="md-copy-btn" type="button" data-code="${escapeHtml(encodedForCopy)}">Copy</button></div><pre><code class="language-${escapeHtml(cleanLang || 'plaintext')}">${escapedCode}</code></pre></div>`;
     return createPlaceholder(codeBlockHtml, 'CODE');
   });

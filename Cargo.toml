@@ -131,3 +131,7 @@ incremental = false
 [profile.test]
 debug = "line-tables-only"
 incremental = false
+
+# Optimiza dependencias en test para que rusqlite, crypto y serde corran a velocidad nativa
+[profile.test.package."*"]
+opt-level = 2

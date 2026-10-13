@@ -387,6 +387,26 @@ pub trait ProviderAdapter: Send + Sync {
         Ok(body)
     }
 
+    /// Finalize a provider request body just before dispatch.
+    ///
+    /// Runs after body formatting, request-body wrapping, provider-configured
+    /// parameter stripping and provider target-header propagation. Adapters may
+    /// use it to keep the body coherent with the headers that were just
+    /// finalized (session identity, capability betas, request signing, ...).
+    ///
+    /// The default implementation is the identity transform: it returns the
+    /// body unchanged and leaves `headers` untouched.
+    fn finalize_request(
+        &self,
+        body: bytes::Bytes,
+        _headers: &mut Vec<(String, String)>,
+        _target_format: TargetFormat,
+        _model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        Ok(body)
+    }
+
     fn format_request(
         &self,
         target_format: TargetFormat,

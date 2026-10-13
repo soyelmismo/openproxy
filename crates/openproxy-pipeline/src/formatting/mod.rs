@@ -338,14 +338,15 @@ impl TargetFormatter for AnthropicFormatter {
                 .get("max_completion_tokens")
                 .and_then(|v| v.as_u64())
                 .is_some();
-        let mut body = match serde_json::to_vec(&anthro) {
-            Ok(v) => bytes::Bytes::from(v),
+        let mut val = match serde_json::to_value(&anthro) {
+            Ok(v) => v,
             Err(e) => {
                 return Err(CoreError::Parse(format!(
                     "serialize anthropic request: {e}"
                 )));
             }
         };
+
         // Anthropic makes max_tokens mandatory, so the translator falls back to
         // DEFAULT_MAX_TOKENS (4096) when the client omits it. That floor is far
         // below every real model's output ceiling and burns out on always-thinking
@@ -359,12 +360,18 @@ impl TargetFormatter for AnthropicFormatter {
                 .filter(|&v| v > 0)
                 .map(|v| v.min(i64::from(u32::MAX)) as u32)
             && anthro.max_tokens < ceiling
+            && let Some(obj) = val.as_object_mut()
         {
-            body = openproxy_adapters::adapters::traits::patch_json_request_body(body, |obj| {
-                obj.insert("max_tokens".to_string(), serde_json::json!(ceiling));
-            })?;
+            obj.insert("max_tokens".to_string(), serde_json::json!(ceiling));
         }
-        Ok(body)
+
+        openproxy_adapters::anthropic_cache::ensure_anthropic_cache_control(&mut val);
+        openproxy_adapters::anthropic_cache::enforce_cache_control_limit(&mut val, 4);
+
+        let body_bytes = serde_json::to_vec(&val).map_err(|e| {
+            CoreError::Parse(format!("serialize anthropic request: {e}"))
+        })?;
+        Ok(bytes::Bytes::from(body_bytes))
     }
 }
 
@@ -414,8 +421,13 @@ pub(crate) use responses::*;
 pub(crate) use serde_json::json;
 
 #[cfg(test)]
-#[path = "../formatting_tests.rs"]
-mod tests;
+mod test_helpers;
+
+#[cfg(test)]
+mod general_tests;
+
+#[cfg(test)]
+mod responses_tests;
 
 #[cfg(test)]
 mod tool_calls_tests;

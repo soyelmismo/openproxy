@@ -12,6 +12,7 @@ pub use streaming::{StreamAction, StreamingChunkStage, StreamingStagePipeline};
 pub use streaming_state::ReasoningNormalizer;
 
 pub mod circuit_breaker;
+pub mod claude_tool_names;
 pub mod context;
 pub mod credentials;
 pub mod error_classification;

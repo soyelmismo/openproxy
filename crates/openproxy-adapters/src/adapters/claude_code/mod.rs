@@ -9,8 +9,9 @@ pub const CLAUDE_CODE_USAGE_PATH: &str = "/api/oauth/usage";
 pub const CLAUDE_CODE_ANTHROPIC_VERSION: &str = "2023-06-01";
 pub const CLAUDE_CODE_BETA_HEADER: &str =
     "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14";
-pub const CLAUDE_CODE_USER_AGENT: &str = "claude-code/0.2.29";
+pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
 
+pub mod cloaking;
 pub mod signing;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -66,7 +67,10 @@ impl ClaudeCodeAdapter {
 
         req.headers.insert(
             http::header::HeaderName::from_static("anthropic-version"),
-            http::HeaderValue::from_static(CLAUDE_CODE_ANTHROPIC_VERSION),
+            http::HeaderValue::try_from(
+                crate::spoofer::claude_code::current_claude_code_anthropic_version(),
+            )
+            .unwrap_or_else(|_| http::HeaderValue::from_static(CLAUDE_CODE_ANTHROPIC_VERSION)),
         );
         req.headers.insert(
             http::header::HeaderName::from_static("anthropic-beta"),
@@ -74,7 +78,8 @@ impl ClaudeCodeAdapter {
         );
         req.headers.insert(
             http::header::USER_AGENT,
-            http::HeaderValue::from_static(CLAUDE_CODE_USER_AGENT),
+            http::HeaderValue::try_from(crate::spoofer::claude_code::current_claude_code_ua())
+                .unwrap_or_else(|_| http::HeaderValue::from_static(CLAUDE_CODE_USER_AGENT)),
         );
 
         let cancel = crate::upstream::CancellationToken::new();
@@ -309,12 +314,21 @@ impl ProviderAdapter for ClaudeCodeAdapter {
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         let base = self.config.base_url.trim_end_matches('/');
-        if base.ends_with("/messages") {
+        let url = if base.ends_with("/messages") {
             base.to_string()
         } else if base.ends_with("/v1") {
             format!("{base}/messages")
         } else {
             format!("{base}/v1/messages")
+        };
+        if url.contains('?') {
+            if !url.contains("beta=true") {
+                format!("{url}&beta=true")
+            } else {
+                url
+            }
+        } else {
+            format!("{url}?beta=true")
         }
     }
 
@@ -322,25 +336,24 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         &self,
         api_key: &str,
         _target_format: TargetFormat,
-        _model: &ModelId,
+        model: &ModelId,
     ) -> Vec<(String, String)> {
         let auth = if !api_key.trim().is_empty() {
             Some(("Authorization".into(), format!("Bearer {}", api_key.trim())))
         } else {
             None
         };
-        crate::adapters::traits::build_spoofer_headers(
-            auth,
-            &crate::spoofer::ClaudeCodeSpoofer::new(),
-            &self.config.extra_headers,
-        )
+        let spoofer = crate::spoofer::ClaudeCodeSpoofer::new()
+            .with_model(model.as_str())
+            .with_oauth(true);
+        crate::adapters::traits::build_spoofer_headers(auth, &spoofer, &self.config.extra_headers)
     }
 
     fn wrap_request_body(
         &self,
         body: bytes::Bytes,
         _target_format: TargetFormat,
-        _model: &ModelId,
+        model: &ModelId,
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> Result<bytes::Bytes> {
         let mut json = serde_json::from_slice::<serde_json::Value>(&body)
@@ -349,7 +362,7 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         let account_uuid = resolved_target
             .custom_meta
             .as_ref()
-            .and_then(|m| m.claude_account_uuid.as_deref())
+            .and_then(|m| m.claude_account_uuid.clone())
             .or_else(|| {
                 resolved_target
                     .custom_meta
@@ -362,9 +375,8 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                             .and_then(|s| s.as_str())
                             .map(ToString::to_string)
                     })
-                    .map(|s| s.leak() as &str)
             })
-            .unwrap_or("53098eb0-6bbd-4c76-9f9c-09bc956164bc");
+            .unwrap_or_else(|| "53098eb0-6bbd-4c76-9f9c-09bc956164bc".to_string());
 
         let device_id = {
             use sha2::{Digest, Sha256};
@@ -379,51 +391,32 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             })
         };
 
-        let session_id = uuid::Uuid::new_v4().to_string();
-
-        if let Some(obj) = json.as_object_mut() {
-            let meta_val = obj
-                .entry("metadata")
-                .or_insert_with(|| serde_json::json!({}));
-            if let Some(meta_obj) = meta_val.as_object_mut() {
-                if let Some(existing_user_id) = meta_obj.get("user_id").and_then(|v| v.as_str()) {
-                    if let Ok(mut parsed_id) =
-                        serde_json::from_str::<serde_json::Value>(existing_user_id)
-                        && let Some(id_map) = parsed_id.as_object_mut()
-                    {
-                        id_map.insert("device_id".into(), serde_json::Value::String(device_id));
-                        if account_uuid != "53098eb0-6bbd-4c76-9f9c-09bc956164bc"
-                            || !id_map.contains_key("account_uuid")
-                        {
-                            id_map.insert(
-                                "account_uuid".into(),
-                                serde_json::Value::String(account_uuid.to_string()),
-                            );
-                        }
-                        if !id_map.contains_key("session_id") {
-                            id_map
-                                .insert("session_id".into(), serde_json::Value::String(session_id));
-                        }
-                        meta_obj.insert(
-                            "user_id".to_string(),
-                            serde_json::Value::String(parsed_id.to_string()),
-                        );
-                    }
+        let session_id = json
+            .get("metadata")
+            .and_then(|m| m.get("user_id"))
+            .and_then(|u| u.as_str())
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|obj| {
+                obj.get("session_id")
+                    .and_then(|v| v.as_str())
+                    .map(ToString::to_string)
+            })
+            .unwrap_or_else(|| {
+                let first_user_text = cloaking::extract_first_user_message_text(&json);
+                if !first_user_text.is_empty() {
+                    openproxy_types::format_as_v4_uuid(&format!("{account_uuid}:{first_user_text}"))
                 } else {
-                    let user_id_obj = serde_json::json!({
-                        "device_id": device_id,
-                        "account_uuid": account_uuid,
-                        "session_id": session_id,
-                    });
-                    meta_obj.insert(
-                        "user_id".to_string(),
-                        serde_json::Value::String(user_id_obj.to_string()),
-                    );
+                    uuid::Uuid::new_v4().to_string()
                 }
-            }
-        }
+            });
 
-        signing::ensure_claude_billing_header(&mut json);
+        cloaking::cloak_claude_request_body(
+            &mut json,
+            model.as_str(),
+            &account_uuid,
+            &session_id,
+            &device_id,
+        );
 
         let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
             CoreError::Parse(format!("failed to serialize claude-code request: {e}"))
@@ -432,6 +425,63 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         if let Err(e) = signing::sign_anthropic_messages_body(&mut body_bytes) {
             tracing::warn!(error = %e, "claude-code: cch signing failed");
         }
+
+        Ok(bytes::Bytes::from(body_bytes))
+    }
+
+    fn finalize_request(
+        &self,
+        body: bytes::Bytes,
+        headers: &mut Vec<(String, String)>,
+        _target_format: TargetFormat,
+        model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> Result<bytes::Bytes> {
+        let mut json = serde_json::from_slice::<serde_json::Value>(&body)
+            .map_err(|e| CoreError::Parse(format!("failed to parse claude-code request: {e}")))?;
+
+        // The pipeline already resolved the canonical session and applied it as
+        // the X-Claude-Code-Session-Id header. Mirror that value into the body
+        // metadata so the signed payload and the routing header describe the
+        // same session.
+        sync_claude_session_id(&mut json, headers);
+
+        // Regenerate the Anthropic-Beta capability set from the finalized body
+        // (post strip) so body-derived capabilities such as server-side
+        // fallback stay coherent with the bytes actually sent, while preserving
+        // any betas the downstream caller explicitly requested.
+        let has_fallbacks = json
+            .get("fallbacks")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|fallbacks| !fallbacks.is_empty());
+        // These capabilities belong to the payload, not the model name. Drop
+        // stale defaults before regenerating them after parameter stripping.
+        for (_, value) in headers
+            .iter_mut()
+            .filter(|(key, _)| key.eq_ignore_ascii_case("anthropic-beta"))
+        {
+            *value = value
+                .split(',')
+                .map(str::trim)
+                .filter(|beta| {
+                    !beta.eq_ignore_ascii_case("server-side-fallback-2026-06-01")
+                        && !beta.eq_ignore_ascii_case("fallback-credit-2026-06-01")
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+        }
+        let body_betas = cloaking::build_claude_code_betas(model.as_str(), has_fallbacks, true);
+        merge_claude_beta_header(headers, &body_betas);
+
+        let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
+            CoreError::Parse(format!("failed to serialize claude-code request: {e}"))
+        })?;
+
+        // Sign the CCH over the exact finalized bytes. This runs after
+        // formatting, wrapping, parameter stripping and header propagation, so
+        // the checksum describes the payload that is actually dispatched.
+        // Signing failures are surfaced, never ignored.
+        signing::sign_anthropic_messages_body(&mut body_bytes)?;
 
         Ok(bytes::Bytes::from(body_bytes))
     }
@@ -691,6 +741,67 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
             Some(model_details.into_boxed_slice())
         },
     }
+}
+
+/// Overwrite the `session_id` field inside the JSON-encoded
+/// `metadata.user_id` string with the canonical session the pipeline placed in
+/// the `X-Claude-Code-Session-Id` header, so the body and header agree.
+fn sync_claude_session_id(json: &mut serde_json::Value, headers: &[(String, String)]) {
+    let Some(session) = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("x-claude-code-session-id"))
+        .map(|(_, v)| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+
+    let Some(meta) = json.get_mut("metadata").and_then(|m| m.as_object_mut()) else {
+        return;
+    };
+
+    // `user_id` is itself a JSON-encoded string, not a nested object.
+    let mut user_id = meta
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if let Some(obj) = user_id.as_object_mut() {
+        obj.insert("session_id".to_string(), serde_json::Value::String(session));
+    }
+
+    meta.insert(
+        "user_id".to_string(),
+        serde_json::Value::String(user_id.to_string()),
+    );
+}
+
+/// Merge body-derived betas into the `anthropic-beta` header without dropping
+/// betas the downstream caller requested (case-insensitive de-duplication).
+fn merge_claude_beta_header(headers: &mut Vec<(String, String)>, body_betas: &str) {
+    let mut betas = Vec::<String>::new();
+    for value in headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("anthropic-beta"))
+        .map(|(_, value)| value.as_str())
+        .chain(std::iter::once(body_betas))
+    {
+        for beta in value
+            .split(',')
+            .map(str::trim)
+            .filter(|beta| !beta.is_empty())
+        {
+            if !betas
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(beta))
+            {
+                betas.push(beta.to_string());
+            }
+        }
+    }
+    headers.retain(|(key, _)| !key.eq_ignore_ascii_case("anthropic-beta"));
+    headers.push(("anthropic-beta".to_string(), betas.join(",")));
 }
 
 #[cfg(test)]

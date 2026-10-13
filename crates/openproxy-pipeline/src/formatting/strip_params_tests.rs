@@ -125,3 +125,51 @@ fn test_populate_upstream_headers_never_leaks_openproxy_internal_headers() {
         "hello"
     );
 }
+
+#[test]
+fn test_nvidia_nim_adapter_appends_strip_headers_and_strips_session_id() {
+    use openproxy_adapters::adapters::ProviderAdapterEnum;
+
+    let mut adapter = ProviderAdapterEnum::from_provider_id("nvidia-nim")
+        .expect("nvidia-nim adapter must exist");
+
+    // Simulate rebuild_adapters applying extra_headers from db
+    adapter.append_extra_headers(vec![(
+        "X-OpenProxy-Strip-Params".to_string(),
+        "session_id".to_string(),
+    )]);
+
+    // Ensure extra_headers was successfully appended via config_mut
+    assert!(
+        adapter
+            .config()
+            .extra_headers
+            .iter()
+            .any(|(k, v)| k == "X-OpenProxy-Strip-Params" && v == "session_id"),
+        "extra_headers must contain X-OpenProxy-Strip-Params"
+    );
+
+    let body = bytes::Bytes::from(
+        serde_json::to_vec(&json!({
+            "model": "meta/llama-3.1-70b-instruct",
+            "session_id": "sess-nvidia-12345",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.7
+        }))
+        .unwrap(),
+    );
+
+    let stripped = strip_provider_configured_params_from_body(body, &adapter.config().extra_headers)
+        .expect("stripping must succeed");
+    let val: Value = serde_json::from_slice(&stripped).unwrap();
+
+    assert!(
+        val.get("session_id").is_none(),
+        "session_id must be stripped from nvidia-nim payload"
+    );
+    assert_eq!(
+        val.get("model"),
+        Some(&json!("meta/llama-3.1-70b-instruct")),
+        "model must be preserved"
+    );
+}

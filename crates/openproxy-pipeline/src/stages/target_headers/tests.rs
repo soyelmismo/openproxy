@@ -615,6 +615,13 @@ fn test_propagate_claude_headers() {
         "custom-session-123".into(),
     );
     req_headers.insert("x-client-request-id".into(), "client-req-456".into());
+    req_headers.insert(
+        "user-agent".into(),
+        "claude-cli/2.1.290 (external, cli)".into(),
+    );
+    req_headers.insert("x-app".into(), "cli".into());
+    req_headers.insert("x-stainless-package-version".into(), "0.115.0".into());
+    req_headers.insert("anthropic-version".into(), "2024-01-01".into());
 
     propagate_claude_headers(&mut headers, &req_headers);
 
@@ -631,4 +638,54 @@ fn test_propagate_claude_headers() {
     );
     assert_eq!(find("x-claude-code-session-id"), Some("custom-session-123"));
     assert_eq!(find("x-client-request-id"), Some("client-req-456"));
+    assert_eq!(
+        find("user-agent"),
+        Some("claude-cli/2.1.290 (external, cli)")
+    );
+    assert_eq!(find("x-stainless-package-version"), Some("0.115.0"));
+    assert_eq!(find("anthropic-version"), Some("2024-01-01"));
+}
+
+#[test]
+fn non_native_sdk_headers_do_not_override_provider_profile() {
+    for user_agent in ["Hermes/1.0", "claude-cli/2.1.290 (external, cli)"] {
+        let mut headers = vec![
+            ("User-Agent".into(), "provider-profile".into()),
+            ("x-stainless-runtime".into(), "node".into()),
+            ("anthropic-version".into(), "2023-06-01".into()),
+            ("x-app".into(), "cli".into()),
+        ];
+        let request_headers = std::collections::BTreeMap::from([
+            ("user-agent".into(), user_agent.into()),
+            ("x-stainless-runtime".into(), "python".into()),
+            ("anthropic-version".into(), "invalid".into()),
+            ("x-app".into(), "unrelated-app".into()),
+        ]);
+        let expected = headers.clone();
+        propagate_claude_headers(&mut headers, &request_headers);
+        assert_eq!(headers, expected);
+    }
+}
+
+#[test]
+fn explicit_claude_session_survives_provider_header_propagation() {
+    let session = "123e4567-e89b-42d3-a456-426614174000";
+    let request_headers =
+        std::collections::BTreeMap::from([("X-Claude-Code-Session-Id".into(), session.into())]);
+    let mut headers = vec![];
+    propagate_provider_target_headers(
+        &mut headers,
+        "claude-code",
+        "claude-code",
+        &request_headers,
+        &openproxy_types::OpenAIRequest::default(),
+        None,
+    );
+    assert_eq!(
+        headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("x-claude-code-session-id"))
+            .map(|(_, value)| value.as_str()),
+        Some(session),
+    );
 }

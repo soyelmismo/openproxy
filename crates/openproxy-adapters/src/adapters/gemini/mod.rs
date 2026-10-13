@@ -45,6 +45,10 @@ impl ProviderAdapter for GeminiAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
         &["google"]
     }

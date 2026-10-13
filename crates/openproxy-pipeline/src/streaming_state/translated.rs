@@ -133,6 +133,11 @@ impl ChunkProcessor<'_> {
         if chunk.stop_reason.is_some() && self.state.stop_reason.is_none() {
             self.state.stop_reason = chunk.stop_reason.take();
         }
+        // Map cloaked tool names back before the chunk is serialized, so the
+        // accumulator and the client both see the names the client declared.
+        if let Some(map) = self.state.tool_name_restore.as_ref() {
+            crate::claude_tool_names::restore_chunk_tool_names(&mut chunk.payload, map);
+        }
         let delta_reasoning = chunk.delta_reasoning.take();
         let _delta_tool_calls = std::mem::take(&mut chunk.delta_tool_calls);
         let chunk_has_content = chunk.has_content;

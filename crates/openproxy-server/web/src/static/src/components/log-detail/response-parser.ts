@@ -5,6 +5,7 @@
 
 import { html, type TemplateResult } from "lit-html";
 import { formatJson } from "./json-prune.js";
+import { renderLogMessageText } from "./message-content.js";
 
 
 /** Shown in the Response tab when `response_body_json` is null. */
@@ -211,7 +212,7 @@ function renderToolCallArgsBlock(args: unknown): TemplateResult | null {
 function renderMessageBlock(message: string): TemplateResult {
   return html`<details class="log-detail-collapsible" open>
     <summary>Message</summary>
-    <pre class="json-viewer log-detail-collapsible-body">${message}</pre>
+    ${renderLogMessageText(message)}
   </details>`;
 }
 
@@ -219,7 +220,7 @@ function renderMessageBlock(message: string): TemplateResult {
 function renderReasoningBlock(reasoning: string): TemplateResult {
   return html`<details class="log-detail-collapsible" open>
     <summary>Reasoning</summary>
-    <pre class="json-viewer log-detail-collapsible-body">${reasoning}</pre>
+    ${renderLogMessageText(reasoning)}
   </details>`;
 }
 

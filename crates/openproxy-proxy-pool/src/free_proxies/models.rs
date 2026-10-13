@@ -36,7 +36,8 @@ pub struct ScrapedProxy {
 }
 
 pub const PROXIFLY_URL: &str = "https://api.proxifly.dev/proxy?format=json&quantity=100";
-pub const ONEPROXY_URL: &str = "https://1proxy-api.aitradepulse.com/api/v1/proxies/advanced";
+pub const PROXMINT_URL: &str =
+    "https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/all.json";
 pub const PROXYSCRAPE_CDN_URL: &str =
     "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json";
 pub const GEONODE_URL: &str =

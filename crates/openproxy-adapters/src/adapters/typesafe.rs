@@ -33,6 +33,10 @@ impl ProviderAdapter for TypeSafeAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn fetch_models(
         &self,
         _upstream_client: &Arc<UpstreamClient>,

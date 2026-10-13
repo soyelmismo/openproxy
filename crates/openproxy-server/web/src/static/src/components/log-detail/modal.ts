@@ -16,6 +16,8 @@ import {
   bumpOpenLogDetailGeneration,
   clearPinnedIdentity,
   getActiveLogDetailTab,
+  getLogDetailMarkdown,
+  setLogDetailMarkdown,
   getPinnedTraceId,
   isCurrentOpenLogDetailGeneration,
   matchesPinnedModalIdentity,
@@ -242,6 +244,17 @@ function renderLogDetailTabs(currentTab: string, rawJson: unknown): TemplateResu
         <button class="detail-tab ${currentTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
       </div>
       <div class="tab-actions-right">
+        <label class="log-detail-markdown-toggle">
+          <span>Markdown</span>
+          <button id="log-detail-markdown-toggle" type="button" role="switch"
+            aria-label="Format messages as Markdown" aria-checked=${getLogDetailMarkdown() ? "true" : "false"}
+            class="toggle-btn ${getLogDetailMarkdown() ? "on" : "off"}"
+            @click=${() => {
+              setLogDetailMarkdown(!getLogDetailMarkdown());
+              renderModal();
+              logDetailTabClick(getActiveLogDetailTab());
+            }}><span class="toggle-thumb"></span></button>
+        </label>
         <button class="btn-copy-tab btn-copy-action" type="button" @click=${(e: Event) => { void copyRawJson(rawJson, e); }} title="Copiar log JSON">
           ${icons.copy()} Copiar
         </button>

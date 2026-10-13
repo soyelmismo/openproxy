@@ -279,6 +279,10 @@ pub fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Val
 
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
+    let mut params_val = Value::Object(params_obj);
+    crate::anthropic_cache::ensure_anthropic_cache_control(&mut params_val);
+    crate::anthropic_cache::enforce_cache_control_limit(&mut params_val, 4);
+
     json!({
         "config": {
             "workingDir": "/",
@@ -295,7 +299,7 @@ pub fn transform_openai_to_commandcode(val: &mut Value, model_name: &str) -> Val
         "memory": null,
         "taste": null,
         "skills": null,
-        "params": params_obj,
+        "params": params_val,
         "threadId": thread_id,
     })
 }

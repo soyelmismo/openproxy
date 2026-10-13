@@ -364,14 +364,22 @@ pub fn propagate_claude_headers(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
 ) {
+    // Forward an SDK identity as a coherent profile only for a native CLI
+    // request, never mix arbitrary downstream x-stainless fields into it.
+    let native_cli = get_header_val(request_headers, "user-agent")
+        .is_some_and(|ua| ua.starts_with("claude-cli/"))
+        && get_header_val(request_headers, "x-app") == Some("cli");
     for (k, v) in request_headers {
         let lk = k.to_ascii_lowercase();
         if lk == "x-claude-code-session-id"
             || lk == "x-client-request-id"
             || lk == "anthropic-dangerous-direct-browser-access"
-            || lk == "x-app"
+            || (native_cli
+                && (lk == "x-app" || lk.starts_with("x-stainless-") || lk == "anthropic-version"))
         {
             upsert_header(headers, k, v.clone());
+        } else if lk == "user-agent" && native_cli {
+            upsert_header(headers, "User-Agent", v.clone());
         } else if lk == "anthropic-beta" {
             if let Some(pos) = headers
                 .iter()

@@ -439,6 +439,19 @@ impl PipelineStage for DispatchStage {
             .body_bytes
             .take()
             .ok_or_else(|| CoreError::Internal("missing body_bytes in pipeline context".into()))?;
+        // Finalize only after formatting, wrapping, parameter stripping and
+        // header propagation. Signatures and body-derived headers must describe
+        // the exact bytes sent to the upstream, independently of the schema.
+        let body_bytes = match adapter.finalize_request(
+            body_bytes,
+            &mut headers,
+            target_format,
+            &model.model_id,
+            current,
+        ) {
+            Ok(body) => body,
+            Err(error) => return fail_stage!(ctx, target, &error, Some(model)),
+        };
         let resolved_timeouts = ctx.resolved_timeouts.ok_or_else(|| {
             CoreError::Internal("missing resolved_timeouts in pipeline context".into())
         })?;
@@ -497,6 +510,16 @@ impl PipelineStage for DispatchStage {
                 &ctx.req.openai_request,
                 codex_ws,
             );
+            let body_bytes = match adapter.finalize_request(
+                body_bytes,
+                &mut paid_headers,
+                target_format,
+                &model.model_id,
+                current,
+            ) {
+                Ok(body) => body,
+                Err(error) => return fail_stage!(ctx, target, &error, Some(model)),
+            };
             result = ctx
                 .pipeline
                 .dispatcher

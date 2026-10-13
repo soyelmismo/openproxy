@@ -1,12 +1,12 @@
 //! Builtin proxy source definitions and registry.
 
 use super::models::{
-    CLEARPROXY_URL, GEONODE_URL, GITHUB_LISTS_BASE_URL, GPROXYNET_URL, ONEPROXY_URL, PROXIFLY_URL,
+    CLEARPROXY_URL, GEONODE_URL, GITHUB_LISTS_BASE_URL, GPROXYNET_URL, PROXIFLY_URL, PROXMINT_URL,
     PROXYSCRAPE_CDN_URL, ScrapedProxy, VAKHOV_URL,
 };
 use super::scrapers::{
-    sync_clearproxy, sync_geonode, sync_github_lists, sync_gproxynet, sync_oneproxy, sync_proxifly,
-    sync_proxyscrape_cdn, sync_vakhov,
+    sync_clearproxy, sync_geonode, sync_github_lists, sync_gproxynet, sync_proxifly,
+    sync_proxmint, sync_proxyscrape_cdn, sync_vakhov,
 };
 
 pub struct BuiltinProxySourceDef {
@@ -43,10 +43,9 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
             "iplocate",
             "hideip",
             "r00tee",
-            "hookzof",
             "anonymouswork",
-            "komutan234",
-            "yuceltoluyag",
+            "kael_odin",
+            "thespeedx",
         ],
         sync_fn: |url| {
             let u = url.to_string();
@@ -54,13 +53,13 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
         },
     },
     BuiltinProxySourceDef {
-        id: "builtin_oneproxy",
-        name: "1proxy (Built-in)",
-        url: ONEPROXY_URL,
-        scraped_sources: &["1proxy"],
+        id: "builtin_proxmint",
+        name: "Proxmint (Built-in)",
+        url: PROXMINT_URL,
+        scraped_sources: &["proxmint"],
         sync_fn: |url| {
             let u = url.to_string();
-            Box::pin(async move { sync_oneproxy(&u).await })
+            Box::pin(async move { sync_proxmint(&u).await })
         },
     },
     BuiltinProxySourceDef {

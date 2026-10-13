@@ -1,14 +1,21 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod adapters;
+pub mod anthropic_cache;
 pub mod antigravity_headers;
 pub mod schema_cleaner;
 pub mod spoofer;
 pub mod upstream;
 
+pub use anthropic_cache::{
+    count_cache_controls, enforce_cache_control_limit, ensure_anthropic_cache_control,
+    inject_messages_cache_control, inject_system_cache_control, inject_tools_cache_control,
+};
+
 pub use spoofer::{
     AntigravitySpoofer, ClientSpoofer, ClineSpoofer, CodeBuddySpoofer, CodexSpoofer,
     CommandCodeSpoofer, KilocodeSpoofer, KiroSpoofer, MiniMaxSpoofer, OpenCodeSpoofer,
+    claude_code::ClaudeCodeSpoofer,
 };
 
 #[cfg(any(test, feature = "test-utils"))]

@@ -263,12 +263,38 @@ async fn sync_proxifly_hits_injected_url_and_parses_json() {
 }
 
 #[tokio::test]
+async fn sync_proxmint_hits_injected_url_and_parses_json() {
+    use httpmock::prelude::*;
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(GET).path("/proxies/all.json");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(
+                r#"{"count": 1, "proxies": [{"ip":"107.174.30.92","port":1080,"protocol":"socks5","country":"us"}]}"#,
+            );
+    });
+
+    let url = format!("{}/proxies/all.json", server.base_url());
+    let proxies = sync_proxmint(&url).await.expect("proxmint sync");
+
+    mock.assert();
+    assert_eq!(proxies.len(), 1);
+    assert_eq!(proxies[0].host, "107.174.30.92");
+    assert_eq!(proxies[0].port, 1080);
+    assert_eq!(proxies[0].r#type, "socks5");
+    assert_eq!(proxies[0].country_code.as_deref(), Some("us"));
+    assert_eq!(proxies[0].source, "proxmint");
+    assert_eq!(proxies[0].priority, 10);
+}
+
+#[tokio::test]
 async fn sync_github_lists_hits_injected_base_and_parses_text() {
     use httpmock::prelude::*;
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
         when.method(GET)
-            .path("/komutan234/Proxy-List-Free/main/proxies/http.txt");
+            .path("/kael-odin/awesome-free-proxy-list/main/proxies/http.txt");
         then.status(200).body("9.9.9.9:3128\n8.8.8.8:80\n");
     });
     server.mock(|when, then| {

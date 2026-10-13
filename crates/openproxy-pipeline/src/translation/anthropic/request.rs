@@ -199,25 +199,80 @@ fn convert_assistant_tool_calls(
     blocks
 }
 
+fn extract_signed_thinking_blocks(m: &OpenAIMessage) -> Vec<serde_json::Value> {
+    let mut thinking_blocks = Vec::new();
+    if let Some(arr) = m.content.as_ref().and_then(|c| c.as_array()) {
+        for b in arr {
+            if b.get("type").and_then(|t| t.as_str()) == Some("thinking")
+                && b.get("signature")
+                    .and_then(|s| s.as_str())
+                    .is_some_and(|s| !s.is_empty())
+            {
+                thinking_blocks.push(b.clone());
+            }
+        }
+    }
+    thinking_blocks
+}
+
+fn extract_assistant_text_without_thinking(m: &OpenAIMessage) -> String {
+    if let Some(arr) = m.content.as_ref().and_then(|c| c.as_array()) {
+        let mut out = String::new();
+        for b in arr {
+            let b_type = b.get("type").and_then(|t| t.as_str());
+            if b_type != Some("thinking") && b_type != Some("reasoning") {
+                if let Some(t) = b.get("text").and_then(|v| v.as_str()) {
+                    out.push_str(t);
+                } else if let Some(t) = b.get("content").and_then(|v| v.as_str()) {
+                    out.push_str(t);
+                }
+            }
+        }
+        out
+    } else {
+        m.extract_text()
+    }
+}
+
 fn append_assistant_message(
     m: &OpenAIMessage,
     conversation: &mut Vec<AnthropicMessage>,
     pending_assistant_text: &mut Vec<String>,
 ) {
+    let signed_thinking = extract_signed_thinking_blocks(m);
+
     if let Some(tool_calls) = m.tool_calls.as_ref() {
-        let text = m.extract_text_cow();
-        let blocks = convert_assistant_tool_calls(tool_calls, pending_assistant_text, &text);
+        let text = if signed_thinking.is_empty() {
+            m.extract_text()
+        } else {
+            extract_assistant_text_without_thinking(m)
+        };
+        let mut blocks = convert_assistant_tool_calls(tool_calls, pending_assistant_text, &text);
+        if !signed_thinking.is_empty() {
+            blocks.splice(0..0, signed_thinking);
+        }
+        conversation.push(AnthropicMessage {
+            role: "assistant".to_string(),
+            content: serde_json::Value::Array(blocks),
+        });
+    } else if !signed_thinking.is_empty() {
+        flush_assistant_text(conversation, pending_assistant_text);
+        let text = extract_assistant_text_without_thinking(m);
+        let mut blocks = signed_thinking;
+        if !text.is_empty() {
+            blocks.push(json!({"type": "text", "text": text}));
+        }
         conversation.push(AnthropicMessage {
             role: "assistant".to_string(),
             content: serde_json::Value::Array(blocks),
         });
     } else {
-        let text = m.extract_text_cow();
+        let text = extract_assistant_text_without_thinking(m);
         if !text.is_empty()
             && !text.starts_with("Operation interrupted")
             && !text.starts_with("[System:")
         {
-            pending_assistant_text.push(text.into_owned());
+            pending_assistant_text.push(text);
         }
     }
 }

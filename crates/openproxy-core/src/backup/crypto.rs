@@ -14,11 +14,14 @@ use openproxy_types::{CoreError, Result};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-/// OWASP-recommended minimum for PBKDF2-HMAC-SHA256.
+/// OWASP-recommended minimum for PBKDF2-HMAC-SHA256 (600_000).
+/// In test/debug builds, scaled to 2_000 to keep test suites executing in milliseconds.
+#[cfg(not(any(test, debug_assertions)))]
 pub const DEFAULT_KDF_ITERATIONS: u32 = 600_000;
+#[cfg(any(test, debug_assertions))]
+pub const DEFAULT_KDF_ITERATIONS: u32 = 2_000;
 /// KDF identifier written to new encrypted bundles.
 pub const KDF_ALGO: &str = "pbkdf2-hmac-sha256";
-/// Legacy identifier (iterated bare SHA-256) — read-only compatibility.
 pub const KDF_ALGO_LEGACY: &str = "sha256_iter";
 const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
@@ -320,7 +323,7 @@ mod tests {
         };
         let salt: [u8; SALT_LEN] = rand::random();
         let nonce_bytes: [u8; NONCE_LEN] = rand::random();
-        let legacy_iterations = 100_000u32;
+        let legacy_iterations = 1_000u32;
         let mut key = derive_key_legacy("old-pass", &salt, legacy_iterations);
         let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
         key.zeroize();

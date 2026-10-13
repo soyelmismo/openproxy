@@ -9,6 +9,7 @@
 
 import { html, type TemplateResult } from "lit-html";
 import { formatJson } from "./json-prune.js";
+import { renderLogMessageContent, renderLogMessagePayload } from "./message-content.js";
 import {
   computeTtlExpiryHint,
   detectPartialResponse,
@@ -190,7 +191,7 @@ function renderSingleMessageCollapsible(raw: unknown, index: number): TemplateRe
 
   return html`<details class="log-detail-collapsible">
     <summary><span class="log-detail-role ${roleClass}">${role}</span>${extraStr}${previewStr}</summary>
-    <pre class="json-viewer log-detail-collapsible-body">${formatJson(msg)}</pre>
+    ${renderLogMessagePayload(msg)}
   </details>`;
 }
 
@@ -279,7 +280,8 @@ function renderObjectRequestBody(obj: Record<string, unknown>): TemplateResult[]
       : null;
     blocks.push(html`<details class="log-detail-collapsible" ?open=${open}>
       <summary><span class="log-detail-key log-detail-key-pinned">${key}</span>${metaSpan}</summary>
-      <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
+      ${key === "system" ? renderLogMessageContent(value)
+        : html`<pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>`}
     </details>`);
     rendered.add(key);
   }

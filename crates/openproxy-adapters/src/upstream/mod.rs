@@ -20,11 +20,18 @@
 //!   when buffering a whole payload. `STREAMING_BODY_LIMIT_BYTES` is
 //!   unbounded, since chunks go straight to the client under idle-chunk and
 //!   total timeouts.
+//! - **Transparent content-encoding.** `gzip` and `deflate` are negotiated and
+//!   inverted here, once, for every provider and request shape; see
+//!   `compression.rs` for the codec scope and for why `br`/`zstd` are not
+//!   advertised. The response headers the caller sees describe plaintext, not
+//!   the wire.
 
 #[cfg(feature = "upstream-hyper")]
 mod cancel;
 #[cfg(feature = "upstream-hyper")]
 mod client;
+#[cfg(feature = "upstream-hyper")]
+mod compression;
 #[cfg(feature = "upstream-hyper")]
 mod conn_pool;
 #[cfg(feature = "upstream-hyper")]
@@ -46,6 +53,14 @@ mod response;
 
 #[cfg(feature = "upstream-hyper")]
 mod tests;
+
+#[cfg(feature = "upstream-hyper")]
+#[cfg(test)]
+mod compression_tests;
+
+#[cfg(feature = "upstream-hyper")]
+#[cfg(test)]
+mod compression_http_tests;
 
 #[cfg(feature = "upstream-hyper")]
 #[cfg(test)]

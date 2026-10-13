@@ -33,6 +33,10 @@ impl ProviderAdapter for LayaAdapter {
         &self.config
     }
 
+    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+        Some(&mut self.config)
+    }
+
     fn is_anonymous_fallback(&self) -> bool {
         true
     }

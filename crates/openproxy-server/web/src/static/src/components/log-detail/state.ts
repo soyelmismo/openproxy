@@ -70,6 +70,11 @@ export interface LogDetailLog {
 // user's selection.
 let currentActiveTab: string = "request";
 
+// Presentation preference survives clock/WS updates and reopening during this session.
+let markdownEnabled = false;
+export function getLogDetailMarkdown(): boolean { return markdownEnabled; }
+export function setLogDetailMarkdown(enabled: boolean): void { markdownEnabled = enabled; }
+
 /** Read the currently-active modal tab. */
 export function getActiveLogDetailTab(): string {
   return currentActiveTab;

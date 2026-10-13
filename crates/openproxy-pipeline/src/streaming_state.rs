@@ -34,6 +34,7 @@ pub(crate) struct StreamingState {
     pub responses_sse_state: crate::sse::ResponsesSseState,
     pub commandcode_sse_state: crate::sse::CommandCodeSseState,
     pub pii_stage: Option<crate::pii::PiiRestorationStage>,
+    pub tool_name_restore: Option<std::collections::HashMap<String, String>>,
 }
 
 pub(crate) struct StreamContext<'a> {
@@ -82,6 +83,7 @@ impl StreamingState {
             responses_sse_state: crate::sse::ResponsesSseState::default(),
             commandcode_sse_state: crate::sse::CommandCodeSseState::default(),
             pii_stage: None,
+            tool_name_restore: None,
         }
     }
 

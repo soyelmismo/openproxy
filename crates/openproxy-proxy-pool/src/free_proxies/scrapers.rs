@@ -150,24 +150,19 @@ pub async fn sync_github_lists(base_url: &str) -> crate::error::Result<Vec<Scrap
             &["socks5"],
         ),
         (
-            "hookzof",
-            "{base}/hookzof/socks5_list/master/proxy.txt",
-            &["socks5"],
-        ),
-        (
             "anonymouswork",
             "{base}/Anonym0usWork1221/Free-Proxies/main/proxy_files/https_proxies.txt",
             &["https"],
         ),
         (
-            "komutan234",
-            "{base}/komutan234/Proxy-List-Free/main/proxies/http.txt",
-            &["http"],
+            "kael_odin",
+            "{base}/kael-odin/awesome-free-proxy-list/main/proxies/{}.txt",
+            &["http", "https", "socks4", "socks5"],
         ),
         (
-            "yuceltoluyag",
-            "{base}/yuceltoluyag/GoodProxy/main/raw.txt",
-            &["http"],
+            "thespeedx",
+            "{base}/TheSpeedX/PROXY-List/master/{}.txt",
+            &["http", "socks4", "socks5"],
         ),
     ];
 
@@ -184,36 +179,33 @@ pub async fn sync_github_lists(base_url: &str) -> crate::error::Result<Vec<Scrap
 }
 
 #[derive(serde::Deserialize)]
-struct OneProxyApiProxy {
+struct ProxmintItem {
     ip: String,
     port: u16,
-    protocol: Option<String>,
-    country_code: Option<String>,
+    protocol: String,
+    country: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
-struct OneProxyApiResponse {
-    proxies: Option<Vec<OneProxyApiProxy>>,
+struct ProxmintResponse {
+    proxies: Vec<ProxmintItem>,
 }
 
-pub async fn sync_oneproxy(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
-    let body: OneProxyApiResponse = fetch_upstream_json(url, "1proxy").await?;
+pub async fn sync_proxmint(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
+    let body: ProxmintResponse = fetch_upstream_json(url, "Proxmint").await?;
 
-    let proxies = body.proxies.unwrap_or_default();
-    let list = proxies
+    let list = body
+        .proxies
         .into_iter()
         .map(|p| ScrapedProxy {
-            source: "1proxy".to_string(),
+            source: "proxmint".to_string(),
             host: p.ip,
             port: p.port,
-            r#type: p
-                .protocol
-                .unwrap_or_else(|| "http".to_string())
-                .to_lowercase(),
-            country_code: p.country_code.filter(|c| !c.is_empty()),
+            r#type: p.protocol.to_lowercase(),
+            country_code: p.country.filter(|c| !c.is_empty()),
             username: None,
             password: None,
-            priority: 0,
+            priority: 10,
         })
         .collect();
     Ok(list)

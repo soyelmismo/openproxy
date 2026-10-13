@@ -6,11 +6,20 @@ use serde_json::Value;
 /// onto prompt/completion/total, and `finish_reason` comes from
 pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     let mut combined = String::new();
+    let mut reasoning = String::new();
     for b in &resp.content {
-        if b.get("type").and_then(|t| t.as_str()) == Some("text")
-            && let Some(t) = b.get("text").and_then(|t| t.as_str())
-        {
-            combined.push_str(t);
+        match b.get("type").and_then(|t| t.as_str()) {
+            Some("text") => {
+                if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                    combined.push_str(t);
+                }
+            }
+            Some("thinking") => {
+                if let Some(t) = b.get("thinking").and_then(|t| t.as_str()) {
+                    reasoning.push_str(t);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -51,13 +60,18 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
         Some(Value::String(combined))
     };
 
+    let mut extra = serde_json::Map::new();
+    if !reasoning.is_empty() {
+        extra.insert("reasoning_content".to_string(), Value::String(reasoning));
+    }
+
     let message = OpenAIMessage {
         role: "assistant".to_string(),
         content,
         name: None,
         tool_call_id: None,
         tool_calls: if has_tools { Some(tool_calls) } else { None },
-        extra: serde_json::Map::new(),
+        extra,
     };
 
     let finish_reason = if has_tools {
