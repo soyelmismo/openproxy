@@ -201,7 +201,7 @@ pub async fn refresh_account_quota(
     Path(account_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     tracing::info!(account_id = account_id, "refresh_account_quota: start");
-    let result: Result<Json<serde_json::Value>, ApiError> = async move {
+    let result: Result<Json<serde_json::Value>, ApiError> = Box::pin(async move {
         let account_id = AccountId::new(account_id);
 
         let adapters = s.adapters();
@@ -240,7 +240,7 @@ pub async fn refresh_account_quota(
                 "supported": false,
             })))
         }
-    }
+    })
     .await;
     result
 }
@@ -258,14 +258,14 @@ pub async fn redeem_codex_reset(
     tracing::info!(account_id = account_id, "redeem_codex_reset: start");
     let credit_id = body.and_then(|Json(b)| b.credit_id);
     let account_id = AccountId::new(account_id);
-    let result = openproxy_core::codex_resets::redeem_codex_account_reset(
+    let result = Box::pin(openproxy_core::codex_resets::redeem_codex_account_reset(
         account_id,
         credit_id.as_deref(),
         s.db_pool(),
         s.master_key(),
         s.upstream_client(),
         &s.oauth_provider_registry(),
-    )
+    ))
     .await
     .map_err(ApiError)?;
 

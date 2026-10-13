@@ -62,7 +62,7 @@ pub fn start_quota_sync_scheduler_with_cancel(
     let token = cancel.clone();
 
     tokio::spawn(async move {
-        run_quota_sync_scheduler(
+        Box::pin(run_quota_sync_scheduler(
             db_pool,
             config,
             upstream_client,
@@ -70,7 +70,7 @@ pub fn start_quota_sync_scheduler_with_cancel(
             adapters,
             oauth_provider_registry,
             token,
-        )
+        ))
         .await;
     });
 

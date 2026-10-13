@@ -224,7 +224,10 @@ async fn smart_warmup_disabled_config_is_noop() {
     assert!(res.is_none());
 
     let cancel = CancellationToken::new();
-    run_smart_warmup_scheduler(pool, config, upstream, master_key, cancel).await;
+    Box::pin(run_smart_warmup_scheduler(
+        pool, config, upstream, master_key, cancel,
+    ))
+    .await;
 }
 
 #[tokio::test]
@@ -241,7 +244,10 @@ async fn smart_warmup_scheduler_cancelled_exits_promptly() {
     cancel.cancel(); // Pre-cancelled token
 
     // Must return immediately without executing network calls
-    run_smart_warmup_scheduler(pool, config, upstream, master_key, cancel).await;
+    Box::pin(run_smart_warmup_scheduler(
+        pool, config, upstream, master_key, cancel,
+    ))
+    .await;
 }
 
 #[tokio::test]
