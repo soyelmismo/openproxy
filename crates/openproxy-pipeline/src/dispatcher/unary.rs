@@ -31,6 +31,22 @@ pub(crate) fn populate_upstream_headers(
     }
 }
 
+/// Anuncia `Accept: text/event-stream` en requests de inferencia streaming
+/// cuando el adapter no declaró su propio Accept. Algunos upstreams (p.ej. el
+/// endpoint mavis de MiniMax) condicionan el flush incremental de chunks a
+/// este header: sin él bufferizan el cuerpo completo aunque el JSON diga
+/// `stream:true`. Los adapters que ya fijan Accept (p.ej. atomesus) se
+/// respetan. En no-streaming no se toca.
+pub(crate) fn ensure_streaming_accept(upstream_request: &mut UpstreamRequest) {
+    if upstream_request.is_streaming && !upstream_request.headers.contains_key(http::header::ACCEPT)
+    {
+        upstream_request.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("text/event-stream"),
+        );
+    }
+}
+
 /// `OpenAIResponse` minimalista desde `choices[0].message.content` del body
 /// crudo, para adapters que no producen OpenAI nativo.
 pub(super) fn translate_simple_text_response(

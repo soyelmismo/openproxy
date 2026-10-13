@@ -127,11 +127,63 @@ fn test_populate_upstream_headers_never_leaks_openproxy_internal_headers() {
 }
 
 #[test]
+fn test_ensure_streaming_accept_sets_sse_only_for_streaming() {
+    use openproxy_adapters::upstream::UpstreamRequest;
+
+    // Streaming sin Accept previo -> se anuncia text/event-stream.
+    let mut streaming = UpstreamRequest::post_json(
+        "http://example.com/v1/messages".to_string(),
+        bytes::Bytes::new(),
+    );
+    streaming.is_streaming = true;
+    crate::dispatcher::unary::ensure_streaming_accept(&mut streaming);
+    assert_eq!(
+        streaming
+            .headers
+            .get(http::header::ACCEPT)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "text/event-stream"
+    );
+
+    // No-streaming -> no se toca Accept.
+    let mut unary = UpstreamRequest::post_json(
+        "http://example.com/v1/messages".to_string(),
+        bytes::Bytes::new(),
+    );
+    unary.is_streaming = false;
+    crate::dispatcher::unary::ensure_streaming_accept(&mut unary);
+    assert!(unary.headers.get(http::header::ACCEPT).is_none());
+
+    // Streaming con Accept ya declarado por el adapter -> se respeta.
+    let mut preset = UpstreamRequest::post_json(
+        "http://example.com/v1/messages".to_string(),
+        bytes::Bytes::new(),
+    );
+    preset.is_streaming = true;
+    preset.headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    crate::dispatcher::unary::ensure_streaming_accept(&mut preset);
+    assert_eq!(
+        preset
+            .headers
+            .get(http::header::ACCEPT)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "application/json"
+    );
+}
+
+#[test]
 fn test_nvidia_nim_adapter_appends_strip_headers_and_strips_session_id() {
     use openproxy_adapters::adapters::ProviderAdapterEnum;
 
-    let mut adapter = ProviderAdapterEnum::from_provider_id("nvidia-nim")
-        .expect("nvidia-nim adapter must exist");
+    let mut adapter =
+        ProviderAdapterEnum::from_provider_id("nvidia-nim").expect("nvidia-nim adapter must exist");
 
     // Simulate rebuild_adapters applying extra_headers from db
     adapter.append_extra_headers(vec![(
@@ -159,8 +211,9 @@ fn test_nvidia_nim_adapter_appends_strip_headers_and_strips_session_id() {
         .unwrap(),
     );
 
-    let stripped = strip_provider_configured_params_from_body(body, &adapter.config().extra_headers)
-        .expect("stripping must succeed");
+    let stripped =
+        strip_provider_configured_params_from_body(body, &adapter.config().extra_headers)
+            .expect("stripping must succeed");
     let val: Value = serde_json::from_slice(&stripped).unwrap();
 
     assert!(
