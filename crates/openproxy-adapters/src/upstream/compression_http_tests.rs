@@ -470,7 +470,7 @@ async fn unsupported_codec_fails_before_any_body_byte_is_read() {
             "200 OK",
             &[
                 ("content-type", "application/json".to_string()),
-                ("content-encoding", "br".to_string()),
+                ("content-encoding", "compress".to_string()),
                 ("content-length", "4".to_string()),
             ],
             b"raw!",
@@ -482,9 +482,9 @@ async fn unsupported_codec_fails_before_any_body_byte_is_read() {
     let err = UpstreamClient::new()
         .call(spec, TimeoutProfile::OAuth, CancellationToken::new())
         .await
-        .expect_err("br is outside the codec scope");
+        .expect_err("compress is outside the codec scope");
     let message = err.to_string();
-    assert!(message.contains("br"), "{message}");
+    assert!(message.contains("compress"), "{message}");
     assert!(message.contains("not supported"), "{message}");
 }
 

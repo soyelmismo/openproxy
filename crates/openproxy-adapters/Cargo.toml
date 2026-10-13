@@ -41,6 +41,8 @@ miniz_oxide = { workspace = true }
 # implements neither gzip nor CRC/ISIZE, so the container is parsed here and
 # the checksum computed independently.
 crc32fast = { version = "1.5", default-features = false }
+brotli-decompressor = { version = "6", default-features = false, features = ["std"] }
+zstd = { version = "0.13", default-features = false }
 
 hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }

@@ -369,7 +369,7 @@ fn test_propagate_opencode_dynamic_headers_and_extensions() {
             .map(|(_, v)| v.as_str())
     };
 
-    assert_eq!(find("User-Agent"), Some("opencode/1.30.0"));
+    assert_eq!(find("User-Agent"), Some("opencode/latest/1.30.0/cli"));
     assert_eq!(find("x-opencode-custom-flag"), Some("speed-mode"));
     assert_eq!(find("x-opencode-debug"), Some("1"));
 

@@ -47,7 +47,12 @@ use super::error::{UpstreamError, UpstreamResult};
 /// `Accept-Encoding` value advertised when the caller named none. `identity`
 /// needs no `q` parameter: RFC 9110 makes it acceptable unless a request says
 /// `identity;q=0`.
-pub(crate) const ADVERTISED_ACCEPT_ENCODING: &str = "gzip, deflate";
+///
+/// `gzip` and `deflate` are inverted incrementally on `miniz_oxide` (safe for
+/// SSE streaming). `br` and `zstd` are also advertised — they give better
+/// ratios on large payloads — but are decoded in one shot at EOF, so they are
+/// only used on non-streaming responses (see [`Stage::codec_kind`]).
+pub(crate) const ADVERTISED_ACCEPT_ENCODING: &str = "gzip, deflate, br, zstd";
 
 /// Bound on a single gzip container header. `FCOMMENT`/`FNAME` are attacker
 /// controlled, so an unterminated field cannot make the transport buffer
@@ -122,9 +127,11 @@ fn classify(tokens: &[String]) -> UpstreamResult<Option<Codec>> {
         "gzip" => Ok(Some(Codec::Gzip)),
         "x-gzip" => Ok(Some(Codec::Gzip)),
         "deflate" => Ok(Some(Codec::Deflate)),
+        "br" => Ok(Some(Codec::Brotli)),
+        "zstd" => Ok(Some(Codec::Zstd)),
         "identity" => Ok(None),
         other => Err(UpstreamError::Decode(format!(
-            "content-encoding `{other}` is not supported by this transport; only gzip and deflate are inverted"
+            "content-encoding `{other}` is not supported by this transport; only gzip, deflate, br and zstd are inverted"
         ))),
     }
 }
@@ -138,6 +145,21 @@ pub(crate) enum Codec {
     Gzip,
     /// RFC 1950 (zlib), with a raw DEFLATE fallback sniffed from the header.
     Deflate,
+    /// RFC 7932 Brotli.
+    Brotli,
+    /// RFC 8878 Zstandard.
+    Zstd,
+}
+
+/// How a codec is decoded: incrementally (safe for streaming) or in one shot
+/// at EOF (for codecs whose streaming API is not available or not worth it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodecKind {
+    /// Inflate on `miniz_oxide`, frame by frame. Streaming-safe.
+    Incremental,
+    /// Accumulate all compressed bytes, decompress in one shot at `finish`.
+    /// Not streaming-safe — only used for non-streaming responses.
+    OneShot,
 }
 
 impl Codec {
@@ -145,6 +167,15 @@ impl Codec {
         match self {
             Codec::Gzip => "gzip",
             Codec::Deflate => "deflate",
+            Codec::Brotli => "br",
+            Codec::Zstd => "zstd",
+        }
+    }
+
+    pub(super) const fn kind(self) -> CodecKind {
+        match self {
+            Codec::Gzip | Codec::Deflate => CodecKind::Incremental,
+            Codec::Brotli | Codec::Zstd => CodecKind::OneShot,
         }
     }
 }
@@ -220,6 +251,15 @@ impl BodyDecoding {
     /// Feed one raw transport frame. Errors before any plaintext is returned.
     pub(crate) fn push(&mut self, raw: &[u8]) -> UpstreamResult<()> {
         self.compressed_in = self.compressed_in.saturating_add(raw.len() as u64);
+        let is_one_shot = self
+            .stage
+            .as_ref()
+            .is_some_and(|s| s.codec.kind() == CodecKind::OneShot);
+        if is_one_shot {
+            // Accumulate raw compressed bytes; decompress in finish().
+            self.pending.extend_from_slice(raw);
+            return Ok(());
+        }
         if self.stage.is_none() {
             self.out.extend_from_slice(raw);
             return Ok(());
@@ -376,6 +416,7 @@ impl BodyDecoding {
                                 .is_none()
                     }
                     Codec::Deflate => buffered < 2,
+                    Codec::Brotli | Codec::Zstd => false,
                 }
             }
             Phase::Trailer => stage.trailer.len() < GZIP_TRAILER_LEN,
@@ -394,6 +435,12 @@ impl BodyDecoding {
     /// A `content-encoding` on an empty body is a protocol oddity, not
     /// corruption, so zero input bytes finish cleanly.
     pub(crate) fn finish(&mut self) -> UpstreamResult<Option<Bytes>> {
+        // One-shot codecs: decompress the entire accumulated buffer at once.
+        if let Some(stage) = self.stage.as_ref()
+            && stage.codec.kind() == CodecKind::OneShot
+        {
+            return self.finish_one_shot();
+        }
         if self.stage.is_none() || self.compressed_in == 0 {
             return Ok(self.take_frame());
         }
@@ -425,6 +472,46 @@ impl BodyDecoding {
             self.decoded_out,
             phase_hint(stage.phase)
         )))
+    }
+
+    /// Decompress the entire accumulated buffer for one-shot codecs (br, zstd).
+    fn finish_one_shot(&mut self) -> UpstreamResult<Option<Bytes>> {
+        let codec = self
+            .stage
+            .as_ref()
+            .map_or(Codec::Gzip, |s| s.codec);
+        let raw = std::mem::take(&mut self.pending);
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        let mut out = Vec::new();
+        match codec {
+            Codec::Brotli => {
+                let mut out_writer = Vec::new();
+                brotli_decompressor::BrotliDecompress(&mut std::io::Cursor::new(&raw[..]), &mut out_writer)
+                    .map_err(|e| UpstreamError::Decode(format!("br body: {e}")))?;
+                out = out_writer;
+            }
+            Codec::Zstd => {
+                let mut reader = zstd::stream::read::Decoder::new(&raw[..])
+                    .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
+                std::io::Read::read_to_end(&mut reader, &mut out).map_err(|e| {
+                    UpstreamError::Decode(format!("zstd body: {e}"))
+                })?;
+            }
+            _ => unreachable!("finish_one_shot called with incremental codec"),
+        }
+        if out.len() as u64 > MAX_DECODED_BODY_BYTES {
+            return Err(UpstreamError::Decode(format!(
+                "{} body expands to more than {MAX_DECODED_BODY_BYTES} decoded bytes",
+                codec.as_str()
+            )));
+        }
+        self.decoded_out = out.len() as u64;
+        if out.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(Bytes::from(out)))
     }
 }
 
@@ -502,6 +589,8 @@ impl Stage {
         match self.codec {
             Codec::Gzip => Phase::Trailer,
             Codec::Deflate => Phase::Done,
+            // One-shot codecs never reach this; they go through finish_one_shot.
+            Codec::Brotli | Codec::Zstd => Phase::Done,
         }
     }
 
@@ -529,6 +618,9 @@ impl Stage {
                 self.state = Some(InflateState::new_boxed(format));
                 Ok(Some(0))
             }
+            // One-shot codecs never reach resolve_container; they go through
+            // finish_one_shot which decompresses the whole buffer at once.
+            Codec::Brotli | Codec::Zstd => Ok(Some(0)),
         }
     }
 
@@ -550,7 +642,7 @@ impl Stage {
         };
         let mut consumed = 0usize;
         while out.len() < MAX_DECODED_FRAME_BYTES {
-            let result = inflate(state, &input[consumed..], scratch, MZFlush::None);
+            let result = inflate(state, &input[consumed..], scratch, MZFlush::Sync);
             let status = match result.status {
                 Ok(status) => status,
                 Err(miniz_oxide::MZError::Buf)
@@ -830,7 +922,7 @@ mod codec_tests {
 
     #[test]
     fn unsupported_codec_fails_instead_of_handing_raw_bytes_to_parsers() {
-        for value in ["br", "zstd", "compress", "gzip, deflate"] {
+        for value in ["compress", "gzip, deflate"] {
             assert!(
                 matches!(
                     response_codec(&encoded(value)),
