@@ -217,7 +217,7 @@ fn test_opencode_spoofer() {
         }
     }
 
-    // Dynamic session/request IDs follow ses_/msg_ + 12 hex + 14 Base62 chars.
+    // Dynamic session ID follows ses_ + 12 hex + 14 Base62 chars.
     let session_id = headers
         .iter()
         .find(|(k, _)| k == "x-opencode-session")
@@ -225,12 +225,30 @@ fn test_opencode_spoofer() {
         .expect("missing x-opencode-session");
     assert_opencode_id("ses_", session_id);
 
-    let request_id = headers
-        .iter()
-        .find(|(k, _)| k == "x-opencode-request")
-        .map(|(_, v)| v.as_str())
-        .expect("missing x-opencode-request");
-    assert_opencode_id("msg_", request_id);
+    // x-opencode-request must NOT be present (not sent by real CLI)
+    assert!(
+        !headers
+            .iter()
+            .any(|(k, _)| k == "x-opencode-request"),
+        "x-opencode-request should not be sent"
+    );
+
+    // Session aliases must all carry the same value as x-opencode-session
+    for alias in ["x-opencode-session-id", "x-session-affinity", "x-session-id"] {
+        let alias_val = headers
+            .iter()
+            .find(|(k, _)| k == alias)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or_else(|| panic!("missing {alias}"));
+        assert_eq!(alias_val, session_id, "{alias} must match x-opencode-session");
+    }
+
+    // W3C tracing headers must be present
+    assert!(headers.iter().any(|(k, _)| k == "b3"), "missing b3 header");
+    assert!(
+        headers.iter().any(|(k, _)| k == "traceparent"),
+        "missing traceparent header"
+    );
 
     // Client flag is fixed to "cli".
     assert!(
@@ -263,11 +281,22 @@ fn test_opencode_spoofer_apply_to_request() {
         .expect("missing dynamic x-opencode-session");
     assert_opencode_id("ses_", session_id.to_str().expect("session id not ascii"));
 
-    let request_id = req
-        .headers
-        .get("x-opencode-request")
-        .expect("missing dynamic x-opencode-request");
-    assert_opencode_id("msg_", request_id.to_str().expect("request id not ascii"));
+    // x-opencode-request must NOT be present
+    assert!(req.headers.get("x-opencode-request").is_none());
+
+    // Session aliases present with same value
+    let session_val = session_id.to_str().unwrap();
+    for alias in ["x-opencode-session-id", "x-session-affinity", "x-session-id"] {
+        assert_eq!(
+            req.headers.get(alias).map(|v| v.to_str().unwrap_or("")),
+            Some(session_val),
+            "missing or wrong {alias}"
+        );
+    }
+
+    // W3C tracing headers present
+    assert!(req.headers.get("b3").is_some(), "missing b3");
+    assert!(req.headers.get("traceparent").is_some(), "missing traceparent");
 
     assert_eq!(
         req.headers.get("x-opencode-client").unwrap(),
@@ -398,19 +427,19 @@ fn test_opencode_dynamic_version_and_extra_headers() {
     let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
     reset_dynamic_opencode_overrides();
 
-    assert_eq!(current_opencode_version(), "1.19.0");
-    assert_eq!(current_opencode_ua(), "opencode/1.19.0");
+    assert_eq!(current_opencode_version(), "2.0.22");
+    assert_eq!(current_opencode_ua(), "opencode/latest/2.0.22/cli");
 
     set_dynamic_opencode_version("1.25.4");
     assert_eq!(current_opencode_version(), "1.25.4");
-    assert_eq!(current_opencode_ua(), "opencode/1.25.4");
+    assert_eq!(current_opencode_ua(), "opencode/latest/1.25.4/cli");
 
     set_dynamic_opencode_extra_header("x-opencode-canary", "alpha-3");
     let headers = OpenCodeSpoofer.headers();
     assert!(
         headers
             .iter()
-            .any(|(k, v)| k == "User-Agent" && v == "opencode/1.25.4")
+            .any(|(k, v)| k == "User-Agent" && v == "opencode/latest/1.25.4/cli")
     );
     assert!(
         headers
@@ -422,7 +451,7 @@ fn test_opencode_dynamic_version_and_extra_headers() {
     OpenCodeSpoofer.apply_to_request(&mut req);
     assert_eq!(
         req.headers.get("User-Agent").unwrap(),
-        HeaderValue::from_static("opencode/1.25.4")
+        HeaderValue::from_static("opencode/latest/1.25.4/cli")
     );
     assert_eq!(
         req.headers.get("x-opencode-canary").unwrap(),
@@ -430,7 +459,7 @@ fn test_opencode_dynamic_version_and_extra_headers() {
     );
 
     reset_dynamic_opencode_overrides();
-    assert_eq!(current_opencode_version(), "1.19.0");
+    assert_eq!(current_opencode_version(), "2.0.22");
 }
 
 #[test]

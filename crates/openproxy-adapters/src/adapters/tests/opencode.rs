@@ -199,19 +199,19 @@ fn test_opencode_build_chat_url() {
 
     assert_eq!(
         zen.build_chat_url(TargetFormat::Gemini, &gemini_model),
-        "https://opencode.ai/zen/v1/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+        "https://opencode.ai/inference/v1/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
     );
     assert_eq!(
         go.build_chat_url(TargetFormat::Gemini, &gemini_model),
-        "https://opencode.ai/zen/go/v1/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
+        "https://opencode.ai/inference/go/v1/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
     );
     assert_eq!(
         zen.build_chat_url(TargetFormat::Openai, &openai_model),
-        "https://opencode.ai/zen/v1/chat/completions"
+        "https://opencode.ai/inference/v1/chat/completions"
     );
     assert_eq!(
         zen.build_chat_url(TargetFormat::Anthropic, &anthropic_model),
-        "https://opencode.ai/zen/v1/messages"
+        "https://opencode.ai/inference/v1/messages"
     );
 }
 
@@ -333,7 +333,7 @@ fn test_opencode_dynamic_headers_and_config_mut() {
 
     let _guard = OPENCODE_TEST_LOCK.lock().unwrap();
     reset_dynamic_opencode_overrides();
-    assert_eq!(current_opencode_version(), "1.19.0");
+    assert_eq!(current_opencode_version(), "2.0.22");
 
     let mut adapter = OpenCodeZenAdapter::new();
 
@@ -358,12 +358,12 @@ fn test_opencode_dynamic_headers_and_config_mut() {
 
     assert_eq!(find("x-admin-injected"), Some("true"));
     assert_eq!(find("x-custom-rule"), Some("rule-42"));
-    assert_eq!(find("User-Agent"), Some("opencode/1.19.0"));
+    assert_eq!(find("User-Agent"), Some("opencode/latest/2.0.22/cli"));
 
     // 2. Test in-memory dynamic version upgrade without recompilation
     set_dynamic_opencode_version("1.25.0");
     assert_eq!(current_opencode_version(), "1.25.0");
-    assert_eq!(current_opencode_ua(), "opencode/1.25.0");
+    assert_eq!(current_opencode_ua(), "opencode/latest/1.25.0/cli");
 
     let headers_updated = adapter.build_headers("my-key", TargetFormat::Anthropic, &model_id);
     let find_up = |k: &str| {
@@ -372,7 +372,7 @@ fn test_opencode_dynamic_headers_and_config_mut() {
             .find(|(name, _)| name.eq_ignore_ascii_case(k))
             .map(|(_, v)| v.as_str())
     };
-    assert_eq!(find_up("User-Agent"), Some("opencode/1.25.0"));
+    assert_eq!(find_up("User-Agent"), Some("opencode/latest/1.25.0/cli"));
 
     // 3. Test in-memory dynamic extra header injection without recompilation
     set_dynamic_opencode_extra_header("x-opencode-experimental", "fast-routing");
@@ -401,12 +401,12 @@ fn test_opencode_dynamic_headers_and_config_mut() {
             .map(|(_, v)| v.as_str())
     };
     assert_eq!(find_go("x-go-test"), Some("active"));
-    assert_eq!(find_go("User-Agent"), Some("opencode/1.25.0"));
+    assert_eq!(find_go("User-Agent"), Some("opencode/latest/1.25.0/cli"));
     assert_eq!(find_go("x-opencode-experimental"), Some("fast-routing"));
 
     // Clean up
     reset_dynamic_opencode_overrides();
-    assert_eq!(current_opencode_version(), "1.19.0");
+    assert_eq!(current_opencode_version(), "2.0.22");
 }
 
 #[test]
@@ -440,7 +440,11 @@ fn test_opencode_default_headers_contract() {
         "x-opencode-client",
         "x-opencode-project",
         "x-opencode-session",
-        "x-opencode-request",
+        "x-opencode-session-id",
+        "x-session-affinity",
+        "x-session-id",
+        "b3",
+        "traceparent",
     ]
     .into_iter()
     .map(String::from)
@@ -457,5 +461,11 @@ fn test_opencode_default_headers_contract() {
     assert_eq!(find("x-opencode-client"), Some("cli"));
     assert_eq!(find("x-opencode-project"), Some("global"));
     assert!(find("x-opencode-session").is_some_and(|s| s.starts_with("ses_")));
-    assert!(find("x-opencode-request").is_some_and(|s| s.starts_with("msg_")));
+    assert!(find("x-opencode-session-id").is_some());
+    assert!(find("x-session-affinity").is_some());
+    assert!(find("x-session-id").is_some());
+    assert!(find("b3").is_some());
+    assert!(find("traceparent").is_some());
+    // x-opencode-request must NOT be present (not sent by real CLI)
+    assert!(find("x-opencode-request").is_none());
 }

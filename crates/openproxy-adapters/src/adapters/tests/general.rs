@@ -95,14 +95,14 @@ fn minimax_builds_anthropic_headers() {
 fn opencode_zen_routes_anthropic_to_messages() {
     let a = OpenCodeZenAdapter::new();
     let url = a.build_chat_url(TargetFormat::Anthropic, &ModelId::new("m"));
-    assert_eq!(url, "https://opencode.ai/zen/v1/messages");
+    assert_eq!(url, "https://opencode.ai/inference/v1/messages");
 }
 
 #[test]
 fn opencode_zen_routes_openai_to_chat_completions() {
     let a = OpenCodeZenAdapter::new();
     let url = a.build_chat_url(TargetFormat::Openai, &ModelId::new("m"));
-    assert_eq!(url, "https://opencode.ai/zen/v1/chat/completions");
+    assert_eq!(url, "https://opencode.ai/inference/v1/chat/completions");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn opencode_zen_models_url() {
     let a = OpenCodeZenAdapter::new();
     assert_eq!(
         a.models_url().as_deref(),
-        Some("https://opencode.ai/zen/v1/models")
+        Some("https://opencode.ai/inference/v1/models")
     );
 }
 

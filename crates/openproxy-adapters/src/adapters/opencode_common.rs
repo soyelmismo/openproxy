@@ -126,6 +126,9 @@ pub async fn fetch_opencode_models(
     upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Result<Vec<DiscoveredModel>> {
+    // 0. Sync CLI version from npm registry into memory
+    let _ = crate::spoofer::refresh_opencode_version(upstream_client).await;
+
     let url = adapter
         .models_url()
         .ok_or_else(|| CoreError::Validation(format!("{}: models_url is None", adapter.id())))?;
@@ -171,11 +174,15 @@ pub struct OpenCodeAdapter {
 impl OpenCodeAdapter {
     pub fn new(flavor: OpenCodeFlavor) -> Self {
         let (id, name, base_url) = match flavor {
-            OpenCodeFlavor::Zen => ("opencode-zen", "OpenCode Zen", "https://opencode.ai/zen/v1"),
+            OpenCodeFlavor::Zen => (
+                "opencode-zen",
+                "OpenCode Zen",
+                "https://opencode.ai/inference/v1",
+            ),
             OpenCodeFlavor::Go => (
                 "opencode-go",
                 "OpenCode Go",
-                "https://opencode.ai/zen/go/v1",
+                "https://opencode.ai/inference/go/v1",
             ),
         };
 

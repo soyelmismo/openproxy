@@ -1,10 +1,31 @@
 use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
+use crate::upstream::UpstreamClient;
 use http::HeaderValue;
 use rand::RngExt;
+use std::sync::Arc;
 
-pub const OPENCODE_UA: &str = "opencode/1.19.0";
+pub const OPENCODE_UA: &str = "opencode/latest/2.0.22/cli";
+
+/// Default OpenCode CLI version used for UA generation and validation.
+pub const DEFAULT_OPENCODE_VERSION: &str = "2.0.22";
+
+/// npm registry URL for the latest opencode CLI version.
+/// Configurable via `OPENPROXY_OPENCODE_LATEST_VERSION_URL`.
+pub const OPENCODE_LATEST_VERSION_URL: &str =
+    "https://registry.npmjs.org/opencode-ai/latest";
 
 static OPENCODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
+
+fn safe_env_value(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// Canonical npm registry URL for OpenCode CLI, configurable via
+/// `OPENPROXY_OPENCODE_LATEST_VERSION_URL`.
+pub fn opencode_latest_version_url() -> String {
+    safe_env_value("OPENPROXY_OPENCODE_LATEST_VERSION_URL")
+        .unwrap_or_else(|| OPENCODE_LATEST_VERSION_URL.to_string())
+}
 
 /// Set dynamic version override for OpenCode in memory at runtime without recompiling.
 pub fn set_dynamic_opencode_version(ver: impl Into<String>) {
@@ -13,12 +34,89 @@ pub fn set_dynamic_opencode_version(ver: impl Into<String>) {
 
 /// Resolve current OpenCode version string.
 pub fn current_opencode_version() -> String {
-    OPENCODE_OVERRIDES.current_version("OPENPROXY_OPENCODE_VERSION", "1.19.0")
+    let ver = OPENCODE_OVERRIDES.current_version("OPENPROXY_OPENCODE_VERSION", "");
+    if !ver.is_empty() {
+        return ver;
+    }
+    safe_env_value("OPENCODE_CLIENT_VERSION")
+        .unwrap_or_else(|| DEFAULT_OPENCODE_VERSION.to_string())
 }
 
-/// Dynamic OpenCode User-Agent.
+/// Dynamic OpenCode User-Agent (4-segment format matching the real CLI).
 pub fn current_opencode_ua() -> String {
-    format!("opencode/{}", current_opencode_version())
+    if let Some(override_ua) = OPENCODE_OVERRIDES.current_extra_header("user-agent") {
+        return override_ua;
+    }
+    if let Some(env_ua) = safe_env_value("OPENPROXY_OPENCODE_USER_AGENT")
+        .or_else(|| safe_env_value("OPENCODE_USER_AGENT"))
+    {
+        return env_ua;
+    }
+    format!("opencode/latest/{}/cli", current_opencode_version())
+}
+
+/// Asynchronously queries the npm registry for the latest OpenCode CLI version
+/// and updates the in-memory dynamic version state if changed.
+pub async fn refresh_opencode_version(upstream_client: &Arc<UpstreamClient>) -> Option<String> {
+    use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamRequest};
+
+    let url = opencode_latest_version_url();
+    let mut req = UpstreamRequest::get(&url);
+    if let Ok(accept) = HeaderValue::from_str("application/json") {
+        req.headers.insert(http::header::ACCEPT, accept);
+    }
+    if let Ok(ua) = HeaderValue::from_str(&current_opencode_ua()) {
+        req.headers.insert(http::header::USER_AGENT, ua);
+    }
+
+    let cancel = CancellationToken::new();
+    let resp = upstream_client
+        .call(req, TimeoutProfile::OAuth, cancel)
+        .await
+        .ok()?;
+
+    if !resp.status.is_success() {
+        return None;
+    }
+
+    let body = resp.collect().await.ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
+
+    let raw_ver = json.get("version").and_then(|v| v.as_str())?;
+    let clean_ver = raw_ver.trim().trim_start_matches('v').split('-').next()?.trim();
+
+    if !clean_ver.is_empty() {
+        set_dynamic_opencode_version(clean_ver);
+        return Some(clean_ver.to_string());
+    }
+
+    None
+}
+
+/// Generate a random 32-hex-char W3C trace ID.
+fn generate_trace_id() -> String {
+    let mut rng = rand::rng();
+    (0..32)
+        .map(|_| format!("{:x}", rng.random_range(0..16)))
+        .collect()
+}
+
+/// Generate a random 16-hex-char W3C span ID.
+fn generate_span_id() -> String {
+    let mut rng = rand::rng();
+    (0..16)
+        .map(|_| format!("{:x}", rng.random_range(0..16)))
+        .collect()
+}
+
+/// Generate W3C `traceparent` header value: `00-{trace}-{span}-01`.
+fn generate_traceparent() -> String {
+    format!("00-{}-{}-01", generate_trace_id(), generate_span_id())
+}
+
+/// Generate B3 `b3` header value: `{trace}-{span}-1-{parent}`.
+fn generate_b3() -> String {
+    format!("{}-{}-1", generate_trace_id(), generate_span_id())
 }
 
 /// Set dynamic extra header override for OpenCode in memory at runtime without recompiling.
@@ -217,8 +315,13 @@ impl ClientSpoofer for OpenCodeSpoofer {
             })
             .collect();
 
-        list.push(("x-opencode-session".into(), generate_session_id()));
-        list.push(("x-opencode-request".into(), generate_request_id()));
+        let session_id = generate_session_id();
+        list.push(("x-opencode-session".into(), session_id.clone()));
+        list.push(("x-opencode-session-id".into(), session_id.clone()));
+        list.push(("x-session-affinity".into(), session_id.clone()));
+        list.push(("x-session-id".into(), session_id));
+        list.push(("b3".into(), generate_b3()));
+        list.push(("traceparent".into(), generate_traceparent()));
 
         merge_header_refs(&mut list, &*OPENCODE_EXTRA_HEADERS);
         OPENCODE_OVERRIDES.apply_to_list(&mut list);
@@ -227,7 +330,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
     }
 
     fn apply_to_header_map(&self, headers: &mut http::HeaderMap) {
-        // 1. User-Agent: preserve valid downstream opencode >= 1.17, else upgrade to current_opencode_ua()
+        // 1. User-Agent: preserve valid downstream opencode, else upgrade to current_opencode_ua()
         let preserve_ua = headers
             .get(http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
@@ -263,7 +366,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
         }
         OPENCODE_OVERRIDES.apply_to_header_map(headers);
 
-        // 4. x-opencode-session: preserve valid, translate candidate, or generate new
+        // 4. x-opencode-session + aliases: preserve valid, translate candidate, or generate new
         let session_header_name = http::header::HeaderName::from_static("x-opencode-session");
         let candidate_session = headers
             .get(&session_header_name)
@@ -286,21 +389,35 @@ impl ClientSpoofer for OpenCodeSpoofer {
             Some(generate_session_id())
         };
 
-        if let Some(session_val) = resolved_session
-            && let Ok(val) = HeaderValue::try_from(session_val)
-        {
-            headers.insert(session_header_name, val);
+        if let Some(ref session_val) = resolved_session {
+            // Set x-opencode-session
+            if let Ok(val) = HeaderValue::try_from(session_val.as_str()) {
+                headers.insert(session_header_name.clone(), val);
+            }
+            // Set aliases (same value)
+            for alias in ["x-opencode-session-id", "x-session-affinity", "x-session-id"] {
+                if let Ok(name) = http::header::HeaderName::try_from(alias)
+                    && !headers.contains_key(&name)
+                    && let Ok(val) = HeaderValue::try_from(session_val.as_str())
+                {
+                    headers.insert(name, val);
+                }
+            }
         }
 
-        // 5. x-opencode-request: preserve valid, or generate new
-        let request_header_name = http::header::HeaderName::from_static("x-opencode-request");
-        let need_request_id = headers
-            .get(&request_header_name)
-            .and_then(|v| v.to_str().ok())
-            .is_none_or(|s| !is_valid_opencode_request_id(s));
+        // 5. Remove x-opencode-request (not sent by the real CLI)
+        headers.remove("x-opencode-request");
 
-        if need_request_id && let Ok(val) = HeaderValue::try_from(generate_request_id()) {
-            headers.insert(request_header_name, val);
+        // 6. W3C tracing headers
+        if !headers.contains_key("b3")
+            && let Ok(val) = HeaderValue::try_from(generate_b3().as_str())
+        {
+            headers.insert("b3", val);
+        }
+        if !headers.contains_key("traceparent")
+            && let Ok(val) = HeaderValue::try_from(generate_traceparent().as_str())
+        {
+            headers.insert("traceparent", val);
         }
     }
 }
