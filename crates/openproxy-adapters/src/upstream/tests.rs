@@ -253,23 +253,23 @@ async fn ttft_timeout_fires_when_first_chunk_delayed_after_headers() {
 }
 
 #[tokio::test]
-async fn phase_timeout_write_accumulates() {
+async fn sent_get_waits_for_headers_not_write_timeout() {
     let addr = spawn_mock_raw(vec![(&[], Duration::from_secs(30))]).await;
     let client = UpstreamClient::new();
     let t0 = std::time::Instant::now();
     let res = client
         .call(
             UpstreamRequest::get(format!("http://{addr}/")),
-            custom_profile(5_000, 5_000, 200, 60_000),
+            custom_profile(500, 5_000, 100, 60_000),
             CancellationToken::new(),
         )
         .await;
     let elapsed = t0.elapsed();
     assert!(matches!(
         res.unwrap_err(),
-        UpstreamError::Timeout(UpstreamPhase::Write)
+        UpstreamError::Timeout(UpstreamPhase::Headers)
     ));
-    assert!(elapsed >= Duration::from_millis(150) && elapsed < Duration::from_secs(2));
+    assert!(elapsed >= Duration::from_millis(450) && elapsed < Duration::from_secs(2));
 }
 
 #[tokio::test]

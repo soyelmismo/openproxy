@@ -209,11 +209,7 @@ impl PipelineStage for FormattingStage {
         let target_format = resolve_target_format(adapter, current.model.target_format);
         let model_streaming = current.model.capabilities().and_then(|c| c.streaming);
         let adapter_streaming = adapter.forced_streaming();
-        let stream = match (model_streaming, adapter_streaming) {
-            (Some(forced), _) => forced,
-            (None, Some(forced)) => forced,
-            (None, None) => ctx.req.openai_request.stream || ctx.req.stream_sink.is_some(),
-        };
+        let stream = resolve_upstream_streaming(model_streaming, adapter_streaming);
         let messages_ref = prepare_messages_for_formatting(ctx);
 
         let mut req_override;
@@ -240,7 +236,9 @@ impl PipelineStage for FormattingStage {
                     body,
                     &adapter.config().extra_headers,
                 )
-            }) {
+            })
+            .and_then(|body| enforce_stream_body(body, target_format, stream))
+        {
             Ok(b) => b,
             Err(e) => return fail_stage!(ctx, &current.target, &e, Some(&current.model)),
         };
@@ -249,6 +247,61 @@ impl PipelineStage for FormattingStage {
         ctx.body_bytes = Some(body_bytes);
         ctx.is_streaming = Some(stream);
         next.execute(ctx).await
+    }
+}
+
+/// Unary at either scope is an explicit veto. Auto always streams upstream,
+/// independently of the downstream response format requested by the client.
+fn resolve_upstream_streaming(model: Option<bool>, provider: Option<bool>) -> bool {
+    model != Some(false) && provider != Some(false)
+}
+
+/// Provider wrappers and parameter stripping cannot silently override transport
+/// policy. Apply it before request finalization/signing, in the native dialect.
+fn enforce_stream_body(
+    body: bytes::Bytes,
+    format: openproxy_types::TargetFormat,
+    stream: bool,
+) -> Result<bytes::Bytes, CoreError> {
+    if format == openproxy_types::TargetFormat::Gemini {
+        return Ok(body); // Gemini selects streaming through the URL, not JSON.
+    }
+    openproxy_adapters::adapters::traits::patch_json_request_body(body, |obj| {
+        if format == openproxy_types::TargetFormat::CommandCodeGo {
+            if let Some(params) = obj
+                .get_mut("params")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                params.insert("stream".into(), serde_json::Value::Bool(stream));
+            }
+        } else {
+            obj.insert("stream".into(), serde_json::Value::Bool(stream));
+            if !stream {
+                obj.remove("stream_options");
+            }
+        }
+    })
+}
+
+fn stream_request_url(url: String, stream: bool) -> String {
+    if stream || !url.contains(":streamGenerateContent") {
+        return url;
+    }
+    // Both Gemini and Antigravity use the same RPC suffix. Unary must not
+    // retain the SSE query parameter even when the adapter supplied the URL.
+    let url = url.replace(":streamGenerateContent", ":generateContent");
+    let Some((base, query)) = url.split_once('?') else {
+        return url;
+    };
+    let query = query
+        .split('&')
+        .filter(|part| *part != "alt=sse")
+        .collect::<Vec<_>>()
+        .join("&");
+    if query.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}?{query}")
     }
 }
 
@@ -411,6 +464,7 @@ impl PipelineStage for DispatchStage {
             },
             |prepared| prepared.route.url.clone(),
         );
+        let url = stream_request_url(url, ctx.is_streaming.unwrap_or(false));
         let effective_key = zai_route
             .as_ref()
             .map_or(api_key, |prepared| prepared.route.credential.as_str());
@@ -645,6 +699,10 @@ impl PipelineStage for CustomAdapterStage {
 }
 
 use super::target_headers::propagate_provider_target_headers;
+
+#[cfg(test)]
+#[path = "stream_policy_tests.rs"]
+mod stream_policy_tests;
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

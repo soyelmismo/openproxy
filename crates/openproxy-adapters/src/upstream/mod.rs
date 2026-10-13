@@ -49,7 +49,11 @@ mod profile;
 #[cfg(feature = "upstream-hyper")]
 pub(crate) mod proxy_tunnel;
 #[cfg(feature = "upstream-hyper")]
+mod request_body;
+#[cfg(feature = "upstream-hyper")]
 mod response;
+#[cfg(feature = "upstream-hyper")]
+mod upload;
 
 #[cfg(feature = "upstream-hyper")]
 mod tests;
@@ -61,6 +65,9 @@ mod compression_tests;
 #[cfg(feature = "upstream-hyper")]
 #[cfg(test)]
 mod compression_http_tests;
+
+#[cfg(all(feature = "upstream-hyper", test))]
+mod upload_tests;
 
 #[cfg(feature = "upstream-hyper")]
 #[cfg(test)]
