@@ -408,4 +408,3 @@ fn test_openai_formatter_strips_cache_control_from_messages_tools_and_extra() {
     );
     assert_eq!(val.get("custom_allowed").unwrap(), "ok");
 }
-
