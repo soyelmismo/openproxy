@@ -287,14 +287,16 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
 
     for _ in 0..MAX_BATCHES {
         let pool_reader = Arc::clone(&db_pool);
-        let proxies = match tokio::task::spawn_blocking(move || -> crate::error::Result<Vec<ProxyTestCandidate>> {
-            let r = pool_reader.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
+        let proxies = match tokio::task::spawn_blocking(
+            move || -> crate::error::Result<Vec<ProxyTestCandidate>> {
+                let r = pool_reader.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
                 crate::error::CoreError::Internal(format!(
                     "test_all_proxies: reader lock not acquired within {READER_LOCK_TIMEOUT:?}"
                 ))
             })?;
-            Ok(fetch_background_test_proxies(&r))
-        })
+                Ok(fetch_background_test_proxies(&r))
+            },
+        )
         .await
         {
             Ok(Ok(p)) => p,
@@ -327,31 +329,35 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
                 }
 
                 let pool = Arc::clone(&pool_writer);
-                let _ = tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
-                    let mut w = pool.writer();
-                    execute_proxy_batch_update(&mut w, &batch)
-                })
-                .await;
+                let _ =
+                    tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
+                        let mut w = pool.writer();
+                        execute_proxy_batch_update(&mut w, &batch)
+                    })
+                    .await;
             }
         });
 
         let test_url_ref = &test_url;
         futures::stream::iter(proxies)
-            .for_each_concurrent(CONCURRENT_PROBES, |(id, r#type, host, port, username, password)| {
-                let tx = tx.clone();
-                async move {
-                    let test_res = test_proxy_connection(
-                        test_url_ref,
-                        &r#type,
-                        &host,
-                        port,
-                        username.as_deref(),
-                        password.as_deref(),
-                    )
-                    .await;
-                    let _ = tx.send((id, test_res)).await;
-                }
-            })
+            .for_each_concurrent(
+                CONCURRENT_PROBES,
+                |(id, r#type, host, port, username, password)| {
+                    let tx = tx.clone();
+                    async move {
+                        let test_res = test_proxy_connection(
+                            test_url_ref,
+                            &r#type,
+                            &host,
+                            port,
+                            username.as_deref(),
+                            password.as_deref(),
+                        )
+                        .await;
+                        let _ = tx.send((id, test_res)).await;
+                    }
+                },
+            )
             .await;
 
         drop(tx);
