@@ -203,6 +203,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     // 403 + VALIDATION_REQUIRED no debe penalizar la cuenta.
@@ -269,6 +270,7 @@ fn test_translate_non_streaming_body_commandcode_raw_chunk_and_full_response() {
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let raw_chunk = serde_json::json!({

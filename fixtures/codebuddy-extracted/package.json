@@ -1,0 +1,94 @@
+{
+  "name": "@tencent-ai/codebuddy-code",
+  "version": "2.164.0",
+  "description": "Use CodeBuddy, Tencent's AI assistant, right from your terminal. CodeBuddy can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
+  "main": "lib/node/index.js",
+  "typings": "lib/node/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/node/index.d.ts",
+      "default": "./lib/node/index.js"
+    },
+    "./testing": {
+      "@genie/monorepo": "./src/testing.ts",
+      "types": "./types/codebuddy-code/testing.d.ts",
+      "import": "./lib/testing.js",
+      "require": "./lib/testing.js",
+      "default": "./lib/testing.js"
+    },
+    "./server": {
+      "@genie/monorepo": "./src/node/server/index.ts",
+      "types": "./dist-server/types/node/server/index.d.ts",
+      "import": "./server.mjs",
+      "require": "./server.cjs"
+    },
+    "./src/node/multitask": {
+      "types": "./src/node/multitask/index.ts",
+      "default": "./src/node/multitask/index.ts"
+    },
+    "./node/*": {
+      "types": "./src/node/*.ts",
+      "default": "./src/node/*.ts"
+    },
+    "./src/*": {
+      "types": "./src/*.ts",
+      "default": "./src/*.ts"
+    },
+    "./package.json": "./package.json",
+    "./*": "./*"
+  },
+  "license": "SEE LICENSE IN README.md",
+  "bin": {
+    "codebuddy-code": "./bin/codebuddy",
+    "codebuddy": "./bin/codebuddy",
+    "cbc": "./bin/codebuddy",
+    "cbc-prewarm": "./bin/cbc-prewarm",
+    "codebuddy-lowmem": "./bin/codebuddy-lowmem"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk-server": "npm:@agentclientprotocol/sdk@1.4.0",
+    "@openai/agents-core": "0.5.2"
+  },
+  "optionalDependencies": {
+    "@lydell/node-pty": "1.2.0-beta.14",
+    "@lydell/node-pty-darwin-arm64": "1.2.0-beta.14",
+    "@lydell/node-pty-darwin-x64": "1.2.0-beta.14",
+    "@lydell/node-pty-linux-x64": "1.2.0-beta.14",
+    "@lydell/node-pty-win32-arm64": "1.2.0-beta.14",
+    "@lydell/node-pty-win32-x64": "1.2.0-beta.14",
+    "@tencent-ai/sandbox-cli-darwin-arm64": "5.9.0-beta.3",
+    "@tencent-ai/sandbox-cli-darwin-x64": "5.9.0-beta.3",
+    "@tencent-ai/sandbox-cli-win32-x64": "5.9.0-beta.3"
+  },
+  "keywords": [
+    "codebuddy",
+    "ai-assistant",
+    "terminal",
+    "cli"
+  ],
+  "files": [
+    "dist",
+    "dist-server",
+    "server.cjs",
+    "server.mjs",
+    "bin",
+    "vendor",
+    "builtin",
+    "types",
+    "CHANGELOG.md",
+    "product.json",
+    "product.*.json",
+    "!customization.json",
+    "!dist/*.tgz",
+    "!dist/manifest.json"
+  ],
+  "homepage": "https://cnb.cool/codebuddy/codebuddy-code",
+  "bugs": {
+    "url": "https://cnb.cool/codebuddy/codebuddy-code/-/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {},
+  "devDependencies": {}
+}

@@ -138,6 +138,35 @@ pub trait ProviderAdapter: Send + Sync {
         None
     }
 
+    /// Snapshot any request-scoped contract state into `self`.
+    ///
+    /// Called exactly once per (request, provider) by
+    /// [`ProviderAdapter::pinned_for_request`]. Providers whose
+    /// request-scoped identity — contract generation, session id, capability
+    /// beta, signing material — can be refreshed between the moment the body
+    /// is wrapped and the moment the request is signed must freeze that value
+    /// here, so every consumer of the same request observes the same
+    /// generation instead of a mix of old and new.
+    ///
+    /// The default implementation is a no-op: providers without
+    /// request-scoped state need not override it.
+    fn pin_request_contract(&mut self) {}
+
+    /// Return a request-local clone of this adapter with its request-scoped
+    /// contract pinned.
+    ///
+    /// The clone is what the pipeline pins per (request, provider): the
+    /// original adapter held by `PipelineConfig::adapters` may be refreshed
+    /// afterwards without affecting requests that are already pinned.
+    fn pinned_for_request(&self) -> Self
+    where
+        Self: Sized + Clone,
+    {
+        let mut pinned = self.clone();
+        pinned.pin_request_contract();
+        pinned
+    }
+
     fn metadata(&self) -> ProviderMetadata {
         let built_in = true;
         ProviderMetadata {
@@ -487,5 +516,233 @@ mod tests {
         let invalid = Bytes::from("not valid json");
         let res = patch_json_request_body(invalid, |_| {});
         assert!(res.is_err());
+    }
+
+    /// Minimal `ResolvedTarget` for the pin tests; the probe never reads it.
+    fn probe_resolved_target() -> openproxy_types::context::ResolvedTarget {
+        openproxy_types::context::ResolvedTarget {
+            target: openproxy_types::ComboTarget::default(),
+            model: openproxy_types::models::Model::default(),
+            api_key: String::new(),
+            api_key_label: None,
+            custom_meta: None,
+        }
+    }
+
+    /// Adapter whose request-scoped generation is observable through every
+    /// consumer: body wrap, headers and finalization.
+    #[derive(Clone, Debug)]
+    struct GenerationProbe {
+        config: ProviderAdapterConfig,
+        generation: Arc<std::sync::atomic::AtomicUsize>,
+        pinned: Option<usize>,
+    }
+
+    impl GenerationProbe {
+        fn new() -> Self {
+            Self {
+                config: ProviderAdapterConfig {
+                    id: ProviderId::new("generation-probe"),
+                    name: "Robert ident-probe".into(),
+                    base_url: "http://127.0.0.1:1".into(),
+                    auth_type: AdapterAuthType::None,
+                    format: AdapterFormat::Openai,
+                    extra_headers: Vec::new(),
+                    anonymous_fallback: false,
+                    rate_limit_scope: "none".into(),
+                },
+                generation: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
+                pinned: None,
+            }
+        }
+
+        fn current(&self) -> usize {
+            self.pinned
+                .unwrap_or_else(|| self.generation.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
+    impl ProviderAdapter for GenerationProbe {
+        fn config(&self) -> &ProviderAdapterConfig {
+            &self.config
+        }
+
+        fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
+            Some(&mut self.config)
+        }
+
+        fn pin_request_contract(&mut self) {
+            self.pinned = Some(self.generation.load(std::sync::atomic::Ordering::SeqCst));
+        }
+
+        fn build_headers(
+            &self,
+            _api_key: &str,
+            _target_format: TargetFormat,
+            _model: &ModelId,
+        ) -> Vec<(String, String)> {
+            vec![("x-generation".into(), self.current().to_string())]
+        }
+
+        fn wrap_request_body(
+            &self,
+            body: bytes::Bytes,
+            _target_format: TargetFormat,
+            _model: &ModelId,
+            _resolved_target: &openproxy_types::context::ResolvedTarget,
+        ) -> std::result::Result<bytes::Bytes, CoreError> {
+            patch_json_request_body(body, |obj| {
+                obj.insert(
+                    "generation".into(),
+                    serde_json::Value::String(self.current().to_string()),
+                );
+            })
+        }
+
+        fn finalize_request(
+            &self,
+            body: bytes::Bytes,
+            headers: &mut Vec<(String, String)>,
+            _target_format: TargetFormat,
+            _model: &ModelId,
+            _resolved_target: &openproxy_types::context::ResolvedTarget,
+        ) -> std::result::Result<bytes::Bytes, CoreError> {
+            headers.push(("x-final-generation".into(), self.current().to_string()));
+            Ok(body)
+        }
+    }
+
+    #[test]
+    fn the_default_pin_hook_is_inert() {
+        let mut adapter = crate::adapters::MockAdapter::new(
+            "noop-pin",
+            "http://127.0.0.1:1",
+            AdapterFormat::Openai,
+        );
+        let before = adapter.config().base_url.clone();
+        adapter.pin_request_contract();
+        assert_eq!(
+            adapter.config().base_url,
+            before,
+            "adapters that override nothing must be unaffected by the hook"
+        );
+    }
+
+    #[test]
+    fn pinned_for_request_freezes_the_generation_for_every_consumer() {
+        let source = GenerationProbe::new();
+        let mut pinned = source.pinned_for_request();
+        assert_eq!(pinned.pinned, Some(1), "the hook runs exactly once");
+
+        // The registry is refreshed between the body wrap and the headers.
+        source
+            .generation
+            .store(2, std::sync::atomic::Ordering::SeqCst);
+
+        let model = ModelId::new("m");
+        let target_format = TargetFormat::Openai;
+        let resolved = probe_resolved_target();
+
+        let body = pinned
+            .wrap_request_body(
+                Bytes::from_static(br#"{"model":"m"}"#),
+                target_format,
+                &model,
+                &resolved,
+            )
+            .expect("wrap");
+        let headers = pinned.build_headers("", target_format, &model);
+        let mut finalized_headers = Vec::new();
+        let finalized = pinned
+            .finalize_request(
+                body.clone(),
+                &mut finalized_headers,
+                target_format,
+                &model,
+                &resolved,
+            )
+            .expect("finalize");
+
+        let wrapped: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(wrapped["generation"], serde_json::json!("1"));
+        assert_eq!(finalized, body, "identity finalize keeps the body");
+        assert!(
+            headers.iter().any(|(k, v)| k == "x-generation" && v == "1"),
+            "headers must use the frozen generation, got {headers:?}"
+        );
+        assert!(
+            finalized_headers
+                .iter()
+                .any(|(k, v)| k == "x-final-generation" && v == "1"),
+            "finalization must use the frozen generation"
+        );
+
+        // The source kept following the refresh.
+        let refreshed_headers = source.build_headers("", target_format, &model);
+        assert!(
+            refreshed_headers
+                .iter()
+                .any(|(k, v)| k == "x-generation" && v == "2"),
+            "the unpinned source observes the refresh"
+        );
+
+        // The hook freezes whatever the current state is; the guarantee that it
+        // runs exactly once per request comes from `pinned_for_request`, which
+        // is the only caller. A deliberate second call therefore re-freezes.
+        pinned.pin_request_contract();
+        assert_eq!(pinned.pinned, Some(2));
+        let re_frozen = pinned.build_headers("", target_format, &model);
+        assert!(
+            re_frozen
+                .iter()
+                .any(|(k, v)| k == "x-generation" && v == "2"),
+            "an explicit re-pin follows the refresh, as documented"
+        );
+    }
+
+    #[test]
+    fn enum_pinned_for_request_returns_an_independent_snapshot() {
+        let mut original = crate::adapters::ProviderAdapterEnum::Custom(Box::new(
+            crate::adapters::CustomAdapter::from_config(ProviderAdapterConfig {
+                id: ProviderId::new("enum-pin"),
+                name: "Emma Sørensen".into(),
+                base_url: "http://127.0.0.1:1".into(),
+                auth_type: AdapterAuthType::None,
+                format: AdapterFormat::Openai,
+                extra_headers: Vec::new(),
+                anonymous_fallback: false,
+                rate_limit_scope: "none".into(),
+            }),
+        ));
+        let pinned = original.pinned_for_request();
+
+        // A refresh mutates the adapter held by the registry.
+        original.config_mut().unwrap().base_url = "http://127.0.0.1:2".into();
+
+        assert_eq!(
+            pinned.config().base_url,
+            "http://127.0.0.1:1",
+            "the pinned clone must keep the snapshot it captured"
+        );
+        assert_eq!(original.config().base_url, "http://127.0.0.1:2");
+    }
+
+    #[test]
+    fn the_enum_forwards_the_hook_to_the_concrete_provider() {
+        // The trait impl of the enum must forward the hook rather than inherit
+        // the no-op default, otherwise a provider overriding it would never be
+        // pinned when reached through the enum. Observability is limited to the
+        // built-in providers (none overrides the hook yet), so this asserts the
+        // forwarding is present and inert for them.
+        let mut adapter = crate::adapters::ProviderAdapterEnum::Mock(Box::new(
+            crate::adapters::MockAdapter::new(
+                "enum-forward",
+                "http://127.0.0.1:1",
+                AdapterFormat::Openai,
+            ),
+        ));
+        let before = adapter.config().base_url.clone();
+        adapter.pin_request_contract();
+        assert_eq!(adapter.config().base_url, before);
     }
 }

@@ -1,0 +1,10 @@
+{
+  "ref": "refs/tags/rust-v0.162.1",
+  "node_id": "REF_kwDOOYsS4bdyZWZzL3RhZ3MvcnVzdC12MC4xNjIuMQ",
+  "url": "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1",
+  "object": {
+    "sha": "7a078f6bb4ce0dc2a81408b334ce52979d92c603",
+    "type": "tag",
+    "url": "https://api.github.com/repos/openai/codex/git/tags/7a078f6bb4ce0dc2a81408b334ce52979d92c603"
+  }
+}

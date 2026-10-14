@@ -42,6 +42,7 @@ fn make_test_builder<'a>(
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
     UsageRecordBuilder::new(tracker, req, combo, target)
 }
@@ -241,6 +242,7 @@ async fn test_concurrent_compression_stats_isolation() {
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     // Request 2: uncompressible (short message < 1000 chars)
@@ -284,6 +286,7 @@ async fn test_concurrent_compression_stats_isolation() {
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let ctx1 = crate::context::PipelineContext::new(req1.clone(), pipeline.clone());
@@ -406,6 +409,7 @@ async fn test_high_concurrency_compression_stats_isolation() {
             pii_session: Arc::new(parking_lot::Mutex::new(None)),
             compression_stats: Arc::new(parking_lot::Mutex::new(None)),
             proxy_override: None,
+            pinned_adapters: Default::default(),
         };
 
         let ctx = crate::context::PipelineContext::new(req.clone(), pipeline.clone());
@@ -507,6 +511,7 @@ async fn test_compression_stats_empty_requests() {
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let ctx = crate::context::PipelineContext::new(req.clone(), pipeline);
@@ -595,6 +600,7 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     // Attempt 1: Prepares messages, encounters failure
