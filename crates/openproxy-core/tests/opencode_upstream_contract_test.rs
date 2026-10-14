@@ -25,7 +25,7 @@ fn test_opencode_zen_golden_contract_spec_parity() {
     let adapter = OpenCodeZenAdapter::new();
 
     assert_eq!(adapter.id().as_str(), "opencode-zen");
-    assert_eq!(adapter.config().base_url, "https://opencode.ai/inference/v1");
+    assert_eq!(adapter.config().base_url, "https://opencode.ai/zen/v1");
     assert!(
         adapter.is_anonymous_fallback(),
         "OpenCode Zen must support anonymous / free tier fallback"
@@ -34,23 +34,23 @@ fn test_opencode_zen_golden_contract_spec_parity() {
     let model = ModelId::new("test-model");
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Anthropic, &model),
-        "https://opencode.ai/inference/v1/messages"
+        "https://opencode.ai/zen/v1/messages"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Responses, &model),
-        "https://opencode.ai/inference/v1/responses"
+        "https://opencode.ai/zen/v1/responses"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Openai, &model),
-        "https://opencode.ai/inference/v1/chat/completions"
+        "https://opencode.ai/zen/v1/chat/completions"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Gemini, &model),
-        "https://opencode.ai/inference/v1/models/test-model:streamGenerateContent?alt=sse"
+        "https://opencode.ai/zen/v1/models/test-model:streamGenerateContent?alt=sse"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::SystemOne, &model),
-        "https://opencode.ai/inference/v1/systemone"
+        "https://opencode.ai/zen/v1/systemone"
     );
 
     // paid key: auth travels in x-api-key, never in Authorization
