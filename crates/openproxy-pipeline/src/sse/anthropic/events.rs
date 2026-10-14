@@ -294,7 +294,14 @@ mod tests {
 
     fn translate(event: &str, data: &str) -> Result<Option<UpstreamSseChunk>> {
         let payload = format!("{event}\n{data}");
-        translate_anthropic_sse_event(&payload, "chatcmpl-1", 1_700_000_000, "claude-opus-5-5", &mut None, &mut 0)
+        translate_anthropic_sse_event(
+            &payload,
+            "chatcmpl-1",
+            1_700_000_000,
+            "claude-opus-5-5",
+            &mut None,
+            &mut 0,
+        )
     }
 
     /// Translate an event that must parse, and unwrap its payload.
@@ -331,7 +338,13 @@ mod tests {
             )
             .is_none()
         );
-        assert!(translate_ok("content_block_delta", r#"{"index":0,"delta":{"type":"thinking_delta"}}"#).is_none());
+        assert!(
+            translate_ok(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"thinking_delta"}}"#
+            )
+            .is_none()
+        );
     }
 
     /// A zero estimate claims no tokens were generated, so it is not a
