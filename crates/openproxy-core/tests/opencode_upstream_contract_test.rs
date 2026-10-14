@@ -11,9 +11,7 @@ use openproxy_adapters::adapters::opencode_common::{
     OpenCodeFlavor, OpenCodeZenAdapter, classify_opencode_target_format,
     inject_opencode_agent_quartet_tools, is_free_opencode_tier,
 };
-use openproxy_adapters::spoofer::{
-    OPENCODE_UA, generate_request_id, generate_session_id, is_valid_opencode_session_id,
-};
+use openproxy_adapters::spoofer::{OPENCODE_UA, is_valid_opencode_session_id};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -315,7 +313,7 @@ async fn test_opencode_zen_remote_upstream_live_contract_parity() {
     let client = UpstreamClient::new();
     let cancel = CancellationToken::new();
 
-    let probe_url = "https://opencode.ai/zen/v1/models";
+    let probe_url = "https://opencode.ai/inference/v1/models";
     let mut req = UpstreamRequest::get(probe_url);
     req.headers.insert(
         axum::http::header::USER_AGENT,
@@ -361,47 +359,34 @@ async fn test_opencode_zen_remote_upstream_live_contract_parity() {
         "live catalogue must include claude-sonnet-4-6"
     );
 
-    let chat_url = "https://opencode.ai/zen/v1/chat/completions";
-    let chat_body = serde_json::json!({
-        "model": "big-pickle",
-        "stream": true,
-        "messages": [{"role": "user", "content": "ping"}],
-        "tools": [
-            {"type": "function", "function": {"name": "bash", "description": "cmd", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}},
-            {"type": "function", "function": {"name": "glob", "description": "glob", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}},
-            {"type": "function", "function": {"name": "grep", "description": "grep", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}},
-            {"type": "function", "function": {"name": "read", "description": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}}
-        ]
-    });
+    let model = ModelId::new("big-pickle");
+    let adapter = OpenCodeZenAdapter::new();
+
+    // URL, body y headers salen del adapter productivo: el live test no puede
+    // derivar del contrato real (ruta /inference/, quartet de tools y session-id
+    // canónico con sus alias).
+    let chat_url = adapter.build_chat_url(TargetFormat::Openai, &model);
+
+    let mut body_obj = serde_json::Map::new();
+    body_obj.insert("model".to_string(), serde_json::json!("big-pickle"));
+    body_obj.insert("stream".to_string(), serde_json::json!(true));
+    body_obj.insert(
+        "messages".to_string(),
+        serde_json::json!([{"role": "user", "content": "ping"}]),
+    );
+    inject_opencode_agent_quartet_tools(&mut body_obj, TargetFormat::Openai);
+    let chat_body = serde_json::Value::Object(body_obj);
 
     let mut chat_req = UpstreamRequest::post_json(
         chat_url,
         bytes::Bytes::from(serde_json::to_vec(&chat_body).unwrap()),
     );
-    chat_req.headers.insert(
-        axum::http::header::USER_AGENT,
-        axum::http::HeaderValue::from_static(OPENCODE_UA),
-    );
-    chat_req.headers.insert(
-        axum::http::header::AUTHORIZATION,
-        axum::http::HeaderValue::from_static("Bearer public"),
-    );
-    chat_req.headers.insert(
-        axum::http::HeaderName::from_static("x-opencode-client"),
-        axum::http::HeaderValue::from_static("cli"),
-    );
-    chat_req.headers.insert(
-        axum::http::HeaderName::from_static("x-opencode-project"),
-        axum::http::HeaderValue::from_static("global"),
-    );
-    chat_req.headers.insert(
-        axum::http::HeaderName::from_static("x-opencode-session"),
-        axum::http::HeaderValue::from_str(&generate_session_id()).unwrap(),
-    );
-    chat_req.headers.insert(
-        axum::http::HeaderName::from_static("x-opencode-request"),
-        axum::http::HeaderValue::from_str(&generate_request_id()).unwrap(),
-    );
+    for (name, value) in adapter.build_headers("", TargetFormat::Openai, &model) {
+        chat_req.headers.insert(
+            axum::http::HeaderName::from_bytes(name.as_bytes()).expect("valid header name"),
+            axum::http::HeaderValue::from_str(&value).expect("valid header value"),
+        );
+    }
 
     let chat_resp = match client.call(chat_req, TimeoutProfile::OAuth, cancel).await {
         Ok(r) if r.status.as_u16() == 429 => {
