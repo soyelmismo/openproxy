@@ -124,6 +124,16 @@ impl ChunkProcessor<'_> {
         stream: &mut openproxy_adapters::upstream::UpstreamBodyStream,
         mut chunk: crate::sse::UpstreamSseChunk,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
+        // Hidden generation progress: the upstream reported that it is
+        // generating (Anthropic `thinking_delta` with an empty `thinking`
+        // and a positive `estimated_tokens`) but nothing the client can see.
+        // Nothing is forwarded, accumulated or normalised — the only effect
+        // is telling the body stream that the request is alive, which moves
+        // the wait off the TTFT deadline onto the idle-chunk budget.
+        if chunk.is_liveness() {
+            stream.note_progress_chunk();
+            return Ok(crate::streaming::ChunkEvent::Skip);
+        }
         if let Some(new_usage) = chunk.usage.take() {
             self.state.usage = Some(match self.state.usage.take() {
                 Some(existing) => merge_usage(existing, new_usage),

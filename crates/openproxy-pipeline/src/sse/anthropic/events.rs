@@ -21,6 +21,12 @@ struct AnthropicDeltaProbe {
     thinking: Option<String>,
     #[serde(default, rename = "partial_json")]
     partial_json: Option<String>,
+    /// Progress estimate the vendor attaches to a `thinking_delta` whose
+    /// `thinking` string is empty — i.e. reasoning generated server-side
+    /// and withheld from the stream. Not billed usage; see
+    /// [`super::super::HIDDEN_THINKING_EVENTS`].
+    #[serde(default, rename = "estimated_tokens")]
+    estimated_tokens: Option<i64>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -97,6 +103,16 @@ fn handle_anthropic_thinking_delta(
 ) -> Option<UpstreamSseChunk> {
     let thinking = delta.thinking.as_deref().unwrap_or("");
     if thinking.is_empty() {
+        // An empty `thinking` with a positive `estimated_tokens` estimate is
+        // the vendor reporting reasoning it withholds from the stream. The
+        // event used to be dropped here, so the pipeline never learned the
+        // upstream was generating and the TTFT gate kept counting to its
+        // deadline. Return liveness instead: the pipeline forwards nothing
+        // but keeps the body stream alive. Zero, negative and non-integer
+        // estimates are not progress claims and stay dropped.
+        if delta.estimated_tokens.is_some_and(|n| n > 0) {
+            return Some(UpstreamSseChunk::liveness());
+        }
         return None;
     }
     Some(crate::sse::make_text_delta(
@@ -269,5 +285,132 @@ pub fn translate_anthropic_sse_event(
             let rebuilt = format!("{event_type}\n{data_json}");
             translate_anthropic_sse_payload(&rebuilt, chunk_id, created, model)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn translate(event: &str, data: &str) -> Result<Option<UpstreamSseChunk>> {
+        let payload = format!("{event}\n{data}");
+        translate_anthropic_sse_event(&payload, "chatcmpl-1", 1_700_000_000, "claude-opus-5-5", &mut None, &mut 0)
+    }
+
+    /// Translate an event that must parse, and unwrap its payload.
+    fn translate_ok(event: &str, data: &str) -> Option<UpstreamSseChunk> {
+        translate(event, data).expect("translation must not fail on a well-formed event")
+    }
+
+    /// The vendor reports reasoning it withholds from the stream: empty
+    /// `thinking` plus `estimated_tokens`. Must produce liveness, not
+    /// `None`, or the TTFT gate keeps counting and the request dies before
+    /// the first visible token.
+    #[test]
+    fn empty_thinking_with_estimated_tokens_is_liveness() {
+        let chunk = translate_ok(
+            "content_block_delta",
+            r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":120}}"#,
+        )
+        .expect("hidden progress must yield a liveness chunk");
+        assert!(chunk.is_liveness());
+        assert!(!chunk.has_content);
+        assert!(!chunk.done);
+        assert!(chunk.usage.is_none());
+        assert!(chunk.delta_reasoning.is_none());
+    }
+
+    /// Empty `thinking` with no estimate carries no progress information, so
+    /// there is nothing to report and the event stays dropped.
+    #[test]
+    fn empty_thinking_without_estimated_tokens_is_dropped() {
+        assert!(
+            translate_ok(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"thinking_delta","thinking":""}}"#,
+            )
+            .is_none()
+        );
+        assert!(translate_ok("content_block_delta", r#"{"index":0,"delta":{"type":"thinking_delta"}}"#).is_none());
+    }
+
+    /// A zero estimate claims no tokens were generated, so it is not a
+    /// progress signal and the event stays dropped.
+    #[test]
+    fn zero_estimated_tokens_is_not_progress() {
+        assert!(
+            translate_ok(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":0}}"#,
+            )
+            .is_none()
+        );
+    }
+
+    /// A non-numeric estimate makes the event unparseable, which the caller
+    /// already treats as non-progress (a logged parse warning).
+    #[test]
+    fn negative_estimates_are_not_progress() {
+        assert!(
+            translate_ok(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":-5}}"#,
+            )
+            .is_none()
+        );
+        let parsed = translate(
+            "content_block_delta",
+            r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"","estimated_tokens":"not-a-number"}}"#,
+        );
+        assert!(parsed.is_err());
+    }
+
+    /// Real reasoning text keeps its existing behaviour: forwarded as a
+    /// reasoning delta with content.
+    #[test]
+    fn thinking_with_text_is_still_forwarded() {
+        let chunk = translate_ok(
+            "content_block_delta",
+            r#"{"index":0,"delta":{"type":"thinking_delta","thinking":"weighing options","estimated_tokens":120}}"#,
+        )
+        .expect("visible reasoning must still be forwarded");
+        assert!(!chunk.is_liveness());
+        assert!(chunk.has_content);
+        assert_eq!(chunk.delta_reasoning.as_deref(), Some("weighing options"));
+    }
+
+    /// `estimated_tokens` on a *text* delta is not a progress signal: only
+    /// the thinking branch interprets it.
+    #[test]
+    fn estimated_tokens_on_text_delta_is_not_progress() {
+        assert!(
+            translate_ok(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"text_delta","text":"","estimated_tokens":120}}"#,
+            )
+            .is_none()
+        );
+    }
+
+    /// `input_json_delta` with an empty fragment keeps dropping, exactly as
+    /// before: tool arguments are content when they arrive, never progress.
+    #[test]
+    fn empty_tool_arguments_are_not_progress() {
+        assert!(
+            translate_ok(
+                "content_block_delta",
+                r#"{"index":0,"delta":{"type":"input_json_delta","partial_json":""}}"#,
+            )
+            .is_none()
+        );
+    }
+
+    /// The liveness chunk is recognised only by the documented shape, so a
+    /// final chunk with a `Null` payload is never mistaken for progress.
+    #[test]
+    fn done_chunk_is_not_liveness() {
+        let done = UpstreamSseChunk::done();
+        assert!(done.done);
+        assert!(!done.is_liveness());
     }
 }
