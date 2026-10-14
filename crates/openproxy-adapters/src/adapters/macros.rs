@@ -38,6 +38,25 @@ macro_rules! define_provider_adapter {
                     _ => None,
                 }
             }
+
+            /// Dispatch the request-scoped pin hook to the concrete provider.
+            #[inline]
+            pub fn pin_request_contract(&mut self) {
+                match self {
+                    $( Self::$b_variant(inner) => inner.pin_request_contract(), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.pin_request_contract(), )+
+                }
+            }
+
+            /// Clone this adapter and pin its request-scoped contract, so that
+            /// every consumer of one request — body wrap, headers, chat URL and
+            /// finalization — observes the same generation.
+            #[inline]
+            pub fn pinned_for_request(&self) -> Self {
+                let mut pinned = self.clone();
+                pinned.pin_request_contract();
+                pinned
+            }
         }
 
         // Per-method inline dispatch: each match is generated from the same
@@ -340,6 +359,9 @@ macro_rules! define_provider_adapter {
             }
             fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
                 ProviderAdapterEnum::config_mut(self)
+            }
+            fn pin_request_contract(&mut self) {
+                ProviderAdapterEnum::pin_request_contract(self)
             }
             fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 ProviderAdapterEnum::metadata(self)

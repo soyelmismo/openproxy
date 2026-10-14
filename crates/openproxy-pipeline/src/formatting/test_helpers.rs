@@ -23,6 +23,7 @@ pub(crate) fn test_req(openai_req: OpenAIRequest) -> PipelineRequest {
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     }
 }
 

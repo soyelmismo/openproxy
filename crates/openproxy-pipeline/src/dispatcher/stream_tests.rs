@@ -170,6 +170,7 @@ async fn dispatch_upstream_streaming_errors_without_sink() {
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let started = std::time::Instant::now();
@@ -340,6 +341,7 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let started = std::time::Instant::now();
@@ -506,6 +508,7 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let started = std::time::Instant::now();
@@ -672,6 +675,7 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
 
     let started = std::time::Instant::now();
