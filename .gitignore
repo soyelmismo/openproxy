@@ -44,3 +44,9 @@ data/
 *.rs.patch
 coverage/
 lcov.info
+
+# Contract fixtures: large upstream artifacts are referenced by SHA-256
+# in fixtures/manifest.json, never committed (56 MB npm tarball, 27 MB
+# minified bundle). Their guard test skips when the artifact is absent.
+fixtures/codebuddy-code-*.tgz
+fixtures/codebuddy-extracted/codebuddy.js
