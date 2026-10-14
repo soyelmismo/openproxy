@@ -351,6 +351,14 @@ impl UpstreamBodyStream {
     pub fn note_content_chunk(&mut self) {
         self.last_chunk_at = Some(Instant::now());
     }
+
+    /// Mark verified generation progress without exposing model output.
+    /// Pings, block starts, zero/invalid estimates must not call this.
+    /// Switches from TTFT to the idle budget, never extending total or
+    /// claiming that client-visible content has arrived.
+    pub fn note_progress_chunk(&mut self) {
+        self.last_chunk_at = Some(Instant::now());
+    }
 }
 
 impl std::fmt::Debug for UpstreamBodyStream {

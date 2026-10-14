@@ -21,7 +21,6 @@ pub(crate) use anthropic::merge_usage;
 use crate::translation::OpenAIUsage;
 use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;
-
 /// A single parsed SSE chunk from the upstream, ready to forward.
 pub struct UpstreamSseChunk {
     /// Raw JSON string for pass-through formats (OpenAI). When present,
@@ -92,6 +91,44 @@ impl UpstreamSseChunk {
             delta_tool_calls: Vec::new(),
             has_content: false,
         }
+    }
+
+    /// A liveness chunk: the upstream reported progress that carries no
+    /// client-visible output.
+    ///
+    /// Today this is the Anthropic `thinking_delta` with an empty
+    /// `thinking` string plus `estimated_tokens` — server-side reasoning the
+    /// vendor withholds from the stream. Nothing is forwarded to the client;
+    /// the pipeline uses it to tell the body stream that bytes are still
+    /// flowing (see [`Self::is_liveness`] and
+    /// `UpstreamBodyStream::note_progress_chunk`), so a request is not
+    /// killed by the TTFT gate while the model is still thinking.
+    ///
+    /// `payload` is `Null` and `done` is `false`, which is exactly what
+    /// [`Self::is_liveness`] tests for.
+    pub(crate) fn liveness() -> Self {
+        Self {
+            raw_payload: None,
+            payload: Value::Null,
+            done: false,
+            usage: None,
+            stop_reason: None,
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: false,
+        }
+    }
+
+    /// True when this chunk reports upstream progress but must not be
+    /// forwarded to the client: a `Null` payload on a non-final chunk.
+    ///
+    /// Every translator builds a real JSON payload for output it forwards,
+    /// so the shape is unambiguous today, and it keeps the struct layout
+    /// frozen for the ~110 literal constructions across the SSE
+    /// translators.
+    #[inline]
+    pub fn is_liveness(&self) -> bool {
+        self.payload.is_null() && !self.done
     }
 
     /// Get the forwardable JSON string. Returns the raw payload if

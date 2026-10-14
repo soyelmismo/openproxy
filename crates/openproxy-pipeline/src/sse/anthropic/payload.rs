@@ -74,17 +74,32 @@ pub(crate) fn translate_anthropic_content_delta(
         .unwrap_or("text_delta");
 
     if delta_type == "thinking_delta" {
-        let thinking = data
-            .get("delta")
+        let delta = data.get("delta");
+        let thinking = delta
             .and_then(|d| d.get("thinking"))
             .and_then(|t| t.as_str())
-            .filter(|s| !s.is_empty())?;
+            .unwrap_or("");
+        if thinking.is_empty() {
+            // Server-side reasoning withheld from the stream: the vendor
+            // reports progress through `estimated_tokens` with an empty
+            // `thinking` string. Emit liveness (nothing forwarded) so the
+            // TTFT gate stops counting while the model is still thinking.
+            // Only a positive integer estimate is accepted: `0`, negatives
+            // and non-integers carry no progress claim, and neither does an
+            // absent field.
+            let estimated = delta
+                .and_then(|d| d.get("estimated_tokens"))
+                .and_then(Value::as_u64);
+            if estimated.is_some_and(|n| n > 0) {
+                return Some(UpstreamSseChunk::liveness());
+            }
+            return None;
+        }
 
         return Some(crate::sse::make_text_delta(
             chunk_id, created, model, thinking, true,
         ));
     }
-
     let text = data
         .get("delta")
         .and_then(|d| d.get("text"))
