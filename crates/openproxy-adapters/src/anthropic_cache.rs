@@ -153,10 +153,7 @@ fn is_message_eligible_for_rolling_cache(msg: &Value) -> bool {
     let Some(last_block) = arr.last() else {
         return false;
     };
-    let typ = last_block
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let typ = last_block.get("type").and_then(Value::as_str).unwrap_or("");
     typ != "thinking" && typ != "redacted_thinking"
 }
 
@@ -269,9 +266,7 @@ pub fn enforce_cache_control_limit(payload: &mut Value, mut max_blocks: usize) {
 
     // Phase 1: system blocks earliest-first, preserving the last one
     if let Some(system) = payload.get_mut("system").and_then(Value::as_array_mut) {
-        let last_sys_cc = system
-            .iter()
-            .rposition(has_cache_control);
+        let last_sys_cc = system.iter().rposition(has_cache_control);
         if let Some(last_idx) = last_sys_cc {
             for (idx, item) in system.iter_mut().enumerate() {
                 if excess == 0 {
@@ -294,9 +289,7 @@ pub fn enforce_cache_control_limit(payload: &mut Value, mut max_blocks: usize) {
 
     // Phase 2: tool blocks earliest-first, preserving the last one
     if let Some(tools) = payload.get_mut("tools").and_then(Value::as_array_mut) {
-        let last_tool_cc = tools
-            .iter()
-            .rposition(has_cache_control);
+        let last_tool_cc = tools.iter().rposition(has_cache_control);
         if let Some(last_idx) = last_tool_cc {
             for (idx, tool) in tools.iter_mut().enumerate() {
                 if excess == 0 {
@@ -495,7 +488,11 @@ mod tests {
             input["messages"][0]["content"][0]["cache_control"]["type"].as_str(),
             Some("ephemeral")
         );
-        assert!(input["messages"][1]["content"][1].get("cache_control").is_none());
+        assert!(
+            input["messages"][1]["content"][1]
+                .get("cache_control")
+                .is_none()
+        );
     }
 
     #[test]
