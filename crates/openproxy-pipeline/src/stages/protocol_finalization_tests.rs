@@ -396,7 +396,8 @@ fn claude_code_tool_names_roundtrip_through_chain() {
     let mut payload = chunk.payload;
     crate::claude_tool_names::restore_chunk_tool_names(&mut payload, &map);
     assert_eq!(
-        payload["choices"][0]["delta"]["tool_calls"][0]["function"]["name"], "read_file",
+        payload["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
+        "read_file",
         "the client must receive the tool name it declared"
     );
 
@@ -427,7 +428,8 @@ fn claude_code_tool_names_roundtrip_through_chain() {
         .expect("tool_calls")[0];
     assert_eq!(call["function"]["name"], "read_file");
     assert_eq!(
-        call["function"]["arguments"], r#"{"path":"src/main.rs"}"#,
+        call["function"]["arguments"],
+        r#"{"path":"src/main.rs"}"#,
         "arguments must stay byte-identical through the restore"
     );
 }

@@ -18,10 +18,9 @@ pub fn build_restore_map(req: &crate::PipelineRequest) -> Option<HashMap<String,
 
 /// Same map, straight from the OpenAI-shaped tool list, so it can be built and
 /// tested without a full `PipelineRequest`.
-pub fn build_restore_map_from_tools(
-    tools: &[serde_json::Value],
-) -> Option<HashMap<String, String>> {
-    let forward = build_tool_rename_map_from_names(tools.iter().filter_map(openai_tool_name));
+pub fn build_restore_map_from_tools(tools: &[serde_json::Value]) -> Option<HashMap<String, String>> {
+    let forward =
+        build_tool_rename_map_from_names(tools.iter().filter_map(openai_tool_name));
     if forward.is_empty() {
         return None;
     }
@@ -112,10 +111,7 @@ mod tests {
             openai_tool("Read"),
         ];
         let map = build_restore_map_from_tools(&tools).expect("renames expected");
-        assert_eq!(
-            map.get("BrowserExec").map(String::as_str),
-            Some("browser_exec")
-        );
+        assert_eq!(map.get("BrowserExec").map(String::as_str), Some("browser_exec"));
         assert_eq!(map.get("ReadFile").map(String::as_str), Some("read_file"));
         // Identity names never enter the map.
         assert!(!map.contains_key("Read"));
@@ -140,8 +136,8 @@ mod tests {
         let tools = vec![openai_tool("browser_exec")];
         let map = build_restore_map_from_tools(&tools).unwrap();
 
-        let mut resp: crate::translation::OpenAIResponse =
-            serde_json::from_value(serde_json::json!({
+        let mut resp: crate::translation::OpenAIResponse = serde_json::from_value(
+            serde_json::json!({
                 "id": "msg_1",
                 "object": "chat.completion",
                 "created": 0,
@@ -160,8 +156,9 @@ mod tests {
                     "finish_reason": "tool_calls"
                 }],
                 "usage": null
-            }))
-            .unwrap();
+            }),
+        )
+        .unwrap();
 
         restore_response_tool_names(&mut resp, &map);
         let call = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];
@@ -174,8 +171,8 @@ mod tests {
         let tools = vec![openai_tool("browser_exec")];
         let map = build_restore_map_from_tools(&tools).unwrap();
 
-        let mut resp: crate::translation::OpenAIResponse =
-            serde_json::from_value(serde_json::json!({
+        let mut resp: crate::translation::OpenAIResponse = serde_json::from_value(
+            serde_json::json!({
                 "id": "msg_1",
                 "object": "chat.completion",
                 "created": 0,
@@ -194,8 +191,9 @@ mod tests {
                     "finish_reason": "tool_calls"
                 }],
                 "usage": null
-            }))
-            .unwrap();
+            }),
+        )
+        .unwrap();
 
         restore_response_tool_names(&mut resp, &map);
         let call = &resp.choices[0].message.tool_calls.as_ref().unwrap()[0];

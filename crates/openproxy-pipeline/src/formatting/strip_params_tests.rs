@@ -130,8 +130,8 @@ fn test_populate_upstream_headers_never_leaks_openproxy_internal_headers() {
 fn test_nvidia_nim_adapter_appends_strip_headers_and_strips_session_id() {
     use openproxy_adapters::adapters::ProviderAdapterEnum;
 
-    let mut adapter =
-        ProviderAdapterEnum::from_provider_id("nvidia-nim").expect("nvidia-nim adapter must exist");
+    let mut adapter = ProviderAdapterEnum::from_provider_id("nvidia-nim")
+        .expect("nvidia-nim adapter must exist");
 
     // Simulate rebuild_adapters applying extra_headers from db
     adapter.append_extra_headers(vec![(
@@ -159,9 +159,8 @@ fn test_nvidia_nim_adapter_appends_strip_headers_and_strips_session_id() {
         .unwrap(),
     );
 
-    let stripped =
-        strip_provider_configured_params_from_body(body, &adapter.config().extra_headers)
-            .expect("stripping must succeed");
+    let stripped = strip_provider_configured_params_from_body(body, &adapter.config().extra_headers)
+        .expect("stripping must succeed");
     let val: Value = serde_json::from_slice(&stripped).unwrap();
 
     assert!(

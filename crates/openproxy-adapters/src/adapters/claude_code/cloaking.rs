@@ -324,9 +324,7 @@ pub fn title_case_tool_name(name: &str) -> String {
 /// A name already in TitleCase is identity and stays out of the map. Two names
 /// that collide on the same cloaked form are both left unchanged: renaming them
 /// would make them indistinguishable to the upstream.
-pub fn build_tool_rename_map_from_names<'a, I>(
-    names: I,
-) -> std::collections::HashMap<String, String>
+pub fn build_tool_rename_map_from_names<'a, I>(names: I) -> std::collections::HashMap<String, String>
 where
     I: IntoIterator<Item = &'a str>,
 {
@@ -344,9 +342,11 @@ where
 
     let mut map = std::collections::HashMap::with_capacity(candidates.len());
     for (original, cloaked) in &candidates {
-        let collides = candidates.iter().any(|(other_original, other_cloaked)| {
-            other_cloaked == cloaked && other_original != original
-        });
+        let collides = candidates
+            .iter()
+            .any(|(other_original, other_cloaked)| {
+                other_cloaked == cloaked && other_original != original
+            });
         if !collides {
             map.insert(original.clone(), cloaked.clone());
         }
@@ -355,9 +355,7 @@ where
 }
 
 /// Builds the rename map from the `tools` declared in an Anthropic request body.
-pub fn build_tool_rename_map(
-    json: &serde_json::Value,
-) -> std::collections::HashMap<String, String> {
+pub fn build_tool_rename_map(json: &serde_json::Value) -> std::collections::HashMap<String, String> {
     let Some(tools) = json.get("tools").and_then(|t| t.as_array()) else {
         return std::collections::HashMap::new();
     };
@@ -401,10 +399,7 @@ pub fn rename_tool_names_in_body(
     }
 }
 
-fn rename_name_field(
-    value: &mut serde_json::Value,
-    map: &std::collections::HashMap<String, String>,
-) {
+fn rename_name_field(value: &mut serde_json::Value, map: &std::collections::HashMap<String, String>) {
     let Some(obj) = value.as_object_mut() else {
         return;
     };

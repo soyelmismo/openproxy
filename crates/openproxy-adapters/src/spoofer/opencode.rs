@@ -11,7 +11,8 @@ pub const DEFAULT_OPENCODE_VERSION: &str = "2.0.22";
 
 /// npm registry URL for the latest opencode CLI version.
 /// Configurable via `OPENPROXY_OPENCODE_LATEST_VERSION_URL`.
-pub const OPENCODE_LATEST_VERSION_URL: &str = "https://registry.npmjs.org/opencode-ai/latest";
+pub const OPENCODE_LATEST_VERSION_URL: &str =
+    "https://registry.npmjs.org/opencode-ai/latest";
 
 static OPENCODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
 
@@ -82,12 +83,7 @@ pub async fn refresh_opencode_version(upstream_client: &Arc<UpstreamClient>) -> 
     let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
 
     let raw_ver = json.get("version").and_then(|v| v.as_str())?;
-    let clean_ver = raw_ver
-        .trim()
-        .trim_start_matches('v')
-        .split('-')
-        .next()?
-        .trim();
+    let clean_ver = raw_ver.trim().trim_start_matches('v').split('-').next()?.trim();
 
     if !clean_ver.is_empty() {
         set_dynamic_opencode_version(clean_ver);
@@ -399,11 +395,7 @@ impl ClientSpoofer for OpenCodeSpoofer {
                 headers.insert(session_header_name.clone(), val);
             }
             // Set aliases (same value)
-            for alias in [
-                "x-opencode-session-id",
-                "x-session-affinity",
-                "x-session-id",
-            ] {
+            for alias in ["x-opencode-session-id", "x-session-affinity", "x-session-id"] {
                 if let Ok(name) = http::header::HeaderName::try_from(alias)
                     && !headers.contains_key(&name)
                     && let Ok(val) = HeaderValue::try_from(session_val.as_str())

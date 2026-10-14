@@ -368,8 +368,9 @@ impl TargetFormatter for AnthropicFormatter {
         openproxy_adapters::anthropic_cache::ensure_anthropic_cache_control(&mut val);
         openproxy_adapters::anthropic_cache::enforce_cache_control_limit(&mut val, 4);
 
-        let body_bytes = serde_json::to_vec(&val)
-            .map_err(|e| CoreError::Parse(format!("serialize anthropic request: {e}")))?;
+        let body_bytes = serde_json::to_vec(&val).map_err(|e| {
+            CoreError::Parse(format!("serialize anthropic request: {e}"))
+        })?;
         Ok(bytes::Bytes::from(body_bytes))
     }
 }

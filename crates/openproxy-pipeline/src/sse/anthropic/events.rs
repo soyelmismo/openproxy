@@ -99,9 +99,7 @@ fn handle_anthropic_thinking_delta(
     if thinking.is_empty() {
         return None;
     }
-    Some(crate::sse::make_text_delta(
-        chunk_id, created, model, thinking, true,
-    ))
+    Some(crate::sse::make_text_delta(chunk_id, created, model, thinking, true))
 }
 
 fn handle_anthropic_text_delta(

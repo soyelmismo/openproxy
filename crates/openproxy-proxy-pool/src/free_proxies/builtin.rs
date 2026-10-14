@@ -5,8 +5,8 @@ use super::models::{
     PROXYSCRAPE_CDN_URL, ScrapedProxy, VAKHOV_URL,
 };
 use super::scrapers::{
-    sync_clearproxy, sync_geonode, sync_github_lists, sync_gproxynet, sync_proxifly, sync_proxmint,
-    sync_proxyscrape_cdn, sync_vakhov,
+    sync_clearproxy, sync_geonode, sync_github_lists, sync_gproxynet, sync_proxifly,
+    sync_proxmint, sync_proxyscrape_cdn, sync_vakhov,
 };
 
 pub struct BuiltinProxySourceDef {
