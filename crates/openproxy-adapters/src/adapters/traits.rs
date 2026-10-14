@@ -474,12 +474,26 @@ pub fn build_spoofer_headers(
     spoofer: &impl crate::spoofer::ClientSpoofer,
     extra_headers: &[(String, String)],
 ) -> Vec<(String, String)> {
+    build_spoofer_headers_from(auth, spoofer.headers(), extra_headers)
+}
+
+/// El mismo ensamblado con los headers del spoofer ya resueltos.
+///
+/// Existe para que un adaptador pueda anclar esos headers a un snapshot de
+/// contrato congelado por petición (ver
+/// [`ProviderAdapter::pin_request_contract`]) en vez de volver a leer el
+/// perfil activo: el pin debe alimentar headers y body por igual.
+pub fn build_spoofer_headers_from(
+    auth: Option<(String, String)>,
+    spoofer_headers: Vec<(String, String)>,
+    extra_headers: &[(String, String)],
+) -> Vec<(String, String)> {
     let mut headers = Vec::with_capacity(8 + extra_headers.len());
     if let Some(auth) = auth {
         headers.push(auth);
     }
     headers.push(("Content-Type".into(), "application/json".into()));
-    headers.extend(spoofer.headers());
+    headers.extend(spoofer_headers);
     crate::spoofer::merge_header_refs(&mut headers, extra_headers);
     headers
 }

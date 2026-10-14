@@ -1,5 +1,7 @@
 //! Background task wiring and supervisor task scheduling.
 
+use crate::background::client_contract::codex_runtime_refresh_service;
+use crate::background::{claude_refresh_service, codebuddy_refresh_service};
 use openproxy_adapters::adapters;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_core::discovery_scheduler::{self, DiscoveryScheduler};
@@ -21,6 +23,12 @@ pub(crate) struct SpawnBackgroundTasksArgs {
     pub(crate) oauth_provider_registry: Arc<openproxy_core::oauth::OAuthProviderRegistry>,
 }
 
+/// Compuerta de auto-refresh de un contrato: activada por defecto, se
+/// desactiva explícitamente con `0` o `false`.
+fn contract_auto_refresh_enabled(env_key: &str) -> bool {
+    !std::env::var(env_key).is_ok_and(|value| value == "0" || value == "false")
+}
+
 pub(crate) fn spawn_background_tasks(
     supervisor: &crate::background::BackgroundSupervisor,
     args: SpawnBackgroundTasksArgs,
@@ -37,6 +45,33 @@ pub(crate) fn spawn_background_tasks(
         upstream_client,
         oauth_provider_registry,
     } = args;
+
+    // Refresco de los contratos de cliente (Claude Code, Codex, CodeBuddy):
+    // un único ciclo compartido, un servicio por proveedor bajo el mismo
+    // supervisor, con una compuerta de auto-refresh individual. En tests no
+    // se arranca nada: nada de red ni capturas accidentales.
+    if !cfg!(test) {
+        // La generación activa de Codex (LKG en disco o semilla embebida)
+        // queda cargada al arrancar, sin red: la primera petición no paga la
+        // lectura y el refresher parte de un snapshot ya cargado.
+        if let Err(error) =
+            openproxy_adapters::client_contract::providers::codex_state::ensure_loaded()
+        {
+            tracing::warn!(
+                %error,
+                "no se pudo cargar el contrato Codex al arrancar; la primera petición lo reintentará"
+            );
+        }
+        if contract_auto_refresh_enabled("OPENPROXY_CLAUDE_CODE_PROFILE_AUTO_REFRESH") {
+            supervisor.spawn(claude_refresh_service());
+        }
+        if contract_auto_refresh_enabled("OPENPROXY_CODEX_CONTRACT_AUTO_REFRESH") {
+            supervisor.spawn(codex_runtime_refresh_service(Arc::clone(&upstream_client)));
+        }
+        if contract_auto_refresh_enabled("OPENPROXY_CODEBUDDY_CONTRACT_AUTO_REFRESH") {
+            supervisor.spawn(codebuddy_refresh_service(Arc::clone(&upstream_client)));
+        }
+    }
 
     // Boot backfill: provider seed + repricing + bootstrap key. First
     // tick fires immediately so the dashboard sees a "backfilling"
@@ -154,4 +189,110 @@ pub(crate) fn spawn_memory_cleanup(
         predictive_limiter,
         api_key_cache,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::pedantic, clippy::wildcard_imports)]
+
+    use super::*;
+    use crate::background::BackgroundSupervisor;
+    use crate::background::client_contract::{
+        ContractRefreshJob, ContractRefreshService, RefreshPolicy, RoundOutcome,
+    };
+    use openproxy_adapters::client_contract::ContractError;
+    use openproxy_adapters::upstream::CancellationToken;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::Duration;
+
+    /// Trabajo de fixture: cuenta su ronda sin tocar la red.
+    struct FixtureJob {
+        name: &'static str,
+        rounds: Arc<AtomicU64>,
+    }
+
+    impl ContractRefreshJob for FixtureJob {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        async fn refresh_round(
+            &self,
+            _cancel: &CancellationToken,
+        ) -> Result<RoundOutcome, ContractError> {
+            self.rounds.fetch_add(1, Ordering::Relaxed);
+            Ok(RoundOutcome::Unchanged)
+        }
+    }
+
+    /// Espera acotada a que el contador alcance el objetivo; falla en vez de
+    /// colgarse si la ronda nunca corre.
+    async fn wait_for(counter: &AtomicU64, target: u64) {
+        for _ in 0..500 {
+            if counter.load(Ordering::Relaxed) >= target {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        panic!("la ronda de arranque nunca se ejecutó");
+    }
+
+    /// El registro de producción arranca un refresher de contrato por
+    /// proveedor bajo el MISMO supervisor, cada uno con un único loop (sin
+    /// duplicados), y el shutdown los drena a los tres. Jobs de fixture: cero
+    /// llamadas al upstream.
+    #[tokio::test]
+    async fn the_three_contract_refreshers_start_under_one_supervisor_and_drain_on_shutdown() {
+        let supervisor = BackgroundSupervisor::new();
+        let policy = RefreshPolicy::default().with_interval(Duration::from_secs(3600));
+
+        let mut services = Vec::new();
+        let mut counters = Vec::new();
+        for name in [
+            "claude_code_profile",
+            "codex_contract",
+            "codebuddy_contract",
+        ] {
+            let rounds = Arc::new(AtomicU64::new(0));
+            let service = Arc::new(ContractRefreshService::new(
+                FixtureJob {
+                    name,
+                    rounds: Arc::clone(&rounds),
+                },
+                policy,
+            ));
+            assert!(
+                service.spawn_under(&supervisor),
+                "{name} debe arrancar bajo el supervisor"
+            );
+            services.push(service);
+            counters.push(rounds);
+        }
+
+        // Una sola ronda de arranque por servicio: ningún loop duplicado.
+        for counter in &counters {
+            wait_for(counter, 1).await;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        for counter in &counters {
+            assert_eq!(
+                counter.load(Ordering::Relaxed),
+                1,
+                "cada servicio ejecuta exactamente una ronda de arranque"
+            );
+        }
+
+        // El shutdown drena los tres: ninguno queda en vuelo ni ronda de más.
+        supervisor.shutdown_and_wait().await;
+        for service in &services {
+            assert!(
+                !service.in_flight(),
+                "la compuerta queda libre tras el drenaje"
+            );
+            assert_eq!(service.stats().rounds, 1);
+            assert_eq!(service.stats().unchanged, 1);
+            assert_eq!(service.stats().cancelled, 0);
+            assert_eq!(service.stats().failures, 0);
+        }
+    }
 }

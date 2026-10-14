@@ -5,7 +5,9 @@
 //! [`ContractLimits`], validación estructural y guards de región):
 //!
 //! 1. `releases/latest` (mutable, `EvidenceKind::ReleaseMetadata`) → tag
-//!    estable `rust-vX.Y.Z`, nunca `prerelease` ni `draft`.
+//!    estable `rust-vX.Y.Z`, nunca `prerelease` ni `draft`. La versión se
+//!    deriva **del tag** (`rust-v0.163.0` → `0.163.0`), no del campo `name`,
+//!    que es texto libre; el tag es el identificador real de la release.
 //! 2. `git/refs/tags/<tag>` → objeto tag anotado.
 //! 3. `git/tags/<sha>` → commit, con desreferenciación **recursiva y acotada**
 //!    ([`MAX_TAG_DEREFERENCES`]): una cadena de tags anidados nunca se sigue
@@ -34,6 +36,18 @@
 //!   catálogo no soportado, versión que no coincide, tag fuera del pin) ⇒
 //!   `Err`. Nunca se adopta una revisión nueva sin guards para ella: el LKG del
 //!   store permanece intacto.
+//!
+//! ## Autoactualización: qué se adopta y qué no
+//!
+//! El driver acepta **cualquier** tag estable con forma `rust-vX.Y.Z`
+//! (semver de tres partes, canal estable), y la versión del `[workspace.package]`
+//! del pin se compara contra la versión derivada del tag. La adopción efectiva
+//! depende de los guards compilados ([`super::codex::CODEX_REGION_GUARDS`],
+//! verificados sobre los bytes del **mismo commit**): una release nueva cuyo
+//! commit no verifica los guards se rechaza, y la generación activa no cambia.
+//! No se promete código arbitrario: solo datos, headers y defaults soportados
+//! por las reglas compiladas pueden activarse; un cambio de transporte o de
+//! autenticación exigiría código nuevo y queda fuera del pin.
 //!
 //! ## Por qué existe orquestación async fuera de `ContractDriver`
 //!
@@ -164,9 +178,11 @@ pub struct ResolvedPin {
 }
 
 impl ResolvedPin {
-    /// La versión que el pin debe declarar en `[workspace.package]`.
-    pub const fn expected_workspace_version(&self) -> &'static str {
-        CODEX_WORKSPACE_VERSION
+    /// La versión que el pin debe declarar en `[workspace.package]`: la que
+    /// anuncia la release, derivada de su tag. No es una constante compilada —
+    /// un tag estable nuevo (`rust-v0.163.0`) fija su propia versión esperada.
+    pub fn expected_workspace_version(&self) -> &str {
+        &self.release_version
     }
 }
 
@@ -466,10 +482,11 @@ impl CodexReleaseDriver {
     /// Es el camino que re-verifica la revisión compilada aunque la release
     /// estable haya avanzado.
     pub async fn resolve_pinned_tag(&self) -> Result<ResolvedPin, ContractError> {
+        let version = codex_version_from_tag(CODEX_PINNED_RELEASE_TAG)?;
         let (pin, _) = self
             .resolve_tag(
                 CODEX_PINNED_RELEASE_TAG.to_string(),
-                CODEX_WORKSPACE_VERSION.to_string(),
+                version,
                 &self.acquirer(),
             )
             .await?;
@@ -503,17 +520,17 @@ impl CodexReleaseDriver {
             ))
             .await?;
         let release = parse_release_metadata(&latest.body)?;
-        if release.tag != CODEX_PINNED_RELEASE_TAG {
-            return Err(ContractError::Rejected(format!(
-                "la release estable es {:?} y el pin compilado es {:?}: sin guards para la nueva revisión",
-                release.tag, CODEX_PINNED_RELEASE_TAG
-            )));
-        }
         if release.prerelease || release.draft {
             return Err(ContractError::Rejected(
                 "la release estable del pin está marcada prerelease o draft".to_string(),
             ));
         }
+        // El tag ya viene validado como estable `rust-vX.Y.Z` por
+        // `parse_release_metadata`. La release estable puede haber avanzado
+        // más allá del pin compilado: la resolución continúa y la adopción la
+        // deciden los guards compilados verificados sobre los bytes del
+        // commit resuelto (ver `build_candidate_with_ref`): sin guards para la
+        // revisión nueva, el candidato se rechaza y el LKG no cambia.
         self.resolve_tag(release.tag, release.version, acquirer)
             .await
     }
@@ -778,7 +795,7 @@ impl CodexReleaseDriver {
 }
 
 /// Construye el perfil a partir del pin resuelto y del catálogo verificado.
-fn build_profile(pin: &ResolvedPin, catalog_models: usize) -> CodexProfile {
+pub(crate) fn build_profile(pin: &ResolvedPin, catalog_models: usize) -> CodexProfile {
     CodexProfile {
         version: pin.release_version.clone(),
         commit: pin.commit.clone(),
@@ -814,7 +831,7 @@ fn decode_utf8(body: &[u8], url: &str) -> Result<String, ContractError> {
 }
 
 /// Un sha de commit completo: 40 hex minúsculas.
-fn is_commit_sha(value: &str) -> bool {
+pub(crate) fn is_commit_sha(value: &str) -> bool {
     value.len() == 40
         && value
             .bytes()
@@ -855,7 +872,7 @@ fn workspace_package_version(cargo: &str) -> Option<String> {
 pub struct ReleaseMetadata {
     /// Tag de la release.
     pub tag: String,
-    /// Versión anunciada, sin prefijo `v`.
+    /// Versión anunciada, derivada del tag y sin prefijo `v`.
     pub version: String,
     /// Marca de prerelease.
     pub prerelease: bool,
@@ -863,17 +880,43 @@ pub struct ReleaseMetadata {
     pub draft: bool,
 }
 
-/// Parsea `releases/latest`. Un campo de canal ausente se trata como
-/// prerelease/draft: fail-closed, nunca se adopta por omisión.
+/// Versión de cliente derivada de un tag de release.
+///
+/// Exige la forma estable `rust-vX.Y.Z`: prefijo `rust-v`, semver de tres
+/// partes numéricas y canal estable. Un prerelease (`rust-v0.163.0-rc.1`), un
+/// tag sin el prefijo o una versión incompleta se rechazan: fail-closed,
+/// nunca se adopta por omisión.
+///
+/// # Errors
+/// [`ContractError::Rejected`] si el tag no tiene la forma esperada.
+pub fn codex_version_from_tag(tag: &str) -> Result<String, ContractError> {
+    let Some(rest) = tag.strip_prefix("rust-v") else {
+        return Err(ContractError::Rejected(format!(
+            "el tag {tag:?} no tiene la forma estable rust-vX.Y.Z"
+        )));
+    };
+    let parsed = parse_version(rest).map_err(|_| {
+        ContractError::Rejected(format!(
+            "el tag {tag:?} no declara una versión semver de tres partes"
+        ))
+    })?;
+    if parsed.channel != crate::client_contract::VersionChannel::Stable {
+        return Err(ContractError::Rejected(format!(
+            "el tag {tag:?} es un prerelease: solo el canal estable se adopta"
+        )));
+    }
+    Ok(parsed.normalized)
+}
+
+/// Parsea `releases/latest`. La versión se deriva del `tag_name`; un campo de
+/// canal ausente se trata como prerelease/draft: fail-closed, nunca se adopta
+/// por omisión.
 pub fn parse_release_metadata(body: &[u8]) -> Result<ReleaseMetadata, ContractError> {
     let value = parse_json_object(body, "releases/latest")?;
     let tag = string_field(&value, "tag_name", "releases/latest")?;
-    let version = value
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or(&tag)
-        .trim_start_matches('v')
-        .to_string();
+    // El campo `name` de la API de GitHub es texto libre editable y no se usa:
+    // la versión del contrato sale del tag, que es el identificador estable.
+    let version = codex_version_from_tag(&tag)?;
     Ok(ReleaseMetadata {
         tag,
         version,
@@ -1058,6 +1101,13 @@ mod tests {
     /// única forma que el driver acepta como revisión fijada.
     const PIN_COMMIT: &str = "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d";
 
+    /// Tag estable del pin compilado.
+    const PINNED_TAG: &str = "rust-v0.162.1";
+
+    /// Sha del annotated tag object del pin (visible en
+    /// `fixtures/codex-tag-object.json`): a donde apunta `refs/tags`.
+    const TAG_OBJECT_SHA: &str = "7a078f6bb4ce0dc2a81408b334ce52979d92c603";
+
     fn ok_json(body: &str) -> FetchResponse {
         FetchResponse {
             status: 200,
@@ -1098,25 +1148,40 @@ mod tests {
 
     /// Respuestas de un pin completo, con overrides por URL relativa.
     fn full_map(commit: &str, overrides: Vec<(&str, FetchResponse)>) -> MapTransport {
+        full_map_tagged(PINNED_TAG, commit, overrides)
+    }
+
+    /// Respuestas de un pin completo para un tag estable cualquiera: la
+    /// versión anunciada y el `[workspace.package]` derivan del tag, y el
+    /// mismo tag object desreferencia al commit servido.
+    fn full_map_tagged(
+        tag: &str,
+        commit: &str,
+        overrides: Vec<(&str, FetchResponse)>,
+    ) -> MapTransport {
         let mut entries: Vec<(String, FetchResponse)> = vec![
             (
                 CODEX_RELEASES_LATEST_URL.to_string(),
-                ok_json(
-                    r#"{"tag_name":"rust-v0.162.1","name":"0.162.1","prerelease":false,"draft":false}"#,
-                ),
+                ok_json(&format!(
+                    r#"{{"tag_name":"{tag}","name":"{tag}","prerelease":false,"draft":false}}"#
+                )),
             ),
             (
-                "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1".to_string(),
-                ok_json(r#"{"object":{"sha":"7a078f6bb4ce0dc2a81408b334ce52979d92c603","type":"tag"}}"#),
+                format!("https://api.github.com/repos/openai/codex/git/refs/tags/{tag}"),
+                ok_json(&format!(
+                    r#"{{"object":{{"sha":"{TAG_OBJECT_SHA}","type":"tag"}}}}"#
+                )),
             ),
             (
-                "https://api.github.com/repos/openai/codex/git/tags/7a078f6bb4ce0dc2a81408b334ce52979d92c603".to_string(),
+                format!("https://api.github.com/repos/openai/codex/git/tags/{TAG_OBJECT_SHA}"),
                 ok_json(&format!(
                     r#"{{"object":{{"sha":"{commit}","type":"commit"}}}}"#
                 )),
             ),
             (
-                format!("https://raw.githubusercontent.com/openai/codex/{commit}/codex-rs/Cargo.toml"),
+                format!(
+                    "https://raw.githubusercontent.com/openai/codex/{commit}/codex-rs/Cargo.toml"
+                ),
                 ok_raw(&fixture_bytes("codex-rust-v0.162.1/codex-rs/Cargo.toml")),
             ),
             (
@@ -1197,19 +1262,106 @@ mod tests {
         assert!(parse_release_metadata(br#"{"name":"0.162.1"}"#).is_err());
     }
 
+    /// Una release estable más nueva que el pin compilado se adopta mientras
+    /// sus bytes verifiquen los guards: la versión del candidato sale del tag
+    /// y el `[workspace.package]` debe coincidir con ella.
     #[tokio::test]
-    async fn a_stable_release_outside_the_pin_is_rejected() {
-        let transport = MapTransport::with(vec![(
-            CODEX_RELEASES_LATEST_URL.to_string(),
-            ok_json(
-                r#"{"tag_name":"rust-v9.9.9","name":"9.9.9","prerelease":false,"draft":false}"#,
-            ),
-        )]);
-        let error = driver(transport).resolve_pin().await.unwrap_err();
-        assert!(
-            matches!(error, ContractError::Rejected(ref message) if message.contains("sin guards")),
-            "got {error:?}"
+    async fn a_newer_stable_release_is_adopted_when_the_pin_still_verifies() {
+        let new_tag = "rust-v0.163.0";
+        let cargo = String::from_utf8(fixture_bytes("codex-rust-v0.162.1/codex-rs/Cargo.toml"))
+            .unwrap()
+            .replace("version = \"0.162.1\"", "version = \"0.163.0\"");
+        let candidate = driver(full_map_tagged(
+            new_tag,
+            PIN_COMMIT,
+            vec![("Cargo.toml", ok_raw(cargo.as_bytes()))],
+        ))
+        .refresh()
+        .await
+        .unwrap()
+        .expect("un candidato de la release nueva");
+        assert_eq!(candidate.payload.version, "0.163.0");
+        assert_eq!(candidate.payload.release_tag, new_tag);
+        assert_eq!(candidate.payload.commit, PIN_COMMIT);
+        assert_eq!(
+            candidate.client_identity.version.as_deref(),
+            Some("0.163.0")
         );
+    }
+
+    /// Una revisión nueva cuyos bytes NO verifican los guards compilados se
+    /// rechaza: sin guards para la revisión no hay adopción, y el LKG del
+    /// store permanece intacto.
+    #[tokio::test]
+    async fn a_new_revision_with_broken_guards_is_rejected() {
+        let new_tag = "rust-v0.163.0";
+        let new_commit = "b7c2e19f4a8d6035c1e2f7a9d4b8063512cfe947";
+        let cargo = String::from_utf8(fixture_bytes("codex-rust-v0.162.1/codex-rs/Cargo.toml"))
+            .unwrap()
+            .replace("version = \"0.162.1\"", "version = \"0.163.0\"");
+        let client = String::from_utf8(fixture_bytes(
+            "codex-rust-v0.162.1/codex-rs/core/src/client.rs",
+        ))
+        .unwrap()
+        .replace("store: false,", "store: true,");
+        let transport = full_map_tagged(
+            new_tag,
+            new_commit,
+            vec![
+                ("Cargo.toml", ok_raw(cargo.as_bytes())),
+                ("core/src/client.rs", ok_raw(client.as_bytes())),
+            ],
+        );
+        let error = driver(transport).refresh().await.unwrap_err();
+        assert!(
+            matches!(error, ContractError::Rejected(ref message) if message.contains("guards de región")),
+            "un guard roto en el commit nuevo debe rechazar el candidato, got {error:?}"
+        );
+    }
+
+    /// La versión del contrato sale del tag, no del campo `name` de la API de
+    /// GitHub, que es texto libre editable.
+    #[test]
+    fn the_version_comes_from_the_tag_not_from_the_release_name() {
+        let meta = parse_release_metadata(
+            br#"{"tag_name":"rust-v0.163.0","name":"Codex 9.9.9 (editable)","prerelease":false,"draft":false}"#,
+        )
+        .unwrap();
+        assert_eq!(meta.version, "0.163.0");
+        assert_eq!(meta.tag, "rust-v0.163.0");
+    }
+
+    /// Un tag fuera de la forma estable `rust-vX.Y.Z` se rechaza antes de
+    /// cualquier salto de red: fail-closed.
+    #[test]
+    fn a_tag_outside_the_stable_rust_v_shape_is_rejected() {
+        for tag in [
+            "rust-v0.163.0-rc.1",
+            "rust-v0.163",
+            "codex-v0.163.0",
+            "v0.163.0",
+            "0.163.0",
+        ] {
+            let error = codex_version_from_tag(tag).unwrap_err();
+            assert!(
+                matches!(error, ContractError::Rejected(_)),
+                "{tag}: got {error:?}"
+            );
+        }
+        assert_eq!(codex_version_from_tag("rust-v0.163.0").unwrap(), "0.163.0");
+        assert_eq!(codex_version_from_tag(PINNED_TAG).unwrap(), "0.162.1");
+    }
+
+    /// La versión esperada del workspace sigue al tag de la release, no a una
+    /// constante compilada.
+    #[test]
+    fn expected_workspace_version_follows_the_release_tag() {
+        let pin = ResolvedPin {
+            release_tag: "rust-v0.163.0".to_string(),
+            release_version: "0.163.0".to_string(),
+            commit: PIN_COMMIT.to_string(),
+        };
+        assert_eq!(pin.expected_workspace_version(), "0.163.0");
     }
 
     // ----------
@@ -1741,9 +1893,11 @@ mod tests {
     fn cache_urls(cache: &TransportCache) -> Vec<String> {
         let mut urls = vec![
             CODEX_RELEASES_LATEST_URL.to_string(),
-            "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1".to_string(),
-            "https://api.github.com/repos/openai/codex/git/tags/7a078f6bb4ce0dc2a81408b334ce52979d92c603".to_string(),
-            format!("https://raw.githubusercontent.com/openai/codex/{PIN_COMMIT}/codex-rs/Cargo.toml"),
+            format!("https://api.github.com/repos/openai/codex/git/refs/tags/{PINNED_TAG}"),
+            format!("https://api.github.com/repos/openai/codex/git/tags/{TAG_OBJECT_SHA}"),
+            format!(
+                "https://raw.githubusercontent.com/openai/codex/{PIN_COMMIT}/codex-rs/Cargo.toml"
+            ),
             format!(
                 "https://raw.githubusercontent.com/openai/codex/{PIN_COMMIT}/codex-rs/models-manager/models.json"
             ),

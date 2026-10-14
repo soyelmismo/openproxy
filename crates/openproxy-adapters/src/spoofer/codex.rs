@@ -1,5 +1,5 @@
 use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
-use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
+use crate::upstream::UpstreamClient;
 use http::HeaderValue;
 use std::sync::Arc;
 
@@ -22,6 +22,10 @@ fn safe_env_value(key: &str) -> Option<String> {
 }
 
 /// Canonical release URL for Codex CLI on GitHub, configurable via `OPENPROXY_CODEX_LATEST_RELEASE_URL`.
+///
+/// Conservada por compatibilidad de API pública. **Ya no se usa para fijar la
+/// versión de cliente**: esa decisión pasa por el contrato validado
+/// (ver [`refresh_codex_version`]).
 pub fn codex_latest_release_url() -> String {
     safe_env_value("OPENPROXY_CODEX_LATEST_RELEASE_URL")
         .unwrap_or_else(|| CODEX_LATEST_RELEASE_URL.to_string())
@@ -102,51 +106,27 @@ pub fn has_valid_codex_version(ua: &str) -> bool {
         .is_some_and(|(major, minor, _)| major > 0 || (major == 0 && minor >= 156))
 }
 
-/// Asynchronously queries GitHub releases for the latest Codex CLI version
-/// and updates the in-memory dynamic version state if changed.
+/// Refresca la versión de cliente de Codex **solo** a través del contrato
+/// validado.
+///
+/// El camino que consultaba `releases/latest` y fijaba la versión desde el
+/// campo `name` (texto libre editable) sin verificar guards queda
+/// desactivado: la versión la publica un snapshot activado por
+/// [`crate::client_contract::providers::codex_state`] — guards compilados
+/// sobre el commit, semver estable derivado del tag, anti-downgrade y LKG
+/// intacto si el candidato no verifica.
+///
+/// Conserva su API pública y delega en ese refresh. Sin transporte upstream,
+/// o si el candidato no verifica los guards, es un no-op explícito y devuelve
+/// `None`: la generación activa permanece.
 pub async fn refresh_codex_version(upstream_client: &Arc<UpstreamClient>) -> Option<String> {
-    let url = codex_latest_release_url();
-    let mut req = UpstreamRequest::get(&url);
-    if let Ok(accept) = HeaderValue::from_str("application/vnd.github.v3+json, application/json") {
-        req.headers.insert(http::header::ACCEPT, accept);
-    }
-    if let Ok(ua) = HeaderValue::from_str(&current_codex_ua()) {
-        req.headers.insert(http::header::USER_AGENT, ua);
-    }
-
-    let cancel = CancellationToken::new();
-    let resp = upstream_client
-        .call(req, TimeoutProfile::OAuth, cancel)
-        .await
-        .ok()?;
-
-    if !resp.status.is_success() {
-        return None;
-    }
-
-    let body = resp.collect().await.ok()?;
-    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
-
-    let tag_or_version = json
-        .get("tag_name")
-        .or_else(|| json.get("name"))
-        .or_else(|| json.get("version"))
-        .and_then(|v| v.as_str())?;
-
-    let clean_ver = tag_or_version
-        .trim()
-        .trim_start_matches("rust-v")
-        .trim_start_matches('v')
-        .split('-')
-        .next()?
-        .trim();
-
-    if !clean_ver.is_empty() && has_valid_codex_version(&format!("codex-cli/{clean_ver}")) {
-        set_dynamic_codex_version(clean_ver);
-        return Some(clean_ver.to_string());
-    }
-
-    None
+    let version =
+        crate::client_contract::providers::codex_state::refresh_validated(upstream_client).await?;
+    // La versión validada por el contrato pasa a ser la identidad que anuncia
+    // el spoofer cuando el adapter no tiene snapshot congelado, para que no
+    // diverjan de la generación activa.
+    set_dynamic_codex_version(&version);
+    Some(version)
 }
 
 #[cfg(any(test, feature = "test-utils"))]

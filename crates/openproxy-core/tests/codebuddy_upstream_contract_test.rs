@@ -323,66 +323,30 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
     assert_eq!(current_codebuddy_version(), "2.157.0");
     assert_eq!(get_codebuddy_version(), "2.157.0");
 
-    if let Some(new_ver) = refresh_codebuddy_version(&client).await {
-        assert_eq!(current_codebuddy_version(), new_ver);
-        assert_eq!(get_codebuddy_version(), new_ver);
-        assert_eq!(
-            current_codebuddy_ua(),
-            format!("CLI/{new_ver} CodeBuddy/{new_ver}")
-        );
-
-        let headers = CodeBuddySpoofer.headers();
-        let find_hdr = |k: &str| {
-            headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(k))
-                .map(|(_, v)| v.as_str())
-        };
-        assert_eq!(
-            find_hdr("user-agent"),
-            Some(format!("CLI/{new_ver} CodeBuddy/{new_ver}").as_str())
-        );
-        assert_eq!(find_hdr("x-ide-version"), Some(new_ver.as_str()));
-    } else {
-        eprintln!(
-            "[CodeBuddyLiveTest] Offline or NPM unreachable, skipping live auto-update check"
-        );
-    }
+    // El refresh delega en el contrato validado: la metadata sola del
+    // registro nunca eleva la versión anunciada mientras la correspondencia
+    // paquete→commit no esté verificada (identidad fail-closed).
+    let elevated = refresh_codebuddy_version(&client).await;
+    assert_eq!(
+        elevated, None,
+        "metadata sola no eleva la versión anunciada"
+    );
+    assert_eq!(current_codebuddy_version(), "2.157.0");
+    assert_eq!(get_codebuddy_version(), "2.157.0");
 
     reset_dynamic_codebuddy_overrides();
     assert_eq!(current_codebuddy_version(), "2.157.0");
 }
 
 #[tokio::test]
-async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
+async fn test_codebuddy_fetch_models_does_not_elevate_the_version_by_itself() {
     let _lock = CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
     assert_eq!(get_codebuddy_version(), "2.157.0");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        if let Ok((mut stream, _)) = listener.accept().await {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf).await;
-            let body = r#"{"name":"@tencent-ai/codebuddy-code","version":"2.188.0"}"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
-        }
-    });
-
-    let mock_url = format!("http://{addr}/@tencent-ai/codebuddy-code/latest");
-    unsafe {
-        std::env::set_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL", &mock_url);
-    }
-
+    // Discovery es puramente local: el catálogo estático no consulta el
+    // registro, así que ninguna metadata puede elevar la versión por sí sola.
     let client = std::sync::Arc::new(UpstreamClient::new());
     let adapter = CodeBuddyAdapter::new();
 
@@ -390,28 +354,50 @@ async fn test_codebuddy_fetch_models_triggers_background_auto_update() {
         .fetch_models(&client, "dummy-key")
         .await
         .expect("fetch models");
-    assert_eq!(models.len(), 35);
-
-    let mut ok = false;
-    for _ in 0..250 {
-        if get_codebuddy_version() == "2.188.0" {
-            ok = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-    }
-    assert!(
-        ok,
-        "background auto update must complete within test timeout"
-    );
-
-    unsafe {
-        std::env::remove_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL");
+    let expected_catalog =
+        openproxy_adapters::client_contract::providers::codebuddy::CodeBuddyCatalog::parse(
+            include_str!("../../../fixtures/codebuddy-extracted/product.json"),
+        )
+        .expect("catálogo embebido válido");
+    assert_eq!(models.len(), expected_catalog.models.len());
+    for (actual, expected) in models.iter().zip(&expected_catalog.models) {
+        assert_eq!(actual.model_id.as_str(), expected.id);
     }
 
-    assert_eq!(get_codebuddy_version(), "2.188.0");
-    assert_eq!(current_codebuddy_ua(), "CLI/2.188.0 CodeBuddy/2.188.0");
+    // Ningún bump en background: el cambio de versión llega solo por el
+    // contrato verificado (ContractRefreshService + store compartido).
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    assert_eq!(get_codebuddy_version(), "2.157.0");
 
     reset_dynamic_codebuddy_overrides();
     assert_eq!(get_codebuddy_version(), "2.157.0");
+}
+
+#[test]
+fn test_codebuddy_pinned_unverified_contract_preserves_header_identity() {
+    let _guard = openproxy_adapters::spoofer::CODEBUDDY_TEST_LOCK
+        .lock()
+        .unwrap();
+    reset_dynamic_codebuddy_overrides();
+    let snapshot =
+        openproxy_adapters::client_contract::providers::codebuddy_state::embedded_snapshot();
+    assert!(!snapshot.payload.identity_activatable);
+    assert!(snapshot.client_identity.version.is_none());
+    let version = current_codebuddy_version();
+    let adapter = CodeBuddyAdapter::new().with_pinned_contract(std::sync::Arc::new(snapshot));
+
+    let headers = adapter.build_headers("key", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(find("x-ide-version"), Some(version.as_str()));
+    assert_eq!(
+        find("user-agent"),
+        Some(format!("CLI/{version} CodeBuddy/{version}").as_str())
+    );
+    assert_eq!(find("x-ide-type"), Some("CLI"));
+    assert_eq!(find("x-codebuddy-request"), Some("1"));
 }

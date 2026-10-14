@@ -2,7 +2,10 @@ use super::{
     AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient, UpstreamRequest,
 };
-use crate::upstream::{CancellationToken, TimeoutProfile};
+
+use crate::client_contract::Snapshot;
+use crate::client_contract::providers::codebuddy_runtime::CodeBuddyProfile;
+use crate::client_contract::providers::codebuddy_state;
 
 pub mod models;
 pub mod quota;
@@ -59,57 +62,19 @@ pub fn set_codebuddy_ua(ua: impl Into<String>) {
     set_dynamic_codebuddy_ua(ua);
 }
 
+/// Actualizar la versión anunciada del CLI CodeBuddy.
+///
+/// Delega en el refresh compartido del contrato: nunca eleva la identidad
+/// desde metadata cruda del registro npm. Sin commit→paquete verificado
+/// (`gitHead` ausente en el paquete npm) la identidad no es activable, así que
+/// el candidato se rechaza y la generación activa permanece. El devuelto
+/// `None` no es un error: es el estado fail-closed correcto.
 pub async fn refresh_codebuddy_version(upstream_client: &Arc<UpstreamClient>) -> Option<String> {
-    let url = codebuddy_npm_metadata_url();
-    let mut req = UpstreamRequest::get(&url);
-    if let Ok(accept) = http::HeaderValue::from_str("application/json") {
-        req.headers.insert(http::header::ACCEPT, accept);
-    }
-    if let Ok(token) = std::env::var("OPENPROXY_CODEBUDDY_NPM_AUTH_TOKEN") {
-        let trimmed = token.trim();
-        if !trimmed.is_empty() {
-            let auth_val = if trimmed.starts_with("Bearer ") {
-                trimmed.to_string()
-            } else {
-                format!("Bearer {trimmed}")
-            };
-            if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
-                req.headers.insert(http::header::AUTHORIZATION, hv);
-            }
-        }
-    }
-    let cancel = CancellationToken::new();
-    let Ok(resp) = upstream_client
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-    else {
-        return None;
-    };
-    if !resp.status.is_success() {
-        return None;
-    }
-    let Ok(body) = resp.collect().await else {
-        return None;
-    };
-    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) {
-        let ver_opt = v
-            .get("version")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                v.get("dist-tags")
-                    .and_then(|dt| dt.get("latest"))
-                    .and_then(serde_json::Value::as_str)
-            });
-        if let Some(ver) = ver_opt {
-            let ver_trimmed = ver.trim();
-            if !ver_trimmed.is_empty() {
-                let ver_string = ver_trimmed.to_string();
-                set_codebuddy_version(ver_string.clone());
-                return Some(ver_string);
-            }
-        }
-    }
-    None
+    let version =
+        crate::client_contract::providers::codebuddy_state::refresh_validated(upstream_client)
+            .await?;
+    set_dynamic_codebuddy_version(version.clone());
+    Some(version)
 }
 
 pub async fn refresh_codebuddy_cli_version(
@@ -121,6 +86,12 @@ pub async fn refresh_codebuddy_cli_version(
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CodeBuddyAdapter {
     config: ProviderAdapterConfig,
+    /// Snapshot del contrato congelado por petición (ver
+    /// [`ProviderAdapter::pin_request_contract`]): los headers de la petición
+    /// leen la MISMA generación aunque el runtime global refresque en
+    /// paralelo. No se persiste: es estado de ejecución, no configuración.
+    #[serde(skip, default)]
+    pinned: Option<Arc<Snapshot<CodeBuddyProfile>>>,
 }
 
 impl CodeBuddyAdapter {
@@ -136,7 +107,23 @@ impl CodeBuddyAdapter {
                 format: AdapterFormat::Openai,
                 extra_headers: vec![],
             },
+            pinned: None,
         }
+    }
+
+    /// El snapshot del contrato congelado para esta petición, si hay uno.
+    #[must_use]
+    pub fn pinned_contract(&self) -> Option<&Arc<Snapshot<CodeBuddyProfile>>> {
+        self.pinned.as_ref()
+    }
+
+    /// Congela un snapshot explícito: los headers de la petición leen esa
+    /// generación concreta. Lo usa el pipeline cuando ya tiene el snapshot
+    /// memoizado, y los tests.
+    #[must_use]
+    pub fn with_pinned_contract(mut self, pinned: Arc<Snapshot<CodeBuddyProfile>>) -> Self {
+        self.pinned = Some(pinned);
+        self
     }
 }
 
@@ -179,17 +166,45 @@ impl ProviderAdapter for CodeBuddyAdapter {
         Some(("Authorization".into(), val))
     }
 
+    fn pin_request_contract(&mut self) {
+        // Congela el snapshot activo (LKG en disco o semilla embebida): los
+        // headers de la petición leen la MISMA generación aunque el runtime
+        // global refresque en paralelo. Sin runtime disponible el adapter
+        // sigue funcionando con su identidad configurada: el contrato es
+        // opt-in por petición.
+        self.pinned = codebuddy_state::ensure_loaded().ok();
+    }
+
     fn build_headers(
         &self,
         access_token: &str,
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        super::build_spoofer_headers(
+        let mut headers = super::build_spoofer_headers(
             self.build_auth_header(access_token),
             &CodeBuddySpoofer,
-            &self.config.extra_headers,
-        )
+            &[],
+        );
+        // El contrato congelado manda sobre la identidad anunciada: la versión
+        // y el user-agent salen del snapshot activo, la MISMA generación que
+        // servirá el resto de la petición. Sin snapshot, el spoofer conserva
+        // su comportamiento (overrides dinámicos o versión por defecto).
+        if let Some(snapshot) = &self.pinned
+            && snapshot.payload.identity_activatable
+            && let Some(version) = snapshot.client_identity.version.as_deref()
+        {
+            crate::spoofer::upsert_header(&mut headers, "x-ide-version", version.to_string());
+            crate::spoofer::upsert_header(
+                &mut headers,
+                "user-agent",
+                format!("CLI/{version} CodeBuddy/{version}"),
+            );
+        }
+        // El override de configuración gana sobre el contrato y sobre el
+        // spoofer: es la decisión explícita del despliegue.
+        crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
+        headers
     }
 
     fn build_chat_url(&self, target_format: TargetFormat, model: &ModelId) -> String {
@@ -199,16 +214,20 @@ impl ProviderAdapter for CodeBuddyAdapter {
 
     fn fetch_models(
         &self,
-        upstream_client: &Arc<UpstreamClient>,
+        _upstream_client: &Arc<UpstreamClient>,
         _api_key: &str,
     ) -> impl std::future::Future<Output = Result<Vec<DiscoveredModel>>> + Send {
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let client_clone = Arc::clone(upstream_client);
-            handle.spawn(async move {
-                let _ = refresh_codebuddy_version(&client_clone).await;
-            });
-        }
-        std::future::ready(Ok(codebuddy_static_models()))
+        // Discovery consume el catálogo del snapshot sin elevar la identidad
+        // ni iniciar otra ronda de refresh. El catálogo estático es fallback.
+        let snapshot = self
+            .pinned
+            .clone()
+            .or_else(|| codebuddy_state::ensure_loaded().ok());
+        let models = snapshot
+            .as_deref()
+            .and_then(models::codebuddy_contract_models)
+            .unwrap_or_else(codebuddy_static_models);
+        std::future::ready(Ok(models))
     }
 
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {

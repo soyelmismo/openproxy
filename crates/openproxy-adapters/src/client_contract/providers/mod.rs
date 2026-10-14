@@ -22,8 +22,11 @@
 //! no se edita. Este submódulo es autocontenido.
 
 pub mod codebuddy;
+pub mod codebuddy_runtime;
+pub mod codebuddy_state;
 pub mod codex;
 pub mod codex_runtime;
+pub mod codex_state;
 pub mod opencode;
 
 pub use codebuddy::{CodeBuddyCatalog, CodeBuddyContract, CodeBuddyModel, CodeBuddyVendor};

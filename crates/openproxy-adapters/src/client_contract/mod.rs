@@ -48,11 +48,12 @@ pub use validation::{
 /// store refuses a manifest carrying any other value.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Providers that own an independent contract snapshot. Four snapshots, three
-/// acquisition families: Zen and Go keep separate identities.
+/// Proveedores que poseen un snapshot independiente del contrato.
+/// Zen y Go conservan identidades separadas.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ContractId {
+    ClaudeCode,
     Codex,
     CodeBuddy,
     OpenCodeZen,
@@ -61,7 +62,8 @@ pub enum ContractId {
 
 impl ContractId {
     /// All known contracts, in a stable order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
+        Self::ClaudeCode,
         Self::Codex,
         Self::CodeBuddy,
         Self::OpenCodeZen,
@@ -71,6 +73,7 @@ impl ContractId {
     /// Stable kebab-case tag. Also the on-disk directory name for a contract.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::CodeBuddy => "codebuddy",
             Self::OpenCodeZen => "opencode-zen",
@@ -546,7 +549,9 @@ mod tests {
     fn contract_id_tags_are_stable() {
         assert_eq!(ContractId::Codex.as_str(), "codex");
         assert_eq!(ContractId::OpenCodeGo.as_str(), "opencode-go");
-        assert_eq!(ContractId::ALL.len(), 4);
+        assert_eq!(ContractId::ClaudeCode.as_str(), "claude-code");
+        assert!(ContractId::ALL.contains(&ContractId::ClaudeCode));
+        assert_eq!(ContractId::ALL.len(), 5);
     }
 
     #[test]

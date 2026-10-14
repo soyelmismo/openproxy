@@ -1,4 +1,7 @@
 use crate::adapters::codex::apply_codex_spoofing_headers;
+use crate::client_contract::Snapshot;
+use crate::client_contract::providers::codex_runtime::CodexProfile;
+use crate::client_contract::providers::codex_state;
 use crate::spoofer::{current_codex_ua, current_codex_version};
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
 use openproxy_types::{CoreError, DiscoveredModel, ModelId, Result, TargetFormat};
@@ -75,19 +78,18 @@ pub fn hardcoded_models() -> Vec<DiscoveredModel> {
     .collect()
 }
 
-/// Parses upstream Codex models JSON response into a list of DiscoveredModel.
-/// Supports `{ "models": [...] }`, `{ "data": [...] }`, or top-level arrays.
-pub fn parse_codex_models_json(bytes: &[u8]) -> Result<Vec<DiscoveredModel>> {
-    let json: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| CoreError::Parse(format!("codex models parse error: {e}")))?;
-
-    let models_arr = json
-        .get("models")
+/// Extrae el array de modelos de las formas soportadas del catálogo.
+fn codex_models_array(json: &serde_json::Value) -> Result<&Vec<serde_json::Value>> {
+    json.get("models")
         .or_else(|| json.get("data"))
         .and_then(|v| v.as_array())
         .or_else(|| json.as_array())
-        .ok_or_else(|| CoreError::Parse("codex models missing 'models' or 'data' array".into()))?;
+        .ok_or_else(|| CoreError::Parse("codex models missing 'models' or 'data' array".into()))
+}
 
+/// Ordena los modelos del catálogo por `priority` (los de prioridad baja
+/// primero), que es el orden en que el cliente Codex los publica.
+fn sort_codex_models_by_priority(models_arr: &[serde_json::Value]) -> Vec<&serde_json::Value> {
     let mut items: Vec<(&serde_json::Value, i64)> = models_arr
         .iter()
         .map(|v| {
@@ -99,10 +101,21 @@ pub fn parse_codex_models_json(bytes: &[u8]) -> Result<Vec<DiscoveredModel>> {
         })
         .collect();
     items.sort_by_key(|(_, p)| *p);
+    items.into_iter().map(|(v, _)| v).collect()
+}
+
+/// Parses upstream Codex models JSON response into a list of DiscoveredModel.
+/// Supports `{ "models": [...] }`, `{ "data": [...] }`, or top-level arrays.
+pub fn parse_codex_models_json(bytes: &[u8]) -> Result<Vec<DiscoveredModel>> {
+    let json: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| CoreError::Parse(format!("codex models parse error: {e}")))?;
+
+    let models_arr = codex_models_array(&json)?;
+    let items = sort_codex_models_by_priority(models_arr);
 
     let discovered: Vec<DiscoveredModel> = items
         .into_iter()
-        .filter_map(|(v, _)| map_codex_model_value(v))
+        .filter_map(map_codex_model_value)
         .collect();
 
     if discovered.is_empty() {
@@ -114,7 +127,70 @@ pub fn parse_codex_models_json(bytes: &[u8]) -> Result<Vec<DiscoveredModel>> {
     Ok(discovered)
 }
 
+/// Catálogo del contrato activo, filtrado por lo que el pin realmente
+/// publica: `visibility != "hide"`, `supported_in_api != false` y
+/// `minimal_client_version` no superior a `client_version`.
+///
+/// # Errors
+/// [`CoreError::Parse`] si el catálogo no es JSON, no declara modelos o queda
+/// vacío tras el filtrado.
+pub fn snapshot_catalog_models(
+    catalog: &[u8],
+    client_version: &str,
+) -> Result<Vec<DiscoveredModel>> {
+    let json: serde_json::Value = serde_json::from_slice(catalog)
+        .map_err(|e| CoreError::Parse(format!("codex snapshot catalog parse: {e}")))?;
+    let models_arr = codex_models_array(&json)?;
+    let items = sort_codex_models_by_priority(models_arr);
+
+    let discovered: Vec<DiscoveredModel> = items
+        .into_iter()
+        .filter_map(|value| map_codex_model_value_with(value, Some(client_version)))
+        .collect();
+
+    if discovered.is_empty() {
+        return Err(CoreError::Parse(
+            "codex snapshot catalog empty after filtering".into(),
+        ));
+    }
+
+    Ok(discovered)
+}
+
+/// `true` si `required` es estrictamente mayor que `current` comparando
+/// semver de tres partes. Una versión no parseable no bloquea: el filtrado de
+/// catálogo no cambia la identidad, solo la visibilidad.
+fn version_greater(required: &str, current: &str) -> bool {
+    fn triple(value: &str) -> Option<(u64, u64, u64)> {
+        let mut parts = value.split('.');
+        let major = parts.next()?.trim().parse().ok()?;
+        let minor = parts.next()?.trim().parse().ok()?;
+        let patch = parts.next()?.trim().parse().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some((major, minor, patch))
+    }
+    match (triple(required), triple(current)) {
+        (Some(required), Some(current)) => required > current,
+        _ => false,
+    }
+}
+
 pub fn map_codex_model_value(val: &serde_json::Value) -> Option<DiscoveredModel> {
+    map_codex_model_value_with(val, None)
+}
+
+/// Mapea una entrada del catálogo a un modelo descubierto.
+///
+/// Con `client_version` se aplica el filtrado real del snapshot: modelos
+/// ocultos (`visibility: "hide"`), no soportados por API
+/// (`supported_in_api: false`) o que exigen un cliente más nuevo
+/// (`minimal_client_version`) no se publican.
+pub fn map_codex_model_value_with(
+    val: &serde_json::Value,
+    client_version: Option<&str>,
+) -> Option<DiscoveredModel> {
     let slug = val
         .get("slug")
         .or_else(|| val.get("id"))
@@ -123,6 +199,21 @@ pub fn map_codex_model_value(val: &serde_json::Value) -> Option<DiscoveredModel>
     // Exclude internal review model
     if slug == "codex-auto-review" {
         return None;
+    }
+
+    if let Some(client_version) = client_version {
+        // Catálogo del contrato: solo lo que el pin publica al cliente.
+        if val.get("visibility").and_then(|v| v.as_str()) == Some("hide") {
+            return None;
+        }
+        if val.get("supported_in_api").and_then(|v| v.as_bool()) == Some(false) {
+            return None;
+        }
+        if let Some(minimal) = val.get("minimal_client_version").and_then(|v| v.as_str())
+            && version_greater(minimal, client_version)
+        {
+            return None;
+        }
     }
 
     let display_name = val
@@ -256,16 +347,24 @@ pub async fn fetch_codex_models_pipeline(
     upstream_client: &Arc<UpstreamClient>,
     api_key: &str,
 ) -> Result<Vec<DiscoveredModel>> {
-    // 0. Automatically sync client version from upstream GitHub releases into memory
-    let _ = crate::spoofer::refresh_codex_version(upstream_client).await;
-
-    // 1. Fetch base catalog from upstream repo (models.json) merged over embedded static models
-    let base_models =
-        if let Some(repo_models) = try_fetch_upstream_repo_models(upstream_client).await {
-            merge_codex_models(hardcoded_models(), repo_models)
-        } else {
-            hardcoded_models()
-        };
+    // Los modelos base salen del contrato activo cuando existe: catálogo,
+    // versión de cliente y headers de la MISMA generación. La versión de
+    // cliente ya no se refresca aquí desde `releases/latest` sin contrato:
+    // eso corresponde al runtime del contrato
+    // (`spoofer::refresh_codex_version` → `codex_state::refresh_validated`).
+    let contract_snapshot = codex_state::current_snapshot();
+    let base_models = match snapshot_catalog_models_from(contract_snapshot.as_ref()) {
+        Some(models) => models,
+        // 1. Sin contrato activo: catálogo del repo (models.json) fusionado
+        //    sobre los modelos estáticos embebidos.
+        None => {
+            if let Some(repo_models) = try_fetch_upstream_repo_models(upstream_client).await {
+                merge_codex_models(hardcoded_models(), repo_models)
+            } else {
+                hardcoded_models()
+            }
+        }
+    };
 
     // 2. If access token is available, discover dynamic backend models & merge over base catalog
     if !api_key.trim().is_empty()
@@ -276,4 +375,16 @@ pub async fn fetch_codex_models_pipeline(
 
     // 3. Fallback to base models
     Ok(base_models)
+}
+
+/// Modelos del catálogo del snapshot activo, filtrados por visibilidad y
+/// versión mínima de cliente. `None` si no hay snapshot activo, no lleva
+/// catálogo o el catálogo no parsea (el pipeline cae entonces a su camino
+/// sin contrato).
+fn snapshot_catalog_models_from(
+    contract_snapshot: Option<&Arc<Snapshot<CodexProfile>>>,
+) -> Option<Vec<DiscoveredModel>> {
+    let snapshot = contract_snapshot?;
+    let catalog = snapshot.catalog_body()?;
+    snapshot_catalog_models(catalog, &snapshot.payload.version).ok()
 }

@@ -5,6 +5,10 @@ use super::{
 };
 use openproxy_types::ResultExt;
 
+use crate::client_contract::Snapshot;
+use crate::client_contract::providers::codex_runtime::CodexProfile;
+use crate::client_contract::providers::codex_state;
+
 pub mod models;
 pub mod quota;
 
@@ -49,6 +53,12 @@ pub async fn refresh_codex_cli_version(upstream_client: &Arc<UpstreamClient>) ->
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CodexAdapter {
     config: ProviderAdapterConfig,
+    /// Snapshot del contrato congelado por petición (ver
+    /// [`ProviderAdapter::pin_request_contract`]): headers, body y modelos de
+    /// la petición leen la MISMA generación aunque el runtime refresque en
+    /// paralelo. No se persiste: es estado de ejecución, no configuración.
+    #[serde(skip, default)]
+    pinned: Option<Arc<Snapshot<CodexProfile>>>,
 }
 
 impl CodexAdapter {
@@ -64,7 +74,23 @@ impl CodexAdapter {
                 format: AdapterFormat::Responses,
                 extra_headers: vec![],
             },
+            pinned: None,
         }
+    }
+
+    /// El snapshot del contrato congelado para esta petición, si hay uno.
+    #[must_use]
+    pub fn pinned_contract(&self) -> Option<&Arc<Snapshot<CodexProfile>>> {
+        self.pinned.as_ref()
+    }
+
+    /// Congela un snapshot explícito: headers, body y modelos de la petición
+    /// leen esa generación concreta. Lo usa el pipeline cuando ya tiene el
+    /// snapshot memoizado, y los tests.
+    #[must_use]
+    pub fn with_pinned_contract(mut self, pinned: Arc<Snapshot<CodexProfile>>) -> Self {
+        self.pinned = Some(pinned);
+        self
     }
 
     pub fn build_hardcoded_codex_model(t: (&str, &str, i64, i64, bool)) -> DiscoveredModel {
@@ -102,17 +128,38 @@ impl ProviderAdapter for CodexAdapter {
         }
     }
 
+    fn pin_request_contract(&mut self) {
+        // Congela el snapshot activo (LKG en disco o semilla embebida): los
+        // headers, el body y los modelos de la petición leen la MISMA
+        // generación aunque el runtime global refresque en paralelo. Sin
+        // runtime disponible el adapter sigue funcionando con su identidad
+        // configurada: el contrato es opt-in por petición.
+        self.pinned = codex_state::ensure_loaded().ok();
+    }
+
     fn build_headers(
         &self,
         api_key: &str,
         _target_format: TargetFormat,
         model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers = super::build_spoofer_headers(
-            self.build_auth_header(api_key),
-            &CodexSpoofer,
-            &self.config.extra_headers,
-        );
+        let mut headers =
+            super::build_spoofer_headers(self.build_auth_header(api_key), &CodexSpoofer, &[]);
+        // El contrato congelado manda sobre la identidad anunciada: la versión
+        // y el user-agent salen del snapshot activo, de la MISMA generación
+        // que el body y los modelos.
+        if let Some(snapshot) = &self.pinned {
+            let version = snapshot.payload.version.as_str();
+            crate::spoofer::upsert_header(&mut headers, "version", version.to_string());
+            crate::spoofer::upsert_header(
+                &mut headers,
+                "user-agent",
+                format!("codex-cli/{version} (Windows 10.0.26200; x64)"),
+            );
+        }
+        // El override de configuración gana sobre el contrato y sobre el
+        // spoofer: es la decisión explícita del despliegue.
+        crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
         let slug = model.as_str();
         if !slug.is_empty()
             && !headers
@@ -131,7 +178,24 @@ impl ProviderAdapter for CodexAdapter {
         _model: &ModelId,
         _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        crate::adapters::traits::patch_json_request_body(body, patch_codex_request_object)
+        let defaults = self
+            .pinned
+            .as_ref()
+            .map(|snapshot| snapshot.payload.defaults.clone());
+        crate::adapters::traits::patch_json_request_body(body, move |obj| {
+            patch_codex_request_object(obj);
+            if let Some(defaults) = &defaults {
+                // Defaults del contrato congelado, de la misma generación que
+                // los headers: el pin verifica que el cliente real los envía.
+                insert_codex_default(obj, "stream", serde_json::Value::Bool(defaults.stream));
+                insert_codex_default(obj, "store", serde_json::Value::Bool(defaults.store));
+                insert_codex_default(
+                    obj,
+                    "tool_choice",
+                    serde_json::Value::String(defaults.tool_choice.clone()),
+                );
+            }
+        })
     }
 
     fn models_url(&self) -> Option<String> {
@@ -262,6 +326,16 @@ pub fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::
             sanitize_codex_input_item(item);
         }
     }
+}
+
+/// Inserta un default del contrato solo si el body no lo trae ya: el pin fija
+/// el piso que el cliente real envía, nunca pisa una decisión explícita.
+fn insert_codex_default(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: serde_json::Value,
+) {
+    obj.entry(key.to_string()).or_insert(value);
 }
 
 fn sanitize_codex_image_part(part_obj: &mut serde_json::Map<String, serde_json::Value>) {

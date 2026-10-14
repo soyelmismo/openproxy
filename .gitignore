@@ -35,6 +35,10 @@ test-results/
 package-lock.json
 *.rcgu.o
 
+# Python bytecode caches
+__pycache__/
+*.pyc
+
 
 # runtime artifacts
 data/
