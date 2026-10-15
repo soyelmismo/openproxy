@@ -290,7 +290,61 @@ fn test_propagate_opencode_headers_default() {
     assert_eq!(find("x-opencode-client"), Some("cli"));
     assert_eq!(find("x-opencode-project"), Some("global"));
     assert!(find("x-opencode-session").unwrap().starts_with("ses_"));
-    assert!(find("x-opencode-request").unwrap().starts_with("msg_"));
+    // x-opencode-request must NOT be synthesized: the upstream free tier gate
+    // rejects it (403 FreeTierError) when combined with session affinity
+    // headers, and the real CLI never sends it.
+    assert!(find("x-opencode-request").is_none());
+}
+
+#[test]
+fn test_propagate_opencode_headers_strips_downstream_request_id() {
+    let _guard = openproxy_adapters::spoofer::OPENCODE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    openproxy_adapters::spoofer::reset_dynamic_opencode_overrides();
+
+    let mut headers = vec![
+        ("Content-Type".into(), "application/json".into()),
+        ("x-opencode-request".into(), "msg_0123456789abcdef".into()),
+        (
+            "x-session-affinity".into(),
+            "ses_9f3a1b2c4d5eAbCdEfGhIjKlMn".into(),
+        ),
+    ];
+    let mut req_headers = std::collections::BTreeMap::new();
+    req_headers.insert("x-opencode-request".into(), "msg_fedcba9876543210".into());
+    req_headers.insert("x-request-id".into(), "req_abcdef012345".into());
+    let openai_req = openproxy_types::OpenAIRequest {
+        model: "big-pickle".into(),
+        messages: vec![],
+        stream: false,
+        temperature: None,
+        max_tokens: None,
+        top_p: None,
+        stop: None,
+        tools: None,
+        tool_choice: None,
+        top_k: None,
+        user: None,
+        extra: serde_json::Map::new(),
+    };
+
+    propagate_opencode_headers(&mut headers, &req_headers, &openai_req);
+
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+
+    // Stripped whether inherited from the client or already present upstream.
+    assert!(find("x-opencode-request").is_none());
+    // Pre-existing session affinity is preserved, not duplicated.
+    assert_eq!(
+        find("x-session-affinity"),
+        Some("ses_9f3a1b2c4d5eAbCdEfGhIjKlMn")
+    );
 }
 
 #[test]

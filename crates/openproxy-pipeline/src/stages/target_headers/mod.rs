@@ -2,15 +2,18 @@
 //!
 //! Propagates and translates downstream client sessions, project and
 //! User-Agent into OpenCode canonical request headers. The upstream Console
-//! free tier gates on all five:
+//! free tier gates on:
 //! 1. User-Agent: valid opencode version (>= 1.17.0, defaults to canonical
 //!    OPENCODE_UA)
 //! 2. `x-opencode-client: cli`
 //! 3. `x-opencode-project: global`
 //! 4. `x-opencode-session: ses_...` (canonical descending format)
-//! 5. `x-opencode-request: msg_...` (canonical ascending format)
+//! 5. (absent) `x-opencode-request` must NOT be sent: the upstream free tier
+//!    gate rejects it when combined with session affinity headers
+//!    (`x-session-affinity`/`x-opencode-session-id`) with HTTP 403
+//!    FreeTierError, and the real CLI never sends it.
 
-use openproxy_adapters::spoofer::{generate_request_id, has_valid_opencode_version};
+use openproxy_adapters::spoofer::has_valid_opencode_version;
 
 pub mod session;
 pub use session::*;
@@ -51,20 +54,11 @@ pub fn propagate_opencode_headers(
     let canonical = resolve_canonical_session(request_headers, openai_req);
     OpenCodeSessionTranslator.apply_session(headers, &canonical);
 
-    // 2. Request ID: downstream id, else ensure msg_... is present.
-    let downstream_req = get_header("x-opencode-request")
-        .or_else(|| get_header("x-request-id"))
-        .filter(|s| !s.trim().is_empty());
-    if let Some(req_id) = downstream_req {
-        if openproxy_adapters::spoofer::is_valid_opencode_request_id(req_id.trim()) {
-            upsert_header(headers, "x-opencode-request", req_id.trim().to_string());
-        }
-    } else if !headers
-        .iter()
-        .any(|(k, _)| k.eq_ignore_ascii_case("x-opencode-request"))
-    {
-        upsert_header(headers, "x-opencode-request", generate_request_id());
-    }
+    // 2. Request ID: the upstream free tier gate rejects requests carrying
+    //    `x-opencode-request` (verified: affinity+request -> 403 FreeTierError,
+    //    each alone -> 200). The real CLI never sends it, so drop any value
+    //    inherited from a downstream client instead of synthesizing one.
+    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-opencode-request"));
 
     if let Some(parent_session) = get_header("x-parent-session-id").filter(|s| !s.trim().is_empty())
     {
