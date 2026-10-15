@@ -18,7 +18,80 @@ import {
 } from '../../handlers/account-handlers.js';
 import { renderQuotaCell } from '../quota-cell.js';
 import { showCodexResetsModal } from '../../components/codex-resets-modal.js';
+import { reorderAccounts, moveAccount } from '../../handlers/account-handlers.js';
 import type { Account, HealthStatus, Provider } from '../../lib/types/api.js';
+
+/** Estado del arrastre táctil de una fila de cuenta. */
+let accountTouchDragState: {
+  draggedId: number;
+  rowEl: HTMLElement;
+  currentOverEl: HTMLElement | null;
+} | null = null;
+
+function onAccountTouchStart(accountId: number, e: TouchEvent): void {
+  const handle = e.currentTarget as HTMLElement;
+  const row = handle.closest('.account-card-row') as HTMLElement | null;
+  if (!row) return;
+  accountTouchDragState = { draggedId: accountId, rowEl: row, currentOverEl: null };
+  row.classList.add('touch-dragging');
+  if (navigator.vibrate) {
+    try { navigator.vibrate(15); } catch { /* ignore */ }
+  }
+}
+
+function onAccountTouchMove(e: TouchEvent): void {
+  if (!accountTouchDragState) return;
+  const touch = e.touches[0];
+  if (!touch) return;
+  if (e.cancelable) e.preventDefault();
+
+  const el = document.elementFromPoint(touch.clientX, touch.clientY);
+  const overRow = el?.closest('.account-card-row') as HTMLElement | null;
+
+  if (accountTouchDragState.currentOverEl && accountTouchDragState.currentOverEl !== overRow) {
+    accountTouchDragState.currentOverEl.classList.remove('drag-over');
+    accountTouchDragState.currentOverEl = null;
+  }
+  if (overRow && overRow !== accountTouchDragState.rowEl) {
+    overRow.classList.add('drag-over');
+    accountTouchDragState.currentOverEl = overRow;
+  }
+}
+
+async function onAccountTouchEnd(): Promise<void> {
+  if (!accountTouchDragState) return;
+  const { draggedId, rowEl, currentOverEl } = accountTouchDragState;
+  rowEl.classList.remove('touch-dragging');
+  if (currentOverEl) {
+    currentOverEl.classList.remove('drag-over');
+    const dropTargetId = Number(currentOverEl.getAttribute('data-drag-id'));
+    if (Number.isFinite(dropTargetId) && dropTargetId !== draggedId) {
+      await reorderAccountTo(draggedId, dropTargetId);
+    }
+  }
+  accountTouchDragState = null;
+}
+
+/**
+ * Reordena arrastrando `draggedId` sobre `targetId`: saca la cuenta de su
+ * posición actual y la inserta donde estaba el destino.
+ */
+async function reorderAccountTo(draggedId: number, targetId: number): Promise<void> {
+  const dragged = (state.accounts || []).find((a) => a.id === draggedId);
+  const target = (state.accounts || []).find((a) => a.id === targetId);
+  if (!dragged || !target || dragged.provider_id !== target.provider_id) return;
+
+  const scoped = (state.accounts || []).filter(
+    (a) => a.provider_id === dragged.provider_id,
+  );
+  const fromIdx = scoped.findIndex((a) => a.id === draggedId);
+  const toIdx = scoped.findIndex((a) => a.id === targetId);
+  if (fromIdx < 0 || toIdx < 0) return;
+  const [moved] = scoped.splice(fromIdx, 1);
+  if (!moved) return;
+  scoped.splice(toIdx, 0, moved);
+  await reorderAccounts(dragged.provider_id, scoped.map((a) => a.id));
+}
 
 
 async function onSetHealth(id: number, e: Event | null): Promise<void> {
@@ -167,15 +240,32 @@ export function renderConnectionsSection(
   const hasQuota = provider.metadata?.supports_quota ?? false;
   const body: TemplateResult =
     accounts.length === 0
-      ? html`<div class="table-wrap"><table class="accounts-table responsive-card-table"><tbody><tr><td colspan="6" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table></div>`
+      ? html`<div class="table-wrap"><table class="accounts-table responsive-card-table"><tbody><tr><td colspan="7" class="empty-row">No accounts. Add an API key to start using this provider.</td></tr></tbody></table></div>`
       : html`<div class="table-wrap"><table class="accounts-table responsive-card-table">
-          <thead><tr><th>Label</th><th>Priority</th><th>Health</th><th>Quota</th><th>Created</th><th>Actions</th></tr></thead>
-          <tbody>${accounts.map((a) => {
+          <thead><tr><th class="col-account-drag"></th><th>Label</th><th>Priority</th><th>Health</th><th>Quota</th><th>Created</th><th>Actions</th></tr></thead>
+          <tbody>${accounts.map((a, aIdx) => {
             const isOAuth = a.auth_type === 'oauth' || provider.auth_type === 'oauth';
             const quotaCell: TemplateResult = hasQuota
               ? html`<td class="col-account-quota" data-label="Quota">${renderQuotaCell(a)}</td>`
               : html`<td class="col-account-quota" data-label="Quota"><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
-            return html`<tr class="account-card-row">
+            return html`<tr class="account-card-row"
+                data-drag-id=${String(a.id)}
+                draggable="true"
+                @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(a.id)); (e.target as HTMLElement).classList.add("dragging"); }}
+                @dragend=${(e: DragEvent) => { (e.target as HTMLElement).classList.remove("dragging"); }}
+                @dragover=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add("drag-over"); }}
+                @dragleave=${(e: DragEvent) => { (e.currentTarget as HTMLElement).classList.remove("drag-over"); }}
+                @drop=${(e: DragEvent) => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.remove("drag-over"); const draggedId = Number(e.dataTransfer?.getData("text/plain")); if (Number.isFinite(draggedId)) { void reorderAccountTo(draggedId, a.id); } }}>
+              <td class="col-account-drag" data-label=""
+                  title="Drag to reorder priority"
+                  @touchstart=${(e: TouchEvent) => onAccountTouchStart(a.id, e)}
+                  @touchmove=${(e: TouchEvent) => onAccountTouchMove(e)}
+                  @touchend=${() => void onAccountTouchEnd()}
+                  @touchcancel=${() => void onAccountTouchEnd()}>
+                <span class="account-drag-handle" style="cursor:grab;">${icons.dragHandle()}</span>
+                <button type="button" class="small account-reorder-btn" style="padding:1px 4px;margin-left:2px;" title="Move up" @click=${() => void moveAccount(a.id, -1)}>${icons.caretUp()}</button>
+                <button type="button" class="small account-reorder-btn" style="padding:1px 4px;" title="Move down" @click=${() => void moveAccount(a.id, 1)}>${icons.caretDown()}</button>
+              </td>
               <td class="col-account-label" data-label="Account">
                 <div class="account-title-row">
                   <span class="editable account-name" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || '')}>
@@ -185,7 +275,8 @@ export function renderConnectionsSection(
                 </div>
               </td>
               <td class="col-account-priority" data-label="Priority">
-                <span class="account-priority-badge">Priority ${a.priority}</span>
+                <span class="account-priority-badge">Priority ${aIdx + 1}</span>
+                <small class="muted account-priority-value">${a.priority}</small>
               </td>
               <td class="col-account-health" data-label="Health">
                 <select class=${'health-select ' + (a.health_status || 'unknown')} @change=${(e: Event) => onSetHealth(a.id, e)}>

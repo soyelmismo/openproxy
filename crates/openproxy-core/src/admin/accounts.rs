@@ -24,8 +24,9 @@ pub struct CreateAccountInput {
 
 /// Insert a new account, storing only the encrypted `api_key` BLOB.
 ///
-/// `priority` defaults to `100`, matching the "lower is higher priority"
-/// convention in [`crate::accounts`].
+/// When `priority` is not supplied the account is appended after the
+/// provider's existing ones via [`accounts::next_priority_for_provider`], so
+/// adding a third account never gives it the same priority as the first two.
 pub fn create_account(
     conn: &Connection,
     master_key: &MasterKey,
@@ -45,7 +46,10 @@ pub fn create_account(
             ));
         }
     }
-    let priority = input.priority.unwrap_or(100);
+    let priority = match input.priority {
+        Some(p) => p,
+        None => accounts::next_priority_for_provider(conn, &provider)?,
+    };
     let effective_label = match input.label.as_deref().map(str::trim) {
         Some(s) if !s.is_empty() => Some(s.to_string()),
         _ => input
@@ -94,6 +98,9 @@ pub struct BulkCreateAccountsResponse {
 /// Dedup runs in three phases: decrypt every existing key for `provider_id`,
 /// track keys seen in-memory across the batch, then drop duplicates (already in
 /// the DB or repeated in the batch), which makes the call idempotent.
+///
+/// Items without an explicit `priority` are appended incrementally, each one
+/// after the previous insert, so a batch never lands on identical priorities.
 pub fn bulk_create_accounts(
     conn: &Connection,
     master_key: &MasterKey,
@@ -114,7 +121,10 @@ pub fn bulk_create_accounts(
             continue;
         }
 
-        let priority = item.priority.unwrap_or(100);
+        let priority = match item.priority {
+            Some(p) => p,
+            None => accounts::next_priority_for_provider(conn, &provider)?,
+        };
         let effective_label = match item.label.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => Some(s.to_string()),
             _ => Some(openproxy_db::accounts::summarize_api_key(trimmed)),
@@ -131,6 +141,26 @@ pub fn bulk_create_accounts(
         ids.push(id);
     }
     Ok(ids)
+}
+
+/// Input for [`reorder_accounts`]. `account_ids` is the desired order, first
+/// being the highest priority, and must cover exactly the provider's accounts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReorderAccountsInput {
+    pub provider_id: String,
+    pub account_ids: Vec<i64>,
+}
+
+/// Rewrite the `priority` of every account of `provider_id` from the submitted
+/// order. Backs the drag-and-drop of the connections table.
+pub fn reorder_accounts(conn: &Connection, input: &ReorderAccountsInput) -> Result<()> {
+    let provider = ProviderId::new(input.provider_id.clone());
+    let ids: Vec<AccountId> = input
+        .account_ids
+        .iter()
+        .map(|id| AccountId::new(*id))
+        .collect();
+    accounts::reorder_accounts(conn, &provider, &ids)
 }
 
 /// Accounts, optionally filtered by provider. `master_key` decrypts
