@@ -11,10 +11,10 @@
 //!   independent `tokio::time::timeout` calls. A stall reports
 //!   `Timeout(Dns|Dial|Tls)` through a `PhasedConnectorError` downcast on the
 //!   boxed error.
-//! - **Write** vs **Headers** are split by a nested `tokio::time::timeout` in
-//!   `client::call_inner`: the outer race carries `write_ms` and reports
-//!   `Timeout(Write)`, the inner one `headers_ms` and reports
-//!   `Timeout(Headers)`. Whichever ceiling fires first wins.
+//! - **Write** ends when Hyper consumed the bounded request frames and the
+//!   connection flushed them. Its timer starts after connection acquisition.
+//! - **Headers/TTFT** starts after upload for streaming. Unary generation
+//!   waits under the total ceiling, without streaming TTFT/idle timers.
 //! - **Total** is the outermost ceiling.
 //!
 //! TLS: the HTTPS path upgrades the `TcpStream` via

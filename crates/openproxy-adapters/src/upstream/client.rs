@@ -6,9 +6,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use super::request_body::RequestBody;
+use super::upload::{FlushProgress, ObservedConnector};
 use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Uri};
-use http_body_util::Full;
 
 use super::cancel::CancellationToken;
 use super::conn_pool::{HostKey, Scheme, UpstreamConnectionPool as Pool};
@@ -122,7 +123,7 @@ impl UpstreamRequest {
 pub trait UpstreamTransport: Send + Sync + std::fmt::Debug {
     fn send_request(
         &self,
-        req: Request<Full<Bytes>>,
+        req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
     ) -> std::pin::Pin<
@@ -150,8 +151,9 @@ pub struct UpstreamClient {
 
 #[derive(Debug)]
 pub(crate) struct ProductionTransport {
-    pub(crate) direct_client: HyperClient<PhasedConnector, Full<Bytes>>,
-    pub(crate) proxy_clients: Arc<DashMap<String, HyperClient<PhasedConnector, Full<Bytes>>>>,
+    pub(crate) direct_client: HyperClient<ObservedConnector<PhasedConnector>, RequestBody>,
+    pub(crate) proxy_clients:
+        Arc<DashMap<String, HyperClient<ObservedConnector<PhasedConnector>, RequestBody>>>,
 }
 
 impl ProductionTransport {
@@ -160,7 +162,7 @@ impl ProductionTransport {
         let direct_client = HyperClient::builder(TaskLocalExecutor)
             .pool_max_idle_per_host(8)
             .pool_idle_timeout(std::time::Duration::from_secs(20))
-            .build(connector);
+            .build(ObservedConnector(connector));
         Self {
             direct_client,
             proxy_clients: Arc::new(DashMap::new()),
@@ -170,7 +172,7 @@ impl ProductionTransport {
     pub(crate) fn client_for_proxy(
         &self,
         proxy_url: Option<&str>,
-    ) -> HyperClient<PhasedConnector, Full<Bytes>> {
+    ) -> HyperClient<ObservedConnector<PhasedConnector>, RequestBody> {
         match proxy_url {
             None => self.direct_client.clone(),
             Some(proxy) => {
@@ -181,7 +183,7 @@ impl ProductionTransport {
                     let client = HyperClient::builder(TaskLocalExecutor)
                         .pool_max_idle_per_host(8)
                         .pool_idle_timeout(std::time::Duration::from_secs(20))
-                        .build(connector);
+                        .build(ObservedConnector(connector));
                     if self.proxy_clients.len() >= 128 {
                         self.proxy_clients.clear();
                     }
@@ -196,7 +198,7 @@ impl ProductionTransport {
 impl UpstreamTransport for ProductionTransport {
     fn send_request(
         &self,
-        req: Request<Full<Bytes>>,
+        req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
     ) -> std::pin::Pin<
@@ -235,7 +237,7 @@ impl UpstreamTransport for ProductionTransport {
 
 #[cfg(feature = "upstream-hyper")]
 struct TestTransport<C> {
-    hyper: HyperClient<C, Full<Bytes>>,
+    hyper: HyperClient<ObservedConnector<C>, RequestBody>,
     phase_hint: Option<UpstreamPhase>,
 }
 
@@ -273,7 +275,7 @@ where
 {
     fn send_request(
         &self,
-        req: Request<Full<Bytes>>,
+        req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
     ) -> std::pin::Pin<
@@ -293,7 +295,7 @@ where
                     if e.is_connect() {
                         UpstreamError::Connection(e.to_string())
                     } else {
-                        UpstreamError::Http(e.to_string())
+                        UpstreamError::Http(format_hyper_error(&e))
                     }
                 })
             };
@@ -350,9 +352,10 @@ impl UpstreamClient {
             + 'static,
         T: hyper::rt::Read + hyper::rt::Write + HyperConnection + Unpin + Send + 'static,
     {
-        let hyper: HyperClient<C, Full<Bytes>> = HyperClient::builder(TokioExecutor::new())
-            .pool_max_idle_per_host(0)
-            .build(connector);
+        let hyper: HyperClient<ObservedConnector<C>, RequestBody> =
+            HyperClient::builder(TokioExecutor::new())
+                .pool_max_idle_per_host(0)
+                .build(ObservedConnector(connector));
         let transport = Arc::new(TestTransport { hyper, phase_hint });
         Arc::new(Self {
             pool: Pool::new(),
@@ -404,6 +407,13 @@ impl UpstreamClient {
         let proxy_url = spec.proxy.clone();
         let (_uri, host_key, host) = build_host_key_and_uri(&spec.url, proxy_url.clone())?;
         let request = build_hyper_request(spec)?;
+        let upload_progress = request
+            .extensions()
+            .get::<tokio::sync::watch::Receiver<Option<Instant>>>()
+            .ok_or_else(|| UpstreamError::Invalid("missing upload observer".into()))?
+            .clone();
+        let mut request = request;
+        let captured = hyper_util::client::legacy::connect::capture_connection(&mut request);
 
         let pool = Pool::clone(&self.pool);
         let cancel_for_send = CancellationToken::clone(&cancel);
@@ -420,13 +430,22 @@ impl UpstreamClient {
             res
         };
 
-        let response = race_dispatch(send_fut, &deadlines, phase_hint, cancel_for_send).await?;
+        let (response, ttft_deadline) = race_dispatch(
+            send_fut,
+            &deadlines,
+            phase_hint,
+            cancel_for_send,
+            (captured, upload_progress),
+            is_streaming,
+            &timeouts,
+        )
+        .await?;
 
         wrap_upstream_response(
             response,
             cancel,
             timeouts.body_chunk_ms,
-            deadlines.headers_deadline,
+            ttft_deadline,
             deadlines.total_deadline,
             is_streaming,
         )
@@ -467,13 +486,10 @@ static DEFAULT_USER_AGENT: std::sync::LazyLock<http::HeaderValue> =
     });
 
 #[cfg(feature = "upstream-hyper")]
-pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<Full<Bytes>>> {
+pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Request<RequestBody>> {
     let body_bytes = spec.body;
     let body_len = body_bytes.as_ref().map(bytes::Bytes::len);
-    let body: Full<Bytes> = match body_bytes {
-        Some(bytes) => Full::new(bytes),
-        None => Full::new(Bytes::new()),
-    };
+    let (body, upload_progress) = RequestBody::new(body_bytes.unwrap_or_default());
     let mut builder = Request::builder().method(spec.method).uri(&spec.url);
     {
         let headers = builder
@@ -496,9 +512,11 @@ pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Reque
             }
         }
     }
-    builder
+    let mut request = builder
         .body(body)
-        .map_err(|e| UpstreamError::Invalid(e.to_string()))
+        .map_err(|e| UpstreamError::Invalid(e.to_string()))?;
+    request.extensions_mut().insert(upload_progress);
+    Ok(request)
 }
 
 #[cfg(feature = "upstream-hyper")]
@@ -560,69 +578,110 @@ fn wrap_upstream_response(
 }
 
 #[cfg(feature = "upstream-hyper")]
-async fn race_earliest_timeout(
-    deadlines: &ResolvedPhaseDeadlines,
-    phase_hint: Option<UpstreamPhase>,
-) -> UpstreamError {
-    let phase_hint_sleep = async {
-        match phase_hint {
-            Some(phase) => {
-                tokio::time::sleep_until(tokio::time::Instant::from_std(
-                    deadlines.deadline_for(phase),
-                ))
-                .await;
-                phase
-            }
-            None => std::future::pending::<UpstreamPhase>().await,
-        }
-    };
-    let total_sleep = async {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.total_deadline)).await;
-        UpstreamPhase::Total
-    };
-    let write_sleep = async {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.write_deadline)).await;
-        UpstreamPhase::Write
-    };
-    let headers_sleep = async {
-        tokio::time::sleep_until(tokio::time::Instant::from_std(deadlines.headers_deadline)).await;
-        UpstreamPhase::Headers
-    };
-
-    tokio::pin!(total_sleep);
-    tokio::pin!(write_sleep);
-    tokio::pin!(headers_sleep);
-    tokio::pin!(phase_hint_sleep);
-
-    let phase = tokio::select! {
-        biased;
-        p = &mut total_sleep => p,
-        p = &mut phase_hint_sleep, if phase_hint.is_some() => p,
-        p = &mut write_sleep => p,
-        p = &mut headers_sleep => p,
-    };
-    UpstreamError::Timeout(phase)
-}
-
-#[cfg(feature = "upstream-hyper")]
 async fn race_dispatch<F>(
     send_fut: F,
     deadlines: &ResolvedPhaseDeadlines,
     phase_hint: Option<UpstreamPhase>,
     cancel: CancellationToken,
-) -> UpstreamResult<hyper::Response<hyper::body::Incoming>>
+    progress: (
+        hyper_util::client::legacy::connect::CaptureConnection,
+        tokio::sync::watch::Receiver<Option<Instant>>,
+    ),
+    is_streaming: bool,
+    timeouts: &super::profile::ResolvedTimeouts,
+) -> UpstreamResult<(hyper::Response<hyper::body::Incoming>, Instant)>
 where
     F: std::future::Future<Output = UpstreamResult<hyper::Response<hyper::body::Incoming>>>,
 {
-    let timeout_fut = race_earliest_timeout(deadlines, phase_hint);
+    let (mut captured, mut upload) = progress;
+    let upload_status = upload.clone();
+    let write_ms = timeouts.write_ms;
+    let headers_ms = timeouts.headers_ms;
+    // New and pooled connections share the same per-request capture boundary.
+    // DNS/dial/TLS have their own timers; upload starts only after connecting.
+    let upload_done = async {
+        let mut flushed = {
+            let metadata = captured.wait_for_connection_metadata().await;
+            let mut extras = http::Extensions::new();
+            metadata
+                .as_ref()
+                .ok_or_else(|| UpstreamError::Http("missing connection metadata".into()))?
+                .get_extras(&mut extras);
+            extras
+                .get::<FlushProgress>()
+                .ok_or_else(|| UpstreamError::Http("missing flush observer".into()))?
+                .0
+                .clone()
+        };
+        let wait = async {
+            let consumed_at = loop {
+                if let Some(at) = *upload.borrow_and_update() {
+                    break at;
+                }
+                upload
+                    .changed()
+                    .await
+                    .map_err(|_| UpstreamError::Http("upload interrupted".into()))?;
+            };
+            loop {
+                if let Some(at) = *flushed.borrow_and_update()
+                    && at >= consumed_at
+                {
+                    return Ok::<_, UpstreamError>(at);
+                }
+                flushed
+                    .changed()
+                    .await
+                    .map_err(|_| UpstreamError::Http("connection closed during upload".into()))?;
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_millis(write_ms), wait)
+            .await
+            .map_err(|_| UpstreamError::Timeout(UpstreamPhase::Write))?
+    };
     tokio::pin!(send_fut);
-    tokio::pin!(timeout_fut);
-
+    tokio::pin!(upload_done);
+    let total_sleep = tokio::time::sleep_until(deadlines.total_deadline.into());
+    tokio::pin!(total_sleep);
+    let phase_hint_sleep = async {
+        if let Some(phase) = phase_hint {
+            tokio::time::sleep_until(deadlines.deadline_for(phase).into()).await;
+            UpstreamError::Timeout(phase)
+        } else {
+            std::future::pending().await
+        }
+    };
+    tokio::pin!(phase_hint_sleep);
+    let uploaded_at = tokio::select! {
+        biased;
+        () = cancel.cancelled() => return Err(UpstreamError::Cancel),
+        () = &mut total_sleep => return Err(UpstreamError::Timeout(UpstreamPhase::Total)),
+        err = &mut phase_hint_sleep => return Err(err),
+        res = &mut send_fut => {
+            let response = res.map_err(handle_dispatch_error)?;
+            // An early response (e.g. a 4xx while uploading) must be returned,
+            // not replaced by an upload timeout. Do not restart TTFT at headers.
+            let uploaded = (*upload_status.borrow()).unwrap_or_else(Instant::now);
+            let ttft = if is_streaming {
+                uploaded + std::time::Duration::from_millis(headers_ms)
+            } else { deadlines.total_deadline };
+            return Ok((response, ttft));
+        },
+        at = &mut upload_done => at?,
+    };
+    let ttft_deadline = if is_streaming {
+        uploaded_at + std::time::Duration::from_millis(headers_ms)
+    } else {
+        deadlines.total_deadline
+    };
+    let headers_sleep = tokio::time::sleep_until(ttft_deadline.into());
+    tokio::pin!(headers_sleep);
     tokio::select! {
         biased;
         () = cancel.cancelled() => Err(UpstreamError::Cancel),
-        timeout_err = &mut timeout_fut => Err(timeout_err),
-        res = &mut send_fut => res.map_err(handle_dispatch_error),
+        () = &mut total_sleep => Err(UpstreamError::Timeout(UpstreamPhase::Total)),
+        () = &mut headers_sleep, if is_streaming => Err(UpstreamError::Timeout(UpstreamPhase::Headers)),
+        res = &mut send_fut => res.map(|r| (r, ttft_deadline)).map_err(handle_dispatch_error),
     }
 }
 

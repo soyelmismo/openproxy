@@ -141,22 +141,13 @@ impl fmt::Display for UpstreamPhase {
 ///   `PhasedConnectorError { phase, Timeout }`, which the client recovers by
 ///   downcasting the boxed error. The fields stay on the struct so the full
 ///   deadline table is observable in one debug print.
-/// - `write_deadline` is enforced by the OUTER nested `tokio::time::timeout`
-///   in `UpstreamClient::call_inner`, which races the
-///   `legacy::Client::request` future and attributes the timeout to `Write`.
-///   The body upload happens before hyper reads the response, so the write
-///   phase is bounded by that outer race.
-/// - `headers_deadline` is enforced by the INNER nested timeout. It fires only
-///   if the dispatch future is still in flight after `write_deadline`
-///   resolved, which is the canonical "server is slow" attribution.
-/// - `body_chunk_deadline` is not a deadline relative to `start`: the body
-///   stream recomputes it inside `UpstreamBodyStream::next_chunk` as
-///   `last_chunk_at + body_chunk_ms`, so the stored instant anchors the first
-///   chunk only.
-/// - `total_deadline` is the OUTERMOST nested timeout and the absolute
-///   ceiling. A call that burns through every per-phase budget surfaces as
-///   `Timeout(Headers)`, the phase boundary the dispatch future was waiting
-///   on.
+/// - Upload and streaming TTFT are phase-relative, observed in `client.rs`.
+///   The corresponding fields here are reference instants for diagnostics
+///   and test-connector phase hints, not races over the entire dispatch.
+/// - Unary generation uses only `total_deadline`, before and after headers.
+/// - The body stream resets its idle timer only after meaningful stream
+///   content, and keeps the same post-upload TTFT deadline before that.
+/// - `total_deadline` is an absolute ceiling across all phases.
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedPhaseDeadlines {
     pub start: Instant,

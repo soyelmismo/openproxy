@@ -48,7 +48,7 @@ impl BackgroundService for QuotaSyncService {
 
     async fn run(&self, cancel: CancellationToken) {
         with_core_cancellation(cancel, |core_cancel| {
-            openproxy_core::quota_sync::run_quota_sync_scheduler(
+            Box::pin(openproxy_core::quota_sync::run_quota_sync_scheduler(
                 Arc::clone(&self.db_pool),
                 self.config.clone(),
                 Arc::clone(&self.upstream_client),
@@ -56,7 +56,7 @@ impl BackgroundService for QuotaSyncService {
                 Arc::clone(&self.adapters),
                 Arc::clone(&self.oauth_provider_registry),
                 core_cancel,
-            )
+            ))
         })
         .await;
     }
@@ -101,13 +101,13 @@ impl BackgroundService for SmartWarmupService {
 
     async fn run(&self, cancel: CancellationToken) {
         with_core_cancellation(cancel, |core_cancel| {
-            openproxy_core::smart_warmup::run_smart_warmup_scheduler(
+            Box::pin(openproxy_core::smart_warmup::run_smart_warmup_scheduler(
                 Arc::clone(&self.db_pool),
                 self.config.clone(),
                 Arc::clone(&self.upstream_client),
                 Arc::clone(&self.master_key),
                 core_cancel,
-            )
+            ))
         })
         .await;
     }

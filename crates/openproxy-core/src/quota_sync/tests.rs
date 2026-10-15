@@ -112,9 +112,9 @@ async fn quota_sync_disabled_config_returns_none_and_noop() {
 
     let cancel = CancellationToken::new();
     // run_quota_sync_scheduler must also return immediately if disabled
-    run_quota_sync_scheduler(
+    Box::pin(run_quota_sync_scheduler(
         pool, config, upstream, master_key, adapters, registry, cancel,
-    )
+    ))
     .await;
 }
 
@@ -134,9 +134,9 @@ async fn quota_sync_initial_delay_cancelled() {
     cancel.cancel(); // Pre-cancelled token
 
     // Must return immediately during initial delay select without hitting DB/network
-    run_quota_sync_scheduler(
+    Box::pin(run_quota_sync_scheduler(
         pool, config, upstream, master_key, adapters, registry, cancel,
-    )
+    ))
     .await;
 }
 

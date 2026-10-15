@@ -12,8 +12,7 @@ use openproxy_adapters::adapters::opencode_common::{
     inject_opencode_agent_quartet_tools, is_free_opencode_tier,
 };
 use openproxy_adapters::spoofer::{
-    OPENCODE_UA, generate_request_id, generate_session_id, is_valid_opencode_request_id,
-    is_valid_opencode_session_id,
+    OPENCODE_UA, generate_request_id, generate_session_id, is_valid_opencode_session_id,
 };
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
@@ -25,7 +24,10 @@ fn test_opencode_zen_golden_contract_spec_parity() {
     let adapter = OpenCodeZenAdapter::new();
 
     assert_eq!(adapter.id().as_str(), "opencode-zen");
-    assert_eq!(adapter.config().base_url, "https://opencode.ai/zen/v1");
+    assert_eq!(
+        adapter.config().base_url,
+        "https://opencode.ai/inference/v1"
+    );
     assert!(
         adapter.is_anonymous_fallback(),
         "OpenCode Zen must support anonymous / free tier fallback"
@@ -34,23 +36,23 @@ fn test_opencode_zen_golden_contract_spec_parity() {
     let model = ModelId::new("test-model");
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Anthropic, &model),
-        "https://opencode.ai/zen/v1/messages"
+        "https://opencode.ai/inference/v1/messages"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Responses, &model),
-        "https://opencode.ai/zen/v1/responses"
+        "https://opencode.ai/inference/v1/responses"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Openai, &model),
-        "https://opencode.ai/zen/v1/chat/completions"
+        "https://opencode.ai/inference/v1/chat/completions"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Gemini, &model),
-        "https://opencode.ai/zen/v1/models/test-model:streamGenerateContent?alt=sse"
+        "https://opencode.ai/inference/v1/models/test-model:streamGenerateContent?alt=sse"
     );
     assert_eq!(
         adapter.build_chat_url(TargetFormat::SystemOne, &model),
-        "https://opencode.ai/zen/v1/systemone"
+        "https://opencode.ai/inference/v1/systemone"
     );
 
     // paid key: auth travels in x-api-key, never in Authorization
@@ -80,11 +82,17 @@ fn test_opencode_zen_golden_contract_spec_parity() {
         "session id must be valid canonical format: {session_id}"
     );
 
-    let request_id = find_hdr(&headers_paid, "x-opencode-request").unwrap();
-    assert!(
-        is_valid_opencode_request_id(request_id),
-        "request id must be valid canonical format: {request_id}"
-    );
+    // Match the native CLI: session aliases agree and no request header is emitted.
+    assert_eq!(find_hdr(&headers_paid, "x-opencode-request"), None);
+    for name in [
+        "x-opencode-session-id",
+        "x-session-affinity",
+        "x-session-id",
+    ] {
+        assert_eq!(find_hdr(&headers_paid, name), Some(session_id));
+    }
+    assert!(find_hdr(&headers_paid, "b3").is_some());
+    assert!(find_hdr(&headers_paid, "traceparent").is_some());
 
     let headers_free_openai = adapter.build_headers("", TargetFormat::Openai, &model);
     assert_eq!(

@@ -38,6 +38,8 @@ env:
   CARGO_TERM_COLOR: always
   PNPM_VERSION: '9'
   RUST_BACKTRACE: 1
+  # Full-pipeline debug e2e futures need more than the default test-thread stack.
+  RUST_MIN_STACK: '33554432'
   # Keep in sync with rust-toolchain.toml; rust-checks verifies equality.
   RUST_TOOLCHAIN: '1.97.1'
 

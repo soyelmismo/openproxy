@@ -154,14 +154,14 @@ async fn test_codex_resets_validation_fails_for_non_codex_or_api_key() {
             .contains("only be redeemed for Codex accounts")
     );
 
-    let err_redeem = redeem_codex_account_reset(
+    let err_redeem = Box::pin(redeem_codex_account_reset(
         ant_account,
         Some("credit-123"),
         &pool,
         &master_key,
         &upstream,
         &registry,
-    )
+    ))
     .await
     .unwrap_err();
     assert!(
@@ -177,10 +177,16 @@ async fn test_codex_resets_validation_fails_for_non_codex_or_api_key() {
         .unwrap_err();
     assert!(err.to_string().contains("require an OAuth account"));
 
-    let err_redeem_key =
-        redeem_codex_account_reset(key_account, None, &pool, &master_key, &upstream, &registry)
-            .await
-            .unwrap_err();
+    let err_redeem_key = Box::pin(redeem_codex_account_reset(
+        key_account,
+        None,
+        &pool,
+        &master_key,
+        &upstream,
+        &registry,
+    ))
+    .await
+    .unwrap_err();
     assert!(
         err_redeem_key
             .to_string()

@@ -156,6 +156,7 @@ impl UpstreamDispatcher {
 
         upstream_request.is_streaming = params.is_streaming;
         unary::populate_upstream_headers(&mut upstream_request, params.headers);
+        unary::ensure_streaming_accept(&mut upstream_request);
 
         self.dispatch_by_stream_mode(params, dctx, upstream_request)
             .await

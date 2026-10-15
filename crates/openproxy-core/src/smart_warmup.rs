@@ -70,7 +70,10 @@ pub fn start_smart_warmup_scheduler_with_cancel(
     let token = cancel.clone();
 
     tokio::spawn(async move {
-        run_smart_warmup_scheduler(db_pool, config, upstream, master_key, token).await;
+        Box::pin(run_smart_warmup_scheduler(
+            db_pool, config, upstream, master_key, token,
+        ))
+        .await;
     });
 
     Some(cancel)
