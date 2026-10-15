@@ -3,6 +3,7 @@ use serde_json::json;
 
 mod adversarial_tests;
 mod adversarial_tools;
+mod cache;
 mod tools;
 
 #[test]
