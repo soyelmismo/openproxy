@@ -399,6 +399,19 @@ mod tests {
     }
 
     #[test]
+    fn compute_tokens_per_sec_ttft_greater_than_total_is_none() {
+        // ttft > total => (total - ttft) <= 0 => None
+        let input = UsageInput {
+            completion_tokens: Some(300),
+            total_ms: 1000,
+            ttft_ms: Some(1500),
+            ..make_input()
+        };
+        let (_cost, tps) = compute(None, &input);
+        assert!(tps.is_none());
+    }
+
+    #[test]
     fn compute_tokens_per_sec_ttft_equals_total_is_none() {
         // ttft == total => (total - ttft) <= 0 => None
         let input = UsageInput {
