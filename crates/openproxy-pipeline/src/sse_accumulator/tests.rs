@@ -1,5 +1,6 @@
 use super::*;
 use crate::translation::OpenAIUsage;
+use openproxy_types::message::PromptTokensDetails;
 use serde_json::Value;
 
 #[test]
@@ -123,6 +124,108 @@ fn usage_and_stop_reason_populated() {
     let v = acc.finish("id", 0, "m");
     assert_eq!(v["usage"]["total_tokens"], 30);
     assert_eq!(v["choices"][0]["finish_reason"], "stop");
+}
+
+/// Gemini reports `cachedContentTokenCount` on some `usageMetadata` chunks
+/// and not on others. A later sparser chunk must not wipe the cache counter.
+#[test]
+fn set_usage_preserves_cached_tokens_from_earlier_chunk() {
+    let mut acc = ResponseAccumulator::new();
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 10000,
+        completion_tokens: 2,
+        total_tokens: 10002,
+        prompt_tokens_details: Some(PromptTokensDetails {
+            cached_tokens: Some(7983),
+        }),
+    });
+    // A later chunk with the same counts but no cache counter.
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 10000,
+        completion_tokens: 2,
+        total_tokens: 10002,
+        prompt_tokens_details: None,
+    });
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(
+        v["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64(),
+        Some(7983),
+        "el contador de cache no debe perderse al llegar un chunk posterior sin el campo"
+    );
+    assert_eq!(v["usage"]["prompt_tokens"], 10000);
+}
+
+/// The reverse order must converge to the same value.
+#[test]
+fn set_usage_preserves_cached_tokens_from_later_chunk() {
+    let mut acc = ResponseAccumulator::new();
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 10000,
+        completion_tokens: 2,
+        total_tokens: 10002,
+        prompt_tokens_details: None,
+    });
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 10000,
+        completion_tokens: 2,
+        total_tokens: 10002,
+        prompt_tokens_details: Some(PromptTokensDetails {
+            cached_tokens: Some(7983),
+        }),
+    });
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(
+        v["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64(),
+        Some(7983)
+    );
+}
+
+/// Anthropic reports prompt tokens on `message_start` and output tokens on
+/// `message_delta`. The prompt count must survive the second chunk.
+#[test]
+fn set_usage_preserves_prompt_tokens_from_first_chunk() {
+    let mut acc = ResponseAccumulator::new();
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 1500,
+        completion_tokens: 1,
+        total_tokens: 1501,
+        prompt_tokens_details: None,
+    });
+    // `message_delta.usage` omits `input_tokens` and sends a zero sentinel.
+    acc.set_usage(OpenAIUsage {
+        prompt_tokens: 0,
+        completion_tokens: 250,
+        total_tokens: 1750,
+        prompt_tokens_details: None,
+    });
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(v["usage"]["prompt_tokens"], 1500);
+    assert_eq!(v["usage"]["completion_tokens"], 250);
+    assert_eq!(v["usage"]["total_tokens"], 1750);
+}
+
+/// Repeated identical usage, as the streaming loop produces by pushing the
+/// merged value on every chunk, must be idempotent.
+#[test]
+fn set_usage_is_idempotent_for_repeated_identical_values() {
+    let mut acc = ResponseAccumulator::new();
+    let usage = OpenAIUsage {
+        prompt_tokens: 10000,
+        completion_tokens: 2,
+        total_tokens: 10002,
+        prompt_tokens_details: Some(PromptTokensDetails {
+            cached_tokens: Some(7983),
+        }),
+    };
+    for _ in 0..5 {
+        acc.set_usage(usage.clone());
+    }
+    let v = acc.finish("id", 0, "m");
+    assert_eq!(
+        v["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64(),
+        Some(7983)
+    );
+    assert_eq!(v["usage"]["total_tokens"], 10002);
 }
 
 #[test]

@@ -155,8 +155,22 @@ impl ResponseAccumulator {
         self.total_bytes += r.len() - prev_len;
     }
 
+    /// Stores the usage for this response.
+    ///
+    /// Usage arrives incrementally. Gemini emits `usageMetadata` on several
+    /// chunks and only some of them carry `cachedContentTokenCount`; Anthropic
+    /// sends the prompt count on `message_start` and the output count on
+    /// `message_delta`. A plain assignment lets a later, sparser chunk wipe
+    /// the cache counter and the prompt count that an earlier chunk reported,
+    /// which understates cache hits and can corrupt billing.
+    ///
+    /// Each field keeps the maximum seen so far, matching the merge the
+    /// streaming loop already applies before calling this.
     pub fn set_usage(&mut self, usage: OpenAIUsage) {
-        self.usage = Some(usage);
+        self.usage = Some(match self.usage.take() {
+            Some(existing) => crate::sse::merge_usage(existing, usage),
+            None => usage,
+        });
     }
 
     pub fn set_stop_reason(&mut self, reason: &str) {
