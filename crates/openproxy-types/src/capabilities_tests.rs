@@ -288,3 +288,22 @@ fn test_infer_modality_json_helpers() {
     let output_json = infer_output_modalities_json("dall-e-3");
     assert_eq!(output_json, r#"["image"]"#);
 }
+
+#[test]
+fn test_is_stt_model() {
+    assert!(is_stt_model("openai/whisper-1"));
+    assert!(is_stt_model("qwen/qwen3-asr-flash"));
+    assert!(is_stt_model("sensevoice-small"));
+    assert!(is_stt_model("speechmatics-en"));
+    assert!(is_stt_model("custom-stt-model"));
+    assert!(is_stt_model("audio-transcription-v1"));
+
+    assert!(!is_stt_model("openai/gpt-4o"));
+    assert!(!is_stt_model("dall-e-3"));
+    assert!(!is_stt_model("anthropic/claude-3-5-sonnet"));
+}
+
+#[test]
+fn test_infer_default_output_modalities() {
+    assert_eq!(infer_default_output_modalities(), vec!["text"]);
+}
