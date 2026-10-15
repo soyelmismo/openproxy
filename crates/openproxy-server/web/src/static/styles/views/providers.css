@@ -431,6 +431,37 @@
   box-shadow: 0 -2px 8px var(--color-primary-soft);
 }
 
+/* Connections (accounts) drag-and-drop: same visual language as combo targets. */
+.account-card-row.dragging,
+.account-card-row.touch-dragging {
+  opacity: 0.6;
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+}
+.account-card-row.drag-over {
+  border-top: 2px solid var(--color-primary);
+  box-shadow: 0 -2px 8px var(--color-primary-soft);
+}
+.col-account-drag {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+  touch-action: none;
+}
+.account-drag-handle {
+  cursor: grab;
+  color: var(--color-text-muted);
+  user-select: none;
+}
+.account-drag-handle:active,
+.account-drag-handle:hover {
+  color: var(--color-primary);
+}
+.account-priority-value {
+  display: block;
+  opacity: 0.55;
+}
+
 
 .oauth-login-section { margin-bottom: var(--space-4); }
 .oauth-login-section h3 { margin-bottom: var(--space-2); font-size: var(--fs-lg); }

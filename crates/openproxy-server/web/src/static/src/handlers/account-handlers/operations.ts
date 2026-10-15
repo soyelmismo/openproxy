@@ -8,6 +8,7 @@ import { showConfirm, showPrompt } from "../../lib/show-confirm.js";
 import { mutateAndRefresh } from "../../lib/mutate.js";
 import { renderOpModal } from "../../components/render-op-modal.js";
 import { pollForDiscoveredModels } from "../../state/models-sync.js";
+import { requestUpdate } from "../../state/reactive.js";
 
 export function closeCreateAccount(): void {
   const root = document.getElementById("modal-root");
@@ -162,4 +163,64 @@ function showApiKeyDisplay(apiKey: string): void {
       >Copy</button>
     `,
   });
+}
+
+/**
+ * Reorder the accounts of `providerId` so the resulting order becomes the
+ * priority order (first = highest priority). Optimistic: the caller's array is
+ * patched in place and the server response re-read on failure.
+ */
+export async function reorderAccounts(
+  providerId: string,
+  orderedIds: number[],
+): Promise<void> {
+  const scoped = (state.accounts || []).filter(
+    (a) => a.provider_id === providerId,
+  );
+  const byId = new Map(scoped.map((a) => [a.id, a]));
+  const reordered = orderedIds
+    .map((id) => byId.get(id))
+    .filter((a): a is (typeof scoped)[number] => a != null);
+  if (reordered.length === 0) return;
+
+  // Optimistic: move the provider's accounts into the requested order.
+  state.accounts = [
+    ...(state.accounts || []).filter((a) => a.provider_id !== providerId),
+    ...reordered,
+  ];
+  requestUpdate();
+
+  try {
+    await api("/accounts/reorder", {
+      method: "POST",
+      body: JSON.stringify({ provider_id: providerId, account_ids: orderedIds }),
+    });
+  } catch (err: unknown) {
+    showApiError(err, "Failed to reorder accounts");
+  } finally {
+    state.accounts = (await api("/accounts")) as typeof state.accounts;
+    requestUpdate();
+  }
+}
+
+/**
+ * Move one account one slot up (`delta = -1`) or down (`delta = +1`) within its
+ * provider, then persist the whole new order.
+ */
+export async function moveAccount(id: number, delta: number): Promise<void> {
+  const account = (state.accounts || []).find((a) => a.id === id);
+  if (!account) return;
+  const scoped = (state.accounts || []).filter(
+    (a) => a.provider_id === account.provider_id,
+  );
+  const idx = scoped.findIndex((a) => a.id === id);
+  const newIdx = idx + delta;
+  if (idx < 0 || newIdx < 0 || newIdx >= scoped.length) return;
+  const [moved] = scoped.splice(idx, 1);
+  if (!moved) return;
+  scoped.splice(newIdx, 0, moved);
+  await reorderAccounts(
+    account.provider_id,
+    scoped.map((a) => a.id),
+  );
 }

@@ -17,6 +17,8 @@ crate::def_table_select!(
 
 crate::def_table_select!(account_current_proxy_select, "accounts", "current_proxy_id");
 
+crate::def_table_select!(account_id_select, "accounts", "id");
+
 /// Generate a short prefix-suffix summary for an API key (e.g. `sk-pro...7654`).
 pub fn summarize_api_key(key: &str) -> String {
     let trimmed = key.trim();
@@ -69,6 +71,30 @@ pub fn create(
             }
         }
     }
+}
+
+/// Priority step used by [`next_priority_for_provider`] and
+/// [`reorder_accounts`], keeping the "lower is higher priority" convention with
+/// gaps so a single insert never collides with an existing row.
+pub const PRIORITY_STEP: i32 = 10;
+
+/// Next priority for a new account of `provider_id`: the highest existing
+/// priority plus one step, or the base step when the provider has no accounts
+/// yet. Guarantees the new account lands last instead of sharing a value with
+/// its siblings.
+pub fn next_priority_for_provider(conn: &Connection, provider_id: &ProviderId) -> Result<i32> {
+    let max: Option<i32> = conn
+        .query_row(
+            "SELECT MAX(priority) FROM accounts WHERE provider_id = ?1",
+            params![provider_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!(
+                "select max priority for provider {provider_id}"
+            ))(e)
+        })?;
+    Ok(max.map_or(PRIORITY_STEP, |m| m.saturating_add(PRIORITY_STEP)))
 }
 
 pub fn get(conn: &Connection, id: AccountId, master_key: &MasterKey) -> Result<Option<Account>> {
@@ -265,6 +291,71 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
     conn.execute("DELETE FROM accounts WHERE id = ?1", params![id.0])
         .map_err(|e| crate::error::map_db_error_ctx(format!("delete account {}", id.0))(e))?;
     Ok(())
+}
+
+/// Reorder the accounts of `provider_id`, rewriting `priority` from the
+/// submitted order: the first id receives `PRIORITY_STEP`, the next
+/// `2 * PRIORITY_STEP`, and so on, matching the `ORDER BY priority ASC, id ASC`
+/// convention of [`list`].
+///
+/// `ids` must be exactly the set of the provider's account ids — a partial
+/// list is rejected rather than silently reordering a subset and leaving
+/// duplicates behind.
+pub fn reorder_accounts(
+    conn: &Connection,
+    provider_id: &ProviderId,
+    ids: &[AccountId],
+) -> Result<()> {
+    crate::error::with_busy_retry("reorder_accounts", || {
+        let existing: Vec<i64> = crate::db_query_all!(
+            conn,
+            account_id_select!("WHERE provider_id = ?1"),
+            params![provider_id.as_str()],
+            |row| row.get(0),
+            "list account ids for reorder"
+        )?;
+
+        let mut seen = std::collections::HashSet::with_capacity(ids.len());
+        for id in ids {
+            if !seen.insert(id.0) {
+                return Err(CoreError::Validation(format!(
+                    "duplicate account id {} in reorder",
+                    id.0
+                )));
+            }
+            if !existing.contains(&id.0) {
+                return Err(CoreError::Validation(format!(
+                    "account {} does not belong to provider {}",
+                    id.0, provider_id
+                )));
+            }
+        }
+        if seen.len() != existing.len() {
+            return Err(CoreError::Validation(format!(
+                "reorder expects {} account ids for provider {}, got {}",
+                existing.len(),
+                provider_id,
+                seen.len()
+            )));
+        }
+
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(crate::error::map_db_error)?;
+        {
+            let mut stmt = tx
+                .prepare_cached("UPDATE accounts SET priority = ?1 WHERE id = ?2")
+                .map_err(crate::error::map_db_error)?;
+            for (i, id) in ids.iter().enumerate() {
+                let priority = ((i as i64 + 1) * PRIORITY_STEP as i64) as i32;
+                stmt.execute(params![priority, id.0]).map_err(|e| {
+                    crate::error::map_db_error_ctx(format!("set priority for account {}", id.0))(e)
+                })?;
+            }
+        }
+        tx.commit().map_err(crate::error::map_db_error)?;
+        Ok(())
+    })
 }
 
 pub fn update_current_proxy(

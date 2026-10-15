@@ -30,6 +30,7 @@ pub fn router() -> axum::Router<AppState> {
             axum::routing::get(get_account_api_key).put(update_account_api_key),
         )
         .route("/{id}/label", axum::routing::patch(update_account_label))
+        .route("/reorder", axum::routing::post(reorder_accounts))
         .route(
             "/{id}/refresh-quota",
             axum::routing::post(refresh_account_quota),
@@ -180,6 +181,40 @@ pub async fn get_account_api_key(
     .await?;
     super::auth::audit_secret_read(&identity, "account_api_key", &format!("account:{id}"));
     Ok(Json(serde_json::json!({ "api_key": key })))
+}
+
+/// Body for `POST /admin/accounts/reorder` — the connections drag-and-drop.
+#[derive(Debug, Deserialize)]
+pub struct ReorderAccountsBody {
+    pub provider_id: String,
+    pub account_ids: Vec<i64>,
+}
+
+/// Rewrite the account priorities of one provider from the submitted order.
+pub async fn reorder_accounts(
+    State(s): State<AppState>,
+    Json(body): Json<ReorderAccountsBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if body.provider_id.trim().is_empty() {
+        return Err(ApiError::from(CoreError::Validation(
+            "missing 'provider_id'".into(),
+        )));
+    }
+    if body.account_ids.is_empty() {
+        return Err(ApiError::from(CoreError::Validation(
+            "missing 'account_ids'".into(),
+        )));
+    }
+    crate::error::run_blocking(move || {
+        s.services()
+            .accounts
+            .reorder(core_admin::ReorderAccountsInput {
+                provider_id: body.provider_id,
+                account_ids: body.account_ids,
+            })?;
+        Ok(Json(serde_json::json!({ "reordered": true })))
+    })
+    .await
 }
 
 pub async fn update_account_label(

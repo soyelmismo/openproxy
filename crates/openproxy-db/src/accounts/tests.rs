@@ -1,7 +1,9 @@
 use super::*;
 use crate::secrets::MasterKey;
 use crate::test_db::{open_in_memory, seed_antigravity_provider};
+use openproxy_types::ProviderId;
 use openproxy_types::Result;
+use rusqlite::params;
 
 #[test]
 fn test_summarize_api_key() {
@@ -532,4 +534,109 @@ fn set_quota_clears_pools_without_touching_other_accounts() {
         err,
         openproxy_types::CoreError::AccountNotFound(_)
     ));
+}
+
+#[test]
+fn next_priority_appends_after_existing_accounts() {
+    let master = MasterKey::generate().unwrap();
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let provider = ProviderId::new("antigravity");
+
+    // Sin cuentas, la primera toma el paso base.
+    assert_eq!(next_priority_for_provider(&conn, &provider).unwrap(), 10);
+
+    let a = create(&conn, &provider, Some("sk-1"), &master, Some("a"), 10, None).unwrap();
+    assert_eq!(next_priority_for_provider(&conn, &provider).unwrap(), 20);
+
+    let b = create(&conn, &provider, Some("sk-2"), &master, Some("b"), 20, None).unwrap();
+    assert_eq!(next_priority_for_provider(&conn, &provider).unwrap(), 30);
+
+    // Prioridades manuales fuera de la rejilla no rompen el cálculo.
+    create(
+        &conn,
+        &provider,
+        Some("sk-3"),
+        &master,
+        Some("c"),
+        137,
+        None,
+    )
+    .unwrap();
+    assert_eq!(next_priority_for_provider(&conn, &provider).unwrap(), 147);
+
+    let _ = (a, b);
+}
+
+#[test]
+fn reorder_accounts_rewrites_priorities_from_submitted_order() {
+    let master = MasterKey::generate().unwrap();
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let provider = ProviderId::new("antigravity");
+
+    let a = create(&conn, &provider, Some("sk-1"), &master, Some("a"), 10, None).unwrap();
+    let b = create(&conn, &provider, Some("sk-2"), &master, Some("b"), 20, None).unwrap();
+    let c = create(&conn, &provider, Some("sk-3"), &master, Some("c"), 30, None).unwrap();
+
+    reorder_accounts(&conn, &provider, &[c, a, b]).unwrap();
+
+    let priority_of = |id: AccountId| -> i32 {
+        conn.query_row(
+            "SELECT priority FROM accounts WHERE id = ?1",
+            params![id.0],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(priority_of(c), 10);
+    assert_eq!(priority_of(a), 20);
+    assert_eq!(priority_of(b), 30);
+
+    // El orden de lectura sigue la nueva prioridad.
+    let order: Vec<i64> = list(&conn, Some(&provider), &master)
+        .unwrap()
+        .into_iter()
+        .map(|x| x.id.0)
+        .collect();
+    assert_eq!(order, vec![c.0, a.0, b.0]);
+}
+
+#[test]
+fn reorder_accounts_rejects_partial_foreign_and_duplicate_ids() {
+    let master = MasterKey::generate().unwrap();
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let provider = ProviderId::new("antigravity");
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('other', 'Other', 'https://example.org', 'bearer', 'openai')",
+        [],
+    )
+    .unwrap();
+    let other = ProviderId::new("other");
+
+    let a = create(&conn, &provider, Some("sk-1"), &master, Some("a"), 10, None).unwrap();
+    let b = create(&conn, &provider, Some("sk-2"), &master, Some("b"), 20, None).unwrap();
+    let foreign = create(&conn, &other, Some("sk-9"), &master, Some("x"), 10, None).unwrap();
+
+    // Lista parcial: no cubre todas las cuentas del proveedor.
+    assert!(reorder_accounts(&conn, &provider, &[a]).is_err());
+    // Id de otro proveedor.
+    assert!(reorder_accounts(&conn, &provider, &[a, b, foreign]).is_err());
+    // Duplicado.
+    assert!(reorder_accounts(&conn, &provider, &[a, a, b]).is_err());
+
+    // Ningún rechazo toca las prioridades existentes.
+    let priority_of = |id: AccountId| -> i32 {
+        conn.query_row(
+            "SELECT priority FROM accounts WHERE id = ?1",
+            params![id.0],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(priority_of(a), 10);
+    assert_eq!(priority_of(b), 20);
+    assert_eq!(priority_of(foreign), 10);
 }
