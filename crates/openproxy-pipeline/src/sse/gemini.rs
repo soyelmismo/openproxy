@@ -69,6 +69,8 @@ struct GeminiUsageProbe {
     completion_tokens: Option<u64>,
     #[serde(default, rename = "totalTokenCount")]
     total_tokens: Option<u64>,
+    #[serde(default, rename = "cachedContentTokenCount")]
+    cached_tokens: Option<u64>,
 }
 
 /// Map a Gemini finishReason to an OpenAI finish_reason string.
@@ -135,7 +137,10 @@ fn extract_gemini_usage(usage_metadata: Option<&GeminiUsageProbe>) -> Option<Ope
         Some(u.prompt_tokens?),
         Some(u.completion_tokens?),
         Some(u.total_tokens?),
-        None,
+        u.cached_tokens
+            .map(|cached| openproxy_types::PromptTokensDetails {
+                cached_tokens: Some(cached.try_into().unwrap_or(u32::MAX)),
+            }),
     ))
 }
 
@@ -201,7 +206,7 @@ pub fn parse_gemini_sse_line(
     }
     let finish_val = finish_reason.as_ref().map_or(Value::Null, |r| json!(r));
 
-    let chunk = json!({
+    let mut chunk = json!({
         "id": chunk_id,
         "object": "chat.completion.chunk",
         "created": created,
@@ -214,6 +219,10 @@ pub fn parse_gemini_sse_line(
     });
 
     let usage = extract_gemini_usage(usage_metadata);
+    if let Some(usage) = &usage {
+        chunk["usage"] = serde_json::to_value(usage)
+            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+    }
     let has_content = !text.is_empty() || delta_reasoning.is_some() || !delta_tool_calls.is_empty();
 
     Ok(Some(UpstreamSseChunk {
@@ -227,6 +236,10 @@ pub fn parse_gemini_sse_line(
         has_content,
     }))
 }
+
+#[cfg(test)]
+#[path = "gemini_cache_tests.rs"]
+mod cache_tests;
 
 #[cfg(test)]
 mod tests {

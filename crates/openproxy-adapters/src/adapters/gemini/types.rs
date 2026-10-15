@@ -165,7 +165,11 @@ pub struct GeminiToolConfig {
 pub struct GeminiResponse {
     #[serde(default)]
     pub candidates: Vec<GeminiCandidate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "usageMetadata",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub usage_metadata: Option<GeminiUsageMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<GeminiInnerResponse>,
@@ -175,7 +179,11 @@ pub struct GeminiResponse {
 pub struct GeminiInnerResponse {
     #[serde(default)]
     pub candidates: Vec<GeminiCandidate>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "usageMetadata",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub usage_metadata: Option<GeminiUsageMetadata>,
 }
 
@@ -183,17 +191,21 @@ pub struct GeminiInnerResponse {
 pub struct GeminiCandidate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<GeminiContent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "finishReason",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeminiUsageMetadata {
-    #[serde(default)]
+    #[serde(default, alias = "promptTokenCount")]
     pub prompt_token_count: u32,
-    #[serde(default)]
+    #[serde(default, alias = "candidatesTokenCount")]
     pub candidates_token_count: u32,
-    #[serde(default)]
+    #[serde(default, alias = "totalTokenCount")]
     pub total_token_count: u32,
     #[serde(rename = "cachedContentTokenCount", default)]
     pub cached_content_token_count: Option<u32>,
