@@ -124,6 +124,12 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
     if m.extra.contains_key("reasoning") && m.extra.contains_key("reasoning_content") {
         return true;
     }
+    if m.role == "assistant"
+        && let Some(Value::String(s)) = &m.content
+        && s.trim().is_empty()
+    {
+        return true;
+    }
     if m.role == "developer" {
         return true;
     }
@@ -289,6 +295,13 @@ fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
 
     if let Some(ref tcs) = patched.tool_calls {
         patched.tool_calls = Some(sanitize_tool_calls(tcs));
+    }
+
+    if patched.role == "assistant"
+        && let Some(Value::String(ref s)) = patched.content
+        && s.trim().is_empty()
+    {
+        patched.content = None;
     }
 
     if matches!(patched.role.as_str(), "assistant" | "system" | "tool")

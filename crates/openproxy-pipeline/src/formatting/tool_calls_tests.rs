@@ -130,3 +130,54 @@ fn lone_reasoning_survives_for_providers_that_only_know_that_name() {
         "un reasoning suelto se deja pasar: hay proveedores que solo usan ese nombre"
     );
 }
+
+#[test]
+fn empty_or_whitespace_assistant_content_normalized_to_none() {
+    // NVIDIA NIM (especialmente diffusiongemma) rechaza 'content: ""' o 'content: "   "'
+    // en mensajes de rol assistant con 400 'Empty content is not allowed for assistant messages'.
+    // Debe normalizarse a None (que serializa como null en JSON).
+    let msg_empty = OpenAIMessage {
+        role: "assistant".to_string(),
+        content: Some(json!("")),
+        name: None,
+        tool_call_id: None,
+        tool_calls: Some(vec![json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "test", "arguments": "{}"}
+        })]),
+        extra: Default::default(),
+    };
+
+    assert!(message_needs_openai_normalization(&msg_empty));
+    let norm_empty = normalize_openai_message(&msg_empty);
+    assert_eq!(norm_empty.content, None);
+
+    let val = serde_json::to_value(&norm_empty).expect("serializa");
+    assert_eq!(val["content"], serde_json::Value::Null);
+
+    let msg_ws = OpenAIMessage {
+        role: "assistant".to_string(),
+        content: Some(json!("   \n\t  ")),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    };
+
+    assert!(message_needs_openai_normalization(&msg_ws));
+    let norm_ws = normalize_openai_message(&msg_ws);
+    assert_eq!(norm_ws.content, None);
+
+    // Contenido no vacío no debe ser alterado
+    let msg_valid = OpenAIMessage {
+        role: "assistant".to_string(),
+        content: Some(json!("hola mundo")),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    };
+    let norm_valid = normalize_openai_message(&msg_valid);
+    assert_eq!(norm_valid.content, Some(json!("hola mundo")));
+}
