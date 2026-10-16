@@ -1,6 +1,7 @@
 mod normalizer;
 mod openai;
 mod processor;
+mod reasoning_progress;
 #[cfg(test)]
 mod tests;
 mod translated;
@@ -35,6 +36,12 @@ pub(crate) struct StreamingState {
     pub commandcode_sse_state: crate::sse::CommandCodeSseState,
     pub pii_stage: Option<crate::pii::PiiRestorationStage>,
     pub tool_name_restore: Option<std::collections::HashMap<String, String>>,
+    /// Contadores metadata-only de razonamiento (hidden thinking). No
+    /// alteran streaming: solo observan.
+    pub reasoning_progress: reasoning_progress::ReasoningProgress,
+    /// True una vez emitido el evento `info` de primera actividad de
+    /// razonamiento (evita ruido: como máximo uno por request).
+    reasoning_first_logged: bool,
 }
 
 pub(crate) struct StreamContext<'a> {
@@ -84,6 +91,8 @@ impl StreamingState {
             commandcode_sse_state: crate::sse::CommandCodeSseState::default(),
             pii_stage: None,
             tool_name_restore: None,
+            reasoning_progress: reasoning_progress::ReasoningProgress::default(),
+            reasoning_first_logged: false,
         }
     }
 

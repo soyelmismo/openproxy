@@ -22,7 +22,8 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
+    # Also validate the isolated contract PR while its focused-fix base is open.
+    branches: [master, fix/focused-account-cache-reasoning]
 
 # Security (OP-25): least privilege by default — read-only for every job
 # (PR jobs included). The jobs that genuinely need write access (docker

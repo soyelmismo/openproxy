@@ -1,0 +1,24 @@
+{
+  "node_id": "TA_kwDOOYsS4doAKDdhMDc4ZjZiYjRjZTBkYzJhODE0MDhiMzM0Y2U1Mjk3OWQ5MmM2MDM",
+  "sha": "7a078f6bb4ce0dc2a81408b334ce52979d92c603",
+  "url": "https://api.github.com/repos/openai/codex/git/tags/7a078f6bb4ce0dc2a81408b334ce52979d92c603",
+  "tagger": {
+    "name": "iceweasel-oai",
+    "email": "iceweasel@openai.com",
+    "date": "2026-10-09T17:39:06Z"
+  },
+  "object": {
+    "sha": "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d",
+    "type": "commit",
+    "url": "https://api.github.com/repos/openai/codex/git/commits/092d3acd6bec3e3a14bdc7e7a2810ab628ab759d"
+  },
+  "tag": "rust-v0.162.1",
+  "message": "Release 0.162.1",
+  "verification": {
+    "verified": false,
+    "reason": "unsigned",
+    "signature": null,
+    "payload": null,
+    "verified_at": null
+  }
+}

@@ -6,6 +6,13 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::Duration;
 
+mod claude_profile;
+pub mod client_contract;
+mod codebuddy_contract;
+// Factories del refresco de contratos de cliente (wiring en state/background.rs).
+pub(crate) use claude_profile::claude_refresh_service;
+pub(crate) use codebuddy_contract::codebuddy_refresh_service;
+
 /// Unified trait for background daemons and services with graceful shutdown support.
 pub trait BackgroundService: Send + Sync + 'static {
     /// Human-readable identifier for tracing and metrics.

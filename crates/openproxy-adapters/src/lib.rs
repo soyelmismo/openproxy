@@ -3,6 +3,7 @@
 pub mod adapters;
 pub mod anthropic_cache;
 pub mod antigravity_headers;
+pub mod client_contract;
 pub mod schema_cleaner;
 pub mod spoofer;
 pub mod upstream;

@@ -54,6 +54,86 @@ pub(super) fn parse_translated_sse_line(
 }
 
 impl ChunkProcessor<'_> {
+    /// Metadata-only: clasifica la línea SSE cruda y actualiza los contadores
+    /// de razonamiento. Se llama **antes** del traductor para que el hidden
+    /// thinking (que el traductor convierte en liveness y descarta) quede
+    /// registrado.
+    ///
+    /// `line` es la línea SSE cruda que entrega `decode_and_record_line`, una
+    /// por llamada (`event: X` y `data: {...}` por separado), NO la forma
+    /// combinada `"X\ndata: {...}"` que fabrica el parser: esa se construye
+    /// después, dentro de `parse_translated_sse_line`. Por eso
+    /// [`ReasoningProgress::observe`] trackea el evento él mismo.
+    ///
+    /// Logs, todos metadata-only:
+    /// * `debug` por delta clasificado (tipo, índice, estimación y
+    ///   longitudes; nunca texto ni SSE crudo).
+    /// * un único `info` de primera actividad de razonamiento por request,
+    ///   para que el hidden thinking no sea invisible sin generar ruido por
+    ///   token.
+    ///
+    /// No altera el chunk, el forwarding, el deadline ni el stop reason, y no
+    /// emite `StageEvent`: un stage desconocido haría que
+    /// `publish_stage_global` retrocediera el rank del intento en el
+    /// `INFLIGHT_REGISTRY` compartido de `streaming` (3) a 0.
+    pub(super) fn record_reasoning_progress(&mut self, ctx: &StreamContext<'_>, line: &str) {
+        let elapsed_ms = ctx.started.elapsed().as_millis() as u64;
+        let probe = self.state.reasoning_progress.observe(line);
+        let Some(p) = probe.as_ref() else {
+            return;
+        };
+        self.state.reasoning_progress.record(p, elapsed_ms);
+
+        tracing::debug!(
+            request_id = %ctx.req.request_id,
+            elapsed_ms,
+            delta_type = %p.delta_type,
+            block_index = ?p.block_index,
+            estimated_tokens = ?p.estimated_tokens,
+            thinking_len = p.thinking_len,
+            text_len = p.text_len,
+            "anthropic reasoning delta observed (metadata-only)"
+        );
+        // Un único evento `info` por request, en la primera actividad de
+        // razonamiento: evita la invisibilidad trace-only sin generar ruido
+        // por token.
+        if p.is_hidden_progress() && !self.state.reasoning_first_logged {
+            self.state.reasoning_first_logged = true;
+            tracing::info!(
+                request_id = %ctx.req.request_id,
+                trace_id = %ctx.trace_id,
+                elapsed_ms,
+                block_index = ?p.block_index,
+                estimated_tokens = ?p.estimated_tokens,
+                "anthropic hidden thinking in progress (metadata-only; estimate is not billed usage)"
+            );
+        }
+    }
+
+    /// Emite el contador agregado de razonamiento al cerrar el stream. Un
+    /// solo `info` por request con los totales; nunca contenido. Se invoca en
+    /// el cierre normal y en los caminos de error/retorno de translated.rs,
+    /// para que un stream que muere con hidden thinking en curso deje rastro.
+    fn emit_reasoning_summary(&self, ctx: &StreamContext<'_>) {
+        let rp = &self.state.reasoning_progress;
+        if !rp.saw_reasoning() {
+            return;
+        }
+        tracing::info!(
+            request_id = %ctx.req.request_id,
+            hidden_events = rp.hidden_events,
+            visible_reasoning_events = rp.visible_reasoning_events,
+            text_delta_events = rp.text_delta_events,
+            estimated_tokens_sum = rp.estimated_tokens_sum,
+            ping_events = rp.ping_events,
+            first_activity_ms = ?rp.first_activity_ms,
+            first_block_index = ?rp.first_block_index,
+            "anthropic hidden-thinking metadata summary"
+        );
+    }
+}
+
+impl ChunkProcessor<'_> {
     pub(super) async fn handle_translated_done(
         &mut self,
         ctx: &StreamContext<'_>,
@@ -108,6 +188,7 @@ impl ChunkProcessor<'_> {
         if !payload_is_null {
             let sse_frame = crate::sse::build_sse_frame(final_json);
             if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
+                self.emit_reasoning_summary(ctx);
                 let fail_ctx = self.state.make_failure_context(ctx);
                 return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                     self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
@@ -115,6 +196,7 @@ impl ChunkProcessor<'_> {
             }
         }
 
+        self.emit_reasoning_summary(ctx);
         self.finish_chat_stream(ctx).await
     }
 
@@ -194,6 +276,7 @@ impl ChunkProcessor<'_> {
             stream.note_content_chunk();
         }
         if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
+            self.emit_reasoning_summary(ctx);
             let fail_ctx = self.state.make_failure_context(ctx);
             return Ok(crate::streaming::ChunkEvent::Return(Box::new(
                 self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
@@ -218,8 +301,17 @@ impl ChunkProcessor<'_> {
             .check_and_handle_inline_upstream_error(ctx, line_payload)
             .await
         {
+            // Un error inline del upstream corta el stream: el resumen
+            // metadata-only debe quedar antes del retorno para que un
+            // thinking en curso no se pierda.
+            self.emit_reasoning_summary(ctx);
             return Ok(ret);
         }
+
+        // Metadata-only: clasificar la línea ANTES del traductor, para que
+        // el hidden thinking (que el traductor convierte en liveness y
+        // descarta) quede registrado. No altera el chunk ni el forwarding.
+        self.record_reasoning_progress(ctx, line);
 
         let parsed = parse_translated_sse_line(
             self.state,
@@ -245,6 +337,7 @@ impl ChunkProcessor<'_> {
                     error = %e,
                     "failed to parse SSE line from upstream"
                 );
+                self.emit_reasoning_summary(ctx);
                 let acc_ref = self.state.acc.as_mut().map(|a| {
                     a.mark_partial();
                     &*a

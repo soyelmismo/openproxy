@@ -7,12 +7,16 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use openproxy_adapters::client_contract::providers::codex_state::CodexContractRuntime;
+use openproxy_adapters::client_contract::{
+    ContractError, ContractTransport, FetchRequest, FetchResponse, RefreshReport,
+};
 use openproxy_adapters::spoofer::{
     CLINE_SPOOFING_HEADERS, CLINE_TEST_LOCK, CODEX_TEST_LOCK, ClientSpoofer, ClineSpoofer,
     CodexSpoofer, KILOCODE_TEST_LOCK, KilocodeSpoofer, current_cline_ua, current_cline_version,
     current_codex_ua, current_codex_version, current_kilocode_ua, current_kilocode_version,
-    has_valid_codex_version, refresh_codex_version, reset_dynamic_cline_overrides,
-    reset_dynamic_codex_overrides, reset_dynamic_kilocode_overrides,
+    has_valid_codex_version, reset_dynamic_cline_overrides, reset_dynamic_codex_overrides,
+    reset_dynamic_kilocode_overrides,
 };
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
@@ -475,8 +479,98 @@ fn test_cline_codex_kilocode_dynamic_spoofer_overrides() {
     reset_dynamic_kilocode_overrides();
 }
 
+/// Transporte de contrato que sirve cada URL del pin Codex desde los
+/// fixtures locales del repositorio: release, ref del tag, tag object,
+/// Cargo.toml, guards y catálogo. Ninguna petición sale del proceso; una URL
+/// desconocida responde `404`.
+struct FixtureTransport {
+    fixtures: std::path::PathBuf,
+    ref_url: String,
+    tag_object_url: String,
+    raw_prefix: String,
+    commit: String,
+}
+
+impl FixtureTransport {
+    fn new() -> Self {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+        let read_json = |name: &str| -> serde_json::Value {
+            let bytes = std::fs::read(fixtures.join(name))
+                .unwrap_or_else(|error| panic!("fixture {name} ilegible: {error}"));
+            serde_json::from_slice(&bytes)
+                .unwrap_or_else(|error| panic!("fixture {name} no es JSON: {error}"))
+        };
+        let tag = read_json("codex-release-latest.json")["tag_name"]
+            .as_str()
+            .expect("codex-release-latest.json declara tag_name")
+            .to_string();
+        let tag_object = read_json("codex-tag-object.json");
+        let tag_object_sha = tag_object["sha"]
+            .as_str()
+            .expect("codex-tag-object.json declara sha")
+            .to_string();
+        let commit = tag_object["object"]["sha"]
+            .as_str()
+            .expect("codex-tag-object.json declara object.sha")
+            .to_string();
+        Self {
+            fixtures,
+            ref_url: format!("https://api.github.com/repos/openai/codex/git/refs/tags/{tag}"),
+            tag_object_url: format!(
+                "https://api.github.com/repos/openai/codex/git/tags/{tag_object_sha}"
+            ),
+            raw_prefix: format!(
+                "https://raw.githubusercontent.com/openai/codex/{commit}/codex-rs/"
+            ),
+            commit,
+        }
+    }
+
+    fn fixture(&self, relative: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.fixtures.join(relative)).ok()
+    }
+}
+
+impl ContractTransport for FixtureTransport {
+    fn fetch(
+        &self,
+        request: &FetchRequest,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<FetchResponse, ContractError>> + Send + '_>,
+    > {
+        let body = if request.url == "https://api.github.com/repos/openai/codex/releases/latest" {
+            self.fixture("codex-release-latest.json")
+        } else if request.url == self.ref_url {
+            self.fixture("codex-tag-ref.json")
+        } else if request.url == self.tag_object_url {
+            self.fixture("codex-tag-object.json")
+        } else if let Some(relative) = request.url.strip_prefix(&self.raw_prefix) {
+            self.fixture(&format!("codex-rust-v0.162.1/codex-rs/{relative}"))
+        } else {
+            None
+        };
+        let response = match body {
+            Some(body) => FetchResponse {
+                status: 200,
+                headers: Vec::new(),
+                body,
+            },
+            None => FetchResponse {
+                status: 404,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        };
+        Box::pin(async move { Ok(response) })
+    }
+}
+
+/// El contrato Codex completo se resuelve y activa con fixtures locales:
+/// release → ref del tag → tag object → commit → Cargo.toml → guards →
+/// catálogo, servidos por [`FixtureTransport`] (sin red), con persistencia
+/// del LKG. Se conservan las comprobaciones deterministas de headers.
 #[test]
-fn test_codex_dynamic_version_remote_refresh_and_header_validation() {
+fn test_codex_contract_refresh_from_local_fixtures_and_header_validation() {
     let _guard = CODEX_TEST_LOCK
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
@@ -521,41 +615,45 @@ fn test_codex_dynamic_version_remote_refresh_and_header_validation() {
             "0.159.0"
         );
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "openproxy-codex-contract-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
 
-        tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                let mut buf = [0u8; 1024];
-                let _ = stream.read(&mut buf).await;
-                let body = r#"{"tag_name":"rust-v0.162.0","name":"0.162.0"}"#;
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = stream.write_all(resp.as_bytes()).await;
-            }
-        });
+        let runtime = CodexContractRuntime::new(&dir);
+        let transport = FixtureTransport::new();
+        let expected_commit = transport.commit.clone();
+        let report = runtime
+            .refresh(std::sync::Arc::new(transport))
+            .await
+            .expect("el refresh del pin desde fixtures no debe fallar");
 
-        let mock_url = format!("http://{addr}/releases/latest");
-        unsafe {
-            std::env::set_var("OPENPROXY_CODEX_LATEST_RELEASE_URL", &mock_url);
-        }
-
-        let client = std::sync::Arc::new(UpstreamClient::new());
-        let refreshed = refresh_codex_version(&client).await;
-        assert_eq!(refreshed.as_deref(), Some("0.162.0"));
-        assert_eq!(current_codex_version(), "0.162.0");
+        let snapshot = match report {
+            RefreshReport::Activated { snapshot, .. } => snapshot,
+            other => panic!("se esperaba la activación del pin, got {other:?}"),
+        };
+        assert_eq!(snapshot.payload.version, "0.162.1");
+        assert_eq!(snapshot.payload.release_tag, "rust-v0.162.1");
+        assert_eq!(snapshot.payload.commit, expected_commit);
+        assert_eq!(snapshot.payload.catalog_models, 11);
+        assert!(snapshot.catalog_body().is_some());
         assert_eq!(
-            current_codex_ua(),
-            "codex-cli/0.162.0 (Windows 10.0.26200; x64)"
+            runtime.snapshot().unwrap().generation,
+            snapshot.generation,
+            "el snapshot activado queda cacheado tras el refresh"
         );
 
-        unsafe {
-            std::env::remove_var("OPENPROXY_CODEX_LATEST_RELEASE_URL");
-        }
+        let restarted = CodexContractRuntime::new(&dir)
+            .load()
+            .expect("el LKG persistido debe cargar");
+        assert_eq!(restarted.generation, snapshot.generation);
+        assert_eq!(restarted.payload.version, "0.162.1");
+        let _ = std::fs::remove_dir_all(&dir);
+
         reset_dynamic_codex_overrides();
         assert_eq!(current_codex_version(), "0.159.0");
     });

@@ -1,5 +1,8 @@
 use crate::{Pipeline, PipelineRequest};
+use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_types::combos::Combo;
+use openproxy_types::ids::ProviderId;
+use std::sync::Arc;
 
 pub use openproxy_types::context::{CustomProviderMeta, ResolvedTarget};
 
@@ -72,4 +75,26 @@ impl AsOpenAIMessage for &openproxy_types::OpenAIMessage {
     fn as_message(&self) -> &openproxy_types::OpenAIMessage {
         self
     }
+}
+
+/// Resolve the adapter for `provider_id` for this request, pinning the first
+/// resolution so every consumer observes the same instance.
+///
+/// The pin is memoized in `PipelineRequest::pinned_adapters`: a second call
+/// returns the very same `Arc`, even if `adapters` was refreshed in between.
+/// Because the map lives on the request and is shared through `Arc`, retries
+/// and races that clone the request reuse the decision instead of forking it.
+pub(crate) fn pinned_adapter(
+    req: &PipelineRequest,
+    adapters: &[ProviderAdapterEnum],
+    provider_id: &ProviderId,
+) -> Option<Arc<ProviderAdapterEnum>> {
+    let mut pins = req.pinned_adapters.lock();
+    if let Some(existing) = pins.get(provider_id) {
+        return Some(Arc::clone(existing));
+    }
+    let source = adapters.iter().find(|a| a.id() == provider_id)?;
+    let pinned = Arc::new(source.pinned_for_request());
+    pins.insert(provider_id.clone(), Arc::clone(&pinned));
+    Some(pinned)
 }

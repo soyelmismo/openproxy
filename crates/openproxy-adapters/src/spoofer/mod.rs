@@ -148,6 +148,7 @@ where
 
 pub mod antigravity;
 pub mod claude_code;
+pub mod claude_code_profile;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;

@@ -1,20 +1,61 @@
 use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
 
-pub const DEFAULT_CLAUDE_CODE_CLI_VERSION: &str = "2.1.280";
-pub const DEFAULT_CLAUDE_CODE_PACKAGE_VERSION: &str = "0.112.1";
+pub const DEFAULT_CLAUDE_CODE_CLI_VERSION: &str = "2.1.293";
+pub const DEFAULT_CLAUDE_CODE_PACKAGE_VERSION: &str = "0.128.0";
 pub const DEFAULT_CLAUDE_CODE_RUNTIME_VERSION: &str = "v26.3.0";
-pub const DEFAULT_CLAUDE_CODE_UA: &str = "claude-cli/2.1.280 (external, cli)";
-pub const DEFAULT_CLAUDE_CODE_BETA: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05";
+pub const DEFAULT_CLAUDE_CODE_UA: &str = "claude-cli/2.1.293 (external, cli)";
+pub const DEFAULT_CLAUDE_CODE_BETA: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,mid-conversation-tool-changes-2026-07-01,dangerous-tool-use-2026-09-03,thinking-display-updates-2026-08-18,afk-mode-2026-01-31";
 pub const DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 static CLAUDE_CODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
 
+/// A coherent profile tuple. Manual overrides are deliberately kept authoritative.
+pub fn current_claude_code_identity() -> (String, String, String, String) {
+    current_claude_code_identity_from(&super::claude_code_profile::current_profile())
+}
+
+/// El mismo tuple coherente anclado a un perfil concreto: el snapshot pinneado
+/// de esta petición. Los overrides manuales siguen ganando, porque la decisión
+/// explícita del despliegue no la cambia una captura.
+pub fn current_claude_code_identity_from(
+    profile: &super::claude_code_profile::ClaudeCodeProfile,
+) -> (String, String, String, String) {
+    let version = CLAUDE_CODE_OVERRIDES
+        .current_version("OPENPROXY_CLAUDE_CODE_CLI_VERSION", &profile.cli_version);
+    let value = |header: &str, env: &str, default: String| {
+        CLAUDE_CODE_OVERRIDES
+            .current_extra_header(header)
+            .or_else(|| std::env::var(env).ok().filter(|v| !v.trim().is_empty()))
+            .unwrap_or(default)
+    };
+    let ua = value(
+        "user-agent",
+        "OPENPROXY_CLAUDE_CODE_USER_AGENT",
+        format!("claude-cli/{version} (external, cli)"),
+    );
+    let package = value(
+        "x-stainless-package-version",
+        "OPENPROXY_CLAUDE_CODE_PACKAGE_VERSION",
+        profile.package_version.clone(),
+    );
+    let runtime = value(
+        "x-stainless-runtime-version",
+        "OPENPROXY_CLAUDE_CODE_RUNTIME_VERSION",
+        profile.runtime_version.clone(),
+    );
+    (ua, version, package, runtime)
+}
+
 /// Current dynamic version of Claude Code CLI.
 pub fn current_claude_code_version() -> String {
-    CLAUDE_CODE_OVERRIDES.current_version(
-        "OPENPROXY_CLAUDE_CODE_CLI_VERSION",
-        DEFAULT_CLAUDE_CODE_CLI_VERSION,
-    )
+    current_claude_code_version_from(&super::claude_code_profile::current_profile())
+}
+
+/// La versión de CLI del perfil pinneado de la petición.
+pub fn current_claude_code_version_from(
+    profile: &super::claude_code_profile::ClaudeCodeProfile,
+) -> String {
+    CLAUDE_CODE_OVERRIDES.current_version("OPENPROXY_CLAUDE_CODE_CLI_VERSION", &profile.cli_version)
 }
 
 /// Dynamic Claude Code User-Agent string.
@@ -36,21 +77,28 @@ pub fn current_claude_code_package_version() -> String {
     if let Some(v) = CLAUDE_CODE_OVERRIDES.current_extra_header("x-stainless-package-version") {
         return v;
     }
-    CLAUDE_CODE_OVERRIDES.current_version(
-        "OPENPROXY_CLAUDE_CODE_PACKAGE_VERSION",
-        DEFAULT_CLAUDE_CODE_PACKAGE_VERSION,
-    )
+    std::env::var("OPENPROXY_CLAUDE_CODE_PACKAGE_VERSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| super::claude_code_profile::current_profile().package_version)
 }
 
 /// Current dynamic runtime version of Claude Code CLI.
 pub fn current_claude_code_runtime_version() -> String {
+    current_claude_code_runtime_version_from(&super::claude_code_profile::current_profile())
+}
+
+/// La versión de runtime stainless del perfil pinneado de la petición.
+pub fn current_claude_code_runtime_version_from(
+    profile: &super::claude_code_profile::ClaudeCodeProfile,
+) -> String {
     if let Some(v) = CLAUDE_CODE_OVERRIDES.current_extra_header("x-stainless-runtime-version") {
         return v;
     }
-    CLAUDE_CODE_OVERRIDES.current_version(
-        "OPENPROXY_CLAUDE_CODE_RUNTIME_VERSION",
-        DEFAULT_CLAUDE_CODE_RUNTIME_VERSION,
-    )
+    std::env::var("OPENPROXY_CLAUDE_CODE_RUNTIME_VERSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| profile.runtime_version.clone())
 }
 
 /// Current dynamic Anthropic API version.
@@ -58,10 +106,10 @@ pub fn current_claude_code_anthropic_version() -> String {
     if let Some(v) = CLAUDE_CODE_OVERRIDES.current_extra_header("anthropic-version") {
         return v;
     }
-    CLAUDE_CODE_OVERRIDES.current_version(
-        "OPENPROXY_CLAUDE_CODE_ANTHROPIC_VERSION",
-        DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION,
-    )
+    std::env::var("OPENPROXY_CLAUDE_CODE_ANTHROPIC_VERSION")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION.to_string())
 }
 
 /// Set dynamic version override for Claude Code CLI in memory at runtime without recompiling.
@@ -170,7 +218,20 @@ impl ClaudeCodeSpoofer {
 
 impl ClientSpoofer for ClaudeCodeSpoofer {
     fn headers(&self) -> Vec<(String, String)> {
-        let ua = current_claude_code_ua();
+        self.headers_for_profile(&crate::spoofer::claude_code_profile::current_profile())
+    }
+}
+
+impl ClaudeCodeSpoofer {
+    /// Los headers del spoofer anclados al perfil pinneado de la petición: UA,
+    /// betas y versiones stainless salen de ESA generación, la misma que el
+    /// body y los headers de billing.
+    #[must_use]
+    pub fn headers_for_profile(
+        &self,
+        profile: &crate::spoofer::claude_code_profile::ClaudeCodeProfile,
+    ) -> Vec<(String, String)> {
+        let (ua, _version, package, runtime) = current_claude_code_identity_from(profile);
         let session = self
             .session_id
             .clone()
@@ -178,7 +239,12 @@ impl ClientSpoofer for ClaudeCodeSpoofer {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         let betas = if let Some(ref m) = self.model {
-            crate::adapters::claude_code::cloaking::build_claude_code_betas(m, false, self.is_oauth)
+            crate::adapters::claude_code::cloaking::build_claude_code_betas_from_profile(
+                m,
+                false,
+                self.is_oauth,
+                profile,
+            )
         } else {
             DEFAULT_CLAUDE_CODE_BETA.to_string()
         };
@@ -199,14 +265,8 @@ impl ClientSpoofer for ClaudeCodeSpoofer {
             ("X-Stainless-Runtime".into(), "node".into()),
             ("X-Stainless-Lang".into(), "js".into()),
             ("X-Stainless-Timeout".into(), "600".into()),
-            (
-                "X-Stainless-Runtime-Version".into(),
-                current_claude_code_runtime_version(),
-            ),
-            (
-                "X-Stainless-Package-Version".into(),
-                current_claude_code_package_version(),
-            ),
+            ("X-Stainless-Runtime-Version".into(), runtime),
+            ("X-Stainless-Package-Version".into(), package),
             ("X-Stainless-OS".into(), detect_os().into()),
             ("X-Stainless-Arch".into(), detect_arch().into()),
             ("X-Claude-Code-Session-Id".into(), session),

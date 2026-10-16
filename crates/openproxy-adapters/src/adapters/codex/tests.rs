@@ -561,3 +561,231 @@ fn test_patch_codex_request_object_sanitizes_input_image_parameters() {
         "mime_type parameter must be stripped for Codex"
     );
 }
+
+/// Un snapshot congelado del contrato fija headers y body de la MISMA
+/// generación: la versión y el user-agent salen del snapshot, y los defaults
+/// verificados por el pin (`store: false`, `tool_choice: "auto"`) se aplican
+/// sin pisar una decisión explícita del cliente.
+#[test]
+fn test_pinned_contract_drives_headers_and_body_of_one_generation() {
+    use crate::client_contract::providers::codex_runtime::{
+        CODEX_RUNTIME_EXTRACTOR_VERSION, CODEX_RUNTIME_RULE_SET_ID, CodexProfile,
+        CodexRequestDefaults,
+    };
+    use crate::client_contract::{
+        Candidate, ClientIdentity, ContractId, IDENTITY_ORIGIN_OFFICIAL, Snapshot,
+    };
+
+    let profile = CodexProfile {
+        version: "0.163.0".to_string(),
+        commit: "0000000000000000000000000000000000000000".to_string(),
+        release_tag: "rust-v0.163.0".to_string(),
+        originator: "codex_cli_rs".to_string(),
+        base_url: "https://chatgpt.com/backend-api/codex".to_string(),
+        residency_header: "x-openai-internal-codex-residency".to_string(),
+        routing_hint_header: "x-codex-routing-hint".to_string(),
+        models_endpoint_path: "models".to_string(),
+        client_version_query: "client_version".to_string(),
+        defaults: CodexRequestDefaults {
+            tool_choice: "auto".to_string(),
+            store: false,
+            stream: true,
+        },
+        rule_set_id: CODEX_RUNTIME_RULE_SET_ID.to_string(),
+        extractor_version: CODEX_RUNTIME_EXTRACTOR_VERSION,
+        catalog_models: 11,
+    };
+    let identity = ClientIdentity::versioned("0.163.0", IDENTITY_ORIGIN_OFFICIAL);
+    let candidate = Candidate::without_catalog(
+        ContractId::Codex,
+        identity,
+        CODEX_RUNTIME_RULE_SET_ID,
+        CODEX_RUNTIME_EXTRACTOR_VERSION,
+        Vec::new(),
+        profile,
+    );
+    let snapshot = Snapshot::from_candidate(candidate).expect("snapshot de prueba");
+
+    let adapter = CodexAdapter::new().with_pinned_contract(Arc::new(snapshot));
+    assert!(adapter.pinned_contract().is_some());
+
+    let headers = adapter.build_headers(
+        "tok",
+        TargetFormat::Responses,
+        &ModelId::new("gpt-5.6-luna"),
+    );
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(
+        find("version"),
+        Some("0.163.0"),
+        "el header version sale del snapshot congelado"
+    );
+    assert_eq!(
+        find("user-agent"),
+        Some("codex-cli/0.163.0 (Windows 10.0.26200; x64)")
+    );
+
+    let body = bytes::Bytes::from(
+        serde_json::to_vec(&serde_json::json!({"model": "gpt-5.6-luna", "input": []})).unwrap(),
+    );
+    let resolved_target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ComboTargetId(1),
+            combo_id: openproxy_types::ComboId(1),
+            provider_id: openproxy_types::ProviderId::new("codex"),
+            account_id: None,
+            model_row_id: Some(openproxy_types::ModelRowId(1)),
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 100,
+            active: true,
+            rate_limit_scope: openproxy_types::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+        },
+        model: openproxy_types::Model {
+            row_id: openproxy_types::ModelRowId(1),
+            provider_id: openproxy_types::ProviderId::new("codex"),
+            model_id: openproxy_types::ModelId::new("gpt-5.6-luna"),
+            target_format: openproxy_types::TargetFormat::Responses,
+            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+            context_length: Some(272_000),
+            max_output_tokens: Some(32_768),
+            model_type: "chat".into(),
+            ..Default::default()
+        },
+        api_key: "tok".to_string(),
+        api_key_label: None,
+        custom_meta: None,
+    };
+    let wrapped = adapter
+        .wrap_request_body(
+            body,
+            TargetFormat::Responses,
+            &ModelId::new("gpt-5.6-luna"),
+            &resolved_target,
+        )
+        .expect("wrap should succeed");
+    let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    assert_eq!(val["stream"], true);
+    assert_eq!(
+        val["store"], false,
+        "el default verificado por el pin viaja en el body"
+    );
+    assert_eq!(val["tool_choice"], "auto");
+}
+
+/// Sin snapshot congelado el comportamiento es el histórico: la versión la
+/// anuncia el spoofer y el body no lleva los defaults del contrato.
+#[test]
+fn test_without_a_pinned_contract_the_body_keeps_its_shape() {
+    let _guard = CODEX_TEST_LOCK.lock().unwrap();
+    reset_dynamic_codex_overrides();
+
+    let adapter = CodexAdapter::new();
+    assert!(adapter.pinned_contract().is_none());
+    let body = bytes::Bytes::from(
+        serde_json::to_vec(&serde_json::json!({"model": "gpt-5.6-luna", "input": []})).unwrap(),
+    );
+    let resolved_target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ComboTargetId(1),
+            combo_id: openproxy_types::ComboId(1),
+            provider_id: openproxy_types::ProviderId::new("codex"),
+            account_id: None,
+            model_row_id: Some(openproxy_types::ModelRowId(1)),
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 100,
+            active: true,
+            rate_limit_scope: openproxy_types::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+        },
+        model: openproxy_types::Model {
+            row_id: openproxy_types::ModelRowId(1),
+            provider_id: openproxy_types::ProviderId::new("codex"),
+            model_id: openproxy_types::ModelId::new("gpt-5.6-luna"),
+            target_format: openproxy_types::TargetFormat::Responses,
+            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+            context_length: Some(272_000),
+            max_output_tokens: Some(32_768),
+            model_type: "chat".into(),
+            ..Default::default()
+        },
+        api_key: "tok".to_string(),
+        api_key_label: None,
+        custom_meta: None,
+    };
+    let wrapped = adapter
+        .wrap_request_body(
+            body,
+            TargetFormat::Responses,
+            &ModelId::new("gpt-5.6-luna"),
+            &resolved_target,
+        )
+        .expect("wrap should succeed");
+    let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    assert_eq!(val["stream"], true);
+    assert!(
+        val.get("store").is_none() && val.get("tool_choice").is_none(),
+        "sin contrato congelado no se inyectan defaults"
+    );
+}
+
+/// El catálogo del snapshot se filtra por lo que el pin publica de verdad:
+/// modelos ocultos, no soportados por API o que exigen un cliente más nuevo
+/// no se listan.
+#[test]
+fn test_snapshot_catalog_filters_by_visibility_support_and_minimal_client() {
+    let catalog = json!({"models": [
+        {"slug": "m-list", "display_name": "L", "priority": 1, "visibility": "list", "supported_in_api": true, "minimal_client_version": "0.150.0"},
+        {"slug": "m-hidden", "display_name": "H", "priority": 2, "visibility": "hide", "supported_in_api": true},
+        {"slug": "m-old-client", "display_name": "O", "priority": 3, "visibility": "list", "supported_in_api": true, "minimal_client_version": "0.170.0"},
+        {"slug": "m-no-api", "display_name": "N", "priority": 4, "visibility": "list", "supported_in_api": false},
+        {"slug": "codex-auto-review", "display_name": "R", "priority": 5, "visibility": "list", "supported_in_api": true}
+    ]});
+    let bytes = serde_json::to_vec(&catalog).unwrap();
+
+    let visible = models::snapshot_catalog_models(&bytes, "0.162.1").unwrap();
+    let ids: Vec<&str> = visible.iter().map(|m| m.model_id.as_str()).collect();
+    assert_eq!(ids, vec!["m-list"]);
+
+    // El camino sin contrato mantiene su comportamiento histórico: solo
+    // excluye el modelo interno de review.
+    let unfiltered = models::parse_codex_models_json(&bytes).unwrap();
+    assert_eq!(unfiltered.len(), 4);
+}
+
+/// El catálogo real del pin, filtrado por la versión del snapshot.
+#[test]
+fn test_snapshot_catalog_of_the_pinned_fixture_filters_hidden_models() {
+    let catalog = include_str!(
+        "../../../../../fixtures/codex-rust-v0.162.1/codex-rs/models-manager/models.json"
+    );
+    let all = models::parse_codex_models_json(catalog.as_bytes()).unwrap();
+    let visible = models::snapshot_catalog_models(catalog.as_bytes(), "0.162.1").unwrap();
+    assert_eq!(all.len(), 10, "11 modelos menos el interno de review");
+    assert!(
+        visible.len() < all.len(),
+        "el filtrado real debe descartar modelos ocultos o no publicados"
+    );
+    assert!(
+        !visible
+            .iter()
+            .any(|m| m.model_id.as_str() == "codex-auto-review")
+    );
+}

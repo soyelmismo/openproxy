@@ -9,7 +9,7 @@ use openproxy_types::SelectionRegistry;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::config::{RacingConfig, RetriesConfig};
 use openproxy_types::error::CoreError;
-use openproxy_types::ids::{ApiKeyId, ComboId, RequestId, TraceId};
+use openproxy_types::ids::{ApiKeyId, ComboId, ProviderId, RequestId, TraceId};
 use rusqlite::Connection;
 
 use std::sync::Arc;
@@ -40,6 +40,18 @@ pub struct PipelineConfig {
     pub background_tx: tokio::sync::mpsc::Sender<crate::worker::BackgroundJob>,
 }
 
+/// Request-local map `ProviderId -> pinned adapter`, shared through `Arc` so
+/// that clones of a `PipelineRequest` (retries, races) observe the same pins.
+/// Never global, never thread-local.
+pub type PinnedAdapters = Arc<
+    parking_lot::Mutex<
+        std::collections::HashMap<
+            ProviderId,
+            Arc<openproxy_adapters::adapters::ProviderAdapterEnum>,
+        >,
+    >,
+>;
+
 #[derive(Debug, Clone)]
 pub struct PipelineRequest {
     pub request_id: RequestId,
@@ -60,6 +72,16 @@ pub struct PipelineRequest {
     pub pii_session: Arc<parking_lot::Mutex<Option<crate::pii::PiiSession>>>,
     pub compression_stats: Arc<parking_lot::Mutex<Option<CompressionStats>>>,
     pub proxy_override: Option<(String, String)>,
+
+    /// Adapter pins captured for this request, keyed by provider id.
+    ///
+    /// The first stage that resolves a provider captures the adapter here;
+    /// every later consumer (body wrap, headers, chat URL, finalization) and
+    /// every clone of this request (retries, races) reuses that exact
+    /// instance instead of re-resolving from `PipelineConfig::adapters`, which
+    /// may have been refreshed meanwhile. Shared through `Arc`, so cloning the
+    /// request never forks the decision.
+    pub pinned_adapters: PinnedAdapters,
 }
 
 #[derive(Debug)]

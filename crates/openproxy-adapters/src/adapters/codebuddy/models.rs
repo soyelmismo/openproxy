@@ -401,6 +401,49 @@ pub const CODEBUDDY_MODELS: &[CodeBuddyModelDef] = &[
     },
 ];
 
+pub(crate) fn codebuddy_contract_models(
+    snapshot: &crate::client_contract::Snapshot<
+        crate::client_contract::providers::codebuddy_runtime::CodeBuddyProfile,
+    >,
+) -> Option<Vec<DiscoveredModel>> {
+    use crate::client_contract::providers::codebuddy::CodeBuddyCatalog;
+
+    let catalog =
+        CodeBuddyCatalog::parse(std::str::from_utf8(snapshot.catalog_body()?).ok()?).ok()?;
+    Some(
+        catalog
+            .models
+            .into_iter()
+            .map(|model| {
+                let reasoning = model.supports_reasoning;
+                DiscoveredModel {
+                    model_id: ModelId::new(model.id),
+                    display_name: Some(model.name),
+                    target_format: TargetFormat::Openai,
+                    context_length: model
+                        .max_input_tokens
+                        .or_else(|| model.context_window.map(|window| window.default_length))
+                        .and_then(|value| i64::try_from(value).ok()),
+                    max_output_tokens: model
+                        .max_output_tokens
+                        .and_then(|value| i64::try_from(value).ok()),
+                    input_modalities: None,
+                    output_modalities: None,
+                    model_type: Some("chat".to_string()),
+                    family: None,
+                    capabilities: Some(openproxy_types::ModelCapabilities {
+                        vision: Some(model.supports_images),
+                        tool_calling: Some(model.supports_tool_call),
+                        reasoning,
+                        thinking: reasoning,
+                        ..Default::default()
+                    }),
+                }
+            })
+            .collect(),
+    )
+}
+
 pub fn codebuddy_static_models() -> Vec<DiscoveredModel> {
     CODEBUDDY_MODELS
         .iter()
