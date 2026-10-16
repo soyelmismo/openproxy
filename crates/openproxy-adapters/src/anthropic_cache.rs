@@ -371,6 +371,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_is_valid_cache_control() {
+        assert!(is_valid_cache_control(&json!({"type": "ephemeral"})));
+        assert!(!is_valid_cache_control(&json!({"type": "persistent"})));
+        assert!(!is_valid_cache_control(&json!({"other": "field"})));
+        assert!(!is_valid_cache_control(&json!("ephemeral")));
+        assert!(!is_valid_cache_control(&json!(null)));
+    }
+
+    #[test]
     fn test_string_system_prompt_gets_cache_control() {
         let mut input = json!({
             "model": "claude-3-5-sonnet",
