@@ -257,6 +257,7 @@ function onTargetDragEnd(e: DragEvent): void {
 
 function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): TemplateResult {
   const isSub = target.sub_combo_id != null;
+  const isDecisionMode = detailCombo?.priority_mode === "decision";
   const cdBadge = target.in_cooldown ? html` <span class="badge badge-cooldown">⏸</span>` : html``;
   const inactBadge = (target.provider_active === false || target.active === false) ? html` <span class="badge badge-inactive">⏸ inactive</span>` : html``;
   const missingBadge = target.is_missing ? html` <span class="badge badge-missing" title="Model is currently missing from provider catalog. Automatically skipped during routing and will re-enable when rediscovered.">👻 missing</span>` : html``;
@@ -268,7 +269,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     const subTargetsCount = subData?.targets?.length;
     const pm = subCombo?.priority_mode ? String(subCombo.priority_mode) : null;
 
-    const descTag = html`
+    const descTag = isDecisionMode ? html`
       <div class="target-desc-row" style="margin-top:4px;">
         <input type="text"
                draggable="false"
@@ -284,7 +285,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
                  target.description = val;
                  requestUpdate();
                }}>
-      </div>`;
+      </div>` : html``;
 
     const modelCell = html`
       <div class="subcombo-title-wrap">
@@ -382,7 +383,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     `;
   }
 
-  const descTag = html`
+  const descTag = isDecisionMode ? html`
     <div class="target-desc-row" style="margin-top:3px;">
       <input type="text"
              draggable="false"
@@ -398,7 +399,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
                target.description = val;
                requestUpdate();
              }}>
-    </div>`;
+    </div>` : html``;
   const modelCell = html`${target.model_display_name || target.model_id || "missing"}${cdBadge}${inactBadge}${missingBadge}${descTag}`;
   const providerCell = html`<a href="#/providers/${encodeURIComponent(target.provider_id)}">${target.provider_id}</a>`;
   const accountCell = target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`;

@@ -648,13 +648,14 @@ export function renderSubComboAccordion(
                     </thead>
                     <tbody>
                       ${subTargets.map((st) => {
+                        const isSubTarget = st.sub_combo_id != null;
                         const inactBadge = st.provider_active === false || st.active === false
                           ? html` <span class="badge badge-inactive">⏸ off</span>`
                           : html``;
                         const cdBadge = st.in_cooldown
                           ? html` <span class="badge badge-cooldown">⏸ CD</span>`
                           : html``;
-                        const missingBadge = st.is_missing
+                        const missingBadge = st.is_missing && !isSubTarget
                           ? html` <span class="badge badge-missing" title="Model is currently missing from provider catalog. Automatically skipped during routing and will re-enable when rediscovered.">👻 missing</span>`
                           : html``;
                         const tr = state.comboTestResults[subComboId]?.find((r) => r.target_id === st.id);
@@ -664,17 +665,29 @@ export function renderSubComboAccordion(
                           ? html`<span class="status-pill off">skipped</span>`
                           : html`<span class=${"status-pill " + statusPillClass(tr.status)}>${String(tr.status)}</span>${tr.elapsed_ms != null ? html` <small>${tr.elapsed_ms}ms</small>` : html``}`;
 
+                        const modelDisplayName = isSubTarget
+                          ? html`<span class="chip chip-subcombo" style="font-size:0.75rem;padding:2px 6px;">${icons.navCombos()} Sub-Combo</span> <strong class="subcombo-name">${st.sub_combo_name ?? "#" + st.sub_combo_id}</strong>`
+                          : html`<span class="sub-model-name">${st.model_display_name || st.model_id || "missing"}</span>`;
+
+                        const providerDisplay = isSubTarget
+                          ? html`<span class="chip chip-subcombo-accent" style="font-size:0.75rem;">combo</span>`
+                          : html`<a href="#/providers/${encodeURIComponent(st.provider_id)}">${st.provider_id}</a>`;
+
+                        const accountDisplay = isSubTarget
+                          ? html`<span class="muted">—</span>`
+                          : (st.account_id ? html`#${st.account_id}` : html`<em>rotate</em>`);
+
                         return html`
-                          <tr class="subcombo-child-row ${st.is_missing ? "target-ghost" : ""}">
+                          <tr class="subcombo-child-row ${st.is_missing && !isSubTarget ? "target-ghost" : ""}">
                             <td class="sub-col-order">${st.priority_order}</td>
                             <td class="sub-col-provider">
-                              <a href="#/providers/${encodeURIComponent(st.provider_id)}">${st.provider_id}</a>
+                              ${providerDisplay}
                             </td>
                             <td class="sub-col-account">
-                              ${st.account_id ? html`#${st.account_id}` : html`<em>rotate</em>`}
+                              ${accountDisplay}
                             </td>
                             <td class="sub-col-model">
-                              <span class="sub-model-name">${st.model_display_name || st.model_id || "missing"}</span>
+                              ${modelDisplayName}
                               ${cdBadge}${inactBadge}${missingBadge}
                             </td>
                             <td class="sub-col-ctx">
@@ -689,13 +702,24 @@ export function renderSubComboAccordion(
                             <td class="sub-col-test">${testStatus}</td>
                             <td class="sub-col-actions">
                               <div class="sub-actions-wrap">
-                                <button
-                                  class="small primary"
-                                  ?disabled=${st.is_missing}
-                                  title=${st.is_missing ? "Model is missing upstream" : "Test model"}
-                                  @click=${(e: Event) => onTestNestedTarget(subComboId, st.id, st.model_row_id, e, onUpdate)}>
-                                  ${icons.flask()}
-                                </button>
+                                ${isSubTarget
+                                  ? html`
+                                      <a
+                                        class="small button-link"
+                                        href="#/combos/${st.sub_combo_id}"
+                                        title="Open sub-combo">
+                                        ${icons.desktop()}
+                                      </a>
+                                    `
+                                  : html`
+                                      <button
+                                        class="small primary"
+                                        ?disabled=${st.is_missing}
+                                        title=${st.is_missing ? "Model is missing upstream" : "Test model"}
+                                        @click=${(e: Event) => onTestNestedTarget(subComboId, st.id, st.model_row_id, e, onUpdate)}>
+                                        ${icons.flask()}
+                                      </button>
+                                    `}
                                 <button
                                   class="small"
                                   title=${st.active !== false ? "Deactivate" : "Activate"}
@@ -704,7 +728,7 @@ export function renderSubComboAccordion(
                                 </button>
                                 <button
                                   class="small danger"
-                                  title="Remove model from sub-combo"
+                                  title="Remove target from sub-combo"
                                   @click=${() => onDeleteNestedTarget(subComboId, st.id, onUpdate)}>
                                   ${icons.trash()}
                                 </button>
