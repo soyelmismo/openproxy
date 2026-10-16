@@ -27,6 +27,63 @@ fn fresh_pool() -> (core_db::DbPool, PathBuf) {
     (pool, path)
 }
 
+/// La DB no puede redirigir un provider integrado, ni al cargar ni al recargar.
+#[tokio::test]
+async fn builtin_endpoints_ignore_database_on_load_and_reload() {
+    let state = make_state().await;
+    let builtins = adapters::builtin_adapters();
+    {
+        let w = state.db_pool().writer();
+        for builtin in &builtins {
+            providers::create(
+                &w,
+                providers::NewProvider {
+                    id: builtin.id(),
+                    name: "Integrado con endpoint obsoleto",
+                    base_url: "https://obsolete.example.test/zen/v1",
+                    auth_type: providers::AuthType::Bearer,
+                    format: providers::ProviderFormat::Openai,
+                    extra_headers_json: None,
+                    auto_activate_keyword: None,
+                    rate_limit_scope: providers::RateLimitScope::Account,
+                },
+            )
+            .expect("crear fila de prueba");
+        }
+    }
+    for round in 0..2 {
+        // La carga inicial y el hot-reload comparten este loader.
+        let loaded = AppState::load_adapters(state.db_pool()).expect("cargar adapters");
+        state.rebuild_adapters().await.expect("recargar adapters");
+        let reloaded = state.adapters();
+        for registry in [&loaded[..], &reloaded[..]] {
+            for builtin in &builtins {
+                let actual = registry.iter().find(|a| a.id() == builtin.id()).unwrap();
+                assert_eq!(actual.config().base_url, builtin.config().base_url);
+                assert_eq!(actual.config().format, builtin.config().format);
+                assert_eq!(
+                    actual.build_chat_url(
+                        openproxy_types::TargetFormat::Openai,
+                        &openproxy_types::ModelId::new("step-5-preview-free"),
+                    ),
+                    builtin.build_chat_url(
+                        openproxy_types::TargetFormat::Openai,
+                        &openproxy_types::ModelId::new("step-5-preview-free"),
+                    ),
+                    "endpoint integrado distinto en ronda {round}: {}",
+                    builtin.id(),
+                );
+            }
+        }
+        let w = state.db_pool().writer();
+        w.execute(
+            "UPDATE providers SET base_url = 'https://another.example.test/v1'",
+            [],
+        )
+        .expect("cambiar endpoints de la DB de prueba");
+    }
+}
+
 /// Build a minimal `AppState` mirroring the test helper in
 /// `crates/openproxy-server/src/handlers/admin.rs::tests::make_state_with_key`.
 async fn make_state() -> AppState {

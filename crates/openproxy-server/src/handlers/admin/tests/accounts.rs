@@ -1,5 +1,5 @@
 use super::common::*;
-use crate::handlers::admin::accounts::{refresh_account_quota, scan_accounts};
+use crate::handlers::admin::accounts::{refresh_account_quota, reorder_accounts, scan_accounts};
 
 #[tokio::test]
 async fn quota_refresh_supported_matrix() {
@@ -240,4 +240,292 @@ async fn adv_scan_endpoint_array_body_returns_4xx() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert!(resp.status().is_client_error());
+}
+
+/// Prioridad con la que quedó una cuenta en la DB.
+fn priority_of(state: &AppState, account_id: i64) -> i32 {
+    state.db_pool().with_conn(|c| {
+        c.query_row(
+            "SELECT priority FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id],
+            |r| r.get::<_, i32>(0),
+        )
+        .unwrap()
+    })
+}
+
+fn count_accounts(state: &AppState) -> i64 {
+    state.db_pool().with_conn(|c| {
+        c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0))
+            .unwrap()
+    })
+}
+
+/// El endpoint reescribe el conjunto completo del proveedor como 10, 20, 30…
+/// en el orden recibido.
+#[tokio::test]
+async fn reorder_endpoint_persists_requested_order() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let a = insert_test_account(&state, "antigravity");
+    let b = insert_test_account(&state, "antigravity");
+    let c = insert_test_account(&state, "antigravity");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, parsed) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [c, a, b]
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(parsed["reordered"], true);
+    assert_eq!(priority_of(&state, c), 10);
+    assert_eq!(priority_of(&state, a), 20);
+    assert_eq!(priority_of(&state, b), 30);
+    assert_eq!(count_accounts(&state), 3);
+}
+
+/// Una lista parcial no debe reordenar en silencio: la validación vive en la DB
+/// y el handler debe traducirla a 4xx, dejando las prioridades intactas.
+#[tokio::test]
+async fn reorder_endpoint_rejects_partial_list() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let a = insert_test_account(&state, "antigravity");
+    let _b = insert_test_account(&state, "antigravity");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [a]
+        })),
+    )
+    .await;
+
+    assert!(status.is_client_error());
+}
+
+/// `provider_id` vacío se rechaza en el handler antes de tocar la DB.
+#[tokio::test]
+async fn reorder_endpoint_rejects_empty_provider() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let a = insert_test_account(&state, "antigravity");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "",
+            "account_ids": [a]
+        })),
+    )
+    .await;
+
+    assert!(status.is_client_error());
+}
+
+/// Lista vacía: no hay nada que reordenar, se rechaza sin tocar la DB.
+#[tokio::test]
+async fn reorder_endpoint_rejects_empty_list() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": []
+        })),
+    )
+    .await;
+
+    assert!(status.is_client_error());
+}
+
+/// El reorden de un proveedor no debe tocar las cuentas de otro.
+#[tokio::test]
+async fn reorder_endpoint_is_scoped_to_its_provider() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let x = insert_test_account(&state, "antigravity");
+    let y = insert_test_account(&state, "antigravity");
+    let other = insert_test_account(&state, "openai");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [y, x]
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(priority_of(&state, y), 10);
+    assert_eq!(priority_of(&state, x), 20);
+    assert_eq!(priority_of(&state, other), 0, "otro proveedor no se toca");
+}
+
+/// Un ID de otro proveedor en la lista debe rechazarse: el conjunto no cuadra.
+#[tokio::test]
+async fn reorder_endpoint_rejects_foreign_account() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let a = insert_test_account(&state, "antigravity");
+    let foreign = insert_test_account(&state, "openai");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [a, foreign]
+        })),
+    )
+    .await;
+
+    assert!(status.is_client_error());
+}
+
+/// IDs duplicados: el conjunto no puede cuadrar dos veces contra el mismo hueco.
+#[tokio::test]
+async fn reorder_endpoint_rejects_duplicate_ids() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let a = insert_test_account(&state, "antigravity");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [a, a]
+        })),
+    )
+    .await;
+
+    assert!(status.is_client_error());
+}
+
+/// El endpoint vive tras `admin_auth_middleware`: sin token, 401. Monta el
+/// middleware real, no el handler pelado, o la prueba no demuestra nada.
+#[tokio::test]
+async fn reorder_endpoint_requires_auth() {
+    let tmp = tempdir();
+    let (state, _plaintext) = make_state_with_key(tmp.path()).await;
+    insert_test_account(&state, "antigravity");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::handlers::admin::auth::admin_auth_middleware,
+        ))
+        .layer(axum::Extension(axum::extract::connect_info::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        )))
+        .with_state(state.clone());
+
+    let (status, _) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        None,
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [1]
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// Con token válido el mismo montaje con middleware responde 200: la capa de
+/// auth deja pasar y el handler ejecuta el reorden.
+#[tokio::test]
+async fn reorder_endpoint_accepts_valid_admin_token() {
+    let tmp = tempdir();
+    let (state, plaintext) = make_state_with_key(tmp.path()).await;
+    let a = insert_test_account(&state, "antigravity");
+    let b = insert_test_account(&state, "antigravity");
+
+    let app = Router::new()
+        .route("/admin/accounts/reorder", post(reorder_accounts))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::handlers::admin::auth::admin_auth_middleware,
+        ))
+        .layer(axum::Extension(axum::extract::connect_info::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        )))
+        .with_state(state.clone());
+
+    let (status, parsed) = test_req(
+        &app,
+        "POST",
+        "/admin/accounts/reorder",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "provider_id": "antigravity",
+            "account_ids": [b, a]
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(parsed["reordered"], true);
+    assert_eq!(priority_of(&state, b), 10);
+    assert_eq!(priority_of(&state, a), 20);
 }

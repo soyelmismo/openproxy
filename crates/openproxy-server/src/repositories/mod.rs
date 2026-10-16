@@ -98,6 +98,10 @@ pub trait AccountRepository: Send + Sync {
         id: AccountId,
         input: openproxy_core::admin::UpdateAccountLabelInput,
     ) -> Result<(), CoreError>;
+    fn reorder_accounts(
+        &self,
+        input: openproxy_core::admin::ReorderAccountsInput,
+    ) -> Result<(), CoreError>;
 }
 
 /// Combo repository trait.
@@ -219,6 +223,14 @@ impl AccountRepository for SqliteRepository {
     ) -> Result<(), CoreError> {
         let w = self.writer();
         openproxy_core::admin::update_account_label(&w, id, &input)
+    }
+
+    fn reorder_accounts(
+        &self,
+        input: openproxy_core::admin::ReorderAccountsInput,
+    ) -> Result<(), CoreError> {
+        let w = self.writer();
+        openproxy_core::admin::reorder_accounts(&w, &input)
     }
 }
 

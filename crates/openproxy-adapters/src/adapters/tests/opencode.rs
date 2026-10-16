@@ -6,6 +6,108 @@ const ZEN: OpenCodeFlavor = OpenCodeFlavor::Zen;
 const GO: OpenCodeFlavor = OpenCodeFlavor::Go;
 
 #[test]
+fn opencode_endpoints_use_inference_in_all_dialects() {
+    for (adapter, base) in [
+        (
+            ProviderAdapterEnum::from_provider_id("opencode-zen").unwrap(),
+            "https://opencode.ai/inference/v1",
+        ),
+        (
+            ProviderAdapterEnum::from_provider_id("opencode-go").unwrap(),
+            "https://opencode.ai/inference/go/v1",
+        ),
+    ] {
+        assert_eq!(adapter.config().base_url, base);
+        for (format, path) in [
+            (TargetFormat::Openai, "/chat/completions"),
+            (TargetFormat::Anthropic, "/messages"),
+            (TargetFormat::Responses, "/responses"),
+            (
+                TargetFormat::Gemini,
+                "/models/gemini-3-flash:streamGenerateContent?alt=sse",
+            ),
+        ] {
+            assert_eq!(
+                adapter.build_chat_url(format, &openproxy_types::ModelId::new("gemini-3-flash")),
+                format!("{base}{path}"),
+            );
+        }
+    }
+}
+
+#[test]
+fn opencode_configured_headers_preserve_auth_and_drop_foreign_referer() {
+    let model = openproxy_types::ModelId::new("step-5-preview-free");
+    for provider in ["opencode-zen", "opencode-go"] {
+        for (format, auth_name, expected) in [
+            (TargetFormat::Openai, "authorization", "Bearer public"),
+            (TargetFormat::Responses, "authorization", "Bearer public"),
+            (TargetFormat::Anthropic, "x-api-key", "public"),
+            (TargetFormat::Gemini, "x-goog-api-key", "public"),
+        ] {
+            let mut adapter = ProviderAdapterEnum::from_provider_id(provider).unwrap();
+            adapter.config_mut().unwrap().extra_headers = vec![
+                ("aUtHoRiZaTiOn".into(), String::new()),
+                ("X-API-Key".into(), "  ".into()),
+                ("X-Goog-Api-Key".into(), String::new()),
+                ("hTtP-rEfErEr".into(), "https://example.invalid".into()),
+                ("X-Custom".into(), "preservado".into()),
+            ];
+            let headers = adapter.build_headers("", format, &model);
+            assert_eq!(
+                headers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(auth_name))
+                    .map(|(_, v)| v.as_str()),
+                Some(expected),
+            );
+            assert!(
+                !headers
+                    .iter()
+                    .any(|(k, _)| k.eq_ignore_ascii_case("http-referer"))
+            );
+            assert!(!headers.iter().any(|(k, v)| {
+                ["authorization", "x-api-key", "x-goog-api-key"]
+                    .iter()
+                    .any(|a| k.eq_ignore_ascii_case(a))
+                    && v.trim().is_empty()
+            }));
+            assert!(
+                headers
+                    .iter()
+                    .any(|(k, v)| k == "X-Custom" && v == "preservado")
+            );
+            // La credencial resuelta de una cuenta pagada tampoco se borra.
+            let paid = adapter.build_headers("credential-fixture", format, &model);
+            let expected_paid = if auth_name == "authorization" {
+                "Bearer credential-fixture"
+            } else {
+                "credential-fixture"
+            };
+            assert_eq!(
+                paid.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(auth_name))
+                    .map(|(_, v)| v.as_str()),
+                Some(expected_paid)
+            );
+            adapter
+                .config_mut()
+                .unwrap()
+                .extra_headers
+                .push((auth_name.into(), "override-explicito".into()));
+            let explicit = adapter.build_headers("", format, &model);
+            assert_eq!(
+                explicit
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(auth_name))
+                    .map(|(_, v)| v.as_str()),
+                Some("override-explicito")
+            );
+        }
+    }
+}
+
+#[test]
 fn test_classify_opencode_target_format() {
     assert_eq!(
         classify_opencode_target_format(ZEN, "claude-3-opus"),

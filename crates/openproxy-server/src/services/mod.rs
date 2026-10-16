@@ -123,6 +123,13 @@ impl AccountService {
     ) -> Result<(), CoreError> {
         self.repo.update_account_label(id, input)
     }
+
+    pub fn reorder(
+        &self,
+        input: openproxy_core::admin::ReorderAccountsInput,
+    ) -> Result<(), CoreError> {
+        self.repo.reorder_accounts(input)
+    }
 }
 
 /// Service for managing Combo business logic.

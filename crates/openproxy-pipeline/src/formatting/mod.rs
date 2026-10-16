@@ -121,6 +121,9 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
     if m.extra.contains_key("cache_control") {
         return true;
     }
+    if m.extra.contains_key("reasoning") && m.extra.contains_key("reasoning_content") {
+        return true;
+    }
     if m.role == "developer" {
         return true;
     }
@@ -262,9 +265,23 @@ fn sanitize_tool_calls(tool_calls: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// Algunos clientes reenvían el historial con `reasoning` y
+/// `reasoning_content` a la vez. Upstreams como NVIDIA NIM rechazan el
+/// cuerpo entero con un 400 de campo duplicado, así que nos quedamos con
+/// `reasoning_content`, que es el nombre estándar, y descartamos `reasoning`.
+///
+/// Solo actúa cuando coexisten los dos. Un `reasoning` suelto se deja pasar
+/// porque hay proveedores que únicamente entienden ese nombre.
+fn dedupe_reasoning_fields(msg: &mut OpenAIMessage) {
+    if msg.extra.contains_key("reasoning_content") {
+        msg.extra.remove("reasoning");
+    }
+}
+
 fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
     let mut patched = m.clone();
     patched.extra.remove("cache_control");
+    dedupe_reasoning_fields(&mut patched);
     if patched.role == "developer" {
         patched.role = "system".to_string();
     }

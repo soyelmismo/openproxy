@@ -11,6 +11,10 @@ use super::{
 use crate::spoofer::{ClientSpoofer, OpenCodeSpoofer};
 use openproxy_types::ResultExt;
 
+// Los endpoints integrados son autoridad del código, no de la fila persistida.
+const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/inference/v1";
+const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/inference/go/v1";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OpenCodeFlavor {
     Zen,
@@ -107,6 +111,20 @@ pub fn build_opencode_headers(
     headers.extend(OpenCodeSpoofer.headers());
 
     for (k, v) in &adapter.config().extra_headers {
+        // La atribución de un cliente OpenRouter no pertenece al contrato
+        // OpenCode y provoca FreeTierError incluso con autenticación válida.
+        if k.eq_ignore_ascii_case("HTTP-Referer") {
+            continue;
+        }
+        // Un override vacío no puede borrar la credencial resuelta ni el
+        // marcador público del acceso anónimo. Los no vacíos siguen vigentes.
+        if v.trim().is_empty()
+            && ["Authorization", "x-api-key", "x-goog-api-key"]
+                .iter()
+                .any(|name| k.eq_ignore_ascii_case(name))
+        {
+            continue;
+        }
         if let Some(pos) = headers
             .iter()
             .position(|(hk, _)| hk.eq_ignore_ascii_case(k))
@@ -174,16 +192,8 @@ pub struct OpenCodeAdapter {
 impl OpenCodeAdapter {
     pub fn new(flavor: OpenCodeFlavor) -> Self {
         let (id, name, base_url) = match flavor {
-            OpenCodeFlavor::Zen => (
-                "opencode-zen",
-                "OpenCode Zen",
-                "https://opencode.ai/inference/v1",
-            ),
-            OpenCodeFlavor::Go => (
-                "opencode-go",
-                "OpenCode Go",
-                "https://opencode.ai/inference/go/v1",
-            ),
+            OpenCodeFlavor::Zen => ("opencode-zen", "OpenCode Zen", OPENCODE_ZEN_BASE_URL),
+            OpenCodeFlavor::Go => ("opencode-go", "OpenCode Go", OPENCODE_GO_BASE_URL),
         };
 
         Self {

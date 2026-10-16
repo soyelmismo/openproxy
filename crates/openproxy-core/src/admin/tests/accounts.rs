@@ -89,7 +89,9 @@ fn create_account_encrypts_and_lists() {
         .into_iter()
         .find(|a| a.id == id2)
         .expect("present");
-    assert_eq!(a.priority, 100);
+    // Sin prioridad explícita la cuenta se añade al final del proveedor, en vez
+    // de heredar el 100 fijo que colisionaba con la primera.
+    assert_eq!(a.priority, 20);
     assert_eq!(a.label.as_deref(), Some("sk-another"));
 }
 
@@ -122,7 +124,8 @@ fn test_bulk_create_accounts() {
     assert_eq!(a1.label.as_deref(), Some("first-label"));
     assert_eq!(a1.priority, 50);
     let a2 = list.iter().find(|a| a.id == created_ids[1]).unwrap();
-    assert_eq!(a2.priority, 100);
+    // Sin prioridad explícita, cada elemento del lote se añade tras el anterior.
+    assert_eq!(a2.priority, 60);
 
     let second_batch = vec![
         bcai("sk-ant-key1-secret123456789", None, None), // duplicate from DB
