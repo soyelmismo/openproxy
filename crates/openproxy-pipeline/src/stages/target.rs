@@ -195,18 +195,16 @@ impl PipelineStage for FormattingStage {
         let current = ctx.current_target.as_ref().ok_or_else(|| {
             CoreError::Internal("missing current_target in pipeline context".into())
         })?;
-        let Some(adapter) = ctx
-            .pipeline
-            .config
-            .adapters
-            .iter()
-            .find(|a| a.id() == &current.target.provider_id)
-        else {
+        let Some(adapter) = crate::context::pinned_adapter(
+            &ctx.req,
+            &ctx.pipeline.config.adapters,
+            &current.target.provider_id,
+        ) else {
             let err = CoreError::ProviderNotFound(current.target.provider_id.to_string());
             return fail_stage!(ctx, &current.target, &err, None);
         };
 
-        let target_format = resolve_target_format(adapter, current.model.target_format);
+        let target_format = resolve_target_format(&adapter, current.model.target_format);
         let model_streaming = current.model.capabilities().and_then(|c| c.streaming);
         let adapter_streaming = adapter.forced_streaming();
         let stream = resolve_upstream_streaming(model_streaming, adapter_streaming);
@@ -227,7 +225,7 @@ impl PipelineStage for FormattingStage {
 
         let formatter = crate::formatting::get_formatter(target_format);
         let body_bytes = match formatter
-            .format_request(req_ref, &current.model, messages_ref, stream, adapter)
+            .format_request(req_ref, &current.model, messages_ref, stream, &adapter)
             .and_then(|body| {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             })
@@ -406,13 +404,11 @@ impl PipelineStage for DispatchStage {
             .as_ref()
             .ok_or_else(|| CoreError::Internal("missing combo in pipeline context".into()))?;
 
-        let Some(adapter) = ctx
-            .pipeline
-            .config
-            .adapters
-            .iter()
-            .find(|a| a.id() == &target.provider_id)
-        else {
+        let Some(adapter) = crate::context::pinned_adapter(
+            &ctx.req,
+            &ctx.pipeline.config.adapters,
+            &target.provider_id,
+        ) else {
             let err = CoreError::ProviderNotFound(target.provider_id.to_string());
             return fail_stage!(ctx, target, &err, Some(model));
         };
@@ -683,13 +679,11 @@ impl PipelineStage for CustomAdapterStage {
         };
         let cloned_target = current.target.clone();
         let target = &cloned_target;
-        let Some(_adapter) = ctx
-            .pipeline
-            .config
-            .adapters
-            .iter()
-            .find(|a| a.id() == &target.provider_id)
-        else {
+        let Some(_adapter) = crate::context::pinned_adapter(
+            &ctx.req,
+            &ctx.pipeline.config.adapters,
+            &target.provider_id,
+        ) else {
             let err = CoreError::ProviderNotFound(target.provider_id.to_string());
             return fail_stage!(with_trace; ctx, target, &err, Some(&current.model), 0);
         };
@@ -703,6 +697,10 @@ use super::target_headers::propagate_provider_target_headers;
 #[cfg(test)]
 #[path = "stream_policy_tests.rs"]
 mod stream_policy_tests;
+
+#[cfg(test)]
+#[path = "pin_tests.rs"]
+mod pin_tests;
 
 #[cfg(test)]
 #[path = "target_tests.rs"]

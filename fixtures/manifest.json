@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-14T04:35:59Z",
+  "note": "Fixtures descargadas y verificadas. No incluye credenciales. Los artefactos grandes se referencian por hash sin commitearse.",
+  "sources": {
+    "codex": {
+      "kind": "git_annotated_tag",
+      "repository": "https://github.com/openai/codex.git",
+      "tag": "rust-v0.162.1",
+      "workspace_version": "0.162.1",
+      "correspondence": {
+        "status": "verified",
+        "reason": "tag anotado desreferenciado a commit; Cargo.toml declara 0.162.1"
+      },
+      "fetch": [
+        {
+          "path": "fixtures/codex-tag-ref.json",
+          "url": "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1"
+        },
+        {
+          "path": "fixtures/codex-tag-object.json",
+          "url": "git tag object desreferenciado del annotated tag"
+        }
+      ]
+    },
+    "codebuddy": {
+      "kind": "npm_package",
+      "package": "@tencent-ai/codebuddy-code",
+      "version": "2.164.0",
+      "gitHead": null,
+      "correspondence": {
+        "status": "unverified",
+        "reason": "el paquete npm no expone gitHead; contenido integro (SHA-512 tarball vs npm, SHA-256 archivos vs unpkg) pero sin procedencia inmutable a commit"
+      },
+      "fetch": [
+        {
+          "path": "fixtures/codebuddy-code-2.164.0.tgz",
+          "url": "https://registry.npmjs.org/@tencent-ai/codebuddy-code/-/codebuddy-code-2.164.0.tgz"
+        },
+        {
+          "path": "fixtures/codebuddy-extracted/package.json",
+          "url": "unpkg sha256 verificado"
+        },
+        {
+          "path": "fixtures/codebuddy-extracted/product.json",
+          "url": "unpkg sha256 verificado"
+        },
+        {
+          "path": "fixtures/codebuddy-extracted/codebuddy.js",
+          "url": "extraido del tarball, unpkg sha256 verificado"
+        }
+      ]
+    },
+    "opencode": {
+      "kind": "npm_package_plus_source_tag",
+      "package": "@opencode/cli",
+      "npm_version": "2.0.28",
+      "source_tag": "v2.0.28",
+      "npm_gitHead": null,
+      "correspondence": {
+        "status": "unverified",
+        "reason": "ninguna de las 1031 versiones de @opencode/cli expone gitHead; el tarball npm es un launcher de 2962 bytes sin commit de build. El tag v2.0.28 coincide solo nominalmente con la version del manifest fuente."
+      },
+      "fetch": [
+        {
+          "path": "fixtures/opencode-cli-2.0.28.json",
+          "url": "https://registry.npmjs.org/@opencode%2Fcli"
+        },
+        {
+          "path": "fixtures/opencode-cli-2.0.28.tgz",
+          "url": "https://registry.npmjs.org/@opencode/cli/-/cli-2.0.28.tgz"
+        },
+        {
+          "path": "fixtures/opencode-tag-v2.0.28.lsremote.txt",
+          "url": "git ls-remote --tags https://github.com/anomalyco/opencode.git"
+        },
+        {
+          "path": "fixtures/opencode-v2.0.28/",
+          "url": "raw.githubusercontent.com/anomalyco/opencode/<commit>/<path>"
+        },
+        {
+          "path": "fixtures/opencode-runtime/zen-models.json",
+          "url": "https://opencode.ai/inference/v1/models"
+        },
+        {
+          "path": "fixtures/opencode-runtime/go-models.json",
+          "url": "https://opencode.ai/inference/go/v1/models"
+        }
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "fixtures/codebuddy-code-2.164.0.tgz",
+      "bytes": 58402277,
+      "sha256": "6d6f594e890a533cc8f635110e27e79e82e039a796703a7265a117cbab0281ed"
+    },
+    {
+      "path": "fixtures/codex-release-latest.json",
+      "bytes": 300133,
+      "sha256": "da76cb0b9bc5478376e39089f4584b202af5b3e770b10ae99950dc1df92f835f"
+    },
+    {
+      "path": "fixtures/codex-tag-object.json",
+      "bytes": 771,
+      "sha256": "e03b27d4c77f9f765d0a816f434cac24fc7c97bda1e81df26beaabc00f175969"
+    },
+    {
+      "path": "fixtures/codex-tag-ref.json",
+      "bytes": 382,
+      "sha256": "f7d6c6d00d986cc454715dee9117cd38288ae4a8c4fcefdf62a71a3556bb0c91"
+    },
+    {
+      "path": "fixtures/opencode-cli-2.0.28.json",
+      "bytes": 2307,
+      "sha256": "7a05632344ddca8328ee30d294a2fbc45a45cd836032230f37d94dd3d5322fb3"
+    },
+    {
+      "path": "fixtures/opencode-cli-2.0.28.tgz",
+      "bytes": 2962,
+      "sha256": "088d38127c529232164381213718f91652450baf3f65cfd380a4e84fd1a79245"
+    },
+    {
+      "path": "fixtures/opencode-tag-v2.0.28.lsremote.txt",
+      "bytes": 59,
+      "sha256": "dffdb7804069f9fb944b4d69ec421511008237aae652d852b1d770d1f723b820"
+    },
+    {
+      "path": "fixtures/spec-contract-autoupdate.md",
+      "bytes": 25299,
+      "sha256": "ade9bf67fe8b0f32b459286b5466b9100dda080cc92c5f18c389496e7fa12731"
+    },
+    {
+      "path": "fixtures/codebuddy/registry-latest.json",
+      "bytes": 3407,
+      "sha256": "66fd7639df3b8a4bb73543ae26ce61ea0bc56a81e33b68d90f3613b4b8344438"
+    },
+    {
+      "path": "fixtures/codebuddy-extracted/codebuddy.js",
+      "bytes": 27292535,
+      "sha256": "2d8e7c1aab61d62f983c85d9fc473c85a2d22afb0e13683920586ba69e82b4a3"
+    },
+    {
+      "path": "fixtures/codebuddy-extracted/package.json",
+      "bytes": 2740,
+      "sha256": "68e0ff61dfa12f526d40e6cc1de24ad7d7f06e93aa3f235753b61b0ddc5a11b8"
+    },
+    {
+      "path": "fixtures/codebuddy-extracted/product.json",
+      "bytes": 370825,
+      "sha256": "1ae650910ca9861b411a1be1db299800fadbb76673300609cf2e6711c0cae1ab"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/Cargo.toml",
+      "bytes": 21055,
+      "sha256": "c31fb138f0167e885a0dd349534b615a265f4190e7264a112070e7ea57188b05"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/codex-api/src/common.rs",
+      "bytes": 14178,
+      "sha256": "6d2bdb9fdbd443120b73734d13ba19912ef6883553df92a926a2fa887d61a6b6"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/codex-api/src/endpoint/models.rs",
+      "bytes": 14749,
+      "sha256": "b63ebf34bf4ae0490419a4cd976a0e935701d65f3e2be60f000d5fa6b692ad79"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/codex-api/src/requests/headers.rs",
+      "bytes": 1444,
+      "sha256": "98c9579a8f17327fda1792ffbf22e8d09241fdc79620c37b699d94cd9637cd47"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/core/src/client.rs",
+      "bytes": 119673,
+      "sha256": "6ca16eb5fb185192738d321c22eacf74664e0ae2c107176c1c8a7f23fde33089"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/core/tests/responses_headers.rs",
+      "bytes": 27716,
+      "sha256": "061b44ff073df55ac8a3027dfae41992df384aec1ddd550a2cba5dfc84aacd7c"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/login/src/auth/default_client.rs",
+      "bytes": 17919,
+      "sha256": "174e02e439013bf75cccdcfd36b9c23e31d9ee84835a0cc0b1f9d7a33391a064"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/model-provider-info/src/lib.rs",
+      "bytes": 31484,
+      "sha256": "93ce6cd0a65477dff89545b8b48853455da0654c4bcc5a1092596d88d9dfe25c"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/models-manager/models.json",
+      "bytes": 472072,
+      "sha256": "943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b"
+    },
+    {
+      "path": "fixtures/codex-rust-v0.162.1/codex-rs/models-manager/src/lib.rs",
+      "bytes": 798,
+      "sha256": "b31b6e8fdaebedbbf07999b27c02201020e8d876ae293ac05a8fe4bf051244d3"
+    },
+    {
+      "path": "fixtures/opencode-runtime/go-models.json",
+      "bytes": 3263,
+      "sha256": "3d3cae4edd918877f7ecec58b70e22e0816a945c16e60e16bf8b4eada353a1fa"
+    },
+    {
+      "path": "fixtures/opencode-runtime/zen-models.json",
+      "bytes": 7207,
+      "sha256": "eae679825624377f4ef6f1ed7da26f3176137aa78379b2417b77bb86fd2416d6"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/cli/package.json",
+      "bytes": 2882,
+      "sha256": "e1455a6a43b2200cc7ec67a5e58373c1a3cd3707557b174bdfdd4311b7493b5c"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/cli/script/build.ts",
+      "bytes": 11576,
+      "sha256": "89ca4306046a94069c198e6259fc9430fe1f9874c7d299b15d5a217a405882cd"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/console/app/src/lib/inference-proxy.ts",
+      "bytes": 3210,
+      "sha256": "7a1644f7ac982f6c534887ca3f38c95b3a5c576976dd3b4fb0da911178c8718b"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/core/package.json",
+      "bytes": 4687,
+      "sha256": "cc5b24afc13e59bf8c25aceee37ad2327bf1233d291313b3c4dfa2548ce05ba8"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/core/src/app.ts",
+      "bytes": 884,
+      "sha256": "c11731f94606f7c4cffc11822ee93de5849283f35b9ff12ee1fc1b753a92e3f9"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/core/src/session/affinity.ts",
+      "bytes": 486,
+      "sha256": "06187f3eb40c5f39386316abf1079327089af3c4f154737606a02ed5d8d3be22"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/core/src/session/model-request.ts",
+      "bytes": 19947,
+      "sha256": "53ba2f1d42e861a180f2673351338dd6252d34fedc4fc7ec6120e202a13a84cb"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/script/package.json",
+      "bytes": 394,
+      "sha256": "4dff7c3ef3817dd74344483bd612d5de3d1b92fbe0a57c0468fc114d75c2cfaa"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/packages/script/src/index.ts",
+      "bytes": 3090,
+      "sha256": "59c519269554ac65de5f0763a07d94cbc8a2a11fc6ac7ed9aaf621fae3013868"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/services/www/src/docs/content/console/go.mdx",
+      "bytes": 42284,
+      "sha256": "d704d80e37226fe7af83688e5e1cfa6d18ed7e1dc58a90c4d909baa4e6417ca5"
+    },
+    {
+      "path": "fixtures/opencode-v2.0.28/services/www/src/docs/content/console/models.mdx",
+      "bytes": 38716,
+      "sha256": "6ebf5b42c61df632027ac88e086265498ac3ff053411be63ed112d19317d5f14"
+    }
+  ]
+}

@@ -215,6 +215,7 @@ pub fn make_request(
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,
+        pinned_adapters: Default::default(),
     };
     (req, _dis_tx)
 }

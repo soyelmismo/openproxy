@@ -2,6 +2,8 @@ use super::{
     AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient, UpstreamRequest,
 };
+use crate::client_contract::Snapshot;
+use crate::spoofer::claude_code_profile::ClaudeCodeProfile;
 use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, ProviderMetadata};
 
 pub const CLAUDE_CODE_DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -9,7 +11,7 @@ pub const CLAUDE_CODE_USAGE_PATH: &str = "/api/oauth/usage";
 pub const CLAUDE_CODE_ANTHROPIC_VERSION: &str = "2023-06-01";
 pub const CLAUDE_CODE_BETA_HEADER: &str =
     "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14";
-pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
+pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.293 (external, cli)";
 
 pub mod cloaking;
 pub mod signing;
@@ -17,6 +19,13 @@ pub mod signing;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClaudeCodeAdapter {
     config: ProviderAdapterConfig,
+    /// Snapshot del contrato congelado por petición (ver
+    /// [`ProviderAdapter::pin_request_contract`]): headers, body, betas y TTL
+    /// de la petición leen la MISMA generación aunque el runtime global
+    /// refresque en paralelo. No se persiste: es estado de ejecución, no
+    /// configuración.
+    #[serde(skip, default)]
+    pinned: Option<Arc<Snapshot<ClaudeCodeProfile>>>,
 }
 
 impl ClaudeCodeAdapter {
@@ -32,7 +41,33 @@ impl ClaudeCodeAdapter {
                 format: AdapterFormat::Anthropic,
                 extra_headers: vec![],
             },
+            pinned: None,
         }
+    }
+
+    /// El snapshot del contrato congelado para esta petición, si hay uno.
+    #[must_use]
+    pub fn pinned_contract(&self) -> Option<&Arc<Snapshot<ClaudeCodeProfile>>> {
+        self.pinned.as_ref()
+    }
+
+    /// Congela un snapshot explícito: headers, body, betas y TTL de la petición
+    /// leen esa generación concreta. Lo usa el pipeline cuando ya tiene el
+    /// snapshot memoizado, y los tests.
+    #[must_use]
+    pub fn with_pinned_contract(mut self, pinned: Arc<Snapshot<ClaudeCodeProfile>>) -> Self {
+        self.pinned = Some(pinned);
+        self
+    }
+
+    /// El perfil de esta petición: el snapshot congelado si existe, si no el
+    /// activo del runtime. Un único punto para que ningún consumidor se salte
+    /// el pin.
+    fn request_profile(&self) -> ClaudeCodeProfile {
+        self.pinned.as_ref().map_or_else(
+            crate::spoofer::claude_code_profile::current_profile,
+            |snapshot| snapshot.payload.clone(),
+        )
     }
 
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
@@ -297,6 +332,15 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         Some(&mut self.config)
     }
 
+    fn pin_request_contract(&mut self) {
+        // Congela el snapshot activo (LKG en disco o semilla medida): headers,
+        // body, betas y TTL de la petición leen la MISMA generación aunque el
+        // runtime global refresque en paralelo. Sin runtime disponible el
+        // adapter sigue funcionando con su identidad configurada: el contrato
+        // es opt-in por petición.
+        self.pinned = crate::spoofer::claude_code_profile::ensure_loaded().ok();
+    }
+
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
         &["claude-code", "claude"]
     }
@@ -346,7 +390,15 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         let spoofer = crate::spoofer::ClaudeCodeSpoofer::new()
             .with_model(model.as_str())
             .with_oauth(true);
-        crate::adapters::traits::build_spoofer_headers(auth, &spoofer, &self.config.extra_headers)
+        // Los headers del spoofer salen del perfil congelado de esta petición:
+        // UA, betas y versiones stainless son de la MISMA generación que el
+        // body, aunque el runtime global refresque en paralelo.
+        let headers = spoofer.headers_for_profile(&self.request_profile());
+        crate::adapters::traits::build_spoofer_headers_from(
+            auth,
+            headers,
+            &self.config.extra_headers,
+        )
     }
 
     fn wrap_request_body(
@@ -410,12 +462,13 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                 }
             });
 
-        cloaking::cloak_claude_request_body(
+        cloaking::cloak_claude_request_body_from_profile(
             &mut json,
             model.as_str(),
             &account_uuid,
             &session_id,
             &device_id,
+            &self.request_profile(),
         );
 
         let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
@@ -440,6 +493,24 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         let mut json = serde_json::from_slice::<serde_json::Value>(&body)
             .map_err(|e| CoreError::Parse(format!("failed to parse claude-code request: {e}")))?;
 
+        // Read CLI, SDK and runtime from the pinned profile snapshot, with
+        // manual overrides. `request_profile()` returns the frozen generation
+        // when the pipeline pinned one, so billing, beta and identity headers
+        // cannot disagree with the body of this same request.
+        let identity =
+            crate::spoofer::claude_code::current_claude_code_identity_from(&self.request_profile());
+        let user_agent = identity.0;
+        let version = user_agent
+            .strip_prefix("claude-cli/")
+            .and_then(|rest| rest.split(' ').next())
+            .filter(|found| !found.is_empty())
+            .map_or(identity.1, ToString::to_string);
+        let package_version = identity.2;
+        let runtime_version = identity.3;
+
+        // Align billing with the final User-Agent, even across a profile reload.
+        apply_claude_code_billing_version(&mut json, &version);
+
         // The pipeline already resolved the canonical session and applied it as
         // the X-Claude-Code-Session-Id header. Mirror that value into the body
         // metadata so the signed payload and the routing header describe the
@@ -447,13 +518,9 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         sync_claude_session_id(&mut json, headers);
 
         // Regenerate the Anthropic-Beta capability set from the finalized body
-        // (post strip) so body-derived capabilities such as server-side
-        // fallback stay coherent with the bytes actually sent, while preserving
-        // any betas the downstream caller explicitly requested.
-        let has_fallbacks = json
-            .get("fallbacks")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|fallbacks| !fallbacks.is_empty());
+        // (post strip) so body-derived capabilities stay coherent with the bytes
+        // actually sent, while preserving any betas the downstream caller
+        // explicitly requested.
         // These capabilities belong to the payload, not the model name. Drop
         // stale defaults before regenerating them after parameter stripping.
         for (_, value) in headers
@@ -464,14 +531,37 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                 .split(',')
                 .map(str::trim)
                 .filter(|beta| {
-                    !beta.eq_ignore_ascii_case("server-side-fallback-2026-06-01")
-                        && !beta.eq_ignore_ascii_case("fallback-credit-2026-06-01")
+                    ![
+                        "server-side-fallback-2026-06-01",
+                        "fallback-credit-2026-06-01",
+                        cloaking::BETA_THINKING_DISPLAY_UPDATES,
+                        cloaking::BETA_REDACT_THINKING,
+                        cloaking::BETA_EXTENDED_CACHE_TTL,
+                        cloaking::BETA_STRUCTURED_OUTPUTS,
+                        cloaking::BETA_EFFORT,
+                    ]
+                    .iter()
+                    .any(|conditional| beta.eq_ignore_ascii_case(conditional))
                 })
                 .collect::<Vec<_>>()
                 .join(",");
         }
-        let body_betas = cloaking::build_claude_code_betas(model.as_str(), has_fallbacks, true);
+        let body_betas = cloaking::build_claude_code_betas_for_body_from_profile(
+            model.as_str(),
+            &json,
+            true,
+            &self.request_profile(),
+        );
         merge_claude_beta_header(headers, &body_betas);
+
+        // Pin the identity headers to the same snapshot as the billing version.
+        // Overrides still win: a value explicitly configured through
+        // `set_dynamic_claude_code_*`/env is what `current_*` already returned,
+        // and an incoming header is only replaced when it disagrees with that
+        // snapshot.
+        set_header_if_present(headers, "user-agent", &user_agent);
+        set_header_if_present(headers, "x-stainless-package-version", &package_version);
+        set_header_if_present(headers, "x-stainless-runtime-version", &runtime_version);
 
         let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
             CoreError::Parse(format!("failed to serialize claude-code request: {e}"))
@@ -775,6 +865,80 @@ fn sync_claude_session_id(json: &mut serde_json::Value, headers: &[(String, Stri
         "user_id".to_string(),
         serde_json::Value::String(user_id.to_string()),
     );
+}
+
+/// Aligns the billing header's `cc_version` with the pinned version used for
+/// the identity headers.
+///
+/// When the body already advertises the pinned version this is a no-op, so the
+/// common path never re-derives the build fingerprint and the signed bytes stay
+/// identical to what the wrapper produced. Only a mid-request profile reload
+/// (which is exactly the split this guards) rewrites the block, and it rebuilds
+/// the fingerprint from the pinned version so both halves stay consistent.
+fn apply_claude_code_billing_version(json: &mut serde_json::Value, version: &str) {
+    let (existing_text, entrypoint) = {
+        let Some(system) = json.get("system").and_then(|s| s.as_array()) else {
+            return;
+        };
+        let Some(first) = system.first().and_then(|b| b.as_object()) else {
+            return;
+        };
+        let Some(text) = first.get("text").and_then(|t| t.as_str()) else {
+            return;
+        };
+        if !text.starts_with("x-anthropic-billing-header:") {
+            return;
+        }
+        let entrypoint = text
+            .split("cc_entrypoint=")
+            .nth(1)
+            .and_then(|rest| rest.split(';').next())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("cli")
+            .to_string();
+        (text.to_string(), entrypoint)
+    };
+
+    // Already coherent: leave the block (and its fingerprint) untouched.
+    if existing_text.contains(&format!("cc_version={version}.")) {
+        return;
+    }
+
+    let message_text = cloaking::extract_first_user_message_text(json);
+    let (_, prev_req, prompt_id) = cloaking::extract_claude_billing_tags(json);
+    let billing_text = cloaking::generate_billing_header(
+        version,
+        &message_text,
+        &entrypoint,
+        prev_req.as_deref(),
+        prompt_id.as_deref(),
+    );
+
+    if let Some(first) = json
+        .get_mut("system")
+        .and_then(|s| s.as_array_mut())
+        .and_then(|arr| arr.first_mut())
+        .and_then(|block| block.as_object_mut())
+        && let Some(text) = first.get_mut("text")
+    {
+        *text = serde_json::Value::String(billing_text);
+    }
+}
+
+/// Replaces an existing header value in place when the key matches, keeping the
+/// caller's key casing and the position of their entry. Never inserts a header
+/// that was not already there: dropping or adding identity headers is the
+/// header builder's job, not the finalizer's.
+fn set_header_if_present(headers: &mut [(String, String)], key: &str, value: &str) {
+    for (existing_key, existing_value) in headers.iter_mut() {
+        if existing_key.eq_ignore_ascii_case(key) {
+            if existing_value != value {
+                *existing_value = value.to_string();
+            }
+            return;
+        }
+    }
 }
 
 /// Merge body-derived betas into the `anthropic-beta` header without dropping

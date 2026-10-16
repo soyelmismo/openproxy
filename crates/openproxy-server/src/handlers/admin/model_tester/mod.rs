@@ -493,6 +493,7 @@ pub async fn run_test_for_model(
                 pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 proxy_override,
+                pinned_adapters: Default::default(),
             };
 
             let start_req = std::time::Instant::now();
