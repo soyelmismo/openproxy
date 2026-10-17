@@ -395,6 +395,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
                 sub_combo_id: None,
                 priority_order: 1,
                 description: None,
+                selected_accounts: None,
             },
         )
         .expect("add_target c");

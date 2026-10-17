@@ -22,7 +22,7 @@ crate::def_table_select!(
     "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
      ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
      ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor, \
-     ct.thinking_effort, ct.description"
+     ct.thinking_effort, ct.description, ct.selected_accounts"
 );
 pub(crate) use combo_target_select;
 
@@ -59,7 +59,8 @@ crate::def_table_select!(
      ct.cooldown_max_secs, \
      ct.cooldown_factor, \
      ct.thinking_effort, \
-     ct.description"
+     ct.description, \
+     ct.selected_accounts"
 );
 pub(crate) use combo_target_with_model_select;
 
@@ -135,6 +136,7 @@ pub(crate) fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         cooldown_factor: @opt_u32(13),
         thinking_effort: 14,
         description: 15,
+        selected_accounts: @opt_json(16, Vec<AccountId>),
     })
 }
 
@@ -169,6 +171,7 @@ pub(crate) fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboT
         cooldown_factor: @opt_u32(21),
         thinking_effort: @opt_box_str(22),
         description: @opt_box_str(23),
+        selected_accounts: @opt_json(24, Vec<AccountId>),
     })
 }
 

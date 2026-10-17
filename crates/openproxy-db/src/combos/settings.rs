@@ -19,6 +19,7 @@ define_column_updaters! {
     pub fn update_target_cooldown_max(max: Option<u64> => max.map(|v| v as i64)) => "cooldown_max_secs";
     pub fn update_target_cooldown_factor(factor: Option<u32> => factor.map(i64::from)) => "cooldown_factor";
     pub fn update_target_description(description: Option<&str>) => "description";
+    pub fn update_target_selected_accounts(accounts: Option<&str>) => "selected_accounts";
 }
 
 define_column_updaters! {

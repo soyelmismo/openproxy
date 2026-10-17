@@ -42,6 +42,7 @@ export interface ComboTarget {
   cooldown_base_secs?: number | null;
   thinking_effort?: string | null;
   description?: string | null;
+  selected_accounts?: number[] | null;
 }
 
 export interface ComboTargetWithModel extends ComboTarget {

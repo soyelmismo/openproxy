@@ -213,6 +213,7 @@ pub struct ComboTargetUpdates<'a> {
     pub cooldown_factor: UpdateField<u32>,
     pub thinking_effort: UpdateField<&'a str>,
     pub description: UpdateField<&'a str>,
+    pub selected_accounts: UpdateField<Option<String>>,
 }
 
 impl ComboTargetUpdates<'_> {
@@ -226,6 +227,7 @@ impl ComboTargetUpdates<'_> {
             && self.cooldown_factor.is_ignore()
             && self.thinking_effort.is_ignore()
             && self.description.is_ignore()
+            && self.selected_accounts.is_ignore()
     }
 }
 
@@ -289,6 +291,35 @@ pub fn parse_combo_target_updates(
     let thinking_effort = parse_nullable_str(body, "thinking_effort")?;
     let description = parse_nullable_str(body, "description")?;
 
+    let selected_accounts = match body.get("selected_accounts") {
+        None => UpdateField::Ignore,
+        Some(serde_json::Value::Null) => UpdateField::Reset,
+        Some(serde_json::Value::Array(arr)) => {
+            let ids: Result<Vec<i64>, _> = arr
+                .iter()
+                .map(|v| {
+                    v.as_i64().ok_or_else(|| {
+                        ApiError(CoreError::Validation(
+                            "selected_accounts must contain integers".into(),
+                        ))
+                    })
+                })
+                .collect();
+            let ids = ids?;
+            let json = serde_json::to_string(&ids).map_err(|e| {
+                ApiError(CoreError::Validation(format!(
+                    "failed to serialize selected_accounts: {e}"
+                )))
+            })?;
+            UpdateField::Set(Some(json))
+        }
+        Some(_) => {
+            return Err(ApiError(CoreError::Validation(
+                "selected_accounts must be an array or null".into(),
+            )));
+        }
+    };
+
     let updates = ComboTargetUpdates {
         priority_order,
         weight,
@@ -299,6 +330,7 @@ pub fn parse_combo_target_updates(
         cooldown_factor,
         thinking_effort,
         description,
+        selected_accounts,
     };
 
     if updates.is_empty() {
@@ -351,6 +383,13 @@ pub fn apply_target_db_updates(
     match updates.description {
         UpdateField::Set(v) => core_combos::update_target_description(w, target_id, Some(v))?,
         UpdateField::Reset => core_combos::update_target_description(w, target_id, None)?,
+        UpdateField::Ignore => {}
+    }
+    match &updates.selected_accounts {
+        UpdateField::Set(v) => {
+            core_combos::update_target_selected_accounts(w, target_id, v.as_deref())?
+        }
+        UpdateField::Reset => core_combos::update_target_selected_accounts(w, target_id, None)?,
         UpdateField::Ignore => {}
     }
     Ok(())
@@ -482,6 +521,27 @@ mod tests {
         assert!(parse_combo_target_updates(&val_err).is_err());
     }
 
+    #[test]
+    fn test_parse_combo_target_updates_selected_accounts() {
+        let val_set = json!({"selected_accounts": [1, 2, 3]});
+        let updates = parse_combo_target_updates(&val_set).unwrap();
+        assert_eq!(
+            updates.selected_accounts,
+            UpdateField::Set(Some("[1,2,3]".to_string()))
+        );
+
+        let val_clear = json!({"selected_accounts": null});
+        let updates_clear = parse_combo_target_updates(&val_clear).unwrap();
+        assert_eq!(updates_clear.selected_accounts, UpdateField::Reset);
+
+        let val_ignore = json!({"weight": 2});
+        let updates_ignore = parse_combo_target_updates(&val_ignore).unwrap();
+        assert_eq!(updates_ignore.selected_accounts, UpdateField::Ignore);
+
+        let val_err = json!({"selected_accounts": "invalid"});
+        assert!(parse_combo_target_updates(&val_err).is_err());
+    }
+
     fn make_test_target(id: i64, combo_id: i64) -> types_combos::ComboTargetWithModel {
         types_combos::ComboTargetWithModel {
             id: ComboTargetId(id),
@@ -509,6 +569,7 @@ mod tests {
             sub_combo_name: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         }
     }
 

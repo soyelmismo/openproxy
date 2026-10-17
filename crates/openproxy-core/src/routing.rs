@@ -417,6 +417,7 @@ pub fn build_synthetic_combo(
         cooldown_factor: None,
         thinking_effort: None,
         description: None,
+        selected_accounts: None,
     };
     let combo = Combo {
         id: ComboId(SYNTHETIC_COMBO_ID),

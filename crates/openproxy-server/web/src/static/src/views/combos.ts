@@ -44,6 +44,7 @@ function formatTokens(n: number): string {
 let detailComboId: number | null = null;
 let detailCombo: Combo | null = null;
 let detailTargets: ComboTargetWithModel[] = [];
+let openAccountMenuTargetId: number | null = null;
 
 async function patchCombo(id: number, body: Record<string, unknown>): Promise<void> {
   try {
@@ -402,7 +403,97 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     </div>` : html``;
   const modelCell = html`${target.model_display_name || target.model_id || "missing"}${cdBadge}${inactBadge}${missingBadge}${descTag}`;
   const providerCell = html`<a href="#/providers/${encodeURIComponent(target.provider_id)}">${target.provider_id}</a>`;
-  const accountCell = target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`;
+
+  // Render accounts selector or display
+  let accountCell: TemplateResult;
+  if (target.sub_combo_id != null) {
+    accountCell = html`—`;
+  } else {
+    const provAccounts = (state.accounts || []).filter((a) => a.provider_id === target.provider_id);
+    if (provAccounts.length <= 1) {
+      accountCell = target.account_id ? html`#${target.account_id}` : html`<em>${t("combos.target.rotate")}</em>`;
+    } else {
+      const isOpen = openAccountMenuTargetId === target.id;
+      const selected = target.selected_accounts ?? null;
+      let label = t("combos.target.rotate");
+      if (selected !== null) {
+        if (selected.length === 0) {
+          label = "None (skipped)";
+        } else if (selected.length === 1) {
+          const acc = provAccounts.find((a) => a.id === selected[0]);
+          label = acc ? (acc.label || `#${acc.id}`) : `#${selected[0]}`;
+        } else if (selected.length === provAccounts.length) {
+          label = `All (${provAccounts.length})`;
+        } else {
+          label = `${selected.length}/${provAccounts.length} selected`;
+        }
+      }
+
+      const isAllSelected = selected === null || selected.length === provAccounts.length;
+
+      accountCell = html`
+        <div class="target-accounts-dropdown ${isOpen ? "open" : ""}" @click=${(e: Event) => e.stopPropagation()}>
+          <button type="button" class="target-accounts-btn" @click=${(e: Event) => {
+            e.stopPropagation();
+            openAccountMenuTargetId = isOpen ? null : target.id;
+            requestUpdate();
+          }}>
+            <span>${label}</span>
+            <small style="opacity:0.7">▾</small>
+          </button>
+          ${isOpen ? html`
+            <div class="target-accounts-menu" @click=${(e: Event) => e.stopPropagation()}>
+              <label class="target-accounts-item" style="font-weight:600">
+                <input type="checkbox"
+                       .checked=${isAllSelected}
+                       @change=${async (e: Event) => {
+                         const chk = (e.target as HTMLInputElement).checked;
+                         const newVal = chk ? null : [];
+                         await api(`/combos/${detailComboId}/targets/${target.id}`, {
+                           method: "PATCH",
+                           body: JSON.stringify({ selected_accounts: newVal }),
+                         });
+                         target.selected_accounts = newVal;
+                         requestUpdate();
+                       }}>
+                <span>All (${t("combos.target.rotate")})</span>
+              </label>
+              <div class="target-accounts-divider"></div>
+              ${provAccounts.map((acc) => {
+                const isChecked = selected === null ? true : selected.includes(acc.id);
+                return html`
+                  <label class="target-accounts-item">
+                    <input type="checkbox"
+                           .checked=${isChecked}
+                           @change=${async (e: Event) => {
+                             const chk = (e.target as HTMLInputElement).checked;
+                             let currentList: number[] = selected === null
+                               ? provAccounts.map((a) => a.id)
+                               : [...selected];
+                             if (chk) {
+                               if (!currentList.includes(acc.id)) currentList.push(acc.id);
+                             } else {
+                               currentList = currentList.filter((id) => id !== acc.id);
+                             }
+                             const toSend = currentList.length === provAccounts.length ? null : currentList;
+                             await api(`/combos/${detailComboId}/targets/${target.id}`, {
+                               method: "PATCH",
+                               body: JSON.stringify({ selected_accounts: toSend }),
+                             });
+                             target.selected_accounts = toSend;
+                             requestUpdate();
+                           }}>
+                    <span>${acc.label ? `${acc.label} (#${acc.id})` : `#${acc.id}`}</span>
+                  </label>
+                `;
+              })}
+            </div>
+          ` : html``}
+        </div>
+      `;
+    }
+  }
+
   const contextCell = target.is_missing
     ? html`<span class="muted" title="Model is missing upstream">— (missing)</span>`
     : (target.context_length != null ? html`<span title=${String(target.context_length)}>${formatTokens(target.context_length)}</span>` : html`—`);
@@ -525,6 +616,13 @@ export async function mountCombos(opts: { detailId?: number } = {}): Promise<(()
     detailComboId = opts.detailId; detailCombo = null; detailTargets = [];
     return createView<{ combo: Combo | null; targets: ComboTargetWithModel[] }>({
       loader: async () => {
+        if (!state.accounts || state.accounts.length === 0) {
+          try {
+            state.accounts = (await api("/accounts")) as typeof state.accounts;
+          } catch {
+            // ignore
+          }
+        }
         const [combo, targets] = await Promise.all([
           api("/combos/" + opts.detailId).catch(() => null) as Promise<Combo | null>,
           api("/combos/" + opts.detailId + "/targets") as Promise<ComboTargetWithModel[]>,

@@ -96,6 +96,8 @@ pub struct ComboTarget {
     pub thinking_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_accounts: Option<Vec<AccountId>>,
 }
 
 impl Default for ComboTarget {
@@ -117,6 +119,7 @@ impl Default for ComboTarget {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         }
     }
 }
@@ -233,6 +236,8 @@ pub struct ComboTargetWithModel {
     pub thinking_effort: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<Box<str>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_accounts: Option<Vec<AccountId>>,
 }
 
 /// Input for adding a target to a combo.
@@ -249,6 +254,8 @@ pub struct AddTargetInput {
     pub priority_order: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_accounts: Option<Vec<AccountId>>,
 }
 
 impl Combo {
@@ -341,6 +348,7 @@ mod tests {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         };
 
         let mut combo = Combo {

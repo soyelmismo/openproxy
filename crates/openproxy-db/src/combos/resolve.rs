@@ -286,10 +286,28 @@ fn expand_single_target_rotation(
         return Ok(());
     }
     let healthy_accounts = fetch_healthy_accounts(conn, &target.provider_id)?;
-    if healthy_accounts.is_empty() {
+    let candidate_accounts: Vec<AccountId> = if let Some(ref allowed) = target.selected_accounts {
+        if allowed.is_empty() {
+            // Empty list means no accounts allowed/all ignored
+            Vec::new()
+        } else {
+            healthy_accounts
+                .into_iter()
+                .filter(|id| allowed.contains(id))
+                .collect()
+        }
+    } else {
+        healthy_accounts
+    };
+
+    if candidate_accounts.is_empty() {
+        if target.selected_accounts.is_some() {
+            // User explicitly restricted accounts and none are eligible/healthy
+            return Ok(());
+        }
         out.push(target);
     } else {
-        for acc_id in healthy_accounts {
+        for acc_id in candidate_accounts {
             let mut ct = target.clone();
             ct.account_id = Some(acc_id);
             out.push(ct);
