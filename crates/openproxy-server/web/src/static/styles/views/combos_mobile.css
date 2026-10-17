@@ -383,6 +383,22 @@
     width: 100%;
   }
 
+  .combo-target-card-row .col-target-account {
+    position: relative;
+  }
+
+  .combo-target-card-row .target-accounts-dropdown {
+    max-width: 60%;
+    display: inline-flex;
+    justify-content: flex-end;
+  }
+
+  .combo-target-card-row .target-accounts-btn {
+    max-width: 100%;
+    text-overflow: ellipsis;
+    overflow: hidden;
+  }
+
   .target-actions-wrap {
     display: flex;
     flex-wrap: wrap;

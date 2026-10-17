@@ -45,6 +45,7 @@ let detailComboId: number | null = null;
 let detailCombo: Combo | null = null;
 let detailTargets: ComboTargetWithModel[] = [];
 let openAccountMenuTargetId: number | null = null;
+let openAccountMenuPos: { top: number; left: number } | null = null;
 
 async function patchCombo(id: number, body: Record<string, unknown>): Promise<void> {
   try {
@@ -433,16 +434,48 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
 
       accountCell = html`
         <div class="target-accounts-dropdown ${isOpen ? "open" : ""}" @click=${(e: Event) => e.stopPropagation()}>
-          <button type="button" class="target-accounts-btn" @click=${(e: Event) => {
+          <button type="button" class="target-accounts-btn" @click=${(e: MouseEvent) => {
             e.stopPropagation();
-            openAccountMenuTargetId = isOpen ? null : target.id;
+            if (isOpen) {
+              openAccountMenuTargetId = null;
+              openAccountMenuPos = null;
+            } else {
+              openAccountMenuTargetId = target.id;
+              const btn = e.currentTarget as HTMLElement;
+              const rect = btn.getBoundingClientRect();
+              const menuWidth = 260;
+              const menuMaxHeight = 280;
+              const margin = 8;
+
+              let left = rect.left;
+              if (left + menuWidth > window.innerWidth - margin) {
+                left = Math.max(margin, window.innerWidth - menuWidth - margin);
+              }
+
+              let top = rect.bottom + 4;
+              if (top + menuMaxHeight > window.innerHeight - margin) {
+                const spaceAbove = rect.top - margin;
+                if (spaceAbove > 150) {
+                  top = Math.max(margin, rect.top - menuMaxHeight - 4);
+                }
+              }
+              openAccountMenuPos = { top, left };
+            }
             requestUpdate();
           }}>
             <span>${label}</span>
             <small style="opacity:0.7">▾</small>
           </button>
-          ${isOpen ? html`
-            <div class="target-accounts-menu" @click=${(e: Event) => e.stopPropagation()}>
+          ${isOpen && openAccountMenuPos ? html`
+            <div class="target-accounts-backdrop" @click=${(e: Event) => {
+              e.stopPropagation();
+              openAccountMenuTargetId = null;
+              openAccountMenuPos = null;
+              requestUpdate();
+            }}></div>
+            <div class="target-accounts-menu"
+                 style="top:${openAccountMenuPos.top}px; left:${openAccountMenuPos.left}px;"
+                 @click=${(e: Event) => e.stopPropagation()}>
               <label class="target-accounts-item" style="font-weight:600">
                 <input type="checkbox"
                        .checked=${isAllSelected}
