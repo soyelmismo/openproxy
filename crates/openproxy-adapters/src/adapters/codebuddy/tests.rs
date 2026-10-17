@@ -151,6 +151,7 @@ fn dummy_codebuddy_resolved_target() -> openproxy_types::context::ResolvedTarget
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

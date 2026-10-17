@@ -183,6 +183,7 @@ fn resolved_target(account_id: AccountId, model: &str) -> ResolvedTarget {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: Model {
             row_id: ModelRowId(1),

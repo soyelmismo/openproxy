@@ -114,7 +114,7 @@ impl PipelineChain {
                     chain: self,
                     next_index: index + 1,
                 };
-                self.stages[index].execute(ctx, next).await
+                Box::pin(self.stages[index].execute(ctx, next)).await
             } else {
                 Err(CoreError::Validation(
                     "Pipeline chain reached end without a result".to_string(),

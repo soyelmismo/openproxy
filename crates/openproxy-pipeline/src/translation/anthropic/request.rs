@@ -277,19 +277,78 @@ fn append_assistant_message(
     }
 }
 
+fn convert_openai_part_to_anthropic(part: &serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = part.as_object() {
+        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if typ == "image_url" || typ == "input_image" {
+            let url_str = obj
+                .get("image_url")
+                .and_then(|u| {
+                    if let Some(s) = u.as_str() {
+                        Some(s)
+                    } else {
+                        u.get("url").and_then(|v| v.as_str())
+                    }
+                })
+                .or_else(|| obj.get("url").and_then(|v| v.as_str()));
+
+            if let Some(url) = url_str {
+                if let Some(data_part) = url.strip_prefix("data:") {
+                    if let Some((media_type, base64_data)) = data_part.split_once(";base64,") {
+                        return json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": base64_data,
+                            }
+                        });
+                    }
+                } else if url.starts_with("http://") || url.starts_with("https://") {
+                    return json!({
+                        "type": "image",
+                        "source": {
+                            "type": "url",
+                            "url": url,
+                        }
+                    });
+                }
+            }
+        }
+    }
+    part.clone()
+}
+
 fn append_user_message(
     m: &OpenAIMessage,
     conversation: &mut Vec<AnthropicMessage>,
     pending_tool_results: &mut Vec<serde_json::Value>,
 ) {
-    let text = m.extract_text_cow();
     if pending_tool_results.is_empty() {
+        if let Some(serde_json::Value::Array(parts)) = &m.content {
+            let converted_parts: Vec<serde_json::Value> =
+                parts.iter().map(convert_openai_part_to_anthropic).collect();
+            conversation.push(AnthropicMessage {
+                role: "user".to_string(),
+                content: serde_json::Value::Array(converted_parts),
+            });
+            return;
+        }
+
+        let text = m.extract_text_cow();
         conversation.push(AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::Value::String(text.into_owned()),
         });
     } else {
-        pending_tool_results.push(json!({"type": "text", "text": text}));
+        if let Some(serde_json::Value::Array(parts)) = &m.content {
+            for part in parts {
+                pending_tool_results.push(convert_openai_part_to_anthropic(part));
+            }
+        } else {
+            let text = m.extract_text_cow();
+            pending_tool_results.push(json!({"type": "text", "text": text}));
+        }
         conversation.push(AnthropicMessage {
             role: "user".to_string(),
             content: serde_json::Value::Array(std::mem::take(pending_tool_results)),

@@ -121,6 +121,7 @@ fn test_wrap_request_body_enforces_stream_true() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -651,6 +652,7 @@ fn test_pinned_contract_drives_headers_and_body_of_one_generation() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -714,6 +716,7 @@ fn test_without_a_pinned_contract_the_body_keeps_its_shape() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

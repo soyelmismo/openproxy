@@ -322,6 +322,7 @@ fn test_gemini_adapter_wrap_request_body_strips_thinking_config_for_gemma() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

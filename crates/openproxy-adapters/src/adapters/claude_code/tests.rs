@@ -97,6 +97,7 @@ fn test_claude_code_wrap_request_body() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -208,6 +209,7 @@ fn test_claude_code_opus_55_fallbacks_and_betas() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -465,6 +467,7 @@ fn test_claude_code_rolling_cache_breakpoint_advances_multi_turn() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -552,6 +555,7 @@ fn test_claude_dynamic_version_in_billing_header() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -640,6 +644,7 @@ fn resolved_for(model_id: &str) -> openproxy_types::context::ResolvedTarget {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

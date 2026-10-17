@@ -43,6 +43,7 @@ fn test_commandcode_wrap_request_body() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -160,6 +161,7 @@ fn test_commandcode_wrap_request_body_with_tool_calls_and_results() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

@@ -282,6 +282,7 @@ mod tests {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         };
         assert!(cb.is_target_healthy(&target_no_acc));
 

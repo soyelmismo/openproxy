@@ -34,6 +34,7 @@ fn ati(pid: &str, mid: ModelRowId, prio: i32) -> AddTargetInput {
         sub_combo_id: None,
         priority_order: prio,
         description: None,
+        selected_accounts: None,
     }
 }
 

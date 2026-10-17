@@ -223,6 +223,7 @@ async fn test_combo_decision_routing_simple_vs_complex() {
                 sub_combo_id: None,
                 priority_order: 1,
                 description: Some("Fast simple questions and casual conversation".into()),
+                selected_accounts: None,
             },
         )
         .expect("add fast target");
@@ -237,6 +238,7 @@ async fn test_combo_decision_routing_simple_vs_complex() {
                 sub_combo_id: None,
                 priority_order: 2,
                 description: Some("Complex deep coding in Rust and advanced architecture".into()),
+                selected_accounts: None,
             },
         )
         .expect("add deep target");
@@ -352,6 +354,7 @@ async fn test_combo_decision_fallback_on_timeout() {
                 sub_combo_id: None,
                 priority_order: 1,
                 description: Some("Default target".into()),
+                selected_accounts: None,
             },
         )
         .expect("add target");
@@ -469,6 +472,7 @@ async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
                 sub_combo_id: None,
                 priority_order: 1,
                 description: None,
+                selected_accounts: None,
             },
         )
         .expect("add target to combo");

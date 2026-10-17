@@ -547,6 +547,7 @@ fn test_wrap_request_body_claude_sanitizes_role_function_and_correlates_ids() {
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -685,6 +686,7 @@ fn test_wrap_request_body_gemini_sanitizes_role_function_to_model_and_formats_ou
             cooldown_factor: None,
             thinking_effort: None,
             description: None,
+            selected_accounts: None,
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),

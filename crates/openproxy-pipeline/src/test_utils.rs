@@ -301,6 +301,7 @@ pub fn seed_solo_combo_at_url(
             priority_order: 1,
             sub_combo_id: None,
             description: None,
+            selected_accounts: None,
         },
     )
     .expect("add target");
@@ -381,6 +382,7 @@ pub fn seed_target_with_account(
             priority_order: priority as i32,
             sub_combo_id: None,
             description: None,
+            selected_accounts: None,
         },
     )
     .expect("add target");
