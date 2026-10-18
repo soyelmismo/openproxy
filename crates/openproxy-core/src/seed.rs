@@ -83,6 +83,15 @@ fn seed_single_adapter(
                 "update builtin base_url",
             ))?;
         }
+        if conf.id.as_str() == "eac" && existing.base_url.contains("dtyg123") {
+            conn.execute(
+                "UPDATE providers SET base_url = ?1 WHERE id = ?2",
+                rusqlite::params![conf.base_url.as_str(), conf.id.as_str()],
+            )
+            .map_err(openproxy_db::error::map_db_error_ctx(
+                "update builtin base_url",
+            ))?;
+        }
         return Ok(false);
     }
 
@@ -252,9 +261,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 23, "first call inserts all twenty-three");
+        assert_eq!(n, 24, "first call inserts all twenty-four");
 
-        // all twenty-two present and reachable by id
+        // all twenty-four present and reachable by id
         for id in [
             "atomesus",
             "openrouter",
@@ -279,6 +288,7 @@ mod tests {
             "typesafe",
             "laya",
             "claude-code",
+            "eac",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -292,14 +302,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 23);
+        assert_eq!(first, 24);
 
         // running again must not insert more rows
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 23, "still exactly twenty-three rows");
+        assert_eq!(count, 24, "still exactly twenty-four rows");
     }
 
     #[test]
@@ -323,7 +333,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 22, "only the twenty-two missing ones");
+        assert_eq!(n, 23, "only the twenty-three missing ones");
 
         // the pre-seeded row's name was not overwritten
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -438,7 +448,7 @@ mod tests {
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 23);
+        assert_eq!(ids.len(), 24);
         assert!(ids.iter().any(|s| s == "claude-code"));
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
@@ -461,6 +471,7 @@ mod tests {
         assert!(ids.iter().any(|s| s == "zai"));
         assert!(ids.iter().any(|s| s == "typesafe"));
         assert!(ids.iter().any(|s| s == "laya"));
+        assert!(ids.iter().any(|s| s == "eac"));
     }
 
     #[test]

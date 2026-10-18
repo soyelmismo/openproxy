@@ -32,6 +32,7 @@ pub mod codebuddy;
 pub mod codex;
 pub mod commandcode;
 pub mod custom_adapter;
+pub mod eac;
 pub mod factory;
 pub mod gemini;
 pub mod horde;
@@ -74,6 +75,7 @@ define_provider_adapter! {
             "codebuddy" => CodeBuddy(codebuddy, CodeBuddyAdapter),
             "codex" => Codex(codex, CodexAdapter),
             "commandcodego" => CommandCodeGo(commandcode, CommandCodeGoAdapter),
+            "eac" => Eac(eac, EacAdapter),
             "gemini" => Gemini(gemini, GeminiAdapter),
             "horde" => Horde(horde, HordeAdapter),
             "kilocode" => Kilocode(kilocode, KilocodeAdapter),

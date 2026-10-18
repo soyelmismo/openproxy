@@ -41,6 +41,7 @@ pub mod claude_code;
 pub mod cline;
 pub mod codebuddy;
 pub mod codex;
+pub mod eac;
 pub mod generic;
 pub mod kiro;
 pub mod minimax;
@@ -385,6 +386,7 @@ define_oauth_provider! {
             CodeBuddy(self::codebuddy::CodeBuddyOAuthProvider),
             Codex(self::codex::CodexOAuthProvider),
             Cline(self::cline::ClineOAuthProvider),
+            Eac(self::eac::EacOAuthProvider),
             Kiro(self::kiro::KiroOAuthProvider),
             MiniMax(self::minimax::MiniMaxOAuthProvider),
             Nous(self::nous::NousOAuthProvider),
