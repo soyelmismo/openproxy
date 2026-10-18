@@ -340,17 +340,11 @@ mod tests {
         let models = parse_custom_gemini_models(&json).expect("should parse gemini models");
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].model_id.as_str(), "gemini-1.5-pro");
-        assert_eq!(
-            models[0].display_name.as_deref(),
-            Some("Gemini 1.5 Pro")
-        );
+        assert_eq!(models[0].display_name.as_deref(), Some("Gemini 1.5 Pro"));
         assert_eq!(models[0].target_format, TargetFormat::Gemini);
 
         assert_eq!(models[1].model_id.as_str(), "gemini-1.5-flash");
-        assert_eq!(
-            models[1].display_name.as_deref(),
-            Some("gemini-1.5-flash")
-        );
+        assert_eq!(models[1].display_name.as_deref(), Some("gemini-1.5-flash"));
         assert_eq!(models[1].target_format, TargetFormat::Gemini);
 
         let invalid_json = serde_json::json!({ "data": [] });
