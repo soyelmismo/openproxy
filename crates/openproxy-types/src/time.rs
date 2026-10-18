@@ -22,4 +22,9 @@ mod tests {
         let t2 = now_ms();
         assert!(t2 >= t1);
     }
+
+    #[test]
+    fn test_now_ms_greater_than_zero() {
+        assert!(now_ms() > 0);
+    }
 }
