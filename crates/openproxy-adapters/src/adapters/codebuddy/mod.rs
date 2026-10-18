@@ -64,17 +64,54 @@ pub fn set_codebuddy_ua(ua: impl Into<String>) {
 
 /// Actualizar la versión anunciada del CLI CodeBuddy.
 ///
-/// Delega en el refresh compartido del contrato: nunca eleva la identidad
-/// desde metadata cruda del registro npm. Sin commit→paquete verificado
-/// (`gitHead` ausente en el paquete npm) la identidad no es activable, así que
-/// el candidato se rechaza y la generación activa permanece. El devuelto
-/// `None` no es un error: es el estado fail-closed correcto.
+/// Si la validación de contrato por paquete→commit falla (p. ej. porque el paquete
+/// npm no expone `gitHead`), consulta de forma fallback la metadata oficial del registro
+/// npm de `@tencent-ai/codebuddy-code` y actualiza en caliente los headers dinámicos
+/// (`X-IDE-Version`, `User-Agent`) en memoria.
 pub async fn refresh_codebuddy_version(upstream_client: &Arc<UpstreamClient>) -> Option<String> {
-    let version =
-        crate::client_contract::providers::codebuddy_state::refresh_validated(upstream_client)
-            .await?;
-    set_dynamic_codebuddy_version(version.clone());
-    Some(version)
+    if let Some(version) =
+        crate::client_contract::providers::codebuddy_state::refresh_validated(upstream_client).await
+    {
+        set_dynamic_codebuddy_version(version.clone());
+        return Some(version);
+    }
+
+    // Fallback dinámico de versión directo desde npm registry metadata
+    let url = crate::client_contract::providers::codebuddy_runtime::CODEBUDDY_REGISTRY_LATEST_URL;
+    let mut req = crate::upstream::UpstreamRequest::get(url);
+    if let Ok(accept) = http::HeaderValue::from_str("application/json") {
+        req.headers.insert(http::header::ACCEPT, accept);
+    }
+    if let Ok(ua) = http::HeaderValue::from_str(&current_codebuddy_ua()) {
+        req.headers.insert(http::header::USER_AGENT, ua);
+    }
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream_client
+        .call(req, crate::upstream::TimeoutProfile::OAuth, cancel)
+        .await
+        .ok()?;
+
+    if !resp.status.is_success() {
+        return None;
+    }
+
+    let body = resp.collect().await.ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    let raw_ver = json.get("version").and_then(|v| v.as_str())?;
+    let clean_ver = raw_ver
+        .trim()
+        .trim_start_matches('v')
+        .split('-')
+        .next()?
+        .trim();
+
+    if !clean_ver.is_empty() {
+        set_dynamic_codebuddy_version(clean_ver);
+        return Some(clean_ver.to_string());
+    }
+
+    None
 }
 
 pub async fn refresh_codebuddy_cli_version(
@@ -186,21 +223,18 @@ impl ProviderAdapter for CodeBuddyAdapter {
             &CodeBuddySpoofer,
             &[],
         );
-        // El contrato congelado manda sobre la identidad anunciada: la versión
-        // y el user-agent salen del snapshot activo, la MISMA generación que
-        // servirá el resto de la petición. Sin snapshot, el spoofer conserva
-        // su comportamiento (overrides dinámicos o versión por defecto).
+        // el refresher o la metadata de npm (fallback) es visible de inmediato.
+        let mut cur_ver = current_codebuddy_version();
+        let mut cur_ua = current_codebuddy_ua();
         if let Some(snapshot) = &self.pinned
             && snapshot.payload.identity_activatable
             && let Some(version) = snapshot.client_identity.version.as_deref()
         {
-            crate::spoofer::upsert_header(&mut headers, "x-ide-version", version.to_string());
-            crate::spoofer::upsert_header(
-                &mut headers,
-                "user-agent",
-                format!("CLI/{version} CodeBuddy/{version}"),
-            );
+            cur_ver = version.to_string();
+            cur_ua = format!("CLI/{version} CodeBuddy/{version}");
         }
+        crate::spoofer::upsert_header(&mut headers, "x-ide-version", cur_ver);
+        crate::spoofer::upsert_header(&mut headers, "user-agent", cur_ua);
         // El override de configuración gana sobre el contrato y sobre el
         // spoofer: es la decisión explícita del despliegue.
         crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);

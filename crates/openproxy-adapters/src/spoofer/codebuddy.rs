@@ -41,7 +41,27 @@ pub fn set_dynamic_codebuddy_ua(ua: impl Into<String>) {
 
 /// Set dynamic version override for CodeBuddy in memory at runtime without recompiling.
 pub fn set_dynamic_codebuddy_version(ver: impl Into<String>) {
-    CODEBUDDY_OVERRIDES.set_version(ver);
+    let ver_str = ver.into();
+    let clean = ver_str.trim().trim_start_matches('v');
+    let effective = if clean.is_empty() {
+        DEFAULT_CODEBUDDY_VERSION.to_string()
+    } else {
+        clean.to_string()
+    };
+    CODEBUDDY_OVERRIDES.set_version(&effective);
+    if let Some(ua) = CODEBUDDY_OVERRIDES.current_extra_header("user-agent") {
+        if ua.starts_with("CLI/") {
+            CODEBUDDY_OVERRIDES.set_extra_header(
+                "user-agent",
+                format!("CLI/{effective} CodeBuddy/{effective}"),
+            );
+        }
+    } else {
+        CODEBUDDY_OVERRIDES.set_extra_header(
+            "user-agent",
+            format!("CLI/{effective} CodeBuddy/{effective}"),
+        );
+    }
 }
 
 /// Set dynamic extra header override for CodeBuddy in memory at runtime without recompiling.
