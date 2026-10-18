@@ -152,7 +152,7 @@ class LiveLogsStore {
 
     if (finished.length <= maxRows) return;
 
-    finished.sort((a, b) => this.stableSort(b, a));
+    finished.sort((a, b) => this.stableSortFinished(b, a));
 
     const toEvict = finished.length - maxRows;
     for (let i = 0; i < toEvict; i++) {
@@ -591,9 +591,19 @@ class LiveLogsStore {
     return null;
   }
 
-  /** startedAtMs desc, then insertion order desc. */
+  /** startedAtMs desc, then insertion order desc (used for inflight or initial attempts). */
   private stableSort(a: AttemptState, b: AttemptState): number {
     const dt = b.startedAtMs - a.startedAtMs;
+    if (dt !== 0) return dt;
+    return getInsertionOrder(b) - getInsertionOrder(a);
+  }
+
+  /** updatedAtMs desc (completion/terminal time), then insertion order desc.
+   *  For finished requests, ensures requests that finish later appear at the top,
+   *  rather than being buried under shorter requests started around the same time.
+   */
+  private stableSortFinished(a: AttemptState, b: AttemptState): number {
+    const dt = b.updatedAtMs - a.updatedAtMs;
     if (dt !== 0) return dt;
     return getInsertionOrder(b) - getInsertionOrder(a);
   }
@@ -630,7 +640,7 @@ class LiveLogsStore {
     for (const a of this.attemptsByKey.values()) {
       if (a.terminal) arr.push(a);
     }
-    arr.sort((a, b) => this.stableSort(a, b));
+    arr.sort((a, b) => this.stableSortFinished(a, b));
     return arr;
   }
 

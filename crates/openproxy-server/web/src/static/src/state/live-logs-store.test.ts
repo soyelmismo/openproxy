@@ -211,6 +211,18 @@ describe("liveLogsStore phase progression", () => {
     dispatchAttemptEvent(4, makeEvent({ attempt_key: "tr-tie-2", started_at: 3_000, event_time: 3_200 }));
     expect(liveLogsStore.selectLogRows().map((a) => a.attemptKey)).toEqual(["tr-late", "tr-tie-2", "tr-tie-1", "tr-early"]);
   });
+
+  it("selectFinishedRows orders by updatedAtMs desc (completion time) so long-running requests finish at top", () => {
+    resetStore();
+    // Request A started early (t=1000) and took a long time (total_ms=10000 -> updatedAtMs=11000)
+    dispatchUsageRow(1, makeRow({ id: 1, trace_id: "tr-long", total_ms: 10_000, created_at: "1970-01-01T00:00:01.000Z" }));
+    // Request B started later (t=5000) and finished quickly (total_ms=500 -> updatedAtMs=5500)
+    dispatchUsageRow(2, makeRow({ id: 2, trace_id: "tr-fast", total_ms: 500, created_at: "1970-01-01T00:00:05.000Z" }));
+
+    // By start time, tr-fast would be first (t=5000 > t=1000).
+    // But by completion time (updatedAtMs), tr-long finished at 11000 > 5500, so it must be first.
+    expect(finishedKeys()).toEqual(["tr-long", "tr-fast"]);
+  });
 });
 
 describe("liveLogsStore cursor deduplication", () => {
