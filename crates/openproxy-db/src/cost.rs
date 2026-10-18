@@ -21,10 +21,9 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64
     } else {
         Some(0.0)
     };
-    let tps = match (input.completion_tokens, input.ttft_ms) {
-        (Some(c), Some(ttft)) if c > 0 && input.total_ms > ttft => {
-            let denom = (input.total_ms - ttft) as f64;
-            Some(f64::from(c) * 1000.0 / denom)
+    let tps = match (input.completion_tokens, input.total_ms, input.status_code) {
+        (Some(c), total_ms, status) if c > 0 && total_ms > 0 && status < 400 => {
+            Some(f64::from(c) * 1000.0 / (total_ms as f64))
         }
         _ => None,
     };
@@ -539,24 +538,25 @@ mod tests {
             100,
             200,
             Some(100),
-            1100,
+            1000,
             USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
         );
         let (cost, tps) = compute(Some(price), &input);
         assert_eq!(cost, Some(0.0005));
+        // 200 * 1000 / 1000 = 200.0
         assert_eq!(tps, Some(200.0));
 
         input.cached_tokens = Some(100);
         let (cost_cached, _) = compute(Some(price), &input);
         assert!(cost_cached.is_some_and(|c| (c - 0.00045).abs() < 1e-9));
 
-        input.ttft_ms = None;
+        input.total_ms = 0;
         assert_eq!(
             compute(Some(crate::pricing::Price::default()), &input).1,
             None
         );
 
-        input.ttft_ms = Some(100);
+        input.total_ms = 1000;
         input.completion_tokens = Some(0);
         assert_eq!(
             compute(Some(crate::pricing::Price::default()), &input).1,
