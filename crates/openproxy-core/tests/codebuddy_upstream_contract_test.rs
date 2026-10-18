@@ -48,14 +48,14 @@ fn test_codebuddy_spoofer_verified_headers() {
 
     assert_eq!(get_header("x-ide-type"), Some("CLI".into()));
     assert_eq!(get_header("x-ide-name"), Some("CLI".into()));
-    assert_eq!(get_header("x-ide-version"), Some("2.157.0".into()));
+    assert_eq!(get_header("x-ide-version"), Some("2.168.2".into()));
     assert_eq!(get_header("x-product"), Some("SaaS".into()));
     assert_eq!(get_header("x-agent-intent"), Some("craft".into()));
     assert_eq!(get_header("x-codebuddy-request"), Some("1".into()));
     assert_eq!(get_header("x-domain"), Some("www.codebuddy.ai".into()));
     assert_eq!(
         get_header("user-agent"),
-        Some("CLI/2.157.0 CodeBuddy/2.157.0".into())
+        Some("CLI/2.168.2 CodeBuddy/2.168.2".into())
     );
 }
 
@@ -67,8 +67,8 @@ fn test_codebuddy_dynamic_spoofer_overrides() {
     let _async_guard = CODEBUDDY_ASYNC_TEST_LOCK.blocking_lock();
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(current_codebuddy_version(), "2.157.0");
-    assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
+    assert_eq!(current_codebuddy_version(), "2.168.2");
+    assert_eq!(current_codebuddy_ua(), "CLI/2.168.2 CodeBuddy/2.168.2");
 
     set_dynamic_codebuddy_version("2.160.0");
     set_dynamic_codebuddy_extra_header("x-codebuddy-tenant", "tencent-cloud");
@@ -104,9 +104,9 @@ fn test_codebuddy_dynamic_spoofer_overrides() {
     assert_eq!(current_codebuddy_version(), "2.170.0");
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(current_codebuddy_version(), "2.157.0");
-    assert_eq!(get_codebuddy_version(), "2.157.0");
-    assert_eq!(current_codebuddy_ua(), "CLI/2.157.0 CodeBuddy/2.157.0");
+    assert_eq!(current_codebuddy_version(), "2.168.2");
+    assert_eq!(get_codebuddy_version(), "2.168.2");
+    assert_eq!(current_codebuddy_ua(), "CLI/2.168.2 CodeBuddy/2.168.2");
 }
 
 #[test]
@@ -320,8 +320,8 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
 
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(current_codebuddy_version(), "2.157.0");
-    assert_eq!(get_codebuddy_version(), "2.157.0");
+    assert_eq!(current_codebuddy_version(), "2.168.2");
+    assert_eq!(get_codebuddy_version(), "2.168.2");
 
     // El refresh delega en el contrato validado: la metadata sola del
     // registro nunca eleva la versión anunciada mientras la correspondencia
@@ -331,11 +331,11 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
         elevated, None,
         "metadata sola no eleva la versión anunciada"
     );
-    assert_eq!(current_codebuddy_version(), "2.157.0");
-    assert_eq!(get_codebuddy_version(), "2.157.0");
+    assert_eq!(current_codebuddy_version(), "2.168.2");
+    assert_eq!(get_codebuddy_version(), "2.168.2");
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(current_codebuddy_version(), "2.157.0");
+    assert_eq!(current_codebuddy_version(), "2.168.2");
 }
 
 #[tokio::test]
@@ -343,7 +343,7 @@ async fn test_codebuddy_fetch_models_does_not_elevate_the_version_by_itself() {
     let _lock = CODEBUDDY_ASYNC_TEST_LOCK.lock().await;
     reset_dynamic_codebuddy_overrides();
 
-    assert_eq!(get_codebuddy_version(), "2.157.0");
+    assert_eq!(get_codebuddy_version(), "2.168.2");
 
     // Discovery es puramente local: el catálogo estático no consulta el
     // registro, así que ninguna metadata puede elevar la versión por sí sola.
@@ -367,10 +367,10 @@ async fn test_codebuddy_fetch_models_does_not_elevate_the_version_by_itself() {
     // Ningún bump en background: el cambio de versión llega solo por el
     // contrato verificado (ContractRefreshService + store compartido).
     tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-    assert_eq!(get_codebuddy_version(), "2.157.0");
+    assert_eq!(get_codebuddy_version(), "2.168.2");
 
     reset_dynamic_codebuddy_overrides();
-    assert_eq!(get_codebuddy_version(), "2.157.0");
+    assert_eq!(get_codebuddy_version(), "2.168.2");
 }
 
 #[test]

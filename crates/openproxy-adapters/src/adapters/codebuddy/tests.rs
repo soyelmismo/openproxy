@@ -105,7 +105,7 @@ fn test_codebuddy_error_code_classification() {
     );
     assert_eq!(
         err_11128.to_upstream_error_class(),
-        openproxy_types::UpstreamErrorClass::InvalidPayload
+        openproxy_types::UpstreamErrorClass::ValidationRequired
     );
 
     let body = r#"{"code": 14014, "message": "Enterprise usage exhausted"}"#;

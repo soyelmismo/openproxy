@@ -598,11 +598,16 @@ impl CodeBuddyErrorCode {
             openproxy_types::UpstreamErrorClass::ResourceExhausted
         } else if self.is_auth_error() {
             openproxy_types::UpstreamErrorClass::PermissionDenied
-        } else if self == Self::ContextTooLong
-            || self == Self::NonStreamNotSupported
-            || self == Self::FirstMessageNotSystemPrompt
-        {
+        } else if self == Self::ContextTooLong || self == Self::NonStreamNotSupported {
             openproxy_types::UpstreamErrorClass::InvalidPayload
+        } else if self == Self::FirstMessageNotSystemPrompt {
+            // Error 11128: histéricamente "first message is not system prompt", pero Tencent
+            // también lo usa como "request illegal" por channel verification ("This call failed
+            // channel verification, possibly because it was not sent from an official client").
+            // Clasificado como ValidationRequired para que el combo descarte la cuenta/target
+            // actual y rote de inmediato a la siguiente en lugar de fallar la petición completa
+            // al cliente como error de payload.
+            openproxy_types::UpstreamErrorClass::ValidationRequired
         } else {
             openproxy_types::UpstreamErrorClass::Generic
         }

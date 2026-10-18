@@ -26,7 +26,7 @@ use super::{ContractParseError, ContractResult, json_error};
 pub const CODEBUDDY_PACKAGE: &str = "@tencent-ai/codebuddy-code";
 
 /// Versión fijada.
-pub const CODEBUDDY_VERSION: &str = "2.164.0";
+pub const CODEBUDDY_VERSION: &str = "2.168.2";
 
 /// Endpoint de producción declarado en `product.json`.
 pub const CODEBUDDY_ENDPOINT: &str = "https://www.codebuddy.ai";

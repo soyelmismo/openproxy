@@ -1,6 +1,6 @@
 {
   "name": "@tencent-ai/codebuddy-code",
-  "version": "2.164.0",
+  "version": "2.168.2",
   "description": "Use CodeBuddy, Tencent's AI assistant, right from your terminal. CodeBuddy can understand your codebase, edit files, run terminal commands, and handle entire workflows for you.",
   "main": "lib/node/index.js",
   "typings": "lib/node/index.d.ts",
@@ -35,6 +35,9 @@
       "default": "./src/*.ts"
     },
     "./package.json": "./package.json",
+    "./mods/client": {
+      "types": "./types/mod-client.d.ts"
+    },
     "./*": "./*"
   },
   "license": "SEE LICENSE IN README.md",
@@ -46,7 +49,7 @@
     "codebuddy-lowmem": "./bin/codebuddy-lowmem"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk-server": "npm:@agentclientprotocol/sdk@1.4.0",
+    "@agentclientprotocol/sdk": "1.7.0",
     "@openai/agents-core": "0.5.2"
   },
   "optionalDependencies": {
@@ -56,9 +59,9 @@
     "@lydell/node-pty-linux-x64": "1.2.0-beta.14",
     "@lydell/node-pty-win32-arm64": "1.2.0-beta.14",
     "@lydell/node-pty-win32-x64": "1.2.0-beta.14",
-    "@tencent-ai/sandbox-cli-darwin-arm64": "5.9.0-beta.3",
-    "@tencent-ai/sandbox-cli-darwin-x64": "5.9.0-beta.3",
-    "@tencent-ai/sandbox-cli-win32-x64": "5.9.0-beta.3"
+    "@tencent-ai/sandbox-cli-darwin-arm64": "5.9.0-beta.8",
+    "@tencent-ai/sandbox-cli-darwin-x64": "5.9.0-beta.8",
+    "@tencent-ai/sandbox-cli-win32-x64": "5.9.0-beta.8"
   },
   "keywords": [
     "codebuddy",
@@ -89,6 +92,6 @@
   "publishConfig": {
     "access": "public"
   },
-  "scripts": {},
-  "devDependencies": {}
+  "devDependencies": {},
+  "scripts": {}
 }
