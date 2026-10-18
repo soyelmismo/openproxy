@@ -141,6 +141,15 @@ test.describe('notifications lifecycle', () => {
     await expect(page.locator('.notification-card')).toHaveCount(2);
     await expect(page.locator(`.notification-card[data-id="${systemId}"]`)).toBeVisible();
     await expect(page.locator(`.notification-card[data-id="${modelId}"]`)).toBeVisible();
+
+    const providerFilter = page.locator('select.notification-provider-filter');
+    await providerFilter.selectOption('provider-filter');
+    await expect(page.locator('.notification-card')).toHaveCount(1);
+    await expect(page.locator(`.notification-card[data-id="${modelId}"]`)).toBeVisible();
+    await expect(page.locator(`.notification-card[data-id="${systemId}"]`)).toHaveCount(0);
+
+    await providerFilter.selectOption('all');
+    await expect(page.locator('.notification-card')).toHaveCount(2);
   });
 
   test('rejects deleting a recent model notification but deletes system notifications', async ({ page }) => {

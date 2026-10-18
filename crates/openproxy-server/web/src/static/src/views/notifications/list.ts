@@ -31,10 +31,27 @@ let isLoadingMore = false;
 let oldestLoadedId: number | null = null;
 let loadError: string | null = null;
 let filter: "all" | "unread" | NotificationKind = "all";
+let providerFilter: string = "all";
 
 function matchesFilter(r: NotificationRow): boolean {
-  if (filter === "all") return true;
-  return filter === "unread" ? isUnread(r) : r.kind === filter;
+  if (filter !== "all") {
+    const matchesKind = filter === "unread" ? isUnread(r) : r.kind === filter;
+    if (!matchesKind) return false;
+  }
+  if (providerFilter !== "all") {
+    const pId = payloadProviderId(r);
+    if (pId !== providerFilter) return false;
+  }
+  return true;
+}
+
+function availableProviders(): string[] {
+  const set = new Set<string>();
+  for (const r of rows) {
+    const pId = payloadProviderId(r);
+    if (pId) set.add(pId);
+  }
+  return Array.from(set).sort();
 }
 
 function notificationCardColor(r: NotificationRow): string {
@@ -217,6 +234,7 @@ function renderRow(r: NotificationRow): TemplateResult {
 
 function renderHeader(): TemplateResult {
   const unread = getUnreadCount();
+  const providers = availableProviders();
   return html`<div class="page-header">
     <div class="page-header-title">
       <h2>${t("notifications.title")}</h2>
@@ -225,6 +243,10 @@ function renderHeader(): TemplateResult {
     <div class="actions">
       <select class="notification-filter" @change=${(e: Event) => { filter = (e.target as HTMLSelectElement).value as typeof filter; requestUpdate(); if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) void loadMore(); }}>
         ${FILTER_OPTIONS.map((o) => html`<option value=${o.value} ?selected=${o.value === filter}>${t(o.key)}</option>`)}
+      </select>
+      <select class="notification-provider-filter notification-filter" @change=${(e: Event) => { providerFilter = (e.target as HTMLSelectElement).value; requestUpdate(); if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) void loadMore(); }}>
+        <option value="all" ?selected=${providerFilter === "all"}>${t("notifications.filter.all_providers")}</option>
+        ${providers.map((p) => html`<option value=${p} ?selected=${providerFilter === p}>${p}</option>`)}
       </select>
       <button class="small" ?disabled=${unread === 0} @click=${() => { void markAllRead(); }}>${t("notifications.mark_all_read")}</button>
       <button class="small danger" ?disabled=${rows.length === 0} @click=${() => { void archiveAll(); }}>${t("notifications.clear_all")}</button>
@@ -247,7 +269,7 @@ function renderList(): TemplateResult {
 }
 
 export function renderView(): TemplateResult { return html`${renderHeader()}${renderList()}`; }
-export function resetListState(): void { rows = []; loadError = null; filter = "all"; hasMore = false; isLoadingMore = false; oldestLoadedId = null; }
+export function resetListState(): void { rows = []; loadError = null; filter = "all"; providerFilter = "all"; hasMore = false; isLoadingMore = false; oldestLoadedId = null; }
 export function hasUnread(): boolean { return rows.some((r) => r.read_at === null && r.archived_at === null); }
 
 export function subscribeNotificationEvents(): () => void {

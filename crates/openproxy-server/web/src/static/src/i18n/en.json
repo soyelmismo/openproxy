@@ -55,6 +55,7 @@
   "notifications.filter.model_gone": "Removed models",
   "notifications.filter.model_auto_activated": "Auto-activated",
   "notifications.filter.system": "System",
+  "notifications.filter.all_providers": "All providers",
   "notifications.kind.model_new": "New model",
   "notifications.kind.model_gone": "Model removed",
   "notifications.kind.model_auto_activated": "Auto-activated",
