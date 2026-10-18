@@ -235,6 +235,16 @@ impl ProviderAdapter for CodeBuddyAdapter {
         }
         crate::spoofer::upsert_header(&mut headers, "x-ide-version", cur_ver);
         crate::spoofer::upsert_header(&mut headers, "user-agent", cur_ua);
+
+        // Required conversation and message tracing headers observed in official CLI
+        // to pass Tencent backend channel verification (error 11128).
+        let conv_id = uuid::Uuid::new_v4().to_string();
+        let msg_id = uuid::Uuid::new_v4().simple().to_string();
+        let req_id = uuid::Uuid::new_v4().to_string();
+        crate::spoofer::upsert_header(&mut headers, "x-conversation-id", conv_id);
+        crate::spoofer::upsert_header(&mut headers, "x-conversation-request-id", req_id);
+        crate::spoofer::upsert_header(&mut headers, "x-conversation-message-id", msg_id);
+
         // El override de configuración gana sobre el contrato y sobre el
         // spoofer: es la decisión explícita del despliegue.
         crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);

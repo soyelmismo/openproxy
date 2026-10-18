@@ -755,8 +755,19 @@ fn test_codebuddy_pinned_unverified_contract_does_not_elevate_headers() {
     let adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));
     let headers =
         adapter.build_headers("test-token", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
+    let strip_dynamic = |list: &[(String, String)]| -> Vec<(String, String)> {
+        list.iter()
+            .filter(|(k, _)| {
+                !k.eq_ignore_ascii_case("x-conversation-id")
+                    && !k.eq_ignore_ascii_case("x-conversation-request-id")
+                    && !k.eq_ignore_ascii_case("x-conversation-message-id")
+            })
+            .cloned()
+            .collect()
+    };
     assert_eq!(
-        headers, baseline,
+        strip_dynamic(&headers),
+        strip_dynamic(&baseline),
         "el catálogo no autoriza elevar identidad"
     );
 }
