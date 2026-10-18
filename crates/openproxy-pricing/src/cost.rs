@@ -13,20 +13,16 @@ pub use openproxy_types::usage::{
     USAGE_FLAG_STREAM_COMPLETE, UsageInput,
 };
 
-fn has_valid_tps_timing(completion: u32, effective_ms: u64, status_code: u16) -> bool {
-    completion > 0 && effective_ms > 0 && status_code < 400
+fn has_valid_tps_timing(completion_tokens: u32, total_ms: u64, status_code: u16) -> bool {
+    completion_tokens > 0 && total_ms > 0 && status_code < 400
 }
 
 fn compute_tokens_per_sec(input: &UsageInput) -> Option<f64> {
     let c = input.completion_tokens?;
-    let effective_ms = match input.connect_ms {
-        Some(conn) => input.total_ms.saturating_sub(conn),
-        None => input.total_ms,
-    };
-    if !has_valid_tps_timing(c, effective_ms, input.status_code) {
+    if !has_valid_tps_timing(c, input.total_ms, input.status_code) {
         return None;
     }
-    Some(f64::from(c) * 1000.0 / (effective_ms as f64))
+    Some(f64::from(c) * 1000.0 / (input.total_ms as f64))
 }
 
 /// Computes (cost_usd, tokens_per_sec) from pricing + tokens + timing.
@@ -379,13 +375,12 @@ mod tests {
             prompt_tokens: Some(100),
             completion_tokens: Some(300),
             total_ms: 1500,
-            connect_ms: Some(500),
             ..make_input()
         };
         let price = pricing::lookup("openrouter", "openai/gpt-4o");
         let (_cost, tps) = compute(price, &input);
-        // effective = 1500 - 500 = 1000; 300 * 1000 / 1000 = 300.0
-        assert_eq!(tps, Some(300.0));
+        // 300 * 1000 / 1500 = 200.0
+        assert_eq!(tps, Some(200.0));
     }
 
     #[test]
@@ -393,7 +388,6 @@ mod tests {
         let input = UsageInput {
             completion_tokens: Some(0),
             total_ms: 1500,
-            connect_ms: Some(500),
             ..make_input()
         };
         let (_cost, tps) = compute(None, &input);
@@ -401,25 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn compute_tokens_per_sec_connect_greater_than_total_is_none() {
-        // connect > total => effective_ms == 0 => None
+    fn compute_tokens_per_sec_zero_total_is_none() {
         let input = UsageInput {
             completion_tokens: Some(300),
-            total_ms: 1000,
-            connect_ms: Some(1500),
-            ..make_input()
-        };
-        let (_cost, tps) = compute(None, &input);
-        assert!(tps.is_none());
-    }
-
-    #[test]
-    fn compute_tokens_per_sec_connect_equals_total_is_none() {
-        // connect == total => effective_ms == 0 => None
-        let input = UsageInput {
-            completion_tokens: Some(300),
-            total_ms: 1500,
-            connect_ms: Some(1500),
+            total_ms: 0,
             ..make_input()
         };
         let (_cost, tps) = compute(None, &input);
@@ -431,12 +410,11 @@ mod tests {
         let input = UsageInput {
             completion_tokens: Some(300),
             total_ms: 1500,
-            connect_ms: Some(500),
-            flags: 0, // non-streaming works as effective throughput
+            flags: 0,
             ..make_input()
         };
         let (_cost, tps) = compute(None, &input);
-        assert_eq!(tps, Some(300.0));
+        assert_eq!(tps, Some(200.0));
     }
 
     #[test]
