@@ -326,9 +326,13 @@ async fn test_codebuddy_remote_upstream_live_contract_parity() {
     // El refresh actualiza en caliente los overrides dinámicos de versión si hay
     // respuesta del registro npm, manteniendo el header del spoofer alineado.
     let elevated = refresh_codebuddy_version(&client).await;
-    assert_eq!(elevated, Some("2.168.2".to_string()));
-    assert_eq!(current_codebuddy_version(), "2.168.2");
-    assert_eq!(get_codebuddy_version(), "2.168.2");
+    assert!(
+        elevated.is_some(),
+        "refresh_codebuddy_version must resolve an elevated version from npm"
+    );
+    let elevated_ver = elevated.unwrap();
+    assert_eq!(current_codebuddy_version(), elevated_ver.as_str());
+    assert_eq!(get_codebuddy_version(), elevated_ver.as_str());
 
     reset_dynamic_codebuddy_overrides();
     assert_eq!(current_codebuddy_version(), "2.168.2");
