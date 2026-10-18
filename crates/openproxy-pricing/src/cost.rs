@@ -13,14 +13,26 @@ pub use openproxy_types::usage::{
     USAGE_FLAG_STREAM_COMPLETE, UsageInput,
 };
 
-fn has_valid_tps_timing(completion: u32, total_ms: u64, ttft_ms: u64, status_code: u16) -> bool {
-    completion > 0 && total_ms > ttft_ms && status_code < 400
+fn has_valid_tps_timing(
+    completion: u32,
+    total_ms: u64,
+    ttft_ms: u64,
+    status_code: u16,
+    is_streaming: bool,
+) -> bool {
+    is_streaming && completion > 0 && total_ms > ttft_ms && status_code < 400
 }
 
 fn compute_tokens_per_sec(input: &UsageInput) -> Option<f64> {
     let c = input.completion_tokens?;
     let ttft = input.ttft_ms?;
-    if !has_valid_tps_timing(c, input.total_ms, ttft, input.status_code) {
+    if !has_valid_tps_timing(
+        c,
+        input.total_ms,
+        ttft,
+        input.status_code,
+        input.has_flag(USAGE_FLAG_IS_STREAMING),
+    ) {
         return None;
     }
     let denom = (input.total_ms - ttft) as f64;
@@ -336,7 +348,7 @@ mod tests {
             compression_techniques: None,
             pii_redacted: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-            flags: 0,
+            flags: USAGE_FLAG_IS_STREAMING,
         }
     }
 
@@ -418,6 +430,19 @@ mod tests {
             completion_tokens: Some(300),
             total_ms: 1500,
             ttft_ms: Some(1500),
+            ..make_input()
+        };
+        let (_cost, tps) = compute(None, &input);
+        assert!(tps.is_none());
+    }
+
+    #[test]
+    fn compute_tokens_per_sec_non_streaming_is_none() {
+        let input = UsageInput {
+            completion_tokens: Some(300),
+            total_ms: 1500,
+            ttft_ms: Some(500),
+            flags: 0, // non-streaming
             ..make_input()
         };
         let (_cost, tps) = compute(None, &input);

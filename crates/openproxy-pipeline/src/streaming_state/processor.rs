@@ -61,12 +61,13 @@ pub(super) fn decode_and_record_line<'a>(
 
 pub(super) fn record_ttft_if_first(ctx: &StreamContext<'_>, state: &mut StreamingState) {
     if state.ttft_ms.is_none() {
-        state.ttft_ms = Some(state.first_chunk_time.elapsed().as_millis() as u64);
+        let ttft = ctx.started.elapsed().as_millis() as u64;
+        state.ttft_ms = Some(ttft);
         openproxy_types::emit_stage_event!(
             request_id: ctx.req.request_id,
             trace_id: ctx.trace_id,
             stage: "streaming",
-            elapsed_ms: ctx.started.elapsed().as_millis() as u64,
+            elapsed_ms: ttft,
             connect_ms: ctx.connect_and_send_ms,
             ttft_ms: state.ttft_ms,
             status_code: 200,
