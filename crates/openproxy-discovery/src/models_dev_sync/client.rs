@@ -1,7 +1,6 @@
 //! Upstream HTTP fetching, one-shot triggers, and periodic sync scheduler.
 
 use super::backfill::recompute_costs;
-use super::combos::auto_create_combos;
 use super::enrich::enrich_models_from_sync;
 use super::provider_map::MODELS_DEV_URL;
 use super::upsert::upsert_models_dev;
@@ -120,17 +119,6 @@ fn process_models_dev_sync_payload(db_pool: &openproxy_db::DbPool, body: &[u8]) 
                 Err(e) => tracing::warn!(error = %e, "models.dev sync enrich failed"),
             }
         }
-        {
-            let conn = db_pool.writer();
-            match auto_create_combos(&conn) {
-                Ok(n) => {
-                    if n > 0 {
-                        tracing::info!("models.dev sync: created {} auto-combos", n);
-                    }
-                }
-                Err(e) => tracing::warn!(error = %e, "models.dev sync auto-combo failed"),
-            }
-        }
     }
     count
 }
@@ -222,27 +210,22 @@ pub async fn run_one_shot(
             enrich_models_from_sync(&conn)?
         };
 
-        let combos = {
-            let conn = db_pool.writer();
-            auto_create_combos(&conn)?
-        };
-
         let repriced = {
             let conn = db_pool.writer();
             recompute_costs(&conn)?
         };
 
-        Ok((count, enriched, combos, repriced))
+        Ok((count, enriched, 0, repriced))
     })
     .await
     .map_err(|e| openproxy_types::error::CoreError::Internal(e.to_string()))??;
 
-    let (count, enriched, combos, repriced) = res;
+    let (count, enriched, _, repriced) = res;
     if count == 0 {
         return Ok("No new models.dev data".into());
     }
 
     Ok(format!(
-        "Synced {count} models, enriched {enriched} model rows, created {combos} auto-combos, re-priced {repriced} usage rows"
+        "Synced {count} models, enriched {enriched} model rows, re-priced {repriced} usage rows"
     ))
 }

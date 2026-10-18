@@ -1,7 +1,6 @@
 use rusqlite::Connection;
 
 mod client;
-mod combos;
 mod sync;
 
 pub(crate) fn create_sync_table(conn: &Connection) {

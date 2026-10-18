@@ -19,7 +19,6 @@ function formatTokens(n: number): string {
 }
 
 let comboSearchQuery = "";
-let isAutoExpanded = false;
 
 function onComboSearch(e: Event): void {
   comboSearchQuery = (e.target as HTMLInputElement).value;
@@ -103,23 +102,17 @@ export function renderCombosList(): TemplateResult {
     );
   };
 
-  const allCustom = list.filter((c) => !c.name.startsWith("auto:"));
-  const allAuto = list.filter((c) => c.name.startsWith("auto:"));
-
-  const filteredCustom = allCustom.filter(matches);
-  const filteredAuto = allAuto.filter(matches);
+  const filteredCustom = list.filter(matches);
 
   const columns = getCombosColumns();
   const hasSearch = q.length > 0;
-  const showAutoAccordion = allAuto.length > 0;
-  const isAccordionOpen = hasSearch || isAutoExpanded;
 
   return html`
     <div class="page-header">
       <div class="header-title-wrap" style="display: flex; align-items: baseline; gap: var(--space-2);">
         <h2>${t("combos.grid.title")}</h2>
         <span class="muted" style="font-size: var(--fs-xs);">
-          (${allCustom.length} custom · ${allAuto.length} auto)
+          (${list.length} total)
         </span>
       </div>
       <div class="actions">
@@ -139,59 +132,17 @@ export function renderCombosList(): TemplateResult {
 
     ${list.length === 0 ? html`<p class="empty">${t("combos.grid.empty")}</p>` : html`
       <div class="combos-list-container">
-        <!-- Custom Combos Section (Always first & prominent) -->
         <section class="combos-section custom-combos-section">
-          <div class="section-header">
-            <h3>Custom Combos (${filteredCustom.length}${hasSearch ? ` of ${allCustom.length}` : ""})</h3>
-          </div>
           ${renderResponsiveCardTable<Combo>({
             columns,
             rows: filteredCustom,
             rowKey: (c) => c.id,
             className: "combos-table custom-combos-table",
             emptyMessage: hasSearch
-              ? `No custom combos matching "${comboSearchQuery}".`
-              : "No custom combos created yet. Click 'Create combo' to add one.",
+              ? `No combos matching "${comboSearchQuery}".`
+              : "No combos created yet. Click 'Create combo' to add one.",
           })}
         </section>
-
-        <!-- Auto Combos Section (Collapsible dropdown at the end) -->
-        ${showAutoAccordion ? html`
-          <section class="combos-section auto-combos-section" style="margin-top: var(--space-4);">
-            <details
-              class="auto-combos-accordion"
-              ?open=${isAccordionOpen}
-              @toggle=${(e: Event) => {
-                isAutoExpanded = (e.currentTarget as HTMLDetailsElement).open;
-                requestUpdate();
-              }}>
-              <summary class="auto-combos-summary">
-                <div class="auto-combos-header-left">
-                  <span class="auto-combos-toggle-icon">
-                    ${isAccordionOpen ? icons.caretDown() : icons.chevronRight()}
-                  </span>
-                  <h3 style="margin: 0; font-size: var(--fs-sm); font-weight: 600;">
-                    Auto-generated Combos (${filteredAuto.length}${hasSearch ? ` of ${allAuto.length}` : ""})
-                  </h3>
-                </div>
-                <span class="muted auto-combos-hint">
-                  ${isAccordionOpen ? "Click to collapse" : "Click to expand single-model virtual combos"}
-                </span>
-              </summary>
-              <div class="auto-combos-content">
-                ${renderResponsiveCardTable<Combo>({
-                  columns,
-                  rows: filteredAuto,
-                  rowKey: (c) => c.id,
-                  className: "combos-table auto-combos-table",
-                  emptyMessage: hasSearch
-                    ? `No auto combos matching "${comboSearchQuery}".`
-                    : "No auto-generated combos available.",
-                })}
-              </div>
-            </details>
-          </section>
-        ` : ""}
       </div>
     `}
   `;

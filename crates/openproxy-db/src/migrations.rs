@@ -352,6 +352,15 @@ mod tests {
     }
 
     #[test]
+    fn test_migrations_count_includes_000092() {
+        let versions: Vec<i64> = MIGRATIONS.iter().map(|m| m.version).collect();
+        assert!(
+            versions.contains(&92),
+            "embedded MIGRATIONS must include 000092; got {versions:?}"
+        );
+    }
+
+    #[test]
     fn end_to_end_via_dbpool_is_idempotent() {
         use crate::conn::DbPool;
 
