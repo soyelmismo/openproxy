@@ -14,6 +14,12 @@ function getEffectiveChatModel(st: PlaygroundState): string {
     !model.startsWith('combo:')
   ) {
     model = `${st.selectedProviderId}/${model}`;
+  } else if (model.includes('/') && !model.startsWith('combo:')) {
+    const slashIdx = model.indexOf('/');
+    const inferredProvider = model.slice(0, slashIdx);
+    if (!st.selectedProviderId) {
+      st.selectedProviderId = inferredProvider;
+    }
   }
   return model;
 }

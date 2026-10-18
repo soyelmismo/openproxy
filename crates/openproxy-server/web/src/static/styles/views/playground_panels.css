@@ -191,6 +191,23 @@
   overflow: hidden;
 }
 
+/* Constrain model target dropdown so long model names never overflow canvas */
+.playground-model-select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.playground-model-select option {
+  max-width: 310px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .field-header-row {
   display: flex;
   justify-content: space-between;

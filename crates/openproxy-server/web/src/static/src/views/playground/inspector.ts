@@ -27,11 +27,19 @@ import {
 function getFilteredModels(st: PlaygroundState): Array<{ id: string; name: string; type: string; provider: string; isCombo?: boolean }> {
   const models = (state.models as Model[]) || [];
   const combos = (state.combos as import('../../lib/types/api.js').Combo[]) || [];
+  const providers = (state.providers as Provider[]) || [];
+  const activeProviderIds = new Set(providers.filter((p) => p.active !== false).map((p) => p.id));
   const result: Array<{ id: string; name: string; type: string; provider: string; isCombo?: boolean }> = [];
 
   const matchingModels = models
     .filter((m) => m.active !== false)
-    .filter((m) => !st.selectedProviderId || m.provider_id === st.selectedProviderId);
+    .filter((m) => {
+      // Must belong to an active provider unless a specific provider was intentionally selected
+      if (st.selectedProviderId) {
+        return m.provider_id === st.selectedProviderId;
+      }
+      return !m.provider_id || activeProviderIds.has(m.provider_id);
+    });
 
   if (!st.selectedProviderId) {
     for (const c of combos) {
@@ -268,7 +276,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
               }}
             >
                <option value="">${t('playground.sidebar.any_provider')}</option>
-              ${providers.map((p) => html`<option value=${p.id}>${p.name || p.id}</option>`)}
+              ${providers.filter((p) => p.active !== false).map((p) => html`<option value=${p.id}>${p.name || p.id}</option>`)}
             </select>
           </div>
 
@@ -359,10 +367,28 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
 
               return html`
                 <select
+                  class="playground-model-select"
                   .value=${st.selectedModelId}
                   @change=${(e: Event) => {
-                    st.selectedModelId = (e.target as HTMLSelectElement).value;
+                    const chosenId = (e.target as HTMLSelectElement).value;
+                    st.selectedModelId = chosenId;
                     st.modelSearchQuery = '';
+
+                    // Automatically align provider and reset invalid account routing
+                    const chosen = filteredModels.find((m) => m.id === chosenId);
+                    if (chosen && chosen.provider && chosen.provider !== 'combo') {
+                      st.selectedProviderId = chosen.provider;
+                      if (st.selectedAccountId) {
+                        const acc = accounts.find((a) => String(a.id) === st.selectedAccountId);
+                        if (acc && acc.provider_id !== chosen.provider) {
+                          st.selectedAccountId = '';
+                        }
+                      }
+                    } else if (chosen && chosen.isCombo) {
+                      st.selectedProviderId = '';
+                      st.selectedAccountId = '';
+                    }
+
                     requestUpdate();
                   }}
                 >

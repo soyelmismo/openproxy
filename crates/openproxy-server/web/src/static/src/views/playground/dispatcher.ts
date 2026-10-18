@@ -65,6 +65,8 @@ export async function executeRequest(st: PlaygroundState, ensureDefaultModel: (s
     showToast(t('playground.request.model_error'), 'error');
     return;
   }
+  // If effectiveModel is already a qualified target ('provider/model' or 'combo:name'),
+  // don't prefix it again. If provider is set and effectiveModel is bare, prefix it.
   if (
     st.selectedProviderId &&
     st.selectedProviderId !== 'combo' &&
@@ -72,6 +74,13 @@ export async function executeRequest(st: PlaygroundState, ensureDefaultModel: (s
     !effectiveModel.startsWith('combo:')
   ) {
     effectiveModel = `${st.selectedProviderId}/${effectiveModel}`;
+  } else if (effectiveModel.includes('/') && !effectiveModel.startsWith('combo:')) {
+    // If the model itself is qualified (e.g. "openrouter/anthropic/claude-3"), align selectedProviderId
+    const slashIdx = effectiveModel.indexOf('/');
+    const inferredProvider = effectiveModel.slice(0, slashIdx);
+    if (!st.selectedProviderId) {
+      st.selectedProviderId = inferredProvider;
+    }
   }
 
   commitComposerContent(st);

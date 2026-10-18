@@ -284,6 +284,11 @@ export async function executeChatRequest(
 
   const response = await fetch('/v1/chat/completions', reqInit);
 
+  // In case user stopped request while headers were in flight
+  if (st.abortController?.signal.aborted) {
+    return;
+  }
+
   st.currentMetrics.statusCode = response.status;
   st.currentMetrics.statusText = response.statusText;
   response.headers.forEach((v, k) => {
@@ -377,6 +382,14 @@ export async function executeChatRequest(
       }
     }
     st.rawResponseText = st.streamedChatContent;
+    // Fallback token counting if upstream didn't send usage in stream chunks
+    if (st.currentMetrics.completionTokens === null && st.streamedChatContent) {
+      const fullGenerated = (st.streamedReasoningContent ? st.streamedReasoningContent + ' ' : '') + st.streamedChatContent;
+      st.currentMetrics.completionTokens = estimateTokens(fullGenerated);
+      if (st.currentMetrics.totalTokens === null) {
+        st.currentMetrics.totalTokens = (st.currentMetrics.promptTokens || 0) + st.currentMetrics.completionTokens;
+      }
+    }
   } else {
     const text = await response.text();
     st.rawResponseText = text;

@@ -6,12 +6,11 @@ import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 
 function computeTokensPerSec(st: PlaygroundState): string | null {
-  const { completionTokens, totalLatencyMs, ttftMs } = st.currentMetrics;
+  const { completionTokens, totalLatencyMs } = st.currentMetrics;
+  // Match OpenProxy E2E Throughput telemetry: completionTokens / totalLatencyMs * 1000
   if (completionTokens && totalLatencyMs && totalLatencyMs > 0) {
-    const elapsedSec = (totalLatencyMs - (ttftMs || 0)) / 1000;
-    if (elapsedSec > 0.05) {
-      return `${(completionTokens / elapsedSec).toFixed(1)} t/s`;
-    }
+    const tps = (completionTokens / totalLatencyMs) * 1000;
+    return `${tps.toFixed(1)} t/s`;
   }
   return null;
 }
