@@ -339,4 +339,57 @@ mod tests {
             .unwrap();
         assert_eq!(&body[..], &original[..]);
     }
+
+    #[test]
+    fn test_nous_sticky_key_and_session_id() {
+        let adapter = NousResearchAdapter::new();
+        let token = make_jwt(&serde_json::json!({"sub": "user-123"}));
+
+        // 1. Direct unit test of nous_sticky_key
+        assert_eq!(
+            nous_sticky_key(Some(&token), Some("label-ignore")),
+            Some("user-123".to_string())
+        );
+        assert_eq!(
+            nous_sticky_key(None, Some("hermes-label")),
+            Some("hermes-label".to_string())
+        );
+        assert_eq!(nous_sticky_key(None, None), None);
+
+        // 2. Wrap request body inserts session_id when sticky key exists
+        let body_oauth = adapter
+            .wrap_request_body(
+                bytes::Bytes::from_static(br#"{"model":"m","messages":[]}"#),
+                openproxy_types::TargetFormat::Openai,
+                &openproxy_types::ModelId::new("m"),
+                &target("", Some("account-label"), Some(&token)),
+            )
+            .unwrap();
+        let val_oauth: serde_json::Value = serde_json::from_slice(&body_oauth).unwrap();
+        assert_eq!(val_oauth["session_id"], "user-123");
+
+        let body_key_labeled = adapter
+            .wrap_request_body(
+                bytes::Bytes::from_static(br#"{"model":"m","messages":[]}"#),
+                openproxy_types::TargetFormat::Openai,
+                &openproxy_types::ModelId::new("m"),
+                &target("sk-nous-xyz", Some("my-label"), None),
+            )
+            .unwrap();
+        let val_key_labeled: serde_json::Value = serde_json::from_slice(&body_key_labeled).unwrap();
+        assert_eq!(val_key_labeled["session_id"], "my-label");
+
+        // 3. Wrap request body does not inject session_id when sticky key is None
+        let body_key_unlabeled = adapter
+            .wrap_request_body(
+                bytes::Bytes::from_static(br#"{"model":"m","messages":[]}"#),
+                openproxy_types::TargetFormat::Openai,
+                &openproxy_types::ModelId::new("m"),
+                &target("sk-nous-xyz", None, None),
+            )
+            .unwrap();
+        let val_key_unlabeled: serde_json::Value =
+            serde_json::from_slice(&body_key_unlabeled).unwrap();
+        assert!(val_key_unlabeled.get("session_id").is_none());
+    }
 }
