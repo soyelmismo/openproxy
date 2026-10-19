@@ -7,7 +7,8 @@
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 
-pub const DEFAULT_EAC_SECRET: &str = "2b3a996145fd07a4973bdbc0dac4ee6eae59275f9c75f42487d66b5208ac6fbc";
+pub const DEFAULT_EAC_SECRET: &str =
+    "2b3a996145fd07a4973bdbc0dac4ee6eae59275f9c75f42487d66b5208ac6fbc";
 pub const HEADER_OFM_TIMESTAMP: &str = "x-ofm-timestamp";
 pub const HEADER_OFM_SIGNATURE: &str = "x-ofm-signature";
 pub const HEADER_OFM_USER: &str = "x-ofm-user";
@@ -128,7 +129,10 @@ pub fn sign_request_headers(
     for (k, v) in headers.iter() {
         if k.eq_ignore_ascii_case("authorization") {
             let s = v.trim();
-            if let Some(t) = s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")) {
+            if let Some(t) = s
+                .strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+            {
                 let tok = t.trim();
                 if !tok.is_empty() {
                     extracted_token = Some(tok.to_string());
