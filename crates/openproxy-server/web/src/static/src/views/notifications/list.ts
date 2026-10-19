@@ -241,7 +241,7 @@ function renderHeader(): TemplateResult {
       <span class="badge ${unread > 0 ? "badge-error" : "badge-info"}">${unread > 0 ? t("notifications.unread_count", { count: unread }) : t("notifications.no_unread")}</span>
     </div>
     <div class="actions">
-      <select class="notification-filter" @change=${(e: Event) => { filter = (e.target as HTMLSelectElement).value as typeof filter; requestUpdate(); if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) void loadMore(); }}>
+      <select class="notification-filter notification-kind-filter" @change=${(e: Event) => { filter = (e.target as HTMLSelectElement).value as typeof filter; requestUpdate(); if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) void loadMore(); }}>
         ${FILTER_OPTIONS.map((o) => html`<option value=${o.value} ?selected=${o.value === filter}>${t(o.key)}</option>`)}
       </select>
       <select class="notification-provider-filter notification-filter" @change=${(e: Event) => { providerFilter = (e.target as HTMLSelectElement).value; requestUpdate(); if (hasMore && !isLoadingMore && rows.filter(matchesFilter).length === 0) void loadMore(); }}>
