@@ -140,6 +140,7 @@ pub async fn sync_all_providers(db_pool: Arc<DbPool>) -> crate::error::Result<Sy
             "DELETE FROM proxy_sources WHERE id = 'builtin_oneproxy'",
             [],
         );
+        let _ = super::sources::purge_inactive_sources_proxies(&w);
         list_proxy_sources(&w)
     })
     .await;

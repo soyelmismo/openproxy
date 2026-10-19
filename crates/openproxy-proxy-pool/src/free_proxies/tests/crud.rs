@@ -273,7 +273,15 @@ fn test_proxy_sources_crud() {
     assert_eq!(updated.priority, 10);
     assert!(updated.active);
 
-    // Verify active can be toggled off
+    // Insert a proxy belonging to this source
+    conn.execute(
+        "INSERT INTO free_proxies (id, source, host, port, type, status) VALUES ('p-source-test', 'Updated Source', '1.2.3.4', 8080, 'http', 'alive')",
+        [],
+    ).unwrap();
+    let count_before: i64 = conn.query_row("SELECT count(*) FROM free_proxies WHERE source = 'Updated Source'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_before, 1);
+
+    // Verify active can be toggled off and purges proxies
     let toggled_off = update_proxy_source(
         &conn,
         &src.id,
@@ -286,6 +294,9 @@ fn test_proxy_sources_crud() {
     )
     .unwrap();
     assert!(!toggled_off.active);
+
+    let count_after: i64 = conn.query_row("SELECT count(*) FROM free_proxies WHERE source = 'Updated Source'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count_after, 0, "Proxies belonging to deactivated source must be purged");
 
     let fetched_off = get_proxy_source(&conn, &src.id).unwrap().unwrap();
     assert!(!fetched_off.active);

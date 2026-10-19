@@ -71,16 +71,22 @@ pub async fn create_source(
 }
 
 pub async fn update_source(
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     DbWriter(w): DbWriter,
     Path(id): Path<String>,
     Json(body): Json<UpdateProxySourceInput>,
 ) -> Result<Json<ProxySource>, ApiError> {
-    DbWriter(w)
+    let is_activating = body.active == Some(true);
+    let src = DbWriter(w)
         .run(move |w| {
             let src = update_proxy_source(w, &id, body)?;
             Ok(Json(src))
         })
-        .await
+        .await?;
+    if is_activating {
+        spawn_source_sync_and_test(&state);
+    }
+    Ok(src)
 }
 
 fn validate_source_deletion(conn: &rusqlite::Connection, id: &str) -> Result<(), ApiError> {

@@ -360,6 +360,10 @@ pub fn prune_dead_proxies(conn: &Connection) -> Result<usize> {
 
 /// Delete a proxy source by ID.
 pub fn delete_proxy_source(conn: &Connection, id: &str) -> Result<bool> {
+    let _ = conn.execute(
+        "DELETE FROM free_proxies WHERE source = (SELECT name FROM proxy_sources WHERE id = ?1)",
+        params![id],
+    );
     let count = conn
         .execute("DELETE FROM proxy_sources WHERE id = ?1", params![id])
         .map_err(crate::error::map_db_error)?;

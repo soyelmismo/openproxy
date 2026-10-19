@@ -152,6 +152,40 @@ pub fn create_proxy_source(
         .ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
 }
 
+pub fn purge_proxies_for_source(
+    conn: &Connection,
+    is_builtin: bool,
+    id: &str,
+    name: &str,
+) -> crate::error::Result<usize> {
+    let sources = resolve_scraped_sources(is_builtin, id, name);
+    let mut total_deleted = 0;
+    for s in sources {
+        let count = conn
+            .execute(
+                "DELETE FROM free_proxies WHERE source = ?1",
+                rusqlite::params![s],
+            )
+            .map_err(|e| crate::error::CoreError::Database {
+                message: e.to_string(),
+                source: Some(std::sync::Arc::new(e)),
+            })?;
+        total_deleted += count;
+    }
+    Ok(total_deleted)
+}
+
+pub fn purge_inactive_sources_proxies(conn: &Connection) -> crate::error::Result<usize> {
+    let sources = list_proxy_sources(conn)?;
+    let mut deleted = 0;
+    for src in sources {
+        if !src.active {
+            deleted += purge_proxies_for_source(conn, src.is_builtin, &src.id, &src.name)?;
+        }
+    }
+    Ok(deleted)
+}
+
 pub fn update_proxy_source(
     conn: &Connection,
     id: &str,
@@ -174,6 +208,10 @@ pub fn update_proxy_source(
         message: e.to_string(),
         source: Some(std::sync::Arc::new(e)),
     })?;
+
+    if existing.active && !active {
+        let _ = purge_proxies_for_source(conn, existing.is_builtin, id, &name);
+    }
 
     get_proxy_source(conn, id)?
         .ok_or_else(|| crate::error::CoreError::not_found("proxy_source", id))
