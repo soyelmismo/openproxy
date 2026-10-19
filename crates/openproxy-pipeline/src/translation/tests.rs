@@ -524,6 +524,71 @@ fn anthropic_to_openai_preserves_thinking_as_reasoning_content() {
             .and_then(Value::as_str),
         Some("Analyzing problem step 1...")
     );
+    assert_eq!(
+        out.choices[0]
+            .message
+            .extra
+            .get("reasoning")
+            .and_then(Value::as_str),
+        Some("Analyzing problem step 1...")
+    );
+}
+
+#[test]
+fn anthropic_to_openai_handles_minimax_thinking_payload() {
+    let raw = json!({
+        "base_resp": { "status_code": 0, "status_msg": "" },
+        "content": [
+            {
+                "signature": "672c7080",
+                "thinking": "We need only bullets max 8.",
+                "type": "thinking"
+            },
+            {
+                "text": "- ran: inspect jobs",
+                "type": "text"
+            }
+        ],
+        "id": "07250674e5e1485f140b3381971c11f5",
+        "model": "MiniMax-M3.1-Flash-Preview",
+        "role": "assistant",
+        "stop_reason": "end_turn",
+        "type": "message",
+        "usage": {
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 178,
+            "input_tokens": 4096,
+            "output_tokens": 183,
+            "output_tokens_details": {
+                "thinking_tokens": 47
+            }
+        }
+    });
+    let out = anthropic_to_openai(&serde_json::from_value(raw).unwrap());
+    assert_eq!(
+        out.choices[0]
+            .message
+            .content
+            .as_ref()
+            .and_then(Value::as_str),
+        Some("- ran: inspect jobs")
+    );
+    assert_eq!(
+        out.choices[0]
+            .message
+            .extra
+            .get("reasoning_content")
+            .and_then(Value::as_str),
+        Some("We need only bullets max 8.")
+    );
+    assert_eq!(
+        out.choices[0]
+            .message
+            .extra
+            .get("reasoning")
+            .and_then(Value::as_str),
+        Some("We need only bullets max 8.")
+    );
 }
 
 #[test]

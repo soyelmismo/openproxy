@@ -276,6 +276,19 @@ fn build_anthropic_content_from_openai_choice(
     choice: &crate::translation::Choice,
 ) -> Vec<serde_json::Value> {
     let mut content = Vec::new();
+    let reasoning = choice
+        .message
+        .extra
+        .get("reasoning_content")
+        .or_else(|| choice.message.extra.get("reasoning"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if let Some(r) = reasoning {
+        content.push(serde_json::json!({
+            "type": "thinking",
+            "thinking": r
+        }));
+    }
     if let Some(s) = choice
         .message
         .content

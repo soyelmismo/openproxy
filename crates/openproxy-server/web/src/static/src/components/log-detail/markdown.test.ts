@@ -117,4 +117,40 @@ describe('Live Log shared Markdown', () => {
     expect(writeText).toHaveBeenCalledExactlyOnceWith('const x = "<tag>";');
     vi.unstubAllGlobals();
   });
+
+  it('parses Anthropic/MiniMax response with thinking and text into Message and Reasoning blocks', () => {
+    const minimaxPayload = {
+      base_resp: { status_code: 0, status_msg: "" },
+      content: [
+        {
+          signature: "672c7080",
+          thinking: "We need only bullets max 8. Need summarize.",
+          type: "thinking",
+        },
+        {
+          text: "- ran: inspect `/root/.hermes/cron/jobs.json`\n- ran: query `/root/.hermes/state.db`",
+          type: "text",
+        },
+      ],
+      id: "07250674e5e1485f140b3381971c11f5",
+      model: "MiniMax-M3.1-Flash-Preview",
+      role: "assistant",
+      stop_reason: "end_turn",
+      type: "message",
+      usage: { input_tokens: 4096, output_tokens: 183 },
+    };
+
+    render(renderResponseTab(minimaxPayload), host);
+    const summaries = Array.from(host.querySelectorAll('details.log-detail-collapsible > summary')).map((s) => s.textContent?.trim());
+    expect(summaries).toContain('Message');
+    expect(summaries).toContain('Reasoning');
+    expect(host.textContent).toContain('We need only bullets max 8.');
+    expect(host.textContent).toContain('- ran: inspect `/root/.hermes/cron/jobs.json`');
+
+    // With Markdown toggled ON:
+    setLogDetailMarkdown(true);
+    render(renderResponseTab(minimaxPayload), host);
+    expect(host.querySelectorAll('.md-formatted-content').length).toBeGreaterThanOrEqual(2);
+    expect(host.textContent).toContain('We need only bullets max 8.');
+  });
 });

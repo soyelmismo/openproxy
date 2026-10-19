@@ -73,6 +73,7 @@ function extractReasoning(messageObj: Record<string, unknown> | null): string | 
     messageObj["reasoning_content"],
     messageObj["reasoning"],
     messageObj["reasoning_text"],
+    messageObj["thinking"],
   ];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.length > 0) {
@@ -91,6 +92,17 @@ function extractMessageContent(
     const c: unknown = choiceMessage["content"];
     if (typeof c === "string") {
       message = c;
+    } else if (Array.isArray(c)) {
+      const parts: string[] = [];
+      for (const p of c) {
+        if (p && typeof p === "object") {
+          const pt = p as Record<string, unknown>;
+          if (typeof pt["text"] === "string" && pt["text"].length > 0) parts.push(pt["text"]);
+        } else if (typeof p === "string" && p.length > 0) {
+          parts.push(p);
+        }
+      }
+      if (parts.length > 0) message = parts.join("\n\n");
     } else if (c == null) {
       const d: unknown = choice["delta"];
       if (d && typeof d === "object" && !Array.isArray(d)) {
@@ -111,6 +123,16 @@ function extractMessageContent(
 
 const TOP_LEVEL_RESPONSE_IGNORED_KEYS = new Set(["choices"]);
 const CHOICE_RESPONSE_IGNORED_KEYS = new Set(["message", "delta", "text"]);
+
+const ANTHROPIC_TOP_LEVEL_IGNORED_KEYS = new Set([
+  "content",
+  "thinking",
+  "reasoning",
+  "reasoning_content",
+  "reasoning_text",
+  "role",
+  "type",
+]);
 
 /** Recognize an OpenAI chat-completion shape, or null so the caller can fall
  *  through to a "Raw response" block. Only ever called with a non-string value;
@@ -156,6 +178,99 @@ export function parseOpenAiChatResponse(value: unknown): {
     return null;
   }
   return { message, reasoning, toolCalls, otherProperties: otherPropsNonNull };
+}
+
+/** Recognize an Anthropic / Claude Messages API response shape, extracting
+ *  text content, thinking/reasoning blocks, tool_use calls, and remaining metadata. */
+export function parseAnthropicMessagesResponse(value: unknown): {
+  message: string | null;
+  reasoning: string | null;
+  toolCalls: ToolCall[];
+  otherProperties: Record<string, unknown> | null;
+} | null {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return null;
+  const v = value as Record<string, unknown>;
+
+  if (Array.isArray(v["choices"])) return null;
+
+  const hasContent = v["content"] != null;
+  const isAnthropicShape =
+    hasContent &&
+    (v["type"] === "message" ||
+      v["role"] === "assistant" ||
+      v["stop_reason"] != null ||
+      Array.isArray(v["content"]));
+
+  if (!isAnthropicShape) return null;
+
+  const textParts: string[] = [];
+  const reasoningParts: string[] = [];
+  const toolCalls: ToolCall[] = [];
+
+  const rawContent = v["content"];
+  if (Array.isArray(rawContent)) {
+    for (const rawBlock of rawContent) {
+      if (rawBlock == null) continue;
+      if (typeof rawBlock === "string") {
+        if (rawBlock.length > 0) textParts.push(rawBlock);
+        continue;
+      }
+      if (typeof rawBlock === "object" && !Array.isArray(rawBlock)) {
+        const b = rawBlock as Record<string, unknown>;
+        const bType = typeof b["type"] === "string" ? b["type"] : "";
+        if (bType === "text" || (bType === "" && typeof b["text"] === "string")) {
+          if (typeof b["text"] === "string" && b["text"].length > 0) {
+            textParts.push(b["text"]);
+          }
+        } else if (bType === "thinking" || typeof b["thinking"] === "string") {
+          if (typeof b["thinking"] === "string" && b["thinking"].length > 0) {
+            reasoningParts.push(b["thinking"]);
+          }
+        } else if (bType === "redacted_thinking" && typeof b["data"] === "string") {
+          reasoningParts.push(`[Redacted thinking: ${b["data"]}]`);
+        } else if (bType === "tool_use") {
+          const name = typeof b["name"] === "string" ? b["name"] : "unknown_tool";
+          const args = b["input"] ?? null;
+          const tcCall: ToolCall = { type: "function", function: { name, arguments: args } };
+          if (typeof b["id"] === "string") tcCall.id = b["id"];
+          toolCalls.push(tcCall);
+        } else if (typeof b["content"] === "string" && b["content"].length > 0) {
+          textParts.push(b["content"]);
+        }
+      }
+    }
+  } else if (typeof rawContent === "string" && rawContent.length > 0) {
+    textParts.push(rawContent);
+  }
+
+  const topReasoning = extractReasoning(v);
+  if (topReasoning != null && !reasoningParts.includes(topReasoning)) {
+    reasoningParts.push(topReasoning);
+  }
+
+  const message = textParts.length > 0 ? textParts.join("\n\n") : null;
+  const reasoning = reasoningParts.length > 0 ? reasoningParts.join("\n\n") : null;
+
+  const otherProperties: Record<string, unknown> = collectFilteredProperties(
+    v,
+    ANTHROPIC_TOP_LEVEL_IGNORED_KEYS,
+  );
+  const otherPropsNonNull = Object.keys(otherProperties).length > 0 ? otherProperties : null;
+
+  if (message == null && reasoning == null && toolCalls.length === 0 && otherPropsNonNull == null) {
+    return null;
+  }
+  return { message, reasoning, toolCalls, otherProperties: otherPropsNonNull };
+}
+
+/** Parses either an OpenAI chat completion or an Anthropic messages response. */
+export function parseResponsePayload(value: unknown): {
+  message: string | null;
+  reasoning: string | null;
+  toolCalls: ToolCall[];
+  otherProperties: Record<string, unknown> | null;
+} | null {
+  return parseOpenAiChatResponse(value) ?? parseAnthropicMessagesResponse(value);
 }
 
 /** Pretty-print a tool-call `arguments` field. The result goes into a `<pre>`,
@@ -294,7 +409,9 @@ export function renderRawResponseBodyBlock(rawBody: string): TemplateResult {
 export function detectPartialResponse(response: unknown, isPartial?: boolean): boolean {
   if (isPartial === true) return true;
   if (typeof response !== "object" || response === null || Array.isArray(response)) return false;
-  const choices = (response as Record<string, unknown>)["choices"];
+  const r = response as Record<string, unknown>;
+  if (r["partial"] === true) return true;
+  const choices = r["choices"];
   if (!Array.isArray(choices) || choices.length === 0) return false;
   const c0 = choices[0] as Record<string, unknown> | undefined;
   if (!c0 || typeof c0 !== "object") return false;
@@ -385,6 +502,15 @@ function extractFallbackResponseData(response: unknown): {
         otherProperties = { ...(otherProperties ?? {}), ...choiceProps };
       }
     }
+  } else {
+    if (typeof obj["content"] === "string" && obj["content"].length > 0) {
+      content = obj["content"];
+    } else if (typeof obj["text"] === "string" && obj["text"].length > 0) {
+      content = obj["text"];
+    } else if (typeof obj["message"] === "string" && obj["message"].length > 0) {
+      content = obj["message"];
+    }
+    reasoning = extractReasoning(obj);
   }
 
   const topLevelProps = collectFilteredProperties(obj, TOP_LEVEL_RESPONSE_IGNORED_KEYS);

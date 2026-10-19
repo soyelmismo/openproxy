@@ -16,7 +16,7 @@ import {
   extractAnthropicToolStats,
   extractRawResponseBody,
   NO_RESPONSE_PLACEHOLDER_TEXT,
-  parseOpenAiChatResponse,
+  parseResponsePayload,
   renderFallbackResponseBlocks,
   renderParsedResponseBlocks,
   renderRawResponseBlock,
@@ -24,6 +24,11 @@ import {
 } from "./response-parser.js";
 
 // Public API
+export {
+  parseAnthropicMessagesResponse,
+  parseOpenAiChatResponse,
+  parseResponsePayload,
+} from "./response-parser.js";
 export type { LogDetailLog } from "./state.js";
 export {
   bumpOpenLogDetailGeneration,
@@ -415,7 +420,7 @@ export function renderResponseTab(
   }
 
 
-  const parsed = parseOpenAiChatResponse(response);
+  const parsed = parseResponsePayload(response);
   const blocks = parsed != null
     ? renderParsedResponseBlocks(parsed, response)
     : renderFallbackResponseBlocks(response);

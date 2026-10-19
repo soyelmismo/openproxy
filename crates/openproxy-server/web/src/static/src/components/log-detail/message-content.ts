@@ -39,7 +39,7 @@ export function renderLogMessagePayload(msg: Record<string, unknown>): TemplateR
   return html`${Object.entries(msg).map(([key, value]) => html`
     <div class="log-detail-message-field">
       <span class="log-detail-key">${key}</span>
-      ${['content', 'reasoning', 'reasoning_content', 'reasoning_text'].includes(key)
+      ${['content', 'reasoning', 'reasoning_content', 'reasoning_text', 'thinking'].includes(key)
         ? renderLogMessageContent(value) : renderRaw(value)}
     </div>`)} `;
 }

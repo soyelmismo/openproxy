@@ -10,12 +10,18 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     for b in &resp.content {
         match b.get("type").and_then(|t| t.as_str()) {
             Some("text") => {
-                if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                if let Some(t) = b.get("text").or_else(|| b.get("content")).and_then(|t| t.as_str()) {
                     combined.push_str(t);
                 }
             }
-            Some("thinking") => {
-                if let Some(t) = b.get("thinking").and_then(|t| t.as_str()) {
+            Some("thinking" | "thought" | "reasoning") => {
+                let t = b
+                    .get("thinking")
+                    .or_else(|| b.get("thought"))
+                    .or_else(|| b.get("reasoning"))
+                    .or_else(|| b.get("text"))
+                    .and_then(|t| t.as_str());
+                if let Some(t) = t {
                     reasoning.push_str(t);
                 }
             }
@@ -62,7 +68,8 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
 
     let mut extra = serde_json::Map::new();
     if !reasoning.is_empty() {
-        extra.insert("reasoning_content".to_string(), Value::String(reasoning));
+        extra.insert("reasoning_content".to_string(), Value::String(reasoning.clone()));
+        extra.insert("reasoning".to_string(), Value::String(reasoning));
     }
 
     let message = OpenAIMessage {

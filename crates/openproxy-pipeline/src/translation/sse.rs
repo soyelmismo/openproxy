@@ -54,9 +54,15 @@ fn build_content_chunk(
     model: &str,
     delta: &serde_json::Value,
 ) -> Vec<String> {
-    if delta.get("type").and_then(|v| v.as_str()) == Some("thinking_delta") {
+    let delta_type = delta.get("type").and_then(|v| v.as_str());
+    if delta_type == Some("thinking_delta")
+        || delta_type == Some("thought_delta")
+        || delta_type == Some("reasoning_delta")
+    {
         let thinking = delta
             .get("thinking")
+            .or_else(|| delta.get("thought"))
+            .or_else(|| delta.get("reasoning"))
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         let chunk = serde_json::json!({
@@ -66,7 +72,11 @@ fn build_content_chunk(
             "model": model,
             "choices": [{
                 "index": 0,
-                "delta": { "content": "", "reasoning_content": thinking },
+                "delta": {
+                    "content": "",
+                    "reasoning_content": thinking,
+                    "reasoning": thinking
+                },
                 "finish_reason": serde_json::Value::Null
             }]
         });
