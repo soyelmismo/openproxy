@@ -569,7 +569,8 @@ fn test_nested_subcombo_thinking_effort_override() {
             },
         )
         .unwrap();
-        openproxy_db::combos::update_target_thinking_effort(&conn, t_root_id, Some("medium")).unwrap();
+        openproxy_db::combos::update_target_thinking_effort(&conn, t_root_id, Some("medium"))
+            .unwrap();
 
         (root_c_id, sub_c_id)
     };

@@ -20,10 +20,10 @@ fn flatten_sub_combos(
             let parent_desc = t.description.take();
             let parent_effort = t.thinking_effort.take();
             for st in &mut sub_flat {
-                if let Some(ref desc) = parent_desc {
-                    if st.description.is_none() {
-                        st.description = Some(desc.clone());
-                    }
+                if let Some(ref desc) = parent_desc
+                    && st.description.is_none()
+                {
+                    st.description = Some(desc.clone());
                 }
                 if let Some(ref effort) = parent_effort {
                     st.thinking_effort = Some(effort.clone());

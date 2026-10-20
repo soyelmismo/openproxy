@@ -1,9 +1,9 @@
 use super::media::parse_media_part_to_inline_data;
 use super::types::{
-    DEFAULT_GEMINI_MAX_OUTPUT_TOKENS, SENTINEL_SIGNATURE, GeminiContent, GeminiFunctionCall,
+    DEFAULT_GEMINI_MAX_OUTPUT_TOKENS, GeminiContent, GeminiFunctionCall,
     GeminiFunctionCallingConfig, GeminiFunctionCallingMode, GeminiFunctionDeclaration,
     GeminiFunctionResponse, GeminiGenerationConfig, GeminiPart, GeminiRequest, GeminiResponse,
-    GeminiSafetySetting, GeminiThinkingConfig, GeminiTool, GeminiToolConfig,
+    GeminiSafetySetting, GeminiThinkingConfig, GeminiTool, GeminiToolConfig, SENTINEL_SIGNATURE,
 };
 
 fn map_single_content_part(part: &serde_json::Value) -> GeminiPart {
@@ -65,7 +65,7 @@ fn partition_messages_for_gemini(
 ) -> (Option<GeminiContent>, Vec<GeminiContent>) {
     let mut system_parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
     let mut contents: Vec<GeminiContent> = Vec::with_capacity(messages.len());
-    let inject_signatures = target_model.map_or(false, gemini_model_supports_thinking);
+    let inject_signatures = target_model.is_some_and(gemini_model_supports_thinking);
 
     // Deterministic O(N) map of tool_call_id -> function_name without external state or cache
     let mut tool_id_to_name: std::collections::HashMap<&str, &str> =
@@ -477,7 +477,7 @@ pub fn inject_gemini_thought_signatures(contents: &mut [serde_json::Value]) {
                 let missing_or_empty = part
                     .get("thoughtSignature")
                     .and_then(|s| s.as_str())
-                    .map_or(true, |s| s.trim().is_empty());
+                    .is_none_or(|s| s.trim().is_empty());
                 if missing_or_empty {
                     part["thoughtSignature"] = serde_json::json!(SENTINEL_SIGNATURE);
                 }

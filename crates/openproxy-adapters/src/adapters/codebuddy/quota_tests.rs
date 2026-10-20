@@ -1,8 +1,8 @@
-use super::*;
 use super::super::{
     is_codebuddy_model_free, make_codebuddy_model_id, normalize_codebuddy_model_name,
     parse_codebuddy_credits_multiplier,
 };
+use super::*;
 
 #[test]
 fn test_codebuddy_candidate_origins_default_and_custom() {
@@ -114,9 +114,18 @@ fn test_parse_codebuddy_resource_quota() {
 
 #[test]
 fn test_codebuddy_credits_multiplier_and_free_detection() {
-    assert_eq!(parse_codebuddy_credits_multiplier("x0.00 credits"), Some(0.0));
-    assert_eq!(parse_codebuddy_credits_multiplier("x0.34 credits"), Some(0.34));
-    assert_eq!(parse_codebuddy_credits_multiplier("x3.31 credits"), Some(3.31));
+    assert_eq!(
+        parse_codebuddy_credits_multiplier("x0.00 credits"),
+        Some(0.0)
+    );
+    assert_eq!(
+        parse_codebuddy_credits_multiplier("x0.34 credits"),
+        Some(0.34)
+    );
+    assert_eq!(
+        parse_codebuddy_credits_multiplier("x3.31 credits"),
+        Some(3.31)
+    );
     assert_eq!(parse_codebuddy_credits_multiplier("0.00x"), Some(0.0));
     assert_eq!(parse_codebuddy_credits_multiplier("1.5x"), Some(1.5));
     assert_eq!(parse_codebuddy_credits_multiplier(""), None);
@@ -126,12 +135,21 @@ fn test_codebuddy_credits_multiplier_and_free_detection() {
     assert!(is_codebuddy_model_free(Some("0")));
     assert!(!is_codebuddy_model_free(Some("x0.34 credits")));
     assert!(!is_codebuddy_model_free(Some("x1.0 credits")));
-    assert!(is_codebuddy_model_free(None) == false);
+    assert!(!is_codebuddy_model_free(None));
 
     assert_eq!(make_codebuddy_model_id("hy3".to_string(), true), "hy3:free");
-    assert_eq!(make_codebuddy_model_id("hy3:free".to_string(), true), "hy3:free");
-    assert_eq!(make_codebuddy_model_id("hy3-free".to_string(), true), "hy3-free");
-    assert_eq!(make_codebuddy_model_id("gpt-5.5".to_string(), false), "gpt-5.5");
+    assert_eq!(
+        make_codebuddy_model_id("hy3:free".to_string(), true),
+        "hy3:free"
+    );
+    assert_eq!(
+        make_codebuddy_model_id("hy3-free".to_string(), true),
+        "hy3-free"
+    );
+    assert_eq!(
+        make_codebuddy_model_id("gpt-5.5".to_string(), false),
+        "gpt-5.5"
+    );
 
     let mut name = "hy3:free".to_string();
     normalize_codebuddy_model_name(&mut name);

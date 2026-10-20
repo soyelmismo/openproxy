@@ -186,51 +186,57 @@ pub fn build_codebuddy_quota_model_details(
     }
 
     // Dynamic models from active contract catalog (including custom or newer upstream models)
-    if let Ok(snapshot) = crate::client_contract::providers::codebuddy_state::ensure_loaded() {
-        if let Some(catalog_body) = snapshot.catalog_body() {
-            if let Ok(catalog_str) = std::str::from_utf8(catalog_body) {
-                if let Ok(catalog) = crate::client_contract::providers::codebuddy::CodeBuddyCatalog::parse(catalog_str) {
-                    for model in catalog.models {
-                        let is_free = super::is_codebuddy_model_free(model.credits.as_deref());
-                        let target_model_id = if is_free {
-                            format!("{}:free", model.id)
-                        } else {
-                            model.id.clone()
-                        };
-                        if details.iter().any(|d| d.model_id == target_model_id || d.model_id == model.id) {
-                            continue;
-                        }
-                        let (m_limit, m_used, rem_frac) = if is_free {
-                            (9_999, 0, 1.0)
-                        } else {
-                            let cost = super::parse_codebuddy_credits_multiplier(
-                                model.credits.as_deref().unwrap_or(""),
-                            ).unwrap_or(1.0);
-                            let m_limit = ((session_limit as f64) / cost).floor() as i64;
-                            let m_used = ((session_used as f64) / cost).floor() as i64;
-                            let frac = if m_limit > 0 {
-                                ((m_limit - m_used) as f64 / m_limit as f64).clamp(0.0, 1.0)
-                            } else {
-                                0.0
-                            };
-                            (m_limit, m_used, frac)
-                        };
-
-                        details.push(ModelQuotaDetail {
-                            model_id: target_model_id,
-                            session_used: m_used,
-                            session_limit: m_limit,
-                            session_reset_at: reset_at.map(ToString::to_string),
-                            remaining_fraction: rem_frac,
-                        });
-                    }
-                }
+    if let Ok(snapshot) = crate::client_contract::providers::codebuddy_state::ensure_loaded()
+        && let Some(catalog_body) = snapshot.catalog_body()
+        && let Ok(catalog_str) = std::str::from_utf8(catalog_body)
+        && let Ok(catalog) =
+            crate::client_contract::providers::codebuddy::CodeBuddyCatalog::parse(catalog_str)
+    {
+        for model in catalog.models {
+            let is_free = super::is_codebuddy_model_free(model.credits.as_deref());
+            let target_model_id = if is_free {
+                format!("{}:free", model.id)
+            } else {
+                model.id.clone()
+            };
+            if details
+                .iter()
+                .any(|d| d.model_id == target_model_id || d.model_id == model.id)
+            {
+                continue;
             }
+            let (m_limit, m_used, rem_frac) = if is_free {
+                (9_999, 0, 1.0)
+            } else {
+                let cost = super::parse_codebuddy_credits_multiplier(
+                    model.credits.as_deref().unwrap_or(""),
+                )
+                .unwrap_or(1.0);
+                let m_limit = ((session_limit as f64) / cost).floor() as i64;
+                let m_used = ((session_used as f64) / cost).floor() as i64;
+                let frac = if m_limit > 0 {
+                    ((m_limit - m_used) as f64 / m_limit as f64).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                (m_limit, m_used, frac)
+            };
+
+            details.push(ModelQuotaDetail {
+                model_id: target_model_id,
+                session_used: m_used,
+                session_limit: m_limit,
+                session_reset_at: reset_at.map(ToString::to_string),
+                remaining_fraction: rem_frac,
+            });
         }
     }
 
     // Include step-5-preview:free if not already present, marking it free (x0.0) as observed in WorkBuddy
-    if !details.iter().any(|d| d.model_id == "step-5-preview:free" || d.model_id == "step-5-preview") {
+    if !details
+        .iter()
+        .any(|d| d.model_id == "step-5-preview:free" || d.model_id == "step-5-preview")
+    {
         details.push(ModelQuotaDetail {
             model_id: "step-5-preview:free".to_string(),
             session_used: 0,
