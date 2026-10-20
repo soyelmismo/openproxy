@@ -6,6 +6,7 @@ use super::{
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
 
 pub mod quota;
+pub mod sanitizer;
 #[cfg(test)]
 mod tests;
 pub mod tokens;
@@ -14,6 +15,7 @@ pub use quota::{
     NORMALIZED_BASE, normalize_quota_fraction, parse_antigravity_models_response,
     parse_antigravity_user_quota_summary, prune_plan_cache,
 };
+pub use sanitizer::PromptSanitizer;
 pub use tokens::{
     COUNT_TOKENS_URL, LOAD_CODE_ASSIST_URL, ONBOARD_USER_URL, SENTINEL_SIGNATURE, count_tokens,
     load_code_assist, onboard_user, parse_total_tokens,
@@ -152,11 +154,11 @@ impl AntigravityAdapter {
 
     /// Parse fetchAvailableModels response into DiscoveredModel list.
     pub fn parse_models_response(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
-        tracing::info!(
-            "Antigravity fetchAvailableModels response: {}",
-            serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string())
-        );
         let models_obj = body.get("models")?.as_object()?;
+        tracing::debug!(
+            model_count = models_obj.len(),
+            "Antigravity fetchAvailableModels parsed"
+        );
         let models: Vec<DiscoveredModel> = models_obj
             .iter()
             .map(|(k, v)| Self::map_antigravity_discovered_model(k, v))
@@ -252,6 +254,19 @@ impl ProviderAdapter for AntigravityAdapter {
         headers_vec
     }
 
+    fn finalize_request(
+        &self,
+        body: bytes::Bytes,
+        headers: &mut Vec<(String, String)>,
+        _target_format: TargetFormat,
+        model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, CoreError> {
+        let physical_model = map_antigravity_physical_model(model.as_str());
+        crate::antigravity_headers::finalize_antigravity_content_headers(headers, physical_model);
+        Ok(body)
+    }
+
     fn wrap_request_body(
         &self,
         body: bytes::Bytes,
@@ -274,6 +289,8 @@ impl ProviderAdapter for AntigravityAdapter {
                 sanitize_antigravity_contents(contents, physical_model);
                 tokens::inject_sentinel_thought_signatures(contents, physical_model);
             }
+
+            PromptSanitizer::sanitize_gemini_request(&mut json);
 
             if let Some(tools) = json.get_mut("tools") {
                 normalize_antigravity_tools(tools);
@@ -325,9 +342,11 @@ impl ProviderAdapter for AntigravityAdapter {
             let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
                 CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
             })?);
-            tracing::info!(
-                "Antigravity test payload: {}",
-                serde_json::to_string(&wrapped).unwrap_or_else(|_| "{}".to_string())
+            tracing::debug!(
+                request_type = %req_type,
+                request_id = %request_id,
+                model = %physical_model,
+                "Antigravity wrapped gemini request prepared"
             );
             return Ok(wrapped_bytes);
         }

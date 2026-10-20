@@ -167,8 +167,13 @@ impl PipelineStage for TimeoutResolutionStage {
                 Err(e) => return fail_stage!(ctx, &current.target, &e, Some(model)),
             };
 
-        let resolved_timeouts =
+        let mut resolved_timeouts =
             timeouts::resolve(&ctx.pipeline.config.defaults, Some(&model_overrides));
+
+        let provider_str = current.target.provider_id.as_str();
+        if provider_str == "antigravity" || provider_str == "agy" {
+            resolved_timeouts = timeouts::apply_antigravity_floor(resolved_timeouts);
+        }
 
         tracing::debug!(
             target_id = current.target.id.0,

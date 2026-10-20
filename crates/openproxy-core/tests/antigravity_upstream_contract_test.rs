@@ -173,6 +173,54 @@ fn test_antigravity_golden_contract_spec_parity() {
         )
         .expect("wrap antigravity request");
 
+    // Generation has its own Hub contract, finalized AFTER account/client
+    // header propagation. Metadata and OAuth above deliberately remain IDE.
+    let mut content_headers = adapter.build_headers(
+        "test-token",
+        TargetFormat::Gemini,
+        &ModelId::new("claude-sonnet-4-6"),
+    );
+    content_headers.extend([
+        ("X-Stainless-Retry-Count".into(), "0".into()),
+        ("X-Goog-User-Project".into(), "p-proj-123".into()),
+        ("X-Anthropic-Billing-Header".into(), "billing".into()),
+    ]);
+    let finalized = adapter
+        .finalize_request(
+            wrapped.clone(),
+            &mut content_headers,
+            TargetFormat::Gemini,
+            &ModelId::new("claude-sonnet-4-6"),
+            &target,
+        )
+        .expect("finalize Hub contract");
+    assert_eq!(
+        finalized, wrapped,
+        "header finalization must preserve body bytes"
+    );
+    let find_content = |name: &str| {
+        content_headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    };
+    assert_eq!(
+        find_content("user-agent"),
+        Some(openproxy_adapters::antigravity_headers::hub_user_agent().as_str())
+    );
+    assert_eq!(find_content("anthropic-beta"), Some("claude-code-20250219"));
+    for removed in [
+        "x-client-name",
+        "x-client-version",
+        "x-machine-id",
+        "x-vscode-sessionid",
+        "x-goog-user-project",
+        "x-stainless-retry-count",
+        "x-anthropic-billing-header",
+    ] {
+        assert_eq!(find_content(removed), None, "must not leak {removed}");
+    }
+
     let val: serde_json::Value = serde_json::from_slice(&wrapped).expect("valid json");
     assert_eq!(val["project"], "p-proj-123");
     assert_eq!(

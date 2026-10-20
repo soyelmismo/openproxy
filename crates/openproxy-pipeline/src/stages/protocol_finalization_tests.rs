@@ -42,6 +42,53 @@ use openproxy_types::{AuthType, ComboTarget, TargetFormat};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+#[test]
+fn antigravity_full_chain_cleans_claude_metadata_and_keeps_user_content() {
+    let adapter = ProviderAdapterEnum::Antigravity(Box::default());
+    let mut resolved = resolved_target_for("antigravity", TargetFormat::Gemini);
+    resolved.custom_meta = Some(CustomProviderMeta {
+        access_token: "test-token".into(),
+        maybe_refresh: None,
+        kiro_region: None,
+        kiro_profile_arn: None,
+        antigravity_project: Some("project-contract-test".into()),
+        antigravity_metadata: None,
+        codex_workspace_id: None,
+        claude_account_uuid: None,
+        claude_metadata: None,
+    });
+    let (mut req, _tx) = make_request(ComboId(1));
+    Arc::get_mut(&mut req.openai_request).expect("fresh request").messages = serde_json::from_value(json!([
+        {"role":"system","content":"You are Claude Code, Anthropic's official CLI for Claude.\nPreserve this application instruction."},
+        {"role":"user","content":"Explain cc_workload literally. Do not modify my source code."}
+    ])).unwrap();
+    req.request_headers
+        .insert("x-stainless-lang".into(), "js".into());
+    req.request_headers
+        .insert("x-anthropic-billing-header".into(), "billing".into());
+    let out = run_chain(&adapter, &resolved, &req);
+    let parsed: Value = serde_json::from_slice(&out.body).unwrap();
+    assert_eq!(parsed["project"], "project-contract-test");
+    let text = String::from_utf8_lossy(&out.body);
+    assert!(!text.contains("You are Claude Code, Anthropic's official CLI"));
+    assert!(text.contains("Preserve this application instruction."));
+    assert!(text.contains("Explain cc_workload literally. Do not modify my source code."));
+    let header = |name: &str| {
+        out.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(
+        header("user-agent"),
+        Some(openproxy_adapters::antigravity_headers::hub_user_agent().as_str())
+    );
+    assert_eq!(header("x-goog-user-project"), None);
+    assert_eq!(header("x-client-version"), None);
+    assert_eq!(header("x-stainless-lang"), None);
+    assert_eq!(header("x-anthropic-billing-header"), None);
+}
+
 /// Length of the embedded CCH signature.
 const CCH_LEN: usize = 5;
 

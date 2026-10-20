@@ -190,6 +190,60 @@ pub fn user_agent() -> HeaderValue {
     build_user_agent(&current_version())
 }
 
+/// Hub fingerprint pinned together to Antigravity-Manager 9f8e4f24.
+/// This is the language-service identity, NOT the IDE/OAuth version.
+/// Never combine a dynamically detected IDE version with this Hub changelist.
+pub const OFFICIAL_HUB_VERSION: &str = "2.23.1";
+pub const OFFICIAL_HUB_CL: &str = "998881661";
+
+pub fn hub_user_agent() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!(
+        "antigravity/hub/{OFFICIAL_HUB_VERSION} (aidev_client; os_type={os}; arch={arch}; cl={OFFICIAL_HUB_CL})"
+    )
+}
+
+/// Last-mile generation headers, after client/account overrides. OAuth and
+/// metadata keep their existing IDE contract. Content requests retain their
+/// project in the JSON envelope, never in Google's quota-project header.
+pub fn finalize_antigravity_content_headers(headers: &mut Vec<(String, String)>, model: &str) {
+    headers.retain(|(key, _)| {
+        let key = key.to_ascii_lowercase();
+        !matches!(
+            key.as_str(),
+            "user-agent"
+                | "x-session-id"
+                | "x-client-name"
+                | "x-client-version"
+                | "x-machine-id"
+                | "x-vscode-sessionid"
+                | "x-goog-user-project"
+                | "x-goog-api-client"
+                | "x-anthropic-billing-header"
+                | "anthropic-dangerous-direct-browser-access"
+        ) && !key.starts_with("x-stainless-")
+            && !key.starts_with("x-claude-code-")
+            && !key.starts_with("x-jeikcode")
+            && !key.starts_with("cc_")
+    });
+    headers.push(("User-Agent".into(), hub_user_agent()));
+    if model.to_ascii_lowercase().contains("claude")
+        && !headers
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("anthropic-beta"))
+    {
+        headers.push(("anthropic-beta".into(), "claude-code-20250219".into()));
+    }
+}
+
 /// `vscode/1.X.X (Antigravity/{version})`, the User-Agent Google's native
 /// OAuth endpoints expect for token exchange, refresh and userinfo.
 pub fn oauth_user_agent() -> String {
@@ -247,7 +301,9 @@ pub fn build_bearer_header(
     let mut buf = bytes::BytesMut::with_capacity(7 + token.len());
     buf.extend_from_slice(b"Bearer ");
     buf.extend_from_slice(token.as_bytes());
-    http::HeaderValue::from_maybe_shared(buf.freeze())
+    let mut value = http::HeaderValue::from_maybe_shared(buf.freeze())?;
+    value.set_sensitive(true);
+    Ok(value)
 }
 
 pub fn insert_bearer(

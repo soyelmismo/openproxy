@@ -127,6 +127,45 @@ fn test_populate_upstream_headers_never_leaks_openproxy_internal_headers() {
 }
 
 #[test]
+fn test_populate_upstream_headers_marks_authorization_sensitive() {
+    let mut upstream_req = openproxy_adapters::upstream::UpstreamRequest::post_json(
+        "http://example.com/v1/chat/completions".to_string(),
+        bytes::Bytes::new(),
+    );
+    let headers = vec![
+        (
+            "Authorization".to_string(),
+            "Bearer secret-token-value".to_string(),
+        ),
+        ("X-Non-Sensitive".to_string(), "public-info".to_string()),
+    ];
+
+    crate::dispatcher::unary::populate_upstream_headers(&mut upstream_req, &headers);
+
+    let auth_val = upstream_req
+        .headers
+        .get(http::header::AUTHORIZATION)
+        .expect("authorization header present");
+    assert!(
+        auth_val.is_sensitive(),
+        "authorization must be marked sensitive"
+    );
+    assert!(
+        !format!("{auth_val:?}").contains("secret-token-value"),
+        "authorization value must not appear in debug representation"
+    );
+
+    let public_val = upstream_req
+        .headers
+        .get("x-non-sensitive")
+        .expect("public header present");
+    assert!(
+        !public_val.is_sensitive(),
+        "public header must not be sensitive"
+    );
+}
+
+#[test]
 fn test_ensure_streaming_accept_sets_sse_only_for_streaming() {
     use openproxy_adapters::upstream::UpstreamRequest;
 

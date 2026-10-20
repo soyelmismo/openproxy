@@ -1,6 +1,88 @@
 use super::*;
 
 #[test]
+fn content_headers_use_hub_and_remove_foreign_fingerprints_case_insensitively() {
+    let mut headers: Vec<(String, String)> = [
+        ("Authorization", "Bearer test"),
+        ("USER-AGENT", "claude-code/2.1.301"),
+        ("user-agent", "second"),
+        ("X-Client-Name", "antigravity"),
+        ("X-Client-Version", "4.3.0"),
+        ("X-Machine-Id", "machine"),
+        ("X-Vscode-Sessionid", "session"),
+        ("X-Goog-User-Project", "project"),
+        ("X-Stainless-Lang", "js"),
+        ("X-Claude-Code-Session-Id", "session"),
+        ("X-Anthropic-Billing-Header", "billing"),
+        ("cc_workload", "subagent"),
+        ("Content-Type", "application/json"),
+        ("X-Custom", "retained"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.into(), v.into()))
+    .collect();
+    finalize_antigravity_content_headers(&mut headers, "claude-sonnet-4-6");
+    let find = |name: &str| {
+        headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case(name))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(find("user-agent").len(), 1);
+    assert_eq!(find("user-agent")[0].1, hub_user_agent());
+    assert!(hub_user_agent().starts_with("antigravity/hub/2.23.1 (aidev_client; os_type="));
+    assert!(hub_user_agent().ends_with("; cl=998881661)"));
+    for name in [
+        "x-client-name",
+        "x-client-version",
+        "x-machine-id",
+        "x-vscode-sessionid",
+        "x-goog-user-project",
+        "x-stainless-lang",
+        "x-claude-code-session-id",
+        "x-anthropic-billing-header",
+        "cc_workload",
+    ] {
+        assert!(find(name).is_empty(), "leaked {name}");
+    }
+    assert_eq!(find("authorization")[0].1, "Bearer test");
+    assert_eq!(find("content-type")[0].1, "application/json");
+    assert_eq!(find("x-custom")[0].1, "retained");
+    assert_eq!(find("anthropic-beta")[0].1, "claude-code-20250219");
+    let first = headers.clone();
+    finalize_antigravity_content_headers(&mut headers, "claude-sonnet-4-6");
+    assert_eq!(
+        headers.len(),
+        first.len(),
+        "finalization must not duplicate headers"
+    );
+}
+
+#[test]
+fn content_headers_preserve_explicit_beta_and_gemini_has_no_default_beta() {
+    let mut headers = vec![("Anthropic-Beta".into(), "custom-beta".into())];
+    finalize_antigravity_content_headers(&mut headers, "claude-opus-4-6");
+    assert_eq!(
+        headers
+            .iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("anthropic-beta"))
+            .count(),
+        1
+    );
+    assert_eq!(headers[0].1, "custom-beta");
+    let mut gemini = Vec::new();
+    finalize_antigravity_content_headers(&mut gemini, "gemini-pro-agent");
+    assert_eq!(gemini, vec![("User-Agent".into(), hub_user_agent())]);
+}
+
+#[test]
+fn bearer_is_sensitive_in_debug_output() {
+    let header = build_bearer_header("private-test-token").unwrap();
+    assert!(header.is_sensitive());
+    assert!(!format!("{header:?}").contains("private-test-token"));
+}
+
+#[test]
 fn user_agent_contains_antigravity_and_version() {
     let ua_hdr = user_agent();
     let ua = ua_hdr.to_str().unwrap();

@@ -22,10 +22,15 @@ pub(crate) fn populate_upstream_headers(
         if k.to_ascii_lowercase().starts_with("x-openproxy-") {
             continue;
         }
-        if let (Ok(name), Ok(value)) = (
+        if let (Ok(name), Ok(mut value)) = (
             http::HeaderName::from_bytes(k.as_bytes()),
             http::HeaderValue::from_str(v),
         ) {
+            // `HeaderValue::from_str` crea un valor no sensible; marcar el
+            // bearer de nuevo para que Debug/redaction no filtren el token.
+            if name == http::header::AUTHORIZATION {
+                value.set_sensitive(true);
+            }
             upstream_request.headers.insert(name, value);
         }
     }

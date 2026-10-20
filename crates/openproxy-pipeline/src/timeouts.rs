@@ -65,6 +65,26 @@ impl ModelTimeoutOverrides {
     }
 }
 
+/// Minimum TTFT and idle chunk timeout (in milliseconds) for Antigravity upstream requests.
+/// Thinking models and long reasoning traces on Google Cloud Code require at least 120s
+/// to prevent premature timeouts during generation.
+pub const ANTIGRAVITY_MIN_TIMEOUT_MS: u64 = 120_000;
+
+/// Enforce minimum timeouts for Antigravity without clipping larger budgets.
+pub fn apply_antigravity_floor(mut timeouts: Timeouts) -> Timeouts {
+    let min_dur = Duration::from_millis(ANTIGRAVITY_MIN_TIMEOUT_MS);
+    if timeouts.ttft < min_dur {
+        timeouts.ttft = min_dur;
+    }
+    if timeouts.idle_chunk < min_dur {
+        timeouts.idle_chunk = min_dur;
+    }
+    if timeouts.total < min_dur {
+        timeouts.total = min_dur;
+    }
+    timeouts
+}
+
 /// Resolve the final timeouts for a request by applying 2-level precedence.
 pub fn resolve(defaults: &Timeouts, model_overrides: Option<&ModelTimeoutOverrides>) -> Timeouts {
     // Model overrides win; unset fields keep the system default.
@@ -131,5 +151,46 @@ mod tests {
 
         let overrides = ModelTimeoutOverrides::from_json(Some(r#"{"ttft_ms": "not an int"}"#));
         assert!(overrides.is_err());
+    }
+
+    #[test]
+    fn test_apply_antigravity_floor_lifts_below_120s() {
+        let low_timeouts = Timeouts {
+            connect: Duration::from_millis(5_000),
+            request_send: Duration::from_millis(10_000),
+            ttft: Duration::from_millis(6_000),
+            idle_chunk: Duration::from_millis(30_000),
+            total: Duration::from_millis(60_000),
+        };
+        let floored = apply_antigravity_floor(low_timeouts);
+        assert_eq!(floored.connect, Duration::from_millis(5_000));
+        assert_eq!(floored.request_send, Duration::from_millis(10_000));
+        assert_eq!(
+            floored.ttft,
+            Duration::from_millis(ANTIGRAVITY_MIN_TIMEOUT_MS)
+        );
+        assert_eq!(
+            floored.idle_chunk,
+            Duration::from_millis(ANTIGRAVITY_MIN_TIMEOUT_MS)
+        );
+        assert_eq!(
+            floored.total,
+            Duration::from_millis(ANTIGRAVITY_MIN_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
+    fn test_apply_antigravity_floor_preserves_larger_budgets() {
+        let large_timeouts = Timeouts {
+            connect: Duration::from_millis(5_000),
+            request_send: Duration::from_millis(10_000),
+            ttft: Duration::from_millis(180_000),
+            idle_chunk: Duration::from_millis(240_000),
+            total: Duration::from_millis(600_000),
+        };
+        let floored = apply_antigravity_floor(large_timeouts);
+        assert_eq!(floored.ttft, Duration::from_millis(180_000));
+        assert_eq!(floored.idle_chunk, Duration::from_millis(240_000));
+        assert_eq!(floored.total, Duration::from_millis(600_000));
     }
 }
