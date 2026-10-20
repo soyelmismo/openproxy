@@ -3,6 +3,7 @@ use serde_json::json;
 
 mod adversarial_tests;
 mod cache;
+mod text;
 
 #[test]
 fn test_map_antigravity_physical_model() {

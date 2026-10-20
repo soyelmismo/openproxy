@@ -432,6 +432,15 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
             continue;
         };
 
+        if is_claude {
+            // Cloud Code drops empty protobuf strings, leaving Claude text blocks
+            // without the required text field. Keep tool/media parts and turn order.
+            parts.retain(|part| part.get("text").and_then(|text| text.as_str()) != Some(""));
+            if parts.is_empty() {
+                parts.push(serde_json::json!({ "text": "..." }));
+            }
+        }
+
         for part in parts.iter_mut() {
             if let Some(fc) = part.get_mut("functionCall").and_then(|f| f.as_object_mut()) {
                 let name = fc
