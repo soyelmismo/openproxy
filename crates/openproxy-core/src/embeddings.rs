@@ -213,6 +213,8 @@ pub async fn execute_embeddings(
                         error_msg: None,
                         total_ms,
                         endpoint_kind: EndpointKind::Embedding,
+                        request_body_json: None,
+                        response_body_json: None,
                     },
                 )
                 .await;
@@ -275,6 +277,8 @@ mod tests {
                 error_msg: None,
                 total_ms: 85,
                 endpoint_kind: EndpointKind::Embedding,
+                request_body_json: None,
+                response_body_json: None,
             },
         );
 

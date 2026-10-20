@@ -43,6 +43,8 @@ fn test_record_image_usage_row() {
             error_msg: None,
             total_ms: 120,
             endpoint_kind: EndpointKind::Image,
+            request_body_json: None,
+            response_body_json: None,
         },
     );
 
@@ -85,6 +87,8 @@ async fn async_usage_waits_for_writer_without_blocking_tokio() {
         error_msg: None,
         total_ms: 120,
         endpoint_kind: EndpointKind::Image,
+        request_body_json: None,
+        response_body_json: None,
     };
     let record = crate::unary::record_unary_usage_async(&pool, &args);
     tokio::pin!(record);

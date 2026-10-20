@@ -376,7 +376,16 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
             : html`<span class="muted">—</span>`;
         })()}</td>
         ${showWeight ? html`<td class="col-target-weight"><em>${t("combos.target.na")}</em></td>` : html``}
-        <td class="col-target-thinking"><em>${t("combos.target.na")}</em></td>
+        <td class="col-target-thinking">
+          <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:110px" .value=${target.thinking_effort ?? ""} @change=${async (e: Event) => {
+            const val = (e.target as HTMLSelectElement).value || null;
+            await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ thinking_effort: val }) });
+            target.thinking_effort = val; requestUpdate();
+          }}>
+            <option value="" ?selected=${!target.thinking_effort}>${t("combos.target.thinking_passthrough")}</option>
+            ${["none", "low", "medium", "high", "max"].map((ef) => html`<option value=${ef} ?selected=${target.thinking_effort === ef}>${ef}</option>`)}
+          </select>
+        </td>
         <td class="col-target-cooldown"><em>${t("combos.target.sub_combo")}</em></td>
         <td class="last-test-cell col-target-test-status"><span class="muted">—</span></td>
         <td class="col-target-actions">${actionsCell}</td>

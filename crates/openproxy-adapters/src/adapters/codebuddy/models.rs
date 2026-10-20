@@ -401,6 +401,66 @@ pub const CODEBUDDY_MODELS: &[CodeBuddyModelDef] = &[
     },
 ];
 
+/// Extrae el multiplicador o costo numérico de créditos a partir de cadenas oficiales
+/// como `"x0.00 credits"`, `"x0.34 credits"` o `"0.00x"`.
+///
+/// Si la cadena indica `0.0` o `0.00`, retorna `Some(0.0)`.
+#[must_use]
+pub fn parse_codebuddy_credits_multiplier(credits_str: &str) -> Option<f64> {
+    let trimmed = credits_str.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Coincide con regex oficial: /(\d+(?:\.\d+)?)/
+    let mut num_str = String::new();
+    let mut started = false;
+    let mut has_dot = false;
+
+    for ch in trimmed.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            num_str.push(ch);
+        } else if ch == '.' && started && !has_dot {
+            has_dot = true;
+            num_str.push(ch);
+        } else if started {
+            break;
+        }
+    }
+
+    if num_str.is_empty() {
+        return None;
+    }
+
+    num_str.parse::<f64>().ok().filter(|val| val.is_finite())
+}
+
+/// Determina si un modelo es gratuito (multiplicador x0.0) basándose en su declaración
+/// de créditos en el catálogo oficial o contrato.
+#[must_use]
+pub fn is_codebuddy_model_free(credits_str: Option<&str>) -> bool {
+    match credits_str.and_then(parse_codebuddy_credits_multiplier) {
+        Some(val) => val <= 0.0,
+        None => false,
+    }
+}
+
+pub fn make_codebuddy_model_id(mut id: String, is_free: bool) -> String {
+    if is_free && !id.ends_with(":free") && !id.contains("-free") {
+        id.push_str(":free");
+    }
+    id
+}
+
+pub fn normalize_codebuddy_model_name(model_str: &mut String) {
+    if let Some(stripped) = model_str
+        .strip_suffix(":free")
+        .or_else(|| model_str.strip_suffix("-free"))
+    {
+        *model_str = stripped.to_string();
+    }
+}
+
 pub(crate) fn codebuddy_contract_models(
     snapshot: &crate::client_contract::Snapshot<
         crate::client_contract::providers::codebuddy_runtime::CodeBuddyProfile,
@@ -416,8 +476,10 @@ pub(crate) fn codebuddy_contract_models(
             .into_iter()
             .map(|model| {
                 let reasoning = model.supports_reasoning;
+                let is_free = is_codebuddy_model_free(model.credits.as_deref());
+                let model_id = make_codebuddy_model_id(model.id, is_free);
                 DiscoveredModel {
-                    model_id: ModelId::new(model.id),
+                    model_id: ModelId::new(model_id),
                     display_name: Some(model.name),
                     target_format: TargetFormat::Openai,
                     context_length: model
@@ -455,8 +517,10 @@ pub fn codebuddy_static_models() -> Vec<DiscoveredModel> {
                 thinking: Some(def.reasoning),
                 ..Default::default()
             };
+            let is_free = def.credit_cost <= 0.0;
+            let model_id = make_codebuddy_model_id(def.id.to_string(), is_free);
             DiscoveredModel {
-                model_id: ModelId::new(def.id),
+                model_id: ModelId::new(model_id),
                 display_name: Some(def.name.to_string()),
                 target_format: TargetFormat::Openai,
                 context_length: if def.context_length > 0 {

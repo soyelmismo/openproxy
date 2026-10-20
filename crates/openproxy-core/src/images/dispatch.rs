@@ -285,6 +285,9 @@ pub async fn execute_image_generation(
         );
 
         let total_ms = started.elapsed().as_millis() as u64;
+        let req_json = serde_json::to_vec(&req).ok().map(bytes::Bytes::from);
+        let resp_json = serde_json::to_value(&parsed_response).ok();
+
         record_unary_usage_async(
             db_pool,
             &UnaryUsageArgs {
@@ -302,6 +305,8 @@ pub async fn execute_image_generation(
                 error_msg: None,
                 total_ms,
                 endpoint_kind: EndpointKind::Image,
+                request_body_json: req_json,
+                response_body_json: resp_json,
             },
         )
         .await;

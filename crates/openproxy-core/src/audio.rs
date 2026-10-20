@@ -273,6 +273,8 @@ pub async fn execute_transcribe(
                         error_msg: None,
                         total_ms,
                         endpoint_kind: openproxy_types::EndpointKind::Audio,
+                        request_body_json: None,
+                        response_body_json: None,
                     },
                 )
                 .await;

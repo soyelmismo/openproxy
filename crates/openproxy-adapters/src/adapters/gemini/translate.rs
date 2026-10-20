@@ -1,6 +1,6 @@
 use super::media::parse_media_part_to_inline_data;
 use super::types::{
-    DEFAULT_GEMINI_MAX_OUTPUT_TOKENS, GeminiContent, GeminiFunctionCall,
+    DEFAULT_GEMINI_MAX_OUTPUT_TOKENS, SENTINEL_SIGNATURE, GeminiContent, GeminiFunctionCall,
     GeminiFunctionCallingConfig, GeminiFunctionCallingMode, GeminiFunctionDeclaration,
     GeminiFunctionResponse, GeminiGenerationConfig, GeminiPart, GeminiRequest, GeminiResponse,
     GeminiSafetySetting, GeminiThinkingConfig, GeminiTool, GeminiToolConfig,
@@ -61,9 +61,11 @@ fn build_default_gemini_safety_settings() -> Vec<GeminiSafetySetting> {
 
 fn partition_messages_for_gemini(
     messages: &[openproxy_types::OpenAIMessage],
+    target_model: Option<&str>,
 ) -> (Option<GeminiContent>, Vec<GeminiContent>) {
     let mut system_parts: Vec<std::borrow::Cow<'_, str>> = Vec::new();
     let mut contents: Vec<GeminiContent> = Vec::with_capacity(messages.len());
+    let inject_signatures = target_model.map_or(false, gemini_model_supports_thinking);
 
     // Deterministic O(N) map of tool_call_id -> function_name without external state or cache
     let mut tool_id_to_name: std::collections::HashMap<&str, &str> =
@@ -167,8 +169,21 @@ fn partition_messages_for_gemini(
                             })
                             .unwrap_or_else(|| serde_json::json!({}));
                         let id = tc.get("id").and_then(|id| id.as_str()).map(String::from);
+                        let thought_signature = tc
+                            .get("thoughtSignature")
+                            .or_else(|| tc.get("thought_signature"))
+                            .and_then(|s| s.as_str())
+                            .map(String::from)
+                            .or_else(|| {
+                                if inject_signatures {
+                                    Some(SENTINEL_SIGNATURE.to_string())
+                                } else {
+                                    None
+                                }
+                            });
                         parts.push(GeminiPart {
                             function_call: Some(GeminiFunctionCall { name, args, id }),
+                            thought_signature,
                             ..Default::default()
                         });
                     }
@@ -228,12 +243,12 @@ fn partition_messages_for_gemini(
                 };
 
                 if let Some(last) = contents.last_mut()
-                    && last.role == "function"
+                    && last.role == "user"
                 {
                     last.parts.push(function_part);
                 } else {
                     contents.push(GeminiContent {
-                        role: "function".to_string(),
+                        role: "user".to_string(),
                         parts: vec![function_part],
                     });
                 }
@@ -426,10 +441,49 @@ pub fn gemini_model_supports_thinking(model: &str) -> bool {
         return false;
     }
     m.contains("thinking")
-        || m.starts_with("gemini-2.")
-        || m.starts_with("gemini-3.")
-        || m.starts_with("gemini-4.")
-        || m.starts_with("gemini-exp")
+        || m.contains("gemini-2.")
+        || m.contains("gemini-3.")
+        || m.contains("gemini-4")
+        || m.contains("gemini-exp")
+}
+
+/// Normalizes and ensures `thoughtSignature` is present for function calls in Gemini thinking models.
+pub fn inject_gemini_thought_signatures(contents: &mut [serde_json::Value]) {
+    for msg in contents.iter_mut() {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        let is_model = role == "model" || role == "assistant";
+
+        let Some(parts) = msg.get_mut("parts").and_then(|p| p.as_array_mut()) else {
+            continue;
+        };
+
+        // Normalize snake_case thought_signature to camelCase thoughtSignature
+        for part in parts.iter_mut() {
+            if let Some(obj) = part.as_object_mut()
+                && let Some(sig) = obj.remove("thought_signature")
+                && !obj.contains_key("thoughtSignature")
+            {
+                obj.insert("thoughtSignature".to_string(), sig);
+            }
+        }
+
+        if !is_model {
+            continue;
+        }
+
+        for part in parts.iter_mut() {
+            let has_fc = part.get("functionCall").is_some() || part.get("function_call").is_some();
+            if has_fc {
+                let missing_or_empty = part
+                    .get("thoughtSignature")
+                    .and_then(|s| s.as_str())
+                    .map_or(true, |s| s.trim().is_empty());
+                if missing_or_empty {
+                    part["thoughtSignature"] = serde_json::json!(SENTINEL_SIGNATURE);
+                }
+            }
+        }
+    }
 }
 
 /// Convert an OpenAI-format chat completion request to Gemini format.
@@ -446,11 +500,12 @@ pub fn openai_to_gemini_with_model(
     override_messages: &[openproxy_types::OpenAIMessage],
     target_model: Option<&str>,
 ) -> GeminiRequest {
-    let (system_instruction, contents) = partition_messages_for_gemini(override_messages);
-
     let effective_model = target_model
         .filter(|m| !m.is_empty())
         .unwrap_or(req.model.as_str());
+
+    let (system_instruction, contents) =
+        partition_messages_for_gemini(override_messages, Some(effective_model));
 
     let thinking_config = if gemini_model_supports_thinking(effective_model) {
         req.extra
@@ -649,7 +704,7 @@ pub fn serialize_gemini_request(
     req: &openproxy_types::OpenAIRequest,
     messages: &[openproxy_types::OpenAIMessage],
 ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-    serialize_gemini_request_with_model(req, messages, None)
+    serialize_gemini_request_with_model(req, messages, Some(req.model.as_str()))
 }
 
 /// Serialize an OpenAI chat request into Gemini wire-format bytes with model awareness.

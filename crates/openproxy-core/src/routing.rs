@@ -129,7 +129,12 @@ fn resolve_combo_to_targets(
     let mut flat = Vec::with_capacity(targets.len());
     for t in targets {
         if let Some(sub_id) = t.sub_combo_id {
-            let sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
+            let mut sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
+            if let Some(ref effort) = t.thinking_effort {
+                for st in &mut sub {
+                    st.thinking_effort = Some(effort.clone());
+                }
+            }
             flat.extend(sub);
         } else {
             flat.push(t);

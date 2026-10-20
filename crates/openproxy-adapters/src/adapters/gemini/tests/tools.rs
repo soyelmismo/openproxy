@@ -297,13 +297,142 @@ fn test_serialize_gemini_request_assistant_tool_calls_and_tool_response() {
     let fc = &contents[0]["parts"][0]["functionCall"];
     assert_eq!(fc["name"], "get_weather");
     assert_eq!(fc["args"]["city"], "Madrid");
+    // For gemini-pro (legacy model), no thought signature is injected
+    assert!(contents[0]["parts"][0]["thoughtSignature"].is_null());
 
-    // Second message: tool -> function with functionResponse
-    assert_eq!(contents[1]["role"], "function");
+    // Second message: tool -> user with functionResponse (Gemini API spec requires role: "user")
+    assert_eq!(contents[1]["role"], "user");
     let fr = &contents[1]["parts"][0]["functionResponse"];
     assert_eq!(fr["name"], "get_weather");
     assert_eq!(fr["response"]["name"], "get_weather");
     assert_eq!(fr["response"]["content"]["temp"], 25);
+}
+
+#[test]
+fn test_serialize_gemini_request_injects_thought_signature_for_thinking_models() {
+    let req = openproxy_types::OpenAIRequest {
+        model: "gemini-4-argon".into(),
+        messages: vec![],
+        stream: false,
+        ..Default::default()
+    };
+    let messages = vec![
+        openproxy_types::OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(json!("What is the weather?")),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "assistant".to_string(),
+            content: None,
+            name: None,
+            tool_call_id: None,
+            tool_calls: Some(vec![json!({
+                "id": "call_123",
+                "type": "function",
+                "function": {
+                    "name": "default_api:search_files",
+                    "arguments": "{\"pattern\":\"test\"}"
+                }
+            })]),
+            extra: serde_json::Map::new(),
+        },
+        openproxy_types::OpenAIMessage {
+            role: "tool".to_string(),
+            content: Some(json!("found 1 match")),
+            name: Some("default_api:search_files".to_string()),
+            tool_call_id: Some("call_123".to_string()),
+            tool_calls: None,
+            extra: serde_json::Map::new(),
+        },
+    ];
+
+    let bytes = serialize_gemini_request(&req, &messages).expect("must serialize");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    let contents = parsed["contents"].as_array().expect("contents is array");
+
+    assert_eq!(contents[1]["role"], "model");
+    let part = &contents[1]["parts"][0];
+    assert_eq!(part["functionCall"]["name"], "default_api:search_files");
+    assert_eq!(
+        part["thoughtSignature"],
+        "skip_thought_signature_validator",
+        "gemini-4-argon must have sentinel signature in functionCall"
+    );
+}
+
+#[test]
+fn test_gemini_adapter_wrap_request_body_injects_thought_signature_fallback() {
+    use crate::adapters::ProviderAdapter;
+
+    let adapter = super::super::GeminiAdapter::new();
+    let body_json = json!({
+        "contents": [
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "name": "default_api:search_files",
+                            "args": {}
+                        }
+                    }
+                ]
+            }
+        ]
+    });
+    let body_bytes = bytes::Bytes::from(serde_json::to_vec(&body_json).unwrap());
+    let resolved_target = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::combos::ComboTarget {
+            id: openproxy_types::ComboTargetId(1),
+            combo_id: openproxy_types::ComboId(1),
+            provider_id: openproxy_types::ProviderId::new("gemini"),
+            account_id: None,
+            model_row_id: None,
+            sub_combo_id: None,
+            priority_order: 0,
+            weight: 100,
+            active: true,
+            rate_limit_scope: openproxy_types::RateLimitScope::Account,
+            cooldown_mode: None,
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            thinking_effort: None,
+            description: None,
+            selected_accounts: None,
+        },
+        model: openproxy_types::Model {
+            row_id: openproxy_types::ModelRowId(1),
+            provider_id: openproxy_types::ProviderId::new("gemini"),
+            model_id: openproxy_types::ModelId::new("gemini-4-argon"),
+            target_format: openproxy_types::TargetFormat::Gemini,
+            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
+            ..Default::default()
+        },
+        api_key: "k".to_string(),
+        api_key_label: None,
+        custom_meta: None,
+    };
+
+    let wrapped = adapter
+        .wrap_request_body(
+            body_bytes,
+            openproxy_types::TargetFormat::Gemini,
+            &openproxy_types::ModelId::new("gemini-4-argon"),
+            &resolved_target,
+        )
+        .expect("wrap succeeds");
+    let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    let part = &val["contents"][0]["parts"][0];
+    assert_eq!(
+        part["thoughtSignature"],
+        "skip_thought_signature_validator",
+        "wrap_request_body must inject thoughtSignature for missing functionCall signature"
+    );
 }
 
 #[test]
@@ -420,8 +549,8 @@ fn test_serialize_gemini_request_consolidates_consecutive_tools_and_users() {
     assert_eq!(contents[2]["role"], "model");
     assert_eq!(contents[2]["parts"].as_array().unwrap().len(), 2);
 
-    // 3. Consecutive tools merged into 1 function turn with 2 functionResponse parts
-    assert_eq!(contents[3]["role"], "function");
+    // 3. Consecutive tools merged into 1 user turn with 2 functionResponse parts
+    assert_eq!(contents[3]["role"], "user");
     let tool_parts = contents[3]["parts"].as_array().unwrap();
     assert_eq!(tool_parts.len(), 2);
     assert_eq!(tool_parts[0]["functionResponse"]["name"], "f1");

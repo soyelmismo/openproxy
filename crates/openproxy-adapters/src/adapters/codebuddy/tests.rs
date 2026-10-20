@@ -199,19 +199,26 @@ fn test_codebuddy_forces_stream_in_normalize_and_wrap() {
         "must force stream = true for CodeBuddy upstream"
     );
 
-    // 2. wrap_request_body injects stream = true into json body
+    // 2. wrap_request_body injects stream = true into json body and normalizes :free suffix
     let raw_unary_json =
-        r#"{"model":"hy3","messages":[{"role":"user","content":"hello"}],"stream":false}"#;
+        r#"{"model":"hy3:free","messages":[{"role":"user","content":"hello"}],"stream":false}"#;
     let resolved_target = dummy_codebuddy_resolved_target();
     let wrapped = adapter
         .wrap_request_body(
             bytes::Bytes::from(raw_unary_json),
             TargetFormat::Openai,
-            &ModelId::new("hy3"),
+            &ModelId::new("hy3:free"),
             &resolved_target,
         )
         .expect("wrap succeeds");
     let wrapped_val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
+    assert_eq!(
+        wrapped_val
+            .get("model")
+            .and_then(serde_json::Value::as_str),
+        Some("hy3"),
+        "wrapped body must strip :free from model"
+    );
     assert_eq!(
         wrapped_val
             .get("stream")
@@ -812,7 +819,10 @@ async fn test_codebuddy_discovery_reads_the_pinned_catalog_not_the_static_list()
     let mut product: serde_json::Value =
         serde_json::from_slice(snapshot.catalog_body().unwrap()).unwrap();
     product["models"].as_array_mut().unwrap().truncate(1);
-    let expected_id = product["models"][0]["id"].as_str().unwrap().to_string();
+    let mut expected_id = product["models"][0]["id"].as_str().unwrap().to_string();
+    if is_codebuddy_model_free(product["models"][0].get("credits").and_then(|c| c.as_str())) {
+        expected_id.push_str(":free");
+    }
     let expected_input = product["models"][0]["maxInputTokens"].as_i64();
     snapshot.catalog = Some(Arc::from(serde_json::to_vec(&product).unwrap()));
     let adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));

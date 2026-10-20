@@ -10,6 +10,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "jsdom",
+    setupFiles: ["src/static/src/test-setup.ts"],
     include: ["src/static/src/**/*.test.ts"],
     // The auth store mutates module-local state (the cached token), so each file runs in
     // isolation and file ordering can't bleed tokens between cases.

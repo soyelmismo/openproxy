@@ -129,18 +129,19 @@ impl ProviderAdapter for GeminiAdapter {
         model: &ModelId,
         _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-        if !gemini_model_supports_thinking(model.as_str()) {
-            crate::adapters::traits::patch_json_request_body(body, |obj| {
+        let supports_thinking = gemini_model_supports_thinking(model.as_str());
+        crate::adapters::traits::patch_json_request_body(body, |obj| {
+            if !supports_thinking {
                 if let Some(gen_cfg) = obj
                     .get_mut("generationConfig")
                     .and_then(|v| v.as_object_mut())
                 {
                     gen_cfg.remove("thinkingConfig");
                 }
-            })
-        } else {
-            Ok(body)
-        }
+            } else if let Some(contents) = obj.get_mut("contents").and_then(|v| v.as_array_mut()) {
+                inject_gemini_thought_signatures(contents);
+            }
+        })
     }
 
     fn translate_non_streaming_response(

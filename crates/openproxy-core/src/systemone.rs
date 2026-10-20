@@ -235,6 +235,8 @@ pub async fn execute_system_one(
                         error_msg: None,
                         total_ms,
                         endpoint_kind: EndpointKind::SystemOne,
+                        request_body_json: None,
+                        response_body_json: None,
                     },
                 )
                 .await;

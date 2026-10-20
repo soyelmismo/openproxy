@@ -12,7 +12,10 @@ pub mod quota;
 #[cfg(test)]
 mod tests;
 
-pub use models::{CODEBUDDY_MODELS, CodeBuddyModelDef, codebuddy_static_models};
+pub use models::{
+    CODEBUDDY_MODELS, CodeBuddyModelDef, codebuddy_static_models, is_codebuddy_model_free,
+    make_codebuddy_model_id, normalize_codebuddy_model_name, parse_codebuddy_credits_multiplier,
+};
 
 pub use crate::spoofer::{
     CODEBUDDY_SPOOFING_HEADERS, DEFAULT_CODEBUDDY_VERSION, current_codebuddy_ua,
@@ -336,6 +339,10 @@ impl ProviderAdapter for CodeBuddyAdapter {
 }
 
 fn patch_codebuddy_request_object(obj: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(serde_json::Value::String(model_str)) = obj.get_mut("model") {
+        normalize_codebuddy_model_name(model_str);
+    }
+
     if obj.get("stream") != Some(&serde_json::Value::Bool(true)) {
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
     }

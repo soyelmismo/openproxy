@@ -429,6 +429,7 @@ pub(crate) async fn execute_image_multipart(
         );
 
         let total_ms = started.elapsed().as_millis() as u64;
+        let resp_json = serde_json::to_value(&parsed_response).ok();
         record_unary_usage_async(
             ctx.db_pool,
             &UnaryUsageArgs {
@@ -446,6 +447,8 @@ pub(crate) async fn execute_image_multipart(
                 error_msg: None,
                 total_ms,
                 endpoint_kind: EndpointKind::Image,
+                request_body_json: None,
+                response_body_json: resp_json,
             },
         )
         .await;

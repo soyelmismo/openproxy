@@ -12,6 +12,34 @@ import { t } from '../../i18n/index.js';
 import type { Account, Provider } from '../../lib/types/api.js';
 import { loadError, renderProviderIcon } from './shared.js';
 
+export type ProviderListFilter = 'all' | 'active' | 'inactive';
+const PROVIDERS_LIST_FILTER_STORAGE_KEY = 'openproxy.providers.filter';
+
+export function getProviderListFilter(): ProviderListFilter {
+  try {
+    const raw = localStorage.getItem(PROVIDERS_LIST_FILTER_STORAGE_KEY);
+    if (raw === 'active' || raw === 'inactive' || raw === 'all') {
+      return raw;
+    }
+  } catch {
+    // localStorage unavailable/restricted
+  }
+  return 'all';
+}
+
+export function setProviderListFilter(filter: ProviderListFilter): void {
+  try {
+    localStorage.setItem(PROVIDERS_LIST_FILTER_STORAGE_KEY, filter);
+  } catch {
+    // localStorage unavailable/restricted
+  }
+}
+
+function onUpdateListFilter(filter: ProviderListFilter): void {
+  setProviderListFilter(filter);
+  requestUpdate();
+}
+
 
 async function onRefreshAllProviders(): Promise<void> {
   try {
@@ -88,6 +116,16 @@ export function renderProvidersGrid(): TemplateResult {
     `;
   }
   const list = state.providers || [];
+  const currentFilter = getProviderListFilter();
+  const activeCount = list.filter((p) => p.active).length;
+  const inactiveCount = list.length - activeCount;
+
+  const filteredList = list.filter((p) => {
+    if (currentFilter === 'active') return p.active;
+    if (currentFilter === 'inactive') return !p.active;
+    return true;
+  });
+
   const cards: TemplateResult =
     list.length === 0
       ? html`<div class="empty-state">
@@ -95,12 +133,43 @@ export function renderProvidersGrid(): TemplateResult {
           <p>${t("providers.list.empty.subtitle")}</p>
           <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} ${t("providers.list.btn.add")}</button>
         </div>`
-      : html`<div class="provider-grid">${list.map((p) => {
-          const accounts = (state.accounts || []).filter((a) => a.provider_id === p.id);
-          return renderProviderCard(p, accounts);
-        })}</div>`;
+      : filteredList.length === 0
+        ? html`<div class="empty-state">
+            <h3>${t("providers.list.empty.filtered")}</h3>
+            <button class="small" @click=${() => onUpdateListFilter('all')}>${t("providers.list.filter.all")} (${list.length})</button>
+          </div>`
+        : html`<div class="provider-grid">${filteredList.map((p) => {
+            const accounts = (state.accounts || []).filter((a) => a.provider_id === p.id);
+            return renderProviderCard(p, accounts);
+          })}</div>`;
   return html`
-    <div class="page-header"><h2>${t("providers.list.heading")}</h2>
+    <div class="page-header">
+      <div class="page-header-title">
+        <h2>${t("providers.list.heading")}</h2>
+        <div class="filter-tabs" role="tablist" aria-label="Provider status filter">
+          <button
+            type="button"
+            class=${'filter-tab ' + (currentFilter === 'all' ? 'active' : '')}
+            @click=${() => onUpdateListFilter('all')}
+          >
+            ${t("providers.list.filter.all")} (${list.length})
+          </button>
+          <button
+            type="button"
+            class=${'filter-tab ' + (currentFilter === 'active' ? 'active' : '')}
+            @click=${() => onUpdateListFilter('active')}
+          >
+            ${t("providers.list.filter.active")} (${activeCount})
+          </button>
+          <button
+            type="button"
+            class=${'filter-tab ' + (currentFilter === 'inactive' ? 'active' : '')}
+            @click=${() => onUpdateListFilter('inactive')}
+          >
+            ${t("providers.list.filter.inactive")} (${inactiveCount})
+          </button>
+        </div>
+      </div>
       <div class="actions">
         <button @click=${onRefreshAllProviders}>${icons.refresh()} ${t("providers.list.btn.refresh_all")}</button>
         <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} ${t("providers.list.btn.add")}</button>

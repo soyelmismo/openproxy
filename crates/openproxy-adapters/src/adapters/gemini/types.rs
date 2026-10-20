@@ -1,6 +1,11 @@
 use std::borrow::Cow;
 
 pub const DEFAULT_GEMINI_MAX_OUTPUT_TOKENS: u32 = 8192;
+pub const SENTINEL_SIGNATURE: &str = "skip_thought_signature_validator";
+
+pub fn is_real_signature(sig: &str) -> bool {
+    sig.len() >= 50 && sig != SENTINEL_SIGNATURE
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeminiSafetySetting {

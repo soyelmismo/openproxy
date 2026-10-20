@@ -17,11 +17,16 @@ fn flatten_sub_combos(
     for mut t in targets {
         if let Some(sub_id) = t.sub_combo_id {
             let mut sub_flat = repo.resolve_combo_to_targets(sub_id, &mut visited, 0)?;
-            if let Some(parent_desc) = t.description.take() {
-                for st in &mut sub_flat {
+            let parent_desc = t.description.take();
+            let parent_effort = t.thinking_effort.take();
+            for st in &mut sub_flat {
+                if let Some(ref desc) = parent_desc {
                     if st.description.is_none() {
-                        st.description = Some(parent_desc.clone());
+                        st.description = Some(desc.clone());
                     }
+                }
+                if let Some(ref effort) = parent_effort {
+                    st.thinking_effort = Some(effort.clone());
                 }
             }
             out.extend(sub_flat);

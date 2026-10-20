@@ -517,6 +517,79 @@ fn test_nested_target_uses_owner_sub_combo_info() {
     assert!(reason.contains("claude-3-5-sonnet"));
 }
 
+#[test]
+fn test_nested_subcombo_thinking_effort_override() {
+    let (pipeline, conn_arc, _master_key, rt) = setup_test_pipeline();
+    let _enter = rt.enter();
+
+    let (root_c_id, _sub_c_id) = {
+        let conn = conn_arc.lock();
+        let m_id = crate::test_utils::seed_provider_and_model(
+            &conn,
+            "anthropic",
+            "claude-3-7-sonnet",
+            TargetFormat::Anthropic,
+        );
+        let root_c_id =
+            crate::test_utils::combos::create_combo(&conn, "root-summary", Strategy::Priority, 1)
+                .unwrap();
+        let sub_c_id =
+            crate::test_utils::combos::create_combo(&conn, "sub-coding", Strategy::Priority, 1)
+                .unwrap();
+
+        // Target inside subcombo has thinking_effort = "low"
+        let t_sub_id = crate::test_utils::combos::add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: sub_c_id,
+                provider_id: ProviderId::new("anthropic"),
+                account_id: None,
+                model_row_id: Some(m_id),
+                sub_combo_id: None,
+                priority_order: 1,
+                description: None,
+                selected_accounts: None,
+            },
+        )
+        .unwrap();
+        openproxy_db::combos::update_target_thinking_effort(&conn, t_sub_id, Some("low")).unwrap();
+
+        // Root combo links to sub-combo with override thinking_effort = "medium"
+        let t_root_id = crate::test_utils::combos::add_target(
+            &conn,
+            AddTargetInput {
+                combo_id: root_c_id,
+                provider_id: ProviderId::new("anthropic"),
+                account_id: None,
+                model_row_id: None,
+                sub_combo_id: Some(sub_c_id),
+                priority_order: 1,
+                description: None,
+                selected_accounts: None,
+            },
+        )
+        .unwrap();
+        openproxy_db::combos::update_target_thinking_effort(&conn, t_root_id, Some("medium")).unwrap();
+
+        (root_c_id, sub_c_id)
+    };
+
+    let root_targets = pipeline.repo().list_targets(root_c_id).unwrap();
+    assert_eq!(root_targets.len(), 1);
+    assert_eq!(root_targets[0].thinking_effort.as_deref(), Some("medium"));
+
+    // Flatten targets via pipeline
+    let flattened = rt
+        .block_on(pipeline.flatten_targets(&root_c_id, root_targets))
+        .unwrap();
+    assert_eq!(flattened.len(), 1);
+    assert_eq!(
+        flattened[0].thinking_effort.as_deref(),
+        Some("medium"),
+        "Parent sub-combo target thinking_effort override must propagate to flattened children"
+    );
+}
+
 use super::mock_repo::MockFailingComboRepo;
 
 #[test]

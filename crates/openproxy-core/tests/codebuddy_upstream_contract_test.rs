@@ -164,8 +164,8 @@ async fn test_codebuddy_static_models_and_product_json_parity() {
 
     let hy3 = models
         .iter()
-        .find(|m| m.model_id.as_str() == "hy3")
-        .expect("hy3");
+        .find(|m| m.model_id.as_str() == "hy3:free")
+        .expect("hy3:free");
     assert_eq!(hy3.context_length, Some(192_000));
 
     let kimi_k3 = models
@@ -361,7 +361,14 @@ async fn test_codebuddy_fetch_models_does_not_elevate_the_version_by_itself() {
         .expect("catálogo embebido válido");
     assert_eq!(models.len(), expected_catalog.models.len());
     for (actual, expected) in models.iter().zip(&expected_catalog.models) {
-        assert_eq!(actual.model_id.as_str(), expected.id);
+        let is_free = openproxy_adapters::adapters::codebuddy::is_codebuddy_model_free(
+            expected.credits.as_deref(),
+        );
+        let expected_id = openproxy_adapters::adapters::codebuddy::make_codebuddy_model_id(
+            expected.id.clone(),
+            is_free,
+        );
+        assert_eq!(actual.model_id.as_str(), expected_id);
     }
 
     // Ningún bump en background: el cambio de versión llega solo por el

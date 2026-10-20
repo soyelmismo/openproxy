@@ -129,6 +129,8 @@ fn handle_model_not_found(
             error_msg: Some("model_not_found".to_string()),
             total_ms: started.elapsed().as_millis() as u64,
             endpoint_kind,
+            request_body_json: None,
+            response_body_json: None,
         },
     );
     let mut msg = format!("model not found: {model}");
@@ -359,6 +361,8 @@ pub struct UnaryUsageArgs<'a> {
     pub error_msg: Option<String>,
     pub total_ms: u64,
     pub endpoint_kind: EndpointKind,
+    pub request_body_json: Option<bytes::Bytes>,
+    pub response_body_json: Option<serde_json::Value>,
 }
 
 fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
@@ -384,8 +388,8 @@ fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
         error_msg: args.error_msg.clone(),
         race_total: 1,
         api_key_id: args.api_key_id,
-        request_body_json: None,
-        response_body_json: None,
+        request_body_json: args.request_body_json.clone(),
+        response_body_json: args.response_body_json.clone(),
         request_headers: None,
         response_headers: None,
         error_message: args.error_msg.clone(),

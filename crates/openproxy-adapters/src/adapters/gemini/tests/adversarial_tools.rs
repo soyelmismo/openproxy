@@ -553,7 +553,7 @@ fn adv_tool_responses_structured_json_content() {
     let bytes =
         serialize_gemini_request(&req, &messages_obj).expect("serialize structured tool response");
     let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON wire format");
-    assert_eq!(parsed["contents"][0]["role"], "function");
+    assert_eq!(parsed["contents"][0]["role"], "user");
     assert_eq!(
         parsed["contents"][0]["parts"][0]["functionResponse"]["response"]["content"]["status"],
         "success"

@@ -181,6 +181,8 @@ pub struct CodeBuddyModel {
     pub summary: Option<String>,
     /// Etiquetas declaradas.
     pub tags: Option<Vec<String>>,
+    /// Texto de créditos/multiplicador declarado (e.g. "x0.00 credits").
+    pub credits: Option<String>,
 }
 
 /// Catálogo CodeBuddy completo.
@@ -319,6 +321,10 @@ impl CodeBuddyCatalog {
                         .map(str::to_string)
                         .collect::<Vec<_>>()
                 });
+            let credits = entry
+                .get("credits")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
 
             models.push(CodeBuddyModel {
                 id,
@@ -341,6 +347,7 @@ impl CodeBuddyCatalog {
                 top_p,
                 summary,
                 tags,
+                credits,
             });
         }
 
