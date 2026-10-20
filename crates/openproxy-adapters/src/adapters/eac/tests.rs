@@ -26,10 +26,7 @@ fn test_extract_pathname() {
         "/v1/chat/completions"
     );
     assert_eq!(extract_pathname("https://ourfreemodel.beichenapi.com"), "/");
-    assert_eq!(
-        extract_pathname("/eac/v1/chat/completions"),
-        "/eac/v1/chat/completions"
-    );
+    assert_eq!(extract_pathname("/eac/v1/chat/completions"), "/eac/v1/chat/completions");
 }
 
 #[test]
@@ -42,10 +39,7 @@ fn test_compute_eac_signature() {
 
     let sig1 = compute_eac_signature(secret, ts, method, pathname, body);
     assert_eq!(sig1.len(), 64);
-    assert!(
-        sig1.chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-    );
+    assert!(sig1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
 
     // Deterministic signature
     let sig2 = compute_eac_signature(secret, ts, method, pathname, body);
@@ -100,11 +94,7 @@ fn test_sign_request_headers_injects_and_overrides() {
     assert!(ts.is_some(), "x-ofm-timestamp missing");
     assert!(sig.is_some(), "x-ofm-signature missing");
     assert_eq!(user, Some("sk-test"), "x-ofm-user missing or incorrect");
-    assert_eq!(
-        ua,
-        Some(DEFAULT_EAC_USER_AGENT),
-        "user-agent missing or incorrect"
-    );
+    assert_eq!(ua, Some(DEFAULT_EAC_USER_AGENT), "user-agent missing or incorrect");
 
     let ts_val = ts.unwrap().parse::<u64>().expect("valid timestamp integer");
     let sig_val = sig.unwrap();
@@ -154,10 +144,7 @@ fn test_sign_request_headers_preserves_explicit_user_and_custom_ua() {
     let mut headers = vec![
         ("user-agent".to_string(), "CustomClient/1.0".to_string()),
         ("x-ofm-user".to_string(), "explicit-user-token".to_string()),
-        (
-            "Authorization".to_string(),
-            "Bearer other-token".to_string(),
-        ),
+        ("Authorization".to_string(), "Bearer other-token".to_string()),
     ];
     let body = b"data";
     sign_request_headers(
@@ -184,10 +171,7 @@ fn test_sign_request_headers_preserves_explicit_user_and_custom_ua() {
 #[test]
 fn test_sign_request_headers_custom_secret_header_and_cleanup() {
     let mut headers = vec![
-        (
-            "x-ofm-secret".to_string(),
-            "custom-override-secret".to_string(),
-        ),
+        ("x-ofm-secret".to_string(), "custom-override-secret".to_string()),
         ("Authorization".to_string(), "Bearer sk-123".to_string()),
     ];
     let body = b"hello";
@@ -200,11 +184,7 @@ fn test_sign_request_headers_custom_secret_header_and_cleanup() {
     );
 
     // Transient secret header must be stripped so it does not leak upstream
-    assert!(
-        !headers
-            .iter()
-            .any(|(k, _)| k.eq_ignore_ascii_case("x-ofm-secret"))
-    );
+    assert!(!headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("x-ofm-secret")));
 
     let sig = headers
         .iter()
@@ -238,14 +218,8 @@ fn test_eac_adapter_basics() {
     assert_eq!(adapter.format(), AdapterFormat::Openai);
     assert_eq!(adapter.auth_type(), AdapterAuthType::OAuth);
 
-    let chat_url = adapter.build_chat_url(
-        TargetFormat::Openai,
-        &ModelId::new("deepseek-ai/deepseek-v4.1-flash"),
-    );
-    assert_eq!(
-        chat_url,
-        "https://ourfreemodel.beichenapi.com/eac/v1/chat/completions"
-    );
+    let chat_url = adapter.build_chat_url(TargetFormat::Openai, &ModelId::new("deepseek-ai/deepseek-v4.1-flash"));
+    assert_eq!(chat_url, "https://ourfreemodel.beichenapi.com/eac/v1/chat/completions");
 
     let models = eac_builtin_models();
     let model_ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();

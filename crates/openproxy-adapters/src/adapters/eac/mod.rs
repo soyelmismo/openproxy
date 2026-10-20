@@ -19,8 +19,8 @@ pub use signing::{
 };
 
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ProviderAdapterConfig, ProviderId,
-    Result, TargetFormat, UpstreamClient,
+    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ProviderAdapterConfig,
+    ProviderId, Result, TargetFormat, UpstreamClient,
 };
 use crate::adapters::ProviderAdapter;
 use serde::{Deserialize, Serialize};
@@ -62,7 +62,9 @@ impl EacAdapter {
     }
 
     pub fn secret(&self) -> &str {
-        self.secret.as_deref().unwrap_or(DEFAULT_EAC_SECRET)
+        self.secret
+            .as_deref()
+            .unwrap_or(DEFAULT_EAC_SECRET)
     }
 
     pub fn set_secret(&mut self, secret: Option<String>) {
@@ -115,12 +117,11 @@ impl ProviderAdapter for EacAdapter {
     ) -> Result<Vec<DiscoveredModel>> {
         let base = self.config.base_url.trim_end_matches('/');
         let url = format!("{base}/models");
-        let mut headers = vec![("Accept".to_string(), "application/json".to_string())];
+        let mut headers = vec![
+            ("Accept".to_string(), "application/json".to_string()),
+        ];
         if !api_key.trim().is_empty() {
-            headers.push((
-                "Authorization".to_string(),
-                format!("Bearer {}", api_key.trim()),
-            ));
+            headers.push(("Authorization".to_string(), format!("Bearer {}", api_key.trim())));
         }
         self.sign_request_headers("GET", &url, &mut headers, b"");
 
@@ -129,20 +130,15 @@ impl ProviderAdapter for EacAdapter {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        match crate::adapters::discovery::upstream_get_json(upstream_client, &url, &header_refs)
-            .await
-        {
+        match crate::adapters::discovery::upstream_get_json(upstream_client, &url, &header_refs).await {
             Ok(json) => {
                 if let Some(arr) = json.get("data").and_then(|v| v.as_array()) {
                     let models: Vec<DiscoveredModel> = arr
                         .iter()
                         .filter_map(|m| {
-                            m.get("id").and_then(|id| id.as_str()).map(|id| {
-                                crate::adapters::discovery::build_discovered_model_with(
-                                    id.to_string(),
-                                    TargetFormat::Openai,
-                                )
-                            })
+                            m.get("id")
+                                .and_then(|id| id.as_str())
+                                .map(|id| crate::adapters::discovery::build_discovered_model_with(id.to_string(), TargetFormat::Openai))
                         })
                         .collect();
                     if !models.is_empty() {
