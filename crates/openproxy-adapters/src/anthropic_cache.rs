@@ -535,4 +535,24 @@ mod tests {
         assert!(input["tools"][0].get("cache_control").is_none());
         assert!(input["tools"][1].get("cache_control").is_some());
     }
+
+    #[test]
+    fn test_enforce_cache_control_limit_with_thread() {
+        let mut input = json!({
+            "thread": {"id": "thread_123"},
+            "tools": [
+                {"name": "t1", "cache_control": {"type": "ephemeral"}},
+                {"name": "t2", "cache_control": {"type": "ephemeral"}}
+            ],
+            "system": [
+                {"type": "text", "text": "s1", "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": "s2", "cache_control": {"type": "ephemeral"}}
+            ]
+        });
+        assert_eq!(count_cache_controls(&input), 4);
+
+        // Max blocks of 4 with a thread present decrements max_blocks to 3
+        enforce_cache_control_limit(&mut input, 4);
+        assert_eq!(count_cache_controls(&input), 3);
+    }
 }
