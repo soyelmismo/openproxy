@@ -156,6 +156,46 @@ impl std::error::Error for SimpleErr {}
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_as_u64_valid_and_negative() {
+        assert_eq!(as_u64(0, "test_field").expect("valid 0"), 0);
+        assert_eq!(as_u64(12345, "test_field").expect("valid positive"), 12345);
+
+        let err = as_u64(-1, "test_field").unwrap_err();
+        if let rusqlite::Error::FromSqlConversionFailure(_, _, err_box) = err {
+            assert!(
+                err_box
+                    .to_string()
+                    .contains("test_field unexpectedly negative: -1")
+            );
+        } else {
+            panic!("expected FromSqlConversionFailure, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_usage_filter_is_empty_and_built_where() {
+        let empty_filter = UsageFilter::default();
+        assert!(empty_filter.is_empty());
+
+        let built_empty = BuiltWhere::from_filter(&empty_filter);
+        assert_eq!(built_empty.sql, "");
+        assert!(built_empty.params.is_empty());
+
+        let filter = UsageFilter {
+            from: Some("2025-01-01T00:00:00Z".to_string()),
+            provider_id: Some(ProviderId::new("openai")),
+            ..Default::default()
+        };
+        assert!(!filter.is_empty());
+
+        let built = BuiltWhere::from_filter(&filter);
+        assert!(built.sql.starts_with("WHERE "));
+        assert!(built.sql.contains("created_at >= datetime(?)"));
+        assert!(built.sql.contains("provider_id = ?"));
+        assert_eq!(built.params.len(), 2);
+    }
+
     fn range_filter() -> UsageFilter {
         UsageFilter {
             from: Some("2026-06-15T00:00:00Z".to_string()),
