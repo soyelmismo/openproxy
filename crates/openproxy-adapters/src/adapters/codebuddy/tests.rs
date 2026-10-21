@@ -213,9 +213,7 @@ fn test_codebuddy_forces_stream_in_normalize_and_wrap() {
         .expect("wrap succeeds");
     let wrapped_val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
     assert_eq!(
-        wrapped_val
-            .get("model")
-            .and_then(serde_json::Value::as_str),
+        wrapped_val.get("model").and_then(serde_json::Value::as_str),
         Some("hy3"),
         "wrapped body must strip :free from model"
     );
