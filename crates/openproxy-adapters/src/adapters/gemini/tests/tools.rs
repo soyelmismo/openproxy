@@ -358,8 +358,7 @@ fn test_serialize_gemini_request_injects_thought_signature_for_thinking_models()
     let part = &contents[1]["parts"][0];
     assert_eq!(part["functionCall"]["name"], "default_api:search_files");
     assert_eq!(
-        part["thoughtSignature"],
-        "skip_thought_signature_validator",
+        part["thoughtSignature"], "skip_thought_signature_validator",
         "gemini-4-argon must have sentinel signature in functionCall"
     );
 }
@@ -429,8 +428,7 @@ fn test_gemini_adapter_wrap_request_body_injects_thought_signature_fallback() {
     let val: serde_json::Value = serde_json::from_slice(&wrapped).unwrap();
     let part = &val["contents"][0]["parts"][0];
     assert_eq!(
-        part["thoughtSignature"],
-        "skip_thought_signature_validator",
+        part["thoughtSignature"], "skip_thought_signature_validator",
         "wrap_request_body must inject thoughtSignature for missing functionCall signature"
     );
 }

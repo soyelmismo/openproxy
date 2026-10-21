@@ -92,11 +92,15 @@ impl EacOAuthProvider {
             http::HeaderValue::from_static(EAC_USER_AGENT),
         );
         if let Ok(val) = http::HeaderValue::from_str(user_token) {
-            req.headers.insert(http::header::HeaderName::from_static("x-ofm-user"), val);
+            req.headers
+                .insert(http::header::HeaderName::from_static("x-ofm-user"), val);
         }
 
         let cancel = CancellationToken::new();
-        if let Ok(resp) = upstream_client.call(req, TimeoutProfile::OAuth, cancel).await {
+        if let Ok(resp) = upstream_client
+            .call(req, TimeoutProfile::OAuth, cancel)
+            .await
+        {
             let _ = resp.collect().await;
         }
     }
@@ -299,7 +303,8 @@ impl OAuthProvider for EacOAuthProvider {
         _db: DbRef<'_>,
     ) -> impl std::future::Future<Output = Result<TokenResponse>> + Send {
         std::future::ready(Err(CoreError::Validation(
-            "EAC Gateway does not use refresh tokens; re-authentication required if token expires".into(),
+            "EAC Gateway does not use refresh tokens; re-authentication required if token expires"
+                .into(),
         )))
     }
 
@@ -450,7 +455,10 @@ mod tests {
 
         let json: serde_json::Value = serde_json::from_str(json_raw).unwrap();
         assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("ok"));
-        assert_eq!(json.get("token").and_then(|v| v.as_str()), Some("tok_12345"));
+        assert_eq!(
+            json.get("token").and_then(|v| v.as_str()),
+            Some("tok_12345")
+        );
         assert_eq!(json.get("login").and_then(|v| v.as_str()), Some("dev_user"));
     }
 }
