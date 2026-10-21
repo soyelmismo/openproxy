@@ -215,49 +215,25 @@ impl PipelineStage for FormattingStage {
         let stream = resolve_upstream_streaming(model_streaming, adapter_streaming);
         let messages_ref = prepare_messages_for_formatting(ctx);
 
-        let effective_model_cap = if let Some(ref combo) = ctx.combo
-            && let Some(combo_cap) = combo.max_output_tokens
-            && combo_cap > 0
-        {
-            let mut m = current.model.clone();
-            let target_cap = m.max_output_tokens.unwrap_or(combo_cap);
-            m.max_output_tokens = Some(target_cap.min(combo_cap));
-            Some(m)
-        } else {
-            None
-        };
-        let model_ref = effective_model_cap.as_ref().unwrap_or(&current.model);
+        let policy = crate::policy::EffectiveTargetPolicy::resolve(
+            ctx.combo.as_ref(),
+            &current.target,
+            &current.model,
+        );
+        let effective_model = policy.apply_to_model(&current.model);
 
         let mut req_override;
-        let mut patched_openai_req;
-        let req_ref = if let Some(ref effort) = current.target.thinking_effort {
-            req_override = ctx.req.clone();
-            patched_openai_req = (*req_override.openai_request).clone();
-            patched_openai_req
-                .extra
-                .insert("reasoning_effort".to_string(), serde_json::json!(effort));
-            if patched_openai_req.max_tokens.is_none()
-                && !patched_openai_req
+        let req_ref = if current.target.thinking_effort.is_some()
+            || (ctx.req.openai_request.max_tokens.is_none()
+                && !ctx
+                    .req
+                    .openai_request
                     .extra
                     .contains_key("max_completion_tokens")
-                && let Some(ceiling) = model_ref.max_output_tokens.filter(|&v| v > 0)
-            {
-                patched_openai_req.max_tokens = Some(ceiling.min(i64::from(u32::MAX)) as u32);
-            }
-            req_override.openai_request = std::sync::Arc::new(patched_openai_req);
-            &req_override
-        } else if ctx.req.openai_request.max_tokens.is_none()
-            && !ctx
-                .req
-                .openai_request
-                .extra
-                .contains_key("max_completion_tokens")
-            && let Some(ceiling) = model_ref.max_output_tokens.filter(|&v| v > 0)
+                && policy.max_output_tokens.is_some())
         {
             req_override = ctx.req.clone();
-            patched_openai_req = (*req_override.openai_request).clone();
-            patched_openai_req.max_tokens = Some(ceiling.min(i64::from(u32::MAX)) as u32);
-            req_override.openai_request = std::sync::Arc::new(patched_openai_req);
+            req_override.openai_request = policy.normalize_request(&ctx.req.openai_request);
             &req_override
         } else {
             &ctx.req
@@ -265,7 +241,7 @@ impl PipelineStage for FormattingStage {
 
         let formatter = crate::formatting::get_formatter(target_format);
         let body_bytes = match formatter
-            .format_request(req_ref, model_ref, messages_ref, stream, &adapter)
+            .format_request(req_ref, &effective_model, messages_ref, stream, &adapter)
             .and_then(|body| {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             })
