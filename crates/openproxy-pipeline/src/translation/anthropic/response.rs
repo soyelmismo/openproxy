@@ -10,7 +10,11 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
     for b in &resp.content {
         match b.get("type").and_then(|t| t.as_str()) {
             Some("text") => {
-                if let Some(t) = b.get("text").or_else(|| b.get("content")).and_then(|t| t.as_str()) {
+                if let Some(t) = b
+                    .get("text")
+                    .or_else(|| b.get("content"))
+                    .and_then(|t| t.as_str())
+                {
                     combined.push_str(t);
                 }
             }
@@ -68,7 +72,10 @@ pub fn anthropic_to_openai(resp: &AnthropicResponse) -> OpenAIResponse {
 
     let mut extra = serde_json::Map::new();
     if !reasoning.is_empty() {
-        extra.insert("reasoning_content".to_string(), Value::String(reasoning.clone()));
+        extra.insert(
+            "reasoning_content".to_string(),
+            Value::String(reasoning.clone()),
+        );
         extra.insert("reasoning".to_string(), Value::String(reasoning));
     }
 
