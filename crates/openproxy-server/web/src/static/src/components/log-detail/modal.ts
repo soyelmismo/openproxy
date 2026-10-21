@@ -113,7 +113,12 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const createdAt: string = log.created_at || log.timestamp || "—";
   const apiKeyIdRaw: unknown = log.api_key_id ?? meta["api_key_id"];
   const apiKeyId: string | number | null = apiKeyIdRaw != null && (typeof apiKeyIdRaw === "string" || typeof apiKeyIdRaw === "number") ? apiKeyIdRaw : null;
-  const comboText: string = combo != null ? String(combo) : "—";
+  const comboNameFromState = combo != null && Array.isArray(state.combos)
+    ? state.combos.find((c) => String(c.id) === String(combo))?.name
+    : null;
+  const comboText: string = combo != null
+    ? (comboNameFromState ? `${comboNameFromState} (#${combo})` : String(combo))
+    : "—";
   const endpointKind: string = (log.endpoint_kind || (detail["endpoint_kind"] as string) || (meta["endpoint_kind"] as string) || "chat").toLowerCase();
   const endpointPath: string = endpointKind === "audio"
     ? "/v1/audio/transcriptions"
