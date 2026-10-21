@@ -47,11 +47,14 @@ fn push_date_filters(
     params: &mut Vec<Box<dyn ToSql>>,
 ) {
     if let Some(from) = from {
-        clauses.push("datetime(created_at) >= datetime(?)");
+        // Column bare so SQLite can use `idx_usage_created(_provider)`; the
+        // bound is normalized on the parameter side because callers pass
+        // RFC-3339 strings while rows store SQLite's `YYYY-MM-DD HH:MM:SS`.
+        clauses.push("created_at >= datetime(?)");
         params.push(Box::new(from.to_owned()));
     }
     if let Some(to) = to {
-        clauses.push("datetime(created_at) < datetime(?)");
+        clauses.push("created_at < datetime(?)");
         params.push(Box::new(to.to_owned()));
     }
 }
@@ -148,3 +151,49 @@ impl std::fmt::Display for SimpleErr {
     }
 }
 impl std::error::Error for SimpleErr {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn range_filter() -> UsageFilter {
+        UsageFilter {
+            from: Some("2026-06-15T00:00:00Z".to_string()),
+            to: Some("2026-06-16T00:00:00Z".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn date_bounds_keep_column_bare_for_index_use() {
+        // Rows store created_at as SQLite's 'YYYY-MM-DD HH:MM:SS' while the
+        // handlers send RFC-3339 bounds, so the parameter side must stay
+        // wrapped in datetime(). Wrapping the column instead defeats
+        // idx_usage_created(_provider) and full-scans 700k+ rows per query.
+        let w = BuiltWhere::from_filter(&range_filter());
+        assert!(w.sql.contains("created_at >= datetime(?)"));
+        assert!(w.sql.contains("created_at < datetime(?)"));
+        assert!(
+            !w.sql.contains("datetime(created_at)"),
+            "column must stay bare so SQLite can use the created_at index"
+        );
+        assert_eq!(w.params.len(), 2);
+    }
+
+    #[test]
+    fn from_only_and_to_only_bounds_each_emit_one_clause() {
+        let from_only = BuiltWhere::from_filter(&UsageFilter {
+            from: Some("2026-06-15T00:00:00Z".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(from_only.sql, "WHERE created_at >= datetime(?)");
+        assert_eq!(from_only.params.len(), 1);
+
+        let to_only = BuiltWhere::from_filter(&UsageFilter {
+            to: Some("2026-06-16T00:00:00Z".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(to_only.sql, "WHERE created_at < datetime(?)");
+        assert_eq!(to_only.params.len(), 1);
+    }
+}

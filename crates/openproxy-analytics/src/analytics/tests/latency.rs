@@ -207,3 +207,43 @@ fn latency_percentiles_excludes_errors() {
         "p95 should reflect only successes (~109.05), got {p95}"
     );
 }
+
+#[test]
+fn latency_percentiles_date_filter_matches_space_format_rows() {
+    let (conn, _p) = fresh_conn();
+
+    // Production rows store created_at as SQLite's 'YYYY-MM-DD HH:MM:SS'
+    // (datetime('now')), while the admin handlers send RFC-3339 bounds with
+    // a 'T'. A raw string comparison shifts both bounds one day: the
+    // from-day row falls out and the to-day row leaks in.
+    let insert_at = |request_id: &str, created_at: &str, connect_ms: i64| {
+        insert(
+            &conn,
+            TestUsageParams {
+                request_id,
+                trace_id: "t-1",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(connect_ms),
+                total_ms: 1000,
+                created_at: Some(created_at),
+                ..Default::default()
+            },
+        );
+    };
+    insert_at("before-window", "2026-06-14 23:00:00", 111);
+    insert_at("in-window", "2026-06-15 09:00:00", 222);
+    insert_at("after-window", "2026-06-16 08:00:00", 333);
+
+    let f = UsageFilter {
+        from: Some("2026-06-15T00:00:00Z".to_string()),
+        to: Some("2026-06-16T00:00:00Z".to_string()),
+        ..Default::default()
+    };
+    let r = latency_percentiles(&conn, &f).expect("latency");
+    assert_eq!(
+        r.samples, 1,
+        "only the from-day row is inside [from, to) after normalization"
+    );
+    assert_eq!(r.p50_connect_ms, Some(222.0));
+}

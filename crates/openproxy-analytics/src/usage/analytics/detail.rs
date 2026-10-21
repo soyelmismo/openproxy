@@ -447,7 +447,7 @@ pub fn prune_expired_recording_bodies(conn: &Connection, ttl_secs: i64) -> Resul
                  response_body_json = NULL, \
                  request_headers = NULL, \
                  response_headers = NULL \
-             WHERE datetime(created_at) <= datetime(?1, ?2)",
+             WHERE created_at <= datetime(?1, ?2)",
             params![
                 chrono::Utc::now().to_rfc3339(),
                 format!("-{} seconds", ttl_secs)
@@ -462,7 +462,7 @@ pub fn prune_expired_usage_rows(conn: &Connection, ttl_days: i64) -> Result<usiz
     let n = conn
         .execute(
             "DELETE FROM usage \
-             WHERE datetime(created_at) <= datetime(?1, ?2)",
+             WHERE created_at <= datetime(?1, ?2)",
             params![
                 chrono::Utc::now().to_rfc3339(),
                 format!("-{} days", ttl_days)

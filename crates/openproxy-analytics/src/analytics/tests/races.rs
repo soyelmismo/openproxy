@@ -280,3 +280,46 @@ fn race_stats_wins_by_target() {
     // MVP reserves this metric; we always return None.
     assert_eq!(s.avg_ttft_savings_ms, None);
 }
+
+#[test]
+fn race_stats_date_filter_matches_space_format_rows() {
+    let (conn, _p) = fresh_conn();
+
+    // The race WHERE clause rewrites `created_at` -> `usage.created_at`
+    // via string replace. The date bounds must stay a parameterized
+    // `datetime(?)` so the replacement is valid and the comparison works
+    // against space-format rows.
+    let insert_at = |request_id: &str, created_at: &str, race_lost: bool| {
+        insert(
+            &conn,
+            TestUsageParams {
+                request_id,
+                trace_id: "t-1",
+                provider: "openrouter",
+                model: "openai/gpt-4o",
+                connect_ms: Some(50),
+                total_ms: 1000,
+                race_total: 2,
+                race_lost,
+                created_at: Some(created_at),
+                ..Default::default()
+            },
+        );
+    };
+    insert_at("before-window", "2026-06-14 23:00:00", false);
+    insert_at("in-window", "2026-06-15 09:00:00", false);
+    insert_at("after-window", "2026-06-16 08:00:00", true);
+
+    let f = UsageFilter {
+        from: Some("2026-06-15T00:00:00Z".to_string()),
+        to: Some("2026-06-16T00:00:00Z".to_string()),
+        ..Default::default()
+    };
+    let s = race_stats(&conn, &f).expect("race_stats");
+    assert_eq!(
+        s.total_races, 1,
+        "only the in-window race survives the date filter"
+    );
+    assert_eq!(s.winners, 1);
+    assert_eq!(s.losers, 0);
+}

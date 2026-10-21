@@ -23,6 +23,8 @@ pub(crate) struct TestUsageParams<'a> {
     pub(crate) race_lost: bool,
     pub(crate) combo_target_id: Option<i64>,
     pub(crate) status_code: Option<i64>,
+    /// Overrides `created_at`; `None` keeps `datetime('now')`.
+    pub(crate) created_at: Option<&'a str>,
 }
 
 pub(crate) fn insert(conn: &Connection, p: TestUsageParams<'_>) {
@@ -37,7 +39,7 @@ pub(crate) fn insert(conn: &Connection, p: TestUsageParams<'_>) {
             race_total, race_lost, created_at\
          ) VALUES (\
             ?1, ?2, 1, ?3, NULL, ?4, ?5, 0, 0, 0.0, ?6, ?7, ?8, ?9, ?10, \
-            NULL, NULL, ?11, ?12, datetime('now')\
+            NULL, NULL, ?11, ?12, COALESCE(?13, datetime('now'))\
          )",
         params![
             p.request_id,
@@ -52,6 +54,7 @@ pub(crate) fn insert(conn: &Connection, p: TestUsageParams<'_>) {
             status,
             race_total,
             i64::from(p.race_lost),
+            p.created_at,
         ],
     )
     .expect("insert");

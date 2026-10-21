@@ -68,11 +68,11 @@ impl<'a> BuiltWhere<'a> {
         let mut params: Vec<&'a dyn ToSql> = Vec::new();
 
         if let Some(from) = &f.from {
-            clauses.push("created_at >= ?");
+            clauses.push("created_at >= datetime(?)");
             params.push(from);
         }
         if let Some(to) = &f.to {
-            clauses.push("created_at < ?");
+            clauses.push("created_at < datetime(?)");
             params.push(to);
         }
         if let Some(pid) = &f.provider_id {
