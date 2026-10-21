@@ -131,7 +131,7 @@ test.describe('notifications lifecycle', () => {
     const [systemId, modelId] = [requireRowId(ids[0], 's'), requireRowId(ids[1], 'm')];
 
     await page.goto('/#/notifications');
-    const filter = page.locator('select.notification-filter');
+    const filter = page.locator('select.notification-filter:not(.notification-provider-filter)');
     await filter.selectOption('system');
     await expect(page.locator('.notification-card')).toHaveCount(1);
     await expect(page.locator(`.notification-card[data-id="${systemId}"] .notification-card-kind`)).toHaveText('System');
