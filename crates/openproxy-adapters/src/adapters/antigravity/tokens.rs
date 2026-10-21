@@ -142,15 +142,14 @@ pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Valu
         };
 
         if is_claude {
-            // Claude models in Antigravity:
-            // 1. Never use thoughtSignature or thought_signature
-            // 2. Must preserve {"thought": true, "text": "..."} blocks without stripping thought flag
-            for part in parts.iter_mut() {
-                if let Some(obj) = part.as_object_mut() {
-                    obj.remove("thought_signature");
-                    obj.remove("thoughtSignature");
-                }
-            }
+            // Cloud Code's Claude bridge maps `thought: true` parts into
+            // Anthropic thinking blocks, which are rejected with
+            // `thinking.signature: Field required` when no valid signature
+            // rides on the turn. Placeholder reasoning is dropped, unsigned
+            // reasoning is downgraded to plain text, and a real signature is
+            // moved to the turn's anchor part (first non-thought part),
+            // matching the official client wire format.
+            sanitize_claude_thinking_parts(parts, is_model);
             continue;
         }
 
@@ -268,4 +267,94 @@ pub(crate) fn inject_sentinel_thought_signatures(contents: &mut serde_json::Valu
         parts.extend(thinking_parts);
         parts.extend(other_parts);
     }
+}
+
+/// True when a thought text carries no information (empty, dots, middots).
+fn is_placeholder_thought_text(text: &str) -> bool {
+    let t = text.trim();
+    t.is_empty() || t.chars().all(|c| matches!(c, '.' | '·' | '…'))
+}
+
+/// Repairs Claude thought parts for the Cloud Code bridge.
+///
+/// The bridge converts every `thought: true` part into an Anthropic thinking
+/// block whose `signature` field is required, so a thought part may only stay
+/// flagged when the turn carries a real signature. Following the official
+/// client wire format, the signature rides on the turn's anchor part (the
+/// first non-thought part), never on the thought part itself.
+fn sanitize_claude_thinking_parts(parts: &mut Vec<serde_json::Value>, is_model: bool) {
+    // Harvest the turn's real signature and strip signature fields from every
+    // part. The Gemini sentinel is not a valid Claude signature and is
+    // discarded by `is_real_signature`.
+    let mut real_sig: Option<String> = None;
+    for part in parts.iter_mut() {
+        let Some(obj) = part.as_object_mut() else {
+            continue;
+        };
+        let raw_sig = obj
+            .get("thoughtSignature")
+            .or_else(|| obj.get("thought_signature"))
+            .and_then(|s| s.as_str())
+            .filter(|s| is_real_signature(s))
+            .map(str::to_string);
+        obj.remove("thoughtSignature");
+        obj.remove("thought_signature");
+        if let Some(sig) = raw_sig
+            && real_sig.is_none()
+        {
+            real_sig = Some(sig);
+        }
+    }
+
+    let mut cleaned: Vec<serde_json::Value> = Vec::with_capacity(parts.len());
+    for mut part in parts.drain(..) {
+        let is_thought = part
+            .get("thought")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if !is_thought {
+            cleaned.push(part);
+            continue;
+        }
+
+        let text = part
+            .get("text")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if is_placeholder_thought_text(&text) {
+            continue;
+        }
+
+        if real_sig.is_some() {
+            // Replayable thinking: keep the flag, the signature lands on the
+            // anchor part below.
+            cleaned.push(part);
+        } else if let Some(obj) = part.as_object_mut() {
+            // Unsigned reasoning must not reach the bridge as thinking;
+            // downgrade it to visible text to preserve the context.
+            obj.remove("thought");
+            obj.insert("text".to_string(), serde_json::Value::String(text));
+            cleaned.push(part);
+        }
+    }
+
+    if let (Some(sig), true) = (&real_sig, is_model)
+        && let Some(anchor) = cleaned.iter_mut().find(|p| {
+            p.get("thought").and_then(|v| v.as_bool()) != Some(true)
+                && p.get("functionResponse").is_none()
+        })
+        && let Some(obj) = anchor.as_object_mut()
+    {
+        obj.insert(
+            "thoughtSignature".to_string(),
+            serde_json::Value::String(sig.clone()),
+        );
+    }
+
+    if cleaned.is_empty() {
+        cleaned.push(serde_json::json!({ "text": "..." }));
+    }
+    *parts = cleaned;
 }

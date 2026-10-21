@@ -488,6 +488,145 @@ fn test_claude_opus_4_6_thinking_no_sentinel_thought_signatures() {
             "snake_case thought_signature must be purged"
         );
     }
+
+    // A short fake signature is not real: the thought part is downgraded to
+    // plain text so the Claude bridge never sees an unsigned thinking block.
+    assert_eq!(
+        parts[0].get("thought"),
+        None,
+        "unsigned thought part must lose the thought flag"
+    );
+    assert_eq!(parts[0]["text"], "reasoning...");
+}
+
+#[test]
+fn test_claude_thinking_reasoning_echo_downgraded_to_text() {
+    // Regression: assistant reasoning echoes (reasoning_content) reach the
+    // Antigravity adapter as thought parts without any signature. The Claude
+    // bridge turns them into thinking blocks and the upstream rejects the
+    // request with `messages.N.content.0.thinking.signature: Field required`.
+    let mut contents = json!([
+        {
+            "role": "model",
+            "parts": [
+                { "thought": true, "text": "el usuario saluda, respondo breve" },
+                { "text": "hola" }
+            ]
+        }
+    ]);
+
+    tokens::inject_sentinel_thought_signatures(&mut contents, "claude-opus-4-6-thinking");
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+
+    assert_eq!(parts.len(), 2);
+    for part in parts {
+        assert!(
+            part.get("thought").is_none(),
+            "no thought flag may survive without a real signature"
+        );
+    }
+    assert_eq!(parts[0]["text"], "el usuario saluda, respondo breve");
+    assert_eq!(parts[1]["text"], "hola");
+}
+
+#[test]
+fn test_claude_thinking_placeholder_thought_dropped_keeping_tool_call() {
+    let mut contents = json!([
+        {
+            "role": "model",
+            "parts": [
+                { "thought": true, "text": "..." },
+                {
+                    "functionCall": {
+                        "name": "get_file",
+                        "args": {}
+                    }
+                }
+            ]
+        }
+    ]);
+
+    tokens::inject_sentinel_thought_signatures(&mut contents, "claude-opus-4-6-thinking");
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+
+    assert_eq!(
+        parts.len(),
+        1,
+        "placeholder reasoning carries no information"
+    );
+    assert!(parts[0].get("functionCall").is_some());
+    assert!(parts[0].get("thoughtSignature").is_none());
+}
+
+#[test]
+fn test_claude_thinking_all_parts_dropped_gets_placeholder_text() {
+    let mut contents = json!([
+        {
+            "role": "model",
+            "parts": [
+                { "thought": true, "text": "·" }
+            ]
+        }
+    ]);
+
+    tokens::inject_sentinel_thought_signatures(&mut contents, "claude-opus-4-6-thinking");
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["text"], "...");
+    assert!(parts[0].get("thought").is_none());
+}
+
+#[test]
+fn test_claude_thinking_sentinel_signature_is_not_real() {
+    let mut contents = json!([
+        {
+            "role": "model",
+            "parts": [
+                { "thought": true, "text": "reasoning", "thoughtSignature": "skip_thought_signature_validator" }
+            ]
+        }
+    ]);
+
+    tokens::inject_sentinel_thought_signatures(&mut contents, "claude-opus-4-6-thinking");
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+
+    // The Gemini sentinel is rejected by Claude upstreams (400 Invalid
+    // signature): it must not be treated as a real signature.
+    assert!(parts[0].get("thought").is_none());
+    assert!(parts[0].get("thoughtSignature").is_none());
+    assert_eq!(parts[0]["text"], "reasoning");
+}
+
+#[test]
+fn test_claude_thinking_real_signature_moves_to_anchor_part() {
+    let real_sig = "EqMOCqAOAWkUfRO0cKuvrvE9Zsa+uKZHZp2d25mCpd2a2h7oN+QkyxGc5MVWZg6/rpw73";
+    let mut contents = json!([
+        {
+            "role": "model",
+            "parts": [
+                { "thought": true, "text": "deep reasoning", "thoughtSignature": real_sig },
+                { "text": "answer" },
+                {
+                    "functionCall": {
+                        "name": "get_file",
+                        "args": {}
+                    }
+                }
+            ]
+        }
+    ]);
+
+    tokens::inject_sentinel_thought_signatures(&mut contents, "claude-opus-4-6-thinking");
+    let parts = contents[0]["parts"].as_array().expect("parts array");
+
+    // The thinking block keeps its flag and stays signature-free...
+    assert_eq!(parts[0].get("thought"), Some(&json!(true)));
+    assert!(parts[0].get("thoughtSignature").is_none());
+    // ...the signature rides on the anchor part (first non-thought part).
+    assert_eq!(parts[1]["thoughtSignature"], json!(real_sig));
+    // Function calls never carry signatures for Claude.
+    assert!(parts[2].get("thoughtSignature").is_none());
 }
 
 #[test]
