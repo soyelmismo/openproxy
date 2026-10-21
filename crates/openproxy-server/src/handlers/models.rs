@@ -126,6 +126,13 @@ pub async fn list_models(
                 .ok()
                 .flatten()
                 .or(c.context_window);
+            let effective_mot = state
+                .services()
+                .combos
+                .compute_effective_max_output_tokens(c.id)
+                .ok()
+                .flatten()
+                .or(c.max_output_tokens);
             let effective_caps = state
                 .services()
                 .combos
@@ -136,12 +143,14 @@ pub async fn list_models(
                 c,
                 None,
                 effective_cw,
+                effective_mot,
                 effective_caps.as_ref(),
             ));
             data.push(build_combo_entry(
                 c,
                 Some(&c.name),
                 effective_cw,
+                effective_mot,
                 effective_caps.as_ref(),
             ));
         }
@@ -227,6 +236,7 @@ fn build_combo_entry(
     c: &openproxy_types::Combo,
     id_override: Option<&str>,
     effective_context_window: Option<i64>,
+    effective_max_output_tokens: Option<i64>,
     effective_caps: Option<&capabilities::ModelCapabilities>,
 ) -> serde_json::Value {
     let id = id_override.map_or_else(
@@ -250,6 +260,10 @@ fn build_combo_entry(
     let is_reasoning = caps_ref.reasoning == Some(true) || caps_ref.thinking == Some(true);
     let supported_params = build_supported_parameters(caps_ref);
 
+    let max_output_tokens = effective_max_output_tokens
+        .or_else(|| capabilities::infer_max_output_tokens(&c.name))
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS);
+
     serde_json::json!({
         "id": id,
         "object": "model",
@@ -260,7 +274,7 @@ fn build_combo_entry(
         "parent": null,
         "context_length": effective_context_window,
         "max_input_tokens": effective_context_window,
-        "max_output_tokens": null,
+        "max_output_tokens": max_output_tokens,
         "input_modalities": input_modalities,
         "output_modalities": output_modalities,
         "capabilities": build_capabilities_object(caps_ref),
@@ -602,6 +616,7 @@ mod tests {
             preventive_rate_limit: false,
             created_at: "2024-01-01".into(),
             context_window: None,
+            max_output_tokens: None,
             priority_mode: Default::default(),
             cooldown_mode: Default::default(),
             cooldown_base_secs: None,
@@ -616,7 +631,13 @@ mod tests {
         caps.thinking = Some(true);
         caps.tool_calling = Some(true);
 
-        let v = build_combo_entry(&combo, Some("test-ninja"), Some(128_000), Some(&caps));
+        let v = build_combo_entry(
+            &combo,
+            Some("test-ninja"),
+            Some(128_000),
+            Some(16_384),
+            Some(&caps),
+        );
         assert_eq!(
             v.get("id"),
             Some(&serde_json::Value::String("test-ninja".into()))

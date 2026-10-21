@@ -7,7 +7,8 @@ use openproxy_types::ids::{AccountId, ComboId};
 use rusqlite::params;
 
 use super::mapping::{
-    account_healthy_ids_select, combo_context_window_select, combo_target_model_sub_select,
+    account_healthy_ids_select, combo_context_window_select, combo_max_output_tokens_select,
+    combo_target_model_sub_select,
 };
 use super::targets::list_targets;
 
@@ -68,12 +69,13 @@ fn extract_and_resolve_window(
     visited: &mut Vec<ComboId>,
     depth: u32,
 ) -> Result<Option<i64>> {
-    let (model_row_id, sub_combo_id, model_cw, model_id): (
+    let (model_row_id, sub_combo_id, model_cw, model_id, _max_output): (
         Option<i64>,
         Option<i64>,
         Option<i64>,
         String,
-    ) = crate::map_row_tuple!(row => (0, 1, 2, 3)).map_err(crate::error::map_db_error)?;
+        Option<i64>,
+    ) = crate::map_row_tuple!(row => (0, 1, 2, 3, 4)).map_err(crate::error::map_db_error)?;
     resolve_target_context_window(
         conn,
         model_row_id,
@@ -154,6 +156,129 @@ pub fn compute_effective_context_window(
 ) -> Result<Option<i64>> {
     let mut visited = Vec::new();
     compute_effective_context_window_recursive(conn, combo_id, &mut visited, 0)
+}
+
+fn resolve_target_max_output_tokens(
+    conn: &rusqlite::Connection,
+    model_row_id: Option<i64>,
+    sub_combo_id: Option<i64>,
+    model_out: Option<i64>,
+    model_id: &str,
+    visited: &mut Vec<openproxy_types::ComboId>,
+    depth: u32,
+) -> openproxy_types::error::Result<Option<i64>> {
+    if let Some(sub_id) = sub_combo_id {
+        compute_effective_max_output_tokens_recursive(
+            conn,
+            openproxy_types::ComboId(sub_id),
+            visited,
+            depth + 1,
+        )
+    } else if model_row_id.is_some() {
+        let out = model_out.filter(|&c| c > 0).or_else(|| {
+            if model_id.is_empty() {
+                None
+            } else {
+                openproxy_types::infer_max_output_tokens(model_id)
+            }
+        });
+        Ok(out)
+    } else {
+        Ok(None)
+    }
+}
+
+fn extract_and_resolve_output_tokens(
+    conn: &rusqlite::Connection,
+    row: &rusqlite::Row,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Option<i64>> {
+    let (model_row_id, sub_combo_id, _model_cw, model_id, model_out): (
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        String,
+        Option<i64>,
+    ) = crate::map_row_tuple!(row => (0, 1, 2, 3, 4)).map_err(crate::error::map_db_error)?;
+    resolve_target_max_output_tokens(
+        conn,
+        model_row_id,
+        sub_combo_id,
+        model_out,
+        &model_id,
+        visited,
+        depth,
+    )
+}
+
+fn aggregate_target_max_output_tokens(
+    conn: &rusqlite::Connection,
+    combo_id: ComboId,
+    visited: &mut Vec<ComboId>,
+    depth: u32,
+) -> Result<Option<i64>> {
+    let mut stmt = conn
+        .prepare(combo_target_model_sub_select!(
+            "WHERE ct.combo_id = ?1 \
+             AND ct.active = 1 \
+             AND (ct.sub_combo_id IS NOT NULL OR (COALESCE(p.active, 0) = 1 AND m.id IS NOT NULL AND m.active = 1)) \
+             AND NOT (ct.model_row_id IS NULL AND ct.sub_combo_id IS NULL)"
+        ))
+        .map_err(crate::error::map_db_error)?;
+    let mut rows = stmt
+        .query(rusqlite::params![combo_id.0])
+        .map_err(crate::error::map_db_error)?;
+
+    let mut min_out: Option<i64> = None;
+    while let Some(row) = rows.next().map_err(crate::error::map_db_error)? {
+        if let Some(out) =
+            extract_and_resolve_output_tokens(conn, row, visited, depth)?.filter(|&out| out > 0)
+        {
+            min_out = Some(min_out.map_or(out, |min| std::cmp::min(min, out)));
+        }
+    }
+    Ok(min_out)
+}
+
+fn compute_effective_max_output_tokens_recursive(
+    conn: &rusqlite::Connection,
+    combo_id: openproxy_types::ComboId,
+    visited: &mut Vec<openproxy_types::ComboId>,
+    depth: u32,
+) -> openproxy_types::error::Result<Option<i64>> {
+    validate_recursion_depth(combo_id, visited, depth)?;
+
+    let out: Option<i64> = conn
+        .query_row(
+            combo_max_output_tokens_select!("WHERE id = ?1"),
+            rusqlite::params![combo_id.0],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            crate::error::map_db_error_ctx(format!(
+                "get max_output_tokens for combo {}",
+                combo_id.0
+            ))(e)
+        })?;
+
+    let natural = aggregate_target_max_output_tokens(conn, combo_id, visited, depth)?;
+
+    let res = match out {
+        Some(o) => Ok(Some(o)),
+        None => Ok(natural),
+    };
+
+    visited.pop();
+    res
+}
+
+pub fn compute_effective_max_output_tokens(
+    conn: &rusqlite::Connection,
+    combo_id: ComboId,
+) -> Result<Option<i64>> {
+    let mut visited = Vec::new();
+    compute_effective_max_output_tokens_recursive(conn, combo_id, &mut visited, 0)
 }
 
 pub fn compute_effective_capabilities(

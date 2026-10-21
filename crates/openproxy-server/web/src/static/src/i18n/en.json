@@ -399,6 +399,7 @@
   "combos.detail.race_size": "Race size:",
   "combos.detail.delete": "Delete",
   "combos.detail.context_window": "Context window:",
+  "combos.detail.max_output_tokens": "Max output tokens:",
   "combos.detail.auto": "Auto: {{value}}",
   "combos.detail.effective": "Effective: {{value}}",
   "combos.detail.override_hint": "Override context window (tokens). Empty = auto-compute.",

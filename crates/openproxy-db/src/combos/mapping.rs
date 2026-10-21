@@ -12,7 +12,8 @@ crate::def_table_select!(
     "id, name, strategy, race_size, created_at, context_window, \
      priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
      cooldown_factor, lkgp_exploration_rate, selection_window_secs, \
-     COALESCE(preventive_rate_limit, 0), decision_model, decision_timeout_ms"
+     COALESCE(preventive_rate_limit, 0), decision_model, decision_timeout_ms, \
+     max_output_tokens"
 );
 pub(crate) use combo_select;
 
@@ -73,6 +74,13 @@ pub(crate) use model_upstream_id_select;
 crate::def_table_select!(combo_context_window_select, "combos", "context_window");
 pub(crate) use combo_context_window_select;
 
+crate::def_table_select!(
+    combo_max_output_tokens_select,
+    "combos",
+    "max_output_tokens"
+);
+pub(crate) use combo_max_output_tokens_select;
+
 crate::def_table_select!(combo_target_ids_select, "combo_targets", "id");
 pub(crate) use combo_target_ids_select;
 
@@ -81,7 +89,7 @@ crate::def_table_select!(
     "combo_targets ct \
      LEFT JOIN providers p ON p.id = ct.provider_id \
      LEFT JOIN models m ON m.id = ct.model_row_id",
-    "ct.model_row_id, ct.sub_combo_id, m.context_length, COALESCE(m.model_id, '')"
+    "ct.model_row_id, ct.sub_combo_id, m.context_length, COALESCE(m.model_id, ''), m.max_output_tokens"
 );
 pub(crate) use combo_target_model_sub_select;
 
@@ -115,6 +123,7 @@ pub(crate) fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         preventive_rate_limit: @bool(13),
         decision_model: 14,
         decision_timeout_ms: @opt_u64(15),
+        max_output_tokens: 16,
     })
 }
 

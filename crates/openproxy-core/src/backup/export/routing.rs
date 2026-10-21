@@ -13,7 +13,7 @@ pub(super) fn export_combos(conn: &Connection) -> Result<Vec<BackupCombo>> {
             "SELECT id, name, strategy, race_size, preventive_rate_limit, \
              context_window, priority_mode, cooldown_mode, cooldown_base_secs, \
              cooldown_max_secs, cooldown_factor, lkgp_exploration_rate, \
-             selection_window_secs, decision_model, decision_timeout_ms \
+             selection_window_secs, decision_model, decision_timeout_ms, max_output_tokens \
              FROM combos ORDER BY id",
         )
         .map_err(map_db_error)?;
@@ -51,6 +51,7 @@ pub(super) fn export_combos(conn: &Connection) -> Result<Vec<BackupCombo>> {
                 selection_window_secs: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
                 decision_model: row.get(13)?,
                 decision_timeout_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+                max_output_tokens: row.get(15)?,
             })
         })
         .map_err(map_db_error)?

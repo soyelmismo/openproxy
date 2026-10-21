@@ -28,6 +28,7 @@ define_column_updaters! {
     id_field: |id| id.0,
     not_found: |id| CoreError::ComboNotFound(id.0),
     pub fn update_context_window(context_window: Option<i64>) => "context_window";
+    pub fn update_max_output_tokens(max_output_tokens: Option<i64>) => "max_output_tokens";
     pub(crate) fn raw_update_combo_priority_mode(mode: Option<&str>) => "priority_mode";
     pub(crate) fn raw_update_combo_cooldown_mode(mode: Option<&str>) => "cooldown_mode";
     pub fn update_cooldown_base(base: Option<u64> => base.map(|v| v as i64)) => "cooldown_base_secs";

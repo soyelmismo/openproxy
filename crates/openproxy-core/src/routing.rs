@@ -431,6 +431,7 @@ pub fn build_synthetic_combo(
         race_size: 1,
         created_at: String::new(),
         context_window: None,
+        max_output_tokens: None,
         // strict priority + flat cooldown: a direct-model dispatch must behave
         // like a single-target user combo
         priority_mode: openproxy_types::combos::PriorityMode::Strict,

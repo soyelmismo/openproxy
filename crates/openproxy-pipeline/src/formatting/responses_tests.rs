@@ -423,3 +423,51 @@ fn anthropic_formatter_raises_max_tokens_to_model_ceiling_when_client_omits_it()
         json!(crate::translation::types::DEFAULT_MAX_TOKENS)
     );
 }
+
+#[test]
+fn openai_formatter_raises_max_tokens_to_model_ceiling_when_client_omits_it() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let user = OpenAIMessage {
+        role: "user".into(),
+        content: Some(json!("hi")),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    };
+
+    let mut model = test_model();
+    model.target_format = TargetFormat::Openai;
+    model.max_output_tokens = Some(32_768);
+
+    // Client omits max_tokens => formatter raises to model ceiling
+    let req = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: vec![user.clone()],
+        ..Default::default()
+    });
+    let body = OpenaiFormatter
+        .format_request(&req, &model, &req.openai_request.messages, false, &adapter)
+        .expect("ok");
+    let val: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(val["max_tokens"], json!(32_768));
+
+    // Client pins max_tokens => must preserve client's value
+    let req_pinned = test_req(OpenAIRequest {
+        model: "test-model".into(),
+        messages: vec![user],
+        max_tokens: Some(2048),
+        ..Default::default()
+    });
+    let body_pinned = OpenaiFormatter
+        .format_request(
+            &req_pinned,
+            &model,
+            &req_pinned.openai_request.messages,
+            false,
+            &adapter,
+        )
+        .expect("ok");
+    let val_pinned: Value = serde_json::from_slice(&body_pinned).unwrap();
+    assert_eq!(val_pinned["max_tokens"], json!(2048));
+}

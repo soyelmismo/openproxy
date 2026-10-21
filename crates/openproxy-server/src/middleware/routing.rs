@@ -249,6 +249,7 @@ async fn translate_plan_to_targets(
                     race_size,
                     created_at: String::new(),
                     context_window: None,
+                    max_output_tokens: None,
                     priority_mode: openproxy_types::combos::PriorityMode::Strict,
                     cooldown_mode: openproxy_types::config::CooldownMode::Flat,
                     cooldown_base_secs: None,

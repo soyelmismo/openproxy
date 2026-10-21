@@ -41,6 +41,8 @@ pub struct Combo {
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<i64>,
     #[serde(default)]
     pub priority_mode: PriorityMode,
     #[serde(default)]
@@ -134,6 +136,7 @@ impl Default for Combo {
             preventive_rate_limit: false,
             created_at: String::new(),
             context_window: None,
+            max_output_tokens: None,
             priority_mode: PriorityMode::Strict,
             cooldown_mode: CooldownMode::Flat,
             cooldown_base_secs: None,
@@ -359,6 +362,7 @@ mod tests {
             preventive_rate_limit: true,
             created_at: "now".into(),
             context_window: None,
+            max_output_tokens: None,
             priority_mode: PriorityMode::Strict,
             cooldown_mode: CooldownMode::Flat,
             cooldown_base_secs: Some(60),

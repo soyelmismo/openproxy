@@ -208,6 +208,11 @@ fn apply_combo_general_updates(
         UpdateField::Reset => core_combos::update_context_window(w, id, None)?,
         UpdateField::Ignore => {}
     }
+    match parse_nullable_i64(body, "max_output_tokens")? {
+        UpdateField::Set(v) => core_combos::update_max_output_tokens(w, id, Some(v))?,
+        UpdateField::Reset => core_combos::update_max_output_tokens(w, id, None)?,
+        UpdateField::Ignore => {}
+    }
     match parse_nullable_str(body, "priority_mode")? {
         UpdateField::Set(v) => core_combos::update_priority_mode(w, id, Some(v))?,
         UpdateField::Reset => core_combos::update_priority_mode(w, id, None)?,

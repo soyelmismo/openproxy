@@ -309,6 +309,43 @@ fn test_compute_effective_context_window_recursive_and_inactive_filters() {
         compute_effective_context_window(&conn, ComboId(10)).unwrap(),
         Some(128_000)
     );
+
+    // 7. Test compute_effective_max_output_tokens
+    conn.execute_batch(
+        "UPDATE models SET max_output_tokens = 8192 WHERE id = 201;
+         UPDATE models SET max_output_tokens = 16384 WHERE id = 202;
+         UPDATE models SET max_output_tokens = 32768 WHERE id = 203;",
+    )
+    .unwrap();
+    // sub_news has 201 (8192) and 202 (16384) -> natural is min(8192, 16384) = 8192
+    assert_eq!(
+        compute_effective_max_output_tokens(&conn, ComboId(11)).unwrap(),
+        Some(8192)
+    );
+    // topics has sub_news (8192) and sub_chat (203=32768 and 207=gpt-4o inferred 16384 -> min is 16384) -> min(8192, 16384) = 8192
+    assert_eq!(
+        compute_effective_max_output_tokens(&conn, ComboId(10)).unwrap(),
+        Some(8192)
+    );
+    // Explicit override on topics
+    conn.execute(
+        "UPDATE combos SET max_output_tokens = 65536 WHERE id = 10",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        compute_effective_max_output_tokens(&conn, ComboId(10)).unwrap(),
+        Some(65536)
+    );
+    conn.execute(
+        "UPDATE combos SET max_output_tokens = NULL WHERE id = 10",
+        [],
+    )
+    .unwrap();
+    assert_eq!(
+        compute_effective_max_output_tokens(&conn, ComboId(10)).unwrap(),
+        Some(8192)
+    );
 }
 
 #[test]

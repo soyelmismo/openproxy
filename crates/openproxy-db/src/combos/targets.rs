@@ -12,7 +12,7 @@ use super::mapping::{
     combo_target_ids_select, combo_target_select, combo_target_with_model_select,
     model_provider_id_select, model_upstream_id_select, row_to_target, row_to_target_with_model,
 };
-use super::resolve::compute_effective_context_window;
+use super::resolve::{compute_effective_context_window, compute_effective_max_output_tokens};
 
 fn validate_flat_target(
     conn: &Connection,
@@ -425,10 +425,21 @@ pub fn list_targets_with_model(
                     .ok()
                     .flatten();
             }
-        } else if (t.context_length.is_none() || t.context_length <= Some(0))
-            && !t.model_id.is_empty()
-        {
-            t.context_length = openproxy_types::infer_context_length(&t.model_id);
+            if t.max_output_tokens.is_none() || t.max_output_tokens <= Some(0) {
+                t.max_output_tokens = compute_effective_max_output_tokens(conn, sub_id)
+                    .ok()
+                    .flatten();
+            }
+        } else {
+            if (t.context_length.is_none() || t.context_length <= Some(0)) && !t.model_id.is_empty()
+            {
+                t.context_length = openproxy_types::infer_context_length(&t.model_id);
+            }
+            if (t.max_output_tokens.is_none() || t.max_output_tokens <= Some(0))
+                && !t.model_id.is_empty()
+            {
+                t.max_output_tokens = openproxy_types::infer_max_output_tokens(&t.model_id);
+            }
         }
     }
     Ok(targets)

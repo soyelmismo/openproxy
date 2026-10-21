@@ -153,6 +153,13 @@ impl ComboService {
         self.repo.compute_effective_context_window(combo_id)
     }
 
+    pub fn compute_effective_max_output_tokens(
+        &self,
+        combo_id: ComboId,
+    ) -> Result<Option<i64>, CoreError> {
+        self.repo.compute_effective_max_output_tokens(combo_id)
+    }
+
     pub fn compute_effective_capabilities(
         &self,
         combo_id: ComboId,

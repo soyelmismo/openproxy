@@ -16,6 +16,7 @@ export interface Combo {
   race_size: number;
   created_at: string;
   context_window?: number | null;
+  max_output_tokens?: number | null;
   priority_mode?: PriorityMode | null;
   cooldown_mode?: CooldownMode | null;
   cooldown_base_secs?: number | null;

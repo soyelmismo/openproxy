@@ -221,8 +221,8 @@ pub fn restore_backup(
                 id, name, strategy, race_size, preventive_rate_limit, \
                 context_window, priority_mode, cooldown_mode, cooldown_base_secs, \
                 cooldown_max_secs, cooldown_factor, lkgp_exploration_rate, \
-                selection_window_secs, decision_model, decision_timeout_ms \
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                selection_window_secs, decision_model, decision_timeout_ms, max_output_tokens \
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         )
         .map_err(map_db_error)?;
 
@@ -244,6 +244,7 @@ pub fn restore_backup(
             c.selection_window_secs.map(|v| v as i64),
             c.decision_model,
             c.decision_timeout_ms.map(|v| v as i64),
+            c.max_output_tokens,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore combo {}", c.name))(e))?;
         combos_restored += 1;

@@ -618,6 +618,15 @@ function renderComboDetail(): TemplateResult {
   const overrideCw = combo.context_window ?? null;
   const effectiveCw = overrideCw != null && autoCw != null ? Math.min(overrideCw, autoCw) : (overrideCw ?? autoCw);
   const effectiveCwLabel = effectiveCw != null ? formatTokens(effectiveCw) : "—";
+
+  const knownMot = targets
+    .map((t) => t.max_output_tokens)
+    .filter((c): c is number => c != null && c > 0);
+  const autoMot = knownMot.length > 0 ? Math.min(...knownMot) : null;
+  const autoMotLabel = autoMot != null ? formatTokens(autoMot) : "—";
+  const overrideMot = combo.max_output_tokens ?? null;
+  const effectiveMot = overrideMot != null && autoMot != null ? Math.min(overrideMot, autoMot) : (overrideMot ?? autoMot);
+  const effectiveMotLabel = effectiveMot != null ? formatTokens(effectiveMot) : "—";
   const cds = targets.filter((t) => t.in_cooldown);
   const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>${t("combos.detail.col.weight")}</abbr></th>` : html``;
 
@@ -643,6 +652,9 @@ function renderComboDetail(): TemplateResult {
     <div class="combo-context-window-bar"><label>${t("combos.detail.context_window")}
       <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
       <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })} · ${t("combos.detail.effective", { value: effectiveCwLabel })}</span></div>
+    <div class="combo-context-window-bar"><label>${t("combos.detail.max_output_tokens")}
+      <input type="number" min="1" placeholder="auto (${autoMotLabel})" .value=${overrideMot != null ? String(overrideMot) : ""} @change=${(e: Event) => onNumInput("max_output_tokens", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
+      <span class="cw-hint">${t("combos.detail.auto", { value: autoMotLabel })} · ${t("combos.detail.effective", { value: effectiveMotLabel })}</span></div>
     ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
     ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>

@@ -73,6 +73,20 @@ impl TargetFormatter for OpenaiFormatter {
                 view.extra.to_mut().remove(*key);
             }
         }
+        // If the client omitted max_tokens/max_completion_tokens, raise it to the
+        // model's declared output ceiling (or combo's effective ceiling) so backends
+        // don't truncate on small 4096 defaults.
+        let client_has_max = req.openai_request.max_tokens.is_some()
+            || view.extra.contains_key("max_completion_tokens")
+            || view.extra.contains_key("max_tokens");
+        if !client_has_max
+            && let Some(ceiling) = model
+                .max_output_tokens
+                .filter(|&v| v > 0)
+                .map(|v| v.min(i64::from(u32::MAX)) as u32)
+        {
+            view.max_tokens = Some(ceiling);
+        }
         adapter.normalize_openai_request(&mut view);
         match serde_json::to_vec(&view) {
             Ok(v) => Ok(bytes::Bytes::from(v)),
