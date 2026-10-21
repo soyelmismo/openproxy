@@ -163,6 +163,43 @@ fn test_inject_sentinel_thought_signatures_flash() {
 }
 
 #[test]
+fn test_should_inject_thought_signatures() {
+    // Models that SHOULD inject thought signatures:
+    for model in [
+        "gemini-2.5-flash",
+        "gemini-1.5-pro",
+        "gemini-pro-agent",
+        "gemini-3.7-flash-high",
+        "custom-thinking-model",
+        "my-agent-model",
+        "openai-o1-mini",
+        "openai-o3-mini",
+        "deepseek-r1",
+    ] {
+        assert!(
+            tokens::should_inject_thought_signatures(model),
+            "model '{model}' should require thought signatures"
+        );
+    }
+
+    // Models that SHOULD NOT inject thought signatures:
+    for model in [
+        "",
+        "imagen-3.0",
+        "text-embedding-004",
+        "gemini-1.5-flash-lite",
+        "claude-3-5-sonnet",
+        "claude-opus-4-6-thinking",
+        "imagen-embed-lite-claude",
+    ] {
+        assert!(
+            !tokens::should_inject_thought_signatures(model),
+            "model '{model}' should NOT require thought signatures"
+        );
+    }
+}
+
+#[test]
 fn test_parse_antigravity_user_quota_summary_missing_groups() {
     let body = json!({});
     let result = parse_antigravity_user_quota_summary(&body);
