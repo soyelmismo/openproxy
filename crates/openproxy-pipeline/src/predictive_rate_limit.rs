@@ -12,6 +12,15 @@ const DEFAULT_WINDOW_DURATION_MS: u32 = 60_000;
 const PROBE_SUCCESS_THRESHOLD: u16 = 2;
 const MIN_RECOVERED_BURST: u16 = 2;
 const MEMORY_DECAY_IDLE_MS: u64 = 15 * 60 * 1000; // 15 min sin 429s -> decay
+/// Techo de la penalización tomada de `Retry-After`. Sin él, una cabecera de
+/// cuota diaria (21h) deja el target sin probe durante horas y el estado Open
+/// solo se abandona por tiempo, nunca por evidencia de que responde.
+const MAX_OPEN_PENALTY_MS: u64 = 10 * 60 * 1000;
+const MIN_RATE_LIMITED_PENALTY_MS: u64 = 3000;
+/// Lease del probe en HalfOpen. Si el slot `in_flight` no vuelve (un camino de
+/// salida temprano que no reporta resultado), el target quedaba Saturado con
+/// `reset_in_ms = 0` para siempre y nunca se reintentaba.
+const PROBE_LEASE_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TargetRateState {
@@ -135,7 +144,7 @@ impl TargetPredictiveState {
             TargetRateState::Open => {
                 self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms))
             }
-            TargetRateState::HalfOpen if self.in_flight == 0 => TargetReadiness::Probe,
+            TargetRateState::HalfOpen if self.probe_lease_free(now_ms) => TargetReadiness::Probe,
             TargetRateState::HalfOpen => {
                 self.saturated_readiness(self.reset_at_ms.saturating_sub(now_ms))
             }
@@ -147,6 +156,13 @@ impl TargetPredictiveState {
         }
     }
 
+    /// Un probe en HalfOpen ocupa el slot mientras está vivo; pasado el lease se
+    /// considera perdido y se permite otro. Evita que un `in_flight` huérfano
+    /// deje el target bloqueado indefinidamente.
+    fn probe_lease_free(&self, now_ms: u64) -> bool {
+        self.in_flight == 0 || now_ms >= self.reset_at_ms.saturating_add(PROBE_LEASE_MS)
+    }
+
     fn saturated_readiness(&self, reset_in_ms: u64) -> TargetReadiness {
         TargetReadiness::Saturated {
             learned_burst: self.learned_burst,
@@ -155,10 +171,10 @@ impl TargetPredictiveState {
         }
     }
 
-    pub fn try_acquire(&mut self) -> bool {
+    pub fn try_acquire(&mut self, now_ms: u64) -> bool {
         match self.state {
             TargetRateState::Open => false,
-            TargetRateState::HalfOpen if self.in_flight == 0 => {
+            TargetRateState::HalfOpen if self.probe_lease_free(now_ms) => {
                 self.in_flight += 1;
                 self.window_count += 1;
                 true
@@ -185,7 +201,7 @@ impl TargetPredictiveState {
         self.consecutive_same_fingerprint = 0;
         self.last_error_fingerprint = 0;
 
-        self.recover_from_half_open();
+        self.recover_from_success();
         self.update_window_duration(reset_window_secs);
         self.calibrate_from_remaining_header(remaining_header);
         self.advance_elastic_streak();
@@ -225,14 +241,22 @@ impl TargetPredictiveState {
         self.reset_at_ms = now_ms + penalty_ms;
     }
 
-    fn recover_from_half_open(&mut self) {
-        if self.state == TargetRateState::HalfOpen {
-            self.state = TargetRateState::Closed;
-            self.learned_burst = self
-                .learned_burst
-                .max(self.window_count)
-                .max(MIN_RECOVERED_BURST);
+    /// Cierra una ventana de penalización ante un 200 real del upstream.
+    ///
+    /// Cubre los dos estados de castigo: `Open` (un éxito demuestra que el
+    /// `Retry-After` no aplica ya, aunque `reset_at_ms` siga en el futuro) y
+    /// `HalfOpen` (probe confirmado). En `Closed` el burst ya se ajusta por las
+    /// otras vías, así que no se toca.
+    fn recover_from_success(&mut self) {
+        if self.state == TargetRateState::Closed {
+            return;
         }
+        self.state = TargetRateState::Closed;
+        self.reset_at_ms = 0;
+        self.learned_burst = self
+            .learned_burst
+            .max(self.window_count)
+            .max(MIN_RECOVERED_BURST);
     }
 
     fn update_window_duration(&mut self, reset_window_secs: Option<u64>) {
@@ -383,7 +407,7 @@ impl PredictiveRateLimiter {
         let state = map.entry(key).or_default();
 
         state.refresh(now_ms);
-        state.try_acquire()
+        state.try_acquire(now_ms)
     }
 
     /// Intenta adquirir el permiso para el target (compatibilidad).
@@ -481,7 +505,8 @@ impl PredictiveRateLimiter {
         state.state = TargetRateState::Open;
 
         let penalty_ms = retry_after_secs.map_or(u64::from(DEFAULT_WINDOW_DURATION_MS), |s| {
-            (s * 1000).max(3000)
+            s.saturating_mul(1000)
+                .clamp(MIN_RATE_LIMITED_PENALTY_MS, MAX_OPEN_PENALTY_MS)
         });
         state.reset_at_ms = now_ms + penalty_ms;
     }

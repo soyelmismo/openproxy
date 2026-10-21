@@ -139,6 +139,92 @@ fn test_upstream_error_blocks_and_recovers() {
 }
 
 #[test]
+fn test_success_closes_open_state_before_reset() {
+    // Regresión: opencode-zen devolvió 429 y el estado Open sobrevivió a un 200
+    // real del mismo provider+modelo (petición directa con combo_id=0).
+    // `apply_success` solo cerraba el estado HalfOpen, así que el target seguía
+    // saturado hasta el reset pese a la evidencia de que responde.
+    let limiter = PredictiveRateLimiter::new();
+    let key = PredictiveRateLimiter::compute_key_parts(
+        &ProviderId::new("opencode-zen"),
+        None,
+        Some(ModelRowId(12_713_086)),
+        RateLimitScope::Account,
+    );
+    let t0 = 1_000_000;
+
+    assert!(limiter.acquire_key(key, t0));
+    limiter.report_rate_limited_key(key, Some(60), t0);
+    assert!(limiter.evaluate_key(key, t0 + 1).is_saturated());
+
+    let t_ok = t0 + 5_000;
+    limiter.report_success_key(key, None, None, t_ok);
+    assert!(
+        !limiter.evaluate_key(key, t_ok).is_saturated(),
+        "un 200 real demuestra que la ventana no está agotada: el estado Open debe cerrarse"
+    );
+}
+
+#[test]
+fn test_half_open_probe_slot_does_not_pin_target_forever() {
+    // Regresión observada en producción: skips con `reset_in_ms = 0` durante
+    // horas. La causa es un `in_flight` huérfano tras el cambio Open→HalfOpen
+    // (camino de salida temprano que no reporta resultado): el target queda
+    // Saturado para siempre y nunca se reintenta.
+    let limiter = PredictiveRateLimiter::new();
+    let (combo, target) = (ComboId(7), ComboTargetId(701));
+    let t0 = 5_000_000;
+
+    assert!(limiter.acquire_target(combo, target, t0));
+    limiter.report_rate_limited(combo, target, Some(3), t0);
+
+    let after_open = t0 + 3_001;
+    assert_eq!(
+        limiter.evaluate_target(combo, target, after_open),
+        TargetReadiness::Probe
+    );
+    assert!(limiter.acquire_target(combo, target, after_open));
+    // Nadie reporta el resultado de este probe: el slot queda ocupado.
+    assert!(
+        limiter
+            .evaluate_target(combo, target, after_open + 1)
+            .is_saturated()
+    );
+
+    let after_lease = after_open + PROBE_LEASE_MS + 1;
+    assert_eq!(
+        limiter.evaluate_target(combo, target, after_lease),
+        TargetReadiness::Probe,
+        "el lease debe liberar el slot huérfano y permitir un nuevo probe"
+    );
+    assert!(limiter.acquire_target(combo, target, after_lease));
+}
+
+#[test]
+fn test_rate_limited_penalty_is_capped() {
+    // Un Retry-After absurdo (cuota diaria, cabecera mal formada) no puede
+    // dejar el target sin ninguna oportunidad de probe durante horas.
+    let limiter = PredictiveRateLimiter::new();
+    let (combo, target) = (ComboId(9), ComboTargetId(901));
+    let t0 = 2_000_000;
+
+    assert!(limiter.acquire_target(combo, target, t0));
+    limiter.report_rate_limited(combo, target, Some(75_770), t0);
+    assert!(
+        limiter
+            .evaluate_target(combo, target, t0 + 1)
+            .is_saturated()
+    );
+
+    let after_cap = t0 + MAX_OPEN_PENALTY_MS + 1;
+    assert_eq!(
+        limiter.evaluate_target(combo, target, after_cap),
+        TargetReadiness::Probe,
+        "tras el techo de penalización el target debe poder probarse"
+    );
+}
+
+#[test]
 fn test_upstream_error_escalating_penalty() {
     let limiter = PredictiveRateLimiter::new();
     let (c, t) = (ComboId(1), ComboTargetId(400));
