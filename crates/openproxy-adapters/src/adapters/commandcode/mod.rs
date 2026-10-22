@@ -26,8 +26,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use crate::spoofer::{
-    current_commandcode_ua, current_commandcode_version, set_dynamic_commandcode_extra_header,
-    set_dynamic_commandcode_ua, set_dynamic_commandcode_version,
+    CommandCodeSpoofer, current_commandcode_ua, current_commandcode_version,
+    set_dynamic_commandcode_extra_header, set_dynamic_commandcode_ua,
+    set_dynamic_commandcode_version,
 };
 
 pub const DEFAULT_COMMANDCODE_CLI_VERSION: &str = crate::spoofer::DEFAULT_COMMANDCODE_CLI_VERSION;
@@ -129,15 +130,11 @@ impl ProviderAdapter for CommandCodeGoAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        use crate::spoofer::{ClientSpoofer, CommandCodeSpoofer};
-        let mut headers = CommandCodeSpoofer.headers();
-        if let Some((name, value)) = self.build_auth_header(api_key) {
-            headers.push((name, value));
-        }
-        for (k, v) in &self.config().extra_headers {
-            headers.push((k.clone(), v.clone()));
-        }
-        headers
+        super::build_spoofer_headers(
+            self.build_auth_header(api_key),
+            &CommandCodeSpoofer,
+            &self.config().extra_headers,
+        )
     }
 
     fn models_url(&self) -> Option<String> {

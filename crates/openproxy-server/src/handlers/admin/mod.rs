@@ -7,6 +7,7 @@ pub mod backup;
 pub mod combo_targets;
 pub mod combos;
 pub mod debug;
+pub mod helpers;
 pub mod model_tester;
 pub mod models;
 pub mod notifications;

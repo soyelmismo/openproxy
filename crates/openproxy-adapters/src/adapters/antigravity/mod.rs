@@ -230,23 +230,11 @@ impl ProviderAdapter for AntigravityAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        let mut headers_vec = Vec::with_capacity(10);
-        headers_vec.push(crate::upstream::bearer_auth_header(api_key));
-        headers_vec.push(("Content-Type".into(), "application/json".into()));
-        headers_vec.extend(AntigravitySpoofer::new().headers());
-
-        for (k, v) in &self.config.extra_headers {
-            if let Some(pos) = headers_vec
-                .iter()
-                .position(|(hk, _)| hk.eq_ignore_ascii_case(k))
-            {
-                headers_vec[pos].1 = v.clone();
-            } else {
-                headers_vec.push((k.clone(), v.clone()));
-            }
-        }
-
-        headers_vec
+        super::build_spoofer_headers(
+            Some(crate::upstream::bearer_auth_header(api_key)),
+            &AntigravitySpoofer::new(),
+            &self.config.extra_headers,
+        )
     }
 
     fn finalize_request(

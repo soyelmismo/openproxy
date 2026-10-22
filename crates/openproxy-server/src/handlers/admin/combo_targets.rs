@@ -9,7 +9,10 @@ use axum::{
 use openproxy_core::admin as core_admin;
 use openproxy_types::UpdateField;
 
-use super::combos::{parse_nullable_str, parse_nullable_u64};
+pub use super::helpers::{
+    ComboTargetUpdates, parse_combo_target_updates, parse_nullable_str, parse_nullable_u64,
+    parse_target_active, parse_target_priority_order, parse_target_weight,
+};
 
 pub async fn list_combo_targets(
     State(s): State<AppState>,
@@ -201,144 +204,6 @@ pub async fn test_combo_targets(
     let targets = fetch_combo_targets_for_test(&s, id).await?;
     let results = run_fan_out_combo_tests(&s, id, targets, cancel_rx).await?;
     Ok(Json(results))
-}
-
-pub struct ComboTargetUpdates<'a> {
-    pub priority_order: Option<i32>,
-    pub weight: Option<i32>,
-    pub active: Option<bool>,
-    pub cooldown_mode: UpdateField<&'a str>,
-    pub cooldown_base_secs: UpdateField<u64>,
-    pub cooldown_max_secs: UpdateField<u64>,
-    pub cooldown_factor: UpdateField<u32>,
-    pub thinking_effort: UpdateField<&'a str>,
-    pub description: UpdateField<&'a str>,
-    pub selected_accounts: UpdateField<Option<String>>,
-}
-
-impl ComboTargetUpdates<'_> {
-    pub fn is_empty(&self) -> bool {
-        self.priority_order.is_none()
-            && self.weight.is_none()
-            && self.active.is_none()
-            && self.cooldown_mode.is_ignore()
-            && self.cooldown_base_secs.is_ignore()
-            && self.cooldown_max_secs.is_ignore()
-            && self.cooldown_factor.is_ignore()
-            && self.thinking_effort.is_ignore()
-            && self.description.is_ignore()
-            && self.selected_accounts.is_ignore()
-    }
-}
-
-pub fn parse_target_priority_order(body: &serde_json::Value) -> Result<Option<i32>, ApiError> {
-    let Some(v) = body.get("priority_order") else {
-        return Ok(None);
-    };
-    let p = v.as_i64().ok_or_else(|| {
-        ApiError(CoreError::Validation(
-            "priority_order must be an integer when present".into(),
-        ))
-    })?;
-    if !(i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&p) {
-        return Err(ApiError(CoreError::Validation(format!(
-            "priority_order out of i32 range: {p}"
-        ))));
-    }
-    Ok(Some(p as i32))
-}
-
-pub fn parse_target_weight(body: &serde_json::Value) -> Result<Option<i32>, ApiError> {
-    let Some(v) = body.get("weight") else {
-        return Ok(None);
-    };
-    let weight_i64 = v.as_i64().ok_or_else(|| {
-        ApiError(CoreError::Validation(
-            "weight must be an integer when present".into(),
-        ))
-    })?;
-    if !(1..=i64::from(i32::MAX)).contains(&weight_i64) {
-        return Err(ApiError(CoreError::Validation(format!(
-            "weight must be a positive i32 (1..={}), got {}",
-            i32::MAX,
-            weight_i64
-        ))));
-    }
-    Ok(Some(weight_i64 as i32))
-}
-
-pub fn parse_target_active(body: &serde_json::Value) -> Result<Option<bool>, ApiError> {
-    let Some(v) = body.get("active") else {
-        return Ok(None);
-    };
-    v.as_bool().map(Some).ok_or_else(|| {
-        ApiError(CoreError::Validation(
-            "active must be a boolean when present".into(),
-        ))
-    })
-}
-
-pub fn parse_combo_target_updates(
-    body: &serde_json::Value,
-) -> Result<ComboTargetUpdates<'_>, ApiError> {
-    let priority_order = parse_target_priority_order(body)?;
-    let weight = parse_target_weight(body)?;
-    let active = parse_target_active(body)?;
-    let cooldown_mode = parse_nullable_str(body, "cooldown_mode")?;
-    let cooldown_base_secs = parse_nullable_u64(body, "cooldown_base_secs")?;
-    let cooldown_max_secs = parse_nullable_u64(body, "cooldown_max_secs")?;
-    let cooldown_factor = parse_nullable_u64(body, "cooldown_factor")?.map(|f| f as u32);
-    let thinking_effort = parse_nullable_str(body, "thinking_effort")?;
-    let description = parse_nullable_str(body, "description")?;
-
-    let selected_accounts = match body.get("selected_accounts") {
-        None => UpdateField::Ignore,
-        Some(serde_json::Value::Null) => UpdateField::Reset,
-        Some(serde_json::Value::Array(arr)) => {
-            let ids: Result<Vec<i64>, _> = arr
-                .iter()
-                .map(|v| {
-                    v.as_i64().ok_or_else(|| {
-                        ApiError(CoreError::Validation(
-                            "selected_accounts must contain integers".into(),
-                        ))
-                    })
-                })
-                .collect();
-            let ids = ids?;
-            let json = serde_json::to_string(&ids).map_err(|e| {
-                ApiError(CoreError::Validation(format!(
-                    "failed to serialize selected_accounts: {e}"
-                )))
-            })?;
-            UpdateField::Set(Some(json))
-        }
-        Some(_) => {
-            return Err(ApiError(CoreError::Validation(
-                "selected_accounts must be an array or null".into(),
-            )));
-        }
-    };
-
-    let updates = ComboTargetUpdates {
-        priority_order,
-        weight,
-        active,
-        cooldown_mode,
-        cooldown_base_secs,
-        cooldown_max_secs,
-        cooldown_factor,
-        thinking_effort,
-        description,
-        selected_accounts,
-    };
-
-    if updates.is_empty() {
-        return Err(ApiError(CoreError::Validation(
-            "missing update fields in request body".into(),
-        )));
-    }
-    Ok(updates)
 }
 
 pub fn apply_target_db_updates(

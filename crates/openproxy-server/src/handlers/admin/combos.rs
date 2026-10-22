@@ -94,69 +94,9 @@ crate::admin_entity_action_handler! {
     }
 }
 
-pub(crate) fn parse_nullable_str<'a>(
-    body: &'a serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<&'a str>, ApiError> {
-    match body.get(field) {
-        None => Ok(UpdateField::Ignore),
-        Some(v) if v.is_null() => Ok(UpdateField::Reset),
-        Some(v) => match v.as_str() {
-            Some(s) => Ok(UpdateField::Set(s)),
-            None => Err(ApiError(CoreError::Validation(format!(
-                "{field} must be a string or null, got {v}"
-            )))),
-        },
-    }
-}
-
-pub(crate) fn parse_nullable_u64(
-    body: &serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<u64>, ApiError> {
-    match body.get(field) {
-        None => Ok(UpdateField::Ignore),
-        Some(v) if v.is_null() => Ok(UpdateField::Reset),
-        Some(v) => match v.as_u64() {
-            Some(n) => Ok(UpdateField::Set(n)),
-            None => Err(ApiError(CoreError::Validation(format!(
-                "{field} must be a non-negative integer or null"
-            )))),
-        },
-    }
-}
-
-pub(crate) fn parse_nullable_i64(
-    body: &serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<i64>, ApiError> {
-    match body.get(field) {
-        None => Ok(UpdateField::Ignore),
-        Some(v) if v.is_null() => Ok(UpdateField::Reset),
-        Some(v) => match v.as_i64() {
-            Some(n) => Ok(UpdateField::Set(n)),
-            None => Err(ApiError(CoreError::Validation(format!(
-                "{field} must be null or an integer"
-            )))),
-        },
-    }
-}
-
-pub(crate) fn parse_nullable_f64(
-    body: &serde_json::Value,
-    field: &str,
-) -> Result<UpdateField<f64>, ApiError> {
-    match body.get(field) {
-        None => Ok(UpdateField::Ignore),
-        Some(v) if v.is_null() => Ok(UpdateField::Reset),
-        Some(v) => match v.as_f64() {
-            Some(n) => Ok(UpdateField::Set(n)),
-            None => Err(ApiError(CoreError::Validation(format!(
-                "{field} must be a number in [0.0, 1.0] or null"
-            )))),
-        },
-    }
-}
+pub(crate) use super::helpers::{
+    parse_nullable_f64, parse_nullable_i64, parse_nullable_str, parse_nullable_u64,
+};
 
 fn apply_combo_cooldown_updates(
     w: &rusqlite::Connection,

@@ -3,6 +3,7 @@ use super::{
     DiscoveredModel, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result,
     Serialize, TargetFormat, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
+use crate::spoofer::KiroSpoofer;
 use openproxy_types::ResultExt;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::Value;
@@ -194,12 +195,11 @@ impl ProviderAdapter for KiroAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        use crate::spoofer::{ClientSpoofer, KiroSpoofer};
-        let mut headers = KiroSpoofer.headers();
-        if let Some(auth) = self.build_auth_header(api_key) {
-            headers.push(auth);
-        }
-        headers
+        super::build_spoofer_headers(
+            self.build_auth_header(api_key),
+            &KiroSpoofer,
+            &self.config.extra_headers,
+        )
     }
 
     fn wrap_request_body(

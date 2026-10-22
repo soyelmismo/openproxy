@@ -131,24 +131,17 @@ impl ProviderAdapter for MiniMaxAdapter {
         _target_format: TargetFormat,
         _model: &ModelId,
     ) -> Vec<(String, String)> {
-        use crate::spoofer::ClientSpoofer;
-        let mut headers = MiniMaxSpoofer.headers();
         let trimmed = api_key.trim();
+        let auth = if !trimmed.is_empty() {
+            Some(crate::upstream::bearer_auth_header(trimmed))
+        } else {
+            None
+        };
+        let mut headers =
+            super::build_spoofer_headers(auth, &MiniMaxSpoofer, &self.config.extra_headers);
         if trimmed.starts_with("sk-") {
             crate::spoofer::upsert_header(&mut headers, "x-api-key", trimmed);
-            crate::spoofer::upsert_header(
-                &mut headers,
-                "Authorization",
-                crate::upstream::format_bearer(trimmed),
-            );
-        } else if !trimmed.is_empty() {
-            crate::spoofer::upsert_header(
-                &mut headers,
-                "Authorization",
-                crate::upstream::format_bearer(trimmed),
-            );
         }
-        crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);
         headers
     }
 
