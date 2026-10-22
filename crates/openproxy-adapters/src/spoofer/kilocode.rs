@@ -1,4 +1,4 @@
-use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
+use super::{ClientSpoofer, build_spoofed_headers, define_spoofer_state};
 
 pub const DEFAULT_KILOCODE_VERSION: &str = "4.108.0";
 
@@ -11,38 +11,25 @@ pub const KILOCODE_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("x-client-version", "4.108.0"),
 ];
 
-static KILOCODE_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
-
-/// Current dynamic version of Kilocode.
-pub fn current_kilocode_version() -> String {
-    KILOCODE_OVERRIDES.current_version("OPENPROXY_KILOCODE_VERSION", DEFAULT_KILOCODE_VERSION)
+define_spoofer_state! {
+    overrides: KILOCODE_OVERRIDES,
+    extra_headers: KILOCODE_EXTRA_HEADERS = "OPENPROXY_KILOCODE_EXTRA_HEADERS",
+    test_lock: KILOCODE_TEST_LOCK,
+    version: {
+        env: "OPENPROXY_KILOCODE_VERSION",
+        default: DEFAULT_KILOCODE_VERSION,
+        getter: current_kilocode_version,
+        setter: set_dynamic_kilocode_version,
+        doc: "Current dynamic version of Kilocode.",
+    },
+    ua: {
+        getter: current_kilocode_ua,
+        format: |ver| format!("Kilo-Code/{ver}"),
+        doc: "Dynamic Kilocode User-Agent.",
+    },
+    extra_header_setter: set_dynamic_kilocode_extra_header,
+    reset: reset_dynamic_kilocode_overrides,
 }
-
-/// Dynamic Kilocode User-Agent.
-pub fn current_kilocode_ua() -> String {
-    format!("Kilo-Code/{}", current_kilocode_version())
-}
-
-/// Set dynamic version override for Kilocode in memory at runtime without recompiling.
-pub fn set_dynamic_kilocode_version(ver: impl Into<String>) {
-    KILOCODE_OVERRIDES.set_version(ver);
-}
-
-/// Set dynamic extra header override for Kilocode in memory at runtime without recompiling.
-pub fn set_dynamic_kilocode_extra_header(key: impl Into<String>, val: impl Into<String>) {
-    KILOCODE_OVERRIDES.set_extra_header(key, val);
-}
-
-/// Reset dynamic in-memory overrides for Kilocode (useful for tests and cleanup).
-pub fn reset_dynamic_kilocode_overrides() {
-    KILOCODE_OVERRIDES.reset();
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-pub static KILOCODE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-static KILOCODE_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
-    std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_KILOCODE_EXTRA_HEADERS"));
 
 /// Preset for Kilocode client identity headers.
 #[derive(Debug, Clone, Copy, Default)]
@@ -52,22 +39,19 @@ impl ClientSpoofer for KilocodeSpoofer {
     fn headers(&self) -> Vec<(String, String)> {
         let cur_ver = current_kilocode_version();
         let cur_ua = current_kilocode_ua();
-        let mut list: Vec<(String, String)> = KILOCODE_SPOOFING_HEADERS
-            .iter()
-            .map(|(k, v)| {
-                if *k == "user-agent" {
+        build_spoofed_headers(
+            KILOCODE_SPOOFING_HEADERS,
+            &KILOCODE_EXTRA_HEADERS,
+            &KILOCODE_OVERRIDES,
+            |k, v| {
+                if k == "user-agent" {
                     (k.to_string(), cur_ua.clone())
-                } else if *k == "x-kilocode-version" || *k == "x-client-version" {
+                } else if k == "x-kilocode-version" || k == "x-client-version" {
                     (k.to_string(), cur_ver.clone())
                 } else {
                     (k.to_string(), v.to_string())
                 }
-            })
-            .collect();
-
-        merge_header_refs(&mut list, &*KILOCODE_EXTRA_HEADERS);
-        KILOCODE_OVERRIDES.apply_to_list(&mut list);
-
-        list
+            },
+        )
     }
 }

@@ -324,13 +324,7 @@ pub fn merge_claude_models(base: &mut Vec<DiscoveredModel>, dynamic: Vec<Discove
 }
 
 impl ProviderAdapter for ClaudeCodeAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn pin_request_contract(&mut self) {
         // Congela el snapshot activo (LKG en disco o semilla medida): headers,

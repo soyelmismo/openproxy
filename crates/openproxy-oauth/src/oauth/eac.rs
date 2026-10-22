@@ -7,12 +7,8 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
-};
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -96,13 +92,7 @@ impl EacOAuthProvider {
                 .insert(http::header::HeaderName::from_static("x-ofm-user"), val);
         }
 
-        let cancel = CancellationToken::new();
-        if let Ok(resp) = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-        {
-            let _ = resp.collect().await;
-        }
+        let _ = super::call_oauth(upstream_client, req, "eac send_ack").await;
     }
 }
 
@@ -159,14 +149,8 @@ impl OAuthProvider for EacOAuthProvider {
             http::HeaderValue::from_static(EAC_USER_AGENT),
         );
 
-        let cancel = CancellationToken::new();
-        let resp = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "eac request_device_code start"))?;
-
-        let status = resp.status;
-        let _ = resp.collect().await;
+        let (status, _) =
+            super::call_oauth(upstream_client, req, "eac request_device_code start").await?;
 
         if !status.is_success() && !status.is_redirection() {
             return Err(CoreError::upstream_error(
@@ -207,28 +191,8 @@ impl OAuthProvider for EacOAuthProvider {
             http::HeaderValue::from_static(EAC_USER_AGENT),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "eac poll_device_token"))?;
-
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "eac poll_device_token body read"))?;
-
-        if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body).to_string();
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "eac",
-                "<oauth_poll>",
-                body_str,
-                false,
-            ));
-        }
+        let body =
+            super::call_oauth_checked(upstream_client, req, "eac", "eac poll_device_token").await?;
 
         let json: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|e| CoreError::Parse(format!("eac poll response json parse: {e}")))?;

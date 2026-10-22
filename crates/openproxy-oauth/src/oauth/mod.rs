@@ -52,6 +52,58 @@ pub mod zai;
 
 pub use util::*;
 
+/// Execute an upstream HTTP request with [`TimeoutProfile::OAuth`] and read the full response body.
+///
+/// Returns the HTTP status code and body bytes, mapping transport errors and body read errors
+/// through [`map_upstream_err`] with the specified `op_name`.
+pub async fn call_oauth(
+    upstream_client: &Arc<UpstreamClient>,
+    req: openproxy_adapters::upstream::UpstreamRequest,
+    op_name: &str,
+) -> Result<(http::StatusCode, bytes::Bytes)> {
+    let cancel = openproxy_adapters::upstream::CancellationToken::new();
+    let response = upstream_client
+        .call(req, openproxy_adapters::upstream::TimeoutProfile::OAuth, cancel)
+        .await
+        .map_err(|e| map_upstream_err(e, op_name))?;
+
+    let status = response.status;
+    let body = response
+        .collect()
+        .await
+        .map_err(|e| map_upstream_err(e, &format!("{op_name} body")))?;
+
+    Ok((status, body))
+}
+
+/// Execute an upstream HTTP request with [`TimeoutProfile::OAuth`], read the body,
+/// and check that the HTTP status is successful via [`check_oauth_status`].
+///
+/// Returns the response body bytes.
+pub async fn call_oauth_checked(
+    upstream_client: &Arc<UpstreamClient>,
+    req: openproxy_adapters::upstream::UpstreamRequest,
+    provider: &str,
+    op_name: &str,
+) -> Result<bytes::Bytes> {
+    let (status, body) = call_oauth(upstream_client, req, op_name).await?;
+    check_oauth_status(status, provider, &body)?;
+    Ok(body)
+}
+
+/// Execute an upstream HTTP request with [`TimeoutProfile::OAuth`], verify the HTTP status
+/// is successful via [`check_oauth_status`], and deserialize the JSON response.
+pub async fn call_oauth_json<T: serde::de::DeserializeOwned>(
+    upstream_client: &Arc<UpstreamClient>,
+    req: openproxy_adapters::upstream::UpstreamRequest,
+    provider: &str,
+    op_name: &str,
+) -> Result<T> {
+    let body = call_oauth_checked(upstream_client, req, provider, op_name).await?;
+    serde_json::from_slice(&body)
+        .map_err(|e| CoreError::Parse(format!("{op_name} parse error: {e}")))
+}
+
 /// A borrowed database handle for OAuth paths.
 ///
 /// Supports either the pooled database ([`openproxy_db::DbPool`]) or a shared

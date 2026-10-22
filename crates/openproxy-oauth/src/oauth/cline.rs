@@ -2,11 +2,9 @@
 
 use crate::error::{CoreError, Result};
 use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
 };
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use std::sync::Arc;
 
 pub const CLINE_DEFAULT_BASE_URL: &str = "https://api.cline.bot";
@@ -110,28 +108,14 @@ impl OAuthProvider for ClineOAuthProvider {
         );
         openproxy_adapters::adapters::cline::apply_cline_spoofing_headers(&mut req);
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "cline exchange"))?;
-
-        let status = response.status;
-        let resp_body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "cline exchange body"))?;
-
-        super::check_oauth_status(status, "cline", &resp_body)?;
-
-        let resp: ClineResponse = serde_json::from_slice(&resp_body)
-            .map_err(|e| CoreError::Parse(format!("cline token parse: {e}")))?;
+        let resp: ClineResponse =
+            super::call_oauth_json(upstream_client, req, "cline", "cline exchange").await?;
 
         if !resp.success {
             return Err(CoreError::Validation("Cline returned success=false".into()));
         }
 
-        let expires_in = parse_expires_in(&resp.data);
+        let expires_in = super::parse_expires_in(resp.data.expires_in, resp.data.expires_at.as_deref());
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
@@ -189,22 +173,8 @@ impl OAuthProvider for ClineOAuthProvider {
         );
         openproxy_adapters::adapters::cline::apply_cline_spoofing_headers(&mut req);
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "cline refresh"))?;
-
-        let status = response.status;
-        let resp_body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "cline refresh body"))?;
-
-        super::check_oauth_status(status, "cline", &resp_body)?;
-
-        let resp: ClineResponse = serde_json::from_slice(&resp_body)
-            .map_err(|e| CoreError::Parse(format!("cline token refresh parse: {e}")))?;
+        let resp: ClineResponse =
+            super::call_oauth_json(upstream_client, req, "cline", "cline refresh").await?;
 
         if !resp.success {
             return Err(CoreError::Validation(
@@ -212,7 +182,7 @@ impl OAuthProvider for ClineOAuthProvider {
             ));
         }
 
-        let expires_in = parse_expires_in(&resp.data);
+        let expires_in = super::parse_expires_in(resp.data.expires_in, resp.data.expires_at.as_deref());
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
@@ -246,21 +216,6 @@ struct ClineAuthResponseData {
     expires_in: Option<u64>,
 }
 
-fn parse_expires_in(data: &ClineAuthResponseData) -> Option<u64> {
-    if let Some(secs) = data.expires_in {
-        return Some(secs);
-    }
-    if let Some(ref ts) = data.expires_at
-        && let Ok(dt) = openproxy_types::timestamp::parse_timestamp(ts)
-    {
-        let diff = dt
-            .with_timezone(&chrono::Utc)
-            .signed_duration_since(chrono::Utc::now());
-        return Some(diff.num_seconds().max(0) as u64);
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,7 +233,8 @@ mod tests {
                 .expect("deserialize valid json");
         assert_eq!(data.access_token, "test_acc");
         assert_eq!(data.refresh_token.as_deref(), Some("test_ref"));
-        let expires_in = parse_expires_in(&data).expect("expires_in parsed");
+        let expires_in = super::super::parse_expires_in(data.expires_in, data.expires_at.as_deref())
+            .expect("expires_in parsed");
         assert!((3590..=3600).contains(&expires_in));
 
         let snake_json = serde_json::json!({
@@ -291,7 +247,10 @@ mod tests {
                 .expect("deserialize snake case");
         assert_eq!(data_snake.access_token, "acc2");
         assert_eq!(data_snake.refresh_token.as_deref(), Some("ref2"));
-        assert_eq!(parse_expires_in(&data_snake), Some(1800));
+        assert_eq!(
+            super::super::parse_expires_in(data_snake.expires_in, data_snake.expires_at.as_deref()),
+            Some(1800)
+        );
     }
 
     #[test]

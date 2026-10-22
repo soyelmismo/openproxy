@@ -86,13 +86,7 @@ fn patch_minimax_thinking_object(
 }
 
 impl ProviderAdapter for MiniMaxAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
         &["minimax"]

@@ -1,4 +1,4 @@
-use super::{ClientSpoofer, DynamicHeaderOverrides, merge_header_refs, parse_env_extra_headers};
+use super::{ClientSpoofer, build_spoofed_headers, define_spoofer_state};
 
 pub const DEFAULT_KIRO_UA: &str = "aws-sdk-js/3.0.0 kiro/0.1";
 pub const DEFAULT_KIRO_SDK_REQUEST: &str = "attempt=1; max=3";
@@ -16,33 +16,20 @@ pub const KIRO_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("anthropic-beta", DEFAULT_KIRO_ANTHROPIC_BETA),
 ];
 
-static KIRO_OVERRIDES: DynamicHeaderOverrides = DynamicHeaderOverrides::new();
-
-/// Current dynamic User-Agent of Kiro / AWS CodeWhisperer.
-pub fn current_kiro_ua() -> String {
-    KIRO_OVERRIDES.current_version("OPENPROXY_KIRO_USER_AGENT", DEFAULT_KIRO_UA)
+define_spoofer_state! {
+    overrides: KIRO_OVERRIDES,
+    extra_headers: KIRO_EXTRA_HEADERS = "OPENPROXY_KIRO_EXTRA_HEADERS",
+    test_lock: KIRO_TEST_LOCK,
+    ua: {
+        env: "OPENPROXY_KIRO_USER_AGENT",
+        default: DEFAULT_KIRO_UA,
+        getter: current_kiro_ua,
+        setter: set_dynamic_kiro_ua,
+        doc: "Current dynamic User-Agent of Kiro / AWS CodeWhisperer.",
+    },
+    extra_header_setter: set_dynamic_kiro_extra_header,
+    reset: reset_dynamic_kiro_overrides,
 }
-
-/// Set dynamic User-Agent override for Kiro in memory at runtime without recompiling.
-pub fn set_dynamic_kiro_ua(ua: impl Into<String>) {
-    KIRO_OVERRIDES.set_version(ua);
-}
-
-/// Set dynamic extra header override for Kiro in memory at runtime without recompiling.
-pub fn set_dynamic_kiro_extra_header(key: impl Into<String>, val: impl Into<String>) {
-    KIRO_OVERRIDES.set_extra_header(key, val);
-}
-
-/// Reset dynamic in-memory overrides for Kiro (useful for tests and cleanup).
-pub fn reset_dynamic_kiro_overrides() {
-    KIRO_OVERRIDES.reset();
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-pub static KIRO_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-static KIRO_EXTRA_HEADERS: std::sync::LazyLock<Vec<(String, String)>> =
-    std::sync::LazyLock::new(|| parse_env_extra_headers("OPENPROXY_KIRO_EXTRA_HEADERS"));
 
 /// Preset for Kiro AI (AWS CodeWhisperer) client identity headers.
 #[derive(Debug, Clone, Copy, Default)]
@@ -51,16 +38,18 @@ pub struct KiroSpoofer;
 impl ClientSpoofer for KiroSpoofer {
     fn headers(&self) -> Vec<(String, String)> {
         let cur_ua = current_kiro_ua();
-        let mut list: Vec<(String, String)> = KIRO_SPOOFING_HEADERS
-            .iter()
-            .map(|(k, v)| {
-                if *k == "x-amz-user-agent" {
+        let mut list = build_spoofed_headers(
+            KIRO_SPOOFING_HEADERS,
+            &KIRO_EXTRA_HEADERS,
+            &KIRO_OVERRIDES,
+            |k, v| {
+                if k == "x-amz-user-agent" {
                     (k.to_string(), cur_ua.clone())
                 } else {
                     (k.to_string(), v.to_string())
                 }
-            })
-            .collect();
+            },
+        );
 
         // Dynamically inject unique invocation ID per request
         list.push((
@@ -68,8 +57,6 @@ impl ClientSpoofer for KiroSpoofer {
             uuid::Uuid::new_v4().to_string(),
         ));
 
-        merge_header_refs(&mut list, &*KIRO_EXTRA_HEADERS);
-        KIRO_OVERRIDES.apply_to_list(&mut list);
         list
     }
 }

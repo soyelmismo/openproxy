@@ -109,13 +109,7 @@ impl Default for CodexAdapter {
 }
 
 impl ProviderAdapter for CodexAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         openproxy_types::ProviderMetadata {

@@ -7,12 +7,8 @@ use std::sync::Arc;
 
 use super::generic::{GenericOAuthProvider, OAuthRequestEncoding, OAuthSpec};
 use crate::error::{CoreError, Result};
-use crate::oauth::{
-    DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
-};
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -140,17 +136,8 @@ impl OAuthProvider for CodexOAuthProvider {
             http::HeaderValue::from_static("application/json"),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "codex deviceauth"))?;
-
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codex deviceauth body"))?;
+        let (status, body) =
+            super::call_oauth(upstream_client, req, "codex deviceauth").await?;
 
         if status.as_u16() == 404 {
             return Err(CoreError::Validation(
@@ -221,17 +208,7 @@ impl OAuthProvider for CodexOAuthProvider {
             http::HeaderValue::from_static("application/json"),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "codex poll"))?;
-
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codex poll body"))?;
+        let (status, body) = super::call_oauth(upstream_client, req, "codex poll").await?;
 
         if status.as_u16() == 403 || status.as_u16() == 404 {
             return Ok(None);
@@ -257,21 +234,8 @@ impl OAuthProvider for CodexOAuthProvider {
             http::HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
 
-        let token_response = upstream_client
-            .call(token_req, TimeoutProfile::OAuth, CancellationToken::new())
-            .await
-            .map_err(|e| map_upstream_err(e, "codex exchange"))?;
-
-        let token_status = token_response.status;
-        let token_body_bytes = token_response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codex exchange body"))?;
-
-        super::check_oauth_status(token_status, "codex", &token_body_bytes)?;
-
-        let token: TokenResponse = serde_json::from_slice(&token_body_bytes)
-            .map_err(|e| CoreError::Parse(format!("codex token parse: {e}")))?;
+        let token: TokenResponse =
+            super::call_oauth_json(upstream_client, token_req, "codex", "codex exchange").await?;
 
         Ok(Some(token))
     }
@@ -307,19 +271,8 @@ impl OAuthProvider for CodexOAuthProvider {
                 .unwrap_or_else(|_| http::HeaderValue::from_static("codex")),
         );
 
-        let cancel = CancellationToken::new();
-        let resp = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "codex token refresh"))?;
-
-        let status = resp.status;
-        let bytes = resp
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "codex token refresh body"))?;
-
-        super::check_oauth_status(status, "codex", &bytes)?;
+        let bytes =
+            super::call_oauth_checked(upstream_client, req, "codex", "codex token refresh").await?;
 
         serde_json::from_slice(&bytes)
             .map_err(|e| CoreError::Parse(format!("codex token refresh parse: {e}")))

@@ -9,11 +9,9 @@
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
 };
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -136,22 +134,8 @@ impl OAuthProvider for ZaiOAuthProvider {
             http::HeaderValue::from_static("ZCode/3.14.0"),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "zai exchange"))?;
-
-        let status = response.status;
-        let resp_bytes = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "zai exchange body"))?;
-
-        crate::oauth::check_oauth_status(status, "zai", &resp_bytes)?;
-
-        let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
-            .map_err(|e| CoreError::Parse(format!("zai token parse: {e}")))?;
+        let json: serde_json::Value =
+            crate::oauth::call_oauth_json(upstream_client, req, "zai", "zai exchange").await?;
 
         let code_num = json
             .get("code")
@@ -185,10 +169,17 @@ impl OAuthProvider for ZaiOAuthProvider {
             .and_then(serde_json::Value::as_str)
             .map(|s| s.trim().to_string());
 
-        let expires_in = data
+        let raw_expires_in = data
             .get("expires_in")
-            .and_then(serde_json::Value::as_u64)
-            .or(Some(86400 * 30));
+            .or_else(|| data.get("expiresIn"))
+            .and_then(serde_json::Value::as_u64);
+        let raw_expires_at = data
+            .get("expires_at")
+            .or_else(|| data.get("expiresAt"))
+            .and_then(serde_json::Value::as_str);
+        let expires_in =
+            crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
+                .or(Some(86400 * 30));
 
         let user_val = data.get("user");
         let user_id = user_val
@@ -371,23 +362,15 @@ impl ZaiOAuthProvider {
             http::HeaderValue::from_static("application/json"),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "zai business login"))?;
+        let (status, resp_bytes) =
+            crate::oauth::call_oauth(upstream_client, req, "zai business login").await?;
 
-        if !response.status.is_success() {
+        if !status.is_success() {
             return Err(CoreError::UpstreamConnection(format!(
                 "business login status: {}",
-                response.status.as_u16()
+                status.as_u16()
             )));
         }
-
-        let resp_bytes = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "zai business login body"))?;
 
         let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
             .map_err(|e| CoreError::Parse(format!("zai business login parse: {e}")))?;

@@ -534,6 +534,21 @@ macro_rules! derive_default_from_new {
 }
 pub(crate) use derive_default_from_new;
 
+/// Implement boilerplate `config(&self)` and `config_mut(&mut self)`
+/// delegating to `self.config`.
+macro_rules! impl_adapter_config {
+    () => {
+        fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
+            &self.config
+        }
+
+        fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
+            Some(&mut self.config)
+        }
+    };
+}
+pub(crate) use impl_adapter_config;
+
 #[macro_export]
 macro_rules! declare_openai_adapter {
     (
@@ -593,13 +608,7 @@ macro_rules! declare_openai_adapter {
         $crate::adapters::derive_default_from_new!($struct_name);
 
         impl $crate::adapters::ProviderAdapter for $struct_name {
-            fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
-                &self.config
-            }
-
-            fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
-                Some(&mut self.config)
-            }
+            $crate::adapters::impl_adapter_config!();
 
             $(
                 fn models_url(&self) -> Option<String> {

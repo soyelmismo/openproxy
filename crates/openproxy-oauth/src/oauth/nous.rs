@@ -216,9 +216,7 @@ async fn nous_post_form(
     url: &str,
     params: &[(&str, &str)],
 ) -> Result<bytes::Bytes> {
-    use crate::oauth::map_upstream_err;
-    use crate::oauth::util::check_oauth_status;
-    use openproxy_adapters::upstream::{CancellationToken, TimeoutProfile, UpstreamRequest};
+    use openproxy_adapters::upstream::UpstreamRequest;
 
     let encoded = urlencoded_string(params);
     let mut req = UpstreamRequest::post_json(url.to_string(), bytes::Bytes::from(encoded));
@@ -227,20 +225,7 @@ async fn nous_post_form(
         http::HeaderValue::from_static("application/x-www-form-urlencoded"),
     );
 
-    let cancel = CancellationToken::new();
-    let response = upstream_client
-        .call(req, TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| map_upstream_err(e, "nous oauth"))?;
-
-    let status = response.status;
-    let body = response
-        .collect()
-        .await
-        .map_err(|e| map_upstream_err(e, "nous oauth body read"))?;
-
-    check_oauth_status(status, NOUS_OAUTH_PROVIDER, &body)?;
-    Ok(body)
+    crate::oauth::call_oauth_checked(upstream_client, req, NOUS_OAUTH_PROVIDER, "nous oauth").await
 }
 
 #[cfg(test)]

@@ -11,16 +11,14 @@
 
 use std::sync::Arc;
 
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
+    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
 };
 use rusqlite::OptionalExtension;
 
@@ -190,23 +188,19 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             );
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-            let cancel = CancellationToken::new();
-            let response = match upstream_client
-                .call(req, TimeoutProfile::OAuth, cancel)
-                .await
+            let (status, body) = match super::call_oauth(
+                upstream_client,
+                req,
+                "codebuddy device state request",
+            )
+            .await
             {
-                Ok(resp) => resp,
+                Ok(pair) => pair,
                 Err(e) => {
-                    last_err = Some(map_upstream_err(e, "codebuddy device state request"));
+                    last_err = Some(e);
                     continue;
                 }
             };
-
-            let status = response.status;
-            let body = response
-                .collect()
-                .await
-                .map_err(|e| map_upstream_err(e, "codebuddy device state body read"))?;
 
             super::check_oauth_status(status, "codebuddy", &body)?;
 
@@ -293,23 +287,14 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             );
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-            let cancel = CancellationToken::new();
-            let response = match upstream_client
-                .call(req, TimeoutProfile::OAuth, cancel)
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    last_err = Some(map_upstream_err(e, "codebuddy device token poll"));
-                    continue;
-                }
-            };
-
-            let status = response.status;
-            let body = response
-                .collect()
-                .await
-                .map_err(|e| map_upstream_err(e, "codebuddy device token poll read"))?;
+            let (status, body) =
+                match super::call_oauth(upstream_client, req, "codebuddy device token poll").await {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        last_err = Some(e);
+                        continue;
+                    }
+                };
 
             // 404 / 428 is the standard pending response
             if status.as_u16() == 404 || status.as_u16() == 428 {
@@ -366,12 +351,18 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                     .and_then(serde_json::Value::as_str)
                     .map(ToString::to_string);
 
-                let expires_in = data
+                let raw_expires_in = data
                     .get("expiresIn")
                     .or_else(|| data.get("expires_in"))
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
-                    .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
+                    .and_then(serde_json::Value::as_u64);
+                let raw_expires_at = data
+                    .get("expiresAt")
+                    .or_else(|| data.get("expires_at"))
+                    .and_then(serde_json::Value::as_str);
+                let expires_in =
+                    super::parse_expires_in(raw_expires_in, raw_expires_at)
+                        .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
+                        .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
 
                 let token_type = data
                     .get("tokenType")
@@ -446,26 +437,14 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             }
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-            let cancel = CancellationToken::new();
-            let response = match upstream_client
-                .call(req, TimeoutProfile::OAuth, cancel)
-                .await
-            {
-                Ok(resp) => resp,
-                Err(e) => {
-                    last_err = Some(map_upstream_err(e, "codebuddy token refresh"));
-                    continue;
-                }
-            };
-
-            let status = response.status;
-            let body = match response.collect().await {
-                Ok(b) => b,
-                Err(e) => {
-                    last_err = Some(map_upstream_err(e, "codebuddy token refresh read"));
-                    continue;
-                }
-            };
+            let (status, body) =
+                match super::call_oauth(upstream_client, req, "codebuddy token refresh").await {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        last_err = Some(e);
+                        continue;
+                    }
+                };
 
             if let Err(e) = super::check_oauth_status(status, "codebuddy", &body) {
                 if status == http::StatusCode::BAD_REQUEST
@@ -529,12 +508,18 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 .map(ToString::to_string)
                 .or_else(|| Some(refresh_token.to_string()));
 
-            let expires_in = data
+            let raw_expires_in = data
                 .get("expiresIn")
                 .or_else(|| data.get("expires_in"))
-                .and_then(serde_json::Value::as_u64)
-                .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
-                .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
+                .and_then(serde_json::Value::as_u64);
+            let raw_expires_at = data
+                .get("expiresAt")
+                .or_else(|| data.get("expires_at"))
+                .and_then(serde_json::Value::as_str);
+            let expires_in =
+                super::parse_expires_in(raw_expires_in, raw_expires_at)
+                    .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
+                    .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
 
             let token_type = data
                 .get("tokenType")

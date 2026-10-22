@@ -188,13 +188,7 @@ impl HordeAdapter {
 crate::adapters::derive_default_from_new!(HordeAdapter);
 
 impl ProviderAdapter for HordeAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata::custom_default();

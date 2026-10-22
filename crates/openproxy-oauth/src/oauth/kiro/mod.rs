@@ -14,9 +14,7 @@ use std::sync::Arc;
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{
-    DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
-};
+use crate::oauth::{DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -88,30 +86,13 @@ impl OAuthProvider for KiroOAuthProvider {
         let register_req =
             UpstreamRequest::post_json(&register_url, bytes::Bytes::from(register_body));
 
-        let cancel = CancellationToken::new();
-        let register_response = upstream_client
-            .call(register_req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro client register"))?;
-
-        let register_status = register_response.status;
-        let register_body = register_response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro register body read"))?;
-        if !register_status.is_success() {
-            let body_str = String::from_utf8_lossy(&register_body).to_string();
-            return Err(CoreError::upstream_error(
-                register_status.as_u16(),
-                "kiro",
-                "<oauth>",
-                body_str,
-                false,
-            ));
-        }
-
-        let client: RegisterClientResponse = serde_json::from_slice(&register_body)
-            .map_err(|e| CoreError::Parse(format!("kiro register response parse: {e}")))?;
+        let client: RegisterClientResponse = crate::oauth::call_oauth_json(
+            upstream_client,
+            register_req,
+            "kiro",
+            "kiro client register",
+        )
+        .await?;
 
         let auth_body = serde_json::json!({
             "clientId": client.client_id,
@@ -124,33 +105,13 @@ impl OAuthProvider for KiroOAuthProvider {
         let device_auth_req =
             UpstreamRequest::post_json(&auth_url, bytes::Bytes::from(auth_body_bytes));
 
-        let device_auth_response = upstream_client
-            .call(
-                device_auth_req,
-                TimeoutProfile::OAuth,
-                CancellationToken::new(),
-            )
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro device authorization"))?;
-
-        let device_auth_status = device_auth_response.status;
-        let device_auth_body = device_auth_response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro device auth body read"))?;
-        if !device_auth_status.is_success() {
-            let body_str = String::from_utf8_lossy(&device_auth_body).to_string();
-            return Err(CoreError::upstream_error(
-                device_auth_status.as_u16(),
-                "kiro",
-                "<oauth>",
-                body_str,
-                false,
-            ));
-        }
-
-        let dar: DeviceAuthorizationResponse = serde_json::from_slice(&device_auth_body)
-            .map_err(|e| CoreError::Parse(format!("kiro device auth response parse: {e}")))?;
+        let dar: DeviceAuthorizationResponse = crate::oauth::call_oauth_json(
+            upstream_client,
+            device_auth_req,
+            "kiro",
+            "kiro device authorization",
+        )
+        .await?;
 
         let cid = client.client_id;
         let csec = client.client_secret;
@@ -186,32 +147,14 @@ impl OAuthProvider for KiroOAuthProvider {
         let tok_url = kiro_token_url(None);
         let req = UpstreamRequest::post_json(&tok_url, bytes::Bytes::from(body_bytes));
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro device poll"))?;
-
-        let status = response.status;
-        let body = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro device poll body read"))?;
+        let (status, body) =
+            crate::oauth::call_oauth(upstream_client, req, "kiro device poll").await?;
 
         if status.as_u16() == 400 || status.as_u16() == 428 {
             return Ok(None);
         }
 
-        if !status.is_success() {
-            let body_str = String::from_utf8_lossy(&body).to_string();
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "kiro",
-                "<oauth>",
-                body_str,
-                false,
-            ));
-        }
+        super::check_oauth_status(status, "kiro", &body)?;
 
         serde_json::from_slice::<TokenResponse>(&body)
             .map(Some)
@@ -249,28 +192,13 @@ impl OAuthProvider for KiroOAuthProvider {
             })?;
             let req = UpstreamRequest::post_json(&social_token_url, bytes::Bytes::from(body_bytes));
 
-            let cancel = CancellationToken::new();
-            let response = upstream_client
-                .call(req, TimeoutProfile::OAuth, cancel)
-                .await
-                .map_err(|e| map_upstream_err(e, "kiro social token refresh"))?;
-
-            let status = response.status;
-            let body_bytes = response
-                .collect()
-                .await
-                .map_err(|e| map_upstream_err(e, "kiro social token refresh body read"))?;
-
-            if !status.is_success() {
-                let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-                return Err(CoreError::upstream_error(
-                    status.as_u16(),
-                    "kiro",
-                    "<oauth_social>",
-                    body_str,
-                    false,
-                ));
-            }
+            let body_bytes = crate::oauth::call_oauth_checked(
+                upstream_client,
+                req,
+                "kiro",
+                "kiro social token refresh",
+            )
+            .await?;
 
             let mut data: serde_json::Value = serde_json::from_slice(&body_bytes)
                 .map_err(|e| CoreError::Parse(format!("kiro social token refresh parse: {e}")))?;
@@ -311,17 +239,8 @@ impl OAuthProvider for KiroOAuthProvider {
             .map_err(|e| CoreError::Parse(format!("kiro token refresh serialize: {e}")))?;
         let req = UpstreamRequest::post_json(&token_url, bytes::Bytes::from(body_bytes));
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro token refresh"))?;
-
-        let status = response.status;
-        let body_bytes = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "kiro token refresh body read"))?;
+        let (status, body_bytes) =
+            crate::oauth::call_oauth(upstream_client, req, "kiro token refresh").await?;
 
         let mut success_body = None;
         if status.is_success() {

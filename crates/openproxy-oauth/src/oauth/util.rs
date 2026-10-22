@@ -93,6 +93,27 @@ pub fn extract_email_from_token(token: &TokenResponse) -> Option<String> {
     extract(&claims)
 }
 
+/// Parse token expiration duration in seconds from an optional `expires_in`
+/// (relative seconds) and/or an optional `expires_at` (RFC3339 or ISO timestamp).
+///
+/// If `expires_in` is provided, it is returned directly. If only `expires_at` is
+/// provided, it is parsed and the remaining duration until that timestamp (in seconds,
+/// clamped to 0) is returned.
+pub fn parse_expires_in(expires_in: Option<u64>, expires_at: Option<&str>) -> Option<u64> {
+    if let Some(secs) = expires_in {
+        return Some(secs);
+    }
+    if let Some(ts) = expires_at
+        && let Ok(dt) = openproxy_types::timestamp::parse_timestamp(ts)
+    {
+        let diff = dt
+            .with_timezone(&chrono::Utc)
+            .signed_duration_since(chrono::Utc::now());
+        return Some(diff.num_seconds().max(0) as u64);
+    }
+    None
+}
+
 /// One named parameter from a URL query string.
 pub fn extract_query_param(query: &str, param: &str) -> Option<String> {
     for part in query.split('&') {
@@ -198,5 +219,24 @@ mod tests {
         assert!(check_oauth_status(http::StatusCode::OK, "test", b"ok").is_ok());
         let err = check_oauth_status(http::StatusCode::BAD_REQUEST, "test", b"fail").unwrap_err();
         assert!(err.to_string().contains("400"));
+    }
+
+    #[test]
+    fn test_parse_expires_in() {
+        assert_eq!(parse_expires_in(Some(3600), None), Some(3600));
+        assert_eq!(
+            parse_expires_in(Some(1800), Some("2099-01-01T00:00:00Z")),
+            Some(1800)
+        );
+
+        let future_ts = (chrono::Utc::now() + chrono::Duration::seconds(3600)).to_rfc3339();
+        let exp = parse_expires_in(None, Some(&future_ts)).expect("future expires_at");
+        assert!((3590..=3600).contains(&exp));
+
+        let past_ts = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
+        assert_eq!(parse_expires_in(None, Some(&past_ts)), Some(0));
+
+        assert_eq!(parse_expires_in(None, Some("invalid timestamp")), None);
+        assert_eq!(parse_expires_in(None, None), None);
     }
 }

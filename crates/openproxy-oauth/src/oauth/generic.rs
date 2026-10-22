@@ -11,12 +11,8 @@ use std::sync::Arc;
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
-};
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 
 /// How token/device requests are encoded on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -513,29 +509,8 @@ async fn call_oauth_endpoint(
     req: UpstreamRequest,
     purpose: &str,
 ) -> Result<bytes::Bytes> {
-    let cancel = CancellationToken::new();
-    let response = upstream_client
-        .call(req, TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| map_upstream_err(e, &format!("{} {purpose}", spec.id)))?;
-    let status = response.status;
-    let body = response
-        .collect()
-        .await
-        .map_err(|e| map_upstream_err(e, &format!("{} {purpose} body read", spec.id)))?;
-
-    if !status.is_success() {
-        return Err(CoreError::UpstreamError {
-            status: status.as_u16(),
-            provider: spec.id.into(),
-            model: "<oauth>".into(),
-            body: String::from_utf8_lossy(&body).to_string(),
-            is_proxy_rotated: false,
-            class: openproxy_types::UpstreamErrorClass::Generic,
-            is_hard_skip: false,
-        });
-    }
-    Ok(body)
+    let op_name = format!("{} {purpose}", spec.id);
+    crate::oauth::call_oauth_checked(upstream_client, req, spec.id, &op_name).await
 }
 
 /// Cryptographically random PKCE code verifier, 43-128 chars.

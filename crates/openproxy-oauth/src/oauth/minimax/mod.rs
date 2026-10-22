@@ -27,11 +27,9 @@ use crate::ids::AccountId;
 use crate::oauth::generic::{code_challenge_s256, generate_code_verifier, urlencoded_body};
 use crate::oauth::{
     DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
-    decode_jwt_payload, map_upstream_err,
+    decode_jwt_payload,
 };
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
 
@@ -142,31 +140,13 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             http::HeaderValue::from_static("MiniMaxCode"),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "minimax device code request"))?;
-
-        let status = response.status;
-        let body_bytes = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "minimax device code read"))?;
-
-        if !status.is_success() {
-            let err_str = String::from_utf8_lossy(&body_bytes).to_string();
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "minimax",
-                "<oauth_device_code>",
-                err_str,
-                false,
-            ));
-        }
-
-        let json: serde_json::Value = serde_json::from_slice(&body_bytes)
-            .map_err(|e| CoreError::Parse(format!("minimax device auth parse: {e}")))?;
+        let json: serde_json::Value = crate::oauth::call_oauth_json(
+            upstream_client,
+            req,
+            "minimax",
+            "minimax device code request",
+        )
+        .await?;
 
         let user_code = json
             .get("user_code")
@@ -421,31 +401,8 @@ impl OAuthProvider for MiniMaxOAuthProvider {
             http::HeaderValue::from_static("MiniMaxCode"),
         );
 
-        let cancel = CancellationToken::new();
-        let response = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
+        crate::oauth::call_oauth_json(upstream_client, req, "minimax", "minimax token refresh")
             .await
-            .map_err(|e| map_upstream_err(e, "minimax token refresh"))?;
-
-        let status = response.status;
-        let body_bytes = response
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "minimax token refresh read"))?;
-
-        if !status.is_success() {
-            let err_str = String::from_utf8_lossy(&body_bytes).to_string();
-            return Err(CoreError::upstream_error(
-                status.as_u16(),
-                "minimax",
-                "<oauth_refresh_token>",
-                err_str,
-                false,
-            ));
-        }
-
-        serde_json::from_slice::<TokenResponse>(&body_bytes)
-            .map_err(|e| CoreError::Parse(format!("minimax refresh token parse: {e}")))
     }
 
     fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
@@ -644,18 +601,8 @@ async fn poll_token_request(
         http::HeaderValue::from_static("MiniMaxCode"),
     );
 
-    let cancel = CancellationToken::new();
-    let response = upstream_client
-        .call(req, TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| map_upstream_err(e, "minimax device poll"))?;
+    let (status, body_bytes) =
+        crate::oauth::call_oauth(upstream_client, req, "minimax device poll").await?;
 
-    let status = response.status;
-    let body_bytes = response
-        .collect()
-        .await
-        .map_err(|e| map_upstream_err(e, "minimax device poll read"))?
-        .to_vec();
-
-    Ok((status, body_bytes))
+    Ok((status, body_bytes.to_vec()))
 }

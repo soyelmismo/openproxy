@@ -1,12 +1,9 @@
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::{CoreError, Result};
-use crate::oauth::map_upstream_err;
 
 pub const REGISTER_URL: &str = "https://oidc.us-east-1.amazonaws.com/client/register";
 pub const DEVICE_AUTH_URL: &str = "https://oidc.us-east-1.amazonaws.com/device_authorization";
@@ -133,31 +130,13 @@ pub(crate) async fn register_oidc_client(
     let register_url = kiro_register_url(Some(region));
     let register_req = UpstreamRequest::post_json(&register_url, bytes::Bytes::from(register_body));
 
-    let cancel = CancellationToken::new();
-    let register_response = upstream_client
-        .call(register_req, TimeoutProfile::OAuth, cancel)
-        .await
-        .map_err(|e| map_upstream_err(e, "kiro client register"))?;
-
-    let register_status = register_response.status;
-    let register_body = register_response
-        .collect()
-        .await
-        .map_err(|e| map_upstream_err(e, "kiro register body read"))?;
-
-    if !register_status.is_success() {
-        let body_str = String::from_utf8_lossy(&register_body).to_string();
-        return Err(CoreError::upstream_error(
-            register_status.as_u16(),
-            "kiro",
-            "<oauth_register>",
-            body_str,
-            false,
-        ));
-    }
-
-    let client: RegisterClientResponse = serde_json::from_slice(&register_body)
-        .map_err(|e| CoreError::Parse(format!("kiro register response parse: {e}")))?;
+    let client: RegisterClientResponse = crate::oauth::call_oauth_json(
+        upstream_client,
+        register_req,
+        "kiro",
+        "kiro client register",
+    )
+    .await?;
 
     Ok((client.client_id, client.client_secret))
 }

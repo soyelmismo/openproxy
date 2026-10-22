@@ -13,10 +13,8 @@ use std::sync::Arc;
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::generic::{code_challenge_s256, generate_code_verifier};
-use crate::oauth::util::{check_oauth_status, parse_oauth_callback_input};
-use crate::oauth::{
-    DbRef, OAuthEndpointResolver, OAuthFlow, OAuthProvider, TokenResponse, map_upstream_err,
-};
+use crate::oauth::util::parse_oauth_callback_input;
+use crate::oauth::{DbRef, OAuthEndpointResolver, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
@@ -253,22 +251,13 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
             http::HeaderValue::from_static(CLAUDE_CODE_AXIOS_USER_AGENT),
         );
 
-        let cancel = CancellationToken::new();
-        let resp = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "claude-code token exchange"))?;
-
-        let status = resp.status;
-        let resp_bytes = resp
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "claude-code token exchange body"))?;
-
-        check_oauth_status(status, "claude-code", &resp_bytes)?;
-
-        let val: serde_json::Value = serde_json::from_slice(&resp_bytes)
-            .map_err(|e| CoreError::Parse(format!("claude-code token parse error: {e}")))?;
+        let val: serde_json::Value = crate::oauth::call_oauth_json(
+            upstream_client,
+            req,
+            "claude-code",
+            "claude-code token exchange",
+        )
+        .await?;
 
         let access_token = val
             .get("access_token")
@@ -383,22 +372,13 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
             http::HeaderValue::from_static(CLAUDE_CODE_AXIOS_USER_AGENT),
         );
 
-        let cancel = CancellationToken::new();
-        let resp = upstream_client
-            .call(req, TimeoutProfile::OAuth, cancel)
-            .await
-            .map_err(|e| map_upstream_err(e, "claude-code token refresh"))?;
-
-        let status = resp.status;
-        let resp_bytes = resp
-            .collect()
-            .await
-            .map_err(|e| map_upstream_err(e, "claude-code token refresh body"))?;
-
-        check_oauth_status(status, "claude-code", &resp_bytes)?;
-
-        let val: serde_json::Value = serde_json::from_slice(&resp_bytes)
-            .map_err(|e| CoreError::Parse(format!("claude-code refresh parse error: {e}")))?;
+        let val: serde_json::Value = crate::oauth::call_oauth_json(
+            upstream_client,
+            req,
+            "claude-code",
+            "claude-code token refresh",
+        )
+        .await?;
 
         let access_token = val
             .get("access_token")

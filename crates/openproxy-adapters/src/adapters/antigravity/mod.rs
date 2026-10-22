@@ -171,13 +171,7 @@ impl AntigravityAdapter {
 crate::adapters::derive_default_from_new!(AntigravityAdapter);
 
 impl ProviderAdapter for AntigravityAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn metadata(&self) -> openproxy_types::ProviderMetadata {
         let mut meta = openproxy_types::ProviderMetadata {

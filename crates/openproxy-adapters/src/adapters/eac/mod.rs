@@ -83,13 +83,7 @@ impl EacAdapter {
 crate::adapters::derive_default_from_new!(EacAdapter);
 
 impl ProviderAdapter for EacAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
         &["eac", "eac-gateway", "ofm"]
