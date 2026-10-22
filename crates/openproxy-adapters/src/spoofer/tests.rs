@@ -756,3 +756,60 @@ fn test_codebuddy_dynamic_version_and_extra_headers() {
     reset_dynamic_codebuddy_overrides();
     assert_eq!(current_codebuddy_version(), "2.168.2");
 }
+
+#[test]
+fn test_parse_env_extra_headers() {
+    let test_var = "TEST_SPOOFER_EXTRA_HEADERS";
+
+    // Missing env var -> returns empty vec
+    unsafe {
+        std::env::remove_var(test_var);
+    }
+    assert!(parse_env_extra_headers(test_var).is_empty());
+
+    // Invalid JSON -> returns empty vec
+    unsafe {
+        std::env::set_var(test_var, "not valid json");
+    }
+    assert!(parse_env_extra_headers(test_var).is_empty());
+
+    // Valid JSON map -> returns sorted/iterated key-value pairs
+    unsafe {
+        std::env::set_var(test_var, r#"{"x-foo": "bar", "x-baz": "qux"}"#);
+    }
+    let parsed = parse_env_extra_headers(test_var);
+    assert_eq!(
+        parsed,
+        vec![
+            ("x-baz".to_string(), "qux".to_string()),
+            ("x-foo".to_string(), "bar".to_string())
+        ]
+    );
+
+    unsafe {
+        std::env::remove_var(test_var);
+    }
+}
+
+#[test]
+fn test_merge_header_refs() {
+    let mut headers = vec![
+        ("User-Agent".to_string(), "old-ua".to_string()),
+        ("x-custom-1".to_string(), "val-1".to_string()),
+    ];
+
+    let extra = vec![
+        ("user-agent".to_string(), "new-ua".to_string()),
+        ("x-custom-2".to_string(), "val-2".to_string()),
+        ("x-openproxy-internal".to_string(), "ignored".to_string()),
+        ("X-OPENPROXY-SECRET".to_string(), "ignored-case".to_string()),
+    ];
+
+    merge_header_refs(&mut headers, &extra);
+
+    // Should update user-agent (case-insensitive), add x-custom-2, and ignore x-openproxy-*
+    assert_eq!(headers.len(), 3);
+    assert_eq!(headers[0], ("User-Agent".to_string(), "new-ua".to_string()));
+    assert_eq!(headers[1], ("x-custom-1".to_string(), "val-1".to_string()));
+    assert_eq!(headers[2], ("x-custom-2".to_string(), "val-2".to_string()));
+}
