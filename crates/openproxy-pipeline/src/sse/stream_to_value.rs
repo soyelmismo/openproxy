@@ -41,10 +41,6 @@ pub fn parse_sse_stream_to_openai_response(
     body_str: &str,
     model_name: &str,
 ) -> Result<OpenAIResponse> {
-    if target_format == TargetFormat::CommandCodeGo {
-        return crate::sse::parse_commandcode_sse_to_unary(body_str, model_name);
-    }
-
     let mut acc = ResponseAccumulator::new();
     let chunk_id = "chatcmpl_unary";
     let created = std::time::SystemTime::now()
@@ -63,6 +59,35 @@ pub fn parse_sse_stream_to_openai_response(
                 {
                     break;
                 }
+            }
+        }
+        TargetFormat::CommandCodeGo => {
+            let mut state = crate::sse::CommandCodeSseState::default();
+            let mut saw_any_chunk = false;
+            for line in body_str.lines() {
+                let trimmed = line.trim_end_matches(['\r', '\n']);
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Some(chunk) = crate::sse::parse_commandcode_sse_line(
+                    trimmed, chunk_id, created, model_name, &mut state,
+                )? {
+                    saw_any_chunk = true;
+                    if feed_chunk_to_acc(&mut acc, chunk) {
+                        break;
+                    }
+                }
+            }
+            if let Some(r) = state.last_finish_step_reason.take() {
+                acc.set_stop_reason(&r);
+            }
+            if let Some(u) = state.last_finish_step_usage.take() {
+                acc.set_usage(u);
+            }
+            if !saw_any_chunk && acc.content_text().is_empty() {
+                // If stream was completely empty of chunks, leave stop_reason None
+            } else if !acc.has_stop_reason() && (!acc.content_text().is_empty() || saw_any_chunk) {
+                acc.set_stop_reason("stop");
             }
         }
         TargetFormat::Anthropic => {
@@ -137,7 +162,7 @@ pub fn parse_sse_stream_to_openai_response(
                 }
             }
         }
-        TargetFormat::CommandCodeGo | TargetFormat::SystemOne => {
+        TargetFormat::SystemOne => {
             return Err(CoreError::Parse(format!(
                 "SSE streaming is not supported for target format {target_format}"
             )));

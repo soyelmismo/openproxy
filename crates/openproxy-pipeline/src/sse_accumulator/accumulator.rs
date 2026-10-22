@@ -173,6 +173,10 @@ impl ResponseAccumulator {
         });
     }
 
+    pub fn has_stop_reason(&self) -> bool {
+        self.stop_reason.is_some()
+    }
+
     pub fn set_stop_reason(&mut self, reason: &str) {
         if self.stop_reason.is_none() {
             self.stop_reason = Some(reason.to_string());

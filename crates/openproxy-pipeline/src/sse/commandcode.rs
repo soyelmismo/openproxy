@@ -8,7 +8,7 @@ use super::{
     parse_provider_json,
 };
 use openproxy_types::error::{CoreError, Result};
-use openproxy_types::{OpenAIChoice, OpenAIMessage, OpenAIResponse, OpenAIUsage};
+use openproxy_types::OpenAIUsage;
 use serde_json::{Value, json};
 
 pub(crate) const MAX_COMMANDCODE_TOOL_CALLS: usize = 128;
@@ -400,133 +400,20 @@ pub fn parse_commandcode_sse_line(
     }
 }
 
-/// Accumulates a full Command Code SSE text payload into an `OpenAIResponse`.
-pub fn parse_commandcode_sse_to_unary(body_str: &str, model_name: &str) -> Result<OpenAIResponse> {
-    let mut state = CommandCodeSseState::default();
-    let mut content = String::new();
-    let mut reasoning_content: Option<String> = None;
-    let mut tool_calls: Vec<Value> = Vec::new();
-    let mut finish_reason = None;
-    let mut usage = None;
-
-    for line in body_str.lines() {
-        let Some(chunk) = parse_commandcode_sse_line(line, "cc_unary", 0, model_name, &mut state)?
-        else {
-            continue;
-        };
-
-        if let Some(r) = chunk.delta_reasoning {
-            reasoning_content
-                .get_or_insert_with(String::new)
-                .push_str(&r);
-        }
-
-        for tc in chunk.delta_tool_calls {
-            let tc_idx = tc.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-            if tc_idx >= tool_calls.len() {
-                tool_calls.resize(tc_idx + 1, Value::Null);
-            }
-            if tool_calls[tc_idx].is_null() {
-                tool_calls[tc_idx] = tc;
-            } else if let Some(new_args) = tc
-                .get("function")
-                .and_then(|f| f.get("arguments"))
-                .and_then(Value::as_str)
-                && let Some(existing_args) = tool_calls[tc_idx]
-                    .get_mut("function")
-                    .and_then(|f| f.get_mut("arguments"))
-                && let Some(s) = existing_args.as_str()
-            {
-                *existing_args = json!(format!("{s}{new_args}"));
-            }
-        }
-
-        if let Some(choices) = chunk.payload.get("choices").and_then(Value::as_array)
-            && let Some(choice) = choices.first()
-        {
-            if let Some(c) = choice
-                .get("delta")
-                .and_then(|d| d.get("content"))
-                .and_then(Value::as_str)
-            {
-                content.push_str(c);
-            }
-            if let Some(fr) = choice.get("finish_reason").and_then(Value::as_str) {
-                finish_reason = Some(fr.to_string());
-            }
-        }
-
-        if let Some(u) = chunk.usage {
-            usage = Some(u);
-        }
-
-        if chunk.done {
-            break;
-        }
-    }
-
-    if finish_reason.is_none() {
-        finish_reason = state.last_finish_step_reason.take();
-    }
-    if usage.is_none() {
-        usage = state.last_finish_step_usage.take();
-    }
-
-    let has_any_data = !content.is_empty() || !tool_calls.is_empty() || reasoning_content.is_some();
-    let resolved_finish_reason = finish_reason.or_else(|| {
-        if has_any_data {
-            Some("stop".to_string())
-        } else {
-            None
-        }
-    });
-
-    let mut extra = serde_json::Map::new();
-    if let Some(r) = reasoning_content {
-        extra.insert("reasoning_content".to_string(), json!(r));
-    }
-
-    let message = OpenAIMessage {
-        role: "assistant".to_string(),
-        content: Some(Value::String(content)),
-        name: None,
-        tool_call_id: None,
-        tool_calls: if tool_calls.is_empty() {
-            None
-        } else {
-            Some(tool_calls.into_iter().filter(|v| !v.is_null()).collect())
-        },
-        extra,
-    };
-
-    let created = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-
-    Ok(OpenAIResponse {
-        id: "chatcmpl_cc".to_string(),
-        object: "chat.completion".to_string(),
-        created,
-        model: model_name.to_string(),
-        choices: vec![OpenAIChoice {
-            index: 0,
-            message,
-            finish_reason: resolved_finish_reason,
-        }],
-        usage,
-    })
-}
-
-/// Accumulates a full Command Code SSE text payload into a JSON `Value` representing an OpenAI response.
-pub fn parse_commandcode_sse_to_value(body_str: &str, model_name: &str) -> Result<Value> {
-    let resp = parse_commandcode_sse_to_unary(body_str, model_name)?;
-    serde_json::to_value(&resp)
-        .map_err(|e| CoreError::Parse(format!("serialize commandcode openai response: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_commandcode_sse_to_unary(
+        body_str: &str,
+        model_name: &str,
+    ) -> Result<openproxy_types::OpenAIResponse> {
+        crate::sse::parse_sse_stream_to_openai_response(
+            openproxy_types::TargetFormat::CommandCodeGo,
+            body_str,
+            model_name,
+        )
+    }
 
     #[test]
     fn test_parse_commandcode_text_delta() {
@@ -709,14 +596,7 @@ mod tests {
                       {\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":16}}\n";
         let resp = parse_commandcode_sse_to_unary(stream, "muse-spark").unwrap();
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("length"));
-        assert_eq!(
-            resp.choices[0]
-                .message
-                .content
-                .as_ref()
-                .and_then(Value::as_str),
-            Some("")
-        );
+        assert!(resp.choices[0].message.content.as_ref().is_none_or(Value::is_null));
     }
 
     #[test]
@@ -761,14 +641,7 @@ mod tests {
         // No content or finish event: finish_reason stays None so
         // is_empty_response catches the turn.
         assert_eq!(resp.choices[0].finish_reason, None);
-        assert_eq!(
-            resp.choices[0]
-                .message
-                .content
-                .as_ref()
-                .and_then(Value::as_str),
-            Some("")
-        );
+        assert!(resp.choices[0].message.content.as_ref().is_none_or(Value::is_null));
         assert!(crate::dispatcher::unary::is_empty_response(&resp));
     }
 }

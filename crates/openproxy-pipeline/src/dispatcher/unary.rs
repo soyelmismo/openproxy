@@ -131,7 +131,11 @@ pub(super) fn translate_non_streaming_body(
                 Ok(resp)
             } else {
                 let body_str = serde_json::to_string(response_body_raw).unwrap_or_default();
-                crate::sse::parse_commandcode_sse_to_unary(&body_str, &req.openai_request.model)
+                crate::sse::parse_sse_stream_to_openai_response(
+                    target_format,
+                    &body_str,
+                    &req.openai_request.model,
+                )
             }
         }
         openproxy_types::TargetFormat::SystemOne => {
