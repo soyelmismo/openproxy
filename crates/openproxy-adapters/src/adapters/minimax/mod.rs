@@ -216,7 +216,7 @@ impl MiniMaxAdapter {
             };
             let url = format!("{platform_origin}/v1/api/openplatform/coding_plan/remains");
 
-            let mut req = UpstreamRequest::get(&url);
+            let mut req = UpstreamRequest::get_json(&url);
             if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
                 req.headers.insert(http::header::AUTHORIZATION, val);
             }
@@ -226,10 +226,6 @@ impl MiniMaxAdapter {
                 req.headers
                     .insert(http::HeaderName::from_static("x-group-id"), val);
             }
-            req.headers.insert(
-                http::header::ACCEPT,
-                http::HeaderValue::from_static("application/json"),
-            );
 
             let cancel = CancellationToken::new();
             let response = upstream

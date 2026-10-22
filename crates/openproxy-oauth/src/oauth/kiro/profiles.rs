@@ -76,17 +76,12 @@ pub(crate) async fn list_available_profiles(
     let body_bytes = serde_json::to_vec(&body)
         .map_err(|e| CoreError::Parse(format!("kiro listAvailableProfiles serialize: {e}")))?;
 
-    let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
-    if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {access_token}")) {
-        req.headers.insert(http::header::AUTHORIZATION, v);
-    }
+    let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes))
+        .with_bearer(access_token)
+        .with_accept_json();
     req.headers.insert(
         http::header::HeaderName::from_static("content-type"),
         http::HeaderValue::from_static("application/x-amz-json-1.0"),
-    );
-    req.headers.insert(
-        http::header::HeaderName::from_static("accept"),
-        http::HeaderValue::from_static("application/json"),
     );
     req.headers.insert(
         http::header::HeaderName::from_static("x-amz-target"),

@@ -126,13 +126,10 @@ impl OAuthProvider for CodexOAuthProvider {
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req =
-            UpstreamRequest::post_json(self.usercode_url(), bytes::Bytes::from(body_bytes));
+            UpstreamRequest::post_json(self.usercode_url(), bytes::Bytes::from(body_bytes))
+                .with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
 
@@ -198,13 +195,10 @@ impl OAuthProvider for CodexOAuthProvider {
         let body_bytes =
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
         let mut req =
-            UpstreamRequest::post_json(self.device_token_url(), bytes::Bytes::from(body_bytes));
+            UpstreamRequest::post_json(self.device_token_url(), bytes::Bytes::from(body_bytes))
+                .with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
 

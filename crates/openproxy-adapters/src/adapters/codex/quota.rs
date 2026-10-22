@@ -8,16 +8,12 @@ fn build_codex_base_request(
     access_token: &str,
     workspace_id: Option<&str>,
 ) -> UpstreamRequest {
-    let mut req = UpstreamRequest::get(url);
+    let mut req = UpstreamRequest::get_json(url);
     req.method = method;
     req.headers.insert(
         http::header::AUTHORIZATION,
         crate::antigravity_headers::build_bearer_header(access_token)
             .unwrap_or_else(|_| http::HeaderValue::from_static("")),
-    );
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
     );
     req.headers.insert(
         http::header::CONTENT_TYPE,

@@ -109,7 +109,7 @@ pub(crate) async fn query_horde_user(
     key: &str,
 ) -> std::result::Result<serde_json::Value, String> {
     let url = format!("{base_url}/find_user");
-    let mut req = UpstreamRequest::get(url);
+    let mut req = UpstreamRequest::get_json(url);
     if let Ok(v) = http::HeaderValue::from_str(key) {
         req.headers
             .insert(http::header::HeaderName::from_static("apikey"), v);
@@ -117,10 +117,6 @@ pub(crate) async fn query_horde_user(
     req.headers.insert(
         http::header::HeaderName::from_static("client-agent"),
         HORDE_CLIENT_AGENT.clone(),
-    );
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
     );
 
     let cancel = CancellationToken::new();

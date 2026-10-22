@@ -293,14 +293,10 @@ pub async fn try_fetch_backend_models(
         "{CODEX_MODELS_URL}?client_version={}",
         current_codex_version()
     );
-    let mut req = UpstreamRequest::get(&url);
+    let mut req = UpstreamRequest::get_json(&url);
     if let Ok(v) = crate::antigravity_headers::build_bearer_header(api_key) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
     apply_codex_spoofing_headers(&mut req);
 
     let cancel = CancellationToken::new();
@@ -320,11 +316,7 @@ pub async fn try_fetch_backend_models(
 pub async fn try_fetch_upstream_repo_models(
     upstream_client: &Arc<UpstreamClient>,
 ) -> Option<Vec<DiscoveredModel>> {
-    let mut req = UpstreamRequest::get(CODEX_UPSTREAM_MODELS_RAW_URL);
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
+    let mut req = UpstreamRequest::get_json(CODEX_UPSTREAM_MODELS_RAW_URL);
     if let Ok(v) = http::HeaderValue::from_str(&current_codex_ua()) {
         req.headers.insert(http::header::USER_AGENT, v);
     }

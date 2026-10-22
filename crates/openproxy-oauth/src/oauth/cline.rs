@@ -162,13 +162,10 @@ impl OAuthProvider for ClineOAuthProvider {
         let body_bytes = serde_json::to_vec(&body)
             .map_err(|e| CoreError::Parse(format!("serialize cline refresh body: {e}")))?;
 
-        let mut req = UpstreamRequest::post_json(refresh_url, bytes::Bytes::from(body_bytes));
+        let mut req = UpstreamRequest::post_json(refresh_url, bytes::Bytes::from(body_bytes))
+            .with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
         openproxy_adapters::adapters::cline::apply_cline_spoofing_headers(&mut req);

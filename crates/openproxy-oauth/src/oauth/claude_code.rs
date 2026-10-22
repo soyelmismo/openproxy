@@ -500,12 +500,8 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
         };
 
         let profile_url = self.profile_url();
-        let mut req = UpstreamRequest::get(profile_url);
-        req.headers.insert(
-            http::header::AUTHORIZATION,
-            http::HeaderValue::from_str(&format!("Bearer {access_token}"))
-                .map_err(|e| CoreError::Validation(format!("invalid authorization header: {e}")))?,
-        );
+        let mut req = UpstreamRequest::get(profile_url)
+            .with_bearer(&access_token);
         req.headers.insert(
             http::header::ACCEPT,
             http::HeaderValue::from_static("application/json, text/plain, */*"),

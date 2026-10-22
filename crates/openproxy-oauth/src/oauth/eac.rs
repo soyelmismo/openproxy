@@ -78,11 +78,7 @@ impl EacOAuthProvider {
     ) {
         let encoded_link = urlencoding::encode(device_code);
         let ack_url = format!("{auth_root}/auth/ack?link={encoded_link}");
-        let mut req = UpstreamRequest::post_json(&ack_url, bytes::Bytes::new());
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
+        let mut req = UpstreamRequest::post_json(&ack_url, bytes::Bytes::new()).with_accept_json();
         req.headers.insert(
             http::header::USER_AGENT,
             http::HeaderValue::from_static(EAC_USER_AGENT),
@@ -181,11 +177,7 @@ impl OAuthProvider for EacOAuthProvider {
         let encoded_link = urlencoding::encode(device_code.trim());
         let poll_url = format!("{auth_root}/auth/poll?link={encoded_link}&retain=1");
 
-        let mut req = UpstreamRequest::get(&poll_url);
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
+        let mut req = UpstreamRequest::get_json(&poll_url);
         req.headers.insert(
             http::header::USER_AGENT,
             http::HeaderValue::from_static(EAC_USER_AGENT),

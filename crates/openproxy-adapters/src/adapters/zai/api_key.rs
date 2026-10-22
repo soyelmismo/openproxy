@@ -105,14 +105,10 @@ pub async fn resolve_zai_api_key(
     }
 
     // 1. Fetch customer info to identify default organization and project
-    let mut info_req = UpstreamRequest::get(ZAI_BIZ_CUSTOMER_INFO_URL);
+    let mut info_req = UpstreamRequest::get_json(ZAI_BIZ_CUSTOMER_INFO_URL);
     if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
         info_req.headers.insert(http::header::AUTHORIZATION, val);
     }
-    info_req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
     info_req.headers.insert(
         http::header::USER_AGENT,
         http::HeaderValue::from_static("ZCode/3.14.0"),
@@ -138,14 +134,10 @@ pub async fn resolve_zai_api_key(
     );
 
     // 2. Query existing API keys
-    let mut list_req = UpstreamRequest::get(&base_api_keys_url);
+    let mut list_req = UpstreamRequest::get_json(&base_api_keys_url);
     if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
         list_req.headers.insert(http::header::AUTHORIZATION, val);
     }
-    list_req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
     list_req.headers.insert(
         http::header::USER_AGENT,
         http::HeaderValue::from_static("ZCode/3.14.0"),
@@ -205,18 +197,11 @@ pub async fn resolve_zai_api_key(
         let body = serde_json::json!({ "name": "zcode-api-key" });
         if let Ok(body_bytes) = serde_json::to_vec(&body) {
             let mut create_req =
-                UpstreamRequest::post_json(&base_api_keys_url, bytes::Bytes::from(body_bytes));
+                UpstreamRequest::post_json(&base_api_keys_url, bytes::Bytes::from(body_bytes))
+                    .with_accept_json();
             if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
                 create_req.headers.insert(http::header::AUTHORIZATION, val);
             }
-            create_req.headers.insert(
-                http::header::ACCEPT,
-                http::HeaderValue::from_static("application/json"),
-            );
-            create_req.headers.insert(
-                http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
             create_req.headers.insert(
                 http::header::USER_AGENT,
                 http::HeaderValue::from_static("ZCode/3.14.0"),
@@ -246,14 +231,10 @@ pub async fn resolve_zai_api_key(
 
     // 4. Retrieve secret key via copy endpoint
     let copy_url = format!("{base_api_keys_url}/copy/{raw_api_key}");
-    let mut copy_req = UpstreamRequest::get(&copy_url);
+    let mut copy_req = UpstreamRequest::get_json(&copy_url);
     if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
         copy_req.headers.insert(http::header::AUTHORIZATION, val);
     }
-    copy_req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
     copy_req.headers.insert(
         http::header::USER_AGENT,
         http::HeaderValue::from_static("ZCode/3.14.0"),

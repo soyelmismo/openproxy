@@ -126,14 +126,10 @@ impl OAuthProvider for MiniMaxOAuthProvider {
         ];
 
         let body = urlencoded_body(&params);
-        let mut req = UpstreamRequest::post_json(&endpoint, body);
+        let mut req = UpstreamRequest::post_json(&endpoint, body).with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
         );
         req.headers.insert(
             http::header::USER_AGENT,
@@ -387,14 +383,10 @@ impl OAuthProvider for MiniMaxOAuthProvider {
         ];
 
         let body = urlencoded_body(&params);
-        let mut req = UpstreamRequest::post_json(&endpoint, body);
+        let mut req = UpstreamRequest::post_json(&endpoint, body).with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
             http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
         );
         req.headers.insert(
             http::header::USER_AGENT,
@@ -587,14 +579,10 @@ async fn poll_token_request(
         ("code_verifier", verifier),
     ];
     let body = urlencoded_body(&params);
-    let mut req = UpstreamRequest::post_json(endpoint, body);
+    let mut req = UpstreamRequest::post_json(endpoint, body).with_accept_json();
     req.headers.insert(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-    );
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
     );
     req.headers.insert(
         http::header::USER_AGENT,

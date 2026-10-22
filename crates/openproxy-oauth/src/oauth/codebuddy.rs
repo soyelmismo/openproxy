@@ -161,13 +161,10 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             let trimmed_base = base.trim_end_matches('/');
             let url = format!("{trimmed_base}{CODEBUDDY_STATE_PATH}");
 
-            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"));
+            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"))
+                .with_accept_json();
             req.headers.insert(
                 http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
-            req.headers.insert(
-                http::header::ACCEPT,
                 http::HeaderValue::from_static("application/json"),
             );
             req.headers.insert(
@@ -264,11 +261,7 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             let encoded_state = urlencoding::encode(device_code);
             let url = format!("{trimmed_base}{CODEBUDDY_TOKEN_PATH}?state={encoded_state}");
 
-            let mut req = UpstreamRequest::get(&url);
-            req.headers.insert(
-                http::header::ACCEPT,
-                http::HeaderValue::from_static("application/json"),
-            );
+            let mut req = UpstreamRequest::get_json(&url);
             req.headers.insert(
                 http::header::HeaderName::from_static("x-no-authorization"),
                 http::HeaderValue::from_static("true"),
@@ -409,13 +402,10 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             let trimmed_base = base.trim_end_matches('/');
             let url = format!("{trimmed_base}{CODEBUDDY_REFRESH_PATH}");
 
-            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"));
+            let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from_static(b"{}"))
+                .with_accept_json();
             req.headers.insert(
                 http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
-            req.headers.insert(
-                http::header::ACCEPT,
                 http::HeaderValue::from_static("application/json"),
             );
             if let Ok(val) = http::HeaderValue::from_str(refresh_token) {

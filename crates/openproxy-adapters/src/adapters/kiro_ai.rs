@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, Deserialize,
-    DiscoveredModel, HeaderValue, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId,
-    Result, Serialize, TargetFormat, TimeoutProfile, UpstreamClient, UpstreamRequest,
+    DiscoveredModel, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result,
+    Serialize, TargetFormat, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use openproxy_types::ResultExt;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
@@ -129,14 +129,10 @@ async fn try_fetch_models_from_endpoint(
     api_key: &str,
     endpoint: &str,
 ) -> Option<Vec<DiscoveredModel>> {
-    let mut req = UpstreamRequest::get(endpoint);
+    let mut req = UpstreamRequest::get_json(endpoint);
     if let Ok(v) = crate::antigravity_headers::build_bearer_header(api_key) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
-    req.headers.insert(
-        http::header::ACCEPT,
-        HeaderValue::from_static("application/json"),
-    );
 
     let cancel = CancellationToken::new();
     let resp = upstream_client

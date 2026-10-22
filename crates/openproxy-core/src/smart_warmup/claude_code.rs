@@ -224,17 +224,12 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
         };
 
         let mut req =
-            UpstreamRequest::post_json("https://api.anthropic.com/v1/messages", payload_bytes);
+            UpstreamRequest::post_json("https://api.anthropic.com/v1/messages", payload_bytes)
+                .with_bearer(&account.access_token)
+                .with_accept_json();
 
-        if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {}", account.access_token)) {
-            req.headers.insert(http::header::AUTHORIZATION, val);
-        }
         req.headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
         req.headers.insert(

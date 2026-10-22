@@ -418,10 +418,6 @@ pub async fn fetch_antigravity_user_quota_local(
             )));
             continue;
         }
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
         crate::antigravity_headers::inject_antigravity_headers(&mut req.headers, None);
 
         let cancel = CancellationToken::new();

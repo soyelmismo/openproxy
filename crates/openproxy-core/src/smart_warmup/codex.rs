@@ -205,11 +205,9 @@ impl WarmupStrategy for CodexWarmupStrategy {
         let mut req = UpstreamRequest::post_json(
             "https://chatgpt.com/backend-api/codex/responses",
             payload_bytes,
-        );
+        )
+        .with_bearer(&account.access_token);
 
-        if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {}", account.access_token)) {
-            req.headers.insert(http::header::AUTHORIZATION, val);
-        }
         req.headers.insert(
             http::header::ACCEPT,
             http::HeaderValue::from_static("text/event-stream"),

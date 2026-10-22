@@ -91,15 +91,11 @@ impl ZaiTokens {
 }
 
 fn build_zai_get_request(url: &str, token: &str, proxy_url: Option<&str>) -> UpstreamRequest {
-    let mut req = UpstreamRequest::get(url);
+    let mut req = UpstreamRequest::get_json(url);
     req.proxy = proxy_url.map(ToString::to_string);
     if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
         req.headers.insert(http::header::AUTHORIZATION, val);
     }
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
     req.headers.insert(
         http::header::USER_AGENT,
         http::HeaderValue::from_static("ZCode/3.14.0"),
@@ -125,16 +121,9 @@ pub(crate) async fn exchange_business_token_on_the_fly(
     let body_bytes = serde_json::to_vec(&body).ok()?;
 
     let mut req =
-        UpstreamRequest::post_json(ZAI_BUSINESS_LOGIN_URL, bytes::Bytes::from(body_bytes));
+        UpstreamRequest::post_json(ZAI_BUSINESS_LOGIN_URL, bytes::Bytes::from(body_bytes))
+            .with_accept_json();
     req.proxy = proxy_url.map(ToString::to_string);
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/json"),
-    );
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
 
     let cancel = CancellationToken::new();
     let resp = upstream

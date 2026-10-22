@@ -1,6 +1,6 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, Bytes, CancellationToken, CoreError, DiscoveredModel,
-    HeaderValue, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat,
+    ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat,
     TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
@@ -406,10 +406,6 @@ async fn fetch_antigravity_models_from_endpoint(
         tracing::warn!("antigravity build bearer header for {endpoint}: {e} — skipping endpoint");
         return None;
     }
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
     AntigravitySpoofer::new().apply_to_request(&mut req);
 
     let cancel = CancellationToken::new();

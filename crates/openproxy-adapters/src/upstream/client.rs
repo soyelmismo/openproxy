@@ -61,6 +61,40 @@ impl UpstreamRequest {
         }
     }
 
+    /// Build a GET request with an `Accept: application/json` header.
+    pub fn get_json(url: impl Into<String>) -> Self {
+        let mut req = Self::get(url);
+        req.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+        req
+    }
+
+    /// Add an `Accept: application/json` header in a builder style.
+    pub fn with_accept_json(mut self) -> Self {
+        self.headers.insert(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+        self
+    }
+
+    /// Add an `Authorization: Bearer <token>` header in a builder style.
+    pub fn with_bearer(mut self, token: &str) -> Self {
+        let auth_val = format!("Bearer {token}");
+        if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
+            self.headers.insert(http::header::AUTHORIZATION, hv);
+        }
+        self
+    }
+
+    /// Add a custom header in a builder style.
+    pub fn with_header(mut self, name: http::HeaderName, value: http::HeaderValue) -> Self {
+        self.headers.insert(name, value);
+        self
+    }
+
     /// Build a simple DELETE with no headers / body.
     pub fn delete(url: impl Into<String>) -> Self {
         Self {

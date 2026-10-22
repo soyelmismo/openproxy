@@ -120,13 +120,10 @@ impl OAuthProvider for ZaiOAuthProvider {
             serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
 
         let mut req =
-            UpstreamRequest::post_json(ZAI_DEFAULT_TOKEN_URL, bytes::Bytes::from(body_bytes));
+            UpstreamRequest::post_json(ZAI_DEFAULT_TOKEN_URL, bytes::Bytes::from(body_bytes))
+                .with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
         req.headers.insert(
@@ -352,13 +349,10 @@ impl ZaiOAuthProvider {
         let mut req = UpstreamRequest::post_json(
             ZAI_DEFAULT_BUSINESS_LOGIN_URL,
             bytes::Bytes::from(body_bytes),
-        );
+        )
+        .with_accept_json();
         req.headers.insert(
             http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::ACCEPT,
             http::HeaderValue::from_static("application/json"),
         );
 

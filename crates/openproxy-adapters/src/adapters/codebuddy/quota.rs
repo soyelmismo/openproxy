@@ -593,7 +593,7 @@ pub fn build_codebuddy_accounts_request_with_url(
     token: &str,
     proxy_url: Option<&str>,
 ) -> UpstreamRequest {
-    let mut req = UpstreamRequest::get(url);
+    let mut req = UpstreamRequest::get_json(url);
     req.proxy = proxy_url.map(ToString::to_string);
 
     let trimmed = token.trim();
@@ -605,10 +605,6 @@ pub fn build_codebuddy_accounts_request_with_url(
     if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
         req.headers.insert(http::header::AUTHORIZATION, hv);
     }
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
     req.headers.insert(
         http::HeaderName::from_static("x-no-enterprise-id"),
         http::HeaderValue::from_static("true"),
