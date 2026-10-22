@@ -1,7 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, CoreError, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    build_discovered_model_full, fetch_models_with_auth,
+    build_discovered_model_full, fetch_openai_compatible_models_with_mapper,
 };
 
 // Cloudflare Workers AI
@@ -126,7 +126,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             self.config.base_url, account_label
         );
         let auth = crate::upstream::format_bearer(api_key);
-        fetch_models_with_auth(
+        fetch_openai_compatible_models_with_mapper(
             &url,
             upstream_client,
             &[("Authorization", &auth)],

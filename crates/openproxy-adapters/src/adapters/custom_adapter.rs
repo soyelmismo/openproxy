@@ -119,19 +119,24 @@ fn build_custom_headers<'a>(
     headers
 }
 
+pub(crate) fn parse_openai_models_array(
+    arr: &[serde_json::Value],
+    target_format: TargetFormat,
+) -> Vec<DiscoveredModel> {
+    arr.iter()
+        .filter_map(|raw| {
+            let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
+            Some(build_discovered_model_with(entry.id, target_format))
+        })
+        .collect()
+}
+
 fn parse_custom_openai_models(
     body: &serde_json::Value,
     target_format: TargetFormat,
 ) -> Option<Vec<DiscoveredModel>> {
     let arr = body.get("data")?.as_array()?;
-    let models = arr
-        .iter()
-        .filter_map(|raw| {
-            let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-            Some(build_discovered_model_with(entry.id, target_format))
-        })
-        .collect();
-    Some(models)
+    Some(parse_openai_models_array(arr, target_format))
 }
 
 fn parse_custom_gemini_models(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {

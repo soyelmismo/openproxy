@@ -133,6 +133,29 @@ pub fn build_discovered_model_with(id: String, target_format: TargetFormat) -> D
     build_discovered_model_full(id, None, target_format, None, None)
 }
 
+/// Fetch and parse an OpenAI-compatible `GET /models` (or similar) response using a custom mapping function.
+pub(crate) async fn fetch_openai_compatible_models_with_mapper<F>(
+    url: &str,
+    upstream_client: &Arc<UpstreamClient>,
+    headers: &[(&str, &str)],
+    array_key: &str,
+    error_prefix: &str,
+    mapper: F,
+) -> Result<Vec<DiscoveredModel>>
+where
+    F: Fn(&serde_json::Value) -> Option<DiscoveredModel>,
+{
+    fetch_models_with_auth(
+        url,
+        upstream_client,
+        headers,
+        array_key,
+        error_prefix,
+        mapper,
+    )
+    .await
+}
+
 /// Fetch and parse an OpenAI-shaped `GET /models` response.
 pub(crate) async fn fetch_openai_models(
     url: &str,
@@ -142,20 +165,18 @@ pub(crate) async fn fetch_openai_models(
     target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
     let auth = crate::upstream::format_bearer(api_key);
-    let body = upstream_get_json(upstream_client, url, &[("Authorization", &auth)])
-        .await
-        .ctx_upstream(format!("{provider_name} /models"))?;
-
-    let payload: OpenAIModelsResponse =
-        <OpenAIModelsResponse as serde::Deserialize>::deserialize(&body)
-            .ctx_parse(format!("{provider_name} /models parse"))?;
-
-    let out = payload
-        .data
-        .into_iter()
-        .map(|m| build_discovered_model_with(m.id, target_format))
-        .collect();
-    Ok(out)
+    fetch_openai_compatible_models_with_mapper(
+        url,
+        upstream_client,
+        &[("Authorization", &auth)],
+        "data",
+        provider_name,
+        |m| {
+            let entry: OpenAIModelEntry = serde::Deserialize::deserialize(m).ok()?;
+            Some(build_discovered_model_with(entry.id, target_format))
+        },
+    )
+    .await
 }
 
 pub(crate) async fn fetch_models_with_auth<F>(
@@ -184,3 +205,30 @@ where
 
     Ok(arr.iter().filter_map(mapper).collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_openai_models_response() {
+        let json = serde_json::json!({
+            "data": [
+                { "id": "gpt-4o" },
+                { "id": "text-embedding-ada-002" }
+            ]
+        });
+        let payload: OpenAIModelsResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(payload.data.len(), 2);
+        assert_eq!(payload.data[0].id, "gpt-4o");
+        assert_eq!(payload.data[1].id, "text-embedding-ada-002");
+    }
+
+    #[test]
+    fn test_parse_openai_models_missing_data_defaults_empty() {
+        let json = serde_json::json!({});
+        let payload: OpenAIModelsResponse = serde_json::from_value(json).unwrap();
+        assert!(payload.data.is_empty());
+    }
+}
+

@@ -24,10 +24,13 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub mod generic_runtime;
 pub mod providers;
 pub mod refresh;
 pub mod store;
 pub mod validation;
+
+pub use generic_runtime::{GenericContractRuntime, ReleaseDriverFactory};
 
 #[cfg(feature = "upstream-hyper")]
 pub use refresh::UpstreamHttpTransport;

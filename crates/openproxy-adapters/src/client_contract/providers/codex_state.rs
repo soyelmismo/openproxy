@@ -33,8 +33,9 @@ use super::codex_runtime::{
 };
 use crate::client_contract::{
     Candidate, ClientIdentity, ContractError, ContractId, ContractLimits, ContractStore,
-    ContractTransport, ContractValidator, EvidenceKind, IDENTITY_ORIGIN_OFFICIAL, RefreshReport,
-    Snapshot, SourceRef, StoreConfig, TransportCache, VersionChannel, hex_digest, parse_version,
+    ContractTransport, ContractValidator, EvidenceKind, GenericContractRuntime,
+    IDENTITY_ORIGIN_OFFICIAL, RefreshReport, Snapshot, SourceRef, TransportCache, VersionChannel,
+    hex_digest, parse_version,
 };
 
 const TAG_REF_JSON: &str = include_str!("../../../../../fixtures/codex-tag-ref.json");
@@ -326,12 +327,9 @@ impl ContractValidator<CodexProfile> for CodexContractValidator {
     }
 }
 
-/// Runtime del contrato Codex: store tipado más cache de transporte, con la
-/// semilla embebida del pin como generación de arranque.
+/// Runtime del contrato Codex: delega en [`GenericContractRuntime`].
 pub struct CodexContractRuntime {
-    store: Arc<ContractStore<CodexProfile>>,
-    cache: Arc<TransportCache>,
-    limits: ContractLimits,
+    inner: GenericContractRuntime<CodexProfile, CodexReleaseDriver>,
 }
 
 impl CodexContractRuntime {
@@ -345,21 +343,23 @@ impl CodexContractRuntime {
     #[must_use]
     pub fn with_limits(root: impl Into<PathBuf>, limits: ContractLimits) -> Self {
         Self {
-            store: Arc::new(ContractStore::new(
+            inner: GenericContractRuntime::new(
                 ContractId::Codex,
-                StoreConfig::new(root).with_limits(limits),
-                Some((*SEED).clone()),
+                root,
+                limits,
+                (*SEED).clone(),
                 Arc::new(CodexContractValidator),
-            )),
-            cache: Arc::new(TransportCache::new()),
-            limits,
+                |transport, cache, limits| {
+                    Arc::new(CodexReleaseDriver::new(transport, cache, limits))
+                },
+            ),
         }
     }
 
     /// El store tipado, para commits directos de un candidato verificado.
     #[must_use]
     pub fn store(&self) -> &ContractStore<CodexProfile> {
-        self.store.as_ref()
+        self.inner.store()
     }
 
     /// El store tipado como handle compartido: **el mismo** store que este
@@ -371,7 +371,7 @@ impl CodexContractRuntime {
     /// segundo store desconectado del que lee la petición.
     #[must_use]
     pub fn store_handle(&self) -> Arc<ContractStore<CodexProfile>> {
-        Arc::clone(&self.store)
+        self.inner.store_handle()
     }
 
     /// Driver de una ronda de refresh sobre `transport`, con la cache y los
@@ -381,17 +381,13 @@ impl CodexContractRuntime {
     /// paralela, sino con los mismos condicionales que ya se usaron.
     #[must_use]
     pub fn release_driver(&self, transport: Arc<dyn ContractTransport>) -> Arc<CodexReleaseDriver> {
-        Arc::new(CodexReleaseDriver::new(
-            transport,
-            Arc::clone(&self.cache),
-            self.limits,
-        ))
+        self.inner.release_driver(transport)
     }
 
     /// La cache de transporte compartida con el driver.
     #[must_use]
     pub fn cache(&self) -> &Arc<TransportCache> {
-        &self.cache
+        self.inner.cache()
     }
 
     /// Snapshot activo: el LKG en disco si existe, si no la semilla embebida.
@@ -399,13 +395,13 @@ impl CodexContractRuntime {
     /// # Errors
     /// Errores del store (LKG corrupto o semilla inválida).
     pub fn load(&self) -> Result<Arc<Snapshot<CodexProfile>>, ContractError> {
-        self.store.load()
+        self.inner.load()
     }
 
     /// El snapshot ya cargado, si el runtime ya sirvió uno.
     #[must_use]
     pub fn snapshot(&self) -> Option<Arc<Snapshot<CodexProfile>>> {
-        self.store.snapshot()
+        self.inner.snapshot()
     }
 
     /// Activa un candidato verificado (anti-downgrade + persistencia).
@@ -416,7 +412,7 @@ impl CodexContractRuntime {
         &self,
         candidate: &Candidate<CodexProfile>,
     ) -> Result<Option<Arc<Snapshot<CodexProfile>>>, ContractError> {
-        self.store.commit(candidate)
+        self.inner.commit(candidate)
     }
 
     /// Resuelve el pin contra `transport` y activa el candidato si verifica
@@ -428,29 +424,9 @@ impl CodexContractRuntime {
         &self,
         transport: Arc<dyn ContractTransport>,
     ) -> Result<RefreshReport<CodexProfile>, ContractError> {
-        let driver = self.release_driver(transport);
-        match driver.refresh().await? {
-            Some(candidate) => match self.store.commit(&candidate)? {
-                Some(snapshot) => Ok(RefreshReport::Activated {
-                    generation: snapshot.generation.clone(),
-                    snapshot,
-                }),
-                None => Ok(RefreshReport::Unchanged {
-                    generation: self.active_generation(),
-                }),
-            },
-            None => Ok(RefreshReport::Unchanged {
-                generation: self.active_generation(),
-            }),
-        }
-    }
-
-    /// La generación activa (el seed si aún no se cargó nada).
-    fn active_generation(&self) -> String {
-        self.store.snapshot().map_or_else(
-            || SEED.generation.clone(),
-            |snapshot| snapshot.generation.clone(),
-        )
+        self.inner
+            .refresh_with(transport, |driver| async move { driver.refresh().await })
+            .await
     }
 }
 

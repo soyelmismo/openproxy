@@ -48,8 +48,9 @@ use super::codebuddy_runtime::{
 };
 use crate::client_contract::{
     Candidate, ClientIdentity, ContractError, ContractId, ContractLimits, ContractStore,
-    ContractTransport, ContractValidator, EvidenceKind, IDENTITY_ORIGIN_OFFICIAL, RefreshReport,
-    Snapshot, SourceRef, StoreConfig, TransportCache, VersionChannel, hex_digest, parse_version,
+    ContractTransport, ContractValidator, EvidenceKind, GenericContractRuntime,
+    IDENTITY_ORIGIN_OFFICIAL, RefreshReport, Snapshot, SourceRef, TransportCache, VersionChannel,
+    hex_digest, parse_version,
 };
 
 /// `package.json` del pin, compilado en el binario.
@@ -295,12 +296,9 @@ impl ContractValidator<CodeBuddyProfile> for CodeBuddyContractValidator {
     }
 }
 
-/// Runtime del contrato CodeBuddy: store tipado más cache de transporte, con la
-/// semilla embebida del pin como generación de arranque.
+/// Runtime del contrato CodeBuddy: delega en [`GenericContractRuntime`].
 pub struct CodeBuddyContractRuntime {
-    store: Arc<ContractStore<CodeBuddyProfile>>,
-    cache: Arc<TransportCache>,
-    limits: ContractLimits,
+    inner: GenericContractRuntime<CodeBuddyProfile, CodeBuddyReleaseDriver>,
 }
 
 impl CodeBuddyContractRuntime {
@@ -314,21 +312,23 @@ impl CodeBuddyContractRuntime {
     #[must_use]
     pub fn with_limits(root: impl Into<PathBuf>, limits: ContractLimits) -> Self {
         Self {
-            store: Arc::new(ContractStore::new(
+            inner: GenericContractRuntime::new(
                 ContractId::CodeBuddy,
-                StoreConfig::new(root).with_limits(limits),
-                Some(embedded_snapshot()),
+                root,
+                limits,
+                embedded_snapshot(),
                 Arc::new(CodeBuddyContractValidator),
-            )),
-            cache: Arc::new(TransportCache::new()),
-            limits,
+                |transport, cache, limits| {
+                    Arc::new(CodeBuddyReleaseDriver::new(transport, cache, limits))
+                },
+            ),
         }
     }
 
     /// El store tipado, para commits directos de un candidato verificado.
     #[must_use]
     pub fn store(&self) -> &ContractStore<CodeBuddyProfile> {
-        self.store.as_ref()
+        self.inner.store()
     }
 
     /// El store tipado como handle compartido: **el mismo** store que este
@@ -340,7 +340,7 @@ impl CodeBuddyContractRuntime {
     /// segundo store desconectado del que lee la petición.
     #[must_use]
     pub fn store_handle(&self) -> Arc<ContractStore<CodeBuddyProfile>> {
-        Arc::clone(&self.store)
+        self.inner.store_handle()
     }
 
     /// Driver de una ronda de refresh sobre `transport`, con la cache y los
@@ -350,17 +350,13 @@ impl CodeBuddyContractRuntime {
         &self,
         transport: Arc<dyn ContractTransport>,
     ) -> Arc<CodeBuddyReleaseDriver> {
-        Arc::new(CodeBuddyReleaseDriver::new(
-            transport,
-            Arc::clone(&self.cache),
-            self.limits,
-        ))
+        self.inner.release_driver(transport)
     }
 
     /// La cache de transporte compartida con el driver.
     #[must_use]
     pub fn cache(&self) -> &Arc<TransportCache> {
-        &self.cache
+        self.inner.cache()
     }
 
     /// Snapshot activo: el LKG en disco si existe, si no la semilla embebida.
@@ -368,13 +364,13 @@ impl CodeBuddyContractRuntime {
     /// # Errors
     /// Errores del store (LKG corrupto o semilla inválida).
     pub fn load(&self) -> Result<Arc<Snapshot<CodeBuddyProfile>>, ContractError> {
-        self.store.load()
+        self.inner.load()
     }
 
     /// El snapshot ya cargado, si el runtime ya sirvió uno.
     #[must_use]
     pub fn snapshot(&self) -> Option<Arc<Snapshot<CodeBuddyProfile>>> {
-        self.store.snapshot()
+        self.inner.snapshot()
     }
 
     /// Activa un candidato verificado (anti-downgrade + persistencia).
@@ -385,7 +381,7 @@ impl CodeBuddyContractRuntime {
         &self,
         candidate: &Candidate<CodeBuddyProfile>,
     ) -> Result<Option<Arc<Snapshot<CodeBuddyProfile>>>, ContractError> {
-        self.store.commit(candidate)
+        self.inner.commit(candidate)
     }
 
     /// Resuelve el pin contra `transport` y activa el candidato si verifica
@@ -397,21 +393,9 @@ impl CodeBuddyContractRuntime {
         &self,
         transport: Arc<dyn ContractTransport>,
     ) -> Result<RefreshReport<CodeBuddyProfile>, ContractError> {
-        let driver = self.release_driver(transport);
-        match driver.refresh().await? {
-            Some(candidate) => match self.store.commit(&candidate)? {
-                Some(snapshot) => Ok(RefreshReport::Activated {
-                    generation: snapshot.generation.clone(),
-                    snapshot,
-                }),
-                None => Ok(RefreshReport::Unchanged {
-                    generation: self.active_generation(),
-                }),
-            },
-            None => Ok(RefreshReport::Unchanged {
-                generation: self.active_generation(),
-            }),
-        }
+        self.inner
+            .refresh_with(transport, |driver| async move { driver.refresh().await })
+            .await
     }
 
     /// Igual que [`Self::refresh`], pero devuelve la versión recién activada
@@ -442,14 +426,6 @@ impl CodeBuddyContractRuntime {
                 None
             }
         }
-    }
-
-    /// La generación activa (el seed si aún no se cargó nada).
-    fn active_generation(&self) -> String {
-        self.store.snapshot().map_or_else(
-            || SEED.generation.clone(),
-            |snapshot| snapshot.generation.clone(),
-        )
     }
 }
 

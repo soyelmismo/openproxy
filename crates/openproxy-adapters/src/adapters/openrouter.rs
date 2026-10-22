@@ -1,6 +1,7 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, Deserialize, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient, upstream_get_json,
+    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
+    fetch_openai_compatible_models_with_mapper,
 };
 
 // OpenRouter
@@ -78,17 +79,15 @@ impl ProviderAdapter for OpenRouterAdapter {
         })?;
 
         let auth = crate::upstream::format_bearer(api_key);
-        let body = upstream_get_json(upstream_client, &url, &[("Authorization", &auth)])
-            .await
-            .map_err(openproxy_types::error::CoreError::UpstreamConnection)?;
-
-        let arr = body.get("data").and_then(|v| v.as_array()).ok_or_else(|| {
-            openproxy_types::error::CoreError::Parse(
-                "openrouter response missing 'data' array".into(),
-            )
-        })?;
-
-        Ok(arr.iter().filter_map(map_openrouter_entry).collect())
+        fetch_openai_compatible_models_with_mapper(
+            &url,
+            upstream_client,
+            &[("Authorization", &auth)],
+            "data",
+            "openrouter",
+            map_openrouter_entry,
+        )
+        .await
     }
 }
 
