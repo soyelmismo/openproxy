@@ -17,26 +17,14 @@ pub use types::*;
 #[cfg(test)]
 mod tests;
 
-use crate::sse::{MAX_SSE_LINE_BYTES, SseParser, parse_sse_data_line};
-use bytes::{BufMut, Bytes, BytesMut};
+use crate::sse::{MAX_SSE_LINE_BYTES, SseParser, append_sse_event, parse_sse_data_line};
+use bytes::{Bytes, BytesMut};
 use futures_util::stream::Stream;
 use openproxy_types::OpenAIUsage;
 use serde_json::json;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-
-fn append_sse_event(out: &mut BytesMut, event_name: &str, payload: &serde_json::Value) {
-    out.extend_from_slice(b"event: ");
-    out.extend_from_slice(event_name.as_bytes());
-    out.extend_from_slice(b"\ndata: ");
-    if serde_json::to_writer((&mut *out).writer(), payload).is_err() {
-        out.extend_from_slice(
-            br#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#,
-        );
-    }
-    out.extend_from_slice(b"\n\n");
-}
 
 pub struct OpenAIToResponsesSseStream<S> {
     inner: S,

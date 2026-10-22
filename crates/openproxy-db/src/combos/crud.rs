@@ -76,12 +76,7 @@ pub fn get_combo_by_name(conn: &Connection, name: &str) -> Result<Option<Combo>>
 }
 
 pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
-    crate::db_execute!(
-        conn,
-        "DELETE FROM combos WHERE id = ?1",
-        params![id.0],
-        format!("delete combo {}", id.0)
-    )?;
+    crate::db_delete_by_id!(conn, "combos", id.0, format!("delete combo {}", id.0))?;
     Ok(())
 }
 
@@ -95,17 +90,13 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
                 "race_size must be in 1..=8, got {rs}"
             )));
         }
-        let affected = conn
-            .execute(
-                "UPDATE combos SET race_size = ?1 WHERE id = ?2",
-                params![i64::from(rs), id.0],
-            )
-            .map_err(|e| {
-                crate::error::map_db_error_ctx(format!("update race_size for combo {}", id.0))(e)
-            })?;
-        if affected == 0 {
-            return Err(CoreError::ComboNotFound(id.0));
-        }
+        crate::crud::execute_check_affected(
+            conn,
+            "UPDATE combos SET race_size = ?1 WHERE id = ?2",
+            params![i64::from(rs), id.0],
+            format!("update race_size for combo {}", id.0),
+            || CoreError::ComboNotFound(id.0),
+        )?;
     }
     Ok(())
 }
@@ -115,18 +106,13 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
 /// so an unknown value surfaces as [`CoreError::Validation`].
 pub fn update_strategy(conn: &Connection, id: ComboId, strategy: &str) -> Result<()> {
     let parsed = Strategy::parse(strategy).map_err(CoreError::Validation)?;
-    let affected = conn
-        .execute(
-            "UPDATE combos SET strategy = ?1 WHERE id = ?2",
-            params![parsed.as_str(), id.0],
-        )
-        .map_err(|e| {
-            crate::error::map_db_error_ctx(format!("update strategy for combo {}", id.0))(e)
-        })?;
-    if affected == 0 {
-        return Err(CoreError::ComboNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::execute_check_affected(
+        conn,
+        "UPDATE combos SET strategy = ?1 WHERE id = ?2",
+        params![parsed.as_str(), id.0],
+        format!("update strategy for combo {}", id.0),
+        || CoreError::ComboNotFound(id.0),
+    )
 }
 
 pub fn clear_targets(conn: &Connection, combo_id: ComboId) -> Result<()> {

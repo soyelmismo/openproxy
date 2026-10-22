@@ -37,12 +37,7 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
 }
 
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
-    crate::db_execute!(
-        conn,
-        "DELETE FROM providers WHERE id = ?1",
-        params![id.as_str()],
-        format!("delete provider {id}")
-    )?;
+    crate::db_delete_by_id!(conn, "providers", id.as_str(), format!("delete provider {id}"))?;
     Ok(())
 }
 
@@ -152,14 +147,13 @@ pub fn update(conn: &Connection, id: &ProviderId, params: UpdateProviderParams<'
     let mut bound: Vec<&dyn rusqlite::ToSql> = bound_values.iter().map(|b| b.as_ref()).collect();
     bound.push(&id_owned);
 
-    let affected = conn
-        .execute(&sql, rusqlite::params_from_iter(bound.iter().copied()))
-        .map_err(|e| crate::error::map_db_error_ctx(format!("update provider {id}"))(e))?;
-
-    if affected == 0 {
-        return Err(CoreError::ProviderNotFound(id.to_string()));
-    }
-    Ok(())
+    crate::crud::execute_check_affected(
+        conn,
+        &sql,
+        rusqlite::params_from_iter(bound.iter().copied()),
+        format!("update provider {id}"),
+        || CoreError::ProviderNotFound(id.to_string()),
+    )
 }
 
 pub fn create(conn: &Connection, new: NewProvider<'_>) -> Result<()> {
@@ -319,10 +313,10 @@ pub fn set_provider_favicon(
 }
 
 pub fn delete_provider_favicon(conn: &Connection, provider_id: &str) -> Result<()> {
-    crate::db_execute!(
+    crate::db_delete_by_id!(
         conn,
-        "DELETE FROM provider_favicons WHERE provider_id = ?1",
-        params![provider_id],
+        "provider_favicons",
+        WHERE provider_id = provider_id,
         format!("delete favicon for provider {provider_id}")
     )?;
     Ok(())

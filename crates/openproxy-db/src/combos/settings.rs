@@ -108,29 +108,23 @@ pub fn update_cooldown_settings(
             Some(parsed.as_str())
         }
     };
-    let affected = conn
-        .execute(
-            "UPDATE combos SET cooldown_mode = ?1, \
-                                cooldown_base_secs = ?2, \
-                                cooldown_max_secs = ?3, \
-                                cooldown_factor = ?4 \
-             WHERE id = ?5",
-            params![
-                mode_value,
-                base.map(|v| v as i64),
-                max.map(|v| v as i64),
-                factor.map(i64::from),
-                id.0
-            ],
-        )
-        .map_err(crate::error::map_db_error_ctx(format!(
-            "update cooldown settings for combo {}",
+    crate::crud::execute_check_affected(
+        conn,
+        "UPDATE combos SET cooldown_mode = ?1, \
+                            cooldown_base_secs = ?2, \
+                            cooldown_max_secs = ?3, \
+                            cooldown_factor = ?4 \
+         WHERE id = ?5",
+        params![
+            mode_value,
+            base.map(|v| v as i64),
+            max.map(|v| v as i64),
+            factor.map(i64::from),
             id.0
-        )))?;
-    if affected == 0 {
-        return Err(CoreError::ComboNotFound(id.0));
-    }
-    Ok(())
+        ],
+        format!("update cooldown settings for combo {}", id.0),
+        || CoreError::ComboNotFound(id.0),
+    )
 }
 
 pub fn update_cooldown_mode(conn: &Connection, id: ComboId, mode: Option<&str>) -> Result<()> {

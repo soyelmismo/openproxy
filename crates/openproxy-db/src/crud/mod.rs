@@ -64,6 +64,31 @@ pub fn execute<P: Params>(
         .map_err(map_db_error_ctx(ctx.as_ref()))
 }
 
+pub fn execute_check_affected<P: Params, E>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+    ctx: impl AsRef<str>,
+    not_found: impl FnOnce() -> E,
+) -> Result<()>
+where
+    E: Into<openproxy_types::CoreError>,
+{
+    let affected = execute(conn, sql, params, ctx)?;
+    check_affected(affected, not_found)
+}
+
+pub fn check_affected<E>(affected: usize, not_found: impl FnOnce() -> E) -> Result<()>
+where
+    E: Into<openproxy_types::CoreError>,
+{
+    if affected == 0 {
+        Err(not_found().into())
+    } else {
+        Ok(())
+    }
+}
+
 pub fn exists<P: Params>(
     conn: &Connection,
     sql: &str,
@@ -81,6 +106,26 @@ pub fn exists<P: Params>(
 macro_rules! db_execute {
     ($conn:expr, $sql:expr, $params:expr, $ctx:expr $(,)?) => {
         $crate::crud::execute($conn, $sql, $params, $ctx)
+    };
+}
+
+#[macro_export]
+macro_rules! db_delete_by_id {
+    ($conn:expr, $table:literal, $id:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("DELETE FROM ", $table, " WHERE id = ?1"),
+            ::rusqlite::params![$id],
+            $ctx,
+        )
+    };
+    ($conn:expr, $table:literal, WHERE $col:ident = $val:expr, $ctx:expr $(,)?) => {
+        $crate::crud::execute(
+            $conn,
+            concat!("DELETE FROM ", $table, " WHERE ", stringify!($col), " = ?1"),
+            ::rusqlite::params![$val],
+            $ctx,
+        )
     };
 }
 

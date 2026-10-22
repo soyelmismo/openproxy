@@ -203,16 +203,13 @@ pub fn set_health_with_error(
     health: HealthStatus,
     error: Option<&str>,
 ) -> Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET health_status = ?1, quota_fetch_error = ?2, rate_limited_until = NULL WHERE id = ?3",
-            params![health.as_str(), error, id.0],
-        )
-        .map_err(|e| crate::error::map_db_error_ctx(format!("update health for account {}", id.0))(e))?;
-    if affected == 0 {
-        return Err(CoreError::AccountNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::execute_check_affected(
+        conn,
+        "UPDATE accounts SET health_status = ?1, quota_fetch_error = ?2, rate_limited_until = NULL WHERE id = ?3",
+        params![health.as_str(), error, id.0],
+        format!("update health for account {}", id.0),
+        || CoreError::AccountNotFound(id.0),
+    )
 }
 
 pub fn set_rate_limited_until(
@@ -227,10 +224,7 @@ pub fn set_rate_limited_until(
         WHERE id = id.0,
         format!("update rate_limited_until for account {}", id.0)
     )?;
-    if affected == 0 {
-        return Err(CoreError::AccountNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::check_affected(affected, || CoreError::AccountNotFound(id.0))
 }
 
 pub fn update_api_key(
@@ -244,23 +238,18 @@ pub fn update_api_key(
     } else {
         None
     };
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET \
-                api_key_encrypted = ?1, \
-                health_status = 'healthy', \
-                rate_limited_until = NULL, \
-                quota_fetch_error = NULL \
-             WHERE id = ?2",
-            params![blob, id.0],
-        )
-        .map_err(|e| {
-            crate::error::map_db_error_ctx(format!("update api_key for account {}", id.0))(e)
-        })?;
-    if affected == 0 {
-        return Err(CoreError::AccountNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::execute_check_affected(
+        conn,
+        "UPDATE accounts SET \
+            api_key_encrypted = ?1, \
+            health_status = 'healthy', \
+            rate_limited_until = NULL, \
+            quota_fetch_error = NULL \
+         WHERE id = ?2",
+        params![blob, id.0],
+        format!("update api_key for account {}", id.0),
+        || CoreError::AccountNotFound(id.0),
+    )
 }
 
 pub fn update_label(conn: &Connection, id: AccountId, label: Option<&str>) -> Result<()> {
@@ -271,10 +260,7 @@ pub fn update_label(conn: &Connection, id: AccountId, label: Option<&str>) -> Re
         WHERE id = id.0,
         format!("update label for account {}", id.0)
     )?;
-    if affected == 0 {
-        return Err(CoreError::AccountNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::check_affected(affected, || CoreError::AccountNotFound(id.0))
 }
 
 pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
@@ -288,8 +274,7 @@ pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
             id.0
         ))(e)
     })?;
-    conn.execute("DELETE FROM accounts WHERE id = ?1", params![id.0])
-        .map_err(|e| crate::error::map_db_error_ctx(format!("delete account {}", id.0))(e))?;
+    crate::db_delete_by_id!(conn, "accounts", id.0, format!("delete account {}", id.0))?;
     Ok(())
 }
 
@@ -370,10 +355,7 @@ pub fn update_current_proxy(
         WHERE id = id.0,
         format!("update current_proxy_id for account {}", id.0)
     )?;
-    if affected == 0 {
-        return Err(CoreError::AccountNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::check_affected(affected, || CoreError::AccountNotFound(id.0))
 }
 
 pub fn get_current_proxy_id(conn: &Connection, account_id: AccountId) -> Result<Option<String>> {

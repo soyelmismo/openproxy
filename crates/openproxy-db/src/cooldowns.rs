@@ -82,10 +82,10 @@ pub fn clear_cooldown(
     conn: &rusqlite::Connection,
     target_id: ComboTargetId,
 ) -> openproxy_types::error::Result<()> {
-    crate::db_execute!(
+    crate::db_delete_by_id!(
         conn,
-        "DELETE FROM target_cooldowns WHERE combo_target_id = ?1",
-        rusqlite::params![target_id.0],
+        "target_cooldowns",
+        WHERE combo_target_id = target_id.0,
         format!("clear cooldown for target {}", target_id.0)
     )?;
     Ok(())

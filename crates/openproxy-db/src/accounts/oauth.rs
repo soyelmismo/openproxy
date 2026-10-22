@@ -89,40 +89,35 @@ pub fn store_oauth_tokens(
 
     let expires_at_resolved = resolve_oauth_expiry(params.expires_at);
 
-    let affected = conn
-        .execute(
-            "UPDATE accounts SET \
-                auth_type = 'oauth', \
-                access_token_encrypted = ?1, \
-                refresh_token_encrypted = COALESCE(?2, refresh_token_encrypted), \
-                token_type = ?3, \
-                expires_at = ?4, \
-                oauth_scope = COALESCE(?5, oauth_scope), \
-                oauth_provider_specific = COALESCE(?6, oauth_provider_specific), \
-                email = COALESCE(?7, email), \
-                label = COALESCE(NULLIF(label, ''), ?7), \
-                health_status = 'healthy', \
-                rate_limited_until = NULL, \
-                quota_fetch_error = NULL \
-             WHERE id = ?8",
-            params![
-                access_blob,
-                refresh_blob,
-                params.token_type,
-                expires_at_resolved,
-                params.scope,
-                provider_specific_encrypted,
-                params.email,
-                id.0,
-            ],
-        )
-        .map_err(|e| {
-            crate::error::map_db_error_ctx(format!("store_oauth_tokens for account {}", id.0))(e)
-        })?;
-    if affected == 0 {
-        return Err(CoreError::AccountNotFound(id.0));
-    }
-    Ok(())
+    crate::crud::execute_check_affected(
+        conn,
+        "UPDATE accounts SET \
+            auth_type = 'oauth', \
+            access_token_encrypted = ?1, \
+            refresh_token_encrypted = COALESCE(?2, refresh_token_encrypted), \
+            token_type = ?3, \
+            expires_at = ?4, \
+            oauth_scope = COALESCE(?5, oauth_scope), \
+            oauth_provider_specific = COALESCE(?6, oauth_provider_specific), \
+            email = COALESCE(?7, email), \
+            label = COALESCE(NULLIF(label, ''), ?7), \
+            health_status = 'healthy', \
+            rate_limited_until = NULL, \
+            quota_fetch_error = NULL \
+         WHERE id = ?8",
+        params![
+            access_blob,
+            refresh_blob,
+            params.token_type,
+            expires_at_resolved,
+            params.scope,
+            provider_specific_encrypted,
+            params.email,
+            id.0,
+        ],
+        format!("store_oauth_tokens for account {}", id.0),
+        || CoreError::AccountNotFound(id.0),
+    )
 }
 
 pub fn decrypt_access_token(

@@ -475,10 +475,10 @@ pub fn target_belongs_to_combo(
 }
 
 pub fn delete_target(conn: &Connection, id: ComboTargetId) -> Result<()> {
-    crate::db_execute!(
+    crate::db_delete_by_id!(
         conn,
-        "DELETE FROM combo_targets WHERE id = ?1",
-        params![id.0],
+        "combo_targets",
+        id.0,
         format!("delete combo_target {}", id.0)
     )?;
     Ok(())

@@ -194,9 +194,12 @@ pub fn delete(conn: &Connection, id: ModelRowId) -> Result<u64> {
     crate::error::with_busy_retry("delete_model", || {
         let tx = conn.unchecked_transaction().map_err(map_db_error)?;
 
-        let removed = tx
-            .execute("DELETE FROM models WHERE id = ?1", params![id.0])
-            .map_err(map_db_error_ctx(format!("delete model {}", id.0)))?;
+        let removed = crate::db_delete_by_id!(
+            &tx,
+            "models",
+            id.0,
+            format!("delete model {}", id.0)
+        )?;
 
         tx.commit().map_err(map_db_error)?;
 

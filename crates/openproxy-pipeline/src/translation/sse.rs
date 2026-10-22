@@ -1,6 +1,7 @@
+use crate::sse::{append_sse_event, format_sse_line};
 use crate::translation::anthropic::map_finish_reason;
 use crate::translation::types::{AnthropicResponse, AnthropicUsage};
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use futures_util::stream::Stream;
 use openproxy_types::ResultExt;
 use openproxy_types::error::Result;
@@ -46,7 +47,7 @@ fn build_role_chunk(chunk_id: &str, created: u64, model: &str) -> Vec<String> {
             "finish_reason": serde_json::Value::Null
         }]
     });
-    vec![format_sse_data(&chunk)]
+    vec![format_sse_line(&chunk)]
 }
 
 fn build_content_chunk(
@@ -81,7 +82,7 @@ fn build_content_chunk(
                 "finish_reason": serde_json::Value::Null
             }]
         });
-        return vec![format_sse_data(&chunk)];
+        return vec![format_sse_line(&chunk)];
     }
 
     let text = delta
@@ -100,7 +101,7 @@ fn build_content_chunk(
             "finish_reason": serde_json::Value::Null
         }]
     });
-    vec![format_sse_data(&chunk)]
+    vec![format_sse_line(&chunk)]
 }
 
 fn build_usage_json(u: &AnthropicUsage) -> serde_json::Value {
@@ -163,7 +164,7 @@ fn build_message_delta_chunk(
         chunk["usage"] = build_usage_json(u);
     }
 
-    vec![format_sse_data(&chunk)]
+    vec![format_sse_line(&chunk)]
 }
 
 fn build_message_stop_chunks(chunk_id: &str, created: u64, model: &str) -> Vec<String> {
@@ -178,7 +179,7 @@ fn build_message_stop_chunks(chunk_id: &str, created: u64, model: &str) -> Vec<S
             "finish_reason": "stop",
         }],
     });
-    vec![format_sse_data(&chunk), "data: [DONE]\n\n".to_string()]
+    vec![format_sse_line(&chunk), "data: [DONE]\n\n".to_string()]
 }
 
 pub use anthropic_sse_event_to_openai_chunks as anthropic_sse_to_openai_chunks;
@@ -235,27 +236,6 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
         .ctx_parse("invalid Anthropic SSE event")?;
 
     Ok(Some(event))
-}
-
-fn format_sse_data(payload: &serde_json::Value) -> String {
-    let payload_str = serde_json::to_string(payload).unwrap_or_default();
-    let mut out = String::with_capacity(payload_str.len() + 8);
-    out.push_str("data: ");
-    out.push_str(&payload_str);
-    out.push_str("\n\n");
-    out
-}
-
-fn append_sse_event(out: &mut BytesMut, event_name: &str, payload: &serde_json::Value) {
-    out.extend_from_slice(b"event: ");
-    out.extend_from_slice(event_name.as_bytes());
-    out.extend_from_slice(b"\ndata: ");
-    if serde_json::to_writer((&mut *out).writer(), payload).is_err() {
-        out.extend_from_slice(
-            br#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#,
-        );
-    }
-    out.extend_from_slice(b"\n\n");
 }
 
 pub struct OpenAIToAnthropicSseStream<S> {

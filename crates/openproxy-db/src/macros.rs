@@ -31,10 +31,7 @@ macro_rules! define_column_updaters {
                         "update {} for {} {}",
                         $col, $table, id_raw
                     ))(e))?;
-                if affected == 0 {
-                    return Err({ let $nf_id = id; $nf_err });
-                }
-                Ok(())
+                $crate::crud::check_affected(affected, || { let $nf_id = id; $nf_err })
             }
         )*
     };

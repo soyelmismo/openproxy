@@ -236,4 +236,37 @@ fn test_crud_macros() {
         )
         .unwrap();
     assert_eq!((id, name), (2, "Bob".to_string()));
+
+    // Test db_delete_by_id! macro and execute_check_affected / check_affected helpers
+    assert_eq!(
+        db_delete_by_id!(&conn, "users", 1, "delete user 1").unwrap(),
+        1
+    );
+    assert!(!db_exists!(&conn, "users", WHERE id = 1, "e").unwrap());
+
+    assert_eq!(
+        db_delete_by_id!(&conn, "users", WHERE name = "Bob", "delete bob").unwrap(),
+        1
+    );
+    assert!(!db_exists!(&conn, "users", WHERE name = "Bob", "e").unwrap());
+
+    let err = execute_check_affected(
+        &conn,
+        "UPDATE users SET name = 'Ghost' WHERE id = 999",
+        [],
+        "update ghost",
+        || openproxy_types::CoreError::Validation("not found".into()),
+    )
+    .unwrap_err();
+    match err {
+        openproxy_types::CoreError::Validation(msg) => assert_eq!(msg, "not found"),
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    assert!(check_affected(1, || openproxy_types::CoreError::Validation("err".into())).is_ok());
+    let err2 = check_affected(0, || openproxy_types::CoreError::Validation("err0".into())).unwrap_err();
+    match err2 {
+        openproxy_types::CoreError::Validation(msg) => assert_eq!(msg, "err0"),
+        other => panic!("expected Validation error, got {other:?}"),
+    }
 }

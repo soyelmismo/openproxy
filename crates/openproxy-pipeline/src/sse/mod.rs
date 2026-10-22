@@ -194,6 +194,24 @@ pub fn format_sse_line(payload: &serde_json::Value) -> String {
     )
 }
 
+/// Append a named SSE event frame (`event: <name>\ndata: <payload>\n\n`) to a byte buffer.
+pub fn append_sse_event(
+    out: &mut bytes::BytesMut,
+    event_name: &str,
+    payload: &serde_json::Value,
+) {
+    use bytes::BufMut;
+    out.extend_from_slice(b"event: ");
+    out.extend_from_slice(event_name.as_bytes());
+    out.extend_from_slice(b"\ndata: ");
+    if serde_json::to_writer((&mut *out).writer(), payload).is_err() {
+        out.extend_from_slice(
+            br#"{"type":"error","error":{"type":"internal_error","message":"Internal server error"}}"#,
+        );
+    }
+    out.extend_from_slice(b"\n\n");
+}
+
 /// The [DONE] sentinel.
 pub const SSE_DONE: &str = "data: [DONE]\n\n";
 
@@ -657,6 +675,16 @@ mod tests {
     fn format_sse_line_with_empty_object() {
         let line = format_sse_line(&serde_json::json!({}));
         assert_eq!(line, "data: {}\n\n");
+    }
+
+    #[test]
+    fn append_sse_event_produces_correct_output() {
+        let mut buf = bytes::BytesMut::new();
+        append_sse_event(&mut buf, "test_event", &serde_json::json!({"foo": "bar"}));
+        assert_eq!(
+            std::str::from_utf8(&buf).unwrap(),
+            "event: test_event\ndata: {\"foo\":\"bar\"}\n\n"
+        );
     }
 
     #[test]
