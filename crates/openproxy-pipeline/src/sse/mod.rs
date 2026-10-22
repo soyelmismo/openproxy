@@ -128,7 +128,7 @@ impl UpstreamSseChunk {
     /// translators.
     #[inline]
     pub fn is_liveness(&self) -> bool {
-        self.payload.is_null() && !self.done
+        self.raw_payload.is_none() && self.payload.is_null() && !self.done
     }
 
     /// Get the forwardable JSON string. Returns the raw payload if

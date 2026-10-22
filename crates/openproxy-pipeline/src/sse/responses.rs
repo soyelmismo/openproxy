@@ -117,6 +117,10 @@ pub fn parse_responses_sse_stream_line(
         });
     }
 
+    if matches!(event_type, "response.created" | "response.in_progress") {
+        return Ok(Some(UpstreamSseChunk::liveness()));
+    }
+
     if event_type == "response.output_item.added"
         && let Some(item) = value.get("item")
     {
@@ -164,6 +168,9 @@ pub fn parse_responses_sse_stream_line(
                 name,
             );
             return Ok(Some(chunk));
+        }
+        if matches!(item_type, "reasoning" | "message") {
+            return Ok(Some(UpstreamSseChunk::liveness()));
         }
     }
 
@@ -323,6 +330,7 @@ pub fn parse_responses_sse_stream_line(
                 chunk_id, created, model_name, delta, true,
             )));
         }
+        return Ok(Some(UpstreamSseChunk::liveness()));
     }
 
     if matches!(
@@ -335,6 +343,7 @@ pub fn parse_responses_sse_stream_line(
                 chunk_id, created, model_name, delta, false,
             )));
         }
+        return Ok(Some(UpstreamSseChunk::liveness()));
     }
 
     if matches!(
@@ -585,12 +594,33 @@ mod tests {
     }
 
     #[test]
-    fn responses_response_created_with_null_error_is_not_error() {
+    fn responses_response_created_emits_liveness() {
         let mut state = ResponsesSseState::default();
         let line = r#"data: {"type":"response.created","response":{"id":"resp_123","error":null}}"#;
         let chunk = parse_responses_sse_stream_line(line, "c1", 123, "muse-spark", &mut state)
-            .expect("should not error on null response.error");
-        assert!(chunk.is_none());
+            .expect("should not error on null response.error")
+            .expect("response.created should yield a liveness chunk");
+        assert!(chunk.is_liveness());
+    }
+
+    #[test]
+    fn responses_reasoning_item_added_emits_liveness() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.output_item.added","item":{"id":"item_1","type":"reasoning"}}"#;
+        let chunk = parse_responses_sse_stream_line(line, "c1", 123, "gpt-6.1-sol", &mut state)
+            .expect("parse")
+            .expect("reasoning output item should yield a liveness chunk");
+        assert!(chunk.is_liveness());
+    }
+
+    #[test]
+    fn responses_empty_reasoning_delta_emits_liveness() {
+        let mut state = ResponsesSseState::default();
+        let line = r#"data: {"type":"response.reasoning_text.delta","delta":""}"#;
+        let chunk = parse_responses_sse_stream_line(line, "c1", 123, "gpt-6.1-sol", &mut state)
+            .expect("parse")
+            .expect("empty reasoning delta should yield a liveness chunk");
+        assert!(chunk.is_liveness());
     }
 
     #[test]

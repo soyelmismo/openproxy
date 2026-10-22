@@ -13,6 +13,9 @@ fn feed_chunk_to_acc(
     acc: &mut ResponseAccumulator,
     mut chunk: crate::sse::UpstreamSseChunk,
 ) -> bool {
+    if chunk.is_liveness() {
+        return false;
+    }
     let done = chunk.done;
     let usage = chunk.usage.take();
     let stop_reason = chunk.stop_reason.take();
