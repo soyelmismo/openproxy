@@ -266,20 +266,8 @@ fn test_finalize_request_antigravity_delegates_to_content_headers() {
             id: openproxy_types::ComboTargetId(1),
             combo_id: openproxy_types::ComboId(1),
             provider_id: openproxy_types::ProviderId::new("antigravity"),
-            account_id: None,
-            model_row_id: None,
-            sub_combo_id: None,
             priority_order: 1,
-            weight: 1,
-            active: true,
-            rate_limit_scope: openproxy_types::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
-            description: None,
-            selected_accounts: None,
+            ..Default::default()
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -290,8 +278,7 @@ fn test_finalize_request_antigravity_delegates_to_content_headers() {
             ..Default::default()
         },
         api_key: "ya29.test".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let body = bytes::Bytes::from_static(b"{\"test\":true}");

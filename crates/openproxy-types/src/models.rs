@@ -92,6 +92,16 @@ impl Model {
             active: self.active,
         }
     }
+
+    /// Convenience constructor for test fixtures.
+    pub fn test(provider: impl Into<ProviderId>, model: impl Into<ModelId>) -> Self {
+        Self {
+            provider_id: provider.into(),
+            model_id: model.into(),
+            active: true,
+            ..Default::default()
+        }
+    }
 }
 
 /// Compact typed representation of model types (1 byte enum vs heap string).

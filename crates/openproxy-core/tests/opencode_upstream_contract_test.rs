@@ -254,18 +254,7 @@ fn test_opencode_zen_request_wrapping_and_aliasing() {
             id: openproxy_types::ids::ComboTargetId(1),
             combo_id: openproxy_types::ids::ComboId(1),
             provider_id: openproxy_types::ids::ProviderId::new("opencode-zen"),
-            account_id: None,
-            model_row_id: None,
-            sub_combo_id: None,
-            priority_order: 0,
             weight: 1,
-            active: true,
-            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: openproxy_types::Model {
@@ -277,8 +266,7 @@ fn test_opencode_zen_request_wrapping_and_aliasing() {
             ..Default::default()
         },
         api_key: String::new(), // Free tier
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let body =

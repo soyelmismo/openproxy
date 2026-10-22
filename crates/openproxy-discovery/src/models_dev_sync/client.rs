@@ -82,15 +82,12 @@ async fn fetch_models_dev_once(upstream: &Arc<UpstreamClient>) -> Result<bytes::
 
     if !status.is_success() {
         let text = String::from_utf8_lossy(&body);
-        return Err(CoreError::UpstreamError {
-            status: status.as_u16(),
-            provider: "models.dev".into(),
-            model: "<sync>".into(),
-            body: text.to_string(),
-            is_proxy_rotated: false,
-            class: openproxy_types::UpstreamErrorClass::Generic,
-            is_hard_skip: false,
-        });
+        return Err(CoreError::upstream(
+            status.as_u16(),
+            "models.dev",
+            "<sync>",
+            text.to_string(),
+        ));
     }
 
     Ok(body)

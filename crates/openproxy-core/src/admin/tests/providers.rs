@@ -17,6 +17,7 @@ fn cp(id: &str, name: &str) -> CreateProviderInput {
         format: "openai".into(),
         extra_headers_json: None,
         stream_mode: None,
+        prompt_cache_ttl: None,
     }
 }
 

@@ -322,23 +322,8 @@ fn test_wrap_request_body_free_tier() {
     let adapter = OpenCodeZenAdapter::new();
     let target = openproxy_types::context::ResolvedTarget {
         target: openproxy_types::combos::ComboTarget {
-            id: openproxy_types::ids::ComboTargetId(0),
-            combo_id: openproxy_types::ids::ComboId(0),
             provider_id: openproxy_types::ids::ProviderId::new("opencode-zen"),
-            account_id: None,
-            model_row_id: None,
-            sub_combo_id: None,
-            priority_order: 0,
-            weight: 1,
-            active: true,
-            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
-            description: None,
-            selected_accounts: None,
+            ..Default::default()
         },
         model: openproxy_types::models::Model {
             row_id: openproxy_types::ids::ModelRowId(1),
@@ -348,8 +333,7 @@ fn test_wrap_request_body_free_tier() {
             ..Default::default()
         },
         api_key: "public".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let initial_body = bytes::Bytes::from(
@@ -375,23 +359,8 @@ fn test_wrap_request_body_muse_spark_responses() {
     let adapter = OpenCodeZenAdapter::new();
     let target = openproxy_types::context::ResolvedTarget {
         target: openproxy_types::combos::ComboTarget {
-            id: openproxy_types::ids::ComboTargetId(0),
-            combo_id: openproxy_types::ids::ComboId(0),
             provider_id: openproxy_types::ids::ProviderId::new("opencode-zen"),
-            account_id: None,
-            model_row_id: None,
-            sub_combo_id: None,
-            priority_order: 0,
-            weight: 1,
-            active: true,
-            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
-            description: None,
-            selected_accounts: None,
+            ..Default::default()
         },
         model: openproxy_types::models::Model {
             row_id: openproxy_types::ids::ModelRowId(1),
@@ -401,8 +370,7 @@ fn test_wrap_request_body_muse_spark_responses() {
             ..Default::default()
         },
         api_key: "public".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let initial_body = bytes::Bytes::from(

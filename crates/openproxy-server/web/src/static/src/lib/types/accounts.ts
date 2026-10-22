@@ -37,6 +37,7 @@ export interface Provider {
   notif_keyword_only?: boolean;
   direct_first?: boolean;
   stream_mode?: 'auto' | 'streaming' | 'unary';
+  prompt_cache_ttl?: string;
   prune_models?: boolean;
 }
 
@@ -48,6 +49,7 @@ export interface CreateProviderInput {
   format: string;
   extra_headers_json: string | null;
   stream_mode?: 'auto' | 'streaming' | 'unary';
+  prompt_cache_ttl?: string;
 }
 
 export interface UpdateProviderInput {
@@ -61,6 +63,7 @@ export interface UpdateProviderInput {
   proxy_rotation_errors?: string;
   proxy_rotation_mode?: string;
   stream_mode?: 'auto' | 'streaming' | 'unary';
+  prompt_cache_ttl?: string;
 }
 
 export interface ModelQuotaDetail {

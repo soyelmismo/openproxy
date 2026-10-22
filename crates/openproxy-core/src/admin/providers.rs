@@ -20,6 +20,8 @@ pub struct CreateProviderInput {
     pub rate_limit_scope: Option<crate::providers::RateLimitScope>,
     #[serde(default)]
     pub stream_mode: Option<String>,
+    #[serde(default)]
+    pub prompt_cache_ttl: Option<String>,
 }
 
 impl Validatable for CreateProviderInput {
@@ -47,6 +49,7 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
     let auth = AuthType::parse(&input.auth_type).map_err(CoreError::Validation)?;
     let format = ProviderFormat::parse(&input.format).map_err(CoreError::Validation)?;
     let stream_mode = input.stream_mode.clone();
+    let prompt_cache_ttl = input.prompt_cache_ttl.clone();
     providers::create(
         conn,
         providers::NewProvider {
@@ -62,12 +65,13 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
                 .unwrap_or(crate::providers::RateLimitScope::Account),
         },
     )?;
-    if let Some(sm) = stream_mode {
+    if stream_mode.is_some() || prompt_cache_ttl.is_some() {
         update_provider(
             conn,
             &id,
             &UpdateProviderInput {
-                stream_mode: Some(sm),
+                stream_mode,
+                prompt_cache_ttl,
                 ..Default::default()
             },
         )?;
@@ -130,6 +134,7 @@ pub struct UpdateProviderInput {
     pub current_proxy_id: Option<Option<String>>,
     pub stream_mode: Option<String>,
     pub prune_models: Option<bool>,
+    pub prompt_cache_ttl: Option<String>,
 }
 
 impl Validatable for UpdateProviderInput {
@@ -169,6 +174,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             CurrentProxyId,
             StreamMode,
             PruneModels,
+            PromptCacheTtl,
         }
 
         struct V;
@@ -254,6 +260,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::PruneModels => {
                             out.prune_models = Some(map.next_value()?);
                         }
+                        Field::PromptCacheTtl => {
+                            out.prompt_cache_ttl = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(out)
@@ -307,6 +316,7 @@ pub fn update_provider(
             current_proxy_id: current_proxy,
             stream_mode: input.stream_mode.as_deref(),
             prune_models: input.prune_models,
+            prompt_cache_ttl: input.prompt_cache_ttl.as_deref(),
         },
     )
 }

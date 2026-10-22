@@ -51,6 +51,20 @@ impl ProviderAdapterConfig {
         }
         None
     }
+
+    /// Returns the configured prompt cache TTL if non-empty and not "auto".
+    pub fn prompt_cache_ttl(&self) -> Option<&str> {
+        for (k, v) in &self.extra_headers {
+            let k_lower = k.to_ascii_lowercase();
+            if k_lower == "x-openproxy-prompt-cache-ttl" || k_lower == "x-openproxy-cache-ttl" {
+                let v_trimmed = v.trim();
+                if !v_trimmed.is_empty() && !v_trimmed.eq_ignore_ascii_case("auto") {
+                    return Some(v_trimmed);
+                }
+            }
+        }
+        None
+    }
 }
 
 pub type AdapterAuthType = openproxy_types::AuthType;

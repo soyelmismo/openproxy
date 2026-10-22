@@ -58,6 +58,13 @@ impl CustomAdapter {
             ));
         }
 
+        if provider.prompt_cache_ttl.as_ref() != "auto" {
+            extra_headers.push((
+                "x-openproxy-prompt-cache-ttl".to_string(),
+                provider.prompt_cache_ttl.to_string(),
+            ));
+        }
+
         Self {
             config: ProviderAdapterConfig {
                 id: provider.id.clone(),

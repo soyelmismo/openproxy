@@ -3,7 +3,6 @@ use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::config::CooldownMode;
 use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
 use openproxy_types::models::Model;
-use openproxy_types::providers::RateLimitScope;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -110,16 +109,8 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
             provider_id: ProviderId::new("codex-1"),
             account_id: Some(openproxy_types::AccountId(1522)),
             model_row_id: Some(ModelRowId(777)),
-            sub_combo_id: None,
             priority_order: 1,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: Model {
@@ -130,8 +121,7 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
             ..Default::default()
         },
         api_key: "key-1522".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let t1_acc2 = crate::context::ResolvedTarget {
@@ -141,16 +131,8 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
             provider_id: ProviderId::new("codex-2"),
             account_id: Some(openproxy_types::AccountId(232)),
             model_row_id: Some(ModelRowId(777)),
-            sub_combo_id: None,
             priority_order: 1,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: Model {
@@ -161,8 +143,7 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
             ..Default::default()
         },
         api_key: "key-232".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let t2 = crate::context::ResolvedTarget {
@@ -172,16 +153,8 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
             provider_id: ProviderId::new("fallback"),
             account_id: Some(openproxy_types::AccountId(999)),
             model_row_id: Some(ModelRowId(888)),
-            sub_combo_id: None,
             priority_order: 2,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: Model {
@@ -192,8 +165,7 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
             ..Default::default()
         },
         api_key: "key-999".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let targets = vec![t1_acc1, t1_acc2, t2];

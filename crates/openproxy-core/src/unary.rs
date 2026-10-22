@@ -483,15 +483,7 @@ pub fn map_upstream_status_error(
         },
         401 | 403 => CoreError::Auth(body_msg),
         400 => CoreError::Validation(body_msg),
-        _ => CoreError::UpstreamError {
-            status: status_code,
-            provider: provider.to_string(),
-            model: model.to_string(),
-            body: body_msg,
-            is_proxy_rotated: false,
-            class: openproxy_types::UpstreamErrorClass::Generic,
-            is_hard_skip: false,
-        },
+        _ => CoreError::upstream(status_code, provider, model, body_msg),
     }
 }
 

@@ -111,6 +111,52 @@ async function onCycleStreamMode(
   }
 }
 
+function getProviderTtlOptions(format: string, providerId: string): Array<{ value: string; label: string }> {
+  // Provider-specific allowed prompt cache TTL options based on official API documentation
+  const isAnthropicFamily = format === 'anthropic' || providerId === 'claude-code';
+  const isResponsesFamily = format === 'responses' || providerId === 'codex';
+
+  if (isAnthropicFamily) {
+    return [
+      { value: 'auto', label: 'auto (default / 5m)' },
+      { value: '5m', label: '5m (ephemeral standard)' },
+      { value: '1h', label: '1h (extended cache beta)' },
+    ];
+  }
+
+  if (isResponsesFamily) {
+    return [
+      { value: 'auto', label: 'auto (default / 5-10m)' },
+      { value: '12h', label: '12h (Responses API extended)' },
+    ];
+  }
+
+  // Generic fallback or providers that support both/standard
+  return [
+    { value: 'auto', label: 'auto (default)' },
+    { value: '5m', label: '5m (Claude standard)' },
+    { value: '1h', label: '1h (Claude extended)' },
+    { value: '12h', label: '12h (Responses API extended)' },
+  ];
+}
+
+async function onChangePromptCacheTtl(
+  providerId: string,
+  newTtl: string,
+): Promise<void> {
+  try {
+    await api('/providers/' + encodeURIComponent(providerId), {
+      method: 'PATCH',
+      body: JSON.stringify({ prompt_cache_ttl: newTtl }),
+    });
+    showToast(`Prompt cache TTL set to ${newTtl}`, 'success');
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating prompt cache TTL');
+  }
+}
+
 async function onRefreshProvider(
   providerId: string,
   e: Event | null,
@@ -272,6 +318,26 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
               @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)}
             >
               stream: ${provider.stream_mode || 'auto'}
+            </span>
+            <span
+              class=${'chip ttl-chip' + (provider.prompt_cache_ttl && provider.prompt_cache_ttl !== 'auto' ? ' combo-chip' : '')}
+              title="Prompt cache TTL: auto, 5m, 1h, 12h. Click to change."
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;"
+            >
+              cache:
+              <select
+                class="ttl-inline-select"
+                style="background: transparent; border: none; color: inherit; font-size: inherit; font-weight: inherit; padding: 0; cursor: pointer; outline: none;"
+                .value=${provider.prompt_cache_ttl || 'auto'}
+                @change=${(e: Event) => {
+                  const target = e.target as HTMLSelectElement;
+                  if (target) void onChangePromptCacheTtl(provider.id, target.value);
+                }}
+              >
+                ${getProviderTtlOptions(provider.format, provider.id).map(
+                  (opt) => html`<option value=${opt.value} ?selected=${(provider.prompt_cache_ttl || 'auto') === opt.value}>${opt.label}</option>`
+                )}
+              </select>
             </span>
             ${provider.extra_headers_json
               ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`

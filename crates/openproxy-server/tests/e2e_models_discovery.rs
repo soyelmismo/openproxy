@@ -177,6 +177,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
                 extra_headers_json: None,
                 rate_limit_scope: None,
                 stream_mode: None,
+        prompt_cache_ttl: None,
             },
         )
         .expect("prov");

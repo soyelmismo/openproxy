@@ -284,6 +284,14 @@ impl ComboTarget {
         self.is_cooldown_forced_disabled()
             || (self.cooldown_mode.is_none() && combo.is_cooldown_disabled())
     }
+
+    /// Convenience constructor for test fixtures.
+    pub fn test(provider: impl Into<ProviderId>) -> Self {
+        Self {
+            provider_id: provider.into(),
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]

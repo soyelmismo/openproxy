@@ -108,20 +108,9 @@ fn test_wrap_request_body_enforces_stream_true() {
             id: openproxy_types::ComboTargetId(1),
             combo_id: openproxy_types::ComboId(1),
             provider_id: openproxy_types::ProviderId::new("codex"),
-            account_id: None,
             model_row_id: Some(openproxy_types::ModelRowId(1)),
-            sub_combo_id: None,
-            priority_order: 0,
             weight: 100,
-            active: true,
-            rate_limit_scope: openproxy_types::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
-            description: None,
-            selected_accounts: None,
+            ..Default::default()
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -135,8 +124,7 @@ fn test_wrap_request_body_enforces_stream_true() {
             ..Default::default()
         },
         api_key: "tok".to_string(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let wrapped = adapter
@@ -639,20 +627,9 @@ fn test_pinned_contract_drives_headers_and_body_of_one_generation() {
             id: openproxy_types::ComboTargetId(1),
             combo_id: openproxy_types::ComboId(1),
             provider_id: openproxy_types::ProviderId::new("codex"),
-            account_id: None,
             model_row_id: Some(openproxy_types::ModelRowId(1)),
-            sub_combo_id: None,
-            priority_order: 0,
             weight: 100,
-            active: true,
-            rate_limit_scope: openproxy_types::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
-            description: None,
-            selected_accounts: None,
+            ..Default::default()
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -666,8 +643,7 @@ fn test_pinned_contract_drives_headers_and_body_of_one_generation() {
             ..Default::default()
         },
         api_key: "tok".to_string(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
     let wrapped = adapter
         .wrap_request_body(
@@ -703,20 +679,9 @@ fn test_without_a_pinned_contract_the_body_keeps_its_shape() {
             id: openproxy_types::ComboTargetId(1),
             combo_id: openproxy_types::ComboId(1),
             provider_id: openproxy_types::ProviderId::new("codex"),
-            account_id: None,
             model_row_id: Some(openproxy_types::ModelRowId(1)),
-            sub_combo_id: None,
-            priority_order: 0,
             weight: 100,
-            active: true,
-            rate_limit_scope: openproxy_types::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
-            description: None,
-            selected_accounts: None,
+            ..Default::default()
         },
         model: openproxy_types::Model {
             row_id: openproxy_types::ModelRowId(1),
@@ -730,8 +695,7 @@ fn test_without_a_pinned_contract_the_body_keeps_its_shape() {
             ..Default::default()
         },
         api_key: "tok".to_string(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
     let wrapped = adapter
         .wrap_request_body(

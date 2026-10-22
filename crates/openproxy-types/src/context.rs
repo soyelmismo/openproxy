@@ -1,7 +1,7 @@
 use crate::combos::ComboTarget;
 use crate::models::Model;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CustomProviderMeta {
     pub access_token: String,
     pub maybe_refresh: Option<String>,
@@ -14,13 +14,32 @@ pub struct CustomProviderMeta {
     pub claude_metadata: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ResolvedTarget {
     pub target: ComboTarget,
     pub model: Model,
     pub api_key: String,
     pub api_key_label: Option<String>,
     pub custom_meta: Option<CustomProviderMeta>,
+}
+
+impl ResolvedTarget {
+    pub fn test(provider: impl Into<crate::ids::ProviderId>, model: impl Into<crate::ids::ModelId>) -> Self {
+        let provider_id = provider.into();
+        let model_id = model.into();
+        Self {
+            target: ComboTarget {
+                provider_id: provider_id.clone(),
+                ..Default::default()
+            },
+            model: Model {
+                provider_id,
+                model_id,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
 }
 
 #[cfg(test)]

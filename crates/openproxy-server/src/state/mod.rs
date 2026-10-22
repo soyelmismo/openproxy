@@ -282,6 +282,12 @@ impl AppState {
                         p.stream_mode.to_string(),
                     )]);
                 }
+                if p.prompt_cache_ttl.as_ref() != "auto" {
+                    adapter.append_extra_headers(vec![(
+                        "x-openproxy-prompt-cache-ttl".into(),
+                        p.prompt_cache_ttl.to_string(),
+                    )]);
+                }
             } else {
                 new_adapters.push(adapters::ProviderAdapterEnum::Custom(Box::new(
                     adapters::CustomAdapter::from_provider_row(p),

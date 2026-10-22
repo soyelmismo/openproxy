@@ -2,7 +2,7 @@ mod multi_account;
 mod rotation;
 
 use super::helpers::{is_max_request_timeout, should_skip_preventive_target};
-use openproxy_types::{CancelReason, CoreError, UpstreamErrorClass};
+use openproxy_types::{CancelReason, CoreError};
 
 #[test]
 fn test_is_max_request_timeout() {
@@ -30,26 +30,20 @@ fn test_is_max_request_timeout() {
     let client_disc = CoreError::Cancelled(CancelReason::ClientDisconnected);
     assert!(!is_max_request_timeout(&client_disc));
 
-    let gateway_timeout = CoreError::UpstreamError {
-        status: 504,
-        provider: "openai".to_string(),
-        model: "gpt-4o".to_string(),
-        body: "gateway timeout while waiting for total response".to_string(),
-        is_proxy_rotated: false,
-        class: UpstreamErrorClass::Generic,
-        is_hard_skip: false,
-    };
+    let gateway_timeout = CoreError::upstream(
+        504,
+        "openai",
+        "gpt-4o",
+        "gateway timeout while waiting for total response",
+    );
     assert!(is_max_request_timeout(&gateway_timeout));
 
-    let internal_error = CoreError::UpstreamError {
-        status: 500,
-        provider: "openai".to_string(),
-        model: "gpt-4o".to_string(),
-        body: "internal server error".to_string(),
-        is_proxy_rotated: false,
-        class: UpstreamErrorClass::Generic,
-        is_hard_skip: false,
-    };
+    let internal_error = CoreError::upstream(
+        500,
+        "openai",
+        "gpt-4o",
+        "internal server error",
+    );
     assert!(!is_max_request_timeout(&internal_error));
 }
 
@@ -57,7 +51,7 @@ fn test_is_max_request_timeout() {
 fn test_should_skip_preventive_target_disabled_cooldown() {
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::config::CooldownMode;
-    use openproxy_types::providers::RateLimitScope;
+    
     use openproxy_types::{ComboId, ComboTargetId};
 
     let limiter = crate::predictive_rate_limit::PredictiveRateLimiter::new();
@@ -86,17 +80,8 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
             combo_id: ComboId(1),
             provider_id: openproxy_types::ProviderId("openai".into()),
             account_id: Some(openproxy_types::AccountId(1)),
-            model_row_id: None,
-            sub_combo_id: None,
             priority_order: 1,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: openproxy_types::models::Model {
@@ -106,8 +91,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
             ..Default::default()
         },
         api_key: "key1".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let target_b = crate::context::ResolvedTarget {
@@ -203,7 +187,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
     use openproxy_types::models::Model;
-    use openproxy_types::providers::RateLimitScope;
+    
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -333,18 +317,8 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
             id: ComboTargetId(tid),
             combo_id: ComboId(1),
             provider_id: ProviderId::new(prov),
-            account_id: None,
-            model_row_id: None,
-            sub_combo_id: None,
             priority_order: prio,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: Model {
@@ -355,8 +329,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
             ..Default::default()
         },
         api_key: "sk-test".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let targets = vec![
@@ -406,7 +379,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
 async fn test_adversarial_single_target_combo_bypasses_race() {
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::config::CooldownMode;
-    use openproxy_types::providers::RateLimitScope;
+    
     use openproxy_types::{ComboId, ComboTargetId, ModelRowId, ProviderId};
 
     let (_pool, conn_arc, _path) = crate::test_utils::fresh_pool();
@@ -438,16 +411,8 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
             provider_id: ProviderId::new("openai"),
             account_id: Some(openproxy_types::AccountId(1)),
             model_row_id: Some(ModelRowId(1)),
-            sub_combo_id: None,
             priority_order: 1,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: openproxy_types::models::Model {
@@ -457,8 +422,7 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
             ..Default::default()
         },
         api_key: "key-1".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let to_run = vec![single_target];
@@ -494,7 +458,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
     use openproxy_types::models::Model;
-    use openproxy_types::providers::RateLimitScope;
+    
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -563,18 +527,9 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
             id: ComboTargetId(tid),
             combo_id: ComboId(400),
             provider_id: ProviderId::new(prov),
-            account_id: None,
             model_row_id: Some(ModelRowId(tid)),
-            sub_combo_id: None,
             priority_order: tid as i32,
             weight: 1,
-            active: true,
-            rate_limit_scope: RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: Model {
@@ -585,8 +540,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
             ..Default::default()
         },
         api_key: "sk-test".into(),
-        api_key_label: None,
-        custom_meta: None,
+        ..Default::default()
     };
 
     let targets = vec![mk_target(401, "prov-w1"), mk_target(402, "prov-w2")];

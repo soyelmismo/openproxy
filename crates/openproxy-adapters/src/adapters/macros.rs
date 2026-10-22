@@ -89,6 +89,9 @@ macro_rules! define_provider_adapter {
             pub fn forced_streaming(&self) -> Option<bool> {
                 self.config().forced_streaming()
             }
+            pub fn prompt_cache_ttl(&self) -> Option<&str> {
+                self.config().prompt_cache_ttl()
+            }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 match self {
                     $( Self::$b_variant(inner) => inner.metadata(), )+

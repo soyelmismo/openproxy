@@ -241,10 +241,17 @@ pub struct Provider {
     /// Upstream streaming mode: "auto" (default), "streaming", "unary".
     #[serde(default = "default_stream_mode")]
     pub stream_mode: Box<str>,
+    /// Upstream prompt cache TTL: "auto" (default), "5m", "1h", "12h".
+    #[serde(default = "default_prompt_cache_ttl")]
+    pub prompt_cache_ttl: Box<str>,
     /// Whether models missing from upstream discovery are pruned from DB.
     /// Default true. Disabled for volatile P2P sources (e.g. antseed).
     #[serde(default = "default_true")]
     pub prune_models: bool,
+}
+
+fn default_prompt_cache_ttl() -> Box<str> {
+    "auto".into()
 }
 
 fn default_stream_mode() -> Box<str> {

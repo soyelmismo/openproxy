@@ -135,6 +135,15 @@ function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
               </select>
             </div>
             <div class="field">
+              <label for="provider-prompt-cache-ttl">Prompt Cache TTL</label>
+              <select id="provider-prompt-cache-ttl" name="prompt_cache_ttl">
+                <option value="auto">auto (default)</option>
+                <option value="5m">5m (Claude standard)</option>
+                <option value="1h">1h (Claude extended)</option>
+                <option value="12h">12h (Responses API extended)</option>
+              </select>
+            </div>
+            <div class="field">
               <label for="provider-extra-headers">Extra Headers (JSON)</label>
               <textarea id="provider-extra-headers" name="extra_headers_json" rows="3" placeholder='{"User-Agent": "Mozilla/5.0...", "Origin": "https://..."}' style="width: 100%; font-family: monospace; font-size: 0.85em; resize: vertical;"></textarea>
             </div>

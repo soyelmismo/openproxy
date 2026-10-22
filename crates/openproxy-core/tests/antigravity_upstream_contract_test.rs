@@ -108,18 +108,7 @@ fn test_antigravity_golden_contract_spec_parity() {
             id: openproxy_types::ids::ComboTargetId(1),
             combo_id: openproxy_types::ids::ComboId(1),
             provider_id: openproxy_types::ids::ProviderId::new("antigravity"),
-            account_id: None,
-            model_row_id: None,
-            sub_combo_id: None,
-            priority_order: 0,
             weight: 1,
-            active: true,
-            rate_limit_scope: openproxy_types::providers::RateLimitScope::Account,
-            cooldown_mode: None,
-            cooldown_base_secs: None,
-            cooldown_max_secs: None,
-            cooldown_factor: None,
-            thinking_effort: None,
             ..Default::default()
         },
         model: openproxy_types::Model {
@@ -131,18 +120,12 @@ fn test_antigravity_golden_contract_spec_parity() {
             ..Default::default()
         },
         api_key: "ya29.test-token".into(),
-        api_key_label: None,
         custom_meta: Some(openproxy_types::context::CustomProviderMeta {
             access_token: String::new(),
-            maybe_refresh: None,
-            kiro_region: None,
-            kiro_profile_arn: None,
             antigravity_project: Some("p-proj-123".into()),
-            antigravity_metadata: None,
-            codex_workspace_id: None,
-            claude_account_uuid: None,
-            claude_metadata: None,
+            ..Default::default()
         }),
+        ..Default::default()
     };
 
     let inner_req = serde_json::json!({

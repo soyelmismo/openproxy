@@ -138,6 +138,40 @@ pub enum CoreError {
 }
 
 impl CoreError {
+    pub fn upstream(
+        status: u16,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self::UpstreamError {
+            status,
+            provider: provider.into(),
+            model: model.into(),
+            body: body.into(),
+            is_proxy_rotated: false,
+            class: crate::UpstreamErrorClass::Generic,
+            is_hard_skip: false,
+        }
+    }
+
+    pub fn upstream_retryable(
+        status: u16,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self::UpstreamError {
+            status,
+            provider: provider.into(),
+            model: model.into(),
+            body: body.into(),
+            is_proxy_rotated: false,
+            class: crate::UpstreamErrorClass::Generic,
+            is_hard_skip: false,
+        }
+    }
+
     #[inline]
     pub fn upstream_error(
         status: u16,

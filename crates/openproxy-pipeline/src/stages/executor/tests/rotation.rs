@@ -83,15 +83,12 @@ async fn test_execute_sequential_targets_skips_failed_race_targets() {
 
     let simulated_race_err = crate::PipelineResult {
         status_code: 500,
-        error: Some(openproxy_types::CoreError::UpstreamError {
-            status: 500,
-            provider: "openai".into(),
-            model: "gpt-4o".into(),
-            body: "upstream lane failed".into(),
-            is_proxy_rotated: false,
-            class: openproxy_types::UpstreamErrorClass::Generic,
-            is_hard_skip: false,
-        }),
+        error: Some(openproxy_types::CoreError::upstream(
+            500,
+            "openai",
+            "gpt-4o",
+            "upstream lane failed",
+        )),
         final_response: None,
         attempts: 2,
         usage_tuple: None,
