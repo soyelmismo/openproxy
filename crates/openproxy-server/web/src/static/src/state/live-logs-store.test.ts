@@ -102,9 +102,9 @@ describe("liveLogsStore detail management", () => {
     expect((fin?.terminal, fin?.terminalKind)).toBe("failed");
   });
 
-  it("auto-expires stale inflight requests older than 30m", () => {
+  it("auto-expires stale inflight requests older than 5m", () => {
     liveLogsStore.clearForTest();
-    const staleTime = Date.now() - 1_900_000;
+    const staleTime = Date.now() - 350_000;
     dispatchAttemptEvent(1, makeEvent({ attempt_key: "tr-stale", request_id: "req-stale", trace_id: "tr-stale", stage: "streaming", event_time: staleTime, started_at: staleTime, stage_seq: 1, stage_rank: 3, terminal: false }));
     expect(liveLogsStore.selectInflightRows().length).toBe(0);
     const fin = liveLogsStore.selectFinishedRows()[0];
@@ -159,7 +159,7 @@ describe("liveLogsStore terminality invariants", () => {
   it("usage_row anchors the attempt and later attempt_events cannot mutate it", () => {
     resetStore();
     dispatchAttemptEvent(1, makeEvent({ attempt_key: "tr-4", trace_id: "tr-4", request_id: "req-4", stage: "streaming", stage_seq: 3, stage_rank: 3, event_time: 1_200, started_at: 1_000 }));
-    dispatchUsageRow(2, makeRow({ id: 5, trace_id: "tr-4", request_id: "req-4", status_code: 200, total_ms: 400 }));
+    dispatchUsageRow(2, makeRow({ id: 5, trace_id: "tr-4", request_id: "req-4", status_code: 200, total_ms: 400, created_at: "1970-01-01T00:00:01.400Z" }));
     const a = liveLogsStore.selectDetail({ kind: "attempt", attemptKey: "tr-4" });
     expect((a?.terminal, a?.stage, a?.rowId, a?.updatedAtMs)).toBe(1_400);
     dispatchAttemptEvent(3, makeEvent({ attempt_key: "tr-4", trace_id: "tr-4", request_id: "req-4", stage: "failed", stage_seq: 4, stage_rank: 4, event_time: 9_999, started_at: 1_000, status_code: 500, error: "late failure", terminal: true }));
@@ -214,13 +214,13 @@ describe("liveLogsStore phase progression", () => {
 
   it("selectFinishedRows orders by updatedAtMs desc (completion time) so long-running requests finish at top", () => {
     resetStore();
-    // Request A started early (t=1000) and took a long time (total_ms=10000 -> updatedAtMs=11000)
-    dispatchUsageRow(1, makeRow({ id: 1, trace_id: "tr-long", total_ms: 10_000, created_at: "1970-01-01T00:00:01.000Z" }));
-    // Request B started later (t=5000) and finished quickly (total_ms=500 -> updatedAtMs=5500)
-    dispatchUsageRow(2, makeRow({ id: 2, trace_id: "tr-fast", total_ms: 500, created_at: "1970-01-01T00:00:05.000Z" }));
+    // Request A finished at t=11000 (created_at is the completion timestamp in DB, total_ms=10000 -> startedAtMs=1000)
+    dispatchUsageRow(1, makeRow({ id: 1, trace_id: "tr-long", total_ms: 10_000, created_at: "1970-01-01T00:00:11.000Z" }));
+    // Request B finished at t=5500 (created_at is completion timestamp, total_ms=500 -> startedAtMs=5000)
+    dispatchUsageRow(2, makeRow({ id: 2, trace_id: "tr-fast", total_ms: 500, created_at: "1970-01-01T00:00:05.500Z" }));
 
-    // By start time, tr-fast would be first (t=5000 > t=1000).
-    // But by completion time (updatedAtMs), tr-long finished at 11000 > 5500, so it must be first.
+    // By start time, tr-fast would be later (t=5000 > t=1000).
+    // By completion time (updatedAtMs), tr-long finished at 11000 > 5500, so it must be first.
     expect(finishedKeys()).toEqual(["tr-long", "tr-fast"]);
   });
 });
@@ -448,13 +448,13 @@ describe("liveLogsStore malformed payloads", () => {
 describe("liveLogsStore inflight expiry (fake timers)", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("inflight attempts expire only after 30 minutes of silence", () => {
+  it("inflight attempts expire only after 5 minutes of silence", () => {
     vi.useFakeTimers({ now: 1_700_000_000_000, toFake: ["Date"] });
     resetStore();
     dispatchAttemptEvent(1, makeEvent({ attempt_key: "tr-exp", trace_id: "tr-exp", request_id: "req-exp", stage: "streaming", stage_seq: 3, stage_rank: 3, event_time: 1_700_000_000_000, started_at: 1_700_000_000_000 }));
-    vi.setSystemTime(1_700_000_000_000 + 1_800_000);
+    vi.setSystemTime(1_700_000_000_000 + 300_000);
     expect(inflightKeys()).toEqual(["tr-exp"]);
-    vi.setSystemTime(1_700_000_000_000 + 1_800_001);
+    vi.setSystemTime(1_700_000_000_000 + 300_001);
     expect(inflightKeys()).toEqual([]);
     const finished = liveLogsStore.selectFinishedRows();
     expect(finished[0]?.terminalKind).toBe("failed");

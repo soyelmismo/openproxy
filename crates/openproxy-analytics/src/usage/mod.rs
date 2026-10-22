@@ -38,8 +38,8 @@ pub fn get_active_inflight_attempts() -> Vec<openproxy_types::usage::InflightAtt
         .unwrap_or_default()
         .as_millis() as u64;
 
-    // Descarta intentos de más de 30m
-    INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 1_800_000);
+    // Descarta intentos de más de 5m (300s, alineado con MemoryCleanupService)
+    INFLIGHT_REGISTRY.retain(|_, v| now.saturating_sub(v.updated_at_ms) < 300_000);
 
     let mut list: Vec<_> = INFLIGHT_REGISTRY
         .iter()

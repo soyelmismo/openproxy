@@ -452,7 +452,8 @@ class LiveLogsStore {
     const rowTerminalKind = isSkipped ? "predict_skipped" : (row.status_code >= 400 ? "failed" : "completed");
 
     if (!a) {
-      const startedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
+      const finishedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
+      const startedAt = finishedAt - row.total_ms;
       a = {
         attemptKey,
         requestId: row.request_id,
@@ -460,7 +461,7 @@ class LiveLogsStore {
         providerId: row.provider_id,
         upstreamModelId: row.upstream_model_id,
         startedAtMs: startedAt,
-        updatedAtMs: startedAt + row.total_ms,
+        updatedAtMs: finishedAt,
         stage: rowStage,
         stageSeq: 9999,
         stageRank: 4,
@@ -484,7 +485,8 @@ class LiveLogsStore {
       a.stage = rowStage;
       a.stageSeq = 9999;
       a.stageRank = 4;
-      a.updatedAtMs = a.startedAtMs + row.total_ms;
+      const finishedAt = Date.parse(row.created_at.endsWith("Z") ? row.created_at : row.created_at + "Z");
+      a.updatedAtMs = Number.isFinite(finishedAt) ? finishedAt : (a.startedAtMs + row.total_ms);
       a.elapsedMsAtEvent = row.total_ms;
       a.source = "db";
       if (row.endpoint_kind) a.endpointKind = row.endpoint_kind;
@@ -620,8 +622,8 @@ class LiveLogsStore {
 
     for (const a of this.attemptsByKey.values()) {
       if (a.terminal) continue;
-      // Auto-expire inflight entries untouched for 30m.
-      if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 1_800_000)) {
+      // Auto-expire inflight entries untouched for 5m (matches backend memory cleanup).
+      if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 300_000)) {
         a.terminal = true;
         a.terminalKind = "failed";
         a.stage = "failed";
