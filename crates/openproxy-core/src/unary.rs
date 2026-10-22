@@ -118,24 +118,13 @@ fn handle_model_not_found(
 ) -> Result<Vec<UnaryTarget>> {
     record_unary_usage(
         db_pool,
-        &UnaryUsageArgs {
-            request_id: RequestId::new(),
-            api_key_id,
-            provider_id: &ProviderId::new(""),
-            account_id: None,
-            combo_id: None,
-            combo_target_id: None,
-            model_row_id: None,
-            upstream_model_id: model,
-            prompt_tokens: None,
-            completion_tokens: None,
-            status_code: 404,
-            error_msg: Some("model_not_found".to_string()),
-            total_ms: started.elapsed().as_millis() as u64,
-            endpoint_kind,
-            request_body_json: None,
-            response_body_json: None,
-        },
+        &UnaryUsageArgs::builder(&ProviderId::new(""), model, endpoint_kind)
+            .request_id(RequestId::new())
+            .api_key_id(api_key_id)
+            .status_code(404)
+            .error_msg(Some("model_not_found".to_string()))
+            .total_ms(started.elapsed().as_millis() as u64)
+            .build(),
     );
     let mut msg = format!("model not found: {model}");
     if let Some(h) = hint {
@@ -349,7 +338,7 @@ macro_rules! guarded_unary_target {
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnaryUsageArgs<'a> {
     pub request_id: RequestId,
     pub api_key_id: Option<ApiKeyId>,
@@ -367,6 +356,172 @@ pub struct UnaryUsageArgs<'a> {
     pub endpoint_kind: EndpointKind,
     pub request_body_json: Option<bytes::Bytes>,
     pub response_body_json: Option<serde_json::Value>,
+}
+
+impl<'a> UnaryUsageArgs<'a> {
+    pub fn builder(
+        provider_id: &'a ProviderId,
+        upstream_model_id: &'a str,
+        endpoint_kind: EndpointKind,
+    ) -> UnaryUsageArgsBuilder<'a> {
+        UnaryUsageArgsBuilder {
+            request_id: RequestId::new(),
+            api_key_id: None,
+            provider_id,
+            account_id: None,
+            combo_id: None,
+            combo_target_id: None,
+            model_row_id: None,
+            upstream_model_id,
+            prompt_tokens: None,
+            completion_tokens: None,
+            status_code: 200,
+            error_msg: None,
+            total_ms: 0,
+            endpoint_kind,
+            request_body_json: None,
+            response_body_json: None,
+        }
+    }
+
+    pub fn from_target(
+        target: &'a UnaryTarget,
+        endpoint_kind: EndpointKind,
+        status_code: u16,
+        total_ms: u64,
+    ) -> Self {
+        Self {
+            request_id: RequestId::new(),
+            api_key_id: None,
+            provider_id: &target.provider,
+            account_id: target.account_id,
+            combo_id: target.combo_id,
+            combo_target_id: target.combo_target_id,
+            model_row_id: target.model_row_id,
+            upstream_model_id: &target.upstream_model,
+            prompt_tokens: None,
+            completion_tokens: None,
+            status_code,
+            error_msg: None,
+            total_ms,
+            endpoint_kind,
+            request_body_json: None,
+            response_body_json: None,
+        }
+    }
+
+    pub fn with_request_id(mut self, request_id: RequestId) -> Self {
+        self.request_id = request_id;
+        self
+    }
+
+    pub fn with_api_key_id(mut self, api_key_id: Option<ApiKeyId>) -> Self {
+        self.api_key_id = api_key_id;
+        self
+    }
+
+    pub fn with_tokens(mut self, prompt_tokens: Option<u32>, completion_tokens: Option<u32>) -> Self {
+        self.prompt_tokens = prompt_tokens;
+        self.completion_tokens = completion_tokens;
+        self
+    }
+
+    pub fn with_json(
+        mut self,
+        request_body_json: Option<bytes::Bytes>,
+        response_body_json: Option<serde_json::Value>,
+    ) -> Self {
+        self.request_body_json = request_body_json;
+        self.response_body_json = response_body_json;
+        self
+    }
+}
+
+pub struct UnaryUsageArgsBuilder<'a> {
+    request_id: RequestId,
+    api_key_id: Option<ApiKeyId>,
+    provider_id: &'a ProviderId,
+    account_id: Option<AccountId>,
+    combo_id: Option<ComboId>,
+    combo_target_id: Option<ComboTargetId>,
+    model_row_id: Option<ModelRowId>,
+    upstream_model_id: &'a str,
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    status_code: u16,
+    error_msg: Option<String>,
+    total_ms: u64,
+    endpoint_kind: EndpointKind,
+    request_body_json: Option<bytes::Bytes>,
+    response_body_json: Option<serde_json::Value>,
+}
+
+impl<'a> UnaryUsageArgsBuilder<'a> {
+    pub fn request_id(mut self, request_id: RequestId) -> Self {
+        self.request_id = request_id;
+        self
+    }
+
+    pub fn api_key_id(mut self, api_key_id: Option<ApiKeyId>) -> Self {
+        self.api_key_id = api_key_id;
+        self
+    }
+
+    pub fn status_code(mut self, status_code: u16) -> Self {
+        self.status_code = status_code;
+        self
+    }
+
+    pub fn error_msg(mut self, error_msg: Option<String>) -> Self {
+        self.error_msg = error_msg;
+        self
+    }
+
+    pub fn total_ms(mut self, total_ms: u64) -> Self {
+        self.total_ms = total_ms;
+        self
+    }
+
+    pub fn prompt_tokens(mut self, prompt_tokens: Option<u32>) -> Self {
+        self.prompt_tokens = prompt_tokens;
+        self
+    }
+
+    pub fn completion_tokens(mut self, completion_tokens: Option<u32>) -> Self {
+        self.completion_tokens = completion_tokens;
+        self
+    }
+
+    pub fn request_body_json(mut self, request_body_json: Option<bytes::Bytes>) -> Self {
+        self.request_body_json = request_body_json;
+        self
+    }
+
+    pub fn response_body_json(mut self, response_body_json: Option<serde_json::Value>) -> Self {
+        self.response_body_json = response_body_json;
+        self
+    }
+
+    pub fn build(self) -> UnaryUsageArgs<'a> {
+        UnaryUsageArgs {
+            request_id: self.request_id,
+            api_key_id: self.api_key_id,
+            provider_id: self.provider_id,
+            account_id: self.account_id,
+            combo_id: self.combo_id,
+            combo_target_id: self.combo_target_id,
+            model_row_id: self.model_row_id,
+            upstream_model_id: self.upstream_model_id,
+            prompt_tokens: self.prompt_tokens,
+            completion_tokens: self.completion_tokens,
+            status_code: self.status_code,
+            error_msg: self.error_msg,
+            total_ms: self.total_ms,
+            endpoint_kind: self.endpoint_kind,
+            request_body_json: self.request_body_json,
+            response_body_json: self.response_body_json,
+        }
+    }
 }
 
 fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
@@ -434,6 +589,24 @@ pub async fn record_unary_usage_async(db_pool: &DbPool, args: &UnaryUsageArgs<'_
             "unary usage persistence failed; admitted jobs remain journaled"
         ),
     }
+}
+
+/// Helper to record successful unary execution usage asynchronously.
+pub async fn record_unary_target_success_async(
+    db_pool: &DbPool,
+    target: &UnaryTarget,
+    endpoint_kind: EndpointKind,
+    api_key_id: Option<ApiKeyId>,
+    status_code: u16,
+    total_ms: u64,
+    tokens: (Option<u32>, Option<u32>),
+) {
+    let mut args = UnaryUsageArgs::from_target(target, endpoint_kind, status_code, total_ms)
+        .with_api_key_id(api_key_id);
+    if tokens.0.is_some() || tokens.1.is_some() {
+        args = args.with_tokens(tokens.0, tokens.1);
+    }
+    record_unary_usage_async(db_pool, &args).await;
 }
 
 pub fn apply_adapter_headers(
@@ -551,6 +724,41 @@ mod tests {
         let (pool, _path) = open_test_pool();
         let cb = CircuitBreakerRegistry::new(&CircuitBreakerConfig::default());
         assert!(is_target_available(&pool, &cb, None, None));
+    }
+
+    #[test]
+    fn test_unary_usage_args_builder_and_from_target() {
+        let (pool, _path) = open_test_pool();
+        let provider = ProviderId::new("openai");
+        let target = UnaryTarget {
+            provider: provider.clone(),
+            account_id: None,
+            model_row_id: None,
+            combo_target_id: None,
+            upstream_model: "text-embedding-3-small".to_string(),
+            combo_id: None,
+        };
+
+        let args = UnaryUsageArgs::from_target(&target, EndpointKind::Embedding, 200, 50)
+            .with_tokens(Some(10), None);
+        assert_eq!(args.provider_id, &provider);
+        assert_eq!(args.upstream_model_id, "text-embedding-3-small");
+        assert_eq!(args.endpoint_kind, EndpointKind::Embedding);
+        assert_eq!(args.status_code, 200);
+        assert_eq!(args.total_ms, 50);
+        assert_eq!(args.prompt_tokens, Some(10));
+        assert_eq!(args.completion_tokens, None);
+
+        let built = UnaryUsageArgs::builder(&provider, "gpt-4o", EndpointKind::Chat)
+            .status_code(200)
+            .total_ms(120)
+            .build();
+        assert_eq!(built.provider_id, &provider);
+        assert_eq!(built.upstream_model_id, "gpt-4o");
+        assert_eq!(built.status_code, 200);
+        assert_eq!(built.total_ms, 120);
+
+        record_unary_usage(&pool, &args);
     }
 
     #[test]

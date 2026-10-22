@@ -10,15 +10,15 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
 use openproxy_types::{
     CoreError, EmbeddingRequest, EmbeddingResponse, EndpointKind, Result, ResultExt,
-    ids::{ApiKeyId, RequestId},
+    ids::ApiKeyId,
 };
 
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
     UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs,
-    is_target_available, map_upstream_status_error, record_unary_usage, record_unary_usage_async,
-    resolve_api_key, resolve_unary_targets,
+    is_target_available, map_upstream_status_error, record_unary_target_success_async,
+    record_unary_usage, record_unary_usage_async, resolve_api_key, resolve_unary_targets,
 };
 
 pub type EmbeddingUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -189,26 +189,14 @@ pub async fn execute_embeddings(
         {
             Ok((parsed_response, status_code)) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                record_unary_usage_async(
+                record_unary_target_success_async(
                     db_pool,
-                    &UnaryUsageArgs {
-                        request_id: RequestId::new(),
-                        api_key_id,
-                        provider_id: &target.provider,
-                        account_id: target.account_id,
-                        combo_id: target.combo_id,
-                        combo_target_id: target.combo_target_id,
-                        model_row_id: target.model_row_id,
-                        upstream_model_id: &target.upstream_model,
-                        prompt_tokens: Some(parsed_response.usage.prompt_tokens),
-                        completion_tokens: None,
-                        status_code,
-                        error_msg: None,
-                        total_ms,
-                        endpoint_kind: EndpointKind::Embedding,
-                        request_body_json: None,
-                        response_body_json: None,
-                    },
+                    &target,
+                    EndpointKind::Embedding,
+                    api_key_id,
+                    status_code,
+                    total_ms,
+                    (Some(parsed_response.usage.prompt_tokens), None),
                 )
                 .await;
 
@@ -255,24 +243,11 @@ mod tests {
         let provider = ProviderId::new("openai");
         record_unary_usage(
             &pool,
-            &UnaryUsageArgs {
-                request_id: RequestId::new(),
-                api_key_id: None,
-                provider_id: &provider,
-                account_id: None,
-                combo_id: None,
-                combo_target_id: None,
-                model_row_id: None,
-                upstream_model_id: "text-embedding-3-small",
-                prompt_tokens: Some(8),
-                completion_tokens: None,
-                status_code: 200,
-                error_msg: None,
-                total_ms: 85,
-                endpoint_kind: EndpointKind::Embedding,
-                request_body_json: None,
-                response_body_json: None,
-            },
+            &UnaryUsageArgs::builder(&provider, "text-embedding-3-small", EndpointKind::Embedding)
+                .prompt_tokens(Some(8))
+                .status_code(200)
+                .total_ms(85)
+                .build(),
         );
 
         let r = pool.reader();

@@ -51,6 +51,22 @@ pub fn sanitize_tool_parameters_schema(val: &mut Value) {
     }
 }
 
+/// Sanitizes the `parameters` schema of a tool object in-place.
+/// Handles both standard OpenAI tool format (`tool.function.parameters`)
+/// and flat tool format (`tool.parameters`).
+pub fn sanitize_tool_parameters(tool: &mut Value) {
+    let Some(obj) = tool.as_object_mut() else {
+        return;
+    };
+    if let Some(func) = obj.get_mut("function").and_then(|f| f.as_object_mut()) {
+        if let Some(params) = func.get_mut("parameters") {
+            sanitize_tool_parameters_schema(params);
+        }
+    } else if let Some(params) = obj.get_mut("parameters") {
+        sanitize_tool_parameters_schema(params);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +145,42 @@ mod tests {
 
         // additionalProperties: false is kept when strictly all fields are required
         assert_eq!(schema["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn test_sanitize_tool_parameters_nested_and_flat() {
+        let mut tool_nested = json!({
+            "type": "function",
+            "function": {
+                "name": "search",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "q": { "type": "string", "pattern": "^.*$" }
+                    }
+                }
+            }
+        });
+        sanitize_tool_parameters(&mut tool_nested);
+        assert!(!tool_nested["function"]["parameters"]["properties"]["q"]
+            .as_object()
+            .unwrap()
+            .contains_key("pattern"));
+
+        let mut tool_flat = json!({
+            "type": "function",
+            "name": "search",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "q": { "type": "string", "pattern": "^.*$" }
+                }
+            }
+        });
+        sanitize_tool_parameters(&mut tool_flat);
+        assert!(!tool_flat["parameters"]["properties"]["q"]
+            .as_object()
+            .unwrap()
+            .contains_key("pattern"));
     }
 }

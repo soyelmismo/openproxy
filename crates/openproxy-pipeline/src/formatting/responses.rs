@@ -147,6 +147,7 @@ pub(crate) fn format_responses_tools(tools: Option<&[Value]>) -> Option<Value> {
     let mut flat_tools = Vec::with_capacity(tools.len());
     for tool in tools {
         let mut flat_tool = tool.clone();
+        crate::schema_sanitizer::sanitize_tool_parameters(&mut flat_tool);
         if let Some(obj) = flat_tool.as_object_mut() {
             let mut strict_val = obj.remove("strict");
             if obj.get("type").and_then(|v| v.as_str()) == Some("function")
@@ -159,15 +160,12 @@ pub(crate) fn format_responses_tools(tools: Option<&[Value]>) -> Option<Value> {
                 if let Some(desc) = func_obj.remove("description") {
                     obj.insert("description".to_string(), desc);
                 }
-                if let Some(mut params) = func_obj.remove("parameters") {
-                    crate::schema_sanitizer::sanitize_tool_parameters_schema(&mut params);
+                if let Some(params) = func_obj.remove("parameters") {
                     obj.insert("parameters".to_string(), params);
                 }
                 if let Some(st) = func_obj.remove("strict") {
                     strict_val = Some(st);
                 }
-            } else if let Some(params) = obj.get_mut("parameters") {
-                crate::schema_sanitizer::sanitize_tool_parameters_schema(params);
             }
             // Codex / OpenAI Responses parity: function tools specify strict: false
             // so dynamic and MCP schemas do not fail OpenAI structured-outputs validation.
@@ -413,50 +411,6 @@ pub(crate) fn convert_msg_tool_calls(tool_calls: &[Value], input_items: &mut Vec
     }
 }
 
-pub(crate) fn extract_reasoning_content(msg: &OpenAIMessage) -> Option<String> {
-    for key in &["reasoning_content", "reasoning", "thinking"] {
-        if let Some(val) = msg.extra.get(*key) {
-            match val {
-                Value::String(s) if !s.is_empty() => return Some(s.clone()),
-                Value::Array(arr) => {
-                    let mut combined = String::new();
-                    for item in arr {
-                        if let Some(s) = item.as_str() {
-                            combined.push_str(s);
-                        } else if let Some(text) = item.get("text").and_then(Value::as_str) {
-                            combined.push_str(text);
-                        } else if let Some(thinking) = item.get("thinking").and_then(Value::as_str)
-                        {
-                            combined.push_str(thinking);
-                        }
-                    }
-                    if !combined.is_empty() {
-                        return Some(combined);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    if let Some(Value::Array(parts)) = &msg.content {
-        let mut combined = String::new();
-        for p in parts {
-            let p_type = p.get("type").and_then(Value::as_str);
-            if matches!(p_type, Some("thinking" | "reasoning")) {
-                if let Some(t) = p.get("thinking").and_then(Value::as_str) {
-                    combined.push_str(t);
-                } else if let Some(t) = p.get("text").and_then(Value::as_str) {
-                    combined.push_str(t);
-                }
-            }
-        }
-        if !combined.is_empty() {
-            return Some(combined);
-        }
-    }
-    None
-}
-
 pub(crate) fn sanitize_responses_reasoning_item(item: &mut Value) {
     let Some(map) = item.as_object_mut() else {
         return;
@@ -535,7 +489,7 @@ pub(crate) fn convert_single_message_to_responses_input(
             .get("reasoning_encrypted_content")
             .and_then(Value::as_str)
             .is_some_and(|s| !s.is_empty());
-        let reasoning_text = extract_reasoning_content(msg);
+        let reasoning_text = super::extract_reasoning_content(msg);
 
         if has_encrypted || reasoning_text.is_some() || msg.extra.contains_key("reasoning_summary")
         {

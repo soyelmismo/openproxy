@@ -283,24 +283,10 @@ pub async fn execute_image_generation(
 
         record_unary_usage_async(
             db_pool,
-            &UnaryUsageArgs {
-                request_id,
-                api_key_id,
-                provider_id: &target.provider,
-                account_id: target.account_id,
-                combo_id: target.combo_id,
-                combo_target_id: target.combo_target_id,
-                model_row_id: target.model_row_id,
-                upstream_model_id: &target.upstream_model,
-                prompt_tokens: None,
-                completion_tokens: None,
-                status_code,
-                error_msg: None,
-                total_ms,
-                endpoint_kind: EndpointKind::Image,
-                request_body_json: req_json,
-                response_body_json: resp_json,
-            },
+            &UnaryUsageArgs::from_target(target, EndpointKind::Image, status_code, total_ms)
+                .with_request_id(request_id)
+                .with_api_key_id(api_key_id)
+                .with_json(req_json, resp_json),
         )
         .await;
 

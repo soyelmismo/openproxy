@@ -10,7 +10,7 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;
 use openproxy_types::{
     CoreError, EndpointKind, Result,
-    ids::{ApiKeyId, RequestId},
+    ids::ApiKeyId,
     systemone::{SystemOneRequest, SystemOneResponse},
 };
 
@@ -18,8 +18,8 @@ use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
     UnaryTarget as SystemOneTargets, UnaryTarget, UnaryUsageArgs,
-    is_target_available, map_upstream_status_error, record_unary_usage, record_unary_usage_async,
-    resolve_api_key, resolve_unary_targets,
+    is_target_available, map_upstream_status_error, record_unary_target_success_async,
+    record_unary_usage, record_unary_usage_async, resolve_api_key, resolve_unary_targets,
 };
 
 pub type SystemOneUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -211,26 +211,14 @@ pub async fn execute_system_one(
                         (Some(u.input_tokens as u32), Some(u.output_tokens as u32))
                     });
 
-                record_unary_usage_async(
+                record_unary_target_success_async(
                     db_pool,
-                    &UnaryUsageArgs {
-                        request_id: RequestId::new(),
-                        api_key_id,
-                        provider_id: &target.provider,
-                        account_id: target.account_id,
-                        combo_id: target.combo_id,
-                        combo_target_id: target.combo_target_id,
-                        model_row_id: target.model_row_id,
-                        upstream_model_id: &target.upstream_model,
-                        prompt_tokens: input_tokens,
-                        completion_tokens: output_tokens,
-                        status_code,
-                        error_msg: None,
-                        total_ms,
-                        endpoint_kind: EndpointKind::SystemOne,
-                        request_body_json: None,
-                        response_body_json: None,
-                    },
+                    &target,
+                    EndpointKind::SystemOne,
+                    api_key_id,
+                    status_code,
+                    total_ms,
+                    (input_tokens, output_tokens),
                 )
                 .await;
 

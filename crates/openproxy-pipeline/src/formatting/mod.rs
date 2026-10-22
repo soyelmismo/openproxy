@@ -47,12 +47,8 @@ impl TargetFormatter for OpenaiFormatter {
                 let mut clean = t.clone();
                 if let Some(obj) = clean.as_object_mut() {
                     obj.remove("cache_control");
-                    if let Some(func) = obj.get_mut("function").and_then(|f| f.as_object_mut())
-                        && let Some(params) = func.get_mut("parameters")
-                    {
-                        crate::schema_sanitizer::sanitize_tool_parameters_schema(params);
-                    }
                 }
+                crate::schema_sanitizer::sanitize_tool_parameters(&mut clean);
                 sanitized_tools.push(clean);
             }
             view.tools = Some(std::borrow::Cow::Owned(sanitized_tools));
@@ -135,7 +131,7 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
     if m.extra.contains_key("cache_control") {
         return true;
     }
-    if m.extra.contains_key("reasoning") && m.extra.contains_key("reasoning_content") {
+    if message_has_conflicting_reasoning(m) {
         return true;
     }
     if m.role == "assistant"
@@ -285,6 +281,8 @@ fn sanitize_tool_calls(tool_calls: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// Deduplicates reasoning fields in `extra`.
+///
 /// Algunos clientes reenvían el historial con `reasoning` y
 /// `reasoning_content` a la vez. Upstreams como NVIDIA NIM rechazan el
 /// cuerpo entero con un 400 de campo duplicado, así que nos quedamos con
@@ -292,10 +290,62 @@ fn sanitize_tool_calls(tool_calls: &[Value]) -> Vec<Value> {
 ///
 /// Solo actúa cuando coexisten los dos. Un `reasoning` suelto se deja pasar
 /// porque hay proveedores que únicamente entienden ese nombre.
-fn dedupe_reasoning_fields(msg: &mut OpenAIMessage) {
+pub(crate) fn dedupe_reasoning_fields(msg: &mut OpenAIMessage) {
     if msg.extra.contains_key("reasoning_content") {
         msg.extra.remove("reasoning");
     }
+}
+
+/// Checks whether an OpenAIMessage has conflicting reasoning fields that need deduplication.
+pub(crate) fn message_has_conflicting_reasoning(msg: &OpenAIMessage) -> bool {
+    msg.extra.contains_key("reasoning") && msg.extra.contains_key("reasoning_content")
+}
+
+/// Extracts reasoning content from an OpenAIMessage, looking in `extra` fields
+/// (`reasoning_content`, `reasoning`, `thinking`) or within multipart `content`
+/// array blocks of type `thinking` or `reasoning`.
+pub(crate) fn extract_reasoning_content(msg: &OpenAIMessage) -> Option<String> {
+    for key in &["reasoning_content", "reasoning", "thinking"] {
+        if let Some(val) = msg.extra.get(*key) {
+            match val {
+                Value::String(s) if !s.is_empty() => return Some(s.clone()),
+                Value::Array(arr) => {
+                    let mut combined = String::new();
+                    for item in arr {
+                        if let Some(s) = item.as_str() {
+                            combined.push_str(s);
+                        } else if let Some(text) = item.get("text").and_then(Value::as_str) {
+                            combined.push_str(text);
+                        } else if let Some(thinking) = item.get("thinking").and_then(Value::as_str)
+                        {
+                            combined.push_str(thinking);
+                        }
+                    }
+                    if !combined.is_empty() {
+                        return Some(combined);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(Value::Array(parts)) = &msg.content {
+        let mut combined = String::new();
+        for p in parts {
+            let p_type = p.get("type").and_then(Value::as_str);
+            if matches!(p_type, Some("thinking" | "reasoning")) {
+                if let Some(t) = p.get("thinking").and_then(Value::as_str) {
+                    combined.push_str(t);
+                } else if let Some(t) = p.get("text").and_then(Value::as_str) {
+                    combined.push_str(t);
+                }
+            }
+        }
+        if !combined.is_empty() {
+            return Some(combined);
+        }
+    }
+    None
 }
 
 fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {

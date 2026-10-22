@@ -12,8 +12,8 @@ use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;
 use openproxy_types::{
-    CoreError, Result,
-    ids::{ApiKeyId, RequestId},
+    CoreError, EndpointKind, Result,
+    ids::ApiKeyId,
 };
 
 use crate::routing::{self, RoutingPlan};
@@ -35,8 +35,8 @@ pub struct AudioTranscriptionResponse {
 
 pub use crate::unary::{
     UnaryTarget as AudioTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
-    is_target_available, map_upstream_status_error, record_unary_usage, record_unary_usage_async,
-    resolve_api_key, resolve_unary_targets,
+    is_target_available, map_upstream_status_error, record_unary_target_success_async,
+    record_unary_usage, record_unary_usage_async, resolve_api_key, resolve_unary_targets,
 };
 
 pub type AudioUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -256,26 +256,14 @@ pub async fn execute_transcribe(
         {
             Ok(resp) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                record_unary_usage_async(
+                record_unary_target_success_async(
                     db_pool,
-                    &UnaryUsageArgs {
-                        request_id: RequestId::new(),
-                        api_key_id,
-                        provider_id: &target.provider,
-                        account_id: target.account_id,
-                        combo_id: target.combo_id,
-                        combo_target_id: target.combo_target_id,
-                        model_row_id: target.model_row_id,
-                        upstream_model_id: &target.upstream_model,
-                        prompt_tokens: None,
-                        completion_tokens: None,
-                        status_code: resp.status_code,
-                        error_msg: None,
-                        total_ms,
-                        endpoint_kind: openproxy_types::EndpointKind::Audio,
-                        request_body_json: None,
-                        response_body_json: None,
-                    },
+                    &target,
+                    EndpointKind::Audio,
+                    api_key_id,
+                    resp.status_code,
+                    total_ms,
+                    (None, None),
                 )
                 .await;
 
