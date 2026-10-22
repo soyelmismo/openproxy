@@ -209,7 +209,7 @@ impl ProviderAdapter for HordeAdapter {
         } else {
             api_key.trim()
         };
-        Some(("Authorization".into(), format!("Bearer {key}")))
+        Some(crate::upstream::bearer_auth_header(key))
     }
 
     fn build_headers(
@@ -223,15 +223,15 @@ impl ProviderAdapter for HordeAdapter {
         } else {
             api_key.trim()
         };
-        let mut headers = Vec::with_capacity(4);
-        headers.push(("Authorization".into(), format!("Bearer {key}")));
-        headers.push(("apikey".into(), key.to_string()));
-        headers.push((
-            "Client-Agent".into(),
-            concat!("openproxy:", env!("CARGO_PKG_VERSION")).into(),
-        ));
-        headers.push(("Content-Type".into(), "application/json".into()));
-        headers
+        vec![
+            crate::upstream::bearer_auth_header(key),
+            ("apikey".into(), key.to_string()),
+            (
+                "Client-Agent".into(),
+                concat!("openproxy:", env!("CARGO_PKG_VERSION")).into(),
+            ),
+            ("Content-Type".into(), "application/json".into()),
+        ]
     }
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {

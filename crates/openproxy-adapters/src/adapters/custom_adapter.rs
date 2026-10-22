@@ -176,7 +176,7 @@ impl ProviderAdapter for CustomAdapter {
             ))
         })?;
 
-        let bearer_auth = format!("Bearer {api_key}");
+        let bearer_auth = crate::upstream::format_bearer(api_key);
         let headers = build_custom_headers(
             self.config.auth_type,
             api_key,

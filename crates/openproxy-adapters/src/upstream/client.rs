@@ -47,6 +47,21 @@ pub struct UpstreamRequest {
     pub proxy_status: Option<String>,
 }
 
+/// Build a formatted `"Bearer <token>"` string.
+pub fn format_bearer(token: &str) -> String {
+    format!("Bearer {token}")
+}
+
+/// Build an `("Authorization", "Bearer <token>")` tuple.
+pub fn bearer_auth_header(token: &str) -> (String, String) {
+    ("Authorization".into(), format_bearer(token))
+}
+
+/// Build an `http::HeaderValue` for a Bearer token.
+pub fn bearer_header_value(token: &str) -> Result<http::HeaderValue, http::header::InvalidHeaderValue> {
+    http::HeaderValue::from_str(&format_bearer(token))
+}
+
 impl UpstreamRequest {
     /// Build a simple GET with no headers / body.
     pub fn get(url: impl Into<String>) -> Self {
@@ -82,8 +97,7 @@ impl UpstreamRequest {
 
     /// Add an `Authorization: Bearer <token>` header in a builder style.
     pub fn with_bearer(mut self, token: &str) -> Self {
-        let auth_val = format!("Bearer {token}");
-        if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
+        if let Ok(hv) = bearer_header_value(token) {
             self.headers.insert(http::header::AUTHORIZATION, hv);
         }
         self

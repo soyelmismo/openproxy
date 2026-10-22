@@ -141,7 +141,7 @@ pub(crate) async fn fetch_openai_models(
     provider_name: &str,
     target_format: TargetFormat,
 ) -> Result<Vec<DiscoveredModel>> {
-    let auth = format!("Bearer {api_key}");
+    let auth = crate::upstream::format_bearer(api_key);
     let body = upstream_get_json(upstream_client, url, &[("Authorization", &auth)])
         .await
         .ctx_upstream(format!("{provider_name} /models"))?;

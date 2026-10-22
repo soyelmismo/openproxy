@@ -139,13 +139,13 @@ impl ProviderAdapter for MiniMaxAdapter {
             crate::spoofer::upsert_header(
                 &mut headers,
                 "Authorization",
-                format!("Bearer {trimmed}"),
+                crate::upstream::format_bearer(trimmed),
             );
         } else if !trimmed.is_empty() {
             crate::spoofer::upsert_header(
                 &mut headers,
                 "Authorization",
-                format!("Bearer {trimmed}"),
+                crate::upstream::format_bearer(trimmed),
             );
         }
         crate::spoofer::merge_header_refs(&mut headers, &self.config.extra_headers);

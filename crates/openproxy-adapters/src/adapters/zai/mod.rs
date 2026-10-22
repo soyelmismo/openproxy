@@ -102,7 +102,7 @@ impl ProviderAdapter for ZaiAdapter {
         let token = api_key.trim();
         if !token.is_empty() {
             headers.push(("x-api-key".into(), token.to_string()));
-            headers.push(("Authorization".into(), format!("Bearer {token}")));
+            headers.push(crate::upstream::bearer_auth_header(token));
         }
         headers.push(("anthropic-version".into(), ZAI_ANTHROPIC_VERSION.into()));
         headers.push(("Content-Type".into(), "application/json".into()));

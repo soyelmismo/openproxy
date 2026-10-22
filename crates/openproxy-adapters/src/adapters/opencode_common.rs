@@ -95,7 +95,7 @@ fn append_format_auth_headers(
     } else if let Some(auth) = adapter.build_auth_header(effective_key) {
         headers.push(auth);
     } else {
-        headers.push(("Authorization".into(), format!("Bearer {effective_key}")));
+        headers.push(crate::upstream::bearer_auth_header(effective_key));
     }
 }
 
@@ -156,7 +156,7 @@ pub async fn fetch_opencode_models(
     } else {
         api_key
     };
-    let auth = format!("Bearer {effective_key}");
+    let auth = crate::upstream::format_bearer(effective_key);
     let body = upstream_get_json(
         upstream_client,
         &url,

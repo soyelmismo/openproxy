@@ -113,7 +113,7 @@ impl ProviderAdapter for EacAdapter {
         if !api_key.trim().is_empty() {
             headers.push((
                 "Authorization".to_string(),
-                format!("Bearer {}", api_key.trim()),
+                crate::upstream::format_bearer(api_key.trim()),
             ));
         }
         self.sign_request_headers("GET", &url, &mut headers, b"");

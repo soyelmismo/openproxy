@@ -96,7 +96,7 @@ impl ClaudeCodeAdapter {
                 req.headers
                     .insert(http::header::HeaderName::from_static("x-api-key"), val);
             }
-        } else if let Ok(val) = http::HeaderValue::from_str(&format!("Bearer {token}")) {
+        } else if let Ok(val) = crate::upstream::bearer_header_value(token) {
             req.headers.insert(http::header::AUTHORIZATION, val);
         }
 
@@ -377,7 +377,7 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         model: &ModelId,
     ) -> Vec<(String, String)> {
         let auth = if !api_key.trim().is_empty() {
-            Some(("Authorization".into(), format!("Bearer {}", api_key.trim())))
+            Some(crate::upstream::bearer_auth_header(api_key.trim()))
         } else {
             None
         };
@@ -641,7 +641,7 @@ pub(crate) async fn fetch_claude_code_quota(
     let mut req = UpstreamRequest::get(&usage_url);
     req.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {access_token}"))
+        crate::upstream::bearer_header_value(access_token)
             .map_err(|e| CoreError::Validation(format!("invalid authorization header: {e}")))?,
     );
     req.headers.insert(

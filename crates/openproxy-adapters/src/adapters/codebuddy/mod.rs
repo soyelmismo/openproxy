@@ -195,7 +195,7 @@ impl ProviderAdapter for CodeBuddyAdapter {
         let val = if trimmed.starts_with("Bearer ") {
             trimmed.to_string()
         } else {
-            format!("Bearer {trimmed}")
+            crate::upstream::format_bearer(trimmed)
         };
         Some(("Authorization".into(), val))
     }

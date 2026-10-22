@@ -253,12 +253,8 @@ impl ProviderAdapter for CommandCodeGoAdapter {
 
 pub fn apply_commandcode_cli_headers(req: &mut UpstreamRequest, token: &str) {
     use crate::spoofer::{ClientSpoofer, CommandCodeSpoofer};
-    let auth_header = format!("Bearer {token}");
-    if let (Ok(name), Ok(val)) = (
-        http::HeaderName::from_bytes(b"authorization"),
-        http::HeaderValue::from_str(&auth_header),
-    ) {
-        req.headers.insert(name, val);
+    if let Ok(val) = crate::upstream::bearer_header_value(token) {
+        req.headers.insert(http::header::AUTHORIZATION, val);
     }
     CommandCodeSpoofer.apply_to_request(req);
 }

@@ -566,7 +566,7 @@ pub fn build_codebuddy_resource_request(
     let auth_val = if trimmed.starts_with("Bearer ") {
         trimmed.to_string()
     } else {
-        format!("Bearer {trimmed}")
+        crate::upstream::format_bearer(trimmed)
     };
     if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
         req.headers.insert(http::header::AUTHORIZATION, hv);
@@ -600,7 +600,7 @@ pub fn build_codebuddy_accounts_request_with_url(
     let auth_val = if trimmed.starts_with("Bearer ") {
         trimmed.to_string()
     } else {
-        format!("Bearer {trimmed}")
+        crate::upstream::format_bearer(trimmed)
     };
     if let Ok(hv) = http::HeaderValue::from_str(&auth_val) {
         req.headers.insert(http::header::AUTHORIZATION, hv);
