@@ -9,7 +9,7 @@ use super::{
     UpstreamClient, upstream_get_json,
 };
 use crate::spoofer::{ClientSpoofer, OpenCodeSpoofer};
-use openproxy_types::ResultExt;
+use openproxy_types::{AccountQuota, ModelQuotaDetail, ProviderMetadata, ResultExt};
 
 // Los endpoints integrados son autoridad del código, no de la fila persistida.
 const OPENCODE_ZEN_BASE_URL: &str = "https://opencode.ai/inference/v1";
@@ -181,6 +181,106 @@ pub async fn fetch_opencode_models(
         })
         .collect();
     Ok(out)
+}
+
+pub const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/inference/go/v1/usage";
+
+pub async fn fetch_opencode_go_quota(
+    upstream_client: &Arc<UpstreamClient>,
+    api_key: &str,
+    proxy_url: Option<&str>,
+) -> Result<AccountQuota> {
+    let mut req = crate::upstream::UpstreamRequest::get_json(OPENCODE_GO_USAGE_URL)
+        .with_bearer(api_key);
+    req.headers.insert(
+        http::header::USER_AGENT,
+        http::HeaderValue::from_static(crate::spoofer::OPENCODE_UA),
+    );
+    if let Some(proxy) = proxy_url {
+        req.proxy = Some(proxy.to_string());
+    }
+
+    let cancel = crate::upstream::CancellationToken::new();
+    let resp = upstream_client
+        .call(req, crate::upstream::TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("opencode-go quota: {e}")))?;
+
+    let status = resp.status;
+    let body = resp
+        .collect()
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("opencode-go quota body: {e}")))?;
+
+    if !status.is_success() {
+        let body_str = String::from_utf8_lossy(&body);
+        return Err(CoreError::upstream_error(
+            status.as_u16(),
+            "opencode-go",
+            "<quota>",
+            body_str.to_string(),
+            false,
+        ));
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).ctx_parse("opencode-go quota json parse error")?;
+
+    Ok(parse_opencode_go_usage_response(&json))
+}
+
+pub(crate) fn parse_opencode_go_usage_response(json: &serde_json::Value) -> AccountQuota {
+    let usage = json.get("usage").and_then(|v| v.as_object());
+
+    let (session_used, session_limit, session_reset_at) = usage
+        .and_then(|u| u.get("rolling"))
+        .and_then(|v| v.as_object())
+        .map_or((None, None, None), |r| {
+            let pct = r.get("percent").and_then(|p| p.as_i64()).unwrap_or(0);
+            let resets_at = r.get("resetsAt").and_then(|s| s.as_str()).map(ToString::to_string);
+            (Some(pct), Some(100), resets_at)
+        });
+
+    let (weekly_used, weekly_limit, weekly_reset_at) = usage
+        .and_then(|u| u.get("weekly"))
+        .and_then(|v| v.as_object())
+        .map_or((None, None, None), |w| {
+            let pct = w.get("percent").and_then(|p| p.as_i64()).unwrap_or(0);
+            let resets_at = w.get("resetsAt").and_then(|s| s.as_str()).map(ToString::to_string);
+            (Some(pct), Some(100), resets_at)
+        });
+
+    let monthly_detail = usage
+        .and_then(|u| u.get("monthly"))
+        .and_then(|v| v.as_object())
+        .map(|m| {
+            let pct = m.get("percent").and_then(|p| p.as_i64()).unwrap_or(0);
+            let resets_at = m.get("resetsAt").and_then(|s| s.as_str()).map(ToString::to_string);
+            let remaining_fraction = ((100 - pct).max(0) as f64) / 100.0;
+            ModelQuotaDetail {
+                model_id: "Monthly".to_string(),
+                session_used: pct,
+                session_limit: 100,
+                session_reset_at: resets_at,
+                remaining_fraction,
+            }
+        });
+
+    let model_details = monthly_detail.map(|d| vec![d].into_boxed_slice());
+
+    AccountQuota {
+        session_used,
+        session_limit,
+        session_reset_at,
+        weekly_used,
+        weekly_limit,
+        weekly_reset_at,
+        plan_name: Some("OpenCode Go".to_string()),
+        last_fetched_at: openproxy_types::now_unix_secs_str(),
+        fetch_error: None,
+        model_details,
+        pools: None,
+    }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -583,6 +683,19 @@ macro_rules! delegate_opencode_adapter {
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
                 self.0.fetch_models(upstream_client, api_key).await
             }
+            fn metadata(&self) -> openproxy_types::ProviderMetadata {
+                self.0.metadata()
+            }
+            fn fetch_quota_with_proxy(
+                &self,
+                upstream_client: &std::sync::Arc<crate::upstream::UpstreamClient>,
+                api_key: &str,
+                access_token: Option<&str>,
+                provider_specific: Option<&str>,
+                proxy_url: Option<&str>,
+            ) -> impl std::future::Future<Output = Option<openproxy_types::Result<openproxy_types::AccountQuota>>> + Send {
+                self.0.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url)
+            }
             fn wrap_request_body(
                 &self,
                 body: bytes::Bytes,
@@ -669,6 +782,50 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
         fetch_opencode_models(self, self.flavor, upstream_client, api_key).await
     }
 
+    fn metadata(&self) -> ProviderMetadata {
+        let supports_quota = matches!(self.flavor, OpenCodeFlavor::Go);
+        ProviderMetadata {
+            built_in: true,
+            deletable: false,
+            supports_quota,
+            quota_refresh_supported: supports_quota,
+            requires_oauth: false,
+            oauth_refresh_lead_seconds: None,
+        }
+    }
+
+    async fn fetch_quota(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        access_token: Option<&str>,
+        _provider_specific: Option<&str>,
+    ) -> Option<Result<AccountQuota>> {
+        self.fetch_quota_with_proxy(upstream_client, api_key, access_token, _provider_specific, None).await
+    }
+
+    async fn fetch_quota_with_proxy(
+        &self,
+        upstream_client: &Arc<UpstreamClient>,
+        api_key: &str,
+        access_token: Option<&str>,
+        _provider_specific: Option<&str>,
+        proxy_url: Option<&str>,
+    ) -> Option<Result<AccountQuota>> {
+        if self.flavor != OpenCodeFlavor::Go {
+            return None;
+        }
+
+        let token = access_token.unwrap_or(api_key).trim();
+        if token.is_empty() {
+            return Some(Ok(AccountQuota::with_error(
+                "opencode-go requires API key for quota",
+            )));
+        }
+
+        Some(fetch_opencode_go_quota(upstream_client, token, proxy_url).await)
+    }
+
     fn wrap_request_body(
         &self,
         body: bytes::Bytes,
@@ -684,6 +841,45 @@ impl crate::adapters::ProviderAdapter for OpenCodeAdapter {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn test_parse_opencode_go_usage_response() {
+        let json = serde_json::json!({
+            "usage": {
+                "rolling": { "status": "ok", "percent": 5, "resetsAt": "2026-10-23T03:04:10.000Z" },
+                "weekly": { "status": "ok", "percent": 25, "resetsAt": "2026-10-26T00:00:00.000Z" },
+                "monthly": { "status": "ok", "percent": 80, "resetsAt": "2026-11-07T00:25:10.000Z" }
+            }
+        });
+
+        let quota = parse_opencode_go_usage_response(&json);
+        assert_eq!(quota.session_used, Some(5));
+        assert_eq!(quota.session_limit, Some(100));
+        assert_eq!(quota.session_reset_at.as_deref(), Some("2026-10-23T03:04:10.000Z"));
+
+        assert_eq!(quota.weekly_used, Some(25));
+        assert_eq!(quota.weekly_limit, Some(100));
+        assert_eq!(quota.weekly_reset_at.as_deref(), Some("2026-10-26T00:00:00.000Z"));
+
+        assert_eq!(quota.plan_name.as_deref(), Some("OpenCode Go"));
+
+        let details = quota.model_details.expect("model_details should be present");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].model_id, "Monthly");
+        assert_eq!(details[0].session_used, 80);
+        assert_eq!(details[0].session_limit, 100);
+        assert_eq!(details[0].session_reset_at.as_deref(), Some("2026-11-07T00:25:10.000Z"));
+        assert!((details[0].remaining_fraction - 0.20).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_parse_opencode_go_usage_response_empty() {
+        let json = serde_json::json!({});
+        let quota = parse_opencode_go_usage_response(&json);
+        assert!(quota.session_used.is_none());
+        assert!(quota.weekly_used.is_none());
+        assert!(quota.model_details.is_none());
+    }
 
     #[test]
     fn test_inject_opencode_agent_quartet_tools_responses_strict_false() {

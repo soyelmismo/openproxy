@@ -23,6 +23,10 @@ async fn quota_refresh_supported_matrix() {
         "kiro must support quota refresh"
     );
     assert!(
+        supported.contains(&"opencode-go".to_string()),
+        "opencode-go must support quota refresh"
+    );
+    assert!(
         !supported.contains(&"openai".to_string()),
         "openai must NOT support quota refresh"
     );

@@ -237,7 +237,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
   const isAntigravity = a.provider_id === "antigravity";
 
   const monthlyDetail = a.quota_model_details?.find(
-    (d) => d.model_id === "Monthly Limit" || d.model_id === "Monthly Window"
+    (d) => d.model_id === "Monthly Limit" || d.model_id === "Monthly Window" || d.model_id === "Monthly"
   );
   const reserveDetail = a.quota_model_details?.find(
     (d) => d.model_id.toLowerCase().includes("reserve") || d.model_id.toLowerCase().includes("luna")
@@ -259,6 +259,7 @@ export function renderQuotaCell(a: Account): TemplateResult {
     (d) =>
       d.model_id !== "Monthly Limit" &&
       d.model_id !== "Monthly Window" &&
+      d.model_id !== "Monthly" &&
       d.model_id !== "Claude (5h)" &&
       d.model_id !== "Claude 5h Window" &&
       d.model_id !== "Claude (Weekly)" &&
@@ -286,7 +287,9 @@ export function renderQuotaCell(a: Account): TemplateResult {
     ? "Gemini 5h Window"
     : (a.provider_id === "claude" || a.provider_id === "claude-code" || a.provider_id === "anthropic")
       ? "5h Window"
-      : (a.provider_id === "codebuddy" ? "Credits" : "Session Window");
+      : (a.provider_id === "opencode-go" || a.provider_id === "opencode-zen")
+        ? "Rolling Window"
+        : (a.provider_id === "codebuddy" ? "Credits" : "Session Window");
 
   const weeklyLabel = isAntigravity
     ? "Gemini Weekly Window"
