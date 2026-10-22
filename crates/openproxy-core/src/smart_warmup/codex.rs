@@ -218,5 +218,7 @@ pub fn resolve_codex_model(conn: &rusqlite::Connection, alias: &str) -> Option<S
 }
 
 fn resolve_default_codex_model(conn: &rusqlite::Connection) -> Option<String> {
-    query_provider_models_fallback(conn, "codex", |m| m.contains("gpt-5") || m.contains("gpt-6"))
+    query_provider_models_fallback(conn, "codex", |m| {
+        m.contains("gpt-5") || m.contains("gpt-6")
+    })
 }

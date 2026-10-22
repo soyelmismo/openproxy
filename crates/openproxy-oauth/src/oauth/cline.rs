@@ -1,9 +1,7 @@
 //! Cline OAuth provider.
 
 use crate::error::{CoreError, Result};
-use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
-};
+use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use std::sync::Arc;
 
@@ -115,7 +113,8 @@ impl OAuthProvider for ClineOAuthProvider {
             return Err(CoreError::Validation("Cline returned success=false".into()));
         }
 
-        let expires_in = super::parse_expires_in(resp.data.expires_in, resp.data.expires_at.as_deref());
+        let expires_in =
+            super::parse_expires_in(resp.data.expires_in, resp.data.expires_at.as_deref());
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
@@ -179,7 +178,8 @@ impl OAuthProvider for ClineOAuthProvider {
             ));
         }
 
-        let expires_in = super::parse_expires_in(resp.data.expires_in, resp.data.expires_at.as_deref());
+        let expires_in =
+            super::parse_expires_in(resp.data.expires_in, resp.data.expires_at.as_deref());
         Ok(TokenResponse {
             access_token: resp.data.access_token,
             refresh_token: resp.data.refresh_token,
@@ -230,8 +230,9 @@ mod tests {
                 .expect("deserialize valid json");
         assert_eq!(data.access_token, "test_acc");
         assert_eq!(data.refresh_token.as_deref(), Some("test_ref"));
-        let expires_in = super::super::parse_expires_in(data.expires_in, data.expires_at.as_deref())
-            .expect("expires_in parsed");
+        let expires_in =
+            super::super::parse_expires_in(data.expires_in, data.expires_at.as_deref())
+                .expect("expires_in parsed");
         assert!((3590..=3600).contains(&expires_in));
 
         let snake_json = serde_json::json!({

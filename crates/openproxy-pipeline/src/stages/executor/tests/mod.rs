@@ -38,12 +38,7 @@ fn test_is_max_request_timeout() {
     );
     assert!(is_max_request_timeout(&gateway_timeout));
 
-    let internal_error = CoreError::upstream(
-        500,
-        "openai",
-        "gpt-4o",
-        "internal server error",
-    );
+    let internal_error = CoreError::upstream(500, "openai", "gpt-4o", "internal server error");
     assert!(!is_max_request_timeout(&internal_error));
 }
 
@@ -51,7 +46,7 @@ fn test_is_max_request_timeout() {
 fn test_should_skip_preventive_target_disabled_cooldown() {
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::config::CooldownMode;
-    
+
     use openproxy_types::{ComboId, ComboTargetId};
 
     let limiter = crate::predictive_rate_limit::PredictiveRateLimiter::new();
@@ -187,7 +182,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
     use openproxy_types::models::Model;
-    
+
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -379,7 +374,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
 async fn test_adversarial_single_target_combo_bypasses_race() {
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::config::CooldownMode;
-    
+
     use openproxy_types::{ComboId, ComboTargetId, ModelRowId, ProviderId};
 
     let (_pool, conn_arc, _path) = crate::test_utils::fresh_pool();
@@ -458,7 +453,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
     use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
     use openproxy_types::ids::{ComboId, ComboTargetId, ModelId, ModelRowId, ProviderId};
     use openproxy_types::models::Model;
-    
+
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;

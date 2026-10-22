@@ -77,7 +77,11 @@ pub fn is_weekly_quota_exhausted(quota: &AccountQuota, now: i64) -> bool {
 }
 
 /// Checks whether any weekly model detail in `quota.model_details` is 100% utilized.
-pub fn is_any_weekly_model_detail_exhausted<F>(quota: &AccountQuota, is_weekly_match: F, now: i64) -> bool
+pub fn is_any_weekly_model_detail_exhausted<F>(
+    quota: &AccountQuota,
+    is_weekly_match: F,
+    now: i64,
+) -> bool
 where
     F: Fn(&str) -> bool,
 {

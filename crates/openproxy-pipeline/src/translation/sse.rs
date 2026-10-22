@@ -211,8 +211,7 @@ fn is_ping_payload(payload: &str) -> Result<bool> {
         #[serde(borrow)]
         r#type: Option<std::borrow::Cow<'a, str>>,
     }
-    let probe: TypeProbe = serde_json::from_str(payload)
-        .ctx_parse("invalid SSE JSON")?;
+    let probe: TypeProbe = serde_json::from_str(payload).ctx_parse("invalid SSE JSON")?;
     Ok(probe.r#type.as_deref() == Some("ping"))
 }
 
@@ -232,8 +231,8 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
         return Ok(None);
     }
 
-    let event: AnthropicSseEvent = serde_json::from_str(payload)
-        .ctx_parse("invalid Anthropic SSE event")?;
+    let event: AnthropicSseEvent =
+        serde_json::from_str(payload).ctx_parse("invalid Anthropic SSE event")?;
 
     Ok(Some(event))
 }

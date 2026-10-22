@@ -37,7 +37,12 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
 }
 
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
-    crate::db_delete_by_id!(conn, "providers", id.as_str(), format!("delete provider {id}"))?;
+    crate::db_delete_by_id!(
+        conn,
+        "providers",
+        id.as_str(),
+        format!("delete provider {id}")
+    )?;
     Ok(())
 }
 

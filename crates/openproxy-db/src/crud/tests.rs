@@ -264,7 +264,8 @@ fn test_crud_macros() {
     }
 
     assert!(check_affected(1, || openproxy_types::CoreError::Validation("err".into())).is_ok());
-    let err2 = check_affected(0, || openproxy_types::CoreError::Validation("err0".into())).unwrap_err();
+    let err2 =
+        check_affected(0, || openproxy_types::CoreError::Validation("err0".into())).unwrap_err();
     match err2 {
         openproxy_types::CoreError::Validation(msg) => assert_eq!(msg, "err0"),
         other => panic!("expected Validation error, got {other:?}"),

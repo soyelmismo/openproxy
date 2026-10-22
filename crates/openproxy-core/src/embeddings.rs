@@ -9,16 +9,15 @@ use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
 use openproxy_types::{
-    CoreError, EmbeddingRequest, EmbeddingResponse, EndpointKind, Result, ResultExt,
-    ids::ApiKeyId,
+    CoreError, EmbeddingRequest, EmbeddingResponse, EndpointKind, Result, ResultExt, ids::ApiKeyId,
 };
 
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
-    UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs,
-    is_target_available, map_upstream_status_error, record_unary_target_success_async,
-    record_unary_usage, record_unary_usage_async, resolve_api_key, resolve_unary_targets,
+    UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs, is_target_available,
+    map_upstream_status_error, record_unary_target_success_async, record_unary_usage,
+    record_unary_usage_async, resolve_api_key, resolve_unary_targets,
 };
 
 pub type EmbeddingUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -127,8 +126,8 @@ async fn dispatch_single_embedding(
         ));
     }
 
-    let parsed_response: EmbeddingResponse = serde_json::from_slice(&body_bytes)
-        .ctx_parse("failed to parse embedding response")?;
+    let parsed_response: EmbeddingResponse =
+        serde_json::from_slice(&body_bytes).ctx_parse("failed to parse embedding response")?;
 
     if let Some(account_id) = target.account_id {
         circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));

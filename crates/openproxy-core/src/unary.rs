@@ -420,7 +420,11 @@ impl<'a> UnaryUsageArgs<'a> {
         self
     }
 
-    pub fn with_tokens(mut self, prompt_tokens: Option<u32>, completion_tokens: Option<u32>) -> Self {
+    pub fn with_tokens(
+        mut self,
+        prompt_tokens: Option<u32>,
+        completion_tokens: Option<u32>,
+    ) -> Self {
         self.prompt_tokens = prompt_tokens;
         self.completion_tokens = completion_tokens;
         self

@@ -29,15 +29,18 @@ use openproxy_adapters::client_contract::providers::codebuddy_runtime::{
     CodeBuddyProfile, CodeBuddyReleaseDriver,
 };
 use openproxy_adapters::client_contract::providers::codebuddy_state;
-use openproxy_adapters::client_contract::{Candidate, ContractError, ContractStore, UpstreamHttpTransport};
+use openproxy_adapters::client_contract::{
+    Candidate, ContractError, ContractStore, UpstreamHttpTransport,
+};
 use openproxy_adapters::upstream::{CancellationToken, UpstreamClient};
 use std::sync::Arc;
 
 impl RefreshableDriver<CodeBuddyProfile> for CodeBuddyReleaseDriver {
     fn refresh(
         &self,
-    ) -> impl std::future::Future<Output = Result<Option<Candidate<CodeBuddyProfile>>, ContractError>> + Send
-    {
+    ) -> impl std::future::Future<
+        Output = Result<Option<Candidate<CodeBuddyProfile>>, ContractError>,
+    > + Send {
         self.refresh()
     }
 }

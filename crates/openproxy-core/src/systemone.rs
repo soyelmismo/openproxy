@@ -17,9 +17,9 @@ use openproxy_types::{
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
-    UnaryTarget as SystemOneTargets, UnaryTarget, UnaryUsageArgs,
-    is_target_available, map_upstream_status_error, record_unary_target_success_async,
-    record_unary_usage, record_unary_usage_async, resolve_api_key, resolve_unary_targets,
+    UnaryTarget as SystemOneTargets, UnaryTarget, UnaryUsageArgs, is_target_available,
+    map_upstream_status_error, record_unary_target_success_async, record_unary_usage,
+    record_unary_usage_async, resolve_api_key, resolve_unary_targets,
 };
 
 pub type SystemOneUsageArgs<'a> = UnaryUsageArgs<'a>;

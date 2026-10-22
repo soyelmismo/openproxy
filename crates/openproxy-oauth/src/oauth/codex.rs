@@ -133,8 +133,7 @@ impl OAuthProvider for CodexOAuthProvider {
             http::HeaderValue::from_static("application/json"),
         );
 
-        let (status, body) =
-            super::call_oauth(upstream_client, req, "codex deviceauth").await?;
+        let (status, body) = super::call_oauth(upstream_client, req, "codex deviceauth").await?;
 
         if status.as_u16() == 404 {
             return Err(CoreError::Validation(

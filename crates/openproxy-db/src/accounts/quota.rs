@@ -14,8 +14,7 @@ fn quota_pools_json(pools: Option<&[openproxy_types::quota::QuotaPool]>) -> Resu
     let Some(pools) = pools else {
         return Ok(None);
     };
-    let json = serde_json::to_string(pools)
-        .ctx_parse("serialize quota_pools")?;
+    let json = serde_json::to_string(pools).ctx_parse("serialize quota_pools")?;
     if json.is_empty() || json == "null" || json == "[]" {
         return Ok(None);
     }

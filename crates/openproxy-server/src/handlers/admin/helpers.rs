@@ -118,13 +118,13 @@ pub fn parse_target_priority_order(body: &Value) -> Result<Option<i32>, ApiError
 }
 
 pub fn parse_target_weight(body: &Value) -> Result<Option<i32>, ApiError> {
-    parse_bounded_i32(
-        body,
-        "weight",
-        1,
-        i64::from(i32::MAX),
-        |w| format!("weight must be a positive i32 (1..={}), got {}", i32::MAX, w),
-    )
+    parse_bounded_i32(body, "weight", 1, i64::from(i32::MAX), |w| {
+        format!(
+            "weight must be a positive i32 (1..={}), got {}",
+            i32::MAX,
+            w
+        )
+    })
 }
 
 pub fn parse_target_active(body: &Value) -> Result<Option<bool>, ApiError> {
@@ -159,9 +159,7 @@ impl ComboTargetUpdates<'_> {
     }
 }
 
-pub fn parse_combo_target_updates(
-    body: &Value,
-) -> Result<ComboTargetUpdates<'_>, ApiError> {
+pub fn parse_combo_target_updates(body: &Value) -> Result<ComboTargetUpdates<'_>, ApiError> {
     let priority_order = parse_target_priority_order(body)?;
     let weight = parse_target_weight(body)?;
     let active = parse_target_active(body)?;
@@ -311,8 +309,15 @@ mod tests {
             parse_bounded_i32(&obj, "missing", 1, 100, |v| format!("{v} out of range")).unwrap(),
             None
         );
-        assert!(parse_bounded_i32(&obj, "out_of_bounds", 1, 100, |v| format!("{v} out of range")).is_err());
-        assert!(parse_bounded_i32(&obj, "invalid", 1, 100, |v| format!("{v} out of range")).is_err());
+        assert!(
+            parse_bounded_i32(&obj, "out_of_bounds", 1, 100, |v| format!(
+                "{v} out of range"
+            ))
+            .is_err()
+        );
+        assert!(
+            parse_bounded_i32(&obj, "invalid", 1, 100, |v| format!("{v} out of range")).is_err()
+        );
     }
 
     #[test]

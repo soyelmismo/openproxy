@@ -56,8 +56,7 @@ impl ModelTimeoutOverrides {
     pub fn from_json(s: Option<&str>) -> Result<Self> {
         match s {
             None | Some("") => Ok(Self::default()),
-            Some(s) => Ok(serde_json::from_str(s)
-                .ctx_parse("model timeout_overrides_json")?),
+            Some(s) => Ok(serde_json::from_str(s).ctx_parse("model timeout_overrides_json")?),
         }
     }
 

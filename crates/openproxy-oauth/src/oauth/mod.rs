@@ -63,7 +63,11 @@ pub async fn call_oauth(
 ) -> Result<(http::StatusCode, bytes::Bytes)> {
     let cancel = openproxy_adapters::upstream::CancellationToken::new();
     let response = upstream_client
-        .call(req, openproxy_adapters::upstream::TimeoutProfile::OAuth, cancel)
+        .call(
+            req,
+            openproxy_adapters::upstream::TimeoutProfile::OAuth,
+            cancel,
+        )
         .await
         .map_err(|e| map_upstream_err(e, op_name))?;
 

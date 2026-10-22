@@ -136,8 +136,7 @@ pub fn encrypt_bundle_payload(payload: &BackupPayload, passphrase: &str) -> Resu
 
     let nonce = Nonce::try_from(nonce_bytes.as_slice())
         .map_err(|e| CoreError::Internal(format!("invalid nonce: {e}")))?;
-    let json_bytes = serde_json::to_vec(payload)
-        .ctx_parse("serialize payload")?;
+    let json_bytes = serde_json::to_vec(payload).ctx_parse("serialize payload")?;
 
     let ciphertext = cipher
         .encrypt(&nonce, json_bytes.as_slice())
@@ -232,8 +231,8 @@ pub fn decrypt_bundle_payload(
         )
     })?;
 
-    let payload: BackupPayload = serde_json::from_slice(&decrypted_bytes)
-        .ctx_parse("deserialize payload")?;
+    let payload: BackupPayload =
+        serde_json::from_slice(&decrypted_bytes).ctx_parse("deserialize payload")?;
 
     Ok(payload)
 }

@@ -16,8 +16,7 @@ use openproxy_types::{
 use crate::images::horde_poll::{HordePollContext, poll_horde_image_generation};
 use crate::routing;
 use crate::unary::{
-    UnaryUsageArgs, map_upstream_status_error, record_unary_usage_async,
-    resolve_api_key_async,
+    UnaryUsageArgs, map_upstream_status_error, record_unary_usage_async, resolve_api_key_async,
 };
 
 pub async fn dispatch_image_request(

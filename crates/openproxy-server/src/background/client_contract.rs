@@ -70,8 +70,8 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OwnedMutexGuard;
 
-use super::runner::{DriverContractJob, RefreshableDriver};
 use super::BackgroundService;
+use super::runner::{DriverContractJob, RefreshableDriver};
 
 /// Cadencia de un contrato sano: una ronda cada seis horas.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);

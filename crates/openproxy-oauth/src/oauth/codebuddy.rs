@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
-};
+use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use rusqlite::OptionalExtension;
 
 pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
@@ -185,19 +183,16 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             );
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-            let (status, body) = match super::call_oauth(
-                upstream_client,
-                req,
-                "codebuddy device state request",
-            )
-            .await
-            {
-                Ok(pair) => pair,
-                Err(e) => {
-                    last_err = Some(e);
-                    continue;
-                }
-            };
+            let (status, body) =
+                match super::call_oauth(upstream_client, req, "codebuddy device state request")
+                    .await
+                {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        last_err = Some(e);
+                        continue;
+                    }
+                };
 
             super::check_oauth_status(status, "codebuddy", &body)?;
 
@@ -280,14 +275,19 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
             );
             openproxy_adapters::apply_codebuddy_spoofing_headers(&mut req);
 
-            let (status, body) =
-                match super::call_oauth(upstream_client, req, "codebuddy device token poll").await {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        last_err = Some(e);
-                        continue;
-                    }
-                };
+            let (status, body) = match super::call_oauth(
+                upstream_client,
+                req,
+                "codebuddy device token poll",
+            )
+            .await
+            {
+                Ok(pair) => pair,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            };
 
             // 404 / 428 is the standard pending response
             if status.as_u16() == 404 || status.as_u16() == 428 {
@@ -352,10 +352,9 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                     .get("expiresAt")
                     .or_else(|| data.get("expires_at"))
                     .and_then(serde_json::Value::as_str);
-                let expires_in =
-                    super::parse_expires_in(raw_expires_in, raw_expires_at)
-                        .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
-                        .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
+                let expires_in = super::parse_expires_in(raw_expires_in, raw_expires_at)
+                    .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
+                    .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
 
                 let token_type = data
                     .get("tokenType")
@@ -506,10 +505,9 @@ impl OAuthProvider for CodeBuddyOAuthProvider {
                 .get("expiresAt")
                 .or_else(|| data.get("expires_at"))
                 .and_then(serde_json::Value::as_str);
-            let expires_in =
-                super::parse_expires_in(raw_expires_in, raw_expires_at)
-                    .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
-                    .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
+            let expires_in = super::parse_expires_in(raw_expires_in, raw_expires_at)
+                .map(|secs| secs.min(CODEBUDDY_MAX_EXPIRES_IN_SECS))
+                .or(Some(CODEBUDDY_MAX_EXPIRES_IN_SECS));
 
             let token_type = data
                 .get("tokenType")

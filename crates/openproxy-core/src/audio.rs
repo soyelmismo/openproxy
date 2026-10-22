@@ -11,10 +11,7 @@ use openproxy_adapters::upstream::{
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;
-use openproxy_types::{
-    CoreError, EndpointKind, Result,
-    ids::ApiKeyId,
-};
+use openproxy_types::{CoreError, EndpointKind, Result, ids::ApiKeyId};
 
 use crate::routing::{self, RoutingPlan};
 

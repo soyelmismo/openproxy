@@ -24,7 +24,10 @@ pub struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
-    pub fn test(provider: impl Into<crate::ids::ProviderId>, model: impl Into<crate::ids::ModelId>) -> Self {
+    pub fn test(
+        provider: impl Into<crate::ids::ProviderId>,
+        model: impl Into<crate::ids::ModelId>,
+    ) -> Self {
         let provider_id = provider.into();
         let model_id = model.into();
         Self {

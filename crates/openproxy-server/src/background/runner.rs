@@ -62,9 +62,7 @@ where
 
 /// Helper para contratos cuyo driver expone `refresh(&self) -> Result<Option<Candidate<T>>, ContractError>`.
 pub trait RefreshableDriver<T>: Send + Sync + 'static {
-    fn refresh(
-        &self,
-    ) -> impl Future<Output = Result<Option<Candidate<T>>, ContractError>> + Send;
+    fn refresh(&self) -> impl Future<Output = Result<Option<Candidate<T>>, ContractError>> + Send;
 }
 
 /// Trabajo genérico de refresco de contrato respaldado por un driver de release y un store tipado.
@@ -77,7 +75,11 @@ pub struct DriverContractJob<D, T> {
 impl<D, T> DriverContractJob<D, T> {
     #[must_use]
     pub fn new(name: &'static str, driver: Arc<D>, store: Arc<ContractStore<T>>) -> Self {
-        Self { name, driver, store }
+        Self {
+            name,
+            driver,
+            store,
+        }
     }
 
     #[must_use]
@@ -105,7 +107,12 @@ where
         cancel: &CancellationToken,
     ) -> Result<RoundOutcome, ContractError> {
         let driver = Arc::clone(&self.driver);
-        run_refresh_round(&self.store, cancel, || async move { driver.refresh().await }).await
+        run_refresh_round(
+            &self.store,
+            cancel,
+            || async move { driver.refresh().await },
+        )
+        .await
     }
 }
 

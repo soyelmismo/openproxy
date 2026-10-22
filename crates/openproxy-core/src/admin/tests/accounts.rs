@@ -20,7 +20,7 @@ fn seed_prov(conn: &rusqlite::Connection, pid: &str, fmt: &str) {
             format: fmt.into(),
             extra_headers_json: None,
             stream_mode: None,
-        prompt_cache_ttl: None,
+            prompt_cache_ttl: None,
         },
     )
     .expect("seed provider");

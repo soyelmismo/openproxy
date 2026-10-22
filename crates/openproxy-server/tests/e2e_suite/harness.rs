@@ -381,7 +381,7 @@ impl TestHarness {
                     extra_headers_json: None,
                     rate_limit_scope: None,
                     stream_mode: None,
-        prompt_cache_ttl: None,
+                    prompt_cache_ttl: None,
                 },
             )
             .expect("create mock provider");

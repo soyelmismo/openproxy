@@ -74,8 +74,7 @@ fn save_config_val<T: serde::Serialize>(
     val: &T,
     now_unix_secs: i64,
 ) -> Result<()> {
-    let json = serde_json::to_string(val)
-        .ctx_parse(format!("serialize {key}"))?;
+    let json = serde_json::to_string(val).ctx_parse(format!("serialize {key}"))?;
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,

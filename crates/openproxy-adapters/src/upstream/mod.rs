@@ -77,7 +77,7 @@ pub mod tests_helper;
 pub use cancel::CancellationToken;
 #[cfg(feature = "upstream-hyper")]
 pub use client::{
-    bearer_auth_header, bearer_header_value, format_bearer, UpstreamClient, UpstreamRequest,
+    UpstreamClient, UpstreamRequest, bearer_auth_header, bearer_header_value, format_bearer,
 };
 #[cfg(feature = "upstream-hyper")]
 pub use conn_pool::{HostKey, Scheme, UpstreamConnectionPool};

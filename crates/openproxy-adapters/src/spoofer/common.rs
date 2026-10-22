@@ -264,10 +264,8 @@ pub fn build_spoofed_headers<F>(
 where
     F: FnMut(&str, &str) -> (String, String),
 {
-    let mut list: Vec<(String, String)> = base_headers
-        .iter()
-        .map(|(k, v)| transform(k, v))
-        .collect();
+    let mut list: Vec<(String, String)> =
+        base_headers.iter().map(|(k, v)| transform(k, v)).collect();
 
     merge_header_refs(&mut list, extra_headers);
     overrides.apply_to_list(&mut list);

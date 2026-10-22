@@ -162,10 +162,12 @@ mod tests {
             }
         });
         sanitize_tool_parameters(&mut tool_nested);
-        assert!(!tool_nested["function"]["parameters"]["properties"]["q"]
-            .as_object()
-            .unwrap()
-            .contains_key("pattern"));
+        assert!(
+            !tool_nested["function"]["parameters"]["properties"]["q"]
+                .as_object()
+                .unwrap()
+                .contains_key("pattern")
+        );
 
         let mut tool_flat = json!({
             "type": "function",
@@ -178,9 +180,11 @@ mod tests {
             }
         });
         sanitize_tool_parameters(&mut tool_flat);
-        assert!(!tool_flat["parameters"]["properties"]["q"]
-            .as_object()
-            .unwrap()
-            .contains_key("pattern"));
+        assert!(
+            !tool_flat["parameters"]["properties"]["q"]
+                .as_object()
+                .unwrap()
+                .contains_key("pattern")
+        );
     }
 }

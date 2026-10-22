@@ -195,11 +195,7 @@ pub fn format_sse_line(payload: &serde_json::Value) -> String {
 }
 
 /// Append a named SSE event frame (`event: <name>\ndata: <payload>\n\n`) to a byte buffer.
-pub fn append_sse_event(
-    out: &mut bytes::BytesMut,
-    event_name: &str,
-    payload: &serde_json::Value,
-) {
+pub fn append_sse_event(out: &mut bytes::BytesMut, event_name: &str, payload: &serde_json::Value) {
     use bytes::BufMut;
     out.extend_from_slice(b"event: ");
     out.extend_from_slice(event_name.as_bytes());
@@ -301,8 +297,7 @@ where
     T: for<'de> serde::Deserialize<'de>,
     S: AsRef<str>,
 {
-    serde_json::from_str(payload.as_ref())
-        .ctx_parse(format!("{provider} sse json"))
+    serde_json::from_str(payload.as_ref()).ctx_parse(format!("{provider} sse json"))
 }
 
 /// Build `OpenAIUsage` from `Option<u64>` token counts, applying the

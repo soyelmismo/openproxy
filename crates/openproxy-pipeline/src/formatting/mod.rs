@@ -432,8 +432,7 @@ impl TargetFormatter for AnthropicFormatter {
                 .get("max_completion_tokens")
                 .and_then(|v| v.as_u64())
                 .is_some();
-        let mut val = serde_json::to_value(&anthro)
-            .ctx_parse("serialize anthropic request")?;
+        let mut val = serde_json::to_value(&anthro).ctx_parse("serialize anthropic request")?;
 
         // Anthropic makes max_tokens mandatory, so the translator falls back to
         // DEFAULT_MAX_TOKENS (4096) when the client omits it. That floor is far
@@ -456,8 +455,7 @@ impl TargetFormatter for AnthropicFormatter {
         openproxy_adapters::anthropic_cache::ensure_anthropic_cache_control(&mut val);
         openproxy_adapters::anthropic_cache::enforce_cache_control_limit(&mut val, 4);
 
-        let body_bytes = serde_json::to_vec(&val)
-            .ctx_parse("serialize anthropic request")?;
+        let body_bytes = serde_json::to_vec(&val).ctx_parse("serialize anthropic request")?;
         Ok(bytes::Bytes::from(body_bytes))
     }
 }

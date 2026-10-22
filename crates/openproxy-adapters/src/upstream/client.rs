@@ -58,7 +58,9 @@ pub fn bearer_auth_header(token: &str) -> (String, String) {
 }
 
 /// Build an `http::HeaderValue` for a Bearer token.
-pub fn bearer_header_value(token: &str) -> Result<http::HeaderValue, http::header::InvalidHeaderValue> {
+pub fn bearer_header_value(
+    token: &str,
+) -> Result<http::HeaderValue, http::header::InvalidHeaderValue> {
     http::HeaderValue::from_str(&format_bearer(token))
 }
 

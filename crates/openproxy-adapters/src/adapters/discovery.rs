@@ -231,4 +231,3 @@ mod tests {
         assert!(payload.data.is_empty());
     }
 }
-

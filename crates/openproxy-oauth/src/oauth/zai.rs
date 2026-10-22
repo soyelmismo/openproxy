@@ -8,9 +8,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
-use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
-};
+use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
 use serde::{Deserialize, Serialize};
@@ -174,9 +172,8 @@ impl OAuthProvider for ZaiOAuthProvider {
             .get("expires_at")
             .or_else(|| data.get("expiresAt"))
             .and_then(serde_json::Value::as_str);
-        let expires_in =
-            crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
-                .or(Some(86400 * 30));
+        let expires_in = crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
+            .or(Some(86400 * 30));
 
         let user_val = data.get("user");
         let user_id = user_val

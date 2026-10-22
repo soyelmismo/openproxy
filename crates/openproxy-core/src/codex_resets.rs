@@ -157,8 +157,8 @@ pub async fn list_codex_account_resets(
         .collect()
         .await
         .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
-    let json: serde_json::Value = serde_json::from_slice(&body)
-        .ctx_parse("codex reset credits parse")?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).ctx_parse("codex reset credits parse")?;
 
     if !(200..300).contains(&status) {
         return Err(CoreError::upstream_error(
@@ -223,8 +223,8 @@ pub async fn redeem_codex_account_reset(
         .collect()
         .await
         .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
-    let json: serde_json::Value = serde_json::from_slice(&body)
-        .ctx_parse("codex reset credits parse")?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).ctx_parse("codex reset credits parse")?;
 
     if !(200..300).contains(&status) {
         return Err(CoreError::upstream_error(

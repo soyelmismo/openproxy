@@ -7,8 +7,8 @@ use super::{
     UpstreamSseChunk, make_text_delta, make_tool_call_delta, make_tool_call_start,
     parse_provider_json,
 };
-use openproxy_types::error::{CoreError, Result};
 use openproxy_types::OpenAIUsage;
+use openproxy_types::error::{CoreError, Result};
 use serde_json::{Value, json};
 
 pub(crate) const MAX_COMMANDCODE_TOOL_CALLS: usize = 128;
@@ -596,7 +596,13 @@ mod tests {
                       {\"type\":\"finish\",\"finishReason\":\"length\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":16}}\n";
         let resp = parse_commandcode_sse_to_unary(stream, "muse-spark").unwrap();
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("length"));
-        assert!(resp.choices[0].message.content.as_ref().is_none_or(Value::is_null));
+        assert!(
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .is_none_or(Value::is_null)
+        );
     }
 
     #[test]
@@ -641,7 +647,13 @@ mod tests {
         // No content or finish event: finish_reason stays None so
         // is_empty_response catches the turn.
         assert_eq!(resp.choices[0].finish_reason, None);
-        assert!(resp.choices[0].message.content.as_ref().is_none_or(Value::is_null));
+        assert!(
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .is_none_or(Value::is_null)
+        );
         assert!(crate::dispatcher::unary::is_empty_response(&resp));
     }
 }

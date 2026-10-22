@@ -26,34 +26,21 @@ pub fn create(
     let plaintext = generate_plaintext();
     let key_hash = hash_key(&plaintext);
     let key_prefix: String = plaintext.chars().take(12).collect();
-    let scopes_json = serde_json::to_string(&input.scopes)
-        .ctx_parse("serialize scopes")?;
+    let scopes_json = serde_json::to_string(&input.scopes).ctx_parse("serialize scopes")?;
     let allowed_models_json = match &input.allowed_models {
-        Some(v) => Some(
-            serde_json::to_string(v)
-                .ctx_parse("serialize allowed_models")?,
-        ),
+        Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize allowed_models")?),
         None => None,
     };
     let allowed_combos_json = match &input.allowed_combos {
-        Some(v) => Some(
-            serde_json::to_string(v)
-                .ctx_parse("serialize allowed_combos")?,
-        ),
+        Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize allowed_combos")?),
         None => None,
     };
     let blacklisted_providers_json = match &input.blacklisted_providers {
-        Some(v) => Some(
-            serde_json::to_string(v)
-                .ctx_parse("serialize blacklisted_providers")?,
-        ),
+        Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize blacklisted_providers")?),
         None => None,
     };
     let blacklisted_models_json = match &input.blacklisted_models {
-        Some(v) => Some(
-            serde_json::to_string(v)
-                .ctx_parse("serialize blacklisted_models")?,
-        ),
+        Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize blacklisted_models")?),
         None => None,
     };
 
@@ -229,8 +216,7 @@ fn serialize_update_field<T: serde::Serialize>(
         UpdateField::Ignore => Ok(UpdateField::Ignore),
         UpdateField::Reset => Ok(UpdateField::Reset),
         UpdateField::Set(v) => {
-            let s = serde_json::to_string(v)
-                .ctx_parse(format!("serialize {name}"))?;
+            let s = serde_json::to_string(v).ctx_parse(format!("serialize {name}"))?;
             Ok(UpdateField::Set(s))
         }
     }

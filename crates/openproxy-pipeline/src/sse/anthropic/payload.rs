@@ -233,8 +233,7 @@ pub fn translate_anthropic_sse_payload(
         return Ok(None);
     }
 
-    let data: Value = serde_json::from_str(data_json)
-        .ctx_parse("anthropic sse json")?;
+    let data: Value = serde_json::from_str(data_json).ctx_parse("anthropic sse json")?;
 
     match event_type {
         "message_start" => Ok(Some(build_anthropic_message_start_chunk(

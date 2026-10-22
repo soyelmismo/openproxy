@@ -216,8 +216,7 @@ pub async fn run_account_checkin(
         }
     }
 
-    let meta_json = serde_json::to_string(&meta)
-        .ctx_parse("serialize meta")?;
+    let meta_json = serde_json::to_string(&meta).ctx_parse("serialize meta")?;
 
     let final_email = meta.email.clone();
     let display_label = identity.display_label();

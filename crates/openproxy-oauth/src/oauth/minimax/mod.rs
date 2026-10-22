@@ -26,8 +26,7 @@ use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
 use crate::oauth::generic::{code_challenge_s256, generate_code_verifier, urlencoded_body};
 use crate::oauth::{
-    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse,
-    decode_jwt_payload,
+    DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse, decode_jwt_payload,
 };
 use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;

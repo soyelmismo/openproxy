@@ -221,8 +221,7 @@ pub fn parse_gemini_sse_line(
 
     let usage = extract_gemini_usage(usage_metadata);
     if let Some(usage) = &usage {
-        chunk["usage"] = serde_json::to_value(usage)
-            .ctx_parse("gemini usage serialize")?;
+        chunk["usage"] = serde_json::to_value(usage).ctx_parse("gemini usage serialize")?;
     }
     let has_content = !text.is_empty() || delta_reasoning.is_some() || !delta_tool_calls.is_empty();
 
