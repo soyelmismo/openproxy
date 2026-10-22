@@ -234,4 +234,30 @@ mod tests {
         );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("end_turn"));
     }
+
+    #[test]
+    fn test_parse_gemini_sse_stream_with_liveness_chunks() {
+        let stream_text = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"\"}]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hello from Gemini!\"}]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":12,\"candidatesTokenCount\":4,\"totalTokenCount\":16}}\n\ndata: [DONE]\n\n";
+        let resp = parse_sse_stream_to_openai_response(
+            TargetFormat::Gemini,
+            stream_text,
+            "gemini-2.5-flash",
+        )
+        .unwrap();
+
+        assert_eq!(
+            resp.choices[0]
+                .message
+                .content
+                .as_ref()
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "Hello from Gemini!"
+        );
+        assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
+        let usage = resp.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 12);
+        assert_eq!(usage.completion_tokens, 4);
+    }
 }

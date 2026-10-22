@@ -225,6 +225,15 @@ pub fn parse_gemini_sse_line(
     }
     let has_content = !text.is_empty() || delta_reasoning.is_some() || !delta_tool_calls.is_empty();
 
+    // If the chunk carries no visible output, no finish reason, no tool calls and no usage,
+    // but the upstream reported candidates (e.g. empty thought parts, empty content while
+    // reasoning server-side) or an empty generation response heartbeat, emit a liveness chunk.
+    // This notifies the streaming body stream that upstream generation is in progress,
+    // switching off the TTFT deadline without emitting empty null content to the client.
+    if !has_content && finish_reason.is_none() && usage.is_none() {
+        return Ok(Some(UpstreamSseChunk::liveness()));
+    }
+
     Ok(Some(UpstreamSseChunk {
         raw_payload: None,
         payload: chunk,
@@ -464,13 +473,31 @@ mod tests {
     }
 
     #[test]
-    fn gemini_only_ellipsis_tokens() {
+    fn gemini_only_ellipsis_tokens_emits_liveness() {
         let line = r#"data: {"candidates":[{"content":{"parts":[]}}]}"#;
         let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
-        let content = chunk.payload["choices"][0]["delta"]["content"]
-            .as_str()
-            .unwrap_or("");
-        assert!(content.is_empty());
+        assert!(chunk.is_liveness());
+    }
+
+    #[test]
+    fn gemini_empty_thought_emits_liveness() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[{"thought":true}]}}]}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        assert!(chunk.is_liveness());
+    }
+
+    #[test]
+    fn gemini_empty_thought_empty_text_emits_liveness() {
+        let line = r#"data: {"candidates":[{"content":{"parts":[{"thought":true,"text":""}]}}]}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        assert!(chunk.is_liveness());
+    }
+
+    #[test]
+    fn gemini_empty_response_heartbeat_emits_liveness() {
+        let line = r#"data: {"response":{"candidates":[{"content":{"parts":[]}}]}}"#;
+        let chunk = parse_gemini_sse_line(line, "id", 0, "m").unwrap().unwrap();
+        assert!(chunk.is_liveness());
     }
 
     #[test]
