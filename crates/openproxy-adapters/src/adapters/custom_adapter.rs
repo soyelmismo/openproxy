@@ -151,13 +151,7 @@ fn parse_custom_gemini_models(body: &serde_json::Value) -> Option<Vec<Discovered
 }
 
 impl ProviderAdapter for CustomAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn metadata(&self) -> ProviderMetadata {
         ProviderMetadata::custom_default()

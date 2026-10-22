@@ -37,13 +37,7 @@ impl CloudflareWorkersAIAdapter {
 crate::adapters::derive_default_from_new!(CloudflareWorkersAIAdapter);
 
 impl ProviderAdapter for CloudflareWorkersAIAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn build_chat_url(&self, _target_format: TargetFormat, _model: &ModelId) -> String {
         // Cloudflare's URL template needs the account label, so the label-less

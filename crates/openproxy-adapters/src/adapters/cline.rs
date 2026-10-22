@@ -84,13 +84,7 @@ fn map_cline_entry(entry: ClineModelEntry, is_free: bool) -> DiscoveredModel {
 }
 
 impl ProviderAdapter for ClineAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn build_headers(
         &self,

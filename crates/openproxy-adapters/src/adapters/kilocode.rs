@@ -39,13 +39,7 @@ impl KilocodeAdapter {
 crate::adapters::derive_default_from_new!(KilocodeAdapter);
 
 impl ProviderAdapter for KilocodeAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn models_url(&self) -> Option<String> {
         Some("https://api.kilo.ai/api/openrouter/models".into())

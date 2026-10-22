@@ -29,13 +29,7 @@ impl TypeSafeAdapter {
 crate::adapters::derive_default_from_new!(TypeSafeAdapter);
 
 impl ProviderAdapter for TypeSafeAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn fetch_models(
         &self,

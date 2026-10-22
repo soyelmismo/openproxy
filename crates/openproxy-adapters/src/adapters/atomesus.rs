@@ -106,13 +106,7 @@ fn infer_atomesus_mode_and_model(model: &ModelId) -> (&'static str, &str) {
 }
 
 impl ProviderAdapter for AtomesusAdapter {
-    fn config(&self) -> &ProviderAdapterConfig {
-        &self.config
-    }
-
-    fn config_mut(&mut self) -> Option<&mut ProviderAdapterConfig> {
-        Some(&mut self.config)
-    }
+    crate::adapters::impl_adapter_config!();
 
     fn wrap_request_body(
         &self,
