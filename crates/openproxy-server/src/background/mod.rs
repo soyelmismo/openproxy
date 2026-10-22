@@ -387,7 +387,8 @@ impl BackgroundService for MaintenanceVacuumService {
 
     async fn run(&self, cancel: CancellationToken) {
         let mut prune_tick = tokio::time::interval(Duration::from_hours(1));
-        let mut vacuum_counter: u32 = 0;
+        // Initialize vacuum_counter to fire on the very first hour tick after startup
+        let mut vacuum_counter: u32 = u32::MAX;
         loop {
             tokio::select! {
                 () = cancel.cancelled() => break,
@@ -686,10 +687,17 @@ pub(crate) fn prune_usage_and_dead_proxies(
     prune_pool: &Arc<openproxy_db::DbPool>,
     retention_days: u32,
 ) {
-    let retention_secs: i64 = i64::from(retention_days) * 24 * 3600;
-    if retention_secs > 0 {
+    if retention_days > 0 {
         if let Some(w) = prune_pool.try_writer_for(std::time::Duration::from_secs(5)) {
-            let _ = openproxy_core::usage::prune_expired_usage_rows(&w, retention_secs);
+            match openproxy_core::usage::prune_expired_usage_rows(&w, i64::from(retention_days)) {
+                Ok(deleted) if deleted > 0 => {
+                    tracing::info!(deleted, retention_days, "pruned expired usage records");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "usage prune failed");
+                }
+            }
         } else {
             tracing::warn!("prune_usage_and_dead_proxies: writer lock contention, skipping tick");
             return;
@@ -732,13 +740,32 @@ pub(crate) fn execute_vacuum_cycle(
         let mut st = vac_status.write();
         st.in_progress = true;
     }
-    let vacuum_result = match prune_pool.try_writer_for(std::time::Duration::from_secs(5)) {
+    // Reopen DB connections to refresh page cache before vacuum cycle
+    let _ = prune_pool.reopen();
+
+    let vacuum_result = match prune_pool.try_writer_for(std::time::Duration::from_secs(30)) {
         Some(w) => {
             let _ = w.pragma_update(None, "auto_vacuum", "INCREMENTAL");
-            let inc_result = w.execute_batch("PRAGMA incremental_vacuum(1000);");
-            match inc_result {
-                Ok(()) => Ok(()),
-                Err(_) => w.execute_batch("VACUUM;"),
+            // Check how many free pages SQLite currently has
+            let free_pages: i64 = w
+                .query_row("PRAGMA freelist_count;", [], |r| r.get(0))
+                .unwrap_or(0);
+
+            if free_pages > 0 {
+                // Perform incremental vacuum for up to free_pages (or chunks of 5000)
+                let pages_to_vacuum = free_pages.min(5000);
+                match w.pragma_update(None, "incremental_vacuum", pages_to_vacuum) {
+                    Ok(()) => {
+                        let _ = w.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "incremental_vacuum failed, falling back to full VACUUM");
+                        w.execute_batch("VACUUM;")
+                    }
+                }
+            } else {
+                Ok(())
             }
         }
         None => {
@@ -751,7 +778,10 @@ pub(crate) fn execute_vacuum_cycle(
     };
     let now = chrono::Utc::now().to_rfc3339();
     let result_str = match vacuum_result {
-        Ok(()) => "ok".to_string(),
+        Ok(()) => {
+            let _ = prune_pool.reopen();
+            "ok".to_string()
+        }
         Err(e) => e.to_string(),
     };
     {
