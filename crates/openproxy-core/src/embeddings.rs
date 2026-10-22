@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use openproxy_adapters::adapters::ProviderAdapterEnum;
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest, UpstreamResponse,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamResponse};
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
@@ -18,7 +16,7 @@ use openproxy_types::{
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
-    UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
+    UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs,
     is_target_available, map_upstream_status_error, record_unary_usage, record_unary_usage_async,
     resolve_api_key, resolve_unary_targets,
 };
@@ -51,21 +49,16 @@ pub async fn dispatch_embedding_request(
     req: &EmbeddingRequest,
 ) -> Result<UpstreamResponse> {
     let payload = adapter.format_embedding_request(req, upstream_model_id)?;
-    let mut upstream_req = UpstreamRequest::post_json(upstream_url, payload);
-
-    apply_adapter_headers(
-        &mut upstream_req,
+    crate::unary::call_unary_upstream(
+        upstream_client,
         adapter,
+        upstream_url,
         api_key,
         upstream_model_id,
+        payload,
         false,
-    );
-
-    let cancel = CancellationToken::new();
-    upstream_client
-        .call(upstream_req, TimeoutProfile::Quota, cancel)
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
+    )
+    .await
 }
 
 async fn dispatch_single_embedding(

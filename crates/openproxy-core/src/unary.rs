@@ -2,10 +2,14 @@
 //! circuit breaker / cooldown checking, and standard usage logging.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 use std::time::Instant;
 
+use bytes::Bytes;
 use openproxy_adapters::adapters::ProviderAdapterEnum;
-use openproxy_adapters::upstream::UpstreamRequest;
+use openproxy_adapters::upstream::{
+    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest, UpstreamResponse,
+};
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry, Health};
@@ -462,6 +466,30 @@ pub fn apply_adapter_headers(
             req.headers.insert(hn, hv);
         }
     }
+}
+
+pub async fn call_unary_upstream(
+    upstream_client: &Arc<UpstreamClient>,
+    adapter: &ProviderAdapterEnum,
+    upstream_url: &str,
+    api_key: &str,
+    upstream_model_id: &str,
+    payload: Bytes,
+    skip_content_type: bool,
+) -> Result<UpstreamResponse> {
+    let mut upstream_req = UpstreamRequest::post_json(upstream_url, payload);
+    apply_adapter_headers(
+        &mut upstream_req,
+        adapter,
+        api_key,
+        upstream_model_id,
+        skip_content_type,
+    );
+    let cancel = CancellationToken::new();
+    upstream_client
+        .call(upstream_req, TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
 }
 
 pub fn map_upstream_status_error(
