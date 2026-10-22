@@ -7,7 +7,7 @@ use crate::error::{CoreError, Result};
 use crate::ids::ApiKeyId;
 use crate::validation::Validatable;
 use openproxy_db::error::map_db_error_ctx;
-use openproxy_types::UpdateField;
+use openproxy_types::{ResultExt, UpdateField};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// Create a new API key. Returns the persisted row plus the plaintext
@@ -27,32 +27,32 @@ pub fn create(
     let key_hash = hash_key(&plaintext);
     let key_prefix: String = plaintext.chars().take(12).collect();
     let scopes_json = serde_json::to_string(&input.scopes)
-        .map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))?;
+        .ctx_parse("serialize scopes")?;
     let allowed_models_json = match &input.allowed_models {
         Some(v) => Some(
             serde_json::to_string(v)
-                .map_err(|e| CoreError::Parse(format!("serialize allowed_models: {e}")))?,
+                .ctx_parse("serialize allowed_models")?,
         ),
         None => None,
     };
     let allowed_combos_json = match &input.allowed_combos {
         Some(v) => Some(
             serde_json::to_string(v)
-                .map_err(|e| CoreError::Parse(format!("serialize allowed_combos: {e}")))?,
+                .ctx_parse("serialize allowed_combos")?,
         ),
         None => None,
     };
     let blacklisted_providers_json = match &input.blacklisted_providers {
         Some(v) => Some(
             serde_json::to_string(v)
-                .map_err(|e| CoreError::Parse(format!("serialize blacklisted_providers: {e}")))?,
+                .ctx_parse("serialize blacklisted_providers")?,
         ),
         None => None,
     };
     let blacklisted_models_json = match &input.blacklisted_models {
         Some(v) => Some(
             serde_json::to_string(v)
-                .map_err(|e| CoreError::Parse(format!("serialize blacklisted_models: {e}")))?,
+                .ctx_parse("serialize blacklisted_models")?,
         ),
         None => None,
     };
@@ -230,7 +230,7 @@ fn serialize_update_field<T: serde::Serialize>(
         UpdateField::Reset => Ok(UpdateField::Reset),
         UpdateField::Set(v) => {
             let s = serde_json::to_string(v)
-                .map_err(|e| CoreError::Parse(format!("serialize {name}: {e}")))?;
+                .ctx_parse(format!("serialize {name}"))?;
             Ok(UpdateField::Set(s))
         }
     }
@@ -322,9 +322,7 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
     }
     let scopes_json = params
         .scopes
-        .map(|s| {
-            serde_json::to_string(s).map_err(|e| CoreError::Parse(format!("serialize scopes: {e}")))
-        })
+        .map(|s| serde_json::to_string(s).ctx_parse("serialize scopes"))
         .transpose()?;
     let allowed_models_json = serialize_update_field(params.allowed_models, "allowed_models")?;
     let allowed_combos_json = serialize_update_field(params.allowed_combos, "allowed_combos")?;

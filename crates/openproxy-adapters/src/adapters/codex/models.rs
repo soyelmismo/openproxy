@@ -4,7 +4,7 @@ use crate::client_contract::providers::codex_runtime::CodexProfile;
 use crate::client_contract::providers::codex_state;
 use crate::spoofer::{current_codex_ua, current_codex_version};
 use crate::upstream::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
-use openproxy_types::{CoreError, DiscoveredModel, ModelId, Result, TargetFormat};
+use openproxy_types::{CoreError, DiscoveredModel, ModelId, Result, ResultExt, TargetFormat};
 use std::sync::Arc;
 
 pub const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
@@ -107,8 +107,8 @@ fn sort_codex_models_by_priority(models_arr: &[serde_json::Value]) -> Vec<&serde
 /// Parses upstream Codex models JSON response into a list of DiscoveredModel.
 /// Supports `{ "models": [...] }`, `{ "data": [...] }`, or top-level arrays.
 pub fn parse_codex_models_json(bytes: &[u8]) -> Result<Vec<DiscoveredModel>> {
-    let json: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| CoreError::Parse(format!("codex models parse error: {e}")))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(bytes).ctx_parse("codex models parse error")?;
 
     let models_arr = codex_models_array(&json)?;
     let items = sort_codex_models_by_priority(models_arr);
@@ -138,8 +138,8 @@ pub fn snapshot_catalog_models(
     catalog: &[u8],
     client_version: &str,
 ) -> Result<Vec<DiscoveredModel>> {
-    let json: serde_json::Value = serde_json::from_slice(catalog)
-        .map_err(|e| CoreError::Parse(format!("codex snapshot catalog parse: {e}")))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(catalog).ctx_parse("codex snapshot catalog parse")?;
     let models_arr = codex_models_array(&json)?;
     let items = sort_codex_models_by_priority(models_arr);
 

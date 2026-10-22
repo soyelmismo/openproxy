@@ -3,7 +3,8 @@
 use super::super::UpstreamSseChunk;
 use super::accumulator::{AnthropicToolUseAccumulator, MAX_TOOL_ARGUMENTS_BYTES};
 use super::payload::translate_anthropic_sse_payload;
-use openproxy_types::error::{CoreError, Result};
+use openproxy_types::ResultExt;
+use openproxy_types::error::Result;
 
 #[derive(serde::Deserialize, Default)]
 struct AnthropicContentBlockDeltaProbe {
@@ -161,7 +162,7 @@ fn translate_anthropic_content_block_delta(
     tool_use_acc: &mut Option<AnthropicToolUseAccumulator>,
 ) -> Result<Option<UpstreamSseChunk>> {
     let probe: AnthropicContentBlockDeltaProbe = serde_json::from_str(data_json)
-        .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
+        .ctx_parse("anthropic sse json")?;
     let delta = probe.delta.unwrap_or_default();
     let delta_type = delta.delta_type.as_deref().unwrap_or("");
 
@@ -185,7 +186,7 @@ fn translate_anthropic_content_block_start(
     tool_call_index_counter: &mut u32,
 ) -> Result<Option<UpstreamSseChunk>> {
     let probe: AnthropicContentBlockStartProbe = serde_json::from_str(data_json)
-        .map_err(|e| CoreError::Parse(format!("anthropic sse json: {e}")))?;
+        .ctx_parse("anthropic sse json")?;
     let block = probe.content_block.unwrap_or_default();
     let block_type = block.block_type.as_deref().unwrap_or("");
 

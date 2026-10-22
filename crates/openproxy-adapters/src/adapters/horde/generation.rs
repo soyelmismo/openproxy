@@ -2,7 +2,7 @@ use super::prompt::{
     HordeLora, HordeTi, clean_residual_prompt, parse_dimensions, parse_prompt_directives,
 };
 use bytes::Bytes;
-use openproxy_types::{CoreError, ImageGenerationRequest, Result};
+use openproxy_types::{ImageGenerationRequest, Result, ResultExt};
 use serde::Serialize;
 use std::collections::HashSet;
 
@@ -203,7 +203,6 @@ pub fn build_horde_payload(
         source_processing,
     };
 
-    let vec = serde_json::to_vec(&payload)
-        .map_err(|e| CoreError::Parse(format!("failed to serialize horde request: {e}")))?;
+    let vec = serde_json::to_vec(&payload).ctx_parse("failed to serialize horde request")?;
     Ok(Bytes::from(vec))
 }

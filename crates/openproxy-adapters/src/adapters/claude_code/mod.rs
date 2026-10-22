@@ -4,7 +4,7 @@ use super::{
 };
 use crate::client_contract::Snapshot;
 use crate::spoofer::claude_code_profile::ClaudeCodeProfile;
-use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, ProviderMetadata};
+use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, ProviderMetadata, ResultExt};
 
 pub const CLAUDE_CODE_DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 pub const CLAUDE_CODE_USAGE_PATH: &str = "/api/oauth/usage";
@@ -403,7 +403,7 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> Result<bytes::Bytes> {
         let mut json = serde_json::from_slice::<serde_json::Value>(&body)
-            .map_err(|e| CoreError::Parse(format!("failed to parse claude-code request: {e}")))?;
+            .ctx_parse("failed to parse claude-code request")?;
 
         let account_uuid = resolved_target
             .custom_meta
@@ -465,9 +465,8 @@ impl ProviderAdapter for ClaudeCodeAdapter {
             &self.request_profile(),
         );
 
-        let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
-            CoreError::Parse(format!("failed to serialize claude-code request: {e}"))
-        })?;
+        let mut body_bytes =
+            serde_json::to_vec(&json).ctx_parse("failed to serialize claude-code request")?;
 
         if let Err(e) = signing::sign_anthropic_messages_body(&mut body_bytes) {
             tracing::warn!(error = %e, "claude-code: cch signing failed");
@@ -485,7 +484,7 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> Result<bytes::Bytes> {
         let mut json = serde_json::from_slice::<serde_json::Value>(&body)
-            .map_err(|e| CoreError::Parse(format!("failed to parse claude-code request: {e}")))?;
+            .ctx_parse("failed to parse claude-code request")?;
 
         // Read CLI, SDK and runtime from the pinned profile snapshot, with
         // manual overrides. `request_profile()` returns the frozen generation
@@ -557,9 +556,8 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         set_header_if_present(headers, "x-stainless-package-version", &package_version);
         set_header_if_present(headers, "x-stainless-runtime-version", &runtime_version);
 
-        let mut body_bytes = serde_json::to_vec(&json).map_err(|e| {
-            CoreError::Parse(format!("failed to serialize claude-code request: {e}"))
-        })?;
+        let mut body_bytes =
+            serde_json::to_vec(&json).ctx_parse("failed to serialize claude-code request")?;
 
         // Sign the CCH over the exact finalized bytes. This runs after
         // formatting, wrapping, parameter stripping and header propagation, so
@@ -682,8 +680,8 @@ pub(crate) async fn fetch_claude_code_quota(
         ));
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("claude-code quota json parse error: {e}")))?;
+    let json: serde_json::Value =
+        serde_json::from_slice(&body).ctx_parse("claude-code quota json parse error")?;
 
     Ok(parse_claude_code_usage_response(&json))
 }

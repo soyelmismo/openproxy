@@ -19,6 +19,7 @@ mod stream_to_value;
 pub(crate) use anthropic::merge_usage;
 
 use crate::translation::OpenAIUsage;
+use openproxy_types::ResultExt;
 use openproxy_types::error::{CoreError, Result};
 use serde_json::Value;
 /// A single parsed SSE chunk from the upstream, ready to forward.
@@ -283,7 +284,7 @@ where
     S: AsRef<str>,
 {
     serde_json::from_str(payload.as_ref())
-        .map_err(|e| CoreError::Parse(format!("{provider} sse json: {e}")))
+        .ctx_parse(format!("{provider} sse json"))
 }
 
 /// Build `OpenAIUsage` from `Option<u64>` token counts, applying the

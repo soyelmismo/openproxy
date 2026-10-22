@@ -10,7 +10,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use openproxy_types::backup::{BACKUP_FORMAT_VERSION, BackupBundle, BackupPayload};
-use openproxy_types::{CoreError, Result};
+use openproxy_types::{CoreError, Result, ResultExt};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
@@ -137,7 +137,7 @@ pub fn encrypt_bundle_payload(payload: &BackupPayload, passphrase: &str) -> Resu
     let nonce = Nonce::try_from(nonce_bytes.as_slice())
         .map_err(|e| CoreError::Internal(format!("invalid nonce: {e}")))?;
     let json_bytes = serde_json::to_vec(payload)
-        .map_err(|e| CoreError::Parse(format!("serialize payload: {e}")))?;
+        .ctx_parse("serialize payload")?;
 
     let ciphertext = cipher
         .encrypt(&nonce, json_bytes.as_slice())
@@ -233,7 +233,7 @@ pub fn decrypt_bundle_payload(
     })?;
 
     let payload: BackupPayload = serde_json::from_slice(&decrypted_bytes)
-        .map_err(|e| CoreError::Parse(format!("deserialize payload: {e}")))?;
+        .ctx_parse("deserialize payload")?;
 
     Ok(payload)
 }

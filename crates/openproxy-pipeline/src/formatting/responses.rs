@@ -1,5 +1,6 @@
 use crate::PipelineRequest;
 use openproxy_types::OpenAIMessage;
+use openproxy_types::ResultExt;
 use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
 use serde_json::{Value, json};
@@ -109,7 +110,7 @@ impl TargetFormatter for ResponsesFormatter {
 
         serde_json::to_vec(&Value::Object(obj))
             .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Parse(format!("serialize responses request: {e}")))
+            .ctx_parse("serialize responses request")
     }
 }
 

@@ -386,6 +386,7 @@ pub trait ResultExt<T> {
     fn ctx_validation(self, msg: impl fmt::Display) -> Result<T>;
     fn ctx_not_found(self, msg: impl fmt::Display) -> Result<T>;
     fn ctx_upstream(self, msg: impl fmt::Display) -> Result<T>;
+    fn ctx_parse(self, msg: impl fmt::Display) -> Result<T>;
 }
 
 impl<T, E: fmt::Display> ResultExt<T> for std::result::Result<T, E> {
@@ -410,6 +411,11 @@ impl<T, E: fmt::Display> ResultExt<T> for std::result::Result<T, E> {
     #[inline]
     fn ctx_upstream(self, msg: impl fmt::Display) -> Result<T> {
         self.map_err(|e| CoreError::UpstreamConnection(format!("{msg}: {e}")))
+    }
+
+    #[inline]
+    fn ctx_parse(self, msg: impl fmt::Display) -> Result<T> {
+        self.map_err(|e| CoreError::Parse(format!("{msg}: {e}")))
     }
 }
 

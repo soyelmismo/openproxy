@@ -249,8 +249,8 @@ impl CodexAdapter {
         }
 
         let body = response.collect().await.ctx_upstream("codex quota read")?;
-        let json: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Parse(format!("codex quota parse: {e}")))?;
+        let json: serde_json::Value =
+            serde_json::from_slice(&body).ctx_parse("codex quota parse")?;
         quota::parse_codex_usage_quota(&json)
     }
 }

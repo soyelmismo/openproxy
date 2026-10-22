@@ -5,6 +5,7 @@ use super::{
 };
 pub use crate::spoofer::CLINE_SPOOFING_HEADERS;
 use crate::spoofer::{ClientSpoofer, ClineSpoofer};
+use openproxy_types::ResultExt;
 
 pub fn apply_cline_spoofing_headers(req: &mut UpstreamRequest) {
     ClineSpoofer.apply_to_request(req);
@@ -141,9 +142,8 @@ impl ProviderAdapter for ClineAdapter {
             .await
             .map_err(openproxy_types::error::CoreError::UpstreamConnection)?;
 
-        let payload: ClineRecommendedModels = serde_json::from_value(body).map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!("cline parse error: {e}"))
-        })?;
+        let payload: ClineRecommendedModels =
+            serde_json::from_value(body).ctx_parse("cline parse error")?;
 
         let discovered = payload
             .recommended

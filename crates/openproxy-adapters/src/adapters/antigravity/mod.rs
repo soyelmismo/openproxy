@@ -4,6 +4,7 @@ use super::{
     TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use crate::spoofer::{AntigravitySpoofer, ClientSpoofer};
+use openproxy_types::ResultExt;
 
 pub mod quota;
 pub mod sanitizer;
@@ -270,7 +271,7 @@ impl ProviderAdapter for AntigravityAdapter {
     ) -> Result<bytes::Bytes> {
         if target_format == TargetFormat::Gemini {
             let mut json = serde_json::from_slice::<serde_json::Value>(&body)
-                .map_err(|e| CoreError::Parse(format!("failed to parse gemini request: {e}")))?;
+                .ctx_parse("failed to parse gemini request")?;
             let project = resolved_target
                 .custom_meta
                 .as_ref()
@@ -333,9 +334,10 @@ impl ProviderAdapter for AntigravityAdapter {
             if !project.is_empty() {
                 wrapped["project"] = serde_json::Value::String(project.to_string());
             }
-            let wrapped_bytes = bytes::Bytes::from(serde_json::to_vec(&wrapped).map_err(|e| {
-                CoreError::Parse(format!("failed to serialize wrapped gemini request: {e}"))
-            })?);
+            let wrapped_bytes = bytes::Bytes::from(
+                serde_json::to_vec(&wrapped)
+                    .ctx_parse("failed to serialize wrapped gemini request")?,
+            );
             tracing::debug!(
                 request_type = %req_type,
                 request_id = %request_id,

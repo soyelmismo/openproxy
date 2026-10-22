@@ -8,6 +8,7 @@ use crate::think_extractor::extract_think_from_response;
 use crate::translation::OpenAIResponse;
 use openproxy_adapters::ProviderAdapter;
 use openproxy_adapters::upstream::{UpstreamError, UpstreamRequest};
+use openproxy_types::ResultExt;
 use openproxy_types::error::CoreError;
 use std::time::Instant;
 
@@ -107,14 +108,14 @@ pub(super) fn translate_non_streaming_body(
         }
         openproxy_types::TargetFormat::Openai => {
             <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-                .map_err(|e| CoreError::Parse(format!("parse openai response: {e}")))
+                .ctx_parse("parse openai response")
         }
         openproxy_types::TargetFormat::Anthropic => {
             let anthropic_resp: crate::translation::AnthropicResponse =
                 <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(
                     response_body_raw,
                 )
-                .map_err(|e| CoreError::Parse(format!("parse anthropic response: {e}")))?;
+                .ctx_parse("parse anthropic response")?;
             Ok(crate::translation::anthropic_to_openai(&anthropic_resp))
         }
         openproxy_types::TargetFormat::Gemini => {
@@ -140,7 +141,7 @@ pub(super) fn translate_non_streaming_body(
         }
         openproxy_types::TargetFormat::SystemOne => {
             <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-                .map_err(|e| CoreError::Parse(format!("parse systemone response: {e}")))
+                .ctx_parse("parse systemone response")
         }
     }
 }

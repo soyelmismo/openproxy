@@ -11,7 +11,7 @@ use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
 use openproxy_types::{
-    CoreError, EmbeddingRequest, EmbeddingResponse, EndpointKind, Result,
+    CoreError, EmbeddingRequest, EmbeddingResponse, EndpointKind, Result, ResultExt,
     ids::{ApiKeyId, RequestId},
 };
 
@@ -135,7 +135,7 @@ async fn dispatch_single_embedding(
     }
 
     let parsed_response: EmbeddingResponse = serde_json::from_slice(&body_bytes)
-        .map_err(|e| CoreError::Parse(format!("failed to parse embedding response: {e}")))?;
+        .ctx_parse("failed to parse embedding response")?;
 
     if let Some(account_id) = target.account_id {
         circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));

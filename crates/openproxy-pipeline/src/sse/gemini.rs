@@ -2,6 +2,7 @@
 
 use super::{UpstreamSseChunk, parse_provider_json, parse_sse_data_or_done};
 use crate::translation::OpenAIUsage;
+use openproxy_types::ResultExt;
 use openproxy_types::error::Result;
 use serde_json::{Value, json};
 
@@ -221,7 +222,7 @@ pub fn parse_gemini_sse_line(
     let usage = extract_gemini_usage(usage_metadata);
     if let Some(usage) = &usage {
         chunk["usage"] = serde_json::to_value(usage)
-            .map_err(|e| openproxy_types::error::CoreError::Parse(e.to_string()))?;
+            .ctx_parse("gemini usage serialize")?;
     }
     let has_content = !text.is_empty() || delta_reasoning.is_some() || !delta_tool_calls.is_empty();
 

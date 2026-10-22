@@ -165,7 +165,7 @@ impl ProviderAdapter for CommandCodeGoAdapter {
         let cc_envelope = transform_openai_to_commandcode(&mut val, upstream_model);
         serde_json::to_vec(&cc_envelope)
             .map(bytes::Bytes::from)
-            .map_err(|e| CoreError::Parse(format!("serialize commandcode request: {e}")))
+            .ctx_parse("serialize commandcode request")
     }
 
     async fn fetch_models(
@@ -199,8 +199,7 @@ impl ProviderAdapter for CommandCodeGoAdapter {
 
         let body = resp.collect().await.ctx_upstream("read /models body")?;
 
-        let val: Value = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Parse(format!("commandcode /models parse: {e}")))?;
+        let val: Value = serde_json::from_slice(&body).ctx_parse("commandcode /models parse")?;
 
         let data = val
             .get("data")

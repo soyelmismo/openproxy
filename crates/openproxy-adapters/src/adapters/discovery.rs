@@ -148,7 +148,7 @@ pub(crate) async fn fetch_openai_models(
 
     let payload: OpenAIModelsResponse =
         <OpenAIModelsResponse as serde::Deserialize>::deserialize(&body)
-            .map_err(|e| CoreError::Parse(format!("{provider_name} /models parse: {e}")))?;
+            .ctx_parse(format!("{provider_name} /models parse"))?;
 
     let out = payload
         .data

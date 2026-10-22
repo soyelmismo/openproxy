@@ -3,6 +3,7 @@ use super::{
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile, UpstreamClient,
     UpstreamRequest,
 };
+use openproxy_types::ResultExt;
 
 pub mod models;
 pub use models::{
@@ -247,8 +248,7 @@ impl MiniMaxAdapter {
                 .collect()
                 .await
                 .map_err(|e| e.to_core_error(&url))?;
-            let json: serde_json::Value = serde_json::from_slice(&body_bytes)
-                .map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
+            let json: serde_json::Value = serde_json::from_slice(&body_bytes).ctx_parse(&url)?;
 
             let mut quota = parse_minimax_quota(&json, &url)?;
             if quota.plan_name.is_none() && tier.is_some() {
@@ -303,8 +303,7 @@ impl MiniMaxAdapter {
         url: &str,
     ) -> Result<openproxy_types::AccountQuota> {
         let body = send_minimax_quota_request(upstream, api_key, url).await?;
-        let json: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|e| CoreError::Parse(format!("{url}: {e}")))?;
+        let json: serde_json::Value = serde_json::from_slice(&body).ctx_parse(url)?;
         parse_minimax_quota(&json, url)
     }
 }

@@ -1,7 +1,8 @@
 //! Per-phase timeouts for upstream requests with 2-level precedence.
 
 use openproxy_adapters::upstream::ResolvedTimeouts;
-use openproxy_types::error::{CoreError, Result};
+use openproxy_types::ResultExt;
+use openproxy_types::error::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -56,7 +57,7 @@ impl ModelTimeoutOverrides {
         match s {
             None | Some("") => Ok(Self::default()),
             Some(s) => Ok(serde_json::from_str(s)
-                .map_err(|e| CoreError::Parse(format!("model timeout_overrides_json: {e}")))?),
+                .ctx_parse("model timeout_overrides_json")?),
         }
     }
 

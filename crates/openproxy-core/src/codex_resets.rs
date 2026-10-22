@@ -9,7 +9,7 @@ use openproxy_adapters::upstream::{TimeoutProfile, UpstreamClient};
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::ids::AccountId;
-use openproxy_types::{CoreError, Result};
+use openproxy_types::{CoreError, Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -158,7 +158,7 @@ pub async fn list_codex_account_resets(
         .await
         .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
     let json: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("codex reset credits parse: {e}")))?;
+        .ctx_parse("codex reset credits parse")?;
 
     if !(200..300).contains(&status) {
         return Err(CoreError::upstream_error(
@@ -224,7 +224,7 @@ pub async fn redeem_codex_account_reset(
         .await
         .map_err(|e| CoreError::UpstreamConnection(e.to_string()))?;
     let json: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("codex reset credits parse: {e}")))?;
+        .ctx_parse("codex reset credits parse")?;
 
     if !(200..300).contains(&status) {
         return Err(CoreError::upstream_error(

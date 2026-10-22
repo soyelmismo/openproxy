@@ -1,7 +1,8 @@
 use crate::upstream::UpstreamClient;
 use bytes::Bytes;
 use openproxy_types::{
-    CoreError, DiscoveredModel, ModelId, ProviderId, ProviderMetadata, Result, TargetFormat,
+    CoreError, DiscoveredModel, ModelId, ProviderId, ProviderMetadata, Result, ResultExt,
+    TargetFormat,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -450,9 +451,7 @@ pub trait ProviderAdapter: Send + Sync {
         self.normalize_openai_request(&mut view);
         serde_json::to_vec(&view)
             .map(bytes::Bytes::from)
-            .map_err(|e| {
-                openproxy_types::error::CoreError::Parse(format!("serialize openai request: {e}"))
-            })
+            .ctx_parse("serialize openai request")
     }
 
     fn translate_non_streaming_response(
@@ -463,9 +462,7 @@ pub trait ProviderAdapter: Send + Sync {
     {
         let _ = target_format;
         <openproxy_types::OpenAIResponse as serde::Deserialize>::deserialize(&response_body)
-            .map_err(|e| {
-                openproxy_types::error::CoreError::Parse(format!("parse openai response: {e}"))
-            })
+            .ctx_parse("parse openai response")
     }
 }
 

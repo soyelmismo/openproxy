@@ -1,7 +1,7 @@
 //! Persistent runtime config KV store.
 
 use openproxy_types::{
-    CompressionMode, CoreError, PiiConfig, PiiEntity, QuotaProtectionConfig, Result, TimeoutsConfig,
+    CompressionMode, PiiConfig, PiiEntity, QuotaProtectionConfig, Result, ResultExt, TimeoutsConfig,
 };
 use rusqlite::{Connection, params};
 
@@ -75,7 +75,7 @@ fn save_config_val<T: serde::Serialize>(
     now_unix_secs: i64,
 ) -> Result<()> {
     let json = serde_json::to_string(val)
-        .map_err(|e| CoreError::Parse(format!("serialize {key}: {e}")))?;
+        .ctx_parse(format!("serialize {key}"))?;
     conn.execute(
         "INSERT INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value,

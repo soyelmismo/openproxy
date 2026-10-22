@@ -472,8 +472,8 @@ async fn fetch_kiro_usage_limits_json(
         .collect()
         .await
         .ctx_upstream("kiro GetUsageLimits read")?;
-    let data: serde_json::Value = serde_json::from_slice(&resp_bytes)
-        .map_err(|e| CoreError::Parse(format!("kiro GetUsageLimits parse: {e}")))?;
+    let data: serde_json::Value =
+        serde_json::from_slice(&resp_bytes).ctx_parse("kiro GetUsageLimits parse")?;
     Ok(Some(data))
 }
 

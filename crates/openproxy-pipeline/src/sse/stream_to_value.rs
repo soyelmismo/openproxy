@@ -6,6 +6,7 @@
 
 use crate::sse_accumulator::ResponseAccumulator;
 use crate::translation::OpenAIResponse;
+use openproxy_types::ResultExt;
 use openproxy_types::TargetFormat;
 use openproxy_types::error::{CoreError, Result};
 
@@ -170,11 +171,7 @@ pub fn parse_sse_stream_to_openai_response(
     }
 
     let val = acc.finish(chunk_id, created, model_name);
-    serde_json::from_value(val).map_err(|e| {
-        CoreError::Parse(format!(
-            "failed to parse accumulated sse into OpenAIResponse: {e}"
-        ))
-    })
+    serde_json::from_value(val).ctx_parse("failed to parse accumulated sse into OpenAIResponse")
 }
 
 #[cfg(test)]

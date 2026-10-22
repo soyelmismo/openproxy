@@ -1,7 +1,7 @@
 //! Account quota persistence.
 
 use openproxy_types::quota::AccountQuota;
-use openproxy_types::{AccountId, CoreError, Result};
+use openproxy_types::{AccountId, CoreError, Result, ResultExt};
 use rusqlite::{Connection, params};
 
 /// Serialize the optional JSON sidecars of a quota snapshot.
@@ -15,7 +15,7 @@ fn quota_pools_json(pools: Option<&[openproxy_types::quota::QuotaPool]>) -> Resu
         return Ok(None);
     };
     let json = serde_json::to_string(pools)
-        .map_err(|e| CoreError::Parse(format!("serialize quota_pools: {e}")))?;
+        .ctx_parse("serialize quota_pools")?;
     if json.is_empty() || json == "null" || json == "[]" {
         return Ok(None);
     }

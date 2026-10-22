@@ -9,7 +9,7 @@ use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
 use openproxy_types::images::{HordeAsyncSubmitResponse, HordeCheckResponse, HordeStatusResponse};
-use openproxy_types::{CoreError, ImageData, ImageGenerationResponse, Result};
+use openproxy_types::{CoreError, ImageData, ImageGenerationResponse, Result, ResultExt};
 
 pub(crate) struct HordePollContext<'a> {
     pub(crate) request_id: &'a str,
@@ -48,7 +48,7 @@ pub(crate) async fn poll_horde_image_generation(
     ctx: HordePollContext<'_>,
 ) -> Result<ImageGenerationResponse> {
     let submit_resp: HordeAsyncSubmitResponse = serde_json::from_slice(initial_body)
-        .map_err(|e| CoreError::Parse(format!("failed to parse horde submit response: {e}")))?;
+        .ctx_parse("failed to parse horde submit response")?;
 
     let Some(job_id) = submit_resp.id else {
         let msg = submit_resp
@@ -106,7 +106,7 @@ pub(crate) async fn poll_horde_image_generation(
             .map_err(|e| CoreError::UpstreamConnection(format!("horde check body error: {e:?}")))?;
 
         let check: HordeCheckResponse = serde_json::from_slice(&body)
-            .map_err(|e| CoreError::Parse(format!("horde check parse error: {e}")))?;
+            .ctx_parse("horde check parse error")?;
 
         openproxy_types::emit_stage_event!(
             request_id: ctx.request_id,
@@ -159,7 +159,7 @@ pub(crate) async fn poll_horde_image_generation(
         .map_err(|e| CoreError::UpstreamConnection(format!("horde status body error: {e:?}")))?;
 
     let status: HordeStatusResponse = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("horde status parse error: {e}")))?;
+        .ctx_parse("horde status parse error")?;
 
     let generations = status.generations.unwrap_or_default();
     if generations.is_empty() {

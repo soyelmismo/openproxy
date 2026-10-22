@@ -5,6 +5,7 @@ use super::types::{
     GeminiFunctionResponse, GeminiGenerationConfig, GeminiPart, GeminiRequest, GeminiResponse,
     GeminiSafetySetting, GeminiThinkingConfig, GeminiTool, GeminiToolConfig, SENTINEL_SIGNATURE,
 };
+use openproxy_types::ResultExt;
 
 fn map_single_content_part(part: &serde_json::Value) -> GeminiPart {
     if let Some(inline_data) = parse_media_part_to_inline_data(part) {
@@ -716,9 +717,7 @@ pub fn serialize_gemini_request_with_model(
     let gemini_req = openai_to_gemini_with_model(req, messages, target_model);
     serde_json::to_vec(&gemini_req)
         .map(bytes::Bytes::from)
-        .map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!("serialize gemini request: {e}"))
-        })
+        .ctx_parse("serialize gemini request")
 }
 
 /// Deserialize a Gemini response JSON value into an OpenAIResponse.
@@ -726,9 +725,8 @@ pub fn deserialize_gemini_response(
     response_body: &serde_json::Value,
 ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
     let gemini_resp: GeminiResponse =
-        <GeminiResponse as serde::Deserialize>::deserialize(response_body).map_err(|e| {
-            openproxy_types::error::CoreError::Parse(format!("parse gemini response: {e}"))
-        })?;
+        <GeminiResponse as serde::Deserialize>::deserialize(response_body)
+            .ctx_parse("parse gemini response")?;
     Ok(gemini_to_openai(&gemini_resp))
 }
 

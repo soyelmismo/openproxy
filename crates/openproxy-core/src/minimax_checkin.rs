@@ -14,6 +14,7 @@ use crate::oauth::minimax::matrix::MiniMaxRegion;
 use openproxy_adapters::upstream::UpstreamClient;
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
+use openproxy_types::ResultExt;
 
 const MINIMAX_PROVIDERS: [&str; 4] = ["minimax", "minimax-coding", "minimax-managed", "minimax-cn"];
 const DEFAULT_CHECKIN_INTERVAL_SECS: u64 = 14_400; // 4 hours
@@ -216,7 +217,7 @@ pub async fn run_account_checkin(
     }
 
     let meta_json = serde_json::to_string(&meta)
-        .map_err(|e| CoreError::Parse(format!("serialize meta: {e}")))?;
+        .ctx_parse("serialize meta")?;
 
     let final_email = meta.email.clone();
     let display_label = identity.display_label();

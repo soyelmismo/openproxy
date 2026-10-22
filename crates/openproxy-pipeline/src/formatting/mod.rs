@@ -1,4 +1,5 @@
 use crate::PipelineRequest;
+use openproxy_types::ResultExt;
 use openproxy_types::error::CoreError;
 use openproxy_types::models::Model;
 use openproxy_types::{OpenAIMessage, OpenAIRequestView, TargetFormat};
@@ -88,10 +89,9 @@ impl TargetFormatter for OpenaiFormatter {
             view.max_tokens = Some(ceiling);
         }
         adapter.normalize_openai_request(&mut view);
-        match serde_json::to_vec(&view) {
-            Ok(v) => Ok(bytes::Bytes::from(v)),
-            Err(e) => Err(CoreError::Parse(format!("serialize openai request: {e}"))),
-        }
+        serde_json::to_vec(&view)
+            .map(bytes::Bytes::from)
+            .ctx_parse("serialize openai request")
     }
 }
 
@@ -382,14 +382,8 @@ impl TargetFormatter for AnthropicFormatter {
                 .get("max_completion_tokens")
                 .and_then(|v| v.as_u64())
                 .is_some();
-        let mut val = match serde_json::to_value(&anthro) {
-            Ok(v) => v,
-            Err(e) => {
-                return Err(CoreError::Parse(format!(
-                    "serialize anthropic request: {e}"
-                )));
-            }
-        };
+        let mut val = serde_json::to_value(&anthro)
+            .ctx_parse("serialize anthropic request")?;
 
         // Anthropic makes max_tokens mandatory, so the translator falls back to
         // DEFAULT_MAX_TOKENS (4096) when the client omits it. That floor is far
@@ -413,7 +407,7 @@ impl TargetFormatter for AnthropicFormatter {
         openproxy_adapters::anthropic_cache::enforce_cache_control_limit(&mut val, 4);
 
         let body_bytes = serde_json::to_vec(&val)
-            .map_err(|e| CoreError::Parse(format!("serialize anthropic request: {e}")))?;
+            .ctx_parse("serialize anthropic request")?;
         Ok(bytes::Bytes::from(body_bytes))
     }
 }

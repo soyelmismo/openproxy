@@ -2,7 +2,8 @@ use crate::translation::anthropic::map_finish_reason;
 use crate::translation::types::{AnthropicResponse, AnthropicUsage};
 use bytes::{BufMut, Bytes, BytesMut};
 use futures_util::stream::Stream;
-use openproxy_types::error::{CoreError, Result};
+use openproxy_types::ResultExt;
+use openproxy_types::error::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::pin::Pin;
@@ -210,7 +211,7 @@ fn is_ping_payload(payload: &str) -> Result<bool> {
         r#type: Option<std::borrow::Cow<'a, str>>,
     }
     let probe: TypeProbe = serde_json::from_str(payload)
-        .map_err(|e| CoreError::Parse(format!("invalid SSE JSON: {e}")))?;
+        .ctx_parse("invalid SSE JSON")?;
     Ok(probe.r#type.as_deref() == Some("ping"))
 }
 
@@ -231,7 +232,7 @@ pub fn parse_anthropic_sse_line(line: &str) -> Result<Option<AnthropicSseEvent>>
     }
 
     let event: AnthropicSseEvent = serde_json::from_str(payload)
-        .map_err(|e| CoreError::Parse(format!("invalid Anthropic SSE event: {e}")))?;
+        .ctx_parse("invalid Anthropic SSE event")?;
 
     Ok(Some(event))
 }

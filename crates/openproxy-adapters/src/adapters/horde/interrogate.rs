@@ -1,7 +1,7 @@
 use super::apply_horde_auth_headers;
 use crate::CancellationToken;
 use bytes::Bytes;
-use openproxy_types::{CoreError, Result};
+use openproxy_types::{CoreError, Result, ResultExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -61,11 +61,8 @@ pub fn build_interrogate_payload(source_image: &str, forms: &[&str]) -> Result<B
         source_image: clean_image_str(source_image).into_owned(),
     };
 
-    let vec = serde_json::to_vec(&payload).map_err(|e| {
-        CoreError::Parse(format!(
-            "failed to serialize horde interrogate request: {e}"
-        ))
-    })?;
+    let vec =
+        serde_json::to_vec(&payload).ctx_parse("failed to serialize horde interrogate request")?;
     Ok(Bytes::from(vec))
 }
 
@@ -228,8 +225,8 @@ pub async fn submit_interrogate_job(
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("read submit response: {e:?}")))?;
 
-    let submit_json: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|e| CoreError::Parse(format!("parse horde submit response: {e}")))?;
+    let submit_json: serde_json::Value =
+        serde_json::from_slice(&body).ctx_parse("parse horde submit response")?;
 
     let Some(job_id) = submit_json.get("id").and_then(|v| v.as_str()) else {
         return Err(CoreError::UpstreamConnection(format!(

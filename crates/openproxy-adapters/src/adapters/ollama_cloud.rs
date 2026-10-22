@@ -51,7 +51,7 @@ declare_openai_adapter!(
 
             let resp_bytes = response.collect().await.ctx_upstream(format!("ollama-cloud /api/tags: {url}"))?;
             let payload: OllamaTagsResponse = serde_json::from_slice(&resp_bytes)
-                .map_err(|e| CoreError::Parse(format!("ollama-cloud /api/tags parse: {url}: parse: {e}")))?;
+                .ctx_parse(format!("ollama-cloud /api/tags parse: {url}: parse"))?;
 
             let out = payload
                 .models
