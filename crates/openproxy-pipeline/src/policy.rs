@@ -151,8 +151,10 @@ mod tests {
 
     #[test]
     fn test_policy_combo_clamps_model_ceiling() {
-        let mut combo = Combo::default();
-        combo.max_output_tokens = Some(32_768);
+        let combo = Combo {
+            max_output_tokens: Some(32_768),
+            ..Default::default()
+        };
 
         let target = sample_target(None);
         let model = sample_model(Some(8_192)); // Model cap is lower
@@ -167,8 +169,10 @@ mod tests {
 
     #[test]
     fn test_policy_preserves_client_max_tokens() {
-        let mut combo = Combo::default();
-        combo.max_output_tokens = Some(32_768);
+        let combo = Combo {
+            max_output_tokens: Some(32_768),
+            ..Default::default()
+        };
 
         let target = sample_target(Some("high"));
         let model = sample_model(Some(128_000));
