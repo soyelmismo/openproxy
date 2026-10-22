@@ -1,6 +1,5 @@
 use super::processor::ChunkProcessor;
 use super::{StreamContext, StreamingState};
-use crate::sse::merge_usage;
 use crate::streaming::{StreamAction, StreamingChunkStage};
 use openproxy_types::error::CoreError;
 
@@ -114,7 +113,7 @@ impl ChunkProcessor<'_> {
     /// solo `info` por request con los totales; nunca contenido. Se invoca en
     /// el cierre normal y en los caminos de error/retorno de translated.rs,
     /// para que un stream que muere con hidden thinking en curso deje rastro.
-    fn emit_reasoning_summary(&self, ctx: &StreamContext<'_>) {
+    pub(super) fn emit_reasoning_summary(&self, ctx: &StreamContext<'_>) {
         let rp = &self.state.reasoning_progress;
         if !rp.saw_reasoning() {
             return;
@@ -139,15 +138,12 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         mut chunk: crate::sse::UpstreamSseChunk,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
-        if let Some(new_usage) = chunk.usage.take() {
-            self.state.usage = Some(match self.state.usage.take() {
-                Some(existing) => merge_usage(existing, new_usage),
-                None => new_usage,
-            });
-        }
-        if chunk.stop_reason.is_some() {
-            self.state.stop_reason = chunk.stop_reason.take();
-        }
+        Self::sync_chunk_metadata_to_accumulator(
+            self.state,
+            chunk.usage.take(),
+            chunk.stop_reason.take(),
+            true,
+        );
         if let Some(residual) = self.state.normalizer.finalize() {
             let sse_bytes = crate::sse::build_sse_frame(&residual);
             let _ = self.send_to_sink(ctx, sse_bytes).await;
@@ -163,12 +159,6 @@ impl ChunkProcessor<'_> {
         };
 
         if let Some(a) = self.state.acc.as_mut() {
-            if let Some(u) = &self.state.usage {
-                a.set_usage(u.to_owned());
-            }
-            if let Some(sr) = &self.state.stop_reason {
-                a.set_stop_reason(sr);
-            }
             a.append_openai_raw(normalized_json);
         }
 
@@ -176,23 +166,12 @@ impl ChunkProcessor<'_> {
             return Ok(cancel);
         }
 
-        let pii_action = match &mut self.state.pii_stage {
-            Some(stage) => stage.process_chunk(normalized_json),
-            None => StreamAction::Passthrough,
-        };
-        let final_json = match &pii_action {
-            StreamAction::Mutate(s) => s.as_str(),
-            _ => normalized_json,
-        };
-
         if !payload_is_null {
-            let sse_frame = crate::sse::build_sse_frame(final_json);
-            if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
-                self.emit_reasoning_summary(ctx);
-                let fail_ctx = self.state.make_failure_context(ctx);
-                return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                    self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
-                )));
+            let deliver_res = self
+                .deliver_payload_through_pii(ctx, normalized_json)
+                .await?;
+            if let crate::streaming::ChunkEvent::Return(_) = deliver_res {
+                return Ok(deliver_res);
             }
         }
 
@@ -216,15 +195,12 @@ impl ChunkProcessor<'_> {
             stream.note_progress_chunk();
             return Ok(crate::streaming::ChunkEvent::Skip);
         }
-        if let Some(new_usage) = chunk.usage.take() {
-            self.state.usage = Some(match self.state.usage.take() {
-                Some(existing) => merge_usage(existing, new_usage),
-                None => new_usage,
-            });
-        }
-        if chunk.stop_reason.is_some() && self.state.stop_reason.is_none() {
-            self.state.stop_reason = chunk.stop_reason.take();
-        }
+        Self::sync_chunk_metadata_to_accumulator(
+            self.state,
+            chunk.usage.take(),
+            chunk.stop_reason.take(),
+            false,
+        );
         // Map cloaked tool names back before the chunk is serialized, so the
         // accumulator and the client both see the names the client declared.
         if let Some(map) = self.state.tool_name_restore.as_ref() {
@@ -248,12 +224,6 @@ impl ChunkProcessor<'_> {
         };
 
         if let Some(a) = self.state.acc.as_mut() {
-            if let Some(u) = &self.state.usage {
-                a.set_usage(u.to_owned());
-            }
-            if let Some(sr) = &self.state.stop_reason {
-                a.set_stop_reason(sr);
-            }
             if let Some(dr) = &delta_reasoning
                 && !dr.is_empty()
             {
@@ -262,27 +232,10 @@ impl ChunkProcessor<'_> {
             a.append_openai_raw(normalized_json);
         }
 
-        let pii_action = match &mut self.state.pii_stage {
-            Some(stage) => stage.process_chunk(normalized_json),
-            None => StreamAction::Passthrough,
-        };
-        let final_json = match &pii_action {
-            StreamAction::Mutate(s) => s.as_str(),
-            _ => normalized_json,
-        };
-
-        let sse_frame = crate::sse::build_sse_frame(final_json);
         if chunk_has_content {
             stream.note_content_chunk();
         }
-        if let Err(e) = self.send_to_sink(ctx, sse_frame).await {
-            self.emit_reasoning_summary(ctx);
-            let fail_ctx = self.state.make_failure_context(ctx);
-            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
-            )));
-        }
-        Ok(crate::streaming::ChunkEvent::Skip)
+        self.deliver_payload_through_pii(ctx, normalized_json).await
     }
 
     /// Gemini / Anthropic SSE handler. Translates to OpenAI shape, then forwards.

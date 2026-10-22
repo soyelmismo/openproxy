@@ -1,13 +1,15 @@
-use super::traits::{WarmupAccountContext, WarmupStrategy, is_future_reset};
+use super::common::{
+    execute_warmup_ping, format_account_desc, is_any_weekly_model_detail_exhausted,
+    is_session_window_ticking, is_weekly_quota_exhausted, query_provider_models_fallback,
+};
+use super::traits::{WarmupAccountContext, WarmupStrategy};
 use crate::accounts::{self, Account};
 use crate::error::Result;
 use crate::ids::ProviderId;
 use openproxy_adapters::adapters::claude_code::{
     CLAUDE_CODE_ANTHROPIC_VERSION, CLAUDE_CODE_BETA_HEADER, CLAUDE_CODE_USER_AGENT,
 };
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
 use openproxy_types::AccountQuota;
 use sha2::{Digest, Sha256};
@@ -52,23 +54,7 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             .and_then(|v| v.as_str())
             .unwrap_or("53098eb0-6bbd-4c76-9f9c-09bc956164bc");
 
-        let acc_id_str = acc_id.to_string();
-        let label = account
-            .label
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && *s != acc_id_str);
-        let email = account
-            .email
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let account_desc = match (label, email) {
-            (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
-            (Some(l), None) => format!("{acc_id} ({l})"),
-            (None, Some(e)) => format!("{acc_id} ({e})"),
-            (None, None) => acc_id_str,
-        };
+        let account_desc = format_account_desc(account);
 
         Some(WarmupAccountContext {
             account_id: acc_id,
@@ -117,56 +103,33 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
 
     fn is_quota_ready(&self, quota: &AccountQuota, _model_id: &str, now: i64) -> bool {
         // 1. If weekly quota is 100% exhausted, under NO circumstance attempt to warm up the 5h window
-        if let Some(weekly_used) = quota.weekly_used {
-            let weekly_limit = quota.weekly_limit.unwrap_or(100);
-            if weekly_used >= weekly_limit
-                && quota
-                    .weekly_reset_at
-                    .as_deref()
-                    .is_none_or(|r| is_future_reset(Some(r), now))
-            {
-                tracing::debug!(
-                    weekly_used,
-                    weekly_limit,
-                    reset_at = ?quota.weekly_reset_at,
-                    "[SmartWarmup] Claude Code weekly quota is 100% utilized; skipping 5h window warmup"
-                );
-                return false;
-            }
+        if is_weekly_quota_exhausted(quota, now) {
+            tracing::debug!(
+                weekly_used = ?quota.weekly_used,
+                weekly_limit = ?quota.weekly_limit,
+                reset_at = ?quota.weekly_reset_at,
+                "[SmartWarmup] Claude Code weekly quota is 100% utilized; skipping 5h window warmup"
+            );
+            return false;
         }
 
         // Also check weekly model details if present (e.g. Claude Sonnet (Weekly), Claude Opus (Weekly))
-        if let Some(details) = &quota.model_details {
-            for detail in details {
-                let lower = detail.model_id.to_lowercase();
-                if lower.contains("weekly") || lower.contains("seven_day") {
-                    let limit = if detail.session_limit > 0 {
-                        detail.session_limit
-                    } else {
-                        100
-                    };
-                    if (detail.session_used >= limit || detail.remaining_fraction <= 0.001)
-                        && detail
-                            .session_reset_at
-                            .as_deref()
-                            .is_none_or(|r| is_future_reset(Some(r), now))
-                    {
-                        tracing::debug!(
-                            model = %detail.model_id,
-                            used = detail.session_used,
-                            "[SmartWarmup] Claude Code weekly model detail is 100% utilized; skipping 5h window warmup"
-                        );
-                        return false;
-                    }
-                }
-            }
+        if is_any_weekly_model_detail_exhausted(
+            quota,
+            |model_id| {
+                let lower = model_id.to_lowercase();
+                lower.contains("weekly") || lower.contains("seven_day")
+            },
+            now,
+        ) {
+            tracing::debug!(
+                "[SmartWarmup] Claude Code weekly model detail is 100% utilized; skipping 5h window warmup"
+            );
+            return false;
         }
 
         // 2. If the 5-hour session window is already ticking with usage, do not ping
-        if let Some(session_used) = quota.session_used
-            && session_used > 0
-            && is_future_reset(quota.session_reset_at.as_deref(), now)
-        {
+        if is_session_window_ticking(quota, now) {
             return false;
         }
 
@@ -245,55 +208,7 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             http::HeaderValue::from_static(CLAUDE_CODE_USER_AGENT),
         );
 
-        let cancel = CancellationToken::new();
-        match upstream
-            .call(req, TimeoutProfile::ModelDiscovery, cancel)
-            .await
-        {
-            Ok(resp) => {
-                let status = resp.status;
-                let body = resp.collect().await.unwrap_or_default();
-                if status.is_success() {
-                    return true;
-                }
-                let body_str = String::from_utf8_lossy(&body);
-                let snippet = if body_str.len() > 200 {
-                    let boundary = body_str
-                        .char_indices()
-                        .map(|(i, _)| i)
-                        .take_while(|&i| i <= 200)
-                        .last()
-                        .unwrap_or(0);
-                    &body_str[..boundary]
-                } else {
-                    &body_str
-                };
-                tracing::warn!(
-                    provider = "claude-code",
-                    account_id = account.account_id,
-                    model = %model,
-                    status = %status,
-                    "[SmartWarmup] Ping failed on Claude Code for model '{}' on account {}: {}",
-                    model,
-                    account.account_desc,
-                    snippet
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    provider = "claude-code",
-                    account_id = account.account_id,
-                    model = %model,
-                    error = %e,
-                    "[SmartWarmup] Ping request error on Claude Code for model '{}' on account {}: {}",
-                    model,
-                    account.account_desc,
-                    e
-                );
-            }
-        }
-
-        false
+        execute_warmup_ping(upstream, req, account, "claude-code", model).await
     }
 }
 
@@ -319,24 +234,5 @@ pub fn resolve_claude_model(conn: &rusqlite::Connection, alias: &str) -> Option<
 }
 
 fn resolve_default_claude_model(conn: &rusqlite::Connection) -> Option<String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT model_id FROM models \
-             WHERE provider_id = 'claude-code' AND active = 1 \
-             ORDER BY model_id DESC",
-        )
-        .ok()?;
-
-    let mut models: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .ok()?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    // Prefer Sonnet
-    if let Some(m) = models.iter().find(|m| m.contains("sonnet")) {
-        return Some(m.clone());
-    }
-
-    models.pop()
+    query_provider_models_fallback(conn, "claude-code", |m| m.contains("sonnet"))
 }

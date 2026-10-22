@@ -1,3 +1,4 @@
+use super::common::format_account_desc;
 use super::traits::{WarmupAccountContext, WarmupStrategy, is_future_reset};
 use crate::accounts::{self, Account};
 use crate::error::Result;
@@ -77,23 +78,7 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
         let meta = account.oauth_provider_specific.as_deref()?;
         let v: serde_json::Value = serde_json::from_str(meta).ok()?;
         let project_id = openproxy_pipeline::credentials::antigravity_project_from_value(&v)?;
-        let acc_id_str = acc_id.to_string();
-        let label = account
-            .label
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && *s != acc_id_str);
-        let email = account
-            .email
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let account_desc = match (label, email) {
-            (Some(l), Some(e)) => format!("{acc_id} ({l} / {e})"),
-            (Some(l), None) => format!("{acc_id} ({l})"),
-            (None, Some(e)) => format!("{acc_id} ({e})"),
-            (None, None) => acc_id_str,
-        };
+        let account_desc = format_account_desc(account);
 
         Some(WarmupAccountContext {
             account_id: acc_id,

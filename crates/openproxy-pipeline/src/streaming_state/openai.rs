@@ -1,7 +1,6 @@
 use super::StreamContext;
 use super::processor::ChunkProcessor;
 use crate::FailureContext;
-use crate::sse::merge_usage;
 use crate::streaming::{StreamAction, StreamingChunkStage};
 use openproxy_types::error::CoreError;
 
@@ -74,15 +73,12 @@ impl ChunkProcessor<'_> {
         mut chunk: crate::sse::UpstreamSseChunk,
         json_payload: &str,
     ) -> (Option<String>, bool) {
-        if let Some(new_usage) = chunk.usage.take() {
-            self.state.usage = Some(match self.state.usage.take() {
-                Some(existing) => merge_usage(existing, new_usage),
-                None => new_usage,
-            });
-        }
-        if chunk.stop_reason.is_some() && self.state.stop_reason.is_none() {
-            self.state.stop_reason = chunk.stop_reason.take();
-        }
+        Self::sync_chunk_metadata_to_accumulator(
+            self.state,
+            chunk.usage.take(),
+            chunk.stop_reason.take(),
+            false,
+        );
 
         let norm_action = self.state.normalizer.process_chunk(json_payload);
         let is_skip = matches!(norm_action, StreamAction::Skip);
@@ -92,12 +88,6 @@ impl ChunkProcessor<'_> {
         };
         let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
         if !is_skip && let Some(a) = self.state.acc.as_mut() {
-            if let Some(u) = &self.state.usage {
-                a.set_usage(u.to_owned());
-            }
-            if let Some(sr) = &self.state.stop_reason {
-                a.set_stop_reason(sr);
-            }
             a.process_chunk(payload_str);
             let _ = chunk.delta_reasoning.take();
         }
@@ -141,26 +131,7 @@ impl ChunkProcessor<'_> {
         }
 
         let payload_str = effective_payload.as_deref().unwrap_or(json_payload);
-
-        let pii_action = match &mut self.state.pii_stage {
-            Some(stage) => stage.process_chunk(payload_str),
-            None => StreamAction::Passthrough,
-        };
-        let final_payload = match &pii_action {
-            StreamAction::Mutate(s) => s.as_str(),
-            _ => payload_str,
-        };
-
-        let sse_bytes = crate::sse::build_sse_frame(final_payload);
-
-        if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
-            let fail_ctx = self.state.make_failure_context(ctx);
-            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
-                self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
-            )));
-        }
-
-        Ok(crate::streaming::ChunkEvent::Skip)
+        self.deliver_payload_through_pii(ctx, payload_str).await
     }
 
     pub(super) fn prepare_content_chunk_bytes(

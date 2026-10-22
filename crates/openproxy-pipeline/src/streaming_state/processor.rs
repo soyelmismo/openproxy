@@ -144,4 +144,71 @@ impl ChunkProcessor<'_> {
         }
         self.finish_chat_stream(ctx).await
     }
+
+    /// Sincroniza metadatos de chunk (usage y stop_reason) con el StreamingState
+    /// y el acumulador si está presente.
+    pub(super) fn sync_chunk_metadata_to_accumulator(
+        state: &mut StreamingState,
+        usage: Option<crate::translation::OpenAIUsage>,
+        stop_reason: Option<String>,
+        overwrite_stop_reason: bool,
+    ) {
+        if let Some(new_usage) = usage {
+            state.usage = Some(match state.usage.take() {
+                Some(existing) => crate::sse::merge_usage(existing, new_usage),
+                None => new_usage,
+            });
+        }
+        if (overwrite_stop_reason && stop_reason.is_some())
+            || (stop_reason.is_some() && state.stop_reason.is_none())
+        {
+            state.stop_reason = stop_reason;
+        }
+        if let Some(a) = state.acc.as_mut() {
+            if let Some(u) = &state.usage {
+                a.set_usage(u.to_owned());
+            }
+            if let Some(sr) = &state.stop_reason {
+                a.set_stop_reason(sr);
+            }
+        }
+    }
+
+    fn emit_reasoning_summary_if_needed(&self, ctx: &StreamContext<'_>) {
+        if self.state.reasoning_progress.saw_reasoning() {
+            self.emit_reasoning_summary(ctx);
+        }
+    }
+
+    /// Procesa el payload a través de la etapa PII, construye el frame SSE
+    /// y lo envía al sink del cliente. Si el envío al sink falla, despacha
+    /// el error correspondiente al dispatcher y retorna `ChunkEvent::Return`.
+    pub(super) async fn deliver_payload_through_pii(
+        &mut self,
+        ctx: &StreamContext<'_>,
+        payload_str: &str,
+    ) -> Result<crate::streaming::ChunkEvent, CoreError> {
+        use crate::streaming::{StreamAction, StreamingChunkStage};
+
+        let pii_action = match &mut self.state.pii_stage {
+            Some(stage) => stage.process_chunk(payload_str),
+            None => StreamAction::Passthrough,
+        };
+        let final_payload = match &pii_action {
+            StreamAction::Mutate(s) => s.as_str(),
+            _ => payload_str,
+        };
+
+        let sse_bytes = crate::sse::build_sse_frame(final_payload);
+
+        if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
+            self.emit_reasoning_summary_if_needed(ctx);
+            let fail_ctx = self.state.make_failure_context(ctx);
+            return Ok(crate::streaming::ChunkEvent::Return(Box::new(
+                self.dispatcher.fail_on_sink_send_error(e, fail_ctx).await,
+            )));
+        }
+
+        Ok(crate::streaming::ChunkEvent::Skip)
+    }
 }
