@@ -22,15 +22,25 @@
 //! candidato no verifica, el último snapshot válido sigue en pie.
 
 use super::client_contract::{
-    ContractRefreshJob, ContractRefreshService, RefreshPolicy, RoundOutcome, publish,
+    ContractRefreshJob, ContractRefreshService, RefreshPolicy, RoundOutcome,
 };
+use super::runner::{DriverContractJob, RefreshableDriver};
 use openproxy_adapters::client_contract::providers::codebuddy_runtime::{
     CodeBuddyProfile, CodeBuddyReleaseDriver,
 };
 use openproxy_adapters::client_contract::providers::codebuddy_state;
-use openproxy_adapters::client_contract::{ContractError, ContractStore, UpstreamHttpTransport};
+use openproxy_adapters::client_contract::{Candidate, ContractError, ContractStore, UpstreamHttpTransport};
 use openproxy_adapters::upstream::{CancellationToken, UpstreamClient};
 use std::sync::Arc;
+
+impl RefreshableDriver<CodeBuddyProfile> for CodeBuddyReleaseDriver {
+    fn refresh(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<Candidate<CodeBuddyProfile>>, ContractError>> + Send
+    {
+        self.refresh()
+    }
+}
 
 /// La ronda de CodeBuddy: resuelve el pin de release sobre el transporte
 /// compartido y commitea el candidato en el store del runtime global.
@@ -40,8 +50,7 @@ use std::sync::Arc;
 /// hasta el final sobre `spawn_blocking`, así que una parada del supervisor
 /// no puede dejar una generación publicada a medias.
 pub(crate) struct CodeBuddyContractJob {
-    driver: Arc<CodeBuddyReleaseDriver>,
-    store: Arc<ContractStore<CodeBuddyProfile>>,
+    inner: DriverContractJob<CodeBuddyReleaseDriver, CodeBuddyProfile>,
 }
 
 impl CodeBuddyContractJob {
@@ -51,7 +60,9 @@ impl CodeBuddyContractJob {
         driver: Arc<CodeBuddyReleaseDriver>,
         store: Arc<ContractStore<CodeBuddyProfile>>,
     ) -> Self {
-        Self { driver, store }
+        Self {
+            inner: DriverContractJob::new("codebuddy_contract", driver, store),
+        }
     }
 
     /// El driver del job, solo para los tests de wiring de la factory: en
@@ -59,7 +70,7 @@ impl CodeBuddyContractJob {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn driver(&self) -> &Arc<CodeBuddyReleaseDriver> {
-        &self.driver
+        self.inner.driver()
     }
 
     /// El store del job, solo para los tests de wiring de la factory: en
@@ -67,33 +78,20 @@ impl CodeBuddyContractJob {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn store(&self) -> &Arc<ContractStore<CodeBuddyProfile>> {
-        &self.store
+        self.inner.store()
     }
 }
 
 impl ContractRefreshJob for CodeBuddyContractJob {
     fn name(&self) -> &'static str {
-        "codebuddy_contract"
+        self.inner.name()
     }
 
     async fn refresh_round(
         &self,
         cancel: &CancellationToken,
     ) -> Result<RoundOutcome, ContractError> {
-        // Adquisición cancelable: la parada del supervisor descarta la ronda
-        // antes de tocar el upstream y sin publicar nada.
-        let acquired = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return Ok(RoundOutcome::Cancelled),
-            acquired = self.driver.refresh() => acquired?,
-        };
-        // `None`: ningún recurso del pin trajo bytes frescos (todo condicional
-        // cacheado), así que la generación activa sigue en pie.
-        let Some(candidate) = acquired else {
-            return Ok(RoundOutcome::Unchanged);
-        };
-        // Frontera de commit: a partir de aquí la cancelación ya no se mira.
-        publish(&self.store, candidate).await
+        self.inner.refresh_round(cancel).await
     }
 }
 

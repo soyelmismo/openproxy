@@ -12,8 +12,8 @@
 
 use super::client_contract::{
     ContractRefreshJob, ContractRefreshService, DEFAULT_INTERVAL, RefreshPolicy, RoundOutcome,
-    publish,
 };
+use super::runner::run_capture_round;
 use openproxy_adapters::client_contract::{Candidate, ContractError, ContractStore};
 use openproxy_adapters::spoofer::claude_code_profile::{
     ClaudeCodeProfile, capture_candidate, runtime,
@@ -156,13 +156,7 @@ impl ContractRefreshJob for ClaudeContractJob {
         &self,
         cancel: &CancellationToken,
     ) -> Result<RoundOutcome, ContractError> {
-        let candidate = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return Ok(RoundOutcome::Cancelled),
-            acquired = self.capture() => acquired?,
-        };
-        // Frontera de commit: a partir de aquí la cancelación ya no se mira.
-        publish(&self.store, candidate).await
+        run_capture_round(&self.store, cancel, || self.capture()).await
     }
 }
 

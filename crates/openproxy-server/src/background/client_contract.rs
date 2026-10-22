@@ -70,6 +70,7 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::OwnedMutexGuard;
 
+use super::runner::{DriverContractJob, RefreshableDriver};
 use super::BackgroundService;
 
 /// Cadencia de un contrato sano: una ronda cada seis horas.
@@ -585,6 +586,15 @@ where
     }))
 }
 
+impl RefreshableDriver<CodexProfile> for CodexReleaseDriver {
+    fn refresh(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<Candidate<CodexProfile>>, ContractError>> + Send
+    {
+        self.refresh()
+    }
+}
+
 /// La ronda de Codex: resuelve el pin de release sobre el transporte compartido
 /// y commitea el candidato en el store del base. El driver ya reutiliza
 /// [`TransportCache`](openproxy_adapters::client_contract::TransportCache), los
@@ -595,53 +605,41 @@ where
 /// hasta el final, así que una parada del supervisor no puede dejar una
 /// generación publicada a medias.
 pub struct CodexContractJob {
-    driver: Arc<CodexReleaseDriver>,
-    store: Arc<ContractStore<CodexProfile>>,
+    inner: DriverContractJob<CodexReleaseDriver, CodexProfile>,
 }
 
 impl CodexContractJob {
     /// Construye el trabajo sobre un driver y un store que el llamante ya tiene.
     #[must_use]
     pub fn new(driver: Arc<CodexReleaseDriver>, store: Arc<ContractStore<CodexProfile>>) -> Self {
-        Self { driver, store }
+        Self {
+            inner: DriverContractJob::new("codex_contract", driver, store),
+        }
     }
 
     /// El driver, para inspección o precalentamiento de la cache.
     #[must_use]
     pub fn driver(&self) -> &Arc<CodexReleaseDriver> {
-        &self.driver
+        self.inner.driver()
     }
 
     /// El store, para leer la generación publicada.
     #[must_use]
     pub fn store(&self) -> &Arc<ContractStore<CodexProfile>> {
-        &self.store
+        self.inner.store()
     }
 }
 
 impl ContractRefreshJob for CodexContractJob {
     fn name(&self) -> &'static str {
-        "codex_contract"
+        self.inner.name()
     }
 
     async fn refresh_round(
         &self,
         cancel: &CancellationToken,
     ) -> Result<RoundOutcome, ContractError> {
-        // Adquisición cancelable: la parada del supervisor descarta la ronda
-        // antes de tocar el upstream y sin publicar nada.
-        let acquired = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return Ok(RoundOutcome::Cancelled),
-            acquired = self.driver.refresh() => acquired?,
-        };
-        // `None`: ningún recurso del pin trajo bytes frescos, así que la
-        // generación activa sigue en pie y no se persiste nada.
-        let Some(candidate) = acquired else {
-            return Ok(RoundOutcome::Unchanged);
-        };
-        // Frontera de commit: a partir de aquí la cancelación ya no se mira.
-        publish(&self.store, candidate).await
+        self.inner.refresh_round(cancel).await
     }
 }
 

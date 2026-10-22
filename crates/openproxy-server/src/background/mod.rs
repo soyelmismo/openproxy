@@ -9,9 +9,11 @@ use std::time::Duration;
 mod claude_profile;
 pub mod client_contract;
 mod codebuddy_contract;
+pub mod runner;
 // Factories del refresco de contratos de cliente (wiring en state/background.rs).
 pub(crate) use claude_profile::claude_refresh_service;
 pub(crate) use codebuddy_contract::codebuddy_refresh_service;
+pub use runner::{DriverContractJob, RefreshableDriver, run_capture_round, run_refresh_round};
 
 /// Unified trait for background daemons and services with graceful shutdown support.
 pub trait BackgroundService: Send + Sync + 'static {
