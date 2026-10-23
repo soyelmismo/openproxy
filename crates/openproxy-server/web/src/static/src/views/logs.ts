@@ -142,6 +142,18 @@ function renderLogsView(): TemplateResult {
   const visibleColKeys = state.logs.visibleColumns || new Set(LOG_COLUMNS.map((c) => c.key));
   const nowOffsetMs = clockStore.nowMs - liveLogsStore.clockOffsetMs;
 
+  const activeApiKeyIds = liveLogsStore.selectActiveApiKeyIds();
+  const hasNoApiKeyRows = liveLogsStore.hasNoApiKeyAttempts();
+  const knownKeys = (state.apiKeys as Array<{ id: number; label?: string | null; key_prefix?: string | null }>) || [];
+  const knownKeysMap = new Map(knownKeys.map((k) => [k.id, k]));
+  const activeKeyOptions = Array.from(activeApiKeyIds)
+    .sort((a, b) => a - b)
+    .map((id) => {
+      const k = knownKeysMap.get(id);
+      const label = k?.label ? `${k.label} (#${id})` : (k?.key_prefix ? `${k.key_prefix}… (#${id})` : `#${id}`);
+      return { id, label };
+    });
+
   return html`
     <div class="logs-header">
       <div class="m-header-top-row">
@@ -176,13 +188,15 @@ function renderLogsView(): TemplateResult {
       <div class="logs-status-filters" role="group">
         ${([["all", "All"], ["inflight", "In-flight"], ["2xx", "2xx OK"], ["4xx", "4xx Client"], ["5xx", "5xx Server"], ["error", "All Errors"]] as const).map(([st, lbl]) => html`<button type="button" class="logs-filter-btn ${filterStatus === st ? "active" : ""}" @click=${() => onSetStatusFilter(st)}>${st === "inflight" ? icons.lightning() : ""} ${lbl}</button>`)}
       </div>
-      <select class="logs-key-filter" aria-label="Filter by API Key" .value=${filterApiKeyId} @change=${(e: Event) => onSetApiKeyFilter((e.target as HTMLSelectElement).value)}>
-        <option value="all">All API Keys</option>
-        <option value="none">No API Key</option>
-        ${((state.apiKeys as Array<{ id: number; label?: string | null; key_prefix?: string | null }>) || []).map((k) => html`
-          <option value=${String(k.id)}>${k.label ? `${k.label} (#${k.id})` : (k.key_prefix ? `${k.key_prefix}… (#${k.id})` : `#${k.id}`)}</option>
-        `)}
-      </select>
+      ${activeKeyOptions.length > 0 || hasNoApiKeyRows ? html`
+        <select class="logs-key-filter" aria-label="Filter by API Key" .value=${filterApiKeyId} @change=${(e: Event) => onSetApiKeyFilter((e.target as HTMLSelectElement).value)}>
+          <option value="all">All API Keys (${activeKeyOptions.length})</option>
+          ${hasNoApiKeyRows ? html`<option value="none">No API Key</option>` : null}
+          ${activeKeyOptions.map((k) => html`
+            <option value=${String(k.id)}>${k.label}</option>
+          `)}
+        </select>
+      ` : null}
     </div>
     <div class="logs" id="logs" @click=${(e: Event) => {
       const row = (e.target as Element | null)?.closest(".log-row[data-request-id]") as HTMLElement | null;

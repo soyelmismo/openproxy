@@ -662,6 +662,21 @@ class LiveLogsStore {
     return arr;
   }
 
+  public selectActiveApiKeyIds(): Set<number> {
+    const set = new Set<number>();
+    for (const a of this.attemptsByKey.values()) {
+      if (a.apiKeyId != null) set.add(a.apiKeyId);
+    }
+    return set;
+  }
+
+  public hasNoApiKeyAttempts(): boolean {
+    for (const a of this.attemptsByKey.values()) {
+      if (a.apiKeyId == null) return true;
+    }
+    return false;
+  }
+
   public selectDetail(identity: { kind: "row_id", id: number } | { kind: "attempt", attemptKey: string }) {
     if (identity.kind === "row_id") {
       const attemptKey = this.attemptKeyByRowId.get(identity.id);

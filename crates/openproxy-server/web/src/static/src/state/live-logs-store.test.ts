@@ -479,5 +479,8 @@ describe("liveLogsStore inflight expiry (fake timers)", () => {
     });
     const finished = liveLogsStore.selectFinishedRows();
     expect(finished[0]?.apiKeyId).toBe(42);
+
+    expect(liveLogsStore.selectActiveApiKeyIds()).toEqual(new Set([42]));
+    expect(liveLogsStore.hasNoApiKeyAttempts()).toBe(false);
   });
 });
