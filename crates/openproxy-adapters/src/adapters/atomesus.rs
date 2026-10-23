@@ -397,7 +397,8 @@ mod tests {
         let adapter = AtomesusAdapter::new();
         let target = dummy_resolved_target();
 
-        let body = bytes::Bytes::from(serde_json::json!({ "prompt": "Plain model test" }).to_string());
+        let body =
+            bytes::Bytes::from(serde_json::json!({ "prompt": "Plain model test" }).to_string());
         let res = adapter
             .wrap_request_body(
                 body,
