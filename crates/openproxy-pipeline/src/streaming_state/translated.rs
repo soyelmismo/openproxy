@@ -149,6 +149,16 @@ impl ChunkProcessor<'_> {
             let _ = self.send_to_sink(ctx, sse_bytes).await;
         }
 
+        // Forward authoritative merged usage to client in the terminal chunk payload
+        // if the chunk payload doesn't already have usage and state has merged usage.
+        if let Some(u) = &self.state.usage
+            && let Some(obj) = chunk.payload.as_object_mut()
+            && !obj.contains_key("usage")
+            && let Ok(u_val) = serde_json::to_value(u)
+        {
+            obj.insert("usage".to_string(), u_val);
+        }
+
         let payload_is_null = chunk.payload.is_null();
         let json_str = chunk.into_json_string();
 

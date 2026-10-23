@@ -708,4 +708,79 @@ mod reasoning_instrumentation_tests {
             "la primera actividad debe quedar sellada"
         );
     }
+
+    #[tokio::test]
+    async fn handle_translated_done_attaches_merged_usage_to_client_payload() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let sink = StreamSink::Direct(tx);
+        let (pipeline, combo, target, model, req, timeouts) = setup_test_harness(&sink);
+        let started = std::time::Instant::now();
+        let ctx = StreamContext {
+            req: &req,
+            combo: &combo,
+            target: &target,
+            model: &model,
+            target_format: TargetFormat::Anthropic,
+            sink: &sink,
+            trace_id: "test-trace",
+            chunk_id: "test-chunk",
+            model_name: "claude-3-5-sonnet",
+            started,
+            attempt: 1,
+            race_size: 1,
+            created: 1000,
+            connect_and_send_ms: 5,
+            resolved_timeouts: &timeouts,
+            proxy_url: None,
+            proxy_status: None,
+        };
+        let mut state = StreamingState::new(false);
+        state.usage = Some(openproxy_types::message::OpenAIUsage {
+            prompt_tokens: 120,
+            completion_tokens: 45,
+            total_tokens: 165,
+            prompt_tokens_details: None,
+        });
+
+        let mut processor = ChunkProcessor {
+            state: &mut state,
+            dispatcher: &pipeline.dispatcher,
+        };
+
+        let chunk = crate::sse::UpstreamSseChunk {
+            raw_payload: None,
+            payload: serde_json::json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1000,
+                "model": "claude-3-5-sonnet",
+                "choices": [{
+                    "index": 0,
+                    "delta": {},
+                    "finish_reason": "stop"
+                }]
+            }),
+            done: true,
+            usage: None,
+            stop_reason: Some("stop".to_string()),
+            delta_reasoning: None,
+            delta_tool_calls: Vec::new(),
+            has_content: false,
+        };
+
+        let res = processor.handle_translated_done(&ctx, chunk).await;
+        assert!(matches!(res, Ok(crate::streaming::ChunkEvent::Done)));
+
+        let frame1 = rx.recv().await.expect("must receive terminal frame");
+        let frame1_str = String::from_utf8_lossy(&frame1);
+        assert!(frame1_str.starts_with("data: "));
+        let json_part = frame1_str.trim_start_matches("data: ").trim();
+        let val: serde_json::Value = serde_json::from_str(json_part).expect("valid json frame");
+        assert_eq!(val["usage"]["prompt_tokens"], 120);
+        assert_eq!(val["usage"]["completion_tokens"], 45);
+        assert_eq!(val["usage"]["total_tokens"], 165);
+
+        let frame2 = rx.recv().await.expect("must receive [DONE] sentinel");
+        assert_eq!(frame2.as_ref(), crate::SSE_DONE_BYTES.as_ref());
+    }
 }

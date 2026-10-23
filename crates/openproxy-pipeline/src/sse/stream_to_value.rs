@@ -233,6 +233,9 @@ mod tests {
             "Hi from Claude!"
         );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("end_turn"));
+        let usage = resp.usage.expect("usage must be accumulated");
+        assert_eq!(usage.prompt_tokens, 15);
+        assert_eq!(usage.completion_tokens, 5);
     }
 
     #[test]
