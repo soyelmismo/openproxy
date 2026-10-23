@@ -38,7 +38,8 @@ const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
     proxy_status TEXT,
     is_proxy_rotated INTEGER NOT NULL DEFAULT 0,
     cached_tokens INTEGER,
-    pii_redacted TEXT
+    pii_redacted TEXT,
+    api_key_id INTEGER
 )";
 
 #[test]
@@ -53,11 +54,11 @@ fn map_usage_row_basic() {
             race_total, race_attempts, is_streaming, stream_complete, race_lost,
             created_at, stop_reason, compression_savings_pct, compression_techniques,
             client_response, prompt_tokens_estimated, completion_tokens_estimated,
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted)
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                  ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)",
+                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)",
         rusqlite::params![
             42i64,
             "req-abc",
@@ -93,8 +94,9 @@ fn map_usage_row_basic() {
             None::<String>,
             None::<String>,
             0i64,
-            Some(10i64),
+            Some(20i64),
             Some("email: 1"),
+            Some(777i64),
         ],
     )
     .unwrap();
@@ -121,9 +123,10 @@ fn map_usage_row_basic() {
     assert_eq!(row.pii_redacted.as_deref(), Some("email: 1"));
     assert_eq!(row.proxy_url, None);
     assert_eq!(row.proxy_status, None);
-    assert_eq!(row.cached_tokens, Some(10));
+    assert_eq!(row.cached_tokens, Some(20));
     // flags: IS_STREAMING(2) | STREAM_COMPLETE(4) | CLIENT_RESPONSE(8) = 14
     assert_eq!(row.flags, 14);
+    assert_eq!(row.api_key_id, Some(777));
 }
 
 #[test]
@@ -138,11 +141,11 @@ fn map_usage_row_negative_total_ms_returns_error() {
             race_total, race_attempts, is_streaming, stream_complete, race_lost,
             created_at, stop_reason, compression_savings_pct, compression_techniques,
             client_response, prompt_tokens_estimated, completion_tokens_estimated,
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted)
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id)
          VALUES (1, 'r', 't', 'p', 'm', 200, -1, NULL, NULL, NULL,
                  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                  0, 0, 0, 0, 0, '2026-01-01', NULL, NULL, NULL,
-                 0, 0, 0, 'chat', NULL, NULL, 0, NULL, NULL)",
+                 0, 0, 0, 'chat', NULL, NULL, 0, NULL, NULL, NULL)",
     )
     .unwrap();
 

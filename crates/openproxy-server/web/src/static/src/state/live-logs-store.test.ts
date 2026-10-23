@@ -29,7 +29,7 @@ const makeSnapshotAttempt = (o: Partial<AttemptState> = {}): AttemptState => ({
   updatedAtMs: 1_000, stage: "streaming", stageSeq: 3, stageRank: 3,
   elapsedMsAtEvent: 0, connectMs: null, ttftMs: null, statusCode: null,
   terminal: false, terminalKind: null, error: null, rowId: null, row: null,
-  source: "snapshot", endpointKind: null, ...o,
+  source: "snapshot", endpointKind: null, apiKeyId: null, ...o,
 });
 
 const makeStageEvent = (o: Partial<StageEvent> = {}): StageEvent => ({
@@ -459,5 +459,25 @@ describe("liveLogsStore inflight expiry (fake timers)", () => {
     const finished = liveLogsStore.selectFinishedRows();
     expect(finished[0]?.terminalKind).toBe("failed");
     expect(finished[0]?.error).toBe("Inflight timeout (stale request)");
+  });
+
+  it("stores and preserves apiKeyId across inflight and row events", () => {
+    resetStore();
+    dispatchAttemptEvent(1, makeEvent({
+      attempt_key: "tr-key",
+      trace_id: "tr-key",
+      request_id: "req-key",
+      api_key_id: 42,
+    }));
+    const inflight = liveLogsStore.selectInflightRows();
+    expect(inflight[0]?.apiKeyId).toBe(42);
+
+    liveLogsStore.dispatch({
+      type: "usage_row",
+      cursor: 2,
+      row: makeRow({ id: 99, request_id: "req-key", trace_id: "tr-key", api_key_id: 42 }),
+    });
+    const finished = liveLogsStore.selectFinishedRows();
+    expect(finished[0]?.apiKeyId).toBe(42);
   });
 });

@@ -35,6 +35,7 @@ export interface AttemptState {
   detail?: Record<string, unknown> | null;
   source: "live" | "snapshot" | "db";
   endpointKind: string | null;
+  apiKeyId: number | null;
 }
 
 export type LiveLogEnvelopeV2 =
@@ -63,6 +64,7 @@ export interface AttemptEventPayload {
   provider_id?: string;
   upstream_model_id?: string;
   endpoint_kind?: string;
+  api_key_id?: number;
 }
 
 const STAGE_RANK = {
@@ -238,6 +240,7 @@ class LiveLogsStore {
         row: null,  // Server never sends row data in snapshot attempts
         source: "snapshot",
         endpointKind: raw.endpointKind ?? (("endpoint_kind" in raw ? (raw as Record<string, unknown>)["endpoint_kind"] as string : null)) ?? null,
+        apiKeyId: raw.apiKeyId ?? (("api_key_id" in raw ? (raw as Record<string, unknown>)["api_key_id"] as number : null)) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
       this.attemptsByKey.set(a.attemptKey, a);
@@ -281,6 +284,10 @@ class LiveLogsStore {
         if (raw.statusCode != null) existing.statusCode = raw.statusCode;
         if (raw.error != null) existing.error = raw.error;
         if (raw.endpointKind != null) existing.endpointKind = raw.endpointKind;
+        if (raw.apiKeyId != null) existing.apiKeyId = raw.apiKeyId;
+        else if ("api_key_id" in raw && (raw as Record<string, unknown>)["api_key_id"] != null) {
+          existing.apiKeyId = (raw as Record<string, unknown>)["api_key_id"] as number;
+        }
         continue;
       }
 
@@ -306,6 +313,7 @@ class LiveLogsStore {
         row: null,
         source: "snapshot",
         endpointKind: raw.endpointKind ?? (("endpoint_kind" in raw ? (raw as Record<string, unknown>)["endpoint_kind"] as string : null)) ?? null,
+        apiKeyId: raw.apiKeyId ?? (("api_key_id" in raw ? (raw as Record<string, unknown>)["api_key_id"] as number : null)) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
       this.attemptsByKey.set(key, a);
@@ -385,6 +393,7 @@ class LiveLogsStore {
       row: null,
       source: "live",
       endpointKind: event.endpoint_kind ?? null,
+      apiKeyId: event.api_key_id ?? null,
     };
 
     if (existing) {
@@ -403,6 +412,9 @@ class LiveLogsStore {
       if (event.upstream_model_id) a.upstreamModelId = event.upstream_model_id;
       if (event.endpoint_kind) {
         a.endpointKind = event.endpoint_kind;
+      }
+      if (event.api_key_id != null) {
+        a.apiKeyId = event.api_key_id;
       }
     }
 
@@ -476,6 +488,7 @@ class LiveLogsStore {
         row,
         source: "db",
         endpointKind: row.endpoint_kind || null,
+        apiKeyId: row.api_key_id ?? null,
       };
     } else {
       a.rowId = row.id;
@@ -490,6 +503,7 @@ class LiveLogsStore {
       a.elapsedMsAtEvent = row.total_ms;
       a.source = "db";
       if (row.endpoint_kind) a.endpointKind = row.endpoint_kind;
+      if (row.api_key_id != null) a.apiKeyId = row.api_key_id;
       if (row.upstream_model_id !== undefined) a.upstreamModelId = row.upstream_model_id || "";
       if (row.provider_id !== undefined) a.providerId = row.provider_id || "";
       if (row.trace_id !== undefined) a.traceId = row.trace_id || "";
@@ -549,6 +563,8 @@ class LiveLogsStore {
       if (d.status_code != null) event.status_code = d.status_code;
       if (d.provider_id) event.provider_id = d.provider_id;
       if (d.upstream_model_id) event.upstream_model_id = d.upstream_model_id;
+      if (d.endpoint_kind) event.endpoint_kind = d.endpoint_kind;
+      if (d.api_key_id != null) event.api_key_id = d.api_key_id;
 
       return {
         type: "attempt_event",

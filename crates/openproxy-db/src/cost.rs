@@ -233,6 +233,7 @@ pub fn record_row(
         proxy_status: input.proxy_status.as_deref().map(str::to_owned),
         flags: input.flags,
         endpoint_kind: input.endpoint_kind,
+        api_key_id: input.api_key_id.map(|k| k.0),
     };
 
     Ok((UsageId(rowid), row))
@@ -365,6 +366,7 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
     let is_proxy_rotated: i64 = r.get(28)?;
     let cached_tokens: Option<u32> = r.get(29)?;
     let pii_redacted: Option<String> = r.get(30)?;
+    let api_key_id: Option<i64> = r.get(31)?;
 
     let flags = ((race_lost != 0) as u8 * USAGE_FLAG_RACE_LOST)
         | ((is_streaming != 0) as u8 * USAGE_FLAG_IS_STREAMING)
@@ -404,6 +406,7 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
         proxy_status,
         flags,
         endpoint_kind: endpoint_kind_str.parse().unwrap_or_default(),
+        api_key_id,
     })
 }
 
@@ -412,7 +415,7 @@ const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream
     error_msg, race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at, \
     stop_reason, compression_savings_pct, compression_techniques, client_response, \
     prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url, \
-    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted";
+    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id";
 
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     let affected = conn

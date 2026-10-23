@@ -499,6 +499,7 @@ impl PipelineStage for DispatchStage {
             trace_id: trace_id,
             stage: "connecting",
             elapsed_ms: started.elapsed().as_millis() as u64,
+            api_key_id: ctx.req.api_key_id,
         );
 
         let body_bytes = ctx

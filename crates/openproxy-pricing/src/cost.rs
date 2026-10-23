@@ -164,6 +164,7 @@ fn build_recent_usage_row(
         proxy_url: input.proxy_url.clone(),
         proxy_status: input.proxy_status.clone(),
         endpoint_kind: input.endpoint_kind,
+        api_key_id: input.api_key_id.map(|k| k.0),
         flags: input.flags,
     }
 }

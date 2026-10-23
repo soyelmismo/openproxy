@@ -453,6 +453,7 @@ impl Pipeline {
             upstream_model_id: resolved_target.model.model_id.as_str(),
             timestamp: String::new(),
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            api_key_id: ctx.req.api_key_id,
         );
         use crate::pipeline_chain;
         use crate::stages::target::{

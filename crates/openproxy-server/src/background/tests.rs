@@ -145,6 +145,7 @@ async fn memory_cleanup_service_prunes_abandoned_inflight_and_trims() {
         row_id: None,
         source: "proxy".to_string(),
         endpoint_kind: None,
+        api_key_id: None,
     };
 
     openproxy_core::usage::INFLIGHT_REGISTRY

@@ -620,6 +620,24 @@ body[data-view="logs"] #main {
   border-color: var(--color-text);
   font-weight: 600;
 }
+.logs-key-filter {
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 0.65rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  max-width: 200px;
+}
+.logs-key-filter:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
 
 
 /* Logs pagination */

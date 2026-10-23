@@ -148,6 +148,9 @@ fn update_inflight_attempt(
     if event.endpoint_kind.is_some() {
         item.endpoint_kind = event.endpoint_kind;
     }
+    if event.api_key_id.is_some() {
+        item.api_key_id = event.api_key_id;
+    }
 }
 
 fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
@@ -210,6 +213,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                     row_id: None,
                     source: "live".into(),
                     endpoint_kind: event.endpoint_kind,
+                    api_key_id: event.api_key_id,
                 },
             );
         }

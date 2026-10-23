@@ -17,6 +17,7 @@ export interface StageEvent {
   compression_techniques: string | null;
   pii_redacted?: string | null;
   endpoint_kind?: string;
+  api_key_id?: number | null;
 }
 
 export interface ByModelRow {
@@ -151,5 +152,6 @@ export interface RecentUsageRow {
   proxy_status: string | null;
   is_proxy_rotated: boolean;
   endpoint_kind?: string;
+  api_key_id?: number | null;
   created_at: string;
 }

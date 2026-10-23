@@ -47,6 +47,7 @@ fn make_attempt(key: &str, updated_at_ms: u64) -> InflightAttempt {
         row_id: None,
         source: "proxy".to_string(),
         endpoint_kind: None,
+        api_key_id: None,
     }
 }
 

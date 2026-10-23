@@ -7,6 +7,7 @@ import { icons } from "../lib/icons.js";
 import { LOG_COLUMNS, LOGS_VISIBLE_COLUMNS_STORAGE_KEY } from "../lib/constants.js";
 import { connectLogsWebSocket, setMessageHandler, disconnectLogsWebSocket } from "../state/ws.js";
 import { fetchRecordingState, toggleRecording, exportLogsCSV } from "../handlers/log-handlers.js";
+import { api } from "../lib/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { openLogDetail } from "../components/log-detail/index.js";
 import { liveLogsStore, type AttemptState } from "../state/live-logs-store.js";
@@ -49,6 +50,7 @@ function saveVisibleColumns(): void {
 
 let filterSearch = "";
 let filterStatus = "all";
+let filterApiKeyId = "all";
 let isPaused = false;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let frozenLogsSnapshot: AttemptState[] | null = null;
@@ -65,15 +67,32 @@ function onSetStatusFilter(status: string): void {
   filterStatus = status; frozenLogsSnapshot = null; state.logs.page = 1; state.logs.followTail = true; requestUpdate();
 }
 
+function onSetApiKeyFilter(keyId: string): void {
+  filterApiKeyId = keyId; frozenLogsSnapshot = null; state.logs.page = 1; state.logs.followTail = true; requestUpdate();
+}
+
 function handleLogsMessage(event: MessageEvent): void {
   if (isPaused) return;
   try { liveLogsStore.dispatch(JSON.parse(event.data) as WsEnvelope); requestUpdate(); } catch { /* ignore */ }
 }
 
-function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; requestId?: string; traceId?: string; error?: string | null; statusCode?: number | null; terminalKind?: string | null }): boolean {
+function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; requestId?: string; traceId?: string; error?: string | null; statusCode?: number | null; terminalKind?: string | null; apiKeyId?: number | null }): boolean {
+  if (filterApiKeyId !== "all") {
+    if (filterApiKeyId === "none") {
+      if (r.apiKeyId != null) return false;
+    } else {
+      const targetId = Number(filterApiKeyId);
+      if (r.apiKeyId !== targetId) return false;
+    }
+  }
   if (filterSearch) {
     const s = filterSearch;
-    const hit = (r.upstreamModelId || "").toLowerCase().includes(s) || (r.providerId || "").toLowerCase().includes(s) || (r.requestId || "").toLowerCase().includes(s) || (r.traceId || "").toLowerCase().includes(s) || (r.error || "").toLowerCase().includes(s);
+    const hit = (r.upstreamModelId || "").toLowerCase().includes(s)
+      || (r.providerId || "").toLowerCase().includes(s)
+      || (r.requestId || "").toLowerCase().includes(s)
+      || (r.traceId || "").toLowerCase().includes(s)
+      || (r.error || "").toLowerCase().includes(s)
+      || (r.apiKeyId != null && (`#${r.apiKeyId}`.includes(s) || String(r.apiKeyId) === s));
     if (!hit) return false;
   }
   if (filterStatus === "inflight") return r.statusCode == null && !r.terminalKind;
@@ -157,6 +176,13 @@ function renderLogsView(): TemplateResult {
       <div class="logs-status-filters" role="group">
         ${([["all", "All"], ["inflight", "In-flight"], ["2xx", "2xx OK"], ["4xx", "4xx Client"], ["5xx", "5xx Server"], ["error", "All Errors"]] as const).map(([st, lbl]) => html`<button type="button" class="logs-filter-btn ${filterStatus === st ? "active" : ""}" @click=${() => onSetStatusFilter(st)}>${st === "inflight" ? icons.lightning() : ""} ${lbl}</button>`)}
       </div>
+      <select class="logs-key-filter" aria-label="Filter by API Key" .value=${filterApiKeyId} @change=${(e: Event) => onSetApiKeyFilter((e.target as HTMLSelectElement).value)}>
+        <option value="all">All API Keys</option>
+        <option value="none">No API Key</option>
+        ${((state.apiKeys as Array<{ id: number; label?: string | null; key_prefix?: string | null }>) || []).map((k) => html`
+          <option value=${String(k.id)}>${k.label ? `${k.label} (#${k.id})` : (k.key_prefix ? `${k.key_prefix}… (#${k.id})` : `#${k.id}`)}</option>
+        `)}
+      </select>
     </div>
     <div class="logs" id="logs" @click=${(e: Event) => {
       const row = (e.target as Element | null)?.closest(".log-row[data-request-id]") as HTMLElement | null;
@@ -224,7 +250,14 @@ export async function mountLogs(): Promise<(() => void) | void> {
   const w = window as Window & typeof globalThis & { __logsColumnsDocClickBound?: boolean };
   if (!w.__logsColumnsDocClickBound) { document.addEventListener("click", onDocClickForMenu); w.__logsColumnsDocClickBound = true; }
 
-  fetchRecordingState(); setMessageHandler(handleLogsMessage); connectLogsWebSocket(); clockStore.subscribe(requestUpdate);
+  fetchRecordingState();
+  if (!state.apiKeys || state.apiKeys.length === 0) {
+    void api("/keys").then((keys) => {
+      state.apiKeys = keys as typeof state.apiKeys;
+      requestUpdate();
+    }).catch(() => { /* non-fatal */ });
+  }
+  setMessageHandler(handleLogsMessage); connectLogsWebSocket(); clockStore.subscribe(requestUpdate);
 
   const hash = location.hash || ""; const qIdx = hash.indexOf("?");
   if (qIdx >= 0) {

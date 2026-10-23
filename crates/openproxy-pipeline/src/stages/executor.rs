@@ -263,6 +263,7 @@ async fn execute_single_target_step(
             upstream_model_id: target.model.model_id.0.as_str(),
             error: "predictive rate limit: skipped to avoid 429",
             endpoint_kind: ctx.req.endpoint_kind,
+            api_key_id: ctx.req.api_key_id,
         );
         return TargetLoopOutcome::Skip;
     }

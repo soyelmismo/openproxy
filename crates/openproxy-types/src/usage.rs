@@ -104,6 +104,8 @@ pub struct StageEvent {
     pub endpoint_kind: Option<EndpointKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pii_redacted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_id: Option<i64>,
 }
 
 #[doc(hidden)]
@@ -156,6 +158,18 @@ impl IntoOption<String> for &crate::ids::ModelId {
     #[inline]
     fn into_opt(self) -> Option<String> {
         Some(self.0.clone())
+    }
+}
+impl IntoOption<i64> for crate::ids::ApiKeyId {
+    #[inline]
+    fn into_opt(self) -> Option<i64> {
+        Some(self.0)
+    }
+}
+impl IntoOption<i64> for Option<crate::ids::ApiKeyId> {
+    #[inline]
+    fn into_opt(self) -> Option<i64> {
+        self.map(|k| k.0)
     }
 }
 
@@ -225,6 +239,8 @@ pub struct InflightAttempt {
     pub source: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint_kind: Option<EndpointKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_id: Option<i64>,
 }
 
 pub static STAGE_EVENT_PUBLISHER: std::sync::OnceLock<fn(StageEvent)> = std::sync::OnceLock::new();
@@ -266,6 +282,7 @@ pub struct RecentUsageRow {
     pub race_attempts: Option<u8>,
     pub flags: u8,
     pub endpoint_kind: EndpointKind,
+    pub api_key_id: Option<i64>,
 }
 
 impl RecentUsageRow {
@@ -343,6 +360,8 @@ struct RecentUsageRowSerde<'a> {
     #[serde(default)]
     pub is_proxy_rotated: bool,
     pub endpoint_kind: EndpointKind,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub api_key_id: Option<i64>,
 }
 
 impl Serialize for RecentUsageRow {
@@ -387,6 +406,7 @@ impl Serialize for RecentUsageRow {
             completion_tokens_estimated: self.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED),
             is_proxy_rotated: self.has_flag(USAGE_FLAG_PROXY_ROTATED),
             endpoint_kind: self.endpoint_kind,
+            api_key_id: self.api_key_id,
         }
         .serialize(serializer)
     }
@@ -435,6 +455,7 @@ impl<'de> Deserialize<'de> for RecentUsageRow {
             race_attempts: s.race_attempts,
             flags,
             endpoint_kind: s.endpoint_kind,
+            api_key_id: s.api_key_id,
         })
     }
 }
@@ -589,6 +610,7 @@ mod tests {
                 | USAGE_FLAG_CLIENT_RESPONSE
                 | USAGE_FLAG_STREAM_COMPLETE,
             endpoint_kind: EndpointKind::Chat,
+            api_key_id: Some(999),
         };
 
         assert!(row.has_flag(USAGE_FLAG_IS_STREAMING));

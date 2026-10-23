@@ -1,7 +1,7 @@
 use super::*;
 use openproxy_types::CoreError;
 
-const EXPECTED_COLUMNS: [&str; 36] = [
+const EXPECTED_COLUMNS: [&str; 37] = [
     "id",
     "request_id",
     "trace_id",
@@ -38,6 +38,7 @@ const EXPECTED_COLUMNS: [&str; 36] = [
     "is_proxy_rotated",
     "cached_tokens",
     "pii_redacted",
+    "api_key_id",
 ];
 
 #[test]
@@ -50,7 +51,7 @@ fn test_projection_column_contract() {
     ];
     for sql in queries {
         let stmt = conn.prepare(sql).unwrap();
-        assert_eq!(stmt.column_count(), 36);
+        assert_eq!(stmt.column_count(), 37);
         assert_eq!(stmt.column_names(), EXPECTED_COLUMNS);
     }
 }
@@ -58,6 +59,19 @@ fn test_projection_column_contract() {
 #[test]
 fn test_recent_queries_ordering_and_equivalence() {
     let conn = openproxy_db::testing::open_in_memory();
+    for id in [1i64, 2, 3] {
+        conn.execute(
+            "INSERT INTO api_keys (id, label, key_hash, key_prefix, created_at)
+             VALUES (?1, ?2, ?3, ?4, '2026-10-01T00:00:00Z')",
+            rusqlite::params![
+                100 + id,
+                format!("key-{id}"),
+                format!("hash-{id}"),
+                format!("prefix-{id}"),
+            ],
+        )
+        .unwrap();
+    }
     let insert_sql = "INSERT INTO usage (
         id, request_id, trace_id, provider_id, upstream_model_id, status_code, total_ms,
         prompt_tokens, completion_tokens, cost_usd, connect_ms, ttft_ms, request_body_json,
@@ -65,9 +79,9 @@ fn test_recent_queries_ordering_and_equivalence() {
         race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at,
         stop_reason, compression_savings_pct, compression_techniques, client_response,
         prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url,
-        proxy_status, is_proxy_rotated, cached_tokens, pii_redacted
+        proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id
     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)";
+              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)";
 
     for id in [3i64, 1, 2] {
         let headers = serde_json::json!({"h": id.to_string()}).to_string();
@@ -109,7 +123,8 @@ fn test_recent_queries_ordering_and_equivalence() {
                 None::<String>,
                 0i64,
                 Some(id * 10),
-                Some("pii-ok")
+                Some("pii-ok"),
+                Some(100 + id),
             ],
         )
         .unwrap();
@@ -146,6 +161,7 @@ fn test_recent_queries_ordering_and_equivalence() {
     assert_eq!(row_by_id2.flags, 14);
     assert_eq!(row_by_id2.compression_savings_pct, Some(20.0));
     assert_eq!(row_by_id2.pii_redacted.as_deref(), Some("pii-ok"));
+    assert_eq!(row_by_id2.api_key_id, Some(102));
 
     assert!(row_for_broadcast_by_id(&conn, 999).unwrap().is_none());
     assert!(recent(&conn, 0, 0).unwrap().is_empty());
