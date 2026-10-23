@@ -27,6 +27,19 @@ import {
 import { renderConnectionsSection } from './oauth.js';
 import { renderModelsSection } from './models.js';
 
+let openTtlMenuProviderId: string | null = null;
+let openTtlMenuPos: { top: number; left: number } | null = null;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('click', () => {
+    if (openTtlMenuProviderId !== null) {
+      openTtlMenuProviderId = null;
+      openTtlMenuPos = null;
+      requestUpdate();
+    }
+  });
+}
+
 
 async function onRenameProvider(
   providerId: string,
@@ -131,12 +144,9 @@ function getProviderTtlOptions(format: string, providerId: string): Array<{ valu
     ];
   }
 
-  // Generic fallback or providers that support both/standard
+  // Other providers (e.g. Gemini, Antigravity, OpenCode, OpenAI standard)
   return [
     { value: 'auto', label: 'auto (default)' },
-    { value: '5m', label: '5m (Claude standard)' },
-    { value: '1h', label: '1h (Claude extended)' },
-    { value: '12h', label: '12h (Responses API extended)' },
   ];
 }
 
@@ -321,24 +331,76 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
             </span>
             <span
               class=${'chip ttl-chip' + (provider.prompt_cache_ttl && provider.prompt_cache_ttl !== 'auto' ? ' combo-chip' : '')}
-              title="Prompt cache TTL: auto, 5m, 1h, 12h. Click to change."
-              style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;"
+              title="Prompt cache TTL: click to change"
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; position: relative;"
+              @click=${(e: MouseEvent) => {
+                e.stopPropagation();
+                if (openTtlMenuProviderId === provider.id) {
+                  openTtlMenuProviderId = null;
+                  openTtlMenuPos = null;
+                } else {
+                  openTtlMenuProviderId = provider.id;
+                  const el = e.currentTarget as HTMLElement;
+                  const rect = el.getBoundingClientRect();
+                  const menuWidth = 200;
+                  const menuMaxHeight = 160;
+                  const margin = 8;
+
+                  let left = rect.left;
+                  if (left + menuWidth > window.innerWidth - margin) {
+                    left = Math.max(margin, window.innerWidth - menuWidth - margin);
+                  }
+
+                  let top = rect.bottom + 4;
+                  if (top + menuMaxHeight > window.innerHeight - margin) {
+                    const spaceAbove = rect.top - margin;
+                    if (spaceAbove > 100) {
+                      top = Math.max(margin, rect.top - menuMaxHeight - 4);
+                    }
+                  }
+                  openTtlMenuPos = { top, left };
+                }
+                requestUpdate();
+              }}
             >
-              cache:
-              <select
-                class="ttl-inline-select"
-                style="background: transparent; border: none; color: inherit; font-size: inherit; font-weight: inherit; padding: 0; cursor: pointer; outline: none;"
-                .value=${provider.prompt_cache_ttl || 'auto'}
-                @change=${(e: Event) => {
-                  const target = e.target as HTMLSelectElement;
-                  if (target) void onChangePromptCacheTtl(provider.id, target.value);
-                }}
-              >
-                ${getProviderTtlOptions(provider.format, provider.id).map(
-                  (opt) => html`<option value=${opt.value} ?selected=${(provider.prompt_cache_ttl || 'auto') === opt.value}>${opt.label}</option>`
-                )}
-              </select>
+              cache: ${provider.prompt_cache_ttl || 'auto'}
+              <small style="opacity: 0.7; font-size: 0.7em;">▾</small>
             </span>
+            ${openTtlMenuProviderId === provider.id && openTtlMenuPos
+              ? html`
+                <div
+                  class="target-accounts-backdrop"
+                  @click=${(e: Event) => {
+                    e.stopPropagation();
+                    openTtlMenuProviderId = null;
+                    openTtlMenuPos = null;
+                    requestUpdate();
+                  }}
+                ></div>
+                <div
+                  class="target-accounts-menu"
+                  style="top:${openTtlMenuPos.top}px; left:${openTtlMenuPos.left}px; width: 220px;"
+                  @click=${(e: Event) => e.stopPropagation()}
+                >
+                  ${getProviderTtlOptions(provider.format, provider.id).map(
+                    (opt) => html`
+                      <div
+                        class="target-accounts-item"
+                        style="padding: 6px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; font-weight: ${(provider.prompt_cache_ttl || 'auto') === opt.value ? '600' : 'normal'}; background: ${(provider.prompt_cache_ttl || 'auto') === opt.value ? 'var(--color-surface-hover, rgba(255,255,255,0.06))' : 'transparent'};"
+                        @click=${() => {
+                          openTtlMenuProviderId = null;
+                          openTtlMenuPos = null;
+                          void onChangePromptCacheTtl(provider.id, opt.value);
+                        }}
+                      >
+                        <span>${opt.label}</span>
+                        ${(provider.prompt_cache_ttl || 'auto') === opt.value ? html`<span style="color: var(--color-primary, #38bdf8)">✓</span>` : html``}
+                      </div>
+                    `
+                  )}
+                </div>
+              `
+              : html``}
             ${provider.extra_headers_json
               ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
               : html``}
