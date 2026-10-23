@@ -370,4 +370,47 @@ mod tests {
         let expected_msg = "[System Instructions]\nBe concise.\n\nPart 1\nPart 2\n\n[Assistant]\nUnderstood.\n\nNext question";
         assert_eq!(v["message"], expected_msg);
     }
+
+    #[tokio::test]
+    async fn test_atomesus_fetch_models() {
+        let adapter = AtomesusAdapter::new();
+        let upstream = UpstreamClient::new();
+        let models = adapter
+            .fetch_models(&upstream, "dummy")
+            .await
+            .expect("fetch_models failed");
+
+        assert!(!models.is_empty());
+        let fast_model = models
+            .iter()
+            .find(|m| m.model_id.as_str() == "atomesus-1-5-fast")
+            .expect("atomesus-1-5-fast missing");
+
+        assert_eq!(fast_model.target_format, TargetFormat::Atomesus);
+        assert_eq!(fast_model.family.as_deref(), Some("atomesus"));
+        assert_eq!(fast_model.context_length, Some(128_000));
+        assert_eq!(fast_model.max_output_tokens, Some(8_192));
+    }
+
+    #[test]
+    fn test_atomesus_wrap_request_body_plain_model_name() {
+        let adapter = AtomesusAdapter::new();
+        let target = dummy_resolved_target();
+
+        let body =
+            bytes::Bytes::from(serde_json::json!({ "prompt": "Plain model test" }).to_string());
+        let res = adapter
+            .wrap_request_body(
+                body,
+                TargetFormat::Atomesus,
+                &ModelId::new("custom-model"),
+                &target,
+            )
+            .expect("wrap_request_body failed");
+
+        let v: serde_json::Value = serde_json::from_slice(&res).expect("json parse failed");
+        assert_eq!(v["model"], "custom-model");
+        assert_eq!(v["mode"], "thinking");
+        assert_eq!(v["message"], "Plain model test");
+    }
 }
