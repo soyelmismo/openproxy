@@ -121,6 +121,29 @@ fn update_provider_changes_name_and_keyword() {
 }
 
 #[test]
+fn update_provider_patch_sets_format() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.writer();
+    let pid = ProviderId::new("p");
+    create_provider(&conn, cp("p", "Original")).expect("seed");
+
+    update_provider(
+        &conn,
+        &pid,
+        &UpdateProviderInput {
+            format: Some("anthropic".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("update_provider");
+
+    let p = crate::providers::get(&conn, &pid)
+        .expect("get")
+        .expect("found");
+    assert_eq!(p.format, crate::providers::ProviderFormat::Anthropic);
+}
+
+#[test]
 fn update_provider_patch_sets_notif_keyword_only() {
     let (pool, _path) = fresh_pool();
     let conn = pool.writer();

@@ -98,6 +98,26 @@ async function onEditHeaders(
   requestUpdate();
 }
 
+async function onChangeProviderFormat(
+  providerId: string,
+  e: Event,
+): Promise<void> {
+  const target = e.target instanceof HTMLSelectElement ? e.target : null;
+  if (!target) return;
+  const newFormat = target.value;
+  try {
+    await api('/providers/' + encodeURIComponent(providerId), {
+      method: 'PATCH',
+      body: JSON.stringify({ format: newFormat }),
+    });
+    showToast(`Provider format updated to ${newFormat}`, 'success');
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating provider format');
+  }
+}
+
 async function onCycleStreamMode(
   providerId: string,
   currentMode: string | undefined,
@@ -317,7 +337,21 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
             ${provider.active ? html`` : html`<span class="chip inactive-chip">inactive</span>`}
           </div>
           <div class="meta provider-detail-meta">
-            <span class="chip format-chip" data-format=${provider.format}>${provider.format}</span>
+            <select
+              class="provider-format-select"
+              title="Provider schema / protocol (OpenAI Chat Completions, Responses, Anthropic Messages, Gemini, etc.)"
+              .value=${provider.format}
+              @change=${(e: Event) => onChangeProviderFormat(provider.id, e)}
+            >
+              <option value="openai" ?selected=${provider.format === 'openai'}>openai</option>
+              <option value="responses" ?selected=${provider.format === 'responses'}>responses</option>
+              <option value="anthropic" ?selected=${provider.format === 'anthropic'}>anthropic</option>
+              <option value="gemini" ?selected=${provider.format === 'gemini'}>gemini</option>
+              <option value="mixed" ?selected=${provider.format === 'mixed'}>mixed</option>
+              <option value="systemone" ?selected=${provider.format === 'systemone'}>systemone</option>
+              <option value="atomesus" ?selected=${provider.format === 'atomesus'}>atomesus</option>
+              <option value="commandcodego" ?selected=${provider.format === 'commandcodego'}>commandcodego</option>
+            </select>
             <span class="chip auth-chip">${provider.auth_type}</span>
             <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
             <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>

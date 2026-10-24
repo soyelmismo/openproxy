@@ -393,6 +393,22 @@
 .model-usage-code { cursor: pointer; padding: 2px 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); font-family: var(--font-mono); }
 .model-modality-block { display: flex; flex-direction: column; gap: 4px; }
 .model-type-select { padding: 2px 4px; font-size: var(--fs-xs); font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.model-format-select { padding: 2px 4px; font-size: var(--fs-xs); font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface-2); color: var(--color-text); cursor: pointer; font-family: var(--font-mono); }
+.provider-format-select {
+  padding: 0.15rem 0.5rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border-radius: var(--radius-pill);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.provider-format-select:focus, .model-format-select:focus {
+  border-color: var(--color-primary);
+  outline: none;
+}
 .model-actions-block { display: flex; flex-direction: column; gap: 4px; }
 .model-test-selectors { display: flex; flex-direction: column; gap: 4px; margin-bottom: 2px; }
 .model-account-select, .model-proxy-select { padding: 2px 4px; font-size: var(--fs-xs); background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px; }

@@ -120,6 +120,7 @@ pub fn set_provider_active(conn: &Connection, id: &ProviderId, active: bool) -> 
 pub struct UpdateProviderInput {
     pub name: Option<String>,
     pub base_url: Option<String>,
+    pub format: Option<String>,
     pub extra_headers_json: Option<Option<String>>,
     pub auto_activate_keyword: Option<Option<String>>,
     pub use_proxies: Option<bool>,
@@ -142,6 +143,9 @@ impl Validatable for UpdateProviderInput {
         if let Some(ref url) = self.base_url {
             validate_base_url(url)?;
         }
+        if let Some(ref fmt) = self.format {
+            crate::providers::ProviderFormat::parse(fmt).map_err(CoreError::Validation)?;
+        }
         if let Some(ref sm) = self.stream_mode
             && !matches!(sm.as_str(), "auto" | "streaming" | "unary")
         {
@@ -163,6 +167,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
         enum Field {
             Name,
             BaseUrl,
+            Format,
             ExtraHeadersJson,
             AutoActivateKeyword,
             UseProxies,
@@ -194,6 +199,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                     match key {
                         Field::Name => out.name = Some(map.next_value()?),
                         Field::BaseUrl => out.base_url = Some(map.next_value()?),
+                        Field::Format => out.format = Some(map.next_value()?),
                         Field::ExtraHeadersJson => {
                             let raw: serde_json::Value = map.next_value()?;
                             out.extra_headers_json =
@@ -299,12 +305,18 @@ pub fn update_provider(
         None => None,
     };
     let current_proxy = input.current_proxy_id.as_ref().map(|o| o.as_deref());
+    let format = if let Some(ref f) = input.format {
+        Some(crate::providers::ProviderFormat::parse(f).map_err(CoreError::Validation)?)
+    } else {
+        None
+    };
     providers::update(
         conn,
         id,
         providers::UpdateProviderParams {
             name: input.name.as_deref(),
             base_url: input.base_url.as_deref(),
+            format,
             extra_headers_json: extra_headers,
             auto_activate_keyword: keyword,
             use_proxies: input.use_proxies,

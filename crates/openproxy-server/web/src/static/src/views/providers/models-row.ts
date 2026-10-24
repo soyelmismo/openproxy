@@ -17,6 +17,24 @@ import { renderCapabilityBadges } from './shared.js';
 import type { Model } from '../../lib/types/api.js';
 
 
+export async function onChangeModelFormat(rowId: number, e: Event): Promise<void> {
+  const target = e.target instanceof HTMLSelectElement ? e.target : null;
+  if (!target) return;
+  const newFormat = target.value;
+  try {
+    await api(`/models/${rowId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ target_format: newFormat }),
+    });
+    const m = (state.models || []).find((x) => x.row_id === rowId);
+    if (m) m.target_format = newFormat as any;
+    showToast(`Model format updated to ${newFormat}`, 'success');
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error');
+  }
+}
+
 export async function onChangeModelType(rowId: number, e: Event): Promise<void> {
   const target = e.target instanceof HTMLSelectElement ? e.target : null;
   if (!target) return;
@@ -202,7 +220,22 @@ export function renderModelRow(m: Model): TemplateResult {
         ${m.custom ? html`<span class="badge custom">custom</span>` : html``}
       </div>
     </td>
-    <td class="col-model-format" data-label="Format"><span class="chip format-chip">${m.target_format || '—'}</span></td>
+    <td class="col-model-format" data-label="Format">
+      <select
+        class="model-format-select"
+        title="Model target format / wire protocol"
+        .value=${m.target_format || 'openai'}
+        @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
+      >
+        <option value="openai" ?selected=${(m.target_format || 'openai') === 'openai'}>openai</option>
+        <option value="responses" ?selected=${m.target_format === 'responses'}>responses</option>
+        <option value="anthropic" ?selected=${m.target_format === 'anthropic'}>anthropic</option>
+        <option value="gemini" ?selected=${m.target_format === 'gemini'}>gemini</option>
+        <option value="systemone" ?selected=${m.target_format === 'systemone'}>systemone</option>
+        <option value="atomesus" ?selected=${m.target_format === 'atomesus'}>atomesus</option>
+        <option value="commandcodego" ?selected=${m.target_format === 'commandcodego'}>commandcodego</option>
+      </select>
+    </td>
     <td class="col-model-context" data-label="Context"><span class="model-spec-val">${formatContextBadge(m.context_length)}</span></td>
     <td class="col-model-max-output" data-label="Max Output"><span class="model-spec-val">${formatContextBadge(m.max_output_tokens)}</span></td>
     <td class="col-model-modality" data-label="Modality & Capabilities">
@@ -294,6 +327,24 @@ export function renderModelRow(m: Model): TemplateResult {
           <span class="config-val-upstream" title="${m.model_id}">
             ${m.model_id}
           </span>
+        </div>
+        <div class="config-item">
+          <span class="config-label">Format</span>
+          <select
+            class="custom-mobile-select"
+            style="font-size:0.75rem;padding:1px 3px;"
+            title="Model format override"
+            .value=${m.target_format || 'openai'}
+            @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
+          >
+            <option value="openai" ?selected=${(m.target_format || 'openai') === 'openai'}>openai</option>
+            <option value="responses" ?selected=${m.target_format === 'responses'}>responses</option>
+            <option value="anthropic" ?selected=${m.target_format === 'anthropic'}>anthropic</option>
+            <option value="gemini" ?selected=${m.target_format === 'gemini'}>gemini</option>
+            <option value="systemone" ?selected=${m.target_format === 'systemone'}>systemone</option>
+            <option value="atomesus" ?selected=${m.target_format === 'atomesus'}>atomesus</option>
+            <option value="commandcodego" ?selected=${m.target_format === 'commandcodego'}>commandcodego</option>
+          </select>
         </div>
         <div class="config-item">
           <span class="config-label">Stream</span>

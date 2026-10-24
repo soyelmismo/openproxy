@@ -50,6 +50,7 @@ pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
 pub struct UpdateProviderParams<'a> {
     pub name: Option<&'a str>,
     pub base_url: Option<&'a str>,
+    pub format: Option<ProviderFormat>,
     pub extra_headers_json: Option<Option<&'a str>>,
     pub auto_activate_keyword: Option<Option<&'a str>>,
     pub use_proxies: Option<bool>,
@@ -76,6 +77,10 @@ fn build_provider_update_clauses(
     if let Some(v) = params.base_url {
         sets.push("base_url = ?");
         bound_values.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = params.format {
+        sets.push("format = ?");
+        bound_values.push(Box::new(v.as_str().to_string()));
     }
     if let Some(v) = params.extra_headers_json {
         sets.push("extra_headers_json = ?");
