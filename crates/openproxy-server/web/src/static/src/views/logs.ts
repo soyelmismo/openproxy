@@ -273,10 +273,7 @@ export async function mountLogs(): Promise<(() => void) | void> {
   }
   setMessageHandler(handleLogsMessage); connectLogsWebSocket();
   const onClockTick = () => {
-    // Only re-render if there are active in-flight rows that need their timer ticked
-    if (liveLogsStore.hasActiveInflightRows()) {
-      requestUpdate();
-    }
+    requestUpdate();
   };
   clockStore.subscribe(onClockTick);
 

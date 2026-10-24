@@ -166,7 +166,6 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
 }
 .logs-recording-toggle.on .logs-recording-dot {
   background: var(--color-error);
-  animation: logs-recording-pulse 1.5s ease-out infinite;
 }
 .logs-recording-toggle.off .logs-recording-dot { background: var(--color-text-muted); }
 .logs-recording-toggle strong { font-weight: 600; }

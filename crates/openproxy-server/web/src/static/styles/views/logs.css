@@ -105,7 +105,6 @@ body[data-view="logs"] #main {
   border-radius: 50%;
   background: #3b82f6;
   display: inline-block;
-  animation: logs-recording-pulse 1.5s ease-out infinite;
 }
 
 .logs-section-count {
@@ -160,7 +159,7 @@ body[data-view="logs"] #main {
 
 .log-row:hover { background: var(--color-surface-2); }
 .log-row:active { transform: translateY(1px); }
-.log-row.streaming { animation: pulse 2s infinite; }
+.log-row.streaming { border-left: 3px solid var(--color-success); }
 .log-row.error { background: var(--color-error-soft); }
 .log-row.error:hover { background: var(--color-error-soft); }
 .log-row.processing { background: var(--color-warn-soft); }
@@ -402,9 +401,9 @@ body[data-view="logs"] #main {
 }
 .log-phase-sub--ticking { color: var(--color-primary); }
 .log-phase--started      { background: var(--color-surface-2); }
-.log-phase--connecting   { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); animation: phasePulse 1.4s ease-in-out infinite; }
-.log-phase--waiting_ttft { background: var(--color-warn-soft); color: var(--color-warn); border-color: var(--color-warn); animation: phaseBlink 1.2s ease-in-out infinite; }
-.log-phase--streaming    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); animation: phasePulse 2s ease-in-out infinite; }
+.log-phase--connecting   { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); }
+.log-phase--waiting_ttft { background: var(--color-warn-soft); color: var(--color-warn); border-color: var(--color-warn); }
+.log-phase--streaming    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
 .log-phase--completed    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
 .log-phase--failed       { background: var(--color-error-soft); color: var(--color-error); border-color: var(--color-error); }
 .log-phase--cancelled    { background: var(--chart-tint-purple); color: var(--chart-purple-darker); border-color: var(--chart-purple-darker); }
