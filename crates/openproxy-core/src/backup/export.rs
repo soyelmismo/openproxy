@@ -51,6 +51,7 @@ pub fn export_backup(
     let proxy_sources = export_proxy_sources(conn)?;
     let api_keys = export_api_keys(conn)?;
     let app_config = export_app_config(conn)?;
+    let extra_tables = crate::backup::introspection::export_extra_tables(conn)?;
 
     let payload = BackupPayload {
         providers,
@@ -61,6 +62,7 @@ pub fn export_backup(
         proxy_sources,
         api_keys,
         app_config,
+        extra_tables,
     };
 
     if let Some(passphrase) = passphrase

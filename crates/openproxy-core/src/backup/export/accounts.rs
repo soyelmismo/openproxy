@@ -40,6 +40,22 @@ pub(super) fn export_accounts(
     conn: &Connection,
     master_key: &MasterKey,
 ) -> Result<Vec<BackupAccount>> {
+    let mut extra_by_id = crate::backup::introspection::export_extra_columns_by_pk(
+        conn,
+        "accounts",
+        "id",
+        &[
+            "id", "provider_id", "api_key_encrypted", "label", "priority",
+            "extra_config_json", "health_status", "rate_limited_until", "auth_type",
+            "email", "oauth_scope", "oauth_provider_specific", "expires_at",
+            "access_token_encrypted", "refresh_token_encrypted", "current_proxy_id",
+            "created_at", "token_type", "quota_session_used", "quota_session_limit",
+            "quota_session_reset_at", "quota_weekly_used", "quota_weekly_limit",
+            "quota_weekly_reset_at", "quota_plan_name", "quota_last_fetched_at",
+            "quota_fetch_error", "quota_model_details",
+        ],
+    )?;
+
     let mut stmt = conn
         .prepare(
             "SELECT id, provider_id, api_key_encrypted, label, priority, \
@@ -74,6 +90,8 @@ pub(super) fn export_accounts(
             let refresh_token = decrypt_token_opt(master_key, refresh_token_encrypted);
             let oauth_specific = decrypt_oauth_specific(master_key, oauth_provider_specific);
 
+            let extra_fields = extra_by_id.remove(&id.to_string()).unwrap_or_default();
+
             Ok(BackupAccount {
                 id,
                 provider_id: ProviderId::new(provider_id_str),
@@ -91,6 +109,7 @@ pub(super) fn export_accounts(
                 access_token,
                 refresh_token,
                 current_proxy_id,
+                extra_fields,
             })
         })
         .map_err(map_db_error)?

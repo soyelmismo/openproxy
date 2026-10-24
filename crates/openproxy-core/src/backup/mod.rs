@@ -2,6 +2,7 @@
 
 pub mod crypto;
 pub mod export;
+pub mod introspection;
 pub mod restore;
 pub mod validate;
 
@@ -184,5 +185,95 @@ mod tests {
             restore_backup(&mut dst_conn, &target_master_key, &bundle, &opts, None).unwrap();
         assert!(report.success);
         assert_eq!(report.providers_restored, 1);
+    }
+
+    #[test]
+    fn test_automatic_backup_extra_columns_and_extra_tables() {
+        let master_key = MasterKey::generate().unwrap();
+        let src_conn = setup_test_db();
+
+        // Simulate a new migration adding an unknown column to providers
+        src_conn
+            .execute_batch("ALTER TABLE providers ADD COLUMN future_setting TEXT DEFAULT 'default_future';")
+            .unwrap();
+
+        // Simulate a new custom table not in core tables and not blacklisted
+        src_conn
+            .execute_batch(
+                "CREATE TABLE custom_plugin_config (
+                    plugin_id TEXT PRIMARY KEY,
+                    config_json TEXT NOT NULL
+                );
+                INSERT INTO custom_plugin_config VALUES ('my_plugin', '{\"enabled\": true}');",
+            )
+            .unwrap();
+
+        src_conn
+            .execute(
+                "INSERT INTO providers (id, name, base_url, auth_type, format, rate_limit_scope, future_setting) \
+                 VALUES ('test_prov_fut', 'Future Prov', 'https://api.test.com', 'bearer', 'openai', 'account', 'custom_value_42')",
+                [],
+            )
+            .unwrap();
+
+        let bundle = export_backup(&src_conn, &master_key, None).unwrap();
+        let payload = bundle.payload.as_ref().unwrap();
+
+        // 1. Verify future_setting was captured automatically in extra_fields
+        let prov = payload
+            .providers
+            .iter()
+            .find(|p| p.id.as_str() == "test_prov_fut")
+            .expect("provider present");
+        assert_eq!(
+            prov.extra_fields.get("future_setting"),
+            Some(&serde_json::Value::String("custom_value_42".into()))
+        );
+
+        // 2. Verify custom table was captured in extra_tables
+        assert!(payload.extra_tables.contains_key("custom_plugin_config"));
+
+        // 3. Restore into a destination DB that also has the schema
+        let mut dst_conn = setup_test_db();
+        dst_conn
+            .execute_batch(
+                "ALTER TABLE providers ADD COLUMN future_setting TEXT DEFAULT 'default_future';
+                 CREATE TABLE custom_plugin_config (
+                    plugin_id TEXT PRIMARY KEY,
+                    config_json TEXT NOT NULL
+                 );",
+            )
+            .unwrap();
+
+        let dst_master = MasterKey::generate().unwrap();
+        let report = restore_backup(
+            &mut dst_conn,
+            &dst_master,
+            &bundle,
+            &RestoreOptions::default(),
+            None,
+        )
+        .unwrap();
+        assert!(report.success);
+
+        // Verify extra column was restored
+        let restored_val: String = dst_conn
+            .query_row(
+                "SELECT future_setting FROM providers WHERE id = 'test_prov_fut'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(restored_val, "custom_value_42");
+
+        // Verify extra table was restored
+        let custom_cfg: String = dst_conn
+            .query_row(
+                "SELECT config_json FROM custom_plugin_config WHERE plugin_id = 'my_plugin'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(custom_cfg, "{\"enabled\": true}");
     }
 }

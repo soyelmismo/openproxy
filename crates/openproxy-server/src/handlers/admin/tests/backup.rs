@@ -261,6 +261,10 @@ async fn test_backup_restore_with_existing_satellite_tables_and_missing_proxy() 
                 notif_keyword_only: false,
                 proxy_rotation_mode: "global".into(),
                 direct_first: false,
+                stream_mode: "auto".into(),
+                prune_models: true,
+                prompt_cache_ttl: "auto".into(),
+                extra_fields: std::collections::BTreeMap::new(),
             }],
             accounts: vec![],
             models: vec![],
@@ -269,6 +273,7 @@ async fn test_backup_restore_with_existing_satellite_tables_and_missing_proxy() 
             proxy_sources: vec![],
             api_keys: vec![],
             app_config: vec![],
+            extra_tables: std::collections::BTreeMap::new(),
         }),
     };
 

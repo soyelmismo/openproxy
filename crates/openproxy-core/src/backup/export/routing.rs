@@ -8,6 +8,18 @@ use openproxy_types::{ProviderId, RateLimitScope, Result};
 use rusqlite::Connection;
 
 pub(super) fn export_combos(conn: &Connection) -> Result<Vec<BackupCombo>> {
+    let mut extra_by_id = crate::backup::introspection::export_extra_columns_by_pk(
+        conn,
+        "combos",
+        "id",
+        &[
+            "id", "name", "strategy", "race_size", "created_at", "context_window",
+            "priority_mode", "cooldown_mode", "cooldown_base_secs", "cooldown_max_secs",
+            "cooldown_factor", "lkgp_exploration_rate", "selection_window_secs",
+            "preventive_rate_limit", "decision_model", "decision_timeout_ms", "max_output_tokens",
+        ],
+    )?;
+
     let mut stmt = conn
         .prepare(
             "SELECT id, name, strategy, race_size, preventive_rate_limit, \
@@ -35,8 +47,11 @@ pub(super) fn export_combos(conn: &Connection) -> Result<Vec<BackupCombo>> {
                 .and_then(|s| CooldownMode::parse(s).ok())
                 .unwrap_or_default();
 
+            let id_val: i64 = row.get(0)?;
+            let extra_fields = extra_by_id.remove(&id_val.to_string()).unwrap_or_default();
+
             Ok(BackupCombo {
-                id: row.get(0)?,
+                id: id_val,
                 name: row.get(1)?,
                 strategy,
                 race_size: row.get(3)?,
@@ -52,6 +67,7 @@ pub(super) fn export_combos(conn: &Connection) -> Result<Vec<BackupCombo>> {
                 decision_model: row.get(13)?,
                 decision_timeout_ms: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
                 max_output_tokens: row.get(15)?,
+                extra_fields,
             })
         })
         .map_err(map_db_error)?
@@ -62,12 +78,25 @@ pub(super) fn export_combos(conn: &Connection) -> Result<Vec<BackupCombo>> {
 }
 
 pub(super) fn export_combo_targets(conn: &Connection) -> Result<Vec<BackupComboTarget>> {
+    let mut extra_by_id = crate::backup::introspection::export_extra_columns_by_pk(
+        conn,
+        "combo_targets",
+        "id",
+        &[
+            "id", "combo_id", "provider_id", "account_id", "model_row_id",
+            "sub_combo_id", "upstream_model_id", "priority_order", "weight",
+            "active", "cooldown_mode", "cooldown_base_secs", "cooldown_max_secs",
+            "cooldown_factor", "thinking_effort", "description", "selected_accounts",
+        ],
+    )?;
+
     let mut stmt = conn
         .prepare(
             "SELECT ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
              ct.sub_combo_id, ct.upstream_model_id, ct.priority_order, ct.weight, \
              ct.active, p.rate_limit_scope, ct.cooldown_mode, ct.cooldown_base_secs, \
-             ct.cooldown_max_secs, ct.cooldown_factor, ct.thinking_effort, ct.description \
+             ct.cooldown_max_secs, ct.cooldown_factor, ct.thinking_effort, ct.description, \
+             ct.selected_accounts \
              FROM combo_targets ct \
              LEFT JOIN providers p ON p.id = ct.provider_id \
              ORDER BY ct.combo_id, ct.priority_order",
@@ -85,8 +114,11 @@ pub(super) fn export_combo_targets(conn: &Connection) -> Result<Vec<BackupComboT
             let cd_str: Option<String> = row.get(11)?;
             let cooldown_mode = cd_str.as_deref().and_then(|s| CooldownMode::parse(s).ok());
 
+            let id_val: i64 = row.get(0)?;
+            let extra_fields = extra_by_id.remove(&id_val.to_string()).unwrap_or_default();
+
             Ok(BackupComboTarget {
-                id: row.get(0)?,
+                id: id_val,
                 combo_id: row.get(1)?,
                 provider_id: ProviderId::new(row.get::<_, String>(2)?),
                 account_id: row.get(3)?,
@@ -103,6 +135,8 @@ pub(super) fn export_combo_targets(conn: &Connection) -> Result<Vec<BackupComboT
                 cooldown_factor: row.get(14)?,
                 thinking_effort: row.get(15)?,
                 description: row.get(16)?,
+                selected_accounts: row.get(17)?,
+                extra_fields,
             })
         })
         .map_err(map_db_error)?

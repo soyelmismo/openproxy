@@ -70,14 +70,20 @@ pub fn restore_backup(
     .map_err(|e| map_db_error_ctx("clean tables for restore")(e))?;
 
     // Restore providers
+    let provider_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "providers")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO providers ( \
                 id, name, base_url, auth_type, format, extra_headers_json, \
                 auto_activate_keyword, active, use_proxies, current_proxy_id, \
                 proxy_rotation_errors, rate_limit_scope, notif_keyword_only, \
-                proxy_rotation_mode, direct_first \
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                proxy_rotation_mode, direct_first, stream_mode, prune_models, prompt_cache_ttl \
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         )
         .map_err(map_db_error)?;
 
@@ -101,8 +107,23 @@ pub fn restore_backup(
             p.notif_keyword_only as i64,
             p.proxy_rotation_mode,
             p.direct_first as i64,
+            p.stream_mode,
+            p.prune_models as i64,
+            p.prompt_cache_ttl,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore provider {}", p.id))(e))?;
+
+        if !p.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "providers",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(p.id.as_str()),
+                &p.extra_fields,
+                &provider_cols,
+            );
+        }
+
         providers_restored += 1;
     }
     drop(stmt);
@@ -116,6 +137,12 @@ pub fn restore_backup(
     .map_err(|e| map_db_error_ctx("seed virtual combo provider")(e))?;
 
     // Restore accounts with re-encryption using local MasterKey
+    let account_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "accounts")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO accounts ( \
@@ -173,11 +200,29 @@ pub fn restore_backup(
             safe_acc_proxy_id,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore account {}", a.id))(e))?;
+
+        if !a.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "accounts",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(a.id),
+                &a.extra_fields,
+                &account_cols,
+            );
+        }
+
         accounts_restored += 1;
     }
     drop(stmt);
 
     // Restore models
+    let model_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "models")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO models ( \
@@ -210,11 +255,29 @@ pub fn restore_backup(
             m.manually_disabled_at,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore model {}", m.model_id))(e))?;
+
+        if !m.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "models",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(m.id),
+                &m.extra_fields,
+                &model_cols,
+            );
+        }
+
         models_restored += 1;
     }
     drop(stmt);
 
     // Restore combos
+    let combo_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "combos")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO combos ( \
@@ -247,19 +310,38 @@ pub fn restore_backup(
             c.max_output_tokens,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore combo {}", c.name))(e))?;
+
+        if !c.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "combos",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(c.id),
+                &c.extra_fields,
+                &combo_cols,
+            );
+        }
+
         combos_restored += 1;
     }
     drop(stmt);
 
     // Restore combo targets
+    let target_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "combo_targets")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO combo_targets ( \
                 id, combo_id, provider_id, account_id, model_row_id, \
                 sub_combo_id, upstream_model_id, priority_order, weight, \
                 active, cooldown_mode, cooldown_base_secs, \
-                cooldown_max_secs, cooldown_factor, thinking_effort, description \
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                cooldown_max_secs, cooldown_factor, thinking_effort, description, \
+                selected_accounts \
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         )
         .map_err(map_db_error)?;
 
@@ -293,13 +375,32 @@ pub fn restore_backup(
             t.cooldown_factor,
             t.thinking_effort,
             t.description,
+            t.selected_accounts,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore combo target {}", t.id))(e))?;
+
+        if !t.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "combo_targets",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(t.id),
+                &t.extra_fields,
+                &target_cols,
+            );
+        }
+
         combo_targets_restored += 1;
     }
     drop(stmt);
 
     // Restore proxy sources
+    let proxy_source_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "proxy_sources")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO proxy_sources (id, name, url, priority, active, is_builtin) \
@@ -318,11 +419,29 @@ pub fn restore_backup(
             ps.is_builtin as i64,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore proxy source {}", ps.name))(e))?;
+
+        if !ps.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "proxy_sources",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(ps.id.as_str()),
+                &ps.extra_fields,
+                &proxy_source_cols,
+            );
+        }
+
         proxy_sources_restored += 1;
     }
     drop(stmt);
 
     // Restore API keys
+    let api_key_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "api_keys")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+
     let mut stmt = tx
         .prepare(
             "INSERT INTO api_keys ( \
@@ -352,6 +471,18 @@ pub fn restore_backup(
             k.blacklisted_models_json,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore api key {}", k.id))(e))?;
+
+        if !k.extra_fields.is_empty() {
+            let _ = crate::backup::introspection::restore_extra_columns(
+                &tx,
+                "api_keys",
+                "id",
+                &rusqlite::types::ToSqlOutput::from(k.id),
+                &k.extra_fields,
+                &api_key_cols,
+            );
+        }
+
         api_keys_restored += 1;
     }
     drop(stmt);
@@ -371,6 +502,9 @@ pub fn restore_backup(
         app_config_restored += 1;
     }
     drop(stmt);
+
+    // Restore extra unmapped tables (if any)
+    let _ = crate::backup::introspection::restore_extra_tables(&tx, &payload.extra_tables);
 
     // Verify foreign keys
     let mut fk_stmt = tx

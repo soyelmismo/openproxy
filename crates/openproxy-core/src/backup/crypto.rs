@@ -284,6 +284,7 @@ mod tests {
             proxy_sources: vec![],
             api_keys: vec![],
             app_config: vec![],
+            extra_tables: std::collections::BTreeMap::new(),
         };
 
         let bundle = encrypt_bundle_payload(&payload, "super-secret-key").unwrap();
@@ -319,6 +320,7 @@ mod tests {
             proxy_sources: vec![],
             api_keys: vec![],
             app_config: vec![],
+            extra_tables: std::collections::BTreeMap::new(),
         };
         let salt: [u8; SALT_LEN] = rand::random();
         let nonce_bytes: [u8; NONCE_LEN] = rand::random();

@@ -4,6 +4,7 @@ use crate::ids::{ModelId, ProviderId};
 use crate::message::TargetFormat;
 use crate::providers::{AuthType, ProviderFormat, RateLimitScope};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
 
@@ -84,6 +85,8 @@ pub struct BackupPayload {
     pub api_keys: Vec<BackupApiKey>,
     #[serde(default)]
     pub app_config: Vec<BackupAppConfig>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_tables: BTreeMap<String, Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -113,6 +116,22 @@ pub struct BackupProvider {
     pub proxy_rotation_mode: String,
     #[serde(default)]
     pub direct_first: bool,
+    #[serde(default = "default_stream_mode_str")]
+    pub stream_mode: String,
+    #[serde(default = "default_true")]
+    pub prune_models: bool,
+    #[serde(default = "default_prompt_cache_ttl_str")]
+    pub prompt_cache_ttl: String,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
+}
+
+fn default_stream_mode_str() -> String {
+    "auto".to_string()
+}
+
+fn default_prompt_cache_ttl_str() -> String {
+    "auto".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,6 +166,8 @@ pub struct BackupAccount {
     pub refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_proxy_id: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -179,6 +200,8 @@ pub struct BackupModel {
     pub output_modalities_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manually_disabled_at: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -212,6 +235,8 @@ pub struct BackupCombo {
     pub decision_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_timeout_ms: Option<u64>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -246,6 +271,10 @@ pub struct BackupComboTarget {
     pub thinking_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_accounts: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -259,6 +288,8 @@ pub struct BackupProxySource {
     pub active: bool,
     #[serde(default)]
     pub is_builtin: bool,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +318,8 @@ pub struct BackupApiKey {
     pub blacklisted_providers_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blacklisted_models_json: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

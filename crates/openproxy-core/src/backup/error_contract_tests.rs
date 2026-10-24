@@ -99,6 +99,10 @@ fn test_restore_duplicate_provider_preserves_downcast_and_rolls_back() {
         notif_keyword_only: false,
         proxy_rotation_mode: "global".into(),
         direct_first: false,
+        stream_mode: "auto".into(),
+        prune_models: true,
+        prompt_cache_ttl: "auto".into(),
+        extra_fields: std::collections::BTreeMap::new(),
     };
     let bundle = BackupBundle {
         version: BACKUP_FORMAT_VERSION,
