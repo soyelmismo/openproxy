@@ -36,8 +36,8 @@ import {
 } from "./index.js";
 
 export function getAccountDisplay(
-  accountId: string | number | null,
-  accountLabelDirect?: string | null
+  accountId: string | number | null | undefined,
+  accountLabelDirect: string | null | undefined
 ): { text: string; title?: string } {
   const direct = accountLabelDirect?.trim();
   if (direct) {
@@ -54,6 +54,26 @@ export function getAccountDisplay(
       };
     }
     return { text: String(accountId) };
+  }
+  return { text: "—" };
+}
+
+export function getComboDisplay(
+  comboId: string | number | null | undefined,
+  comboNameDirect: string | null | undefined
+): { text: string; title?: string } {
+  const direct = comboNameDirect?.trim();
+  const idStr = comboId != null && comboId !== "" && comboId !== "—" ? String(comboId) : null;
+  if (direct) {
+    return idStr ? { text: `${direct} (#${idStr})`, title: `Combo #${idStr}` } : { text: direct };
+  }
+  if (idStr) {
+    const match = (state.combos || []).find((c) => String(c.id) === idStr);
+    const name = match?.name?.trim();
+    if (name) {
+      return { text: `${name} (#${idStr})`, title: `Combo #${idStr}` };
+    }
+    return { text: idStr };
   }
   return { text: "—" };
 }
@@ -116,22 +136,8 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const apiKeyId: string | number | null = apiKeyIdRaw != null && (typeof apiKeyIdRaw === "string" || typeof apiKeyIdRaw === "number") ? apiKeyIdRaw : null;
   const comboNameDirect: string | null | undefined =
     (detail["combo_name"] as string | undefined) ?? (log.combo_name as string | undefined);
-  const comboNameFromState = combo != null && Array.isArray(state.combos)
-    ? state.combos.find((c) => String(c.id) === String(combo))?.name
-    : null;
-  const comboNameResolved = comboNameDirect || comboNameFromState;
-  if (combo != null && !comboNameResolved) {
-    void ensureCombosLoaded().then(() => {
-      // Re-render modal if open and combo found
-      const modal = document.getElementById("log-detail-modal");
-      if (modal) {
-        renderModal();
-      }
-    });
-  }
-  const comboText: string = combo != null
-    ? (comboNameResolved ? `${comboNameResolved} (#${combo})` : String(combo))
-    : (comboNameResolved || "—");
+  const comboDisplay = getComboDisplay(combo, comboNameDirect);
+  const comboText: string = comboDisplay.text;
   const endpointKind: string = (log.endpoint_kind || (detail["endpoint_kind"] as string) || (meta["endpoint_kind"] as string) || "chat").toLowerCase();
   const endpointPath: string = endpointKind === "audio"
     ? "/v1/audio/transcriptions"
@@ -344,6 +350,14 @@ export async function openLogDetail(
     void (api("/accounts") as Promise<typeof state.accounts>).then((accs) => {
       if (Array.isArray(accs) && isCurrentOpenLogDetailGeneration(gen)) {
         state.accounts = accs;
+        renderModal();
+      }
+    }).catch(() => {});
+  }
+
+  if (!state.combos || state.combos.length === 0) {
+    void ensureCombosLoaded().then((combos) => {
+      if (Array.isArray(combos) && isCurrentOpenLogDetailGeneration(gen)) {
         renderModal();
       }
     }).catch(() => {});

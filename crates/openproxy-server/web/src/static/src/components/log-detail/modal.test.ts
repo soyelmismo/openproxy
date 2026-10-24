@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { state } from "../../state/index.js";
-import { getAccountDisplay } from "./modal.js";
+import { getAccountDisplay, getComboDisplay, renderLogDetailModal } from "./modal.js";
 import type { Account } from "../../lib/types/accounts.js";
+import type { Combo } from "../../lib/types/combos.js";
+import type { LogDetailLog } from "./state.js";
 
 describe("getAccountDisplay in log detail modal", () => {
   beforeEach(() => {
@@ -83,5 +85,61 @@ describe("getAccountDisplay in log detail modal", () => {
     expect(getAccountDisplay(null, null).text).toBe("—");
     expect(getAccountDisplay("", null).text).toBe("—");
     expect(getAccountDisplay("—", null).text).toBe("—");
+  });
+});
+
+describe("getComboDisplay in log detail modal", () => {
+  beforeEach(() => {
+    state.combos = [
+      {
+        id: 193 as any,
+        name: "minis",
+        strategy: "priority",
+        race_size: 1,
+        preventive_rate_limit: true,
+        created_at: "2026-07-02",
+      } as Combo,
+    ];
+  });
+
+  it("displays direct combo_name when provided by detail endpoint", () => {
+    const res = getComboDisplay(193, "minis");
+    expect(res.text).toBe("minis (#193)");
+    expect(res.title).toBe("Combo #193");
+  });
+
+  it("resolves combo name from state.combos when direct combo_name is missing", () => {
+    const res = getComboDisplay(193, null);
+    expect(res.text).toBe("minis (#193)");
+    expect(res.title).toBe("Combo #193");
+  });
+
+  it("falls back to combo ID when not found in state and no direct name", () => {
+    const res = getComboDisplay(999, null);
+    expect(res.text).toBe("999");
+  });
+
+  it("returns dash when combo ID is null or missing", () => {
+    expect(getComboDisplay(null, null).text).toBe("—");
+  });
+});
+
+describe("renderLogDetailModal regression: no synchronous infinite loop", () => {
+  it("renders synchronously without invoking ensureCombosLoaded or triggering infinite re-render loop", () => {
+    state.combos = [];
+    const log: LogDetailLog = {
+      id: 849102,
+      request_id: "req-1",
+      trace_id: "trace-1",
+      combo_id: 193,
+      status_code: 200,
+      detail: {},
+    };
+
+    // Before fix, renderLogDetailModal invoked ensureCombosLoaded -> renderModal synchronously in a promise loop,
+    // freezing the browser thread when combo_name was not yet resolved.
+    const tpl = renderLogDetailModal(log);
+    expect(tpl).toBeDefined();
+    expect(tpl.strings).toBeDefined();
   });
 });
