@@ -273,11 +273,15 @@ export async function mountLogs(): Promise<(() => void) | void> {
   }
   setMessageHandler(handleLogsMessage); connectLogsWebSocket();
   const onClockTick = () => {
+    // Only re-render if there are active in-flight rows that need their timer ticked
     if (liveLogsStore.hasActiveInflightRows()) {
       requestUpdate();
     }
   };
   clockStore.subscribe(onClockTick);
+
+  // E2E test helper: tests can trigger a view update after injecting rows directly into liveLogsStore
+  (window as unknown as { __openproxyRequestUpdate?: () => void }).__openproxyRequestUpdate = requestUpdate;
 
   const hash = location.hash || ""; const qIdx = hash.indexOf("?");
   if (qIdx >= 0) {

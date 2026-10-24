@@ -86,6 +86,9 @@ async function openFirstLogRow(page: Page): Promise<string | null> {
         response_body_json: null,
         error_message: null
       });
+      if (typeof w.__openproxyRequestUpdate === 'function') {
+        w.__openproxyRequestUpdate();
+      }
     }
   });
 

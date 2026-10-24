@@ -429,7 +429,7 @@ class LiveLogsStore {
     }
   }
 
-  private applyUsageRow(row: RecentUsageRow) {
+  public applyUsageRow(row: RecentUsageRow) {
     this.rowsById.set(row.id, row);
 
     const attemptKey = row.trace_id || `${row.request_id}:unknown`;
