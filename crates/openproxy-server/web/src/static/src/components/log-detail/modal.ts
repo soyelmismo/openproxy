@@ -8,6 +8,7 @@
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../../state/index.js";
 import { api } from "../../lib/api.js";
+import { ensureCombosLoaded } from "../../state/models-sync.js";
 import { ensureModalRoot } from "../../lib/ui-utils.js";
 import { icons, endpointIcon } from "../../lib/icons.js";
 import { liveLogsStore } from "../../state/live-logs-store.js";
@@ -113,12 +114,24 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const createdAt: string = log.created_at || log.timestamp || "—";
   const apiKeyIdRaw: unknown = log.api_key_id ?? meta["api_key_id"];
   const apiKeyId: string | number | null = apiKeyIdRaw != null && (typeof apiKeyIdRaw === "string" || typeof apiKeyIdRaw === "number") ? apiKeyIdRaw : null;
+  const comboNameDirect: string | null | undefined =
+    (detail["combo_name"] as string | undefined) ?? (log.combo_name as string | undefined);
   const comboNameFromState = combo != null && Array.isArray(state.combos)
     ? state.combos.find((c) => String(c.id) === String(combo))?.name
     : null;
+  const comboNameResolved = comboNameDirect || comboNameFromState;
+  if (combo != null && !comboNameResolved) {
+    void ensureCombosLoaded().then(() => {
+      // Re-render modal if open and combo found
+      const modal = document.getElementById("log-detail-modal");
+      if (modal) {
+        renderModal();
+      }
+    });
+  }
   const comboText: string = combo != null
-    ? (comboNameFromState ? `${comboNameFromState} (#${combo})` : String(combo))
-    : "—";
+    ? (comboNameResolved ? `${comboNameResolved} (#${combo})` : String(combo))
+    : (comboNameResolved || "—");
   const endpointKind: string = (log.endpoint_kind || (detail["endpoint_kind"] as string) || (meta["endpoint_kind"] as string) || "chat").toLowerCase();
   const endpointPath: string = endpointKind === "audio"
     ? "/v1/audio/transcriptions"

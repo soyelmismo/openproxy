@@ -53,6 +53,7 @@ export interface LogDetailLog {
   account_id?: string | number | null;
   account_label?: string | null;
   combo_id?: string | number | null;
+  combo_name?: string | null;
   api_key_id?: string | number | null;
   user_agent?: string | null;
   latency_ms?: number | null;

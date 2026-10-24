@@ -36,6 +36,7 @@ pub struct UsageDetailRow {
     pub account_id: Option<AccountId>,
     pub account_label: Option<String>,
     pub combo_id: Option<ComboId>,
+    pub combo_name: Option<String>,
     pub combo_target_id: Option<ComboTargetId>,
     pub model_row_id: Option<ModelRowId>,
     pub upstream_model_id: String,
@@ -87,6 +88,8 @@ struct UsageDetailRowSerde {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub account_label: Option<String>,
     pub combo_id: Option<ComboId>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub combo_name: Option<String>,
     pub combo_target_id: Option<ComboTargetId>,
     pub model_row_id: Option<ModelRowId>,
     pub upstream_model_id: String,
@@ -135,6 +138,7 @@ impl Serialize for UsageDetailRow {
             account_id: self.account_id,
             account_label: self.account_label.clone(),
             combo_id: self.combo_id,
+            combo_name: self.combo_name.clone(),
             combo_target_id: self.combo_target_id,
             model_row_id: self.model_row_id,
             upstream_model_id: self.upstream_model_id.clone(),
@@ -209,6 +213,7 @@ impl<'de> Deserialize<'de> for UsageDetailRow {
             account_id: shadow.account_id,
             account_label: shadow.account_label,
             combo_id: shadow.combo_id,
+            combo_name: shadow.combo_name,
             combo_target_id: shadow.combo_target_id,
             model_row_id: shadow.model_row_id,
             upstream_model_id: shadow.upstream_model_id,
@@ -298,6 +303,8 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
     let pii_redacted: Option<String> = row.get(col_idx).unwrap_or(None);
     col_idx += 1;
     let account_label: Option<String> = row.get(col_idx).unwrap_or(None);
+    col_idx += 1;
+    let combo_name: Option<String> = row.get(col_idx).unwrap_or(None);
 
     if !(0..=i64::from(u16::MAX)).contains(&status_code) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -351,6 +358,7 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
         account_id: account_id.map(AccountId),
         account_label,
         combo_id: combo_id.map(ComboId),
+        combo_name,
         combo_target_id: combo_target_id.map(ComboTargetId),
         model_row_id: model_row_id.map(ModelRowId),
         upstream_model_id,
@@ -393,9 +401,10 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     u.response_headers, u.error_message, u.client_response, \
                     u.prompt_tokens_estimated, u.completion_tokens_estimated, \
                     u.endpoint_kind, u.proxy_url, u.proxy_status, u.is_proxy_rotated, \
-                    u.pii_redacted, a.label \
+                    u.pii_redacted, a.label, c.name \
              FROM usage u \
              LEFT JOIN accounts a ON u.account_id = a.id \
+             LEFT JOIN combos c ON u.combo_id = c.id \
              WHERE u.id = ?1",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -421,9 +430,10 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     u.response_headers, u.error_message, u.client_response, \
                     u.prompt_tokens_estimated, u.completion_tokens_estimated, \
                     u.endpoint_kind, u.proxy_url, u.proxy_status, u.is_proxy_rotated, \
-                    u.pii_redacted, a.label \
+                    u.pii_redacted, a.label, c.name \
              FROM usage u \
              LEFT JOIN accounts a ON u.account_id = a.id \
+             LEFT JOIN combos c ON u.combo_id = c.id \
              WHERE u.trace_id = ?1 \
              ORDER BY u.client_response DESC, u.id DESC \
              LIMIT 1",

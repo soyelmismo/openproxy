@@ -163,6 +163,10 @@ fn test_detail_by_id_includes_account_label() {
             id INTEGER PRIMARY KEY,
             label TEXT
         );
+        CREATE TABLE combos (
+            id INTEGER PRIMARY KEY,
+            name TEXT
+        );
         CREATE TABLE usage (
             id INTEGER PRIMARY KEY,
             request_id TEXT NOT NULL,
