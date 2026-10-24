@@ -665,6 +665,27 @@ function renderComboDetail(): TemplateResult {
     </section>`;
 }
 
+export async function refreshComboDetail(): Promise<void> {
+  if (!detailComboId) return;
+  try {
+    const [combo, targets] = await Promise.all([
+      api("/combos/" + detailComboId).catch(() => null) as Promise<Combo | null>,
+      api("/combos/" + detailComboId + "/targets") as Promise<ComboTargetWithModel[]>,
+    ]);
+    detailCombo = combo;
+    detailTargets = targets || [];
+    clearSubComboCache();
+    for (const tgt of detailTargets) {
+      if (tgt.sub_combo_id != null) {
+        void loadSubComboData(tgt.sub_combo_id, () => requestUpdate(), true);
+      }
+    }
+    requestUpdate();
+  } catch (err: unknown) {
+    console.error("[openproxy] refreshComboDetail failed:", err);
+  }
+}
+
 export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
   if (opts.detailId) {
     detailComboId = opts.detailId; detailCombo = null; detailTargets = [];

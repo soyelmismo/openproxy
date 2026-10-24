@@ -118,6 +118,8 @@ export async function deleteTarget(comboId: number, targetId: number): Promise<v
   try {
     await api(`/combos/${comboId}/targets/${targetId}`, { method: "DELETE" });
     showToast("Target deleted.", "success");
+    const { refreshComboDetail } = await import("../../views/combos.js");
+    await refreshComboDetail();
     const { forceRerenderCurrentView } = await import("../../state/router.js");
     forceRerenderCurrentView();
   } catch (e: unknown) {

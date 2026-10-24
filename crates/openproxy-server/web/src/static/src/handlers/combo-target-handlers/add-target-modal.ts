@@ -7,7 +7,6 @@ import { state } from "../../state/index.js";
 import { api } from "../../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
 import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel, Provider } from "../../lib/types/api.js";
-import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../../components/toast.js";
 import { ensureModalRoot, showApiError } from "../../lib/ui-utils.js";
 import { invalidateSubCombo } from "../../views/combos/subcombo-group.js";
@@ -19,6 +18,16 @@ type ModelWithFallbacks = Model & { id?: string; owned_by?: string };
 // The combo's current target `model_row_id` values; `buildGlobalSearchGroups` skips any
 // model whose `row_id` is in this set.
 let existingTargetModelRowIds: Set<number> = new Set();
+let nextTargetPriority: number = 1;
+
+export function computeNextTargetPriority(targets: Array<{ priority_order?: number }>): number {
+  if (!targets || targets.length === 0) return 1;
+  const maxPriority = targets.reduce((max, t) => {
+    const p = typeof t.priority_order === "number" && Number.isFinite(t.priority_order) ? t.priority_order : 0;
+    return Math.max(max, p);
+  }, 0);
+  return maxPriority + 1;
+}
 
 // ── Templates ──────────────────────────────────────────────────────────────
 
@@ -50,6 +59,7 @@ function addTargetTemplate(
   validSubCombos: ComboSummary[],
   totalOtherCombos: number,
   wrapper: HTMLElement,
+  initialPriority: number = nextTargetPriority,
 ): TemplateResult {
   return html`
     <div class="modal-bg" id="add-target-modal"
@@ -101,7 +111,7 @@ function addTargetTemplate(
               </div>
               <div class="field">
                 <label for="target-priority">Priority</label>
-                <input id="target-priority" name="priority_order" type="number" value="100" required>
+                <input id="target-priority" name="priority_order" type="number" value=${String(initialPriority)} required>
               </div>
               <div class="field">
                 <label for="target-sub-combo-desc">Routing Criteria / Description</label>
@@ -128,7 +138,7 @@ function accountsForProviderTemplate(providerId: string): TemplateResult {
   `;
 }
 
-function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult {
+function modelCheckboxListTemplate(models: ModelWithFallbacks[], initialPriority: number = nextTargetPriority): TemplateResult {
   if (models.length === 0) {
     return html`<p class="model-checkbox-empty">No active models for this provider</p>`;
   }
@@ -169,7 +179,7 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
                  name="target_priority_${rowId}"
                  data-model-row=${String(rowId)}
                  type="number"
-                 value="100"
+                 value=${String(initialPriority)}
                  min="1"
                  step="1"
                  title="Priority (lower = preferred)">
@@ -187,7 +197,7 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[]): TemplateResult
 
 // ── Global model search ────────────────────────────────────────────────────
 
-function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): TemplateResult {
+function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>, initialPriority: number = nextTargetPriority): TemplateResult {
   if (groups.size === 0) {
     return html`<p class="model-checkbox-empty">No active models match your search.</p>`;
   }
@@ -197,7 +207,7 @@ function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>): T
     return html`
       <div class="model-checkbox-group">
         <div class="model-checkbox-group-header">${p}</div>
-        ${modelCheckboxListTemplate(models)}
+        ${modelCheckboxListTemplate(models, initialPriority)}
       </div>
     `;
   })}`;
@@ -332,19 +342,24 @@ export async function showAddTarget(comboId: number): Promise<void> {
     state.combos = allCombosResp;
   }
   const totalOtherCombos = (allCombosResp || []).filter((c) => c && c.id !== comboId).length;
+  let existingTargets: ComboTargetWithModel[] = [];
   try {
     const existing: unknown = await api(`/combos/${comboId}/targets`);
+    existingTargets = Array.isArray(existing) ? (existing as ComboTargetWithModel[]) : [];
     existingTargetModelRowIds = new Set(
-      (Array.isArray(existing) ? (existing as ComboTargetWithModel[]) : [])
+      existingTargets
         .map((t) => t.model_row_id)
         .filter((id): id is number => typeof id === "number"),
     );
   } catch {
     existingTargetModelRowIds = new Set();
+    existingTargets = [];
   }
+  nextTargetPriority = computeNextTargetPriority(existingTargets);
+
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
-  render(addTargetTemplate(comboId, validSubCombos, totalOtherCombos, wrapper), wrapper);
+  render(addTargetTemplate(comboId, validSubCombos, totalOtherCombos, wrapper, nextTargetPriority), wrapper);
   renderInitialModelList();
 }
 
@@ -407,9 +422,19 @@ export function onModelCheckboxChange(): void {
   const allCheckboxes = document.querySelectorAll<HTMLInputElement>(
     "#target-model-list input[name='model_row_ids']"
   );
+  let checkedOrder = 0;
   allCheckboxes.forEach((cb) => {
     const item = cb.closest(".model-checkbox-item") as HTMLElement | null;
-    if (item) updateModelControlsVisibility(cb.checked, item);
+    if (item) {
+      updateModelControlsVisibility(cb.checked, item);
+      if (cb.checked) {
+        const priorityInput = item.querySelector(".target-per-model-priority") as HTMLInputElement | null;
+        if (priorityInput && (!priorityInput.value || priorityInput.value === "100" || priorityInput.value === String(nextTargetPriority))) {
+          priorityInput.value = String(nextTargetPriority + checkedOrder);
+        }
+        checkedOrder++;
+      }
+    }
   });
 }
 
@@ -417,7 +442,16 @@ export function selectAllModelsInModal(): void {
   const checkboxes = document.querySelectorAll<HTMLInputElement>(
     "#target-model-list input[name='model_row_ids']"
   );
-  checkboxes.forEach((cb) => { cb.checked = true; });
+  let checkedIndex = 0;
+  checkboxes.forEach((cb) => {
+    cb.checked = true;
+    const item = cb.closest(".model-checkbox-item") as HTMLElement | null;
+    const priorityInput = item?.querySelector(".target-per-model-priority") as HTMLInputElement | null;
+    if (priorityInput) {
+      priorityInput.value = String(nextTargetPriority + checkedIndex);
+    }
+    checkedIndex++;
+  });
   onModelCheckboxChange();
 }
 
@@ -473,7 +507,10 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
       await api(`/combos/${comboId}/targets`, { method: "POST", body: JSON.stringify(body) });
       invalidateSubCombo(comboId);
       if (wrapper) wrapper.remove(); else closeAddTarget();
-      requestUpdate();
+      const { refreshComboDetail } = await import("../../views/combos.js");
+      await refreshComboDetail();
+      const { forceRerenderCurrentView } = await import("../../state/router.js");
+      forceRerenderCurrentView();
     } catch (err: unknown) {
       showApiError(err, "Error");
     }
@@ -510,7 +547,7 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
     const descInput = item?.querySelector(".target-per-model-description") as HTMLInputElement | null;
     const accountIdRaw = accountSel && accountSel.value ? parseInt(accountSel.value, 10) : NaN;
     const accountId: number | null = Number.isNaN(accountIdRaw) ? null : accountIdRaw;
-    const priorityOrder = priorityInput ? (parseInt(priorityInput.value, 10) || 100) : 100;
+    const priorityOrder = priorityInput ? (parseInt(priorityInput.value, 10) || nextTargetPriority + i) : (nextTargetPriority + i);
     const description = descInput && descInput.value.trim() ? descInput.value.trim() : null;
     const providerForModel = rowIdToProvider.get(modelRowId) ?? "";
     if (!providerForModel) {
@@ -546,6 +583,8 @@ export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement
 
   if (added > 0 && comboId) {
     invalidateSubCombo(comboId);
+    const { refreshComboDetail } = await import("../../views/combos.js");
+    await refreshComboDetail();
     const { forceRerenderCurrentView } = await import("../../state/router.js");
     forceRerenderCurrentView();
   }

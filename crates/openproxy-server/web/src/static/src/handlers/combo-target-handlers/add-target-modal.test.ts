@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render } from "lit-html";
 import {
   buildSubComboTargetBodyFromForm,
+  computeNextTargetPriority,
   modelMatchesSearch,
   buildGlobalSearchGroups,
   subComboOptionsTemplate,
@@ -35,6 +36,20 @@ function makeSubComboForm(fields: {
   input("priority_order", fields.priorityOrder ?? "100");
   return form;
 }
+
+describe("computeNextTargetPriority", () => {
+  it("returns 1 when target list is empty", () => {
+    expect(computeNextTargetPriority([])).toBe(1);
+  });
+
+  it("returns max priority + 1 for existing targets", () => {
+    expect(computeNextTargetPriority([{ priority_order: 1 }, { priority_order: 5 }])).toBe(6);
+  });
+
+  it("handles targets without priority_order gracefully", () => {
+    expect(computeNextTargetPriority([{}, { priority_order: 3 }])).toBe(4);
+  });
+});
 
 describe("buildSubComboTargetBodyFromForm", () => {
   beforeEach(() => {
