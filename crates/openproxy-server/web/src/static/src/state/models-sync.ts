@@ -3,16 +3,35 @@
 
 import { subscribeWs } from "./ws-bus.js";
 import { state } from "./index.js";
+import type { Combo } from "../lib/types/combos.js";
 import { api } from "./api.js";
 import { requestUpdate } from "./reactive.js";
 import { showToast } from "../components/toast.js";
 import { detailProviderId } from "../views/providers/shared.js";
+
+export async function ensureCombosLoaded(): Promise<Combo[]> {
+  if (Array.isArray(state.combos) && state.combos.length > 0) {
+    return state.combos;
+  }
+  try {
+    const list = (await api("/combos")) as Combo[];
+    if (Array.isArray(list)) {
+      state.combos = list;
+    }
+    return state.combos;
+  } catch {
+    return state.combos || [];
+  }
+}
 
 let initialized = false;
 
 export function initModelsSync(): void {
   if (initialized) return;
   initialized = true;
+
+  // Priming fetch of combos and providers so modals and log rows have names immediately
+  void ensureCombosLoaded();
 
   subscribeWs("models_refreshed", async (msg) => {
     const data = msg.data as
@@ -39,9 +58,15 @@ export function initModelsSync(): void {
         )) as typeof state.models;
         state.modelsComplete = false;
         requestUpdate();
+        let newSuffix = "";
+        if (data.new_model_ids && data.new_model_ids.length > 0) {
+          newSuffix = data.new_model_ids.length <= 3
+            ? ` New: ${data.new_model_ids.join(", ")}.`
+            : ` New: ${data.new_model_ids.slice(0, 3).join(", ")} (+${data.new_model_ids.length - 3} more).`;
+        }
         if (data.models_refreshed > 0) {
           showToast(
-            `Refreshed ${data.models_refreshed} model${data.models_refreshed === 1 ? "" : "s"} for ${data.provider_id}`,
+            `Refreshed ${data.models_refreshed} model${data.models_refreshed === 1 ? "" : "s"} for ${data.provider_id}.${newSuffix}`,
             "success"
           );
         }

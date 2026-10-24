@@ -208,19 +208,9 @@ async function onRefreshProvider(
       result && typeof result.models_refreshed === 'number'
         ? result.models_refreshed
         : 0;
-    const newIds: string[] =
-      result && Array.isArray(result.new_model_ids) ? result.new_model_ids : [];
-    const summary: string =
-      n === 0
-        ? `Nothing to refresh for ${providerId}.`
-        : `Refreshed ${n} models for ${providerId}.`;
-    const newSuffix: string =
-      newIds.length === 0
-        ? ''
-        : newIds.length <= 3
-          ? ` New: ${newIds.join(', ')}.`
-          : ` New: ${newIds.slice(0, 3).join(', ')} (+${newIds.length - 3} more).`;
-    showToast(summary + newSuffix, 'success');
+    if (n === 0) {
+      showToast(`Nothing to refresh for ${providerId}.`, 'info');
+    }
     state.providers = (await api('/providers')) as typeof state.providers;
     state.models = (await api(
       '/models?provider_id=' + encodeURIComponent(providerId),
