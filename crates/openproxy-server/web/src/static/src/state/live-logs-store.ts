@@ -653,6 +653,18 @@ class LiveLogsStore {
     return arr;
   }
 
+  public hasActiveInflightRows(): boolean {
+    const nowMs = Date.now() - this.clockOffsetMs;
+    for (const a of this.attemptsByKey.values()) {
+      if (a.terminal) continue;
+      if (a.updatedAtMs > 1_000_000_000_000 && (nowMs - a.updatedAtMs > 300_000)) {
+        continue;
+      }
+      return true;
+    }
+    return false;
+  }
+
   public selectFinishedRows(): AttemptState[] {
     const arr: AttemptState[] = [];
     for (const a of this.attemptsByKey.values()) {

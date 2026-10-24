@@ -122,6 +122,36 @@ describe("liveLogsStore detail management", () => {
     expect(liveLogsStore.attemptsByKey.has("tr-1") || liveLogsStore.attemptsByKey.has("tr-2")).toBe(false);
     expect(liveLogsStore.attemptsByKey.has("tr-3")).toBe(true);
   });
+
+  it("reports active inflight rows correctly via hasActiveInflightRows", () => {
+    liveLogsStore.clearForTest();
+    expect(liveLogsStore.hasActiveInflightRows()).toBe(false);
+
+    dispatchAttemptEvent(1, makeEvent({
+      attempt_key: "tr-active",
+      request_id: "req-active",
+      trace_id: "tr-active",
+      stage: "connecting",
+      stage_seq: 1,
+      stage_rank: 1,
+      started_at: 1000,
+      event_time: 1000,
+      terminal: false,
+    }));
+
+    expect(liveLogsStore.hasActiveInflightRows()).toBe(true);
+
+    dispatchUsageRow(2, makeRow({
+      id: 99,
+      request_id: "req-active",
+      trace_id: "tr-active",
+      status_code: 200,
+      total_ms: 120,
+      created_at: "2026-10-23T00:00:00Z",
+    }));
+
+    expect(liveLogsStore.hasActiveInflightRows()).toBe(false);
+  });
 });
 
 describe("liveLogsStore terminality invariants", () => {

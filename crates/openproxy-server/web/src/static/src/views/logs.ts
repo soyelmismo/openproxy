@@ -271,7 +271,13 @@ export async function mountLogs(): Promise<(() => void) | void> {
       requestUpdate();
     }).catch(() => { /* non-fatal */ });
   }
-  setMessageHandler(handleLogsMessage); connectLogsWebSocket(); clockStore.subscribe(requestUpdate);
+  setMessageHandler(handleLogsMessage); connectLogsWebSocket();
+  const onClockTick = () => {
+    if (liveLogsStore.hasActiveInflightRows()) {
+      requestUpdate();
+    }
+  };
+  clockStore.subscribe(onClockTick);
 
   const hash = location.hash || ""; const qIdx = hash.indexOf("?");
   if (qIdx >= 0) {
@@ -280,7 +286,7 @@ export async function mountLogs(): Promise<(() => void) | void> {
     if (traceId || requestId) void openLogDetail("", requestId, traceId);
   }
 
-  return () => { disconnectLogsWebSocket(); clockStore.unsubscribe(requestUpdate); cleanupReactive(); };
+  return () => { disconnectLogsWebSocket(); clockStore.unsubscribe(onClockTick); cleanupReactive(); };
 }
 
 setMessageHandler(handleLogsMessage);

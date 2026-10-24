@@ -408,10 +408,13 @@ function renderModal() {
   render(renderLogDetailModal(logObj as LogDetailLog), wrapper as HTMLElement);
 }
 
-// Re-render on clock tick so live latency updates
+// Re-render on clock tick so live latency updates (only if attempt is in-flight)
 clockStore.subscribe(() => {
   if (state.logs.selectedIdentity) {
-    renderModal();
+    const attempt = liveLogsStore.selectDetail(state.logs.selectedIdentity);
+    if (attempt && !attempt.terminal) {
+      renderModal();
+    }
   }
 });
 
