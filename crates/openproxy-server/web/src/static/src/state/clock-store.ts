@@ -1,4 +1,4 @@
-// 1000ms clock tick feeding relative timestamps. Pauses while the tab is hidden
+// 250ms clock tick feeding relative timestamps. Pauses while the tab is hidden
 // and runs once immediately on resume, so a background tab does not re-render
 // elapsed-time labels.
 
@@ -7,7 +7,7 @@ import {
   type VisibilityAwareHandle,
 } from "../lib/visibility-aware-interval.js";
 
-const CLOCK_TICK_MS = 1000;
+const CLOCK_TICK_MS = 250;
 
 class ClockStore {
   public nowMs: number = Date.now();
