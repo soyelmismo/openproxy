@@ -95,6 +95,8 @@ test('Columns toggle: show/hide + localStorage persistence', async ({ page }: { 
     await page.locator(`.columns-menu input[data-arg1="${key}"]`).click();
   }
   await page.locator('.columns-menu input[data-arg1="time"]').click();
+  // Ensure the DOM reflects that unchecking the last remaining column is prevented
+  await page.waitForTimeout(100);
   const storedMin = await page.evaluate((k: string) => JSON.parse(localStorage.getItem(k) || '[]'), STORAGE_KEY);
   expect(storedMin).toEqual(['time']);
   await expect(page.locator('.columns-menu input[data-arg1="time"]')).toBeChecked();

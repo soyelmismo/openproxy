@@ -246,7 +246,16 @@ export function toggleColumnsMenu(): void { columnsMenuOpen = !columnsMenuOpen; 
 export function toggleColumn(key: string): void {
   if (!state.logs.visibleColumns) state.logs.visibleColumns = new Set(LOG_COLUMNS.map((c) => c.key));
   const set = state.logs.visibleColumns;
-  if (set.has(key)) { if (set.size === 1) return; set.delete(key); } else set.add(key);
+  if (set.has(key)) {
+    if (set.size === 1) {
+      // Re-render so the DOM checkbox reverts its checked state back to true
+      requestUpdate();
+      return;
+    }
+    set.delete(key);
+  } else {
+    set.add(key);
+  }
   saveVisibleColumns(); requestUpdate();
 }
 
