@@ -141,14 +141,15 @@ pub fn restore_extra_columns(
             continue;
         }
 
-        let update_sql = format!(
-            "UPDATE \"{}\" SET \"{}\" = ?1 WHERE \"{}\" = ?2",
-            table_name, col_name, pk_col
-        );
+        let update_sql =
+            format!("UPDATE \"{table_name}\" SET \"{col_name}\" = ?1 WHERE \"{pk_col}\" = ?2");
 
         match json_val {
             serde_json::Value::Null => {
-                let _ = tx.execute(&update_sql, rusqlite::params![rusqlite::types::Null, pk_val]);
+                let _ = tx.execute(
+                    &update_sql,
+                    rusqlite::params![rusqlite::types::Null, pk_val],
+                );
             }
             serde_json::Value::Bool(b) => {
                 let _ = tx.execute(&update_sql, rusqlite::params![*b as i64, pk_val]);
@@ -186,9 +187,8 @@ pub fn restore_extra_tables(
         let col_set: HashSet<String> = cols.into_iter().collect();
 
         for row in rows {
-            let obj = match row.as_object() {
-                Some(o) => o,
-                None => continue,
+            let Some(obj) = row.as_object() else {
+                continue;
             };
 
             let matching_cols: Vec<String> = obj
@@ -201,11 +201,16 @@ pub fn restore_extra_tables(
                 continue;
             }
 
-            let placeholders: Vec<String> = (1..=matching_cols.len()).map(|i| format!("?{i}")).collect();
+            let placeholders: Vec<String> =
+                (1..=matching_cols.len()).map(|i| format!("?{i}")).collect();
             let insert_sql = format!(
                 "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
                 table_name,
-                matching_cols.iter().map(|c| format!("\"{c}\"")).collect::<Vec<_>>().join(", "),
+                matching_cols
+                    .iter()
+                    .map(|c| format!("\"{c}\""))
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 placeholders.join(", ")
             );
 
@@ -242,9 +247,7 @@ pub fn restore_extra_tables(
 }
 
 /// Export any table in the database that is not in `TABLE_BLACKLIST` and not in `CORE_TABLES`.
-pub fn export_extra_tables(
-    conn: &Connection,
-) -> Result<BTreeMap<String, Vec<serde_json::Value>>> {
+pub fn export_extra_tables(conn: &Connection) -> Result<BTreeMap<String, Vec<serde_json::Value>>> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .map_err(map_db_error)?;

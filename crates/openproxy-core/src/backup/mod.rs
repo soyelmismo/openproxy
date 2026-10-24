@@ -194,7 +194,9 @@ mod tests {
 
         // Simulate a new migration adding an unknown column to providers
         src_conn
-            .execute_batch("ALTER TABLE providers ADD COLUMN future_setting TEXT DEFAULT 'default_future';")
+            .execute_batch(
+                "ALTER TABLE providers ADD COLUMN future_setting TEXT DEFAULT 'default_future';",
+            )
             .unwrap();
 
         // Simulate a new custom table not in core tables and not blacklisted

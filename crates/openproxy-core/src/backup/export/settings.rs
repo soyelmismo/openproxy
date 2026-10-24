@@ -10,7 +10,16 @@ pub(super) fn export_proxy_sources(conn: &Connection) -> Result<Vec<BackupProxyS
         conn,
         "proxy_sources",
         "id",
-        &["id", "name", "url", "priority", "active", "is_builtin", "created_at", "updated_at"],
+        &[
+            "id",
+            "name",
+            "url",
+            "priority",
+            "active",
+            "is_builtin",
+            "created_at",
+            "updated_at",
+        ],
     )?;
 
     let mut stmt = conn
@@ -48,10 +57,21 @@ pub(super) fn export_api_keys(conn: &Connection) -> Result<Vec<BackupApiKey>> {
         "api_keys",
         "id",
         &[
-            "id", "key_hash", "key_prefix", "label", "scopes_json",
-            "allowed_models_json", "allowed_combos_json", "is_active", "revoked_at",
-            "expires_at", "created_by", "blacklisted_providers_json",
-            "blacklisted_models_json", "created_at", "last_used_at",
+            "id",
+            "key_hash",
+            "key_prefix",
+            "label",
+            "scopes_json",
+            "allowed_models_json",
+            "allowed_combos_json",
+            "is_active",
+            "revoked_at",
+            "expires_at",
+            "created_by",
+            "blacklisted_providers_json",
+            "blacklisted_models_json",
+            "created_at",
+            "last_used_at",
         ],
     )?;
 
