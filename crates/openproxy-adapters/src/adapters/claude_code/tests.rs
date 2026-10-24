@@ -872,6 +872,11 @@ fn test_claude_code_finalize_drops_fallback_betas_after_strip() {
 
 #[test]
 fn test_claude_code_enum_trait_wrap_and_finalize_parity() {
+    let _guard = crate::spoofer::claude_code::CLAUDE_CODE_TEST_LOCK
+        .lock()
+        .unwrap();
+    crate::spoofer::claude_code::reset_dynamic_claude_code_overrides();
+
     let model = ModelId::new("claude-opus-5-5");
     let resolved = resolved_for(model.as_str());
     let adapter = crate::adapters::ProviderAdapterEnum::from_provider_id("claude-code")
