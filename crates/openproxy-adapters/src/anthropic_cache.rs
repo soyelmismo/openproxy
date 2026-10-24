@@ -371,6 +371,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_count_cache_controls() {
+        let payload = json!({
+            "tools": [
+                {"name": "t1", "cache_control": {"type": "ephemeral"}},
+                {"name": "t2"}
+            ],
+            "system": [
+                {"type": "text", "text": "s1", "cache_control": {"type": "ephemeral"}}
+            ],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "u1", "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": "u2"}
+                    ]
+                }
+            ]
+        });
+        assert_eq!(count_cache_controls(&payload), 3);
+    }
+
+    #[test]
     fn test_is_valid_cache_control() {
         assert!(is_valid_cache_control(&json!({"type": "ephemeral"})));
         assert!(!is_valid_cache_control(&json!({"type": "persistent"})));
