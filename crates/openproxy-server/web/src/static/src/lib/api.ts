@@ -12,6 +12,7 @@
 
 import { state } from "../state/index.js";
 import { getToken, clearToken } from "../state/auth.js";
+import { triggerServerReconnect } from "../state/server-reconnect.js";
 import type { DebugLogsResponse } from "./types/api.js";
 import type { FormatsMetadata } from "./types/common.js";
 import { FALLBACK_TARGET_FORMATS, FALLBACK_PROVIDER_FORMATS } from "./types/common.js";
@@ -29,9 +30,19 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
     : { "Content-Type": "application/json" };
   const init: RequestInit = { method: opts.method || "GET", headers };
   if (opts.body) init.body = opts.body;
-  const r: Response = await fetch("/admin/api" + path, init);
+  let r: Response;
+  try {
+    r = await fetch("/admin/api" + path, init);
+  } catch (netErr: unknown) {
+    // Network/connection drop (e.g. backend process stopped while nginx is restarting or fetch failed entirely)
+    triggerServerReconnect();
+    throw netErr;
+  }
+
   if (!r.ok) {
-    if (r.status === 401) {
+    if (r.status === 502 || r.status === 503 || r.status === 504) {
+      triggerServerReconnect();
+    } else if (r.status === 401) {
       clearToken();
       if (typeof location !== "undefined" && !location.hash.startsWith("#/login") && path !== "/notifications/unread-count") {
         location.hash = "#/login";

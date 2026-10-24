@@ -1,0 +1,99 @@
+/* Server reconnect overlay — shown when backend returns 502/503 during restart */
+
+.server-reconnect-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.server-reconnect-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.server-reconnect-card {
+  background: var(--bg-surface, #1e1e2e);
+  color: var(--text-main, #cdd6f4);
+  border: 1px solid var(--border-color, #313244);
+  border-radius: var(--radius-lg, 12px);
+  padding: var(--space-6, 24px) var(--space-8, 32px);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 420px;
+  width: 90%;
+  animation: reconnectCardPop 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes reconnectCardPop {
+  0% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.server-reconnect-spinner {
+  width: 44px;
+  height: 44px;
+  border: 4px solid var(--border-color, #313244);
+  border-top-color: var(--color-primary, #89b4fa);
+  border-radius: 50%;
+  animation: reconnectSpin 0.9s linear infinite;
+  margin-bottom: var(--space-4, 16px);
+}
+
+@keyframes reconnectSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.server-reconnect-text h3 {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--fs-lg, 1.25rem);
+  font-weight: 600;
+  color: var(--text-main, #cdd6f4);
+}
+
+.server-reconnect-text p {
+  margin: 0 0 var(--space-5, 20px);
+  font-size: var(--fs-sm, 0.875rem);
+  color: var(--text-muted, #a6adc8);
+  line-height: 1.45;
+}
+
+.server-reconnect-btn {
+  background: var(--bg-surface-hover, #313244);
+  color: var(--text-main, #cdd6f4);
+  border: 1px solid var(--border-color, #45475a);
+  border-radius: var(--radius-md, 8px);
+  padding: 8px 18px;
+  font-size: var(--fs-sm, 0.875rem);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.server-reconnect-btn:hover {
+  background: var(--color-primary, #89b4fa);
+  color: #11111b;
+  border-color: var(--color-primary, #89b4fa);
+}

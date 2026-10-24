@@ -12,6 +12,7 @@
 
 import { state, setPollHandle } from "./index.js";
 import { renderSidebar } from "../components/sidebar.js";
+import { triggerServerReconnect } from "./server-reconnect.js";
 
 const POLL_MS = 3000;
 
@@ -26,7 +27,12 @@ async function healthTick(): Promise<void> {
     // The public endpoint, not /admin/api/health: it is unauthenticated (the
     // LB liveness probe), so the pill works on the login page too.
     const res: Response = await fetch("/admin/health");
-    if (!res.ok) throw new Error(`${res.status}`);
+    if (!res.ok) {
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        triggerServerReconnect();
+      }
+      throw new Error(`${res.status}`);
+    }
     const raw: unknown = await res.json();
     const health: HealthPayload | null = isHealthPayload(raw) ? raw : null;
     if (health) {
@@ -38,7 +44,13 @@ async function healthTick(): Promise<void> {
     // lost to the next `renderSidebar()` from the router or the
     // notifications store, which re-rendered the stale `state.health`.
     renderSidebar();
-  } catch (_e: unknown) { /* swallow — next tick will try again */ }
+  } catch (err: unknown) {
+    // If fetch failed completely (network down / server stopped)
+    if (err instanceof TypeError) {
+      triggerServerReconnect();
+    }
+    /* swallow — next tick will try again */
+  }
   finally {
     if (state && state.__healthPollActive) {
       if (state.__healthPollHandle != null) clearTimeout(state.__healthPollHandle);
