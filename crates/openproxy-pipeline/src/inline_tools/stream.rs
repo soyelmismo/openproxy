@@ -386,7 +386,26 @@ fn find_close_tag_in_buffer(buffer: &str, expected_close: &str) -> Option<usize>
         }
         return None;
     }
-    find_ignore_ascii_case(buffer, expected_close).map(|p| p + expected_close.len())
+    if let Some(pos) = find_ignore_ascii_case(buffer, expected_close) {
+        return Some(pos + expected_close.len());
+    }
+    // Also tolerate alternative spacing for DSML closing tags:
+    // e.g. "</｜｜DSML｜｜ calls>" vs "</｜DSML｜ calls>" vs "</calls>"
+    if expected_close.contains("calls>") {
+        for alt in &["</｜｜DSML｜｜ calls>", "</｜DSML｜ calls>", "</calls>"] {
+            if let Some(pos) = find_ignore_ascii_case(buffer, alt) {
+                return Some(pos + alt.len());
+            }
+        }
+    }
+    if expected_close.contains("invoke>") {
+        for alt in &["</｜｜DSML｜｜ invoke>", "</｜DSML｜ invoke>", "</invoke>"] {
+            if let Some(pos) = find_ignore_ascii_case(buffer, alt) {
+                return Some(pos + alt.len());
+            }
+        }
+    }
+    None
 }
 
 fn extract_trailing_partial_tag_prefix(s: &str) -> (&str, &str) {

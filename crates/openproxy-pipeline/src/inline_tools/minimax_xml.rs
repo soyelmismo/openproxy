@@ -460,10 +460,13 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
                     let next = content_start + close_pos + close_tag.len();
                     (c, next)
                 }
-                None => match alt_close_tag.as_ref().and_then(|act| find_ignore_ascii_case(&inner_body[content_start..], act)) {
-                    Some(close_pos) => {
+                None => match alt_close_tag.as_ref().and_then(|act| {
+                    find_ignore_ascii_case(&inner_body[content_start..], act)
+                        .map(|pos| (pos, act.len()))
+                }) {
+                    Some((close_pos, tag_len)) => {
                         let c = &inner_body[content_start..content_start + close_pos];
-                        let next = content_start + close_pos + alt_close_tag.as_ref().unwrap().len();
+                        let next = content_start + close_pos + tag_len;
                         (c, next)
                     }
                     None => {
