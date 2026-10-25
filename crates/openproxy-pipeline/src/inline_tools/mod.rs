@@ -22,6 +22,10 @@ const ENCLOSING_TAG_PAIRS: &[(&str, &str)] = &[
     ("<function_calls", "</function_calls>"),
     ("<tools", "</tools>"),
     ("<tool", "</tool>"),
+    ("<｜｜DSML｜｜ calls>", "</｜｜DSML｜｜ calls>"),
+    ("<｜｜DSML｜｜ calls", "</｜｜DSML｜｜ calls>"),
+    ("<｜DSML｜ calls>", "</｜DSML｜ calls>"),
+    ("<｜DSML｜ calls", "</｜DSML｜ calls>"),
 ];
 
 /// Strips the inline tool call blocks out of `content` and returns the
@@ -245,6 +249,8 @@ fn find_earliest_enclosing_block(s: &str) -> Option<(usize, usize, &'static str)
 fn find_bare_invoke_span(s: &str) -> Option<(usize, &'static str)> {
     let candidates = [
         ("<invoke", "</invoke>"),
+        ("<｜｜DSML｜｜ invoke", "</｜｜DSML｜｜ invoke>"),
+        ("<｜DSML｜ invoke", "</｜DSML｜ invoke>"),
         ("<function_call", "</function_call>"),
         ("<function", "</function>"),
         ("<call", "</call>"),

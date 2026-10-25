@@ -674,3 +674,27 @@ fn test_bare_self_closing_invoke_in_stream() {
         other => panic!("expected Mutate with ping tool_call, got {other:?}"),
     }
 }
+
+#[test]
+fn test_dsml_tool_calls_extraction() {
+    let input = r#"Voy a analizar el repositorio en profundidad. Comienzo leyendo la estructura y los archivos clave.
+
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="terminal">
+<｜｜DSML｜｜ parameter name="command" string="true">cd /root/proyectos/gpthon-rs && ls -la && echo "---" && find . -name "subagent.rs" -o -name "stream_timeline" -type d | head -20</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert_eq!(
+        extracted.clean_content.trim(),
+        "Voy a analizar el repositorio en profundidad. Comienzo leyendo la estructura y los archivos clave."
+    );
+    assert_eq!(extracted.tool_calls.len(), 1);
+    assert_eq!(extracted.tool_calls[0].name, "terminal");
+    let args: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert_eq!(
+        args["command"],
+        "cd /root/proyectos/gpthon-rs && ls -la && echo \"---\" && find . -name \"subagent.rs\" -o -name \"stream_timeline\" -type d | head -20"
+    );
+}

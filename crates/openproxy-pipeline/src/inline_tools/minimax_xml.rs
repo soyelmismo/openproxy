@@ -91,6 +91,8 @@ pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
 fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
     let candidates = [
         ("<invoke", "</invoke>"),
+        ("<｜｜DSML｜｜ invoke", "</｜｜DSML｜｜ invoke>"),
+        ("<｜DSML｜ invoke", "</｜DSML｜ invoke>"),
         ("<function_call", "</function_call>"),
         ("<function", "</function>"),
         ("<call", "</call>"),
@@ -130,6 +132,15 @@ pub fn extract_all_attributes(tag_str: &str) -> Vec<(String, String)> {
     let mut i = 0;
     if bytes[0] == b'<' {
         i = 1;
+        // Skip DSML prefix if present: <｜｜DSML｜｜ tag_name ...
+        if tag_str[1..].starts_with("｜｜DSML｜｜") {
+            i += "｜｜DSML｜｜".len();
+        } else if tag_str[1..].starts_with("｜DSML｜") {
+            i += "｜DSML｜".len();
+        }
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         while i < len && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' && bytes[i] != b'/' {
             i += 1;
         }
@@ -408,11 +419,13 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
         }
 
         let is_self_closing = open_tag_header.ends_with('/');
-        let raw_tag_name = open_tag_header
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('/');
+        let mut parts = open_tag_header.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        let raw_tag_name = if first == "｜｜DSML｜｜" || first == "｜DSML｜" {
+            parts.next().unwrap_or("").trim_end_matches('/')
+        } else {
+            first.trim_end_matches('/')
+        };
 
         if raw_tag_name.is_empty() {
             cursor = open_tag_abs + 1 + open_tag_end + 1;
@@ -432,6 +445,14 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
         }
 
         let close_tag = format!("</{raw_tag_name}>");
+        let alt_close_tag = if open_tag_header.starts_with("｜｜DSML｜｜")
+            || open_tag_header.starts_with("｜DSML｜")
+        {
+            Some(format!("</｜｜DSML｜｜ {raw_tag_name}>"))
+        } else {
+            None
+        };
+
         let (content, next_cursor) =
             match find_ignore_ascii_case(&inner_body[content_start..], &close_tag) {
                 Some(close_pos) => {
@@ -439,10 +460,17 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
                     let next = content_start + close_pos + close_tag.len();
                     (c, next)
                 }
-                None => {
-                    let c = &inner_body[content_start..];
-                    (c, inner_body.len())
-                }
+                None => match alt_close_tag.as_ref().and_then(|act| find_ignore_ascii_case(&inner_body[content_start..], act)) {
+                    Some(close_pos) => {
+                        let c = &inner_body[content_start..content_start + close_pos];
+                        let next = content_start + close_pos + alt_close_tag.as_ref().unwrap().len();
+                        (c, next)
+                    }
+                    None => {
+                        let c = &inner_body[content_start..];
+                        (c, inner_body.len())
+                    }
+                },
             };
 
         let key = if raw_tag_name.eq_ignore_ascii_case("parameter")
