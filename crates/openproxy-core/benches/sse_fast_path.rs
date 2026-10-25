@@ -89,7 +89,7 @@ fn bench_old(c: &mut Criterion) {
 
 /// Gemini probe-struct parse against the old Value-based parse.
 fn bench_gemini_parse(c: &mut Criterion) {
-    use openproxy_pipeline::sse::parse_gemini_sse_line;
+    use openproxy_pipeline::sse::parse_gemini_sse_line_test as parse_gemini_sse_line;
 
     // `]}` closes the parts array and content object before the candidates separator comma
     const GEMINI_CHUNKS: &[&str] = &[

@@ -31,7 +31,13 @@ pub(super) fn parse_translated_sse_line(
             crate::sse::parse_atomesus_sse_line(line, chunk_id, created, model_name)
         }
         openproxy_types::TargetFormat::Gemini => {
-            crate::sse::parse_gemini_sse_line(line, chunk_id, created, model_name)
+            crate::sse::parse_gemini_sse_line(
+                line,
+                chunk_id,
+                created,
+                model_name,
+                &mut state.tool_call_index_counter,
+            )
         }
         openproxy_types::TargetFormat::Anthropic => {
             let Some(payload) =

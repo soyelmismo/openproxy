@@ -136,13 +136,20 @@ pub fn parse_sse_stream_to_openai_response(
             }
         }
         TargetFormat::Gemini => {
+            let mut tool_call_index_counter = 0u32;
             for line in body_str.lines() {
                 let trimmed = line.trim_end_matches(['\r', '\n']);
                 if trimmed.is_empty() {
                     continue;
                 }
                 if let Some(chunk) =
-                    crate::sse::parse_gemini_sse_line(trimmed, chunk_id, created, model_name)?
+                    crate::sse::parse_gemini_sse_line(
+                    trimmed,
+                    chunk_id,
+                    created,
+                    model_name,
+                    &mut tool_call_index_counter,
+                )?
                     && feed_chunk_to_acc(&mut acc, chunk)
                 {
                     break;

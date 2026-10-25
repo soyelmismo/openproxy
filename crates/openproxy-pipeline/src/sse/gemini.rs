@@ -145,11 +145,22 @@ fn extract_gemini_usage(usage_metadata: Option<&GeminiUsageProbe>) -> Option<Ope
     ))
 }
 
+pub fn parse_gemini_sse_line_test(
+    line: &str,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Result<Option<UpstreamSseChunk>> {
+    let mut counter = 0;
+    parse_gemini_sse_line(line, chunk_id, created, model, &mut counter)
+}
+
 pub fn parse_gemini_sse_line(
     line: &str,
     chunk_id: &str,
     created: u64,
     model: &str,
+    tool_call_index_counter: &mut u32,
 ) -> Result<Option<UpstreamSseChunk>> {
     let payload = match parse_sse_data_or_done(line) {
         super::SseDataOrDone::Payload(p) => p,
@@ -169,14 +180,16 @@ pub fn parse_gemini_sse_line(
         .map(map_gemini_finish_reason);
 
     let mut delta_tool_calls = Vec::new();
-    for (idx, fc) in function_calls.into_iter().enumerate() {
-        let call_id = fc.id.unwrap_or_else(|| format!("call_{chunk_id}_{idx}"));
+    for (_idx, fc) in function_calls.into_iter().enumerate() {
+        let global_idx = *tool_call_index_counter;
+        *tool_call_index_counter += 1;
+        let call_id = fc.id.unwrap_or_else(|| format!("call_{chunk_id}_{global_idx}"));
         let args_str = fc.args.map_or_else(
             || "{}".to_string(),
             |a| serde_json::to_string(&a).unwrap_or_else(|_| "{}".to_string()),
         );
         delta_tool_calls.push(json!({
-            "index": idx,
+            "index": global_idx,
             "id": call_id,
             "type": "function",
             "function": {
@@ -252,7 +265,7 @@ mod cache_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::parse_gemini_sse_line_test as parse_gemini_sse_line;
     use openproxy_types::error::CoreError;
 
     #[test]

@@ -627,7 +627,7 @@ pub use anthropic::{
 };
 pub use atomesus::parse_atomesus_sse_line;
 pub use commandcode::{CommandCodeSseState, parse_commandcode_sse_line};
-pub use gemini::parse_gemini_sse_line;
+pub use gemini::{parse_gemini_sse_line, parse_gemini_sse_line_test};
 pub use openai::parse_openai_sse_line;
 pub use responses::{ResponsesSseState, parse_responses_sse_stream_line};
 pub use stream_to_value::parse_sse_stream_to_openai_response;

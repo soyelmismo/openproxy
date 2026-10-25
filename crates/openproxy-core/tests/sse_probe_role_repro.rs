@@ -6,7 +6,7 @@
 //! Real-world Gemini chunks carry `"role":"model"` inside `content` next to
 //! `parts`, an unknown field that `GeminiContentProbe` must skip without erroring.
 
-use openproxy_pipeline::sse::parse_gemini_sse_line;
+use openproxy_pipeline::sse::parse_gemini_sse_line_test as parse_gemini_sse_line;
 
 #[test]
 fn gemini_probe_handles_role_sibling_in_content() {
