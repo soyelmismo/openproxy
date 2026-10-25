@@ -258,4 +258,21 @@ mod tests {
         // Idempotence: formatting the formatted UUID returns the same
         assert_eq!(format_as_v4_uuid(&formatted), formatted);
     }
+
+    #[test]
+    fn test_format_as_v4_uuid_quoted_and_determinism() {
+        let quoted_v4 = "\"9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d\"";
+        assert_eq!(
+            format_as_v4_uuid(quoted_v4),
+            "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        );
+
+        let input = "same-input-string";
+        let u1 = format_as_v4_uuid(input);
+        let u2 = format_as_v4_uuid(input);
+        assert_eq!(u1, u2);
+
+        let u64_val = 123456789u64;
+        assert_eq!(u64_to_v4_uuid(u64_val), u64_to_v4_uuid(u64_val));
+    }
 }
