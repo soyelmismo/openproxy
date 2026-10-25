@@ -34,6 +34,8 @@ struct GeminiCandidateProbe {
     content: Option<GeminiContentProbe>,
     #[serde(default, rename = "finishReason")]
     finish_reason: Option<String>,
+    #[serde(default, rename = "finishMessage")]
+    finish_message: Option<String>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -80,6 +82,7 @@ fn map_gemini_finish_reason(reason: &str) -> String {
         "STOP" => "stop".to_string(),
         "MAX_TOKENS" => "length".to_string(),
         "SAFETY" | "RECITATION" | "BLOCKLIST" => "content_filter".to_string(),
+        "MALFORMED_FUNCTION_CALL" | "UNEXPECTED_TOOL_CALL" => "tool_calls".to_string(),
         _ => "stop".to_string(),
     }
 }
@@ -180,10 +183,12 @@ pub fn parse_gemini_sse_line(
         .map(map_gemini_finish_reason);
 
     let mut delta_tool_calls = Vec::new();
-    for (_idx, fc) in function_calls.into_iter().enumerate() {
+    for fc in function_calls {
         let global_idx = *tool_call_index_counter;
         *tool_call_index_counter += 1;
-        let call_id = fc.id.unwrap_or_else(|| format!("call_{chunk_id}_{global_idx}"));
+        let call_id = fc
+            .id
+            .unwrap_or_else(|| format!("call_{chunk_id}_{global_idx}"));
         let args_str = fc.args.map_or_else(
             || "{}".to_string(),
             |a| serde_json::to_string(&a).unwrap_or_else(|_| "{}".to_string()),
@@ -197,6 +202,44 @@ pub fn parse_gemini_sse_line(
                 "arguments": args_str,
             }
         }));
+    }
+
+    // Synthesize tool_call if Gemini aborted with MALFORMED_FUNCTION_CALL
+    if let Some(candidate) = candidates.first() {
+        if let Some(fr) = candidate.finish_reason.as_deref() {
+            if (fr == "MALFORMED_FUNCTION_CALL" || fr == "UNEXPECTED_TOOL_CALL") && delta_tool_calls.is_empty() {
+                let global_idx = *tool_call_index_counter;
+                *tool_call_index_counter += 1;
+                let call_id = format!("call_{chunk_id}_{global_idx}");
+                let finish_msg = candidate.finish_message.as_deref().unwrap_or(fr);
+                
+                // Try to parse tool name and arguments from Gemini's finishMessage:
+                // Format e.g.: "Malformed function call: call:terminal{command:\"ls\"}"
+                let (name, args_str) = if let Some(idx) = finish_msg.find("call:") {
+                    let rest = &finish_msg[idx + 5..];
+                    if let Some(brace_idx) = rest.find('{') {
+                        let tool_name = rest[..brace_idx].trim();
+                        let raw_args = &rest[brace_idx..];
+                        // If args end with '}' use it, else serialize as error object
+                        (tool_name.to_string(), raw_args.to_string())
+                    } else {
+                        ("malformed_tool_call".to_string(), json!({"error": fr, "message": finish_msg}).to_string())
+                    }
+                } else {
+                    ("malformed_tool_call".to_string(), json!({"error": fr, "message": finish_msg}).to_string())
+                };
+
+                delta_tool_calls.push(json!({
+                    "index": global_idx,
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": args_str,
+                    }
+                }));
+            }
+        }
     }
 
     if !delta_tool_calls.is_empty()
