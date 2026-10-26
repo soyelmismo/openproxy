@@ -166,7 +166,8 @@ fn test_build_horde_payload_with_all_directives() {
     assert_eq!(p["sampler_name"], "k_euler_a");
     assert_eq!(p["cfg_scale"], 8.0);
     assert_eq!(p["clip_skip"], 2);
-    assert_eq!(p["seed"], 9999);
+    // Horde exige `params.seed` como string (400 si va como número).
+    assert_eq!(p["seed"], "9999");
     assert!(p["hires_fix"].as_bool().unwrap());
     assert_eq!(p["hires_fix_denoising_strength"], 0.35);
     assert_eq!(p["control_type"], "depth");

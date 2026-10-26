@@ -179,7 +179,7 @@ fn test_format_image_request_standard() {
     assert_eq!(v["prompt"], "A beautiful sunset ### blurry, low quality");
     assert_eq!(v["params"]["width"], 512);
     assert_eq!(v["params"]["height"], 512);
-    assert_eq!(v["params"]["seed"], 42);
+    assert_eq!(v["params"]["seed"], "42");
     assert_eq!(v["models"][0], "SDXL 1.0");
     assert!(v["params"]["karras"].as_bool().unwrap());
     assert!(v["params"]["hires_fix"].as_bool().unwrap());

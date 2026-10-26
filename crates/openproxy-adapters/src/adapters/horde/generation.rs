@@ -14,7 +14,12 @@ pub(crate) struct HordeGenerationParams {
     pub(crate) steps: u32,
     pub(crate) sampler_name: String,
     pub(crate) cfg_scale: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // AI Horde tipa `params.seed` como string en ModelGenerationInputStable:
+    // enviarlo como número devuelve 400 "is not of type 'string'".
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_seed_as_string"
+    )]
     pub(crate) seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) denoising_strength: Option<f32>,
@@ -54,6 +59,21 @@ pub(crate) struct HordeGenerationPayload {
     pub(crate) source_mask: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) source_processing: Option<String>,
+}
+
+/// AI Horde tipa `params.seed` como string. Enviarlo como número devuelve
+/// `400 {"errors":{"params.seed":"424242 is not of type 'string'"}}`.
+fn serialize_seed_as_string<S>(
+    seed: &Option<u64>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match seed {
+        Some(value) => serializer.serialize_str(&value.to_string()),
+        None => serializer.serialize_none(),
+    }
 }
 
 pub(crate) fn assemble_final_prompt(
