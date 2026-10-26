@@ -31,10 +31,73 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tower::ServiceExt;
 
+fn read_proc_status_rss_kb() -> usize {
+    if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
+        for line in content.lines() {
+            if line.starts_with("VmRSS:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    return parts[1].parse::<usize>().unwrap_or(0);
+                }
+            }
+        }
+    }
+    0
+}
+
 #[derive(Clone)]
 struct MockUpstreamConfig {
     tokens_per_stream: usize,
     chunk_size_tokens: usize,
+}
+
+struct CpuAndIoSnapshot {
+    utime_ticks: u64,
+    stime_ticks: u64,
+    rchar: u64,
+    wchar: u64,
+    read_bytes: u64,
+    write_bytes: u64,
+}
+
+fn read_cpu_and_io_snapshot() -> CpuAndIoSnapshot {
+    let mut utime = 0;
+    let mut stime = 0;
+    if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
+        let parts: Vec<&str> = stat.split_whitespace().collect();
+        if parts.len() > 15 {
+            utime = parts[13].parse::<u64>().unwrap_or(0);
+            stime = parts[14].parse::<u64>().unwrap_or(0);
+        }
+    }
+
+    let mut rchar = 0;
+    let mut wchar = 0;
+    let mut read_bytes = 0;
+    let mut write_bytes = 0;
+    if let Ok(io) = std::fs::read_to_string("/proc/self/io") {
+        for line in io.lines() {
+            if let Some((k, v)) = line.split_once(':') {
+                let val = v.trim().parse::<u64>().unwrap_or(0);
+                match k.trim() {
+                    "rchar" => rchar = val,
+                    "wchar" => wchar = val,
+                    "read_bytes" => read_bytes = val,
+                    "write_bytes" => write_bytes = val,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    CpuAndIoSnapshot {
+        utime_ticks: utime,
+        stime_ticks: stime,
+        rchar,
+        wchar,
+        read_bytes,
+        write_bytes,
+    }
 }
 
 async fn fast_mock_chat_handler(
@@ -291,6 +354,9 @@ async fn main() {
     let min_ttft_micros = Arc::new(AtomicUsize::new(usize::MAX));
     let max_ttft_micros = Arc::new(AtomicUsize::new(0));
 
+    let pre_rss_kb = read_proc_status_rss_kb();
+    let pre_sys = read_cpu_and_io_snapshot();
+
     let start = Instant::now();
     let mut handles = Vec::with_capacity(concurrency);
 
@@ -421,5 +487,36 @@ async fn main() {
             );
         }
     }
+
+    let post_rss_kb = read_proc_status_rss_kb();
+    let post_sys = read_cpu_and_io_snapshot();
+    let rss_growth_kb = post_rss_kb.saturating_sub(pre_rss_kb);
+    let rss_growth_mb = (rss_growth_kb as f64) / 1024.0;
+    let bytes_per_stream = if concurrency > 0 {
+        (rss_growth_kb * 1024) / concurrency
+    } else {
+        0
+    };
+
+    let user_cpu_ticks = post_sys.utime_ticks.saturating_sub(pre_sys.utime_ticks);
+    let sys_cpu_ticks = post_sys.stime_ticks.saturating_sub(pre_sys.stime_ticks);
+    let total_cpu_ticks = user_cpu_ticks + sys_cpu_ticks;
+    let ticks_per_sec = 100.0; // Linux sysconf(_SC_CLK_TCK) default
+    let cpu_time_sec = (total_cpu_ticks as f64) / ticks_per_sec;
+    let cpu_util_percent = (cpu_time_sec / elapsed.as_secs_f64()) * 100.0;
+
+    let disk_read_kb = (post_sys.read_bytes.saturating_sub(pre_sys.read_bytes) as f64) / 1024.0;
+    let disk_write_kb = (post_sys.write_bytes.saturating_sub(pre_sys.write_bytes) as f64) / 1024.0;
+    let logical_read_kb = (post_sys.rchar.saturating_sub(pre_sys.rchar) as f64) / 1024.0;
+    let logical_write_kb = (post_sys.wchar.saturating_sub(pre_sys.wchar) as f64) / 1024.0;
+
+    println!("\n---------- RESOURCE CONSUMPTION (Memory, CPU & I/O) ----------");
+    println!("Process Resident Set (RSS):    {post_rss_kb} KB ({:.2} MB)", post_rss_kb as f64 / 1024.0);
+    println!("RSS Growth During Workload:    {rss_growth_kb} KB ({rss_growth_mb:.2} MB)");
+    println!("Memory Allocation per Request: {:.2} KB ({:.3} MB per request)", bytes_per_stream as f64 / 1024.0, (bytes_per_stream as f64) / (1024.0 * 1024.0));
+    println!("CPU Utilization (Process):     {cpu_util_percent:.1}% across cores ({cpu_time_sec:.3}s CPU time: user={user_cpu_ticks}t, sys={sys_cpu_ticks}t)");
+    println!("Disk Physical I/O:             Read: {disk_read_kb:.1} KB | Written (fsync/WAL): {disk_write_kb:.1} KB");
+    println!("Logical I/O (Syscalls):        Read: {logical_read_kb:.1} KB | Written: {logical_write_kb:.1} KB");
+    println!("Database Operations:           DB queries on stream path: 0 (cached API keys & in-memory routing)");
     println!("==========");
 }

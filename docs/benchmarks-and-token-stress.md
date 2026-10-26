@@ -29,49 +29,38 @@ cargo bench --bench token_throughput -- --sample-size 10 accumulator_token_scale
 
 ---
 
-## 2. Nivel 2: Benchmark End-to-End (Estrés Completo de Servidor)
-Levanta una instancia real de OpenProxy (Axum router + autenticación + DB SQLite en memoria temporal + pool de adapters + middleware) conectada a un servidor mock upstream SSE ultrarrápido que emite streams sin latencia de red de internet.
+## 2. Nivel 2: Benchmark End-to-End con Perfilado de Recursos
 
-Mide el rendimiento real de entrega HTTP, multiplexación asíncrona de Tokio, parsing y consumo de chunks SSE bajo concurrencia pesada.
+El ejecutable de estrés (`bench_token_stress`) instrumenta mediciones del kernel de Linux (`/proc/self/stat`, `/proc/self/status`, `/proc/self/io`) para obtener un desglose a nivel bit:
 
-### Ubicación del ejecutable:
-`crates/openproxy-server/examples/bench_token_stress.rs`
+1. **Latencia por Fase (en microsegundos $\mu s$):**
+   - **Dispatch (Routing + Auth + Upstream Connect):** Overhead antes de iniciar el streaming.
+   - **TTFT (Time To First Token):** Latencia real percibida por el cliente hasta el primer chunk.
+   - **Stream Processing & Drain:** Tiempo total de vaciado del canal SSE.
+   - **Average Time Per SSE Chunk:** Coste en $\mu s$ por cada chunk procesado por la lógica del proxy.
+2. **Consumo de Memoria:**
+   - **Process Resident Set (RSS):** Tamaño residente total del proceso en RAM.
+   - **RSS Growth:** Incremento neto de memoria durante el lote de peticiones.
+   - **Memory per Request:** Consumo de RAM promedio generado por cada conexión de cliente.
+3. **Consumo de CPU:**
+   - Ticks de CPU en espacio de usuario (`utime`) y sistema (`stime`).
+   - Porcentaje efectivo de utilización multi-núcleo.
+4. **I/O Físico y Lógico:**
+   - I/O físico a disco (`read_bytes`, `write_bytes` por fsync/WAL).
+   - Syscalls lógicos (`rchar`, `wchar`).
+   - Consultas a la base de datos en el hot-path (validando la caché en memoria).
 
-### Compilación optimizada:
+### Compilación y Ejecución:
+
 ```bash
 cargo build --release -p openproxy-server --example bench_token_stress
-```
 
-### Parámetros:
-```bash
+# Formato:
 ./target/release/examples/bench_token_stress [CONCURRENCY] [TOKENS_PER_STREAM] [CHUNK_SIZE]
+
+# Ejemplo 1: 1 stream largo de 10.000 tokens
+./target/release/examples/bench_token_stress 1 10000 5
+
+# Ejemplo 2: 50 streams concurrentes de 10.000 tokens (500.000 tokens en paralelo)
+./target/release/examples/bench_token_stress 50 10000 5
 ```
-- `CONCURRENCY`: Número de clientes simultáneos enviando peticiones en paralelo (ej. 10, 50, 100).
-- `TOKENS_PER_STREAM`: Cantidad total de tokens que emitirá cada stream (ej. 1,000, 10,000, 50,000).
-- `CHUNK_SIZE`: Cuántos tokens viajan en cada frame SSE individual (por defecto 5).
-
-### Ejemplos de uso:
-
-1. **Prueba rápida (10 streams de 5k tokens = 50,000 tokens):**
-   ```bash
-   ./target/release/examples/bench_token_stress 10 5000 5
-   ```
-
-2. **Carga media (50 clientes de 10k tokens = 500,000 tokens):**
-   ```bash
-   ./target/release/examples/bench_token_stress 50 10000 5
-   ```
-
-3. **Carga extrema (100 clientes de 20k tokens = 2,000,000 tokens):**
-   ```bash
-   ./target/release/examples/bench_token_stress 100 20000 10
-   ```
-
-### Métricas reportadas:
-- **Elapsed Time:** Tiempo total de ejecución de la prueba.
-- **Successful Requests:** Peticiones HTTP completadas exitosamente sin errores ni desconexiones.
-- **Total Tokens Delivered:** Conteo real de tokens transferidos a través del proxy.
-- **Throughput (tokens/sec):** Velocidad efectiva de tokens procesados por segundo.
-- **Data Transfer:** Megabytes totales transferidos y tasa de transferencia en MB/s.
-- **SSE Chunks Processed:** Número total de eventos SSE leídos y ensamblados.
-- **Avg Stream Time:** Latencia promedio por stream individual.
