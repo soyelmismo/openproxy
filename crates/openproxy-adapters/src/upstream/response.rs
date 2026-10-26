@@ -312,6 +312,13 @@ impl UpstreamBodyStream {
                     return self.decoding.finish();
                 };
 
+                // Identity responses already own the transport buffer. Do not
+                // copy it into the decoder only to split it straight back out.
+                // Compressed bodies still go through every validation below.
+                if !self.decoding.is_decoding() {
+                    return Ok(Some(raw));
+                }
+
                 // A frame that carried no input cannot produce plaintext
                 // either (trailers-only frames); hand it back untouched.
                 let carried_input = !raw.is_empty();

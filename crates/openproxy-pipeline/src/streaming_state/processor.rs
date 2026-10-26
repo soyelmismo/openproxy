@@ -45,7 +45,9 @@ pub(super) fn decode_and_record_line<'a>(
     state: &mut StreamingState,
     line_bytes: &'a [u8],
 ) -> Option<&'a str> {
-    let line = std::str::from_utf8(line_bytes).ok()?.trim_end_matches('\r');
+    let line = std::str::from_utf8(line_bytes)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
     if line.is_empty() {
         state.current_event_type = None;
         return None;

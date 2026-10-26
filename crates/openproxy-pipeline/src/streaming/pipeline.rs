@@ -24,10 +24,16 @@ pub(crate) async fn run_pipeline(
             },
         };
 
-        sse_parser.push(&bytes)?;
+        sse_parser.push_bytes(bytes)?;
 
-        while let Some(line_bytes) = sse_parser.next_line() {
-            let event = ChunkEvent::Data(line_bytes.into());
+        loop {
+            let next = if ctx.target_format == openproxy_types::TargetFormat::Openai {
+                sse_parser.next_openai_frame()
+            } else {
+                sse_parser.next_line()
+            };
+            let Some(line_bytes) = next else { break };
+            let event = ChunkEvent::Data(line_bytes);
             if let Some(res) = process_and_dispatch_event(ctx, stream, processor, event).await? {
                 return Ok(res);
             }

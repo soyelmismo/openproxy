@@ -137,7 +137,7 @@ impl ChunkProcessor<'_> {
     pub(super) fn prepare_content_chunk_bytes(
         &mut self,
         json_payload: &str,
-        line_bytes: &[u8],
+        line_bytes: &bytes::Bytes,
     ) -> bytes::Bytes {
         let norm_action = self.state.normalizer.process_chunk(json_payload);
         if matches!(norm_action, StreamAction::Skip) {
@@ -163,11 +163,10 @@ impl ChunkProcessor<'_> {
             _ => match norm_action {
                 StreamAction::Mutate(modified) => crate::sse::build_sse_frame(&modified),
                 StreamAction::Skip => bytes::Bytes::new(),
-                _ => {
-                    let mut frame = bytes::BytesMut::from(line_bytes);
-                    frame.extend_from_slice(b"\n\n");
-                    frame.freeze()
+                _ if line_bytes.ends_with(b"\n\n") || line_bytes.ends_with(b"\r\n\r\n") => {
+                    line_bytes.clone()
                 }
+                _ => crate::sse::build_sse_frame(normalized_payload),
             },
         }
     }
@@ -177,7 +176,7 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         stream: &mut openproxy_adapters::upstream::UpstreamBodyStream,
         json_payload: &str,
-        line_bytes: &[u8],
+        line_bytes: &bytes::Bytes,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
         let sse_bytes = self.prepare_content_chunk_bytes(json_payload, line_bytes);
         if sse_bytes.is_empty() {
@@ -204,7 +203,7 @@ impl ChunkProcessor<'_> {
         ctx: &StreamContext<'_>,
         stream: &mut openproxy_adapters::upstream::UpstreamBodyStream,
         line: &str,
-        line_bytes: &[u8],
+        line_bytes: &bytes::Bytes,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
         if line_bytes.len() < 5 || &line_bytes[..5] != b"data:" {
             return Ok(crate::streaming::ChunkEvent::Skip);

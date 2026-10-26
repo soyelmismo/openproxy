@@ -20,7 +20,7 @@ pub(crate) use anthropic::merge_usage;
 
 use crate::translation::OpenAIUsage;
 use openproxy_types::ResultExt;
-use openproxy_types::error::{CoreError, Result};
+use openproxy_types::error::Result;
 use serde_json::Value;
 /// A single parsed SSE chunk from the upstream, ready to forward.
 pub struct UpstreamSseChunk {
@@ -218,53 +218,8 @@ pub const MAX_SSE_LINE_BYTES: usize = 4_194_304; // 4 MiB
 /// Prevents unbounded memory allocation from malformed upstream event: lines.
 pub const MAX_SSE_EVENT_TYPE_BYTES: usize = 1024;
 
-pub struct SseParser {
-    buffer: bytes::BytesMut,
-    max_line_bytes: usize,
-}
-
-impl SseParser {
-    pub fn new(max_line_bytes: usize) -> Self {
-        Self {
-            buffer: bytes::BytesMut::with_capacity(8192),
-            max_line_bytes,
-        }
-    }
-
-    pub fn push(&mut self, chunk: &[u8]) -> Result<()> {
-        self.buffer.extend_from_slice(chunk);
-        if self.buffer.len() > self.max_line_bytes {
-            return Err(CoreError::UpstreamConnection(format!(
-                "SSE line buffer exceeded {} bytes (memory-DoS guard)",
-                self.max_line_bytes
-            )));
-        }
-        Ok(())
-    }
-
-    pub fn next_line(&mut self) -> Option<bytes::BytesMut> {
-        use bytes::Buf;
-        if let Some(pos) = memchr::memchr(b'\n', &self.buffer) {
-            let line_bytes = self.buffer.split_to(pos);
-            self.buffer.advance(1); // skip '\n'
-
-            if self.buffer.capacity() - self.buffer.len() < 4096 {
-                self.buffer.reserve(16384);
-            }
-            Some(line_bytes)
-        } else {
-            None
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
-    }
-
-    pub fn remaining_bytes(&self) -> &[u8] {
-        &self.buffer
-    }
-}
+mod framing;
+pub use framing::SseParser;
 
 pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
     let pos = bytes.iter().position(|&b| b != b' ').unwrap_or(bytes.len());

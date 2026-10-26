@@ -43,12 +43,6 @@ impl ToolCallAccumulator {
         prev.push_str(fragment);
         fragment
     }
-
-    /// Fast probe for the normalizer to check if there are active tool calls.
-    #[inline]
-    pub fn has_active_state(&self, _text: &str) -> bool {
-        !self.args_by_index.is_empty()
-    }
 }
 
 fn normalize_choice_content(
@@ -149,16 +143,19 @@ pub(crate) fn apply_reasoning_normalizations(
 
     // Role-only and finish chunks carry neither key, so the JSON parse
     // is skipped entirely.
-    let has_content = p.contains("\"content\"");
-    let has_tool_calls = p.contains("\"tool_calls\"");
+    // Escapes may hide property names or think tags from raw-byte probes.
+    // Fall back to serde rather than interpreting JSON with substring tests.
+    let escaped = p.contains('\\');
+    let has_content = escaped || p.contains("\"content\"");
+    let has_tool_calls = escaped || p.contains("\"tool_calls\"");
     if !has_content && !has_tool_calls {
         return normalized;
     }
 
-    // Fast-path: if content does not contain think tags and tool calls don't need normalization,
-    // skip the full serde deserialization and serialization roundtrip.
-    if (!has_content || !think_extractor.has_active_state_or_tag(p))
-        && (!has_tool_calls || !tool_call_acc.has_active_state(p))
+    // Every tool delta must initialize/update its accumulator, including the
+    // first one. Only unescaped ordinary text can bypass deserialization.
+    if !has_tool_calls
+        && (!has_content || (!escaped && !think_extractor.has_active_state_or_tag(p)))
     {
         return normalized;
     }
