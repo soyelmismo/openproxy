@@ -41,7 +41,7 @@ function showOverlay(): void {
   overlayEl.classList.add("visible");
 }
 
-function hideOverlay(): void {
+export function hideOverlay(): void {
   if (overlayEl) {
     overlayEl.classList.remove("visible");
     setTimeout(() => {
@@ -114,5 +114,8 @@ export function _resetServerReconnectForTest(): void {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   consecutiveSuccesses = 0;
-  hideOverlay();
+  if (overlayEl) {
+    overlayEl.remove();
+    overlayEl = null;
+  }
 }

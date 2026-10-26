@@ -56,4 +56,22 @@ describe("server-reconnect", () => {
 
     expect(reloadMock).toHaveBeenCalled();
   });
+
+  it("is never triggered by regular API errors (500, 502, network failure in api())", async () => {
+    const { api } = await import("../lib/api.js");
+    const fetchSpy = vi.spyOn(window, "fetch");
+
+    // 502 from an upstream endpoint (e.g. sync models)
+    fetchSpy.mockResolvedValue(new Response("Upstream model sync failed: 502", { status: 502 }));
+    await expect(api("/providers/1/sync")).rejects.toThrow("502: Upstream model sync failed: 502");
+    expect(isServerReconnecting()).toBe(false);
+
+    // Network error in api()
+    fetchSpy.mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(api("/models")).rejects.toThrow("Failed to fetch");
+    expect(isServerReconnecting()).toBe(false);
+
+    const overlay = document.getElementById("server-reconnect-overlay");
+    expect(overlay).toBeNull();
+  });
 });
