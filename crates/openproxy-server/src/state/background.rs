@@ -59,7 +59,7 @@ pub(crate) fn spawn_background_tasks(
         {
             tracing::warn!(
                 %error,
-                "no se pudo cargar el contrato Codex al arrancar; la primera petición lo reintentará"
+                "failed to load Codex contract at startup; initial request will retry"
             );
         }
         if contract_auto_refresh_enabled("OPENPROXY_CLAUDE_CODE_PROFILE_AUTO_REFRESH") {

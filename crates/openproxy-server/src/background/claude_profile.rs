@@ -103,27 +103,27 @@ impl ClaudeContractJob {
         let status = tokio::time::timeout(CAPTURE_TIMEOUT, command.status())
             .await
             .map_err(|_| {
-                ContractError::Rejected("la captura del perfil Claude Code caducó".to_string())
+                ContractError::Rejected("Claude Code profile capture timed out".to_string())
             })?
             .map_err(|error| {
-                ContractError::Rejected(format!("no se pudo lanzar la captura: {error}"))
+                ContractError::Rejected(format!("failed to spawn capture process: {error}"))
             })?;
         if !status.success() {
             return Err(ContractError::Rejected(
-                "la captura del perfil Claude Code falló".to_string(),
+                "Claude Code profile capture failed".to_string(),
             ));
         }
 
         // El candidato pasa por los mismos guards que el hot path. Un perfil
         // inválido se descarta aquí y la generación buena sigue en pie.
         let bytes = tokio::fs::read(&output).await.map_err(|error| {
-            ContractError::Rejected(format!("candidato de captura ilegible: {error}"))
+            ContractError::Rejected(format!("unreadable capture candidate: {error}"))
         })?;
         // El scratch no sobrevive a la ronda ni cuando el candidato no
         // verifica: solo el store publica.
         let _ = tokio::fs::remove_file(&output).await;
         let candidate = capture_candidate(&bytes)
-            .map_err(|error| ContractError::Rejected(format!("candidato inválido: {error}")))?;
+            .map_err(|error| ContractError::Rejected(format!("invalid candidate: {error}")))?;
         Ok(candidate)
     }
 

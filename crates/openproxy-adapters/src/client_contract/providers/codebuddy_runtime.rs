@@ -585,15 +585,15 @@ impl CodeBuddyReleaseDriver {
         let announced = parse_version(&metadata.version)?;
         if announced.channel != crate::client_contract::VersionChannel::Stable {
             return Err(ContractError::Rejected(format!(
-                "registry/latest anuncia la versión {:?}, que no es del canal estable",
+                "registry/latest announces version {:?}, which is not from stable channel",
                 metadata.version
             )));
         }
         if metadata.version != CODEBUDDY_VERSION {
             return Err(ContractError::Rejected(format!(
-                "registry/latest anuncia {} y el runtime compilado fija {}: \
-                 sin guards compilados para la revisión nueva, la metadata sola \
-                 no eleva la identidad y el candidato se rechaza",
+                "registry/latest announces {} while compiled runtime pins {}: \
+                 without compiled guards for the new revision, metadata alone \
+                 does not elevate identity and candidate is rejected",
                 metadata.version, CODEBUDDY_VERSION
             )));
         }
@@ -777,15 +777,15 @@ impl CodeBuddyReleaseDriver {
         let announced = parse_version(&metadata.version)?;
         if announced.channel != crate::client_contract::VersionChannel::Stable {
             return Err(ContractError::Rejected(format!(
-                "registry/latest anuncia la versión {:?}, que no es del canal estable",
+                "registry/latest announces version {:?}, which is not from stable channel",
                 metadata.version
             )));
         }
         if metadata.version != CODEBUDDY_VERSION {
             return Err(ContractError::Rejected(format!(
-                "registry/latest anuncia {} y el runtime compilado fija {}: \
-                 sin guards compilados para la revisión nueva, la metadata sola \
-                 no eleva la identidad y el candidato se rechaza",
+                "registry/latest announces {} while compiled runtime pins {}: \
+                 without compiled guards for the new revision, metadata alone \
+                 does not elevate identity and candidate is rejected",
                 metadata.version, CODEBUDDY_VERSION
             )));
         }
@@ -951,7 +951,7 @@ mod tests {
         let driver = driver(pin_map("2.165.0"));
         let error = driver.refresh().await.unwrap_err();
         assert!(
-            matches!(error, ContractError::Rejected(ref message) if message.contains("metadata sola")),
+            matches!(error, ContractError::Rejected(ref message) if message.contains("metadata alone")),
             "got {error:?}"
         );
     }

@@ -206,13 +206,12 @@ impl ContractValidator<CodeBuddyProfile> for CodeBuddyContractValidator {
                 candidate.payload.version
             )));
         }
-        // Sin guards compilados para otra revisión, la versión del pin es la
-        // única activable. Es la compuerta que impide elevar la identidad con
-        // metadata o con un paquete descargado de otra revisión.
+        // Without compiled guards for another revision, the pinned version is the
+        // only activatable one.
         if candidate.payload.version != CODEBUDDY_VERSION {
             return Err(ContractError::Rejected(format!(
-                "el candidato anuncia la versión {:?} y el runtime compilado fija {CODEBUDDY_VERSION}: \
-                 sin guards compilados para esa revisión el candidato se rechaza",
+                "candidate announces version {:?} while compiled runtime pins {CODEBUDDY_VERSION}: \
+                 without compiled guards for that revision candidate is rejected",
                 candidate.payload.version
             )));
         }
@@ -697,7 +696,7 @@ mod tests {
         candidate.payload.version = "2.165.0".to_string();
         let error = runtime.commit(&candidate).unwrap_err();
         assert!(
-            matches!(error, ContractError::Rejected(ref message) if message.contains("guards compilados")),
+            matches!(error, ContractError::Rejected(ref message) if message.contains("without compiled guards")),
             "got {error:?}"
         );
         assert_eq!(
@@ -827,7 +826,7 @@ mod tests {
         let transport = Arc::new(pin_map("2.165.0", Vec::new()));
         let error = runtime.refresh(transport).await.unwrap_err();
         assert!(
-            matches!(error, ContractError::Rejected(ref message) if message.contains("metadata sola")),
+            matches!(error, ContractError::Rejected(ref message) if message.contains("metadata alone")),
             "got {error:?}"
         );
         assert_eq!(runtime.snapshot().unwrap().generation, seed.generation);

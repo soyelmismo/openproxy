@@ -490,19 +490,19 @@ impl<J: ContractRefreshJob> ContractRefreshService<J> {
                 tracing::info!(
                     service = self.job.name(),
                     generation = %generation,
-                    "generación de contrato activada"
+                    "contract generation activated"
                 );
             }
             Ok(RoundOutcome::Unchanged) => {
                 self.counters.unchanged.fetch_add(1, Ordering::Relaxed);
                 self.reset_backoff();
-                tracing::debug!(service = self.job.name(), "contrato sin cambios");
+                tracing::debug!(service = self.job.name(), "contract unchanged");
             }
             Ok(RoundOutcome::Cancelled) => {
                 self.counters.cancelled.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!(
                     service = self.job.name(),
-                    "ronda de refresh descartada por cancelación"
+                    "contract refresh round discarded due to cancellation"
                 );
             }
             Err(error) => {
@@ -522,8 +522,8 @@ impl<J: ContractRefreshJob> ContractRefreshService<J> {
                 tracing::warn!(
                     service = self.job.name(),
                     %error,
-                    fallos = self.counters.consecutive_failures.load(Ordering::Relaxed),
-                    "ronda de refresh de contrato fallida; se conserva la última generación buena"
+                    failures = self.counters.consecutive_failures.load(Ordering::Relaxed),
+                    "contract refresh round failed; retaining last known good generation"
                 );
             }
         }
@@ -577,7 +577,7 @@ where
     let committed = tokio::task::spawn_blocking(move || store.commit(&candidate))
         .await
         .map_err(|error| {
-            ContractError::Rejected(format!("la tarea de commit del contrato falló: {error}"))
+            ContractError::Rejected(format!("contract commit task failed: {error}"))
         })??;
     Ok(committed.map_or(RoundOutcome::Unchanged, |snapshot| {
         RoundOutcome::Activated {
