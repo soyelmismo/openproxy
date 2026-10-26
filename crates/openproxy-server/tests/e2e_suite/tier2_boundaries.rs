@@ -250,12 +250,17 @@ async fn test_tier2_disconnect_aborted_upstream_stops_tokens() {
     harness.mock_handle.set_delay(Duration::from_millis(50));
     let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
-    tokio::spawn(async move {
+    let cancellation = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(10)).await;
         cancel_clone.cancel();
     });
     assert!(!cancel.is_cancelled());
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    // Wall-clock sleeps do not order tasks when the test runner is busy.
+    // Await the producer before asserting its observable side effect.
+    tokio::time::timeout(Duration::from_secs(2), cancellation)
+        .await
+        .expect("cancellation task timed out")
+        .expect("cancellation task panicked");
     assert!(cancel.is_cancelled());
     harness.mock_handle.clear_delay();
 }
