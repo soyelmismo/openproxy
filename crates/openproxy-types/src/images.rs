@@ -316,4 +316,51 @@ mod tests {
             serde_json::from_str(json_none).expect("deserialize none");
         assert_eq!(req_none.post_processing, None);
     }
+
+    #[test]
+    fn test_horde_responses_serde() {
+        let async_json = r#"{"id":"job_123","message":"Job queued","error":null}"#;
+        let async_res: HordeAsyncSubmitResponse =
+            serde_json::from_str(async_json).expect("deserialize async submit");
+        assert_eq!(async_res.id.as_deref(), Some("job_123"));
+        assert_eq!(async_res.message.as_deref(), Some("Job queued"));
+        assert_eq!(async_res.error, None);
+
+        let check_json = r#"{"done":false,"finished":1,"faulted":false,"wait_time":10,"queue_position":2,"error":null}"#;
+        let check_res: HordeCheckResponse =
+            serde_json::from_str(check_json).expect("deserialize check");
+        assert_eq!(check_res.done, Some(false));
+        assert_eq!(check_res.finished, Some(1));
+        assert_eq!(check_res.wait_time, Some(10));
+        assert_eq!(check_res.queue_position, Some(2));
+
+        let status_json = r#"{
+            "done": true,
+            "faulted": false,
+            "generations": [
+                {
+                    "worker_id": "worker_1",
+                    "worker_name": "gpu_node",
+                    "model": "SDXL",
+                    "state": "ok",
+                    "img": "https://horde.example.com/img.png",
+                    "censored": false
+                }
+            ],
+            "error": null
+        }"#;
+        let status_res: HordeStatusResponse =
+            serde_json::from_str(status_json).expect("deserialize status");
+        assert_eq!(status_res.done, Some(true));
+        assert_eq!(status_res.faulted, Some(false));
+        let gens = status_res.generations.as_ref().expect("generations list");
+        assert_eq!(gens.len(), 1);
+        assert_eq!(gens[0].worker_id.as_deref(), Some("worker_1"));
+        assert_eq!(gens[0].model.as_deref(), Some("SDXL"));
+        assert_eq!(gens[0].censored, Some(false));
+
+        let reserialized = serde_json::to_string(&status_res).expect("serialize status");
+        assert!(reserialized.contains(r#""done":true"#));
+        assert!(reserialized.contains(r#""worker_id":"worker_1""#));
+    }
 }
