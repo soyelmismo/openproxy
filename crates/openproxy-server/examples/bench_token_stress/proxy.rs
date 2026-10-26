@@ -120,6 +120,26 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     })
     .await??;
     let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let requested = openproxy_server::loopback_notrack::requested();
+    // Unlike production's best-effort optimization, a benchmark must fail closed:
+    // silently falling back would compare two tracked runs and claim a false A/B.
+    let notrack = if requested {
+        Some(openproxy_server::loopback_notrack::LoopbackNotrack::install(&[port]).await?)
+    } else {
+        None
+    };
+    let mut network = json!({
+        "notrack_requested": requested,
+        "notrack_active": notrack.is_some(),
+        "listener_port": port,
+        "upstream": config.upstream,
+        "table": notrack.as_ref().map(|guard| guard.table()),
+    });
+    std::fs::write(
+        config.directory.join("loopback-notrack.json"),
+        serde_json::to_vec_pretty(&network)?,
+    )?;
     emit(
         &json!({"pid":std::process::id(),"url":format!("http://{}", listener.local_addr()?),"keys":keys}),
     )?;
@@ -153,8 +173,32 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     let _ = stop.send(());
     server.await??;
     let server_shutdown_us = drain_start.elapsed().as_micros();
+    if let Some(guard) = notrack {
+        let table = guard.table().to_owned();
+        guard.remove().await;
+        let listed = tokio::process::Command::new("nft")
+            .args(["-j", "list", "tables"])
+            .output()
+            .await?;
+        ensure!(listed.status.success(), "cannot verify notrack cleanup");
+        let ruleset: serde_json::Value = serde_json::from_slice(&listed.stdout)?;
+        let entries = ruleset["nftables"]
+            .as_array()
+            .context("missing nftables JSON array")?;
+        ensure!(
+            !entries.iter().any(|entry| entry["table"]["name"] == table),
+            "notrack owner table survived shutdown"
+        );
+        network["table_removed"] = json!(true);
+    }
+    std::fs::write(
+        config.directory.join("loopback-notrack.json"),
+        serde_json::to_vec_pretty(&network)?,
+    )?;
+    let notrack_shutdown_us = drain_start.elapsed().as_micros() - server_shutdown_us;
     state.shutdown_usage_worker().await?;
-    let usage_shutdown_us = drain_start.elapsed().as_micros() - server_shutdown_us;
+    let usage_shutdown_us =
+        drain_start.elapsed().as_micros() - server_shutdown_us - notrack_shutdown_us;
     #[cfg(feature = "benchmark-sql")]
     let mut sql = serde_json::to_value(openproxy_db::sql_profile::stop())?;
     #[cfg(feature = "benchmark-sql")]
@@ -169,7 +213,7 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     #[cfg(not(feature = "benchmark-sql"))]
     let sql = json!({"status":"not instrumented; build with --features benchmark-sql"});
     emit(
-        &json!({"drained":true,"drain_us":drain_start.elapsed().as_micros(),"server_shutdown_us":server_shutdown_us,"usage_shutdown_us":usage_shutdown_us,"sql":sql}),
+        &json!({"drained":true,"drain_us":drain_start.elapsed().as_micros(),"server_shutdown_us":server_shutdown_us,"notrack_shutdown_us":notrack_shutdown_us,"usage_shutdown_us":usage_shutdown_us,"network":network,"sql":sql}),
     )?;
     // Parent samples /proc after persistence but before the process exits.
     tokio::task::spawn_blocking(read_line).await??;
