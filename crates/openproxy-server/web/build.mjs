@@ -49,6 +49,11 @@ if (isWatch) {
   await Promise.all([jsCtx.watch(), cssCtx.watch()]);
   console.log('Watching for changes...');
 } else {
+  // Limpiar chunks y bundles viejos para evitar que rust-embed infle el binario
+  const { rmSync, mkdirSync } = await import('fs');
+  rmSync(outDir, { recursive: true, force: true });
+  mkdirSync(outDir, { recursive: true });
+
   await Promise.all([
     build(options),
     build(cssOptions),

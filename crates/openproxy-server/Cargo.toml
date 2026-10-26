@@ -55,10 +55,9 @@ futures = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 tokio-stream = { workspace = true }
-http-body = "1"
-http-body-util = "0.1"
-bytes = "1"
-urlencoding = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
 parking_lot = { workspace = true }
 # Embeds the dashboard SPA's dist/ bundle into the binary so the
 # server ships as a single self-contained executable that serves
@@ -67,8 +66,8 @@ parking_lot = { workspace = true }
 # the correct Content-Type for each embedded asset; we also pull in
 # `mime_guess` directly so the handler in `admin_ui.rs` can call
 # `mime_guess::from_path` without going through rust-embed's re-export.
-rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
-mime_guess = "2"
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
 # mimalloc as the global allocator. glibc malloc retains freed arenas
 # aggressively, which inflates idle RSS for long-running services that
 # go through bursts of allocation (migrations, models.dev sync,
@@ -92,23 +91,22 @@ mime_guess = "2"
 # retained arenas to the OS now" — equivalent to glibc's `malloc_trim`
 # or jemalloc's `je_mallctl("arena.0.purge")`. It's allocator hygiene,
 # not GC.
-mimalloc = { version = "0.1", default-features = false, features = ["extended"] }
+mimalloc = { workspace = true }
 # Direct dep on libmimalloc-sys so we can call `mi_collect(false)` from
 # the memory-sweep task in state.rs. The `extended` feature exposes
 # `mi_collect` (and other extended APIs) via FFI.
-libmimalloc-sys = { version = "0.1", default-features = false, features = ["extended"] }
+libmimalloc-sys = { workspace = true }
 # rusqlite is needed in production code for the analytics query retry
 # helper in handlers/admin.rs (the helper takes a `&rusqlite::Connection`
 # as a closure parameter). Previously it was only a dev-dependency (for
 # tests), but the retry helper needs it at build time.
 rusqlite = { workspace = true }
-ahash = "0.8.12"
 tower-http = { workspace = true }
 thiserror.workspace = true
 # Manual accept loop in main.rs (OP-13): axum::serve does not expose
 # http1_header_read_timeout or a connection cap, so the server drives
 # hyper_util's connection builder directly (same stack axum uses internally).
-hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
-tower = { version = "0.5", features = ["util"] }
+hyper-util = { workspace = true, features = ["tokio", "server-auto", "service"] }
+tower = { workspace = true, features = ["util"] }
 
 [dev-dependencies]

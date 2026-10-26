@@ -95,7 +95,7 @@ pub fn md5_bytes(data: &[u8]) -> [u8; 16] {
 /// MD5 digest as 32 lowercase hex chars.
 pub fn md5_hex(data: impl AsRef<[u8]>) -> String {
     let digest = md5_bytes(data.as_ref());
-    hex::encode(digest)
+    openproxy_types::to_hex_lower(&digest)
 }
 
 #[cfg(test)]

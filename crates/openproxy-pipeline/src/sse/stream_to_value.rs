@@ -142,15 +142,13 @@ pub fn parse_sse_stream_to_openai_response(
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Some(chunk) =
-                    crate::sse::parse_gemini_sse_line(
+                if let Some(chunk) = crate::sse::parse_gemini_sse_line(
                     trimmed,
                     chunk_id,
                     created,
                     model_name,
                     &mut tool_call_index_counter,
-                )?
-                    && feed_chunk_to_acc(&mut acc, chunk)
+                )? && feed_chunk_to_acc(&mut acc, chunk)
                 {
                     break;
                 }

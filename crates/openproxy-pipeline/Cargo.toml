@@ -14,7 +14,7 @@ default = ["laya-engine"]
 laya-engine = ["openproxy-adapters/laya-engine"]
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = { workspace = true }
 
 [[bench]]
 name = "sse_streaming"
@@ -29,6 +29,10 @@ harness = false
 name = "sse_accumulator"
 harness = false
 
+[[bench]]
+name = "token_throughput"
+harness = false
+
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
@@ -41,23 +45,14 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
-bytes = "1"
-http = "1"
-http-body = "1"
-http-body-util = "0.1"
-futures-util = "0.3"
-anyhow = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+futures-util = { workspace = true }
 thiserror = { workspace = true }
 rusqlite = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
-memchr = "2"
-tokio-util = { workspace = true, features = ["rt"] }
+memchr = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 aho-corasick = { workspace = true }
-# Security: NFKC normalization collapses fullwidth/homoglyph characters to
-# their ASCII equivalents before PII regex matching, so that inputs like
-# `alice＠example.com` (FULLWIDTH @) or `+１２３-５５５-０１９９` (FULLWIDTH
-# digits) are detected instead of leaking to upstream providers verbatim.
-unicode-normalization = "0.1"

@@ -166,7 +166,7 @@ impl OAuthProvider for ClaudeCodeOAuthProvider {
         let authorize_url = self.auth_url();
 
         let state_bytes: [u8; 16] = rand::random();
-        let state = hex::encode(state_bytes);
+        let state = openproxy_types::to_hex_lower(&state_bytes);
 
         // Anthropic Claude Code client expects the registered callback URI
         let effective_redirect =

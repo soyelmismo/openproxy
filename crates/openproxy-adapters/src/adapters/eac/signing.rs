@@ -36,17 +36,7 @@ pub fn resolve_eac_secret(configured: Option<&str>) -> Cow<'static, str> {
     Cow::Borrowed(DEFAULT_EAC_SECRET)
 }
 
-/// Converts bytes into a lowercase hex string without external dependencies.
-#[inline]
-pub fn to_hex_lower(bytes: &[u8]) -> String {
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        s.push(HEX_CHARS[(b >> 4) as usize] as char);
-        s.push(HEX_CHARS[(b & 0x0f) as usize] as char);
-    }
-    s
-}
+pub use openproxy_types::to_hex_lower;
 
 /// HMAC-SHA256 (RFC 2104 / RFC 4231) over `data` using `key`.
 #[inline]

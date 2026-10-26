@@ -22,6 +22,5 @@ aes-gcm = { workspace = true }
 base64 = { workspace = true }
 zeroize = { workspace = true }
 regex = { workspace = true }
-rand.workspace = true
 thiserror.workspace = true
-getrandom = "0.3"
+getrandom = { workspace = true }

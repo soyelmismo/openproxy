@@ -286,6 +286,13 @@ impl ThinkStreamExtractor {
             (buffered, String::new())
         }
     }
+
+    /// Fast probe for the normalizer to skip JSON parsing when no think tag
+    /// or active think state exists.
+    #[inline]
+    pub fn has_active_state_or_tag(&self, text: &str) -> bool {
+        self.inside_think || !self.tag_buffer.is_empty() || text.contains('<')
+    }
 }
 
 impl crate::streaming::StreamingChunkStage for ThinkStreamExtractor {

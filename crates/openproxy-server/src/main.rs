@@ -47,18 +47,25 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn configure_allocator() {
     unsafe {
-        // Immediate segment purge on free (disables 10ms purge delay)
-        libmimalloc_sys::mi_option_set(15 /* mi_option_purge_delay */, 0);
-        // Disable eager arena commit on Linux overcommit systems
+        // Disallow arena allocation completely: allocate directly from OS pages
+        // which can be immediately freed and returned to the OS via MADV_DONTNEED.
+        // This prevents mimalloc from hoarding 1 GiB arenas in anonymous dirty RSS.
+        libmimalloc_sys::mi_option_set(27 /* mi_option_disallow_arena_alloc */, 1);
+        // Purge delay of 10ms for OS segments (non-zero so mi_arena_purge_delay and segment sweeps actually fire)
+        libmimalloc_sys::mi_option_set(15 /* mi_option_purge_delay */, 10);
+        // Disable eager commit
         libmimalloc_sys::mi_option_set(4 /* mi_option_arena_eager_commit */, 0);
-        // Reduce initial arena reservation from 1 GiB to 64 MiB (in KiB)
+        libmimalloc_sys::mi_option_set(3 /* mi_option_eager_commit */, 0);
+        // Reduce initial arena reservation to 64 MiB (in KiB) as fallback
         libmimalloc_sys::mi_option_set(23 /* mi_option_arena_reserve */, 64 * 1024);
         // Immediately purge pages when threads terminate (spawn_blocking pool)
         libmimalloc_sys::mi_option_set(12 /* mi_option_abandoned_page_purge */, 1);
     }
     for (k, v) in [
-        ("MIMALLOC_PURGE_DELAY", "0"),
+        ("MIMALLOC_DISALLOW_ARENA_ALLOC", "1"),
+        ("MIMALLOC_PURGE_DELAY", "10"),
         ("MIMALLOC_ARENA_EAGER_COMMIT", "0"),
+        ("MIMALLOC_EAGER_COMMIT", "0"),
         ("MIMALLOC_ARENA_RESERVE", "65536"),
         ("MIMALLOC_ABANDONED_PAGE_PURGE", "1"),
     ] {
@@ -353,9 +360,20 @@ fn run_main() -> anyhow::Result<()> {
     //    the same process is a no-op.
     openproxy_core::install_rustls_crypto_provider();
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Ok(threads_str) = env::var("OPENPROXY_WORKER_THREADS") {
+        if let Ok(threads) = threads_str.parse::<usize>()
+            && threads > 0
+        {
+            builder.worker_threads(threads);
+        }
+    } else {
+        // Default to 4 worker threads for balanced concurrency without allocating
+        // 16-32 thread stacks and thread-local mimalloc pools.
+        builder.worker_threads(4);
+    }
+    let runtime = builder.build()?;
 
     runtime.block_on(async {
         let config = load_server_config()?;
@@ -479,13 +497,17 @@ mod tests {
     fn test_allocator_options_configured() {
         configure_allocator();
         unsafe {
-            assert_eq!(libmimalloc_sys::mi_option_get(15), 0);
+            assert_eq!(libmimalloc_sys::mi_option_get(27), 1);
+            assert_eq!(libmimalloc_sys::mi_option_get(15), 10);
             assert_eq!(libmimalloc_sys::mi_option_get(4), 0);
+            assert_eq!(libmimalloc_sys::mi_option_get(3), 0);
             assert_eq!(libmimalloc_sys::mi_option_get(23), 64 * 1024);
             assert_eq!(libmimalloc_sys::mi_option_get(12), 1);
         }
-        assert_eq!(std::env::var("MIMALLOC_PURGE_DELAY").unwrap(), "0");
+        assert_eq!(std::env::var("MIMALLOC_DISALLOW_ARENA_ALLOC").unwrap(), "1");
+        assert_eq!(std::env::var("MIMALLOC_PURGE_DELAY").unwrap(), "10");
         assert_eq!(std::env::var("MIMALLOC_ARENA_EAGER_COMMIT").unwrap(), "0");
+        assert_eq!(std::env::var("MIMALLOC_EAGER_COMMIT").unwrap(), "0");
         assert_eq!(std::env::var("MIMALLOC_ARENA_RESERVE").unwrap(), "65536");
         assert_eq!(std::env::var("MIMALLOC_ABANDONED_PAGE_PURGE").unwrap(), "1");
     }

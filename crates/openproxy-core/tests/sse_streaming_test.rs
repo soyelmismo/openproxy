@@ -6,7 +6,8 @@
 //! translates them for the client.
 
 use openproxy_pipeline::sse::{
-    SSE_DONE, UpstreamSseChunk, format_sse_line, parse_gemini_sse_line_test as parse_gemini_sse_line, parse_openai_sse_line,
+    SSE_DONE, UpstreamSseChunk, format_sse_line,
+    parse_gemini_sse_line_test as parse_gemini_sse_line, parse_openai_sse_line,
 };
 use openproxy_pipeline::translation::OpenAIUsage;
 

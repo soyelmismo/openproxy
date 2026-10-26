@@ -115,7 +115,7 @@ pub fn generate_plaintext() -> String {
 pub fn hash_key(plaintext: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(plaintext.as_bytes());
-    hex::encode(hasher.finalize())
+    openproxy_types::to_hex_lower(&hasher.finalize())
 }
 
 /// Parse an `expires_at` string into a UTC timestamp and return whether `now >= expires_at`.

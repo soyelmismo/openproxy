@@ -1,4 +1,6 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_pipeline::sse_accumulator::{
     ResponseAccumulator, extract_reasoning_content, normalize_nonstandard_reasoning_fields,
 };

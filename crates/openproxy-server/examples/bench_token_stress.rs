@@ -380,11 +380,7 @@ async fn main() {
 
     println!("---------- RESULTS ----------");
     println!("Elapsed Time:          {:.3} s", elapsed.as_secs_f64());
-    println!(
-        "Successful Requests:   {}/{}",
-        succ,
-        concurrency
-    );
+    println!("Successful Requests:   {succ}/{concurrency}");
     println!("Total Tokens Delivered: {total_tokens}");
     println!("Throughput:            {tokens_per_sec:.0} tokens/sec");
     println!("Data Transfer:         {mbytes:.2} MB ({mb_per_sec:.2} MB/s)");
@@ -405,12 +401,24 @@ async fn main() {
         let max_ttft = max_ttft_micros.load(Ordering::Relaxed);
 
         println!("\n---------- LATENCY & BOTTLENECK PROFILE (Microseconds) ----------");
-        println!("Routing + Auth + Upstream Connect (Dispatch):  {avg_dispatch_us:.1} µs ({:.2} ms)", avg_dispatch_us / 1000.0);
-        println!("Time To First Token (TTFT - Client perspective): {avg_ttft_us:.1} µs ({:.2} ms) [min: {min_ttft} µs, max: {max_ttft} µs]");
-        println!("Stream Processing & Drain (SSE pump):          {avg_drain_us:.1} µs ({:.2} ms)", avg_drain_us / 1000.0);
+        println!(
+            "Routing + Auth + Upstream Connect (Dispatch):  {avg_dispatch_us:.1} µs ({:.2} ms)",
+            avg_dispatch_us / 1000.0
+        );
+        println!(
+            "Time To First Token (TTFT - Client perspective): {avg_ttft_us:.1} µs ({:.2} ms) [min: {min_ttft} µs, max: {max_ttft} µs]",
+            avg_ttft_us / 1000.0
+        );
+        println!(
+            "Stream Processing & Drain (SSE pump):          {avg_drain_us:.1} µs ({:.2} ms)",
+            avg_drain_us / 1000.0
+        );
         if total_chunks_received.load(Ordering::Relaxed) > 0 {
-            let per_chunk_us = (total_stream_drain_micros.load(Ordering::Relaxed) as f64) / (total_chunks_received.load(Ordering::Relaxed) as f64);
-            println!("Average Time Per SSE Chunk in Proxy Pipeline:   {per_chunk_us:.2} µs (overhead por token)");
+            let per_chunk_us = (total_stream_drain_micros.load(Ordering::Relaxed) as f64)
+                / (total_chunks_received.load(Ordering::Relaxed) as f64);
+            println!(
+                "Average Time Per SSE Chunk in Proxy Pipeline:   {per_chunk_us:.2} µs (overhead por token)"
+            );
         }
     }
     println!("==========");

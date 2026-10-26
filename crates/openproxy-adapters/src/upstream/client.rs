@@ -553,8 +553,7 @@ pub(crate) fn build_hyper_request(spec: UpstreamRequest) -> UpstreamResult<Reque
         if let Some(len) = body_len
             && !headers.contains_key(http::header::CONTENT_LENGTH)
         {
-            let mut buf = itoa::Buffer::new();
-            let len_str = buf.format(len);
+            let len_str = len.to_string();
             let mut bytes = bytes::BytesMut::with_capacity(len_str.len());
             bytes.extend_from_slice(len_str.as_bytes());
             if let Ok(v) = http::HeaderValue::from_maybe_shared(bytes.freeze()) {

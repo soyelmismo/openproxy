@@ -15,9 +15,15 @@ fn gemini_cache_preserva_contador_en_stream_y_acumulador() {
                 body = json!({"response": body});
             }
             let mut counter = 0;
-            let chunk = parse_gemini_sse_line(&format!("data: {body}"), "cache-test", 0, "gemini", &mut counter)
-                .unwrap()
-                .unwrap();
+            let chunk = parse_gemini_sse_line(
+                &format!("data: {body}"),
+                "cache-test",
+                0,
+                "gemini",
+                &mut counter,
+            )
+            .unwrap()
+            .unwrap();
             let usage = chunk.usage.as_ref().unwrap();
             assert_eq!(usage.prompt_tokens, 10000);
             assert_eq!(

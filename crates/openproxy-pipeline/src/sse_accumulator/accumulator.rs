@@ -138,7 +138,9 @@ impl ResponseAccumulator {
             return;
         }
         self.append_delta_content_if_present(payload);
-        self.append_delta_tool_calls_if_present(payload);
+        if payload.contains("\"tool_calls\"") {
+            self.append_delta_tool_calls_if_present(payload);
+        }
     }
 
     pub fn append_reasoning(&mut self, text: &str) {

@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 use openproxy_pipeline::sse::{
     AnthropicToolUseAccumulator, parse_gemini_sse_line, parse_openai_sse_line,
     translate_anthropic_sse_event,
@@ -17,11 +19,13 @@ fn bench_gemini_sse_line(c: &mut Criterion) {
     let line = r#"data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}}"#;
     c.bench_function("gemini_sse_line_parse", |b| {
         b.iter(|| {
+            let mut counter: u32 = 0;
             parse_gemini_sse_line(
                 black_box(line),
                 black_box("test-id"),
                 black_box(0),
                 black_box("gemini-pro"),
+                black_box(&mut counter),
             )
             .expect("failed to parse gemini sse")
         })

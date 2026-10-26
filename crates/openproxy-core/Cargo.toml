@@ -41,29 +41,22 @@ axum.workspace = true
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 toml = { workspace = true }
 chrono.workspace = true
 uuid = { workspace = true }
-futures = { workspace = true }
 # `tokio_util::sync::CancellationToken` lives behind the `rt` feature.
 # direct dep so the discovery scheduler can fan out `cancel()` to every
 # per-provider task with broadcast semantics. See Gate E1 spec.
 tokio-util = { workspace = true, features = ["rt"] }
 parking_lot = { workspace = true }
 rand = { workspace = true }
-hex = { workspace = true }
 base64 = { workspace = true }
-tdigest = { workspace = true }
 dashmap = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
 zeroize = { workspace = true }
-urlencoding = { workspace = true }
 miniz_oxide = { workspace = true }
 
 # --- hyper-based upstream client (Gate 0) ---
@@ -71,30 +64,19 @@ miniz_oxide = { workspace = true }
 # Pinned to versions that are already present in the workspace lockfile
 # so disabling the module also disables the direct dep; that keeps
 # `cargo build -p openproxy-core --no-default-features` working.
-hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
-hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }
-http = { version = "1", optional = true }
-http-body = { version = "1", optional = true }
-http-body-util = { version = "0.1", default-features = false, features = ["channel"], optional = true }
-bytes = "1"
-tower = { version = "0.5", default-features = false, features = ["util"] }
-tower-service = { version = "0.3" }
-futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
-# TCP keepalive support for the upstream connector. Used to set
-# SO_KEEPALIVE on upstream sockets so stale connections are detected
-# at the kernel level before hyper's pool hands them out.
-socket2 = { version = "0.6", features = ["all"], optional = true }
-# TLS for the upstream/ connector. Only the production HTTPS path
-# uses these (HTTP uses a plain `tokio::net::TcpStream`). The
-# versions track the `tokio-rustls 0.26 / rustls 0.23` pair that
-# deps here keeps the feature flag self-contained.
-tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"], optional = true }
-rustls-pki-types = { version = "1", optional = true }
-webpki-roots = { version = "1", optional = true }
-ahash = "0.8.12"
-governor = "0.10.4"
-getrandom = "0.3"
+hyper = { workspace = true, features = ["client", "http1", "http2"], optional = true }
+hyper-util = { workspace = true, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }
+http = { workspace = true, optional = true }
+http-body = { workspace = true, optional = true }
+http-body-util = { workspace = true, features = ["channel"], optional = true }
+bytes = { workspace = true }
+futures-util = { workspace = true, features = ["std"], optional = true }
+socket2 = { workspace = true, features = ["all"], optional = true }
+tokio-rustls = { workspace = true, features = ["logging", "ring", "tls12"], optional = true }
+rustls = { workspace = true, features = ["logging", "std", "tls12", "ring"], optional = true }
+rustls-pki-types = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+governor = { workspace = true }
 
 [dev-dependencies]
 # Re-enable `tokio`'s `test-util` feature ONLY for the test
@@ -118,7 +100,7 @@ httpmock = { workspace = true }
 openproxy-adapters = { path = "../openproxy-adapters", features = ["ssrf-bypass"] }
 # Benchmark harness for the SSE chunk-forwarding hot path.
 # Used by `cargo bench -p openproxy-core --bench sse_fast_path`.
-criterion = { version = "0.8", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
+criterion = { workspace = true, features = ["async_tokio"] }
 
 [[bench]]
 name = "sse_fast_path"

@@ -23,15 +23,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
-bytes = "1"
-http = "1"
+bytes = { workspace = true }
+http = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-ahash = "0.8.12"
 regex = { workspace = true }
 dashmap.workspace = true
-tower-service = "0.3"
+tower-service = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 sha2 = { workspace = true }
@@ -40,25 +39,24 @@ miniz_oxide = { workspace = true }
 # CRC32 for gzip trailer verification. `miniz_oxide::inflate::stream`
 # implements neither gzip nor CRC/ISIZE, so the container is parsed here and
 # the checksum computed independently.
-crc32fast = { version = "1.5", default-features = false }
-brotli-decompressor = { version = "6", default-features = false, features = ["std"] }
-zstd = { version = "0.13", default-features = false }
+crc32fast = { workspace = true }
+brotli-decompressor = { workspace = true }
+zstd = { workspace = true }
 
-hyper = { version = "1.10", default-features = false, features = ["client", "http1", "http2"], optional = true }
-hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }
-http-body = { version = "1", optional = true }
-http-body-util = { version = "0.1", default-features = false, features = ["channel"], optional = true }
-futures-util = { version = "0.3", default-features = false, features = ["std"], optional = true }
-socket2 = { version = "0.6", features = ["all"], optional = true }
-tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "ring", "tls12"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["logging", "std", "tls12", "ring"], optional = true }
-rustls-pki-types = { version = "1", optional = true }
-webpki-roots = { version = "1", optional = true }
-itoa = "1.0.18"
-tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"], optional = true }
+hyper = { workspace = true, features = ["client", "http1", "http2"], optional = true }
+hyper-util = { workspace = true, features = ["client-legacy", "tokio", "http1", "http2"], optional = true }
+http-body = { workspace = true, optional = true }
+http-body-util = { workspace = true, features = ["channel"], optional = true }
+futures-util = { workspace = true, features = ["std"], optional = true }
+socket2 = { workspace = true, features = ["all"], optional = true }
+tokio-rustls = { workspace = true, features = ["logging", "ring", "tls12"], optional = true }
+rustls = { workspace = true, features = ["logging", "std", "tls12", "ring"], optional = true }
+rustls-pki-types = { workspace = true, optional = true }
+webpki-roots = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
 
 [dev-dependencies]
-hyper = { version = "1.10", default-features = false, features = ["server", "http2"] }
+hyper = { workspace = true, features = ["server", "http2"] }
 
 [build-dependencies]
-cc = "1.0"
+cc = { workspace = true }

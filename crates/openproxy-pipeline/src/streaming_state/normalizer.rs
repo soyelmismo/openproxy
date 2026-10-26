@@ -43,6 +43,12 @@ impl ToolCallAccumulator {
         prev.push_str(fragment);
         fragment
     }
+
+    /// Fast probe for the normalizer to check if there are active tool calls.
+    #[inline]
+    pub fn has_active_state(&self, _text: &str) -> bool {
+        !self.args_by_index.is_empty()
+    }
 }
 
 fn normalize_choice_content(
@@ -146,6 +152,14 @@ pub(crate) fn apply_reasoning_normalizations(
     let has_content = p.contains("\"content\"");
     let has_tool_calls = p.contains("\"tool_calls\"");
     if !has_content && !has_tool_calls {
+        return normalized;
+    }
+
+    // Fast-path: if content does not contain think tags and tool calls don't need normalization,
+    // skip the full serde deserialization and serialization roundtrip.
+    if (!has_content || !think_extractor.has_active_state_or_tag(p))
+        && (!has_tool_calls || !tool_call_acc.has_active_state(p))
+    {
         return normalized;
     }
 

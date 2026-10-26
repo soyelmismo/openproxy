@@ -294,7 +294,7 @@ impl OAuthProvider for GenericOAuthProvider {
 
             // random state guards the callback against CSRF
             let state_buf: [u8; 16] = rand::random();
-            let state = hex::encode(state_buf);
+            let state = openproxy_types::to_hex_lower(&state_buf);
             params.push(("state", state.as_str()));
 
             Ok((
