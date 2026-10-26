@@ -9,6 +9,8 @@ use super::TargetFormatter;
 
 pub struct ResponsesFormatter;
 
+pub(crate) const DEFAULT_RESPONSES_INSTRUCTIONS: &str = "You are an autonomous agent. Fulfill the user's intent completely without stopping to ask for confirmation or permission for routine, intermediate, or subsequent steps unless strictly blocked. Follow the developer instructions in the conversation.";
+
 impl TargetFormatter for ResponsesFormatter {
     fn format_request(
         &self,
@@ -33,8 +35,7 @@ impl TargetFormatter for ResponsesFormatter {
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
 
-        let default_instructions =
-            "Follow the developer instructions in the conversation.".to_string();
+        let default_instructions = DEFAULT_RESPONSES_INSTRUCTIONS.to_string();
         obj.entry("instructions".to_string()).or_insert_with(|| {
             Value::String(system_instructions.unwrap_or(default_instructions.clone()))
         });
@@ -94,7 +95,7 @@ impl TargetFormatter for ResponsesFormatter {
             let instructions_str = obj
                 .get("instructions")
                 .and_then(|v| v.as_str())
-                .unwrap_or("Follow the developer instructions in the conversation.");
+                .unwrap_or(DEFAULT_RESPONSES_INSTRUCTIONS);
             let pck = compute_responses_prompt_cache_key(
                 instructions_str,
                 req.openai_request.tools.as_deref(),
