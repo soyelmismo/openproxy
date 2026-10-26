@@ -155,6 +155,18 @@ pub fn extract_content_part_text(part: &serde_json::Value) -> String {
     if let Some(reasoning) = part.get("reasoning").and_then(|v| v.as_str()) {
         return reasoning.to_string();
     }
+
+    // Ignore image parts in text extraction so base64 payloads don't inflate
+    // estimated text tokens by hundreds of thousands.
+    if let Some(part_type) = part.get("type").and_then(|v| v.as_str())
+        && (part_type == "image_url" || part_type == "input_image" || part_type == "image")
+    {
+        return String::new();
+    }
+    if part.get("image_url").is_some() {
+        return String::new();
+    }
+
     match part {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),

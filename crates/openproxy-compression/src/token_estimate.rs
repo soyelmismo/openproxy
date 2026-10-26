@@ -23,6 +23,8 @@ use openproxy_types::message::OpenAIMessage;
 /// Estimate prompt tokens from string and array-of-parts (Anthropic-style
 /// `[{type:"text",text:"..."}]`) content across every message role, plus 4
 /// tokens of framing overhead per message (`<|im_start|>role\n...<|im_end|>`).
+/// Image parts (base64 or URLs) are billed standard vision tiles (~800 tokens)
+/// instead of counting raw base64 characters.
 pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
     let mut total: u32 = 0;
     for msg in messages {
@@ -30,6 +32,21 @@ pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
         if !text.is_empty() {
             total += count_tokens(&text);
         }
+
+        // Add standard image vision token allowance (~800 tokens per image part)
+        if let Some(serde_json::Value::Array(parts)) = &msg.content {
+            for part in parts {
+                let is_image = part
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|t| t == "image_url" || t == "input_image" || t == "image")
+                    || part.get("image_url").is_some();
+                if is_image {
+                    total += 800;
+                }
+            }
+        }
+
         // 4 tokens of role framing: <|im_start|>role\ncontent<|im_end|>\n.
         total += 4;
     }
