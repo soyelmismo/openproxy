@@ -117,7 +117,7 @@ async fn fast_mock_chat_handler(
         .unwrap_or("bench-model");
 
     if is_stream {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(64);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
         let tokens = cfg.tokens_per_stream;
         let step = cfg.chunk_size_tokens.max(1);
         let model_name = model.to_string();
@@ -234,7 +234,14 @@ async fn main() {
     println!("Started in-memory mock upstream on http://{upstream_addr}");
 
     let temp_dir = TempDir::new("openproxy-bench").expect("temp dir");
-    let db_pool = Arc::new(DbPool::open(&temp_dir.path().join("bench.db")).expect("open db"));
+    let db_pool = Arc::new(
+        DbPool::open_with_options(
+            &temp_dir.path().join("bench.db"),
+            0,
+            openproxy_types::SqliteSynchronous::Normal,
+        )
+        .expect("open db"),
+    );
     {
         let mut w = db_pool.writer();
         migrations::run(&mut w).expect("run migrations");
@@ -492,11 +499,7 @@ async fn main() {
     let post_sys = read_cpu_and_io_snapshot();
     let rss_growth_kb = post_rss_kb.saturating_sub(pre_rss_kb);
     let rss_growth_mb = (rss_growth_kb as f64) / 1024.0;
-    let bytes_per_stream = if concurrency > 0 {
-        (rss_growth_kb * 1024) / concurrency
-    } else {
-        0
-    };
+    let bytes_per_stream = (rss_growth_kb * 1024).checked_div(concurrency).unwrap_or(0);
 
     let user_cpu_ticks = post_sys.utime_ticks.saturating_sub(pre_sys.utime_ticks);
     let sys_cpu_ticks = post_sys.stime_ticks.saturating_sub(pre_sys.stime_ticks);
@@ -511,12 +514,27 @@ async fn main() {
     let logical_write_kb = (post_sys.wchar.saturating_sub(pre_sys.wchar) as f64) / 1024.0;
 
     println!("\n---------- RESOURCE CONSUMPTION (Memory, CPU & I/O) ----------");
-    println!("Process Resident Set (RSS):    {post_rss_kb} KB ({:.2} MB)", post_rss_kb as f64 / 1024.0);
+    println!(
+        "Process Resident Set (RSS):    {post_rss_kb} KB ({:.2} MB)",
+        post_rss_kb as f64 / 1024.0
+    );
     println!("RSS Growth During Workload:    {rss_growth_kb} KB ({rss_growth_mb:.2} MB)");
-    println!("Memory Allocation per Request: {:.2} KB ({:.3} MB per request)", bytes_per_stream as f64 / 1024.0, (bytes_per_stream as f64) / (1024.0 * 1024.0));
-    println!("CPU Utilization (Process):     {cpu_util_percent:.1}% across cores ({cpu_time_sec:.3}s CPU time: user={user_cpu_ticks}t, sys={sys_cpu_ticks}t)");
-    println!("Disk Physical I/O:             Read: {disk_read_kb:.1} KB | Written (fsync/WAL): {disk_write_kb:.1} KB");
-    println!("Logical I/O (Syscalls):        Read: {logical_read_kb:.1} KB | Written: {logical_write_kb:.1} KB");
-    println!("Database Operations:           DB queries on stream path: 0 (cached API keys & in-memory routing)");
+    println!(
+        "Memory Allocation per Request: {:.2} KB ({:.3} MB per request)",
+        bytes_per_stream as f64 / 1024.0,
+        (bytes_per_stream as f64) / (1024.0 * 1024.0)
+    );
+    println!(
+        "CPU Utilization (Process):     {cpu_util_percent:.1}% across cores ({cpu_time_sec:.3}s CPU time: user={user_cpu_ticks}t, sys={sys_cpu_ticks}t)"
+    );
+    println!(
+        "Disk Physical I/O:             Read: {disk_read_kb:.1} KB | Written (fsync/WAL): {disk_write_kb:.1} KB"
+    );
+    println!(
+        "Logical I/O (Syscalls):        Read: {logical_read_kb:.1} KB | Written: {logical_write_kb:.1} KB"
+    );
+    println!(
+        "Database Operations:           DB queries on stream path: 0 (cached API keys & in-memory routing)"
+    );
     println!("==========");
 }

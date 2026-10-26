@@ -161,7 +161,7 @@ impl PipelineRunner {
         let trace_id = TraceId::new();
 
         let watchdog_budget_ms = Self::calculate_watchdog_budget(headers);
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel(16);
         let CancelWatch {
             tx: watchdog_tx,
             rx: client_disconnected,

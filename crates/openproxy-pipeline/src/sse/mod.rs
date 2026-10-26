@@ -159,12 +159,14 @@ impl UpstreamSseChunk {
 }
 
 /// `data: <payload>\n\n` as `Bytes`, ready for a socket write. The caller
-/// passes the inner JSON with no leading `data: `; `+ 16` covers `"data: "`
-/// (6) plus `"\n\n"` (2) plus BytesMut's allocation slack.
+/// passes the inner JSON with no leading `data: `; allocates exact size (payload.len() + 8).
+#[inline]
 pub fn build_sse_frame(payload: &str) -> bytes::Bytes {
-    let mut b = bytes::BytesMut::with_capacity(payload.len() + 16);
+    let p_bytes = payload.as_bytes();
+    let total_len = p_bytes.len() + 8;
+    let mut b = bytes::BytesMut::with_capacity(total_len);
     b.extend_from_slice(b"data: ");
-    b.extend_from_slice(payload.as_bytes());
+    b.extend_from_slice(p_bytes);
     b.extend_from_slice(b"\n\n");
     b.freeze()
 }
