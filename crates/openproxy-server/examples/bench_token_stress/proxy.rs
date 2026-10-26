@@ -88,6 +88,14 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
         key,
         Arc::new(parking_lot::RwLock::new(Arc::new(vec![]))),
     );
+    if !config.background {
+        // Keep admission, routing, PII, recording and durable usage unchanged.
+        // Catalog refresh and public-proxy crawling are not part of this load.
+        state.discovery_scheduler().cancel();
+        state.supervisor().shutdown();
+        state.discovery_scheduler().shutdown_and_wait().await;
+        state.supervisor().shutdown_and_wait().await;
+    }
     state.rebuild_adapters().await?;
     let setup_state = state.clone();
     let keys = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<String>> {
@@ -144,7 +152,9 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     let drain_start = std::time::Instant::now();
     let _ = stop.send(());
     server.await??;
+    let server_shutdown_us = drain_start.elapsed().as_micros();
     state.shutdown_usage_worker().await?;
+    let usage_shutdown_us = drain_start.elapsed().as_micros() - server_shutdown_us;
     #[cfg(feature = "benchmark-sql")]
     let mut sql = serde_json::to_value(openproxy_db::sql_profile::stop())?;
     #[cfg(feature = "benchmark-sql")]
@@ -158,7 +168,9 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     let _ = sql_start;
     #[cfg(not(feature = "benchmark-sql"))]
     let sql = json!({"status":"not instrumented; build with --features benchmark-sql"});
-    emit(&json!({"drained":true,"drain_us":drain_start.elapsed().as_micros(),"sql":sql}))?;
+    emit(
+        &json!({"drained":true,"drain_us":drain_start.elapsed().as_micros(),"server_shutdown_us":server_shutdown_us,"usage_shutdown_us":usage_shutdown_us,"sql":sql}),
+    )?;
     // Parent samples /proc after persistence but before the process exits.
     tokio::task::spawn_blocking(read_line).await??;
     Ok(())

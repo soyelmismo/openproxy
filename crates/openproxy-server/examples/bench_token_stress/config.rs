@@ -14,6 +14,8 @@ pub const HELP: &str = "bench_token_stress [CONCURRENCY=10] [TOKENS=5000] [TOKEN
   --workers N          Proxy Tokio workers (default number of proxy CPUs)
   --json PATH          Machine-readable report, '-' for JSON stdout
   --synchronous MODE   full (default, matches production) or normal (durability tradeoff)
+  --event-interval-us N Mock pause between upstream events per stream (default 0 = firehose)
+  --background         Include unrelated discovery/maintenance daemons (default isolated pipeline)
   --perf               Hardware counters for proxy measurement window (Linux perf required)
   --heaptrack          Profile proxy allocations (requires heaptrack and --features benchmark-system-allocator)
   --output-dir PATH    Artifacts parent (default TMPDIR, fresh run directory)
@@ -36,6 +38,10 @@ pub struct WorkerConfig {
     pub keys: Vec<String>,
     pub directory: PathBuf,
     pub synchronous: String,
+    #[serde(default)]
+    pub background: bool,
+    #[serde(default)]
+    pub event_interval_us: u64,
 }
 
 pub struct Options {
@@ -60,7 +66,7 @@ impl Options {
         let mut flags = std::collections::BTreeMap::new();
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
-            if arg == "--perf" || arg == "--heaptrack" {
+            if matches!(arg.as_str(), "--perf" | "--heaptrack" | "--background") {
                 flags.insert(arg.as_str(), "true".to_owned());
             } else if arg.starts_with("--") {
                 ensure!(
@@ -73,7 +79,8 @@ impl Options {
                         "--workers",
                         "--json",
                         "--synchronous",
-                        "--output-dir"
+                        "--output-dir",
+                        "--event-interval-us"
                     ]
                     .contains(&arg.as_str()),
                     "unknown flag {arg}"
@@ -179,6 +186,11 @@ impl Options {
                 keys: Vec::new(),
                 directory,
                 synchronous,
+                background: flags.contains_key("--background"),
+                event_interval_us: flags
+                    .get("--event-interval-us")
+                    .map_or(Ok(0), |v| v.parse())
+                    .context("invalid --event-interval-us")?,
             },
             repetitions,
             proxy_cpus,

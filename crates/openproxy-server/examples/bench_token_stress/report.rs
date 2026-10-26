@@ -50,6 +50,8 @@ pub struct Run {
     pub elapsed_us: u64,
     pub headers_us: Option<Distribution>,
     pub ttft_us: Option<Distribution>,
+    pub max_gap_us: Option<Distribution>,
+    pub http_frames_per_stream: Option<Distribution>,
     pub latency_us: Option<Distribution>,
     pub all_attempt_latency_us: Option<Distribution>,
     pub client_batch: Batch,
@@ -99,6 +101,10 @@ impl Run {
                     .map(|t| t as f64)
                     .collect(),
             ),
+            max_gap_us: Distribution::from(valid.iter().map(|r| r.max_gap_us as f64).collect()),
+            http_frames_per_stream: Distribution::from(
+                valid.iter().map(|r| r.http_frames as f64).collect(),
+            ),
             latency_us: Distribution::from(valid.iter().map(|r| r.total_us as f64).collect()),
             all_attempt_latency_us: Distribution::from(
                 batch.requests.iter().map(|r| r.total_us as f64).collect(),
@@ -122,6 +128,8 @@ impl Run {
         );
         for (name, distribution) in [
             ("TTFT", &self.ttft_us),
+            ("Max frame gap", &self.max_gap_us),
+            ("HTTP frames/stream", &self.http_frames_per_stream),
             ("Latency", &self.latency_us),
             ("Headers", &self.headers_us),
         ] {
@@ -183,6 +191,7 @@ pub fn self_test() -> anyhow::Result<()> {
         total_us: 2,
         body_bytes: 0,
         http_frames: 0,
+        max_gap_us: 0,
         stream: crate::validate::Validator::default(),
     };
     failed.stream.tokens = 999;

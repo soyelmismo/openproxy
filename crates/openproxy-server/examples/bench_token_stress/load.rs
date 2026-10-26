@@ -28,6 +28,9 @@ pub struct RequestResult {
     pub total_us: u64,
     pub body_bytes: u64,
     pub http_frames: u64,
+    /// Largest gap between consecutive body frames after the first one.
+    #[serde(default)]
+    pub max_gap_us: u64,
     pub stream: Validator,
 }
 
@@ -53,6 +56,7 @@ async fn request(
         total_us: 0,
         body_bytes: 0,
         http_frames: 0,
+        max_gap_us: 0,
         stream: Validator::default(),
     };
     let outcome = tokio::time::timeout(Duration::from_secs(120), async {
@@ -68,9 +72,17 @@ async fn request(
             "not SSE"
         );
         let mut body = response.into_body();
+        let mut last_frame: Option<Instant> = None;
         while let Some(frame) = body.frame().await {
             let frame = frame?;
             if let Some(data) = frame.data_ref() {
+                let now = Instant::now();
+                if let Some(previous) = last_frame {
+                    result.max_gap_us = result
+                        .max_gap_us
+                        .max(now.duration_since(previous).as_micros() as u64);
+                }
+                last_frame = Some(now);
                 result.http_frames += 1;
                 result.body_bytes += data.len() as u64;
                 if result.stream.push(data)? && result.ttft_us.is_none() {
@@ -145,6 +157,9 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
         results.push(result?);
     }
     let elapsed_us = start.elapsed().as_micros() as u64;
+    // All requests have completed. Close idle pooled connections before the
+    // coordinator drains the server, keeping this process alive for /proc.
+    drop(client);
     results.sort_unstable_by_key(|r| r.id);
     emit(&Batch {
         elapsed_us,

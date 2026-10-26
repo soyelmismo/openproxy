@@ -47,6 +47,13 @@ impl Worker {
                     config.directory.join("heaptrack-proxy.raw").display()
                 ));
         }
+        if !config.background {
+            command
+                .env("OPENPROXY_CLAUDE_CODE_PROFILE_AUTO_REFRESH", "0")
+                .env("OPENPROXY_CODEX_CONTRACT_AUTO_REFRESH", "0")
+                .env("OPENPROXY_CODEBUDDY_CONTRACT_AUTO_REFRESH", "0")
+                .env("MODELS_DEV_SYNC_ENABLED", "false");
+        }
         command
             .arg(std::env::current_exe()?)
             .args(["--role", role])
@@ -209,7 +216,7 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         "affinity":{"proxy":options.proxy_cpus,"mock":options.mock_cpus,"client":options.client_cpus},
         "allocator":if cfg!(feature="benchmark-system-allocator") { "system (allocation profiling, do not compare RSS with mimalloc)" } else { "mimalloc (production allocator with child environment tuning)" },
         "sql_instrumented":cfg!(feature="benchmark-sql"), "clock_ticks_per_second":ticks,
-        "notes":["Synthetic tokens: exact received ' tok' units, not tokenizer throughput", "RSS is residency, not allocations; sampled every 5ms; HWM includes warmup", "CPU ticks are scheduled CPU time, NOT hardware cycles", "SQL counts include background/persistence; no phase attribution", "AppState::for_test and axum::serve, not the production startup/hardened accept loop", "Loopback transport and disjoint affinity do not eliminate host noise", "Per-request latency includes scheduler, sockets, upstream and client work, not pure pipeline CPU"],
+        "notes":["Default isolates pipeline: unrelated discovery/maintenance daemons stopped before warmup; --background enables them", "Synthetic tokens: exact received ' tok' units, not tokenizer throughput", "RSS is residency, not allocations; sampled every 5ms; HWM includes warmup", "CPU ticks are scheduled CPU time, NOT hardware cycles", "SQL counts include background/persistence; no phase attribution", "AppState::for_test and axum::serve, not the production startup/hardened accept loop", "Loopback transport and disjoint affinity do not eliminate host noise", "Per-request latency includes scheduler, sockets, upstream and client work, not pure pipeline CPU"],
         "artifacts":directory, "throughput_across_repetitions":throughput,"failed_requests":failed,"runs":runs,
     });
     let text = serde_json::to_string_pretty(&result)?;

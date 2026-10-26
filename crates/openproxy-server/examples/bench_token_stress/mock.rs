@@ -18,6 +18,7 @@ struct Payloads {
     remainder: Option<Bytes>,
     terminal: Bytes,
     count: usize,
+    interval: std::time::Duration,
 }
 
 fn content_frame(tokens: usize) -> Bytes {
@@ -33,7 +34,17 @@ fn content_frame(tokens: usize) -> Bytes {
 async fn chat(State(payloads): State<Arc<Payloads>>) -> impl IntoResponse {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
     tokio::spawn(async move {
+        // Optional pacing emulates a real model's inter-token gap. Delay keeps
+        // the spacing when the mock falls behind instead of bursting to catch up.
+        let mut pace = (!payloads.interval.is_zero()).then(|| {
+            let mut tick = tokio::time::interval(payloads.interval);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            tick
+        });
         for _ in 0..payloads.count {
+            if let Some(tick) = pace.as_mut() {
+                tick.tick().await;
+            }
             if tx.send(Ok(payloads.regular.clone())).await.is_err() {
                 return;
             }
@@ -68,6 +79,7 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
             })
         )),
         count: config.tokens / config.chunk,
+        interval: std::time::Duration::from_micros(config.event_interval_us),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     emit(
