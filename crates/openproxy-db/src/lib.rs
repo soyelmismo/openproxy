@@ -14,6 +14,8 @@ pub mod cost;
 pub mod pricing;
 pub mod providers;
 pub mod secrets;
+#[cfg(feature = "sql-profile")]
+pub mod sql_profile;
 pub mod usage_journal;
 pub mod usage_writer;
 

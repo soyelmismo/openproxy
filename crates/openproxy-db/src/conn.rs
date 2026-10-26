@@ -498,6 +498,8 @@ fn configure_connection(
         ))
     }
     .map_err(crate::error::map_db_error)?;
+    #[cfg(feature = "sql-profile")]
+    crate::sql_profile::install(conn);
     Ok(())
 }
 

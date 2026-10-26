@@ -9,6 +9,10 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Disabled in normal builds: statement tracing perturbs the measured workload.
+sql-profile = ["rusqlite/trace"]
+
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }
 tokio = { workspace = true }
