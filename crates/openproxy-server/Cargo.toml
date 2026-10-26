@@ -19,6 +19,10 @@ laya-engine = [
     "openproxy-pipeline/laya-engine",
     "openproxy-core/laya-engine",
 ]
+# Opt-in statement counting for the standalone performance harness only.
+benchmark-sql = ["openproxy-db/sql-profile"]
+# External heaptrack interposition needs the system allocator, not mimalloc.
+benchmark-system-allocator = []
 
 [[bin]]
 name = "openproxy"
@@ -110,3 +114,5 @@ hyper-util = { workspace = true, features = ["tokio", "server-auto", "service"] 
 tower = { workspace = true, features = ["util"] }
 
 [dev-dependencies]
+# Reuse the workspace HTTP client for the isolated load generator.
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
