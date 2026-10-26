@@ -128,7 +128,10 @@ pub(crate) fn handle_streaming_response(
         ),
     };
 
-    let body = axum::body::Body::from_stream(sse_stream);
+    let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
+        sse_stream,
+        crate::services::sse_coalesce::configured_window(),
+    ));
     (
         [(
             axum::http::header::CONTENT_TYPE,

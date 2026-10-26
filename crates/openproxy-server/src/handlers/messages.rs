@@ -61,7 +61,10 @@ pub async fn anthropic_messages(
         let sse_stream =
             OpenAIToAnthropicSseStream::new(merged, format!("msg_{request_id}"), model);
 
-        let body = axum::body::Body::from_stream(sse_stream);
+        let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
+            sse_stream,
+            crate::services::sse_coalesce::configured_window(),
+        ));
         Ok((
             [(
                 axum::http::header::CONTENT_TYPE,

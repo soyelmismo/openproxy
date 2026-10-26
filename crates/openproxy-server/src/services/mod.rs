@@ -3,6 +3,7 @@
 //! Database-backed services are synchronous and must run inside blocking tasks.
 
 pub mod pipeline_runner;
+pub mod sse_coalesce;
 pub use pipeline_runner::{PipelineRunner, PreparedPipelineRequest};
 
 use crate::repositories::{

@@ -83,7 +83,10 @@ pub async fn responses_completions(
             model,
         );
 
-        let body = axum::body::Body::from_stream(sse_stream);
+        let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
+            sse_stream,
+            crate::services::sse_coalesce::configured_window(),
+        ));
         return Ok((
             [(
                 axum::http::header::CONTENT_TYPE,
