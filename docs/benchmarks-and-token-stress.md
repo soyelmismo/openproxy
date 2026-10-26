@@ -130,3 +130,8 @@ SQLite está en un directorio temporal bajo `TMPDIR`, **no en RAM salvo que ese 
 2. Consultar `by_prepared_sql` para localizar SELECT repetidos y transacciones, sin asumir caché a partir de lecturas de código
 3. Correlacionar `perf` y stacks de heaptrack con microbenchmarks. Preservar reasoning, tools, PII, usage y recording
 4. Cambiar una causa por vez y repetir la misma matriz con el mismo arnés. No reducir durabilidad ni desactivar funciones para presentar una ganancia
+
+## Variables de rendimiento del servicio
+
+- `OPENPROXY_SSE_COALESCE_MS` (default `1`): ventana máxima para juntar frames SSE ya listos en una sola escritura. El primer frame sale inmediato. `0` vuelve a una escritura por evento. Medido a 800 streams: 216k → 477-492k tokens/s y CPU del proxy 61 s → 19-22 s. Ventanas de 2-20 ms no mejoran más
+- `OPENPROXY_LOOPBACK_NOTRACK` (`1`/`true`, apagado por defecto): instala una tabla nftables `inet openproxy_loopback_notrack_<pid>` con `flags owner` que marca `notrack` solo el tráfico `lo` hacia y desde los puertos de `bind` y `admin_bind`. El kernel la borra cuando muere el proceso, también con `kill -9`. Requiere `CAP_NET_ADMIN` y el binario `nft`. Si falla, el servicio arranca con tracking normal y avisa en el log. No confundir el +6-8% observado al vaciar todo el firewall en un netns con la ganancia de estas dos reglas: ese factor no está medido aún. Las reglas `ct state` del host dejan de ver ese tráfico, y no aplica a clientes remotos ni a upstreams

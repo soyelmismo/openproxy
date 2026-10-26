@@ -122,12 +122,19 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
     }
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "openproxy listening");
-    let result = if let Some(admin_bind) = admin_bind {
-        let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
-        if !is_loopback_bind(&admin_bind) {
-            tracing::warn!(addr = %admin_bind, "admin listener is NON-LOOPBACK over plain HTTP; use a TLS-terminating reverse proxy");
+    let admin_listener = match admin_bind {
+        Some(admin_bind) => {
+            let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
+            if !is_loopback_bind(&admin_bind) {
+                tracing::warn!(addr = %admin_bind, "admin listener is NON-LOOPBACK over plain HTTP; use a TLS-terminating reverse proxy");
+            }
+            tracing::info!(addr = %admin_bind, "openproxy admin listening");
+            Some(admin_listener)
         }
-        tracing::info!(addr = %admin_bind, "openproxy admin listening");
+        None => None,
+    };
+    let notrack = install_loopback_notrack(&listener, admin_listener.as_ref()).await;
+    let result = if let Some(admin_listener) = admin_listener {
         serve_listeners(listener, admin_listener, state.clone()).await
     } else {
         serve_with_limits(
@@ -136,8 +143,42 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
         )
         .await
     };
+    if let Some(notrack) = notrack {
+        notrack.remove().await;
+        tracing::info!("loopback conntrack bypass removed");
+    }
     state.shutdown_usage_worker().await?;
     result
+}
+
+/// Opt-in `OPENPROXY_LOOPBACK_NOTRACK`: exempt loopback traffic to our own
+/// listening ports from conntrack. Never fails startup.
+async fn install_loopback_notrack(
+    public: &tokio::net::TcpListener,
+    admin: Option<&tokio::net::TcpListener>,
+) -> Option<openproxy_server::loopback_notrack::LoopbackNotrack> {
+    use openproxy_server::loopback_notrack::{ENV_VAR, LoopbackNotrack, requested};
+    if !requested() {
+        return None;
+    }
+    let ports: Vec<u16> = std::iter::once(public)
+        .chain(admin)
+        .filter_map(|l| l.local_addr().ok().map(|a| a.port()))
+        .collect();
+    match LoopbackNotrack::install(&ports).await {
+        Ok(guard) => {
+            tracing::info!(
+                table = guard.table(),
+                ?ports,
+                "loopback conntrack bypass installed"
+            );
+            Some(guard)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "{ENV_VAR} is set but the loopback conntrack bypass could not be installed; continuing with normal tracking");
+            None
+        }
+    }
 }
 
 async fn serve_listeners(
