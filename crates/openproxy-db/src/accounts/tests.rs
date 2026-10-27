@@ -640,3 +640,26 @@ fn reorder_accounts_rejects_partial_foreign_and_duplicate_ids() {
     assert_eq!(priority_of(b), 20);
     assert_eq!(priority_of(foreign), 10);
 }
+
+#[test]
+fn clearing_an_unset_rate_limit_writes_nothing() {
+    let (conn, _key, id) = zai_account();
+    let changes_before = conn.total_changes();
+    assert!(!clear_rate_limited_until(&conn, id).unwrap());
+    assert_eq!(
+        conn.total_changes(),
+        changes_before,
+        "no row may be rewritten"
+    );
+
+    set_rate_limited_until(&conn, id, Some("2999-01-01T00:00:00Z")).unwrap();
+    assert!(clear_rate_limited_until(&conn, id).unwrap());
+    let until: Option<String> = conn
+        .query_row(
+            "SELECT rate_limited_until FROM accounts WHERE id = ?1",
+            [id.0],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(until, None);
+}

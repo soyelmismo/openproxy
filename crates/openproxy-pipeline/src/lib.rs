@@ -58,5 +58,8 @@ pub mod worker;
 
 pub use response_ext::ResponseExt;
 
+#[cfg(feature = "benchmark-profile")]
+pub use worker::profile;
+
 #[cfg(test)]
 mod repository_tests;

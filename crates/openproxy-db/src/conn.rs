@@ -191,7 +191,12 @@ impl DbPool {
 
     /// Acquire the serialized writer. Blocks until the previous writer is released.
     pub fn writer(&self) -> WriterGuard<'_> {
-        self.writer.lock()
+        #[cfg(feature = "sql-profile")]
+        let start = std::time::Instant::now();
+        let guard = self.writer.lock();
+        #[cfg(feature = "sql-profile")]
+        crate::sql_profile::record_lock_wait(crate::sql_profile::LockKind::Writer, start.elapsed());
+        guard
     }
 
     /// Try to acquire the writer lock for at most `timeout`, returning `None`
@@ -205,13 +210,22 @@ impl DbPool {
     /// Clone the writer mutex's [`Arc`] handle, for long-lived consumers (e.g.
     /// [`crate::pipeline::Pipeline`]) that lock the connection repeatedly and
     /// move the handle into spawned tasks. Every `lock()` still serializes.
+    ///
+    /// NOTE: Locking directly on the returned `Arc<Mutex<Connection>>` bypasses
+    /// `DbPool::writer()` and its `sql-profile` lock acquisition instrumentation.
+    /// Pipeline components monitor and measure this lock wait separately.
     pub fn writer_arc(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.writer)
     }
 
     /// Acquire the serialized writer with an owned guard backed by Arc.
     pub fn writer_guard(&self) -> ArcWriterGuard {
-        self.writer.lock_arc()
+        #[cfg(feature = "sql-profile")]
+        let start = std::time::Instant::now();
+        let guard = self.writer.lock_arc();
+        #[cfg(feature = "sql-profile")]
+        crate::sql_profile::record_lock_wait(crate::sql_profile::LockKind::Writer, start.elapsed());
+        guard
     }
 
     #[inline]
@@ -237,13 +251,20 @@ impl DbPool {
     /// readers non-blockingly with adaptive backoff, so a busy reader cannot
     /// cause Head-of-Line blocking or a deadlock.
     pub fn reader_guard(&self) -> ArcReaderGuard {
+        #[cfg(feature = "sql-profile")]
+        let start = std::time::Instant::now();
         let n = self.readers.len();
         let mut spins = 0u32;
         loop {
-            let start = self.get_reader_idx();
+            let start_idx = self.get_reader_idx();
             for offset in 0..n {
-                let idx = (start + offset) % n;
+                let idx = (start_idx + offset) % n;
                 if let Some(guard) = self.readers[idx].try_lock_arc() {
+                    #[cfg(feature = "sql-profile")]
+                    crate::sql_profile::record_lock_wait(
+                        crate::sql_profile::LockKind::Reader,
+                        start.elapsed(),
+                    );
                     return guard;
                 }
             }
@@ -255,13 +276,20 @@ impl DbPool {
     /// Performs an opportunistic non-blocking scan across readers with adaptive
     /// backoff to prevent Head-of-Line blocking or deadlocks on busy readers.
     pub fn reader(&self) -> ReaderGuard<'_> {
+        #[cfg(feature = "sql-profile")]
+        let start = std::time::Instant::now();
         let n = self.readers.len();
         let mut spins = 0u32;
         loop {
-            let start = self.get_reader_idx();
+            let start_idx = self.get_reader_idx();
             for offset in 0..n {
-                let idx = (start + offset) % n;
+                let idx = (start_idx + offset) % n;
                 if let Some(guard) = self.readers[idx].try_lock() {
+                    #[cfg(feature = "sql-profile")]
+                    crate::sql_profile::record_lock_wait(
+                        crate::sql_profile::LockKind::Reader,
+                        start.elapsed(),
+                    );
                     return guard;
                 }
             }

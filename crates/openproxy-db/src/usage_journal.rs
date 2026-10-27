@@ -23,6 +23,38 @@ pub fn append(conn: &mut Connection, payload: &str) -> Result<i64> {
     })
 }
 
+/// Appends several payloads in one transaction (one commit, one fsync).
+///
+/// Results keep input order. Entries beyond the remaining capacity get
+/// `JournalCapacityExhausted` while earlier ones are still admitted, matching
+/// what sequential [`append`] calls would return.
+pub fn append_batch(conn: &mut Connection, payloads: &[&str]) -> Result<Vec<Result<i64>>> {
+    crate::with_busy_retry("usage_journal::append_batch", || {
+        let transaction = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(crate::error::map_db_error)?;
+        let free = MAX_PENDING_JOBS.saturating_sub(depth(&transaction)?);
+        let mut results = Vec::with_capacity(payloads.len());
+        {
+            let mut insert = transaction
+                .prepare_cached("INSERT INTO usage_journal(payload) VALUES (?1)")
+                .map_err(crate::error::map_db_error)?;
+            for (index, payload) in payloads.iter().enumerate() {
+                if index as u64 >= free {
+                    results.push(Err(openproxy_types::CoreError::JournalCapacityExhausted));
+                    continue;
+                }
+                insert
+                    .execute([payload])
+                    .map_err(crate::error::map_db_error)?;
+                results.push(Ok(transaction.last_insert_rowid()));
+            }
+        }
+        transaction.commit().map_err(crate::error::map_db_error)?;
+        Ok(results)
+    })
+}
+
 /// Helper predicate to check whether an error indicates that the usage journal
 /// has reached maximum capacity and cannot admit more entries until drained.
 #[inline]
@@ -96,6 +128,20 @@ mod tests {
             err.to_string(),
             "usage journal capacity exhausted; admission rejected"
         );
+        assert_eq!(depth(&conn).unwrap(), MAX_PENDING_JOBS);
+    }
+
+    #[test]
+    fn batch_append_admits_up_to_capacity_and_rejects_the_rest() {
+        let mut conn = crate::testing::open_in_memory();
+        conn.execute_batch(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<99998)
+            INSERT INTO usage_journal(payload) SELECT 'pending' FROM n;",
+        )
+        .unwrap();
+        let results = append_batch(&mut conn, &["a", "b", "c"]).unwrap();
+        assert!(results[0].is_ok() && results[1].is_ok());
+        assert!(is_capacity_exhausted(results[2].as_ref().unwrap_err()));
         assert_eq!(depth(&conn).unwrap(), MAX_PENDING_JOBS);
     }
 }

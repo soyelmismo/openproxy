@@ -9,6 +9,9 @@ use tokio::sync::mpsc;
 pub mod coordinator;
 pub use coordinator::*;
 
+#[cfg(feature = "benchmark-profile")]
+pub mod profile;
+
 /// Closes admission, drains accepted jobs and waits for the SQLite worker.
 pub struct WorkerHandle {
     cancel: CancellationToken,
@@ -145,7 +148,7 @@ fn spawn_worker_with_canonical_coordinator(
                 _ = retry.tick(), if !rx.is_closed() => BackgroundJob::JournalWake,
             };
             let mut batch = vec![job];
-            while batch.len() < 32 {
+            while batch.len() < 1024 {
                 match rx.try_recv() {
                     Ok(j) => batch.push(j),
                     Err(_) => break,
@@ -157,13 +160,21 @@ fn spawn_worker_with_canonical_coordinator(
             let batch_coord = Arc::clone(&worker_coord);
 
             // spawn_blocking: SQLite es síncrono y no puede correr en el hilo de Tokio.
+            // Wakes only signal that the journal has work: one replay drains
+            // everything admitted so far, so the batch costs a single replay.
             let result = tokio::task::spawn_blocking(move || {
                 for job in batch {
-                    if let Err(error) = process_job_with_coordinator(&conn_clone, job, &batch_coord)
-                    {
-                        batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        tracing::error!(%error, "failed to persist usage job");
+                    if matches!(job, BackgroundJob::JournalWake) {
+                        continue;
                     }
+                    if let Err(error) = admit_job(&conn_clone, &job) {
+                        batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::error!(%error, "failed to admit usage job");
+                    }
+                }
+                if let Err(error) = replay_pending_with_coordinator(&conn_clone, &batch_coord) {
+                    batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tracing::error!(%error, "failed to persist usage job");
                 }
             })
             .await;
@@ -181,27 +192,6 @@ fn spawn_worker_with_canonical_coordinator(
         conn: handle_conn,
         coordinator,
     }
-}
-
-fn record_usage(
-    conn: &Arc<parking_lot::Mutex<Connection>>,
-    input: &UsageInput,
-    cooldown: Option<&openproxy_db::usage_writer::AttemptCooldown<'_>>,
-    journal_id: i64,
-) -> openproxy_types::Result<()> {
-    let row = {
-        let mut connection = conn.lock();
-        openproxy_db::usage_writer::record_journaled(
-            &mut connection,
-            input,
-            cooldown,
-            Some(journal_id),
-        )?
-    };
-    if let Some((_, row)) = row {
-        openproxy_types::usage::publish_usage_row(row);
-    }
-    Ok(())
 }
 
 pub fn process_job(
@@ -243,32 +233,106 @@ pub fn replay_pending_with_coordinator(
     coordinator: &JournalCoordinator,
 ) -> openproxy_types::Result<()> {
     loop {
-        let entries = openproxy_db::usage_journal::pending(&conn.lock(), 32)?;
-        if entries.is_empty() {
-            return Ok(());
+        let (applied, rows) = {
+            #[cfg(feature = "benchmark-profile")]
+            let lock_start = std::time::Instant::now();
+            let mut connection = conn.lock();
+            #[cfg(feature = "benchmark-profile")]
+            let lock_wait = lock_start.elapsed();
+            let entries = openproxy_db::usage_journal::pending(&connection, REPLAY_BATCH)?;
+            if entries.is_empty() {
+                return Ok(());
+            }
+            #[cfg(feature = "benchmark-profile")]
+            let tx_start = std::time::Instant::now();
+            match apply_batch(&mut connection, &entries) {
+                Ok(rows) => {
+                    #[cfg(feature = "benchmark-profile")]
+                    crate::worker::profile::record_replay_commit(
+                        entries.len(),
+                        lock_wait,
+                        tx_start.elapsed(),
+                    );
+                    (entries.len(), rows)
+                }
+                // One bad entry must not hide the good ones before it: replay
+                // the page entry by entry, which commits each success and
+                // stops at the failing entry exactly like the unbatched path.
+                Err(_) if entries.len() > 1 => {
+                    drop(connection);
+                    return replay_one_by_one(conn, coordinator, entries);
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        for row in rows {
+            openproxy_types::usage::publish_usage_row(row);
         }
-        for (id, payload) in entries {
-            let job: BackgroundJob = serde_json::from_str(&payload).map_err(|error| {
-                openproxy_types::CoreError::Internal(format!(
-                    "invalid usage journal entry {id}: {error}"
-                ))
-            })?;
-            persist_job(conn, job, id)?;
-            coordinator.notify_drained(1);
-        }
+        coordinator.notify_drained(applied);
     }
 }
 
-fn persist_job(
+/// Journal entries applied per transaction. One commit (one fsync with
+/// `synchronous=FULL`) covers the whole page instead of one per request.
+const REPLAY_BATCH: usize = 256;
+
+fn decode(id: i64, payload: &str) -> openproxy_types::Result<BackgroundJob> {
+    serde_json::from_str(payload).map_err(|error| {
+        openproxy_types::CoreError::Internal(format!("invalid usage journal entry {id}: {error}"))
+    })
+}
+
+fn apply_batch(
+    connection: &mut Connection,
+    entries: &[(i64, String)],
+) -> openproxy_types::Result<Vec<openproxy_types::usage::RecentUsageRow>> {
+    openproxy_db::with_busy_retry("usage_worker::apply_batch", || {
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(openproxy_db::error::map_db_error)?;
+        let mut rows = Vec::new();
+        for (id, payload) in entries {
+            if let Some(row) = apply_entry(&transaction, decode(*id, payload)?, *id)? {
+                rows.push(row);
+            }
+        }
+        transaction
+            .commit()
+            .map_err(openproxy_db::error::map_db_error)?;
+        Ok(rows)
+    })
+}
+
+fn replay_one_by_one(
     conn: &Arc<parking_lot::Mutex<Connection>>,
+    coordinator: &JournalCoordinator,
+    entries: Vec<(i64, String)>,
+) -> openproxy_types::Result<()> {
+    for (id, payload) in entries {
+        let rows = apply_batch(&mut conn.lock(), &[(id, payload)])?;
+        for row in rows {
+            openproxy_types::usage::publish_usage_row(row);
+        }
+        coordinator.notify_drained(1);
+    }
+    replay_pending_with_coordinator(conn, coordinator)
+}
+
+/// Applies one journal entry inside the caller's transaction and acknowledges
+/// it there. Already-acknowledged entries are skipped (idempotent replay).
+fn apply_entry(
+    transaction: &Connection,
     job: BackgroundJob,
     journal_id: i64,
-) -> openproxy_types::Result<()> {
+) -> openproxy_types::Result<Option<openproxy_types::usage::RecentUsageRow>> {
+    use openproxy_db::usage_writer::{AttemptCooldown, record_in_transaction};
     match job {
         BackgroundJob::JournalWake => Err(openproxy_types::CoreError::Internal(
             "wake cannot be journaled".into(),
         )),
-        BackgroundJob::RecordUsage(input) => record_usage(conn, &input, None, journal_id),
+        BackgroundJob::RecordUsage(input) => {
+            Ok(record_in_transaction(transaction, &input, None, Some(journal_id))?.map(|r| r.1))
+        }
         BackgroundJob::RecordAttempt {
             usage_input,
             target_id,
@@ -279,10 +343,8 @@ fn persist_job(
             cooldown_base_secs,
             cooldown_max_secs,
             cooldown_factor,
-        } => record_usage(
-            conn,
-            &usage_input,
-            Some(&openproxy_db::usage_writer::AttemptCooldown {
+        } => {
+            let cooldown = AttemptCooldown {
                 target_id,
                 combo_id,
                 error: error_msg.as_deref(),
@@ -291,33 +353,32 @@ fn persist_job(
                 base_secs: cooldown_base_secs,
                 max_secs: cooldown_max_secs,
                 factor: cooldown_factor,
-            }),
-            journal_id,
-        ),
+            };
+            Ok(
+                record_in_transaction(
+                    transaction,
+                    &usage_input,
+                    Some(&cooldown),
+                    Some(journal_id),
+                )?
+                .map(|r| r.1),
+            )
+        }
         BackgroundJob::MarkClientResponse {
             request_id,
             attempt,
             target_id,
         } => {
-            let mut connection = conn.lock();
-            openproxy_db::with_busy_retry("usage_worker::mark_winner", || {
-                let transaction = connection
-                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                    .map_err(openproxy_db::error::map_db_error)?;
-                if !openproxy_db::usage_journal::contains(&transaction, journal_id)? {
-                    return Ok(());
-                }
+            if openproxy_db::usage_journal::contains(transaction, journal_id)? {
                 openproxy_db::cost::mark_winner_usage_row(
-                    &transaction,
+                    transaction,
                     &request_id,
                     attempt,
                     target_id,
                 )?;
-                openproxy_db::usage_journal::acknowledge(&transaction, journal_id)?;
-                transaction
-                    .commit()
-                    .map_err(openproxy_db::error::map_db_error)
-            })
+                openproxy_db::usage_journal::acknowledge(transaction, journal_id)?;
+            }
+            Ok(None)
         }
     }
 }

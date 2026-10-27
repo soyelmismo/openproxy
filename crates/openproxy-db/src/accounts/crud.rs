@@ -227,6 +227,22 @@ pub fn set_rate_limited_until(
     crate::crud::check_affected(affected, || CoreError::AccountNotFound(id.0))
 }
 
+/// Clears an active rate limit. A no-op (no write at all) when none is set,
+/// which keeps the per-request success path off the serialized writer's disk.
+pub fn clear_rate_limited_until(conn: &Connection, id: AccountId) -> Result<bool> {
+    let affected = conn
+        .execute(
+            "UPDATE accounts SET rate_limited_until = NULL \
+             WHERE id = ?1 AND rate_limited_until IS NOT NULL",
+            [id.0],
+        )
+        .map_err(crate::error::map_db_error_ctx(format!(
+            "clear rate_limited_until for account {}",
+            id.0
+        )))?;
+    Ok(affected > 0)
+}
+
 pub fn update_api_key(
     conn: &Connection,
     id: AccountId,

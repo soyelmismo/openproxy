@@ -369,3 +369,94 @@ async fn worker_shutdown_fails_when_pending_jobs_remain() {
         "shutdown must not return success when pending jobs / failed batches exist"
     );
 }
+
+/// Concurrent producers share commits but each one is acknowledged only after
+/// its own row is durable, and every row lands exactly once in FIFO order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_admissions_are_group_committed_without_loss() {
+    let conn = Arc::new(parking_lot::Mutex::new(
+        openproxy_db::testing::open_in_memory(),
+    ));
+    let coord = Arc::new(JournalCoordinator::new());
+    let tasks: Vec<_> = (0..400)
+        .map(|i| {
+            let conn = Arc::clone(&conn);
+            let coord = Arc::clone(&coord);
+            tokio::spawn(async move { coord.admit(&conn, format!("p{i}")).await })
+        })
+        .collect();
+    let mut ids = Vec::new();
+    for task in tasks {
+        ids.push(task.await.unwrap().unwrap());
+    }
+    let mut sorted = ids.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        400,
+        "every producer got a distinct durable id"
+    );
+    let rows = tokio::task::spawn_blocking(move || {
+        openproxy_db::usage_journal::pending(&conn.lock(), 1000).unwrap()
+    })
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 400);
+    let mut payloads: Vec<_> = rows.into_iter().map(|(_, p)| p).collect();
+    payloads.sort();
+    let mut expected: Vec<_> = (0..400).map(|i| format!("p{i}")).collect();
+    expected.sort();
+    assert_eq!(payloads, expected);
+}
+
+/// A database error fails every producer of the group explicitly.
+#[tokio::test]
+async fn group_commit_propagates_database_errors_to_every_producer() {
+    let conn = Arc::new(parking_lot::Mutex::new(
+        openproxy_db::testing::open_in_memory(),
+    ));
+    conn.lock()
+        .execute_batch("CREATE TRIGGER fail_all BEFORE INSERT ON usage_journal BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;")
+        .unwrap();
+    let coord = Arc::new(JournalCoordinator::new());
+    let tasks: Vec<_> = (0..16)
+        .map(|i| {
+            let conn = Arc::clone(&conn);
+            let coord = Arc::clone(&coord);
+            tokio::spawn(async move { coord.admit(&conn, format!("p{i}")).await })
+        })
+        .collect();
+    for task in tasks {
+        let err = task.await.unwrap().unwrap_err();
+        assert!(!err.is_journal_capacity_exhausted());
+    }
+    // The leader role was released: a later admission succeeds.
+    conn.lock().execute_batch("DROP TRIGGER fail_all").unwrap();
+    assert!(coord.admit(&conn, "after".into()).await.is_ok());
+}
+
+/// One poisoned entry must not block the valid entries queued before it:
+/// they are applied, the bad one stays journaled for inspection.
+#[test]
+fn replay_applies_valid_entries_before_a_corrupt_one() {
+    let conn = Arc::new(parking_lot::Mutex::new(
+        openproxy_db::testing::open_in_memory(),
+    ));
+    let payload = serde_json::to_string(&job()).unwrap();
+    {
+        let mut db = conn.lock();
+        openproxy_db::usage_journal::append(&mut db, &payload).unwrap();
+        openproxy_db::usage_journal::append(&mut db, &payload).unwrap();
+        openproxy_db::usage_journal::append(&mut db, "{not json").unwrap();
+        openproxy_db::usage_journal::append(&mut db, &payload).unwrap();
+    }
+    assert!(replay_pending(&conn).is_err());
+    let left = openproxy_db::usage_journal::pending(&conn.lock(), 10).unwrap();
+    assert_eq!(
+        left.len(),
+        2,
+        "two valid entries applied, corrupt + tail kept"
+    );
+    assert_eq!(left[0].1, "{not json");
+}

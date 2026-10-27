@@ -36,35 +36,50 @@ pub fn record_journaled(
         let transaction = conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(crate::error::map_db_error)?;
-        if let Some(id) = journal_id
-            && !crate::usage_journal::contains(&transaction, id)?
-        {
-            return Ok(None);
+        let row = record_in_transaction(&transaction, input, cooldown, journal_id)?;
+        if row.is_some() {
+            transaction.commit().map_err(crate::error::map_db_error)?;
         }
-        let row = crate::cost::record_row(&transaction, input)?;
-        if let Some(params) = cooldown.filter(|params| params.combo_id.0 != -1) {
-            match params.error {
-                None => crate::cooldowns::clear_cooldown(&transaction, params.target_id)?,
-                Some(reason) if params.is_upstream_health_issue => {
-                    crate::cooldowns::record_cooldown(
-                        &transaction,
-                        params.target_id,
-                        reason,
-                        params.mode,
-                        params.base_secs,
-                        params.max_secs,
-                        params.factor,
-                    )?;
-                }
-                Some(_) => {}
-            }
-        }
-        if let Some(id) = journal_id {
-            crate::usage_journal::acknowledge(&transaction, id)?;
-        }
-        transaction.commit().map_err(crate::error::map_db_error)?;
-        Ok(Some(row))
+        Ok(row)
     })
+}
+
+/// Same as [`record_journaled`] inside a caller-owned transaction, so several
+/// journal entries can share one commit. Returns `None` when the journal entry
+/// was already applied.
+pub fn record_in_transaction(
+    transaction: &Connection,
+    input: &UsageInput,
+    cooldown: Option<&AttemptCooldown<'_>>,
+    journal_id: Option<i64>,
+) -> Result<Option<(UsageId, RecentUsageRow)>> {
+    if let Some(id) = journal_id
+        && !crate::usage_journal::contains(transaction, id)?
+    {
+        return Ok(None);
+    }
+    let row = crate::cost::record_row(transaction, input)?;
+    if let Some(params) = cooldown.filter(|params| params.combo_id.0 != -1) {
+        match params.error {
+            None => crate::cooldowns::clear_cooldown(transaction, params.target_id)?,
+            Some(reason) if params.is_upstream_health_issue => {
+                crate::cooldowns::record_cooldown(
+                    transaction,
+                    params.target_id,
+                    reason,
+                    params.mode,
+                    params.base_secs,
+                    params.max_secs,
+                    params.factor,
+                )?;
+            }
+            Some(_) => {}
+        }
+    }
+    if let Some(id) = journal_id {
+        crate::usage_journal::acknowledge(transaction, id)?;
+    }
+    Ok(Some(row))
 }
 
 #[cfg(test)]
