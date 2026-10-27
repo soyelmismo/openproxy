@@ -552,6 +552,114 @@ fn test_patch_codex_request_object_sanitizes_input_image_parameters() {
     );
 }
 
+/// Chat Completions nests the JSON schema under `json_schema`; the Responses
+/// backend reads `text.format.name` at the top level, so a verbatim copy is
+/// rejected with 400 `missing_required_parameter: text.format.name`.
+#[test]
+fn test_response_format_json_schema_is_flattened_into_text_format() {
+    let mut obj = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "goal_verdict",
+                "strict": true,
+                "schema": {
+                    "type": "object",
+                    "properties": { "met": { "type": "boolean" } },
+                    "required": ["met"]
+                }
+            }
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    patch_codex_request_object(&mut obj);
+
+    assert!(
+        obj.get("response_format").is_none(),
+        "response_format must not survive into the Responses body"
+    );
+    let format = &obj["text"]["format"];
+    assert_eq!(format["type"], "json_schema");
+    assert_eq!(
+        format["name"], "goal_verdict",
+        "name must sit at text.format.name, not under text.format.json_schema.name"
+    );
+    assert_eq!(format["strict"], true);
+    assert_eq!(format["schema"]["type"], "object");
+    assert!(
+        format.get("json_schema").is_none(),
+        "the Chat Completions nesting must be removed"
+    );
+}
+
+#[test]
+fn test_response_format_json_schema_without_name_gets_synthetic_name() {
+    let mut obj = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": { "schema": { "type": "object" } }
+        }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    patch_codex_request_object(&mut obj);
+
+    let format = &obj["text"]["format"];
+    assert_eq!(
+        format["name"], "response",
+        "a missing name is repaired instead of forwarded as a 400"
+    );
+    assert_eq!(format["schema"]["type"], "object");
+}
+
+/// `json_object` does not take a `name`; adding one would be an unsupported
+/// parameter. It must pass through byte-for-byte.
+#[test]
+fn test_response_format_json_object_passes_through_unchanged() {
+    let mut obj = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "response_format": { "type": "json_object" }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    patch_codex_request_object(&mut obj);
+
+    let format = &obj["text"]["format"];
+    assert_eq!(format["type"], "json_object");
+    assert!(
+        format.get("name").is_none(),
+        "json_object must not gain a name parameter"
+    );
+}
+
+/// A client that already speaks Responses keeps its explicit choice.
+#[test]
+fn test_existing_text_format_is_not_overwritten() {
+    let mut obj = serde_json::json!({
+        "model": "gpt-6.1-sol",
+        "text": { "format": { "type": "text" }, "verbosity": "low" },
+        "response_format": { "type": "json_object" }
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+
+    patch_codex_request_object(&mut obj);
+
+    assert_eq!(obj["text"]["format"]["type"], "text");
+    assert_eq!(obj["text"]["verbosity"], "low");
+    assert!(obj.get("response_format").is_none());
+}
+
 /// Un snapshot congelado del contrato fija headers y body de la MISMA
 /// generación: la versión y el user-agent salen del snapshot, y los defaults
 /// verificados por el pin (`store: false`, `tool_choice: "auto"`) se aplican

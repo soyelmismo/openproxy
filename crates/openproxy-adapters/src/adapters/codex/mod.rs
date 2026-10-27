@@ -255,6 +255,45 @@ impl CodexAdapter {
     }
 }
 
+/// Translates a Chat Completions `response_format` value into the Responses API
+/// `text.format` shape.
+///
+/// Chat Completions nests the schema under `json_schema`:
+/// `{"type":"json_schema","json_schema":{"name":"x","schema":{...}}}`
+/// Responses wants it flat: `{"type":"json_schema","name":"x","schema":{...}}`.
+/// Only `json_schema` carries a `name`; `json_object` and `text` pass through
+/// untouched because the backend rejects unknown parameters on those variants.
+fn normalize_codex_text_format(fmt: serde_json::Value) -> Option<serde_json::Value> {
+    let obj = fmt.as_object()?;
+    if obj.get("type").and_then(serde_json::Value::as_str) != Some("json_schema") {
+        return Some(fmt);
+    }
+
+    // The nested form wins when present: that is the shape clients actually send.
+    let source = obj
+        .get("json_schema")
+        .and_then(serde_json::Value::as_object)
+        .unwrap_or(obj);
+
+    let mut out = serde_json::Map::new();
+    out.insert(
+        "type".to_string(),
+        serde_json::Value::String("json_schema".to_string()),
+    );
+    for key in ["name", "description", "schema", "strict"] {
+        if let Some(value) = source.get(key) {
+            out.insert(key.to_string(), value.clone());
+        }
+    }
+    // `name` is mandatory on every json_schema format: repair a client that
+    // omitted it instead of forwarding a request the backend will reject.
+    out.entry("name".to_string())
+        .or_insert_with(|| serde_json::Value::String("response".to_string()));
+    out.entry("schema".to_string())
+        .or_insert_with(|| serde_json::json!({ "type": "object" }));
+    Some(serde_json::Value::Object(out))
+}
+
 pub fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::Value>) {
     // Codex backend ALWAYS requires stream: true, else it returns HTTP 400 {"detail":"Stream must be set to true"}
     obj.insert("stream".to_string(), serde_json::Value::Bool(true));
@@ -298,16 +337,22 @@ pub fn patch_codex_request_object(obj: &mut serde_json::Map<String, serde_json::
         );
     }
 
-    // Map response_format into text.format if present
+    // Rewrite Chat Completions `response_format` into the Responses `text.format`
+    // shape. Copying it verbatim nests the schema one level too deep and the
+    // backend answers 400 `missing_required_parameter: text.format.name`.
     if let Some(fmt) = obj.remove("response_format")
-        && !obj.contains_key("text")
+        && let Some(format) = normalize_codex_text_format(fmt)
     {
-        obj.insert(
-            "text".to_string(),
-            serde_json::json!({
-                "format": fmt
-            }),
-        );
+        if obj.contains_key("text") {
+            if let Some(text) = obj
+                .get_mut("text")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                text.entry("format".to_string()).or_insert(format);
+            }
+        } else {
+            obj.insert("text".to_string(), serde_json::json!({ "format": format }));
+        }
     }
 
     // Sanitize any input items or content parts with image data
