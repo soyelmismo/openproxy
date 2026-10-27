@@ -36,7 +36,7 @@ fn test_codebuddy_spoofer_verified_headers() {
     let _async_guard = CODEBUDDY_ASYNC_TEST_LOCK.blocking_lock();
     reset_dynamic_codebuddy_overrides();
 
-    let mut req = UpstreamRequest::get("https://www.codebuddy.ai/v2/chat/completions");
+    let mut req = UpstreamRequest::get("https://www.workbuddy.ai/v2/chat/completions");
     apply_codebuddy_spoofing_headers(&mut req);
 
     let get_header = |key: &str| {
@@ -52,7 +52,7 @@ fn test_codebuddy_spoofer_verified_headers() {
     assert_eq!(get_header("x-product"), Some("SaaS".into()));
     assert_eq!(get_header("x-agent-intent"), Some("craft".into()));
     assert_eq!(get_header("x-codebuddy-request"), Some("1".into()));
-    assert_eq!(get_header("x-domain"), Some("www.codebuddy.ai".into()));
+    assert_eq!(get_header("x-domain"), Some("www.workbuddy.ai".into()));
     assert_eq!(
         get_header("user-agent"),
         Some("CLI/2.168.2 CodeBuddy/2.168.2".into())
@@ -114,12 +114,12 @@ fn test_codebuddy_adapter_spec_parity() {
     let adapter = CodeBuddyAdapter::new();
     assert_eq!(adapter.id().as_str(), "codebuddy");
     assert_eq!(adapter.config().name, "CodeBuddy");
-    assert_eq!(adapter.config().base_url, "https://www.codebuddy.ai/v2");
+    assert_eq!(adapter.config().base_url, "https://www.workbuddy.ai/v2");
     assert_eq!(adapter.format(), AdapterFormat::Openai);
     assert_eq!(adapter.auth_type(), AdapterAuthType::OAuth);
 
     let chat_url = adapter.build_chat_url(TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    assert_eq!(chat_url, "https://www.codebuddy.ai/v2/chat/completions");
+    assert_eq!(chat_url, "https://www.workbuddy.ai/v2/chat/completions");
 
     // models_url MUST be None to avoid 404 from upstream
     assert!(adapter.models_url().is_none());
@@ -268,7 +268,7 @@ fn test_codebuddy_builtin_seed_and_registration() {
 
     assert_eq!(cb.id.as_str(), "codebuddy");
     assert_eq!(&*cb.name, "CodeBuddy");
-    assert_eq!(&*cb.base_url, "https://www.codebuddy.ai/v2");
+    assert_eq!(&*cb.base_url, "https://www.workbuddy.ai/v2");
     assert_eq!(cb.auth_type, openproxy_core::providers::AuthType::OAuth);
     assert_eq!(cb.format, openproxy_core::providers::ProviderFormat::Openai);
 

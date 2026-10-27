@@ -751,7 +751,7 @@ fn test_codebuddy_dynamic_version_and_extra_headers() {
     assert_eq!(find("X-Product"), Some("SaaS"));
     assert_eq!(find("X-Agent-Intent"), Some("craft"));
     assert_eq!(find("x-codebuddy-request"), Some("1"));
-    assert_eq!(find("X-Domain"), Some("www.codebuddy.ai"));
+    assert_eq!(find("X-Domain"), Some("www.workbuddy.ai"));
 
     reset_dynamic_codebuddy_overrides();
     assert_eq!(current_codebuddy_version(), "2.168.2");

@@ -95,7 +95,7 @@ async fn mock_codebuddy_state_handler(
             "code": 0,
             "data": {
                 "state": "cb-device-state-uuid-777",
-                "authUrl": "https://www.codebuddy.ai/auth?state=cb-device-state-uuid-777"
+                "authUrl": "https://www.workbuddy.ai/auth?state=cb-device-state-uuid-777"
             }
         })),
     )
@@ -236,11 +236,11 @@ async fn test_codebuddy_oauth_full_device_code_wire_mock() {
     assert_eq!(dar.user_code, "cb-device-state-uuid-777");
     assert_eq!(
         dar.verification_uri,
-        "https://www.codebuddy.ai/auth?state=cb-device-state-uuid-777"
+        "https://www.workbuddy.ai/auth?state=cb-device-state-uuid-777"
     );
     assert_eq!(
         dar.verification_uri_complete.as_deref(),
-        Some("https://www.codebuddy.ai/auth?state=cb-device-state-uuid-777")
+        Some("https://www.workbuddy.ai/auth?state=cb-device-state-uuid-777")
     );
     assert_eq!(dar.expires_in, Some(300));
     assert_eq!(dar.interval, Some(2));
@@ -274,7 +274,7 @@ async fn test_codebuddy_oauth_full_device_code_wire_mock() {
         let conn = pool.writer();
         // provider row required by the account foreign key
         conn.execute(
-            "INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('codebuddy', 'CodeBuddy', 'https://www.codebuddy.ai/v2', 'oauth', 'openai')",
+            "INSERT INTO providers (id, name, base_url, auth_type, format) VALUES ('codebuddy', 'CodeBuddy', 'https://www.workbuddy.ai/v2', 'oauth', 'openai')",
             [],
         )
         .unwrap();

@@ -28,7 +28,11 @@ pub const CODEBUDDY_PACKAGE: &str = "@tencent-ai/codebuddy-code";
 /// Versión fijada.
 pub const CODEBUDDY_VERSION: &str = "2.168.2";
 
-/// Endpoint de producción declarado en `product.json`.
+/// Endpoint de producción declarado en el `product.json` del paquete fijado
+/// (2.168.2). Es un dato de procedencia atado al fixture, no el host de
+/// tráfico: el paquete se publicó cuando el host internacional era
+/// `codebuddy.ai`. El tráfico real sale de `CodeBuddyAdapter::config().base_url`,
+/// que apunta a `workbuddy.ai`.
 pub const CODEBUDDY_ENDPOINT: &str = "https://www.codebuddy.ai";
 
 /// Endpoint de staging declarado en `product.json`.

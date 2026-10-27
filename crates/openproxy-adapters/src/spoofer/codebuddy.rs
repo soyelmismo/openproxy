@@ -9,7 +9,7 @@ pub const CODEBUDDY_SPOOFING_HEADERS: &[(&str, &str)] = &[
     ("X-Product", "SaaS"),
     ("X-Agent-Intent", "craft"),
     ("x-codebuddy-request", "1"),
-    ("X-Domain", "www.codebuddy.ai"),
+    ("X-Domain", "www.workbuddy.ai"),
     ("User-Agent", "CLI/2.168.2 CodeBuddy/2.168.2"),
 ];
 
@@ -122,7 +122,7 @@ mod tests {
         let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
         reset_dynamic_codebuddy_overrides();
         let spoofer = CodeBuddySpoofer;
-        let mut req = UpstreamRequest::get("https://www.codebuddy.ai/v2");
+        let mut req = UpstreamRequest::get("https://www.workbuddy.ai/v2");
         spoofer.apply_to_request(&mut req);
 
         for &(k, v) in CODEBUDDY_SPOOFING_HEADERS {
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(find("x-product"), Some("SaaS"));
         assert_eq!(find("x-agent-intent"), Some("craft"));
         assert_eq!(find("x-codebuddy-request"), Some("1"));
-        assert_eq!(find("x-domain"), Some("www.codebuddy.ai"));
+        assert_eq!(find("x-domain"), Some("www.workbuddy.ai"));
 
         reset_dynamic_codebuddy_overrides();
         assert_eq!(current_codebuddy_version(), "2.168.2");

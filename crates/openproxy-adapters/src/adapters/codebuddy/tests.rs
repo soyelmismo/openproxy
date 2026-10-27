@@ -4,12 +4,12 @@ use super::*;
 fn test_codebuddy_adapter_config() {
     let adapter = CodeBuddyAdapter::new();
     assert_eq!(adapter.id().as_str(), "codebuddy");
-    assert_eq!(adapter.config().base_url, "https://www.codebuddy.ai/v2");
+    assert_eq!(adapter.config().base_url, "https://www.workbuddy.ai/v2");
     assert_eq!(adapter.format(), AdapterFormat::Openai);
     assert_eq!(adapter.auth_type(), AdapterAuthType::OAuth);
     assert_eq!(
         adapter.build_chat_url(TargetFormat::Openai, &ModelId::new("gpt-5.5")),
-        "https://www.codebuddy.ai/v2/chat/completions"
+        "https://www.workbuddy.ai/v2/chat/completions"
     );
     assert!(adapter.models_url().is_none());
 }

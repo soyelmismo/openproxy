@@ -74,7 +74,7 @@ fn seed_single_adapter(
                 "update builtin base_url",
             ))?;
         }
-        if conf.id.as_str() == "codebuddy" && existing.base_url.contains("codebuddy.ai") {
+        if conf.id.as_str() == "codebuddy" && existing.base_url.contains("codebuddy.") {
             conn.execute(
                 "UPDATE providers SET base_url = ?1 WHERE id = ?2",
                 rusqlite::params![conf.base_url.as_str(), conf.id.as_str()],
@@ -125,11 +125,13 @@ pub fn seed_builtin_providers(conn: &Connection) -> Result<usize> {
             seeded += 1;
         }
     }
-    // CodeBuddy provider points at the international edition (codebuddy.ai).
+    // CodeBuddy provider points at the international edition (workbuddy.ai).
+    // Older rows stored either the retired codebuddy.ai host (now sinkholed in
+    // public DNS) or the codebuddy.cn regional host.
     let _ = conn.execute(
-        "UPDATE providers SET base_url = 'https://www.codebuddy.ai/v2' \
+        "UPDATE providers SET base_url = 'https://www.workbuddy.ai/v2' \
          WHERE id = 'codebuddy' \
-           AND (base_url = 'https://www.codebuddy.cn/v2' OR base_url = 'https://www.codebuddy.cn')",
+           AND base_url LIKE '%codebuddy.%'",
         [],
     );
     // Legacy CodeBuddy accounts stored a 1-year token expiry, which suppressed

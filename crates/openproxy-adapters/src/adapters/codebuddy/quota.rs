@@ -4,21 +4,21 @@ use crate::adapters::{
 };
 use openproxy_types::quota::{AccountQuota, ModelQuotaDetail, now_unix_secs_str};
 
-pub const CODEBUDDY_ACCOUNTS_URL: &str = "https://www.codebuddy.ai/v2/accounts";
+pub const CODEBUDDY_ACCOUNTS_URL: &str = "https://www.workbuddy.ai/v2/accounts";
 
 pub const CODEBUDDY_GET_USER_RESOURCE_URL: &str =
-    "https://www.codebuddy.ai/billing/meter/get-user-resource";
+    "https://www.workbuddy.ai/billing/meter/get-user-resource";
 
 pub const CODEBUDDY_GET_USER_RESOURCE_SUMMARY_URL: &str =
-    "https://www.codebuddy.ai/billing/meter/get-user-resource-summary";
+    "https://www.workbuddy.ai/billing/meter/get-user-resource-summary";
 
-pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
+pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.workbuddy.ai/v2";
 
-pub const CN_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.cn/v2";
+pub const CN_CODEBUDDY_BASE_URL: &str = "https://www.workbuddy.cn/v2";
 
 pub const MIRROR_CODEBUDDY_BASE_URL: &str = "https://copilot.tencent.com/v2";
 
-pub const LEGACY_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
+pub const LEGACY_CODEBUDDY_BASE_URL: &str = "https://www.workbuddy.ai/v2";
 
 /// `OPENPROXY_CODEBUDDY_BASE_URL`, then `OPENPROXY_CODEBUDDY_AUTH_BASE_URL`,
 /// then [`DEFAULT_CODEBUDDY_BASE_URL`].
@@ -31,8 +31,8 @@ pub fn codebuddy_base_url() -> String {
         .unwrap_or_else(|| DEFAULT_CODEBUDDY_BASE_URL.to_string())
 }
 
-/// Strips the `/v2` suffix, e.g. `https://www.codebuddy.ai/v2` ->
-/// `https://www.codebuddy.ai`.
+/// Strips the `/v2` suffix, e.g. `https://www.workbuddy.ai/v2` ->
+/// `https://www.workbuddy.ai`.
 #[must_use]
 pub fn codebuddy_origin_from_base_url(base: &str) -> String {
     let trimmed = base.trim_end_matches('/');
@@ -55,8 +55,8 @@ pub fn codebuddy_candidate_origins() -> Vec<String> {
     }
 
     for fallback in [
-        "https://www.codebuddy.ai",
-        "https://www.codebuddy.cn",
+        "https://www.workbuddy.ai",
+        "https://www.workbuddy.cn",
         "https://copilot.tencent.com",
     ] {
         if !origins.iter().any(|o| o == fallback) {

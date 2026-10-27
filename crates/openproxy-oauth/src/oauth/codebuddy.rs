@@ -1,12 +1,12 @@
 //! CodeBuddy (`@tencent-ai/codebuddy-code`) OAuth 2.0 provider.
 //!
 //! Implements Tencent CodeBuddy CLI External Link / Device Code authorization flow:
-//! - State Request: `POST https://www.codebuddy.ai/v2/plugin/auth/state?platform=CLI` with body `{}`.
+//! - State Request: `POST https://www.workbuddy.ai/v2/plugin/auth/state?platform=CLI` with body `{}`.
 //!   Returns `state` (UUID) and `authUrl` (verification URL for the user to open in the browser).
-//! - Polling: `GET https://www.codebuddy.ai/v2/plugin/auth/token?state={state}`.
+//! - Polling: `GET https://www.workbuddy.ai/v2/plugin/auth/token?state={state}`.
 //!   While response is `{"code": 11217, "msg": "login ing..."}`, returns pending (`None`).
 //!   On success (`code: 0`), extracts `accessToken`, `refreshToken`, `expiresIn`, `tokenType: "Bearer"`.
-//! - Refresh: `POST https://www.codebuddy.ai/v2/plugin/auth/token/refresh` with body `{}` and
+//! - Refresh: `POST https://www.workbuddy.ai/v2/plugin/auth/token/refresh` with body `{}` and
 //!   headers `X-Refresh-Token: <refreshToken>` and `X-Auth-Refresh-Source: plugin`.
 
 use std::sync::Arc;
@@ -20,10 +20,10 @@ use crate::ids::AccountId;
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use rusqlite::OptionalExtension;
 
-pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
-pub const CN_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.cn/v2";
+pub const DEFAULT_CODEBUDDY_BASE_URL: &str = "https://www.workbuddy.ai/v2";
+pub const CN_CODEBUDDY_BASE_URL: &str = "https://www.workbuddy.cn/v2";
 pub const MIRROR_CODEBUDDY_BASE_URL: &str = "https://copilot.tencent.com/v2";
-pub const LEGACY_CODEBUDDY_BASE_URL: &str = "https://www.codebuddy.ai/v2";
+pub const LEGACY_CODEBUDDY_BASE_URL: &str = "https://www.workbuddy.ai/v2";
 pub const CODEBUDDY_STATE_PATH: &str = "/plugin/auth/state?platform=CLI";
 pub const CODEBUDDY_TOKEN_PATH: &str = "/plugin/auth/token";
 pub const CODEBUDDY_REFRESH_PATH: &str = "/plugin/auth/token/refresh";

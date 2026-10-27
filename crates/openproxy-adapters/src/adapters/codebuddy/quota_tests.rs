@@ -7,16 +7,16 @@ use super::*;
 #[test]
 fn test_codebuddy_candidate_origins_default_and_custom() {
     let origins = codebuddy_candidate_origins();
-    assert!(origins.contains(&"https://www.codebuddy.ai".to_string()));
-    assert!(origins.contains(&"https://www.codebuddy.cn".to_string()));
+    assert!(origins.contains(&"https://www.workbuddy.ai".to_string()));
+    assert!(origins.contains(&"https://www.workbuddy.cn".to_string()));
     assert!(origins.contains(&"https://copilot.tencent.com".to_string()));
     assert_eq!(
-        codebuddy_origin_from_base_url("https://www.codebuddy.ai/v2"),
-        "https://www.codebuddy.ai"
+        codebuddy_origin_from_base_url("https://www.workbuddy.ai/v2"),
+        "https://www.workbuddy.ai"
     );
     assert_eq!(
-        codebuddy_origin_from_base_url("https://www.codebuddy.cn/v2/"),
-        "https://www.codebuddy.cn"
+        codebuddy_origin_from_base_url("https://www.workbuddy.cn/v2/"),
+        "https://www.workbuddy.cn"
     );
 }
 
@@ -49,7 +49,7 @@ fn test_is_codebuddy_auth_error() {
 #[test]
 fn test_build_codebuddy_accounts_request_with_url() {
     let req = build_codebuddy_accounts_request_with_url(
-        "https://www.codebuddy.cn/v2/accounts",
+        "https://www.workbuddy.cn/v2/accounts",
         "test-token-cn",
         Some("http://proxy.local:8080"),
     );
