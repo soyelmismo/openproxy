@@ -112,19 +112,7 @@ fn nous_sticky_key(oauth_token: Option<&str>, account_label: Option<&str>) -> Op
 /// Signature verification is the upstream TLS/auth layer's job; here we only need
 /// the attribution claims. Returns `None` for non-JWT or malformed tokens.
 pub fn jwt_claim_named(token: &str, claim: &str) -> Option<String> {
-    let payload = token.split('.').nth(1)?;
-    let decoded =
-        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload)
-            .or_else(|_| {
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, payload)
-            })
-            .ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-    let claim = value.get(claim)?.as_str()?;
-    if claim.is_empty() {
-        return None;
-    }
-    Some(claim.to_string())
+    crate::jwt::claim_str(token, claim)
 }
 
 /// The Portal's user id for an OAuth token: `sub`, falling back to `email`.

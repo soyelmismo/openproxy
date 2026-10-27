@@ -105,14 +105,17 @@ impl TokenRefreshCoordinator {
                 let Some(acc) = acc else {
                     return Ok(None);
                 };
-                let needs_refresh =
-                    pipeline_token_needs_refresh(acc.expires_at.as_deref(), &check_provider_id);
                 let access_token = openproxy_db::accounts::decrypt_access_token(
                     conn,
                     account_id,
                     &check_master_key,
                 )
                 .ok();
+                let needs_refresh = pipeline_token_needs_refresh(
+                    acc.expires_at.as_deref(),
+                    access_token.as_deref(),
+                    &check_provider_id,
+                );
                 let latest_refresh_token = openproxy_db::accounts::decrypt_refresh_token(
                     conn,
                     account_id,
@@ -196,8 +199,11 @@ impl TokenRefreshCoordinator {
             })
             .await?;
 
-            let disk_needs_refresh =
-                pipeline_token_needs_refresh(disk_token.expires_at.as_deref(), provider_id);
+            let disk_needs_refresh = pipeline_token_needs_refresh(
+                disk_token.expires_at.as_deref(),
+                Some(disk_token.access_token.as_str()),
+                provider_id,
+            );
 
             if !force && !disk_needs_refresh {
                 tracing::info!(
@@ -271,8 +277,11 @@ impl TokenRefreshCoordinator {
                     })
                     .await?;
 
-                    if !pipeline_token_needs_refresh(disk_token.expires_at.as_deref(), provider_id)
-                    {
+                    if !pipeline_token_needs_refresh(
+                        disk_token.expires_at.as_deref(),
+                        Some(disk_token.access_token.as_str()),
+                        provider_id,
+                    ) {
                         return Ok(TokenResponse {
                             access_token: disk_token.access_token,
                             token_type: "Bearer".to_string(),
@@ -296,7 +305,11 @@ impl TokenRefreshCoordinator {
             }
         };
 
-        let expires_at = token_expires_at(token.expires_in);
+        // The Portal may omit `expires_in` (RFC 6749 makes it optional); its
+        // JWT `exp` claim is then the only deadline, and without one the row
+        // would read as "fresh forever" to every refresh path.
+        let expires_at =
+            openproxy_adapters::jwt::expires_at_for_token(token.expires_in, &token.access_token);
 
         let stored_token = token.clone();
         let store_master_key = master_key.clone();
@@ -336,14 +349,6 @@ impl TokenRefreshCoordinator {
 
         Ok(token)
     }
-}
-
-pub fn token_expires_at(expires_in: Option<u64>) -> Option<String> {
-    expires_in.map(|secs| {
-        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string()
-    })
 }
 
 /// Resolve an OAuth access token for an account, refreshing it when
@@ -430,14 +435,24 @@ pub async fn resolve_oauth_token(
 
 /// Lighter check than [`resolve_oauth_token`] for the pipeline's custom-provider
 /// path, which only needs the expiry comparison.
-pub fn pipeline_token_needs_refresh(db_expires_at: Option<&str>, provider_id: &str) -> bool {
-    let Some(ts) = db_expires_at else {
-        return false; // no expiry recorded: assume fresh
-    };
-    let Ok(expires_at) = openproxy_types::timestamp::parse_timestamp(ts) else {
+///
+/// When the row has no `expires_at`, the access token's own `exp` claim decides.
+/// Portals that omit `expires_in` from the token response (RFC 6749 makes it
+/// optional) would otherwise leave the account looking fresh forever, so the
+/// token would never be renewed before it lapsed.
+pub fn pipeline_token_needs_refresh(
+    db_expires_at: Option<&str>,
+    access_token: Option<&str>,
+    provider_id: &str,
+) -> bool {
+    let expires_at = db_expires_at
+        .and_then(|ts| openproxy_types::timestamp::parse_timestamp(ts).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|| access_token.and_then(openproxy_adapters::jwt::exp_timestamp));
+    let Some(expires_at) = expires_at else {
+        // No deadline anywhere: nothing can call the token stale.
         return false;
     };
-    let expires_at = expires_at.with_timezone(&chrono::Utc);
     let lead = refresh_lead_seconds(provider_id);
     let threshold = chrono::Utc::now() + chrono::Duration::seconds(lead as i64);
     expires_at <= threshold

@@ -185,14 +185,12 @@ impl OAuthProvider for NousOAuthProvider {
         let client_id = self.generic.spec().client_id_default.to_string();
         let refresh_token = refresh_token.to_string();
         async move {
-            let body = nous_post_form(
+            let req = nous_refresh_request(&url, &client_id, &refresh_token);
+            let body = crate::oauth::call_oauth_checked(
                 upstream_client,
-                &url,
-                &[
-                    ("grant_type", "refresh_token"),
-                    ("client_id", client_id.as_str()),
-                    ("refresh_token", refresh_token.as_str()),
-                ],
+                req,
+                NOUS_OAUTH_PROVIDER,
+                "nous oauth",
             )
             .await?;
             serde_json::from_slice::<TokenResponse>(&body)
@@ -216,21 +214,86 @@ async fn nous_post_form(
     url: &str,
     params: &[(&str, &str)],
 ) -> Result<bytes::Bytes> {
-    use openproxy_adapters::upstream::UpstreamRequest;
+    let req = nous_form_request(url, params);
+    crate::oauth::call_oauth_checked(upstream_client, req, NOUS_OAUTH_PROVIDER, "nous oauth").await
+}
 
+/// Builds a urlencoded POST to the Portal.
+fn nous_form_request(
+    url: &str,
+    params: &[(&str, &str)],
+) -> openproxy_adapters::upstream::UpstreamRequest {
     let encoded = urlencoded_string(params);
-    let mut req = UpstreamRequest::post_json(url.to_string(), bytes::Bytes::from(encoded));
+    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
+        url.to_string(),
+        bytes::Bytes::from(encoded),
+    );
     req.headers.insert(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/x-www-form-urlencoded"),
     );
+    req
+}
 
-    crate::oauth::call_oauth_checked(upstream_client, req, NOUS_OAUTH_PROVIDER, "nous oauth").await
+/// Header the Portal reads the refresh token from.
+const NOUS_REFRESH_TOKEN_HEADER: &str = "x-nous-refresh-token";
+
+/// Builds the refresh-token exchange request.
+///
+/// The refresh token travels in the `x-nous-refresh-token` header, which is the
+/// channel the Portal's own clients use; the RFC 6749 `refresh_token` form field
+/// stays populated as well. The distinction matters because these refresh tokens
+/// are single-use: a request the Portal cannot read means the grant was never
+/// redeemed, and a retry against an already-rotated chain kills the session.
+fn nous_refresh_request(
+    url: &str,
+    client_id: &str,
+    refresh_token: &str,
+) -> openproxy_adapters::upstream::UpstreamRequest {
+    let mut req = nous_form_request(
+        url,
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("refresh_token", refresh_token),
+        ],
+    );
+    if let Ok(value) = http::HeaderValue::from_str(refresh_token) {
+        req.headers.insert(
+            http::HeaderName::from_static(NOUS_REFRESH_TOKEN_HEADER),
+            value,
+        );
+    }
+    req
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refresh_request_carries_the_token_in_the_portal_header() {
+        let req = nous_refresh_request(
+            "https://portal.nousresearch.com/api/oauth/token",
+            "hermes-cli",
+            "rt_single_use",
+        );
+        assert_eq!(
+            req.headers
+                .get("x-nous-refresh-token")
+                .and_then(|v| v.to_str().ok()),
+            Some("rt_single_use"),
+            "the Portal reads the grant from this header"
+        );
+        let body = req
+            .body
+            .as_deref()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
+        assert!(body.contains("grant_type=refresh_token"), "body: {body}");
+        assert!(body.contains("client_id=hermes-cli"), "body: {body}");
+        assert!(body.contains("refresh_token=rt_single_use"), "body: {body}");
+    }
 
     #[test]
     fn provider_identity_and_flow() {

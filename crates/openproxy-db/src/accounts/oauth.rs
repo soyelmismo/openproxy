@@ -212,6 +212,31 @@ pub fn list_expiring_oauth_accounts(
     )
 }
 
+/// OAuth accounts with no recorded deadline but a refresh token to renew with.
+///
+/// [`list_expiring_oauth_accounts`] requires `expires_at IS NOT NULL`, so a row
+/// written without one is invisible to the scheduler even though its access
+/// token may already be dead. This is the complementary query: rows whose
+/// deadline is unknown rather than absent, which must be checked instead of
+/// skipped.
+pub fn list_undated_oauth_accounts(
+    conn: &Connection,
+    master_key: &MasterKey,
+) -> Result<Vec<Account>> {
+    crate::db_query_all!(
+        conn,
+        account_select!(
+            "WHERE auth_type = 'oauth' \
+               AND expires_at IS NULL \
+               AND refresh_token_encrypted IS NOT NULL \
+             ORDER BY priority ASC, id ASC"
+        ),
+        [],
+        |row| super::crud::row_to_account(row, master_key),
+        "list undated oauth accounts"
+    )
+}
+
 pub fn list_oauth_account_ids(conn: &Connection) -> Result<Vec<i64>> {
     crate::db_query_all!(
         conn,
@@ -549,11 +574,36 @@ pub fn read_antigravity_project(
         .filter(|s| !s.is_empty()))
 }
 
-pub fn clear_oauth_expires_at(conn: &Connection, account_id: i64) -> Result<()> {
+/// Writes a known deadline for an OAuth account.
+///
+/// Only fills a gap: `expires_at IS NULL` in the predicate means a deadline that
+/// a concurrent refresh already recorded is never overwritten with an older one.
+pub fn set_oauth_expires_at(conn: &Connection, account_id: i64, expires_at: &str) -> Result<()> {
     conn.execute(
-        "UPDATE accounts SET expires_at = NULL WHERE id = ?1",
-        params![account_id],
+        "UPDATE accounts SET expires_at = ?1 WHERE id = ?2 AND expires_at IS NULL",
+        params![expires_at, account_id],
     )
-    .map_err(crate::error::map_db_error_ctx("clear oauth expires_at"))?;
+    .map_err(crate::error::map_db_error_ctx("set oauth expires_at"))?;
+    Ok(())
+}
+
+/// Marks an OAuth account's deadline as already reached.
+///
+/// This is what a failed refresh must do. Erasing the deadline (`expires_at =
+/// NULL`) hides the account from every refresh path at once: the scheduler's
+/// query requires a non-null deadline, and the pipeline reads null as "fresh
+/// forever". One failed refresh therefore stranded the credentials permanently,
+/// and the refresh token then lapsed server-side from disuse — the account looked
+/// fine until a request finally came back 401.
+///
+/// Keeping the deadline in the past leaves the row due. Pacing comes from the
+/// scheduler's failure backoff, not from hiding the row.
+pub fn mark_oauth_expiry_due(conn: &Connection, account_id: i64) -> Result<()> {
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    conn.execute(
+        "UPDATE accounts SET expires_at = ?1 WHERE id = ?2",
+        params![now, account_id],
+    )
+    .map_err(crate::error::map_db_error_ctx("mark oauth expires_at due"))?;
     Ok(())
 }

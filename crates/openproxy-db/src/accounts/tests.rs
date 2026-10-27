@@ -270,9 +270,25 @@ fn test_account_select_canonical_projection() {
     assert_eq!(acc_get.expires_at.as_deref(), Some("2026-10-01T22:00:00Z"));
     assert_eq!(acc_get.created_at, acc_oauth.created_at);
 
-    clear_oauth_expires_at(&conn, acc_id.0).expect("clear succeeds");
-    let acc_cleared = get(&conn, acc_id, &master).unwrap().unwrap();
-    assert_eq!(acc_cleared.expires_at, None);
+    mark_oauth_expiry_due(&conn, acc_id.0).expect("marking due succeeds");
+    let acc_due = get(&conn, acc_id, &master).unwrap().unwrap();
+    let due = acc_due
+        .expires_at
+        .as_deref()
+        .expect("a failed refresh must keep a deadline, not erase it");
+    let due = openproxy_types::timestamp::parse_timestamp(due).expect("parsable deadline");
+    assert!(
+        due <= chrono::Utc::now(),
+        "a due deadline must not read as fresh: {due}"
+    );
+
+    set_oauth_expires_at(&conn, acc_id.0, "2030-01-01T00:00:00Z").expect("backfill succeeds");
+    let acc_kept = get(&conn, acc_id, &master).unwrap().unwrap();
+    assert_ne!(
+        acc_kept.expires_at.as_deref(),
+        Some("2030-01-01T00:00:00Z"),
+        "backfill must not overwrite a deadline a refresh already recorded"
+    );
 }
 
 // ===== quota_pools persistence (migration 000089) =====

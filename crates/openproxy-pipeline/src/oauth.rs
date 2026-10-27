@@ -52,18 +52,29 @@ pub trait PipelineOAuthRegistry: Send + Sync {
     }
 }
 
+/// Decides whether a target's OAuth access token needs renewing before dispatch.
+///
+/// `access_token` is the second, independent source for the deadline. Some
+/// portals omit `expires_in` from the token response (RFC 6749 makes it
+/// optional), so a row stored by an older build can carry `expires_at = NULL`
+/// even though the token expires in an hour. Reading the JWT `exp` claim keeps
+/// such an account visible to the refresh stage instead of letting it read as
+/// "fresh forever" and lapse into a 401.
 pub fn pipeline_token_needs_refresh(
     db_expires_at: Option<&str>,
+    access_token: Option<&str>,
     provider_id: &str,
     adapters: &[ProviderAdapterEnum],
 ) -> bool {
-    let Some(ts) = db_expires_at else {
+    let expires_at = db_expires_at
+        .and_then(|ts| openproxy_types::timestamp::parse_timestamp(ts).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|| access_token.and_then(openproxy_adapters::jwt::exp_timestamp));
+    let Some(expires_at) = expires_at else {
+        // No deadline anywhere: nothing can say the token is stale, so leave
+        // the request alone rather than burning a rotating refresh token.
         return false;
     };
-    let Ok(expires_at) = openproxy_types::timestamp::parse_timestamp(ts) else {
-        return false;
-    };
-    let expires_at = expires_at.with_timezone(&chrono::Utc);
     let mut lead = 900;
     if let Some(adapter) = adapters.iter().find(|a| a.id().as_str() == provider_id)
         && let Some(l) = adapter.metadata().oauth_refresh_lead_seconds

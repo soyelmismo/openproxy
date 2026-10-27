@@ -297,6 +297,7 @@ fn extract_provider_custom_meta(
 
 fn resolve_oauth_refresh(
     raw_account: &RawAccount,
+    access_token: Option<&str>,
     provider_id: &str,
     master_key: &MasterKey,
     oauth_registry: Option<&dyn crate::oauth::PipelineOAuthRegistry>,
@@ -305,6 +306,7 @@ fn resolve_oauth_refresh(
     oauth_registry?;
     if !crate::oauth::pipeline_token_needs_refresh(
         raw_account.expires_at.as_deref(),
+        access_token,
         provider_id,
         adapters,
     ) {
@@ -341,6 +343,7 @@ fn resolve_account_oauth_meta(
 
     let maybe_refresh = resolve_oauth_refresh(
         raw_account,
+        Some(access_token.as_str()),
         t.provider_id.as_str(),
         master_key,
         oauth_registry,

@@ -69,6 +69,8 @@ pub async fn run_refresh_scheduler(
         return;
     }
 
+    backfill_missing_expiries(&db_pool, &master_key).await;
+
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
     // Skip the first immediate tick while respecting cancellation.
     tokio::select! {
@@ -108,6 +110,70 @@ pub async fn run_refresh_scheduler(
         if cancel.is_cancelled() {
             break;
         }
+    }
+}
+
+/// Fills missing `expires_at` values from the access token's own `exp` claim.
+///
+/// Accounts that already lost their deadline stay hidden from the expiring set
+/// until something rewrites it, and the pipeline reads a null deadline as fresh,
+/// so they would sit unused until a request came back 401. Their own token
+/// already carries the instant, so recover it at startup instead of waiting for
+/// a failure to surface.
+///
+/// Runs once per process start; the scheduler's undated-account pass covers
+/// anything that appears later in the same run.
+async fn backfill_missing_expiries(
+    db_pool: &Arc<openproxy_db::DbPool>,
+    master_key: &Arc<MasterKey>,
+) {
+    let db_pool = Arc::clone(db_pool);
+    let master_key = Arc::clone(master_key);
+    let recovered = tokio::task::spawn_blocking(move || {
+        let read_conn = db_pool.reader();
+        let accounts =
+            match crate::accounts::list_undated_oauth_accounts(&read_conn, master_key.as_ref()) {
+                Ok(accounts) => accounts,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "oauth refresh scheduler: failed to list accounts missing a deadline"
+                    );
+                    return 0;
+                }
+            };
+
+        let mut recovered = 0;
+        for account in accounts {
+            let access_token =
+                crate::accounts::decrypt_access_token(&read_conn, account.id, master_key.as_ref())
+                    .ok();
+            let Some(expires_at) = access_token
+                .as_deref()
+                .and_then(openproxy_adapters::jwt::exp_rfc3339)
+            else {
+                continue;
+            };
+            let write_conn = db_pool.writer();
+            match crate::accounts::set_oauth_expires_at(&write_conn, account.id.0, &expires_at) {
+                Ok(()) => recovered += 1,
+                Err(e) => tracing::warn!(
+                    account = account.id.0,
+                    error = %e,
+                    "oauth refresh scheduler: failed to restore a missing deadline"
+                ),
+            }
+        }
+        recovered
+    })
+    .await
+    .unwrap_or(0);
+
+    if recovered > 0 {
+        tracing::info!(
+            count = recovered,
+            "oauth refresh scheduler: restored missing token deadlines from JWT exp claims"
+        );
     }
 }
 
@@ -264,18 +330,30 @@ async fn fetch_expiring_oauth_accounts(
     let master_key = Arc::clone(master_key);
     tokio::task::spawn_blocking(move || {
         let conn = db_pool.reader();
-        crate::accounts::list_expiring_oauth_accounts(
+        let mut accounts = crate::accounts::list_expiring_oauth_accounts(
             &conn,
             MAX_REFRESH_LEAD_SECS,
             master_key.as_ref(),
         )
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "oauth refresh scheduler: failed to list expiring accounts");
+            Vec::new()
+        });
+        // Rows left without a deadline by older builds (or by a token response
+        // that carried neither `expires_in` nor an `exp` claim) are not in the
+        // expiring set, yet they are exactly the ones that never get renewed.
+        // Their deadline is unknown, not absent, so they must be checked.
+        match crate::accounts::list_undated_oauth_accounts(&conn, master_key.as_ref()) {
+            Ok(undated) => accounts.extend(undated),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "oauth refresh scheduler: failed to list accounts without a deadline"
+            ),
+        }
+        accounts
     })
     .await
-    .unwrap_or_else(|_| Ok(Vec::new()))
-    .unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "oauth refresh scheduler: failed to list expiring accounts");
-        Vec::new()
-    })
+    .unwrap_or_default()
 }
 
 fn filter_accounts_due(accounts: Vec<crate::accounts::Account>) -> Vec<crate::accounts::Account> {
@@ -283,17 +361,18 @@ fn filter_accounts_due(accounts: Vec<crate::accounts::Account>) -> Vec<crate::ac
     accounts
         .into_iter()
         .filter(|a| {
-            if let Some(ref expires_at) = a.expires_at {
-                let expires_at = match openproxy_types::timestamp::parse_timestamp(expires_at) {
-                    Ok(dt) => dt.with_timezone(&chrono::Utc),
-                    Err(_) => return false,
-                };
-                let lead = refresh_lead_seconds(&a.provider_id.0);
-                let threshold = now + chrono::Duration::seconds(lead as i64);
-                expires_at <= threshold
-            } else {
-                false
-            }
+            let Some(ref expires_at) = a.expires_at else {
+                // No deadline recorded: due by definition, otherwise the row
+                // stays invisible to every refresh path forever.
+                return true;
+            };
+            let Ok(expires_at) = openproxy_types::timestamp::parse_timestamp(expires_at) else {
+                return false;
+            };
+            let expires_at = expires_at.with_timezone(&chrono::Utc);
+            let lead = refresh_lead_seconds(&a.provider_id.0);
+            let threshold = now + chrono::Duration::seconds(lead as i64);
+            expires_at <= threshold
         })
         .collect()
 }
@@ -359,8 +438,24 @@ async fn handle_refresh_failure(
 
     let _ = tokio::task::spawn_blocking(move || {
         let conn = db_pool.writer();
+        // Keep the row due whether or not the failure looks terminal. Erasing
+        // the deadline used to hide the account from every refresh path, so one
+        // failure meant the credentials were never exercised again and the
+        // refresh token lapsed server-side. The failure backoff below, not a
+        // missing deadline, is what paces retries.
+        if let Err(due_err) = crate::accounts::mark_oauth_expiry_due(&conn, acc_id.0) {
+            tracing::warn!(
+                account = account_id,
+                error = %due_err,
+                "oauth refresh: failed to keep account due for retry"
+            );
+        }
         if is_unrecoverable {
-            let _ = crate::accounts::clear_oauth_expires_at(&conn, acc_id.0);
+            tracing::warn!(
+                account = account_id,
+                provider = %provider_id_str,
+                "oauth refresh: provider rejected the grant; credentials kept and retried with backoff"
+            );
         }
         if let Err(update_err) = crate::accounts::set_health(&conn, acc_id, new_health) {
             tracing::warn!(
