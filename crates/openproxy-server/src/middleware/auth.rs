@@ -321,24 +321,23 @@ async fn verify_combo_authorization(
     state: &AppState,
     auth: Option<&ValidatedApiToken>,
     model_name: &str,
-) -> Result<(), ApiError> {
+) -> Result<Option<openproxy_core::routing::RoutingPlan>, ApiError> {
     let model_name = model_name.to_owned();
-    let Ok(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) = state
+    let plan = state
         .db_pool()
         .spawn_read(move |r| openproxy_core::routing::resolve(r, &model_name))
         .await
-    else {
-        return Ok(());
-    };
+        .ok();
 
-    if let Some(auth) = auth
+    if let Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) = &plan
+        && let Some(auth) = auth
         && !auth.is_combo_allowed(combo_id.0)
     {
         return Err(ApiError(CoreError::Auth(
             "combo not allowed for this key".into(),
         )));
     }
-    Ok(())
+    Ok(plan)
 }
 
 /// Authenticate the request against active API keys and verify model/combo authorization.
@@ -450,6 +449,7 @@ pub async fn auth_middleware(
     }
 
     let requested_model = &parsed.model;
+    let mut pre_resolved_plan = None;
     if let Some(token) = &auth_result {
         if !token
             .key
@@ -468,7 +468,20 @@ pub async fn auth_middleware(
             ))));
         }
 
-        verify_combo_authorization(&state, Some(token), requested_model).await?;
+        pre_resolved_plan =
+            verify_combo_authorization(&state, Some(token), requested_model).await?;
+    }
+
+    if let Some(plan) = pre_resolved_plan {
+        parts
+            .extensions
+            .insert(super::routing::PreResolvedRoutingPlan {
+                model: requested_model.to_string(),
+                legacy_combo_name: None,
+                provider_override: None,
+                account_override: None,
+                plan,
+            });
     }
 
     parts.extensions.insert(ParsedChatRequest {

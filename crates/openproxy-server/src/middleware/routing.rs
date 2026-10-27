@@ -22,6 +22,30 @@ use crate::{
 };
 
 #[derive(Clone)]
+pub struct PreResolvedRoutingPlan {
+    pub model: String,
+    pub legacy_combo_name: Option<String>,
+    pub provider_override: Option<String>,
+    pub account_override: Option<AccountId>,
+    pub plan: RoutingPlan,
+}
+
+impl PreResolvedRoutingPlan {
+    pub fn matches_request(
+        &self,
+        model: &str,
+        legacy_combo_name: Option<&str>,
+        provider_override: Option<&str>,
+        account_override: Option<AccountId>,
+    ) -> bool {
+        self.model == model
+            && self.legacy_combo_name.as_deref() == legacy_combo_name
+            && self.provider_override.as_deref() == provider_override
+            && self.account_override == account_override
+    }
+}
+
+#[derive(Clone)]
 pub struct ResolvedRoute {
     pub openai_req: Arc<OpenAIRequest>,
     pub combo_id: ComboId,
@@ -51,10 +75,60 @@ pub async fn routing_middleware(
     let worker_state = state.clone();
     let headers = req.headers().clone();
     let request = Arc::clone(&openai_req);
-    let (plan, has_key_restrictions) = crate::error::run_blocking(move || {
-        resolve_routing_plan(&worker_state, &headers, &request, auth_token.as_ref())
-    })
-    .await?;
+    let (plan, has_key_restrictions) = if let Some(pre) =
+        req.extensions().get::<PreResolvedRoutingPlan>()
+        && pre.matches_request(
+            &openai_req.model,
+            headers
+                .get("x-openproxy-combo")
+                .and_then(|v| v.to_str().ok()),
+            headers
+                .get("x-openproxy-provider")
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty()),
+            headers
+                .get("x-openproxy-account")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<i64>().ok())
+                .map(AccountId),
+        ) {
+        let mut plan = pre.plan.clone();
+        match auth_token.as_ref() {
+            Some(auth) => {
+                let has_restrictions = auth.key.blacklisted_providers.is_some()
+                    || auth.key.blacklisted_models.is_some()
+                    || auth
+                        .key
+                        .allowed_models
+                        .as_ref()
+                        .is_some_and(|a| !a.is_empty());
+                let plan_is_combo = matches!(plan, RoutingPlan::Combo { .. });
+
+                // Fast path pure in-memory: if no SQL filtering is required,
+                // apply combo check in Tokio without spawning a blocking thread.
+                if !has_restrictions || !plan_is_combo {
+                    let has_restr =
+                        apply_auth_restrictions_to_plan(&worker_state, &mut plan, auth)?;
+                    (plan, has_restr)
+                } else {
+                    let auth = auth.clone();
+                    crate::error::run_blocking(move || {
+                        let has_restr =
+                            apply_auth_restrictions_to_plan(&worker_state, &mut plan, &auth)?;
+                        Ok((plan, has_restr))
+                    })
+                    .await?
+                }
+            }
+            None => (plan, false),
+        }
+    } else {
+        crate::error::run_blocking(move || {
+            resolve_routing_plan(&worker_state, &headers, &request, auth_token.as_ref())
+        })
+        .await?
+    };
     let (combo_id, combo_override, targets_override) =
         translate_plan_to_targets(&state, plan, has_key_restrictions, api_key_id).await?;
 
@@ -331,3 +405,7 @@ async fn record_model_not_found_usage_row(
         tracing::error!(%error, "failed to enqueue model_not_found usage");
     }
 }
+
+#[cfg(test)]
+#[path = "routing_reuse_tests.rs"]
+mod routing_reuse_tests;
