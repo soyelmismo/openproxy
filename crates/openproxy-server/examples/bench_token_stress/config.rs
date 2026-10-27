@@ -7,6 +7,7 @@ use std::{
 
 pub const HELP: &str = "bench_token_stress [CONCURRENCY=10] [TOKENS=5000] [TOKENS_PER_EVENT=5]
   --repetitions N       Fresh processes and SQLite directory per repetition (default 3)
+  --rounds N            Rounds of requests reusing the same HTTP client and server (default 1)
   --keys N             Default ceil(concurrency/64). --keys 1 tests the admission cap
   --proxy-cpus LIST     taskset CPU list (default all allowed CPUs after the first two)
   --client-cpus LIST    taskset CPU list (default second allowed CPU)
@@ -15,8 +16,18 @@ pub const HELP: &str = "bench_token_stress [CONCURRENCY=10] [TOKENS=5000] [TOKEN
   --json PATH          Machine-readable report, '-' for JSON stdout
   --synchronous MODE   full (default, matches production) or normal (durability tradeoff)
   --event-interval-us N Mock pause between upstream events per stream (default 0 = firehose)
+  --arrival-rate RPS   Open-loop request rate, 0 = simultaneous batch (default)
+  --read-delay-ms N    Pause before each client body frame (default 0)
+  --cancel-after-tokens N  Deliberately disconnect after N observed tokens (default 0 = off)
+  --cancel-percent N   Percentage of clients that disconnect (default 100 when enabled)
+  --network-delay-ms N One-way delay per direction via ephemeral loopback TCP relay (default 0)
+  --upstream-cut-after-events N Cut upstream stream after N events with error (default 0 = off)
+  --upstream-cut-percent P      Percentage of upstream streams to cut (default 100 when enabled)
   --background         Include unrelated discovery/maintenance daemons (default isolated pipeline)
+  --recording          Persist request/response bodies and headers (default off)
+  --upstream-tls       Serve the mock upstream over HTTPS with ALPN h2 (bench only; reads certs from BENCH_TLS_DIR)
   --perf               Hardware counters for proxy measurement window (Linux perf required)
+  --perf-fsync         Also count fsync/fdatasync tracepoints (implies --perf, Linux privileges required)
   --heaptrack          Profile proxy allocations (requires heaptrack and --features benchmark-system-allocator)
   --output-dir PATH    Artifacts parent (default TMPDIR, fresh run directory)
   --self-test          Optional correctness tests, no load, not run by cargo test
@@ -38,10 +49,38 @@ pub struct WorkerConfig {
     pub keys: Vec<String>,
     pub directory: PathBuf,
     pub synchronous: String,
+    #[serde(default = "default_rounds")]
+    pub rounds: usize,
     #[serde(default)]
     pub background: bool,
     #[serde(default)]
+    pub recording: bool,
+    #[serde(default)]
+    pub upstream_tls: bool,
+    #[serde(default)]
     pub event_interval_us: u64,
+    #[serde(default)]
+    pub arrival_rate_rps: u64,
+    #[serde(default)]
+    pub read_delay_ms: u64,
+    #[serde(default)]
+    pub cancel_after_tokens: usize,
+    #[serde(default = "all_clients")]
+    pub cancel_percent: u64,
+    #[serde(default)]
+    pub network_delay_ms: u64,
+    #[serde(default)]
+    pub upstream_cut_after_events: usize,
+    #[serde(default = "all_clients")]
+    pub upstream_cut_percent: u64,
+}
+
+fn default_rounds() -> usize {
+    1
+}
+
+fn all_clients() -> u64 {
+    100
 }
 
 pub struct Options {
@@ -52,6 +91,7 @@ pub struct Options {
     pub mock_cpus: String,
     pub json: Option<String>,
     pub perf: bool,
+    pub perf_fsync: bool,
     pub heaptrack: bool,
 }
 
@@ -66,12 +106,21 @@ impl Options {
         let mut flags = std::collections::BTreeMap::new();
         let mut iter = args.iter();
         while let Some(arg) = iter.next() {
-            if matches!(arg.as_str(), "--perf" | "--heaptrack" | "--background") {
+            if matches!(
+                arg.as_str(),
+                "--perf"
+                    | "--perf-fsync"
+                    | "--heaptrack"
+                    | "--background"
+                    | "--recording"
+                    | "--upstream-tls"
+            ) {
                 flags.insert(arg.as_str(), "true".to_owned());
             } else if arg.starts_with("--") {
                 ensure!(
                     [
                         "--repetitions",
+                        "--rounds",
                         "--keys",
                         "--proxy-cpus",
                         "--client-cpus",
@@ -80,7 +129,14 @@ impl Options {
                         "--json",
                         "--synchronous",
                         "--output-dir",
-                        "--event-interval-us"
+                        "--event-interval-us",
+                        "--arrival-rate",
+                        "--read-delay-ms",
+                        "--cancel-after-tokens",
+                        "--cancel-percent",
+                        "--network-delay-ms",
+                        "--upstream-cut-after-events",
+                        "--upstream-cut-percent"
                     ]
                     .contains(&arg.as_str()),
                     "unknown flag {arg}"
@@ -171,6 +227,38 @@ impl Options {
             !heaptrack || cfg!(feature = "benchmark-system-allocator"),
             "heaptrack requires --features benchmark-system-allocator"
         );
+        let arrival_rate_rps = number("--arrival-rate", 0)? as u64;
+        let read_delay_ms = number("--read-delay-ms", 0)? as u64;
+        let cancel_after_tokens = number("--cancel-after-tokens", 0)?;
+        let cancel_percent = number("--cancel-percent", 100)? as u64;
+        let rounds = number("--rounds", 1)?;
+        let network_delay_ms = number("--network-delay-ms", 0)? as u64;
+        let upstream_cut_after_events = number("--upstream-cut-after-events", 0)?;
+        let upstream_cut_percent = number("--upstream-cut-percent", 100)? as u64;
+        ensure!(
+            (1..=100_000).contains(&rounds),
+            "rounds must be between 1 and 100000"
+        );
+        ensure!(
+            network_delay_ms <= 10_000,
+            "network delay must be <= 10000 ms"
+        );
+        ensure!(
+            upstream_cut_percent <= 100,
+            "upstream-cut-percent must be 0..=100"
+        );
+        ensure!(
+            arrival_rate_rps <= 1_000_000 && read_delay_ms <= 1000,
+            "invalid arrival rate or read delay"
+        );
+        ensure!(
+            cancel_percent <= 100 && cancel_after_tokens < tokens,
+            "cancel threshold must be below tokens; percent must be 0..=100"
+        );
+        ensure!(
+            arrival_rate_rps == 0 || concurrency as u64 * 1000 / arrival_rate_rps < 100_000,
+            "open-loop schedule must fit within 100 s"
+        );
         let directory = flags
             .get("--output-dir")
             .map_or_else(std::env::temp_dir, PathBuf::from);
@@ -186,7 +274,17 @@ impl Options {
                 keys: Vec::new(),
                 directory,
                 synchronous,
+                rounds,
+                arrival_rate_rps,
+                read_delay_ms,
+                cancel_after_tokens,
+                cancel_percent,
+                network_delay_ms,
+                upstream_cut_after_events,
+                upstream_cut_percent,
                 background: flags.contains_key("--background"),
+                recording: flags.contains_key("--recording"),
+                upstream_tls: flags.contains_key("--upstream-tls"),
                 event_interval_us: flags
                     .get("--event-interval-us")
                     .map_or(Ok(0), |v| v.parse())
@@ -197,7 +295,8 @@ impl Options {
             client_cpus,
             mock_cpus,
             json: flags.get("--json").cloned(),
-            perf: flags.contains_key("--perf"),
+            perf: flags.contains_key("--perf") || flags.contains_key("--perf-fsync"),
+            perf_fsync: flags.contains_key("--perf-fsync"),
             heaptrack,
         })
     }

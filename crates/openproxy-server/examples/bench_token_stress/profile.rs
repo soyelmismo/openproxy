@@ -19,7 +19,7 @@ pub struct Perf {
     path: PathBuf,
 }
 impl Perf {
-    pub fn start(pid: u32, directory: &Path) -> anyhow::Result<Self> {
+    pub fn start(pid: u32, directory: &Path, fsync: bool) -> anyhow::Result<Self> {
         let control_path = directory.join("perf-control");
         let ack_path = directory.join("perf-ack");
         let status = Command::new("mkfifo")
@@ -34,6 +34,11 @@ impl Perf {
         let ack_file = OpenOptions::new().read(true).write(true).open(&ack_path)?;
         let ack_writer = ack_file.try_clone()?;
         let path = directory.join("perf-stat.csv");
+        let events = if fsync {
+            "cycles,instructions,cache-misses,task-clock,context-switches,page-faults,syscalls:sys_enter_fsync,syscalls:sys_enter_fdatasync"
+        } else {
+            "cycles,instructions,cache-misses,task-clock,context-switches,page-faults"
+        };
         let child = Command::new("perf")
             .args([
                 "stat",
@@ -41,7 +46,7 @@ impl Perf {
                 "-D",
                 "-1",
                 "-e",
-                "cycles,instructions,cache-misses,task-clock,context-switches,page-faults",
+                events,
                 "-p",
                 &pid.to_string(),
                 "--control",

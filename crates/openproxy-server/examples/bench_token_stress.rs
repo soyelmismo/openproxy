@@ -11,6 +11,8 @@ mod mock;
 mod profile;
 #[path = "bench_token_stress/proxy.rs"]
 mod proxy;
+#[path = "bench_token_stress/relay.rs"]
+mod relay;
 #[path = "bench_token_stress/report.rs"]
 mod report;
 #[path = "bench_token_stress/resources.rs"]
@@ -29,6 +31,14 @@ fn main() -> anyhow::Result<()> {
         let role = args
             .get(1)
             .ok_or_else(|| anyhow::anyhow!("missing worker role"))?;
+        // Keep worker stdout JSON-only. Network errno diagnostics go to the
+        // existing per-role stderr artifact, with the same filter in A and B.
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+            .try_init()
+            .map_err(|error| anyhow::anyhow!("worker tracing init: {error}"))?;
         let config: config::WorkerConfig = serde_json::from_str(&config::read_line()?)?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -46,7 +56,9 @@ fn main() -> anyhow::Result<()> {
     if args.first().is_some_and(|a| a == "--self-test") {
         validate::self_test()?;
         report::self_test()?;
+        load::self_test()?;
         resources::self_test()?;
+        mock::self_test()?;
         println!(
             "benchmark self-tests: passed (fragmentation, corruption, usage, terminal, percentiles, proc parser)"
         );

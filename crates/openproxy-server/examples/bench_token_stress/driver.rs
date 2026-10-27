@@ -3,7 +3,7 @@ use crate::{
     load::Batch,
     profile::Perf,
     report::{Distribution, Run},
-    resources::{Sampler, ticks_per_second},
+    resources::{Sampler, TcpCounters, ticks_per_second},
 };
 use anyhow::{Context, ensure};
 use serde_json::{Value, json};
@@ -161,20 +161,46 @@ fn one_run(
     ensure!(proxy.read()?["prepared"] == true, "proxy did not prepare");
     let perf = options
         .perf
-        .then(|| Perf::start(pid(&proxy_ready)?, &config.directory))
+        .then(|| Perf::start(pid(&proxy_ready)?, &config.directory, options.perf_fsync))
         .transpose()?;
     let sampler = Sampler::start(vec![
         pid(&proxy_ready)?,
         pid(&mock_ready)?,
         pid(&client_ready)?,
     ])?;
+    let tcp_before = TcpCounters::read()?;
     client.send("go")?;
     let batch: Batch = serde_json::from_value(client.read()?)?;
+    let total_requests = config.concurrency * config.rounds.max(1);
+    let expected_cancelled = if config.cancel_after_tokens == 0 {
+        0
+    } else {
+        (0..config.concurrency)
+            .filter(|id| (*id as u64 * 100 / config.concurrency as u64) < config.cancel_percent)
+            .count()
+            * config.rounds.max(1)
+    };
+    let actual_cancelled = batch
+        .requests
+        .iter()
+        .filter(|r| r.cancelled_as_planned)
+        .count();
+    ensure!(
+        actual_cancelled == expected_cancelled,
+        "expected {expected_cancelled} deliberate disconnects across {} rounds, observed {actual_cancelled}",
+        config.rounds.max(1)
+    );
+    ensure!(
+        batch.requests.len() == total_requests,
+        "expected {total_requests} requests in batch, observed {}",
+        batch.requests.len()
+    );
     let after_client = sampler.snapshot()?;
     proxy.send("finish")?;
     let persistence = proxy.read()?;
     ensure!(persistence["drained"] == true, "persistence did not drain");
     let resources = sampler.finish(after_client, ticks)?;
+    let tcp_host_delta = TcpCounters::read()?.delta(&tcp_before);
     let profile = if let Some(perf) = perf {
         perf.stop()?
     } else {
@@ -187,7 +213,14 @@ fn one_run(
     if options.heaptrack {
         profile["allocations"] = crate::profile::interpret_heaptrack(&config.directory)?;
     }
-    Ok(Run::new(repetition, batch, resources, persistence, profile))
+    Ok(Run::new(
+        repetition,
+        batch,
+        resources,
+        tcp_host_delta,
+        persistence,
+        profile,
+    ))
 }
 
 pub fn run(options: Options) -> anyhow::Result<()> {
@@ -210,14 +243,19 @@ pub fn run(options: Options) -> anyhow::Result<()> {
         runs.push(run);
     }
     let failed: usize = runs.iter().map(|r| r.failed).sum();
-    let throughput = Distribution::from(runs.iter().map(|r| r.tokens_per_second).collect());
+    let repetition_tps: Vec<_> = runs.iter().map(|r| r.tokens_per_second).collect();
+    let throughput = Distribution::from(repetition_tps.clone());
+    let throughput_mean_ci95 = crate::report::mean_ci95(&repetition_tps);
     let result = json!({
         "schema_version":2, "configuration":options.worker, "repetitions":options.repetitions,
         "affinity":{"proxy":options.proxy_cpus,"mock":options.mock_cpus,"client":options.client_cpus},
         "allocator":if cfg!(feature="benchmark-system-allocator") { "system (allocation profiling, do not compare RSS with mimalloc)" } else { "mimalloc (production allocator with child environment tuning)" },
         "sql_instrumented":cfg!(feature="benchmark-sql"), "clock_ticks_per_second":ticks,
-        "notes":["Default isolates pipeline: unrelated discovery/maintenance daemons stopped before warmup; --background enables them", "Synthetic tokens: exact received ' tok' units, not tokenizer throughput", "RSS is residency, not allocations; sampled every 5ms; HWM includes warmup", "CPU ticks are scheduled CPU time, NOT hardware cycles", "SQL counts include background/persistence; no phase attribution", "AppState::for_test and axum::serve, not the production startup/hardened accept loop", "Loopback transport and disjoint affinity do not eliminate host noise", "Per-request latency includes scheduler, sockets, upstream and client work, not pure pipeline CPU"],
-        "artifacts":directory, "throughput_across_repetitions":throughput,"failed_requests":failed,"runs":runs,
+        "notes":["Default isolates pipeline: unrelated discovery/maintenance daemons stopped before warmup; --background enables them", "Synthetic tokens: exact received ' tok' units, not tokenizer throughput", "RSS is residency, not allocations; sampled every 5ms; HWM includes warmup", "CPU ticks are scheduled CPU time, NOT hardware cycles", "SQL counts include background/persistence; no phase attribution", "TCP counters are host-wide (/proc/net), not per process", "AppState::for_test and axum::serve, not the production startup/hardened accept loop", "Loopback transport and disjoint affinity do not eliminate host noise", "Per-request latency includes scheduler, sockets, upstream and client work, not pure pipeline CPU"],
+        "artifacts":directory, "throughput_across_repetitions":throughput,
+        "throughput_mean_ci95":throughput_mean_ci95,
+        "confidence_interval_method":"Student-t 95%, independent fresh-process repetitions; df>30 uses conservative t(df=30); null for n<2; does not remove host noise",
+        "failed_requests":failed,"runs":runs,
     });
     let text = serde_json::to_string_pretty(&result)?;
     std::fs::write(directory.join("report.json"), &text)?;
@@ -236,6 +274,12 @@ pub fn run(options: Options) -> anyhow::Result<()> {
             100.0 * stats.standard_deviation / stats.mean,
             stats.min,
             stats.max
+        );
+    }
+    if let Some([lo, hi]) = throughput_mean_ci95 {
+        eprintln!(
+            "Throughput mean 95% CI (Student-t, n={}): [{lo:.0}, {hi:.0}]",
+            options.repetitions
         );
     }
     ensure!(

@@ -10,7 +10,6 @@ use openproxy_server::{router::build_router, state::AppState};
 use openproxy_types::ids::ProviderId;
 use serde_json::json;
 use std::sync::Arc;
-use tokio::net::TcpListener;
 
 fn seed(pool: &DbPool, master_key: &MasterKey, upstream: String) -> anyhow::Result<()> {
     let provider = ProviderId::new("mock-upstream");
@@ -88,8 +87,10 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
         key,
         Arc::new(parking_lot::RwLock::new(Arc::new(vec![]))),
     );
+    state.set_recording(config.recording);
     if !config.background {
-        // Keep admission, routing, PII, recording and durable usage unchanged.
+        // Keep admission, routing, PII and durable usage unchanged.
+        // Recording is controlled separately by --recording.
         // Catalog refresh and public-proxy crawling are not part of this load.
         state.discovery_scheduler().cancel();
         state.supervisor().shutdown();
@@ -119,7 +120,7 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
             .collect()
     })
     .await??;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = openproxy_server::listener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let requested = openproxy_server::loopback_notrack::requested();
     // Unlike production's best-effort optimization, a benchmark must fail closed:
@@ -162,9 +163,18 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     );
     wait_for_usage(&state).await?;
     #[cfg(feature = "benchmark-sql")]
-    openproxy_db::sql_profile::start();
+    {
+        openproxy_db::sql_profile::start();
+        openproxy_pipeline::profile::start();
+    }
     let sql_start = std::time::Instant::now();
-    emit(&json!({"prepared":true}))?;
+    // Positive backend evidence, not just absence of a fallback warning.
+    // Linux truncates comm to 15 bytes. The shared ring starts during warmup.
+    let io_uring_active = std::fs::read_dir("/proc/self/task")?
+        .filter_map(Result::ok)
+        .filter_map(|entry| std::fs::read_to_string(entry.path().join("comm")).ok())
+        .any(|name| name.trim() == "openproxy-io-ur");
+    emit(&json!({"prepared":true,"io_uring_active":io_uring_active}))?;
     ensure!(
         tokio::task::spawn_blocking(read_line).await?? == "finish",
         "expected finish"
@@ -200,6 +210,9 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     let usage_shutdown_us =
         drain_start.elapsed().as_micros() - server_shutdown_us - notrack_shutdown_us;
     #[cfg(feature = "benchmark-sql")]
+    let batching_profile =
+        serde_json::to_value(openproxy_pipeline::profile::stop()).unwrap_or(json!({}));
+    #[cfg(feature = "benchmark-sql")]
     let mut sql = serde_json::to_value(openproxy_db::sql_profile::stop())?;
     #[cfg(feature = "benchmark-sql")]
     {
@@ -212,9 +225,21 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
     let _ = sql_start;
     #[cfg(not(feature = "benchmark-sql"))]
     let sql = json!({"status":"not instrumented; build with --features benchmark-sql"});
-    emit(
-        &json!({"drained":true,"drain_us":drain_start.elapsed().as_micros(),"server_shutdown_us":server_shutdown_us,"notrack_shutdown_us":notrack_shutdown_us,"usage_shutdown_us":usage_shutdown_us,"network":network,"sql":sql}),
-    )?;
+    #[cfg(not(feature = "benchmark-sql"))]
+    let batching_profile = json!({"status":"not instrumented"});
+
+    let persistence_json = json!({
+        "drained": true,
+        "io_uring_active": io_uring_active,
+        "drain_us": drain_start.elapsed().as_micros(),
+        "server_shutdown_us": server_shutdown_us,
+        "notrack_shutdown_us": notrack_shutdown_us,
+        "usage_shutdown_us": usage_shutdown_us,
+        "network": network,
+        "sql": sql,
+        "batching": batching_profile
+    });
+    emit(&persistence_json)?;
     // Parent samples /proc after persistence but before the process exits.
     tokio::task::spawn_blocking(read_line).await??;
     Ok(())

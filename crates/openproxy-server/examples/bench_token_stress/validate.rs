@@ -147,10 +147,20 @@ pub fn self_test() -> anyhow::Result<()> {
     let wire = b": heartbeat\r\ndata: {\"choices\":[{\"delta\":{\"content\":\" tok tok\"}}]}\r\n\r\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\n data-ignored: x\ndata: \"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\n\ndata: [DONE]\n\n";
     for step in 1..=wire.len() {
         let mut validator = Validator::default();
+        let mut timeline_tokens = 0;
+        let mut done_transitions = 0;
         for bytes in wire.chunks(step) {
+            let before = validator.tokens;
+            let was_done = validator.done;
             validator.push(bytes)?;
+            timeline_tokens += validator.tokens - before;
+            done_transitions += u64::from(!was_done && validator.done);
         }
         validator.complete(2)?;
+        ensure!(
+            timeline_tokens == 2 && done_transitions == 1,
+            "fragmentation-invariant timing counters"
+        );
         ensure!(
             validator.events == 3 && validator.content_events == 1,
             "event/frame conflation"

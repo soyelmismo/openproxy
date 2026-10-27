@@ -20,7 +20,11 @@ laya-engine = [
     "openproxy-core/laya-engine",
 ]
 # Opt-in statement counting for the standalone performance harness only.
-benchmark-sql = ["openproxy-db/sql-profile"]
+benchmark-sql = [
+    "openproxy-db/sql-profile",
+    "openproxy-adapters/bench-tls-hook",
+    "openproxy-pipeline/benchmark-profile",
+]
 # External heaptrack interposition needs the system allocator, not mimalloc.
 benchmark-system-allocator = []
 
@@ -116,3 +120,7 @@ tower = { workspace = true, features = ["util"] }
 [dev-dependencies]
 # Reuse the workspace HTTP client for the isolated load generator.
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+# TLS+h2 mock upstream for the benchmark harness (bench only).
+rustls = { workspace = true, features = ["logging", "std", "tls12", "ring"] }
+tokio-rustls = { workspace = true, features = ["logging", "ring", "tls12"] }
+rustls-pki-types = { workspace = true }
