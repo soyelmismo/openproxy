@@ -120,11 +120,11 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
              unencrypted unless a TLS-terminating reverse proxy fronts this port."
         );
     }
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    let listener = openproxy_server::listener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "openproxy listening");
     let admin_listener = match admin_bind {
         Some(admin_bind) => {
-            let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
+            let admin_listener = openproxy_server::listener::bind(&admin_bind).await?;
             if !is_loopback_bind(&admin_bind) {
                 tracing::warn!(addr = %admin_bind, "admin listener is NON-LOOPBACK over plain HTTP; use a TLS-terminating reverse proxy");
             }

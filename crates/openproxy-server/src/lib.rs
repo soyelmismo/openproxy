@@ -23,6 +23,7 @@ pub mod disconnect;
 pub mod error;
 pub mod extractors;
 pub mod handlers;
+pub mod listener;
 pub mod loopback_notrack;
 pub mod middleware;
 pub mod repositories;
