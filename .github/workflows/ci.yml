@@ -691,3 +691,25 @@ jobs:
         working-directory: crates/openproxy-server/web
         run: pnpm run test:e2e
 
+  cleanup-artifacts:
+    name: Limpiar artifacts antiguos
+    needs: [release, e2e-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Conservar los 40 más recientes y borrar el resto
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${{ github.repository }}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | [.id, .created_at] | @tsv' \
+            | sort -k2 -r \
+            | awk 'NR > 40 {print $1}' \
+            | while read -r id; do
+                echo "borrando artifact $id"
+                gh api -X DELETE "repos/${{ github.repository }}/actions/artifacts/$id" >/dev/null || true
+              done
+
