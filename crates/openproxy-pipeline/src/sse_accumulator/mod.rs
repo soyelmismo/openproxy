@@ -17,6 +17,8 @@ pub mod types;
 mod tests;
 
 pub use accumulator::ResponseAccumulator;
+#[cfg(test)]
+pub(crate) use parser::extract_delta_fields;
 pub use parser::{
     decode_json_escape_into, extract_reasoning_content, normalize_nonstandard_reasoning_fields,
 };

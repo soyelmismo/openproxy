@@ -761,3 +761,6 @@ fn finish_preserves_prompt_tokens_details() {
     assert_eq!(v["usage"]["total_tokens"], 150);
     assert_eq!(v["usage"]["prompt_tokens_details"]["cached_tokens"], 80);
 }
+
+#[path = "single_scan_tests.rs"]
+mod single_scan;

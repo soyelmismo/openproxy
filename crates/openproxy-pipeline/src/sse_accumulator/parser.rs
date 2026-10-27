@@ -112,16 +112,37 @@ pub(crate) fn find_delta_object(payload: &str) -> Option<usize> {
     None
 }
 
-/// Extract a string field from `choices[0].delta` strictly at depth 1,
-/// ignoring nested objects and arrays (e.g. `tool_calls`).
-pub(crate) fn extract_delta_field<'a>(payload: &'a str, target_key: &str) -> Option<&'a str> {
-    let bytes = payload.as_bytes();
-    if !payload.contains(target_key) {
-        return None;
-    }
-    let mut i = find_delta_object(payload)?;
-    let mut depth: usize = 1;
+/// Text fields borrowed from the first delta object, without decoding escapes.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct DeltaFields<'a> {
+    pub content: Option<&'a str>,
+    pub reasoning_content: Option<&'a str>,
+}
 
+/// Locate a string's closing quote, skipping escaped quotes and backslashes.
+fn string_end(bytes: &[u8], mut offset: usize) -> Option<usize> {
+    while let Some(relative) = memchr::memchr2(b'"', b'\\', bytes.get(offset..)?) {
+        offset += relative;
+        if bytes[offset] == b'"' {
+            return Some(offset);
+        }
+        offset += 2;
+    }
+    None
+}
+
+/// Read both text fields at delta depth one in one traversal. Nested tool-call
+/// fields are ignored. Like the original field extractor, the first occurrence
+/// wins even when it is null or non-string, and incomplete strings are ignored.
+pub(crate) fn extract_delta_fields(payload: &str) -> DeltaFields<'_> {
+    let bytes = payload.as_bytes();
+    let Some(mut i) = find_delta_object(payload) else {
+        return DeltaFields::default();
+    };
+    let mut fields = DeltaFields::default();
+    let mut depth = 1usize;
+    let mut seen_content = false;
+    let mut seen_reasoning = false;
     while i < bytes.len() && depth > 0 {
         match bytes[i] {
             b'{' | b'[' => {
@@ -133,70 +154,63 @@ pub(crate) fn extract_delta_field<'a>(payload: &'a str, target_key: &str) -> Opt
                 i += 1;
             }
             b'"' => {
-                let str_start = i + 1;
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == b'\\' {
-                        i += 2;
-                        continue;
+                let start = i + 1;
+                let Some(end) = string_end(bytes, start) else {
+                    break;
+                };
+                let key = &bytes[start..end];
+                i = end + 1;
+                let mut value = i;
+                while bytes.get(value).is_some_and(u8::is_ascii_whitespace) {
+                    value += 1;
+                }
+                if bytes.get(value) != Some(&b':') {
+                    continue;
+                }
+                value += 1;
+                while bytes.get(value).is_some_and(u8::is_ascii_whitespace) {
+                    value += 1;
+                }
+                i = value;
+                if depth != 1 {
+                    continue;
+                }
+                let destination = match key {
+                    b"content" if !seen_content => {
+                        seen_content = true;
+                        &mut fields.content
                     }
-                    if bytes[i] == b'"' {
+                    b"reasoning_content" if !seen_reasoning => {
+                        seen_reasoning = true;
+                        &mut fields.reasoning_content
+                    }
+                    _ => continue,
+                };
+                if bytes.get(value) == Some(&b'"') {
+                    let Some(end) = string_end(bytes, value + 1) else {
                         break;
-                    }
-                    i += 1;
+                    };
+                    *destination = payload.get(value + 1..end);
+                    i = end + 1;
                 }
-                if i >= bytes.len() {
-                    return None;
-                }
-                let key_str = std::str::from_utf8(&bytes[str_start..i]).ok()?;
-                i += 1;
-
-                let mut j = i;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if j < bytes.len() && bytes[j] == b':' {
-                    j += 1;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    if depth == 1 && key_str == target_key {
-                        if j < bytes.len() && bytes[j] == b'"' {
-                            let val_start = j + 1;
-                            let mut k = val_start;
-                            while k < bytes.len() {
-                                if bytes[k] == b'\\' {
-                                    k += 2;
-                                    continue;
-                                }
-                                if bytes[k] == b'"' {
-                                    return Some(&payload[val_start..k]);
-                                }
-                                k += 1;
-                            }
-                        }
-                        return None;
-                    }
-                    i = j;
+                if seen_content && seen_reasoning {
+                    break;
                 }
             }
-            _ => {
-                i += 1;
-            }
+            _ => i += 1,
         }
     }
-    None
+    fields
 }
 
-/// `delta.content`, read strictly inside the `choices[0].delta` object so
-/// nested `tool_calls` arguments are not mistaken for it.
+/// `delta.content`, excluding fields nested in tool-call arguments.
 pub(crate) fn extract_delta_content(payload: &str) -> Option<&str> {
-    extract_delta_field(payload, "content")
+    extract_delta_fields(payload).content
 }
 
-/// `delta.reasoning_content`, read under the same `choices[0].delta` boundary.
+/// `delta.reasoning_content`, under the same delta boundary as content.
 pub fn extract_reasoning_content(payload: &str) -> Option<&str> {
-    extract_delta_field(payload, "reasoning_content")
+    extract_delta_fields(payload).reasoning_content
 }
 
 fn should_check_reasoning_fields(payload: &str) -> bool {

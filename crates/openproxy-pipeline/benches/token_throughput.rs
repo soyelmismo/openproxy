@@ -160,11 +160,43 @@ fn bench_accumulator_high_token_scale(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_accumulator_combined_fields(c: &mut Criterion) {
+    use openproxy_pipeline::streaming::StreamingChunkStage;
+    let mut group = c.benchmark_group("accumulator_combined_fields");
+    for (label, payload) in [
+        (
+            "text",
+            r#"{"choices":[{"delta":{"content":" ordinary text"},"finish_reason":null}]}"#,
+        ),
+        (
+            "reasoning",
+            r#"{"choices":[{"delta":{"reasoning_content":" thoughts"},"finish_reason":null}]}"#,
+        ),
+        (
+            "mixed",
+            r#"{"choices":[{"delta":{"content":" answer","reasoning_content":" thoughts"},"finish_reason":null}]}"#,
+        ),
+    ] {
+        group.throughput(Throughput::Elements(1000));
+        group.bench_function(label, |b| {
+            b.iter(|| {
+                let mut accumulator = ResponseAccumulator::new();
+                for _ in 0..1000 {
+                    black_box(accumulator.process_chunk(black_box(payload)));
+                }
+                black_box(accumulator);
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_openai_token_throughput,
     bench_anthropic_token_throughput,
     bench_gemini_token_throughput,
     bench_accumulator_high_token_scale,
+    bench_accumulator_combined_fields,
 );
 criterion_main!(benches);

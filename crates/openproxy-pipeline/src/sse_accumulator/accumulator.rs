@@ -4,8 +4,8 @@ use serde_json::Value;
 use crate::translation::OpenAIUsage;
 
 use super::parser::{
-    decode_json_escape_into, extract_delta_content, extract_error_from_line,
-    extract_reasoning_content, parse_tool_call_probe,
+    decode_json_escape_into, extract_delta_content, extract_delta_fields, extract_error_from_line,
+    parse_tool_call_probe,
 };
 use super::types::{AccumulatedToolCall, AnthropicToolEvent, MAX_ACCUMULATED_BYTES};
 
@@ -104,9 +104,12 @@ impl ResponseAccumulator {
     }
 
     fn append_delta_content_if_present(&mut self, payload: &str) {
-        let Some(content) = extract_delta_content(payload) else {
-            return;
-        };
+        if let Some(content) = extract_delta_content(payload) {
+            self.append_content(content);
+        }
+    }
+
+    fn append_content(&mut self, content: &str) {
         if self.total_bytes + content.len() > MAX_ACCUMULATED_BYTES {
             self.truncated = true;
             return;
@@ -363,13 +366,22 @@ struct FinishFunction<'a> {
 
 impl crate::streaming::StreamingChunkStage for ResponseAccumulator {
     fn process_chunk(&mut self, payload: &str) -> crate::streaming::StreamAction {
-        self.append_openai_raw(payload);
-        if payload.contains("\"reasoning_content\"")
-            && let Some(rc) = extract_reasoning_content(payload)
-            && !rc.is_empty()
-        {
+        if self.truncated {
+            return crate::streaming::StreamAction::Passthrough;
+        }
+
+        let fields = extract_delta_fields(payload);
+        if let Some(content) = fields.content {
+            self.append_content(content);
+        }
+        if payload.contains("\"tool_calls\"") {
+            self.append_delta_tool_calls_if_present(payload);
+        }
+        // Preserve content -> tools -> reasoning priority at the byte cap.
+        if let Some(rc) = fields.reasoning_content {
             self.append_reasoning(rc);
         }
+
         crate::streaming::StreamAction::Passthrough
     }
 }
