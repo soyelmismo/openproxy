@@ -40,7 +40,7 @@ fn validate_create_source_input(body: &CreateProxySourceInput) -> Result<(), Api
 fn spawn_source_sync_and_test(state: &crate::state::AppState) {
     let supervisor = Arc::clone(state.supervisor());
     let pool = Arc::clone(state.db_pool());
-    let admitted = supervisor.spawn_one_shot("source_sync_and_test", async move {
+    let admitted = supervisor.spawn_cancellable_one_shot("source_sync_and_test", async move {
         match openproxy_core::free_proxies::sync_all_providers(Arc::clone(&pool)).await {
             Ok(summary) => {
                 if summary.added > 0 || summary.fetched > 0 {

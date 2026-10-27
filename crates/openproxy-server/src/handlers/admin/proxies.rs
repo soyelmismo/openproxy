@@ -180,7 +180,7 @@ pub async fn test_all_proxies(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let supervisor = Arc::clone(s.supervisor());
     let pool = Arc::clone(s.db_pool());
-    let admitted = supervisor.spawn_one_shot("test_all_proxies", async move {
+    let admitted = supervisor.spawn_cancellable_one_shot("test_all_proxies", async move {
         openproxy_core::free_proxies::test_all_proxies(pool).await;
     });
     if !admitted {

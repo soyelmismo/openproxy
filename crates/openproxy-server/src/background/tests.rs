@@ -535,3 +535,29 @@ async fn spawn_one_shot_many_completed_tasks_do_not_grow_unboundedly() {
         supervisor.task_count()
     );
 }
+
+/// A long proxy validation pass must not delay service shutdown: the
+/// cancellable one-shot stops at shutdown instead of running to completion.
+#[tokio::test]
+async fn cancellable_one_shot_does_not_block_shutdown() {
+    let supervisor = BackgroundSupervisor::new();
+    assert!(
+        supervisor.spawn_cancellable_one_shot("endless_validation", async {
+            std::future::pending::<()>().await;
+        })
+    );
+    tokio::time::timeout(Duration::from_secs(2), supervisor.shutdown_and_wait())
+        .await
+        .expect("shutdown must not wait for an endless cancellable one-shot");
+}
+
+/// Same guarantee for the periodic validator service.
+#[tokio::test]
+async fn proxy_validator_service_stops_promptly_on_cancel() {
+    let pool = Arc::new(openproxy_db::DbPool::test_pool().unwrap());
+    let supervisor = BackgroundSupervisor::new();
+    assert!(supervisor.spawn(super::FreeProxiesValidatorService { db_pool: pool }));
+    tokio::time::timeout(Duration::from_secs(2), supervisor.shutdown_and_wait())
+        .await
+        .expect("validator must stop on cancellation");
+}
