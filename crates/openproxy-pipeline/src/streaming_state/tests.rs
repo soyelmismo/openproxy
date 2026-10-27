@@ -296,7 +296,7 @@ impl TestStreamHarness {
 #[tokio::test]
 async fn test_finish_chat_stream_terminal_done_received() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    let sink = crate::race_sink::StreamSink::Direct(tx);
+    let sink = crate::race_sink::StreamSink::direct(tx);
     let harness = TestStreamHarness::new(&sink);
     let ctx = harness.context(&sink);
     let mut state = super::StreamingState::new(false);
@@ -322,7 +322,7 @@ async fn test_finish_chat_stream_terminal_done_received() {
 #[tokio::test]
 async fn test_finish_chat_stream_flushes_pii_prior_to_terminal_done() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-    let sink = crate::race_sink::StreamSink::Direct(tx);
+    let sink = crate::race_sink::StreamSink::direct(tx);
     let harness = TestStreamHarness::new(&sink);
     let ctx = harness.context(&sink);
     let mut state = super::StreamingState::new(false);
@@ -409,7 +409,7 @@ mod reasoning_instrumentation_tests {
     /// producción, no con una forma combinada inventada.
     fn run_lines(lines: &[&str]) -> StreamingState {
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
-        let sink = StreamSink::Direct(tx);
+        let sink = StreamSink::direct(tx);
         let (pipeline, combo, target, model, req, timeouts) = setup_test_harness(&sink);
         let started = std::time::Instant::now();
         let ctx = StreamContext {
@@ -715,7 +715,7 @@ mod reasoning_instrumentation_tests {
     #[tokio::test]
     async fn handle_translated_done_attaches_merged_usage_to_client_payload() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        let sink = StreamSink::Direct(tx);
+        let sink = StreamSink::direct(tx);
         let (pipeline, combo, target, model, req, timeouts) = setup_test_harness(&sink);
         let started = std::time::Instant::now();
         let ctx = StreamContext {

@@ -27,7 +27,7 @@ impl PipelineStage for UpstreamExecutorStage {
         let (combo, to_run, race_size) = extract_execution_plan(ctx)?;
         let (last_result, failed_targets, failed_models) =
             match evaluate_initial_race(ctx, &combo, &to_run, race_size).await {
-                InitialRaceOutcome::Success(res) => return Ok(res),
+                InitialRaceOutcome::Finished(res) => return Ok(res),
                 InitialRaceOutcome::Exhausted {
                     last_result,
                     failed_targets,
@@ -49,7 +49,8 @@ impl PipelineStage for UpstreamExecutorStage {
 }
 
 enum InitialRaceOutcome {
-    Success(PipelineResult),
+    /// Final outcome, including a committed partial stream that cannot retry.
+    Finished(PipelineResult),
     Exhausted {
         last_result: Option<PipelineResult>,
         failed_targets: std::collections::HashSet<TargetExecutionId>,
@@ -104,8 +105,8 @@ async fn evaluate_initial_race(
     race_size: usize,
 ) -> InitialRaceOutcome {
     match try_initial_race(ctx, combo, to_run, race_size).await {
-        Some(outcome) if outcome.result.error.is_none() => {
-            InitialRaceOutcome::Success(outcome.result)
+        Some(outcome) if outcome.result.error.is_none() || ctx.req.has_stream_output() => {
+            InitialRaceOutcome::Finished(outcome.result)
         }
         Some(outcome) => InitialRaceOutcome::Exhausted {
             last_result: Some(outcome.result),
@@ -278,6 +279,13 @@ async fn execute_single_target_step(
     let step =
         run_target_with_retries(ctx, combo, target, race_size, to_run.len(), overall_attempt).await;
     *overall_attempt = overall_attempt.saturating_add(1);
+    if ctx.req.has_stream_output() {
+        return TargetLoopOutcome::Finish(match step {
+            TargetStepResult::Success(r)
+            | TargetStepResult::ClientDisconnected(r)
+            | TargetStepResult::Failed(r) => r,
+        });
+    }
     match step {
         TargetStepResult::Success(r) => TargetLoopOutcome::Finish(r),
         TargetStepResult::ClientDisconnected(r) => {

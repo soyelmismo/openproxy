@@ -99,7 +99,7 @@ async fn pii_http_roundtrip_unary_and_streaming() {
         openai.messages[0].content = Some(serde_json::json!(original));
         let (sink, mut rx) = tokio::sync::mpsc::channel(32);
         if streaming {
-            req.stream_sink = Some(crate::StreamSink::Direct(sink));
+            req.stream_sink = Some(crate::StreamSink::direct(sink));
         }
         let result = tokio::time::timeout(std::time::Duration::from_secs(10), pipeline.run(req))
             .await

@@ -113,7 +113,12 @@ async fn execute_race_worker(mut req: PipelineRequest, ctx: RaceContext) {
             })
             .await;
 
-        if result.error.is_none() {
+        if (result.error.is_none() || req.has_stream_output())
+            && req
+                .stream_sink
+                .as_ref()
+                .is_none_or(crate::StreamSink::claim_result)
+        {
             let mut w = ctx.winner.lock();
             if w.is_none() {
                 *w = Some(result);
@@ -136,7 +141,7 @@ async fn execute_race_worker(mut req: PipelineRequest, ctx: RaceContext) {
     }
 }
 
-fn extract_direct_sink(req: &PipelineRequest) -> Option<tokio::sync::mpsc::Sender<bytes::Bytes>> {
+fn extract_direct_sink(req: &PipelineRequest) -> Option<crate::race_sink::DirectSink> {
     match req.stream_sink.as_ref() {
         Some(crate::race_sink::StreamSink::Direct(tx)) => Some(tx.clone()),
         _ => {

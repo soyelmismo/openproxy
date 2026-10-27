@@ -1,6 +1,6 @@
 use openproxy_adapters::upstream::CancellationToken;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -11,17 +11,76 @@ pub enum StreamSinkError {
     Lost,
 }
 
+/// All clones share the commit bit, including the sinks passed into race lanes.
+/// Enqueuing bytes is the commit point: a receiver may consume them immediately.
+#[derive(Debug, Clone)]
+pub struct DirectSink {
+    tx: mpsc::Sender<bytes::Bytes>,
+    committed: Arc<AtomicBool>,
+}
+
+impl From<mpsc::Sender<bytes::Bytes>> for DirectSink {
+    fn from(tx: mpsc::Sender<bytes::Bytes>) -> Self {
+        Self {
+            tx,
+            committed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl DirectSink {
+    async fn send(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
+        let permit = self
+            .tx
+            .reserve()
+            .await
+            .map_err(|_| StreamSinkError::Closed)?;
+        if !chunk.is_empty() {
+            self.committed.store(true, Ordering::Release);
+        }
+        permit.send(chunk);
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum StreamSink {
-    Direct(mpsc::Sender<bytes::Bytes>),
+    Direct(DirectSink),
     Race(RaceSinkHandle),
     Discard,
 }
 
 impl StreamSink {
+    pub fn direct(tx: mpsc::Sender<bytes::Bytes>) -> Self {
+        Self::Direct(tx.into())
+    }
+
+    /// Claim the final result through the same arbiter as the first chunk.
+    /// A unary/empty success must not replace another lane's committed stream.
+    pub(crate) fn claim_result(&self) -> bool {
+        match self {
+            Self::Race(handle) => handle.sink.claim_winner(handle.worker_id).is_ok(),
+            Self::Direct(_) | Self::Discard => true,
+        }
+    }
+
+    /// Whether this lane has committed bytes to the client. On the original
+    /// Direct sink this covers all lanes; a Race handle covers only its owner.
+    /// Discard sinks do not commit, so synchronous partial attempts can retry.
+    pub fn has_output(&self) -> bool {
+        match self {
+            Self::Direct(sink) => sink.committed.load(Ordering::Acquire),
+            Self::Race(handle) => {
+                handle.sink.winner.load(Ordering::Acquire) == handle.worker_id + 1
+                    && handle.sink.inner.committed.load(Ordering::Acquire)
+            }
+            Self::Discard => false,
+        }
+    }
+
     pub async fn send(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
         match self {
-            StreamSink::Direct(tx) => tx.send(chunk).await.map_err(|_| StreamSinkError::Closed),
+            StreamSink::Direct(sink) => sink.send(chunk).await,
             StreamSink::Race(handle) => handle.send(chunk).await,
             StreamSink::Discard => Ok(()),
         }
@@ -29,7 +88,7 @@ impl StreamSink {
 }
 
 pub struct RaceSink {
-    inner: mpsc::Sender<bytes::Bytes>,
+    inner: DirectSink,
     winner: AtomicUsize,
     worker_tokens: Vec<CancellationToken>,
 }
@@ -45,13 +104,13 @@ impl std::fmt::Debug for RaceSink {
 
 impl RaceSink {
     pub fn new(
-        inner: mpsc::Sender<bytes::Bytes>,
+        inner: impl Into<DirectSink>,
         num_workers: usize,
     ) -> (Arc<Self>, Vec<CancellationToken>) {
         let worker_tokens: Vec<CancellationToken> =
             (0..num_workers).map(|_| CancellationToken::new()).collect();
         let sink = Arc::new(Self {
-            inner,
+            inner: inner.into(),
             winner: AtomicUsize::new(0),
             worker_tokens: worker_tokens.clone(),
         });
@@ -98,10 +157,7 @@ impl RaceSink {
 
     async fn send(&self, worker_id: usize, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
         self.claim_winner(worker_id)?;
-        self.inner
-            .send(chunk)
-            .await
-            .map_err(|_| StreamSinkError::Closed)
+        self.inner.send(chunk).await
     }
 }
 
@@ -186,6 +242,45 @@ mod tests {
 
         let chunk = rx.recv().await.unwrap();
         assert!(!chunk.is_empty());
+    }
+
+    #[tokio::test]
+    async fn result_winner_cannot_replace_the_lane_that_sent_bytes() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let direct = StreamSink::direct(tx);
+        let StreamSink::Direct(inner) = &direct else {
+            unreachable!()
+        };
+        let (sink, _) = RaceSink::new(inner.clone(), 2);
+        let output_lane = StreamSink::Race(sink.handle(0));
+        let result_lane = StreamSink::Race(sink.handle(1));
+        output_lane
+            .send(bytes::Bytes::from_static(b"partial"))
+            .await
+            .unwrap();
+        assert!(direct.has_output());
+        assert!(output_lane.has_output());
+        assert!(!result_lane.has_output());
+        assert!(
+            !result_lane.claim_result(),
+            "a success from another lane cannot mask the partial error"
+        );
+        assert!(output_lane.claim_result());
+        assert_eq!(rx.recv().await.unwrap(), "partial");
+    }
+
+    #[tokio::test]
+    async fn result_before_first_chunk_owns_the_same_arbiter() {
+        let (tx, _rx) = mpsc::channel(1);
+        let (sink, tokens) = RaceSink::new(tx, 2);
+        let result_lane = StreamSink::Race(sink.handle(0));
+        let output_lane = StreamSink::Race(sink.handle(1));
+        assert!(result_lane.claim_result());
+        assert!(tokens[1].is_cancelled());
+        assert_eq!(
+            output_lane.send(bytes::Bytes::from_static(b"late")).await,
+            Err(StreamSinkError::Lost)
+        );
     }
 
     #[tokio::test]

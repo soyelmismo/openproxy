@@ -332,8 +332,9 @@ impl UpstreamDispatcher {
     }
 
     /// Un error inline del upstream (chunk SSE con code+msg) emitido antes
-    /// de la desconexión se atribuye al upstream. Sin él, es cancel puro,
-    /// o `UpstreamConnection` si el cliente ya había recibido contenido.
+    /// de la desconexión se atribuye al upstream. Sin él, es cancel del cliente
+    /// (status 499) conservando la acumulación parcial para usage/cost tracking,
+    /// sin penalizar la salud del upstream con un 502/UpstreamConnection espurio.
     pub(crate) async fn fail_stream_client_disconnected(
         &self,
         fctx: StreamFailureContext<'_>,
@@ -364,20 +365,15 @@ impl UpstreamDispatcher {
             return self.fail_stream_with_error(err, fctx, Some(code)).await;
         }
 
-        let has_partial_content = fctx.acc.as_deref().is_some_and(|a| !a.is_empty());
-        let err = if has_partial_content {
-            CoreError::UpstreamConnection(
-                "stream interrupted — client disconnected after receiving partial content".into(),
-            )
-        } else {
-            CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected)
-        };
+        let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
         self.fail_stream_with_error(err, fctx, Some(499)).await
     }
 
     /// `Lost` significa que otra race lane ganó. `Closed` significa que
-    /// el cliente o el proxy cayeron, y entonces se propaga el error inline
-    /// del upstream o se construye un `UpstreamConnection`.
+    /// el sink del cliente se cerró. Si el upstream ya había emitido un error inline,
+    /// se prioriza ese error. Si el watchdog reportó timeout, se preserva WatchdogTimeout.
+    /// De lo contrario, se clasifica como desconexión del cliente (status 499,
+    /// CoreError::Cancelled(ClientDisconnected)), sin culpar al upstream ni penalizar salud.
     pub(crate) async fn fail_on_sink_send_error(
         &self,
         e: crate::race_sink::StreamSinkError,
@@ -422,7 +418,7 @@ impl UpstreamDispatcher {
             return self.fail_stream_with_error(err, fctx, Some(code)).await;
         }
 
-        let is_watchdog_fired = fctx.req.client_disconnected.borrow().is_some();
+        let client_disconnected = *fctx.req.client_disconnected.borrow();
         tracing::warn!(
             combo_id = fctx.combo.id.0,
             target_id = fctx.target.id.0,
@@ -431,14 +427,21 @@ impl UpstreamDispatcher {
             elapsed_ms = elapsed,
             connect_ms = fctx.connect_ms,
             ttft_ms = ?fctx.ttft_ms,
-            watchdog_fired = is_watchdog_fired,
-            "sink send failed: Closed — client/proxy disconnected"
+            watchdog_reason = ?client_disconnected,
+            "sink send failed: Closed — client disconnected"
         );
-        let err = CoreError::UpstreamConnection(format!(
-            "client disconnected (elapsed={elapsed}ms, connect={}ms, ttft={:?}) — likely proxy idle timeout or client HTTP library timeout",
-            fctx.connect_ms, fctx.ttft_ms
-        ));
-        self.fail_stream_with_error(err, fctx, None).await
+
+        let (err, status) = match client_disconnected {
+            Some(reason @ openproxy_types::CancelReason::WatchdogTimeout) => {
+                (CoreError::Cancelled(reason), 504)
+            }
+            Some(reason) => (CoreError::Cancelled(reason), 499),
+            None => (
+                CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected),
+                499,
+            ),
+        };
+        self.fail_stream_with_error(err, fctx, Some(status)).await
     }
 
     /// Corta antes de enviar si el cliente ya se desconectó.

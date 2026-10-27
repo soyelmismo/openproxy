@@ -331,7 +331,7 @@ async fn test_account_rotation_on_rate_limit_sequential() {
 
     let (mut req, _rx) = make_request(ComboId(-1));
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
-    req.stream_sink = Some(crate::race_sink::StreamSink::Direct(tx_direct));
+    req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
     let mut ctx = PipelineContext::new(req, pipeline);
     ctx.combo = Some(combo);
@@ -493,7 +493,7 @@ async fn test_account_rotation_after_race_exhaustion() {
 
     let (mut req, _rx) = make_request(ComboId(-1));
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
-    req.stream_sink = Some(crate::race_sink::StreamSink::Direct(tx_direct));
+    req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
     let mut ctx = PipelineContext::new(req, pipeline);
     ctx.combo = Some(combo);
@@ -636,7 +636,7 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
 
     let (mut req, _rx) = make_request(ComboId(999));
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
-    req.stream_sink = Some(crate::race_sink::StreamSink::Direct(tx_direct));
+    req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
     let mut ctx = PipelineContext::new(req, pipeline);
     ctx.combo = Some(combo);

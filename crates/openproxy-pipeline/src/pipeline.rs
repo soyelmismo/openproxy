@@ -84,6 +84,14 @@ pub struct PipelineRequest {
     pub pinned_adapters: PinnedAdapters,
 }
 
+impl PipelineRequest {
+    pub(crate) fn has_stream_output(&self) -> bool {
+        self.stream_sink
+            .as_ref()
+            .is_some_and(crate::race_sink::StreamSink::has_output)
+    }
+}
+
 #[derive(Debug)]
 pub struct PipelineResult {
     pub status_code: u16,

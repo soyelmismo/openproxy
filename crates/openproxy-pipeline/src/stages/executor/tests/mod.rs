@@ -1,3 +1,4 @@
+mod midstream;
 mod multi_account;
 mod rotation;
 
@@ -335,7 +336,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
 
     let (mut req, _rx) = make_request(ComboId(1));
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
-    req.stream_sink = Some(crate::race_sink::StreamSink::Direct(tx_direct));
+    req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
     let mut ctx = PipelineContext::new(req, pipeline);
     ctx.combo = Some(combo);
@@ -441,7 +442,7 @@ async fn test_adversarial_single_target_combo_bypasses_race() {
             assert!(failed_targets.is_empty());
             assert!(failed_models.is_empty());
         }
-        super::InitialRaceOutcome::Success(_) => panic!("Expected Exhausted with empty sets"),
+        super::InitialRaceOutcome::Finished(_) => panic!("Expected Exhausted with empty sets"),
     }
 }
 
@@ -541,7 +542,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
     let targets = vec![mk_target(401, "prov-w1"), mk_target(402, "prov-w2")];
     let (mut req, _rx) = make_request(ComboId(400));
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
-    req.stream_sink = Some(crate::race_sink::StreamSink::Direct(tx_direct));
+    req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
     let outcome = crate::racing::run_race(&pipeline, req, &combo, targets, 2).await;
     assert!(outcome.result.error.is_none(), "Race should succeed");

@@ -172,7 +172,7 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
 
     let (mut req, _rx) = make_request(ComboId(500));
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
-    req.stream_sink = Some(crate::race_sink::StreamSink::Direct(tx_direct));
+    req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
     let mut ctx = PipelineContext::new(req, pipeline);
     ctx.combo = Some(combo);

@@ -24,6 +24,7 @@ async fn execute_proxy_worker(req: PipelineRequest, ctx: ProxyRaceContext) {
         return;
     }
 
+    let stream_sink = req.stream_sink.clone();
     let result = ctx
         .pipeline
         .execute_single(crate::SingleExecutionParams {
@@ -37,7 +38,14 @@ async fn execute_proxy_worker(req: PipelineRequest, ctx: ProxyRaceContext) {
         })
         .await;
 
-    if result.error.is_none() {
+    if (result.error.is_none()
+        || stream_sink
+            .as_ref()
+            .is_some_and(crate::StreamSink::has_output))
+        && stream_sink
+            .as_ref()
+            .is_none_or(crate::StreamSink::claim_result)
+    {
         let mut w = ctx.winner.lock();
         if w.is_none() {
             *w = Some((result, ctx.proxy_id));
@@ -112,7 +120,7 @@ pub async fn run_proxy_race(
         _ => {
             tracing::warn!("run_proxy_race: non-direct stream sink, using dummy channel");
             let (tx, _rx) = tokio::sync::mpsc::channel(32);
-            tx
+            tx.into()
         }
     };
 
@@ -160,9 +168,10 @@ pub async fn run_proxy_race(
     )
     .await
     {
-        Ok((result, win_proxy_id)) => {
+        Ok((result, win_proxy_id)) if result.error.is_none() => {
             handle_proxy_race_winner(pipeline, target, result, win_proxy_id)
         }
+        Ok((result, _)) => result,
         Err(err) => PipelineResult {
             status_code: err.http_status(),
             error: Some(err),

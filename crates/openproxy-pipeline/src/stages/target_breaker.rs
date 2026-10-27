@@ -251,7 +251,12 @@ pub(crate) fn update_account_rate_limited_until_on_result(
         let conn_clone = Arc::clone(&pipeline.conn);
         let handle = tokio::task::spawn_blocking(move || {
             let conn = conn_clone.lock();
-            let _ = openproxy_db::accounts::set_rate_limited_until(&conn, aid, None);
+            // Success path runs on every request: only touch the row when a
+            // limit is actually set, so the common case writes nothing (no
+            // dirty page, no WAL frame, no fsync on the serialized writer).
+            if let Err(e) = openproxy_db::accounts::clear_rate_limited_until(&conn, aid) {
+                tracing::warn!(account_id = aid.0, error = %e, "failed to clear rate_limited_until");
+            }
         });
         std::mem::drop(handle);
     }

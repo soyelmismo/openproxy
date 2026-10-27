@@ -4,7 +4,7 @@ use bytes::Bytes;
 #[tokio::test]
 async fn passthrough_keeps_storage_but_normalization_and_pii_still_mutate() {
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    let sink = crate::race_sink::StreamSink::Direct(tx);
+    let sink = crate::race_sink::StreamSink::direct(tx);
     let harness = TestStreamHarness::new(&sink);
     let mut state = super::super::StreamingState::new(true);
     let mut processor = super::super::ChunkProcessor {

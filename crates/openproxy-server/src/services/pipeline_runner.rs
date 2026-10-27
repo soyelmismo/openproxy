@@ -168,7 +168,7 @@ impl PipelineRunner {
         } = cancel;
 
         let stream_sink = if openai_req.stream {
-            Some(StreamSink::Direct(tx))
+            Some(StreamSink::direct(tx))
         } else {
             Some(StreamSink::Discard)
         };
@@ -207,7 +207,7 @@ impl PipelineRunner {
         }
     }
 
-    /// Spawn the pipeline execution in background and merge the output stream with an error frame channel.
+    /// Spawn pipeline execution and enqueue any terminal error in its data FIFO.
     pub fn spawn_streaming_bridge(
         pipeline: Pipeline,
         req: PipelineRequest,
@@ -215,23 +215,27 @@ impl PipelineRunner {
         stream_rx: mpsc::Receiver<Bytes>,
         target_format: TargetFormat,
     ) -> futures::stream::SelectAll<ReceiverStream<Bytes>> {
-        let (error_tx, error_rx) = mpsc::channel::<Bytes>(1);
-
+        // Use the SAME FIFO as data frames. Merging a second error channel
+        // can overtake queued content and put the terminal error before it.
+        let error_sink = req.stream_sink.clone();
         tokio::spawn(async move {
             let result = pipeline.run(req).await;
-            let _ = done_tx.send(());
-
             if let Some(err) = result.error {
                 let frame = ApiError(err).to_sse_error_frame(target_format);
-                let _ = error_tx.send(frame).await;
+                if let Some(sink) = error_sink {
+                    let _ = sink.send(frame).await;
+                }
             }
+            let _ = done_tx.send(());
         });
 
         let main_stream = ReceiverStream::new(stream_rx);
-        let error_stream = ReceiverStream::new(error_rx);
         let mut merged = futures::stream::SelectAll::new();
         merged.push(main_stream);
-        merged.push(error_stream);
         merged
     }
 }
+
+#[cfg(test)]
+#[path = "pipeline_runner_tests.rs"]
+mod tests;

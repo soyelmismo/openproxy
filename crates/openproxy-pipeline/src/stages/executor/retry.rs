@@ -275,6 +275,11 @@ pub(super) async fn run_target_with_retries(
     .await;
 
     while let Some(e) = &result.error {
+        // Once bytes are committed, neither retry nor proxy-race fallback may
+        // append another generation to this response.
+        if ctx.req.has_stream_output() {
+            break;
+        }
         match perform_retry_iteration(ctx, combo, target, &mut state, e, overall_attempt).await {
             RetryStep::Done(r) => {
                 result = r;

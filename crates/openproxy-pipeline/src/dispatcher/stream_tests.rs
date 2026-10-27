@@ -7,7 +7,9 @@ use openproxy_types::CancelReason;
 use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::providers::{AuthType, ProviderFormat, RateLimitScope};
 
-fn build_dispatcher_for_stream_test(
+mod cancellation;
+
+pub(super) fn build_dispatcher_for_stream_test(
     conn_arc: std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
 ) -> UpstreamDispatcher {
     let repo = std::sync::Arc::new(crate::repository::SqlitePipelineRepository::new(
@@ -328,7 +330,7 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
             extra: serde_json::Map::new(),
         }),
         client_disconnected: rx,
-        stream_sink: Some(crate::race_sink::StreamSink::Direct(sink_tx)),
+        stream_sink: Some(crate::race_sink::StreamSink::direct(sink_tx)),
         api_key_id: None,
         combo_override: None,
         targets_override: None,
@@ -495,7 +497,7 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
             extra: serde_json::Map::new(),
         }),
         client_disconnected: rx,
-        stream_sink: Some(crate::race_sink::StreamSink::Direct(sink_tx)),
+        stream_sink: Some(crate::race_sink::StreamSink::direct(sink_tx)),
         api_key_id: None,
         combo_override: None,
         targets_override: None,
@@ -662,7 +664,7 @@ async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
             extra: serde_json::Map::new(),
         }),
         client_disconnected: rx,
-        stream_sink: Some(crate::race_sink::StreamSink::Direct(sink_tx)),
+        stream_sink: Some(crate::race_sink::StreamSink::direct(sink_tx)),
         api_key_id: None,
         combo_override: None,
         targets_override: None,
