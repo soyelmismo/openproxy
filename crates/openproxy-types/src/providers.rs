@@ -475,4 +475,32 @@ mod tests {
             .expect("mixed provider format");
         assert_eq!(mixed_pf.default_target_format, TargetFormat::Openai);
     }
+
+    #[test]
+    fn test_provider_metadata_custom_default_and_serde() {
+        let meta = ProviderMetadata::custom_default();
+        assert!(!meta.built_in);
+        assert!(meta.deletable);
+        assert!(!meta.supports_quota);
+        assert!(!meta.quota_refresh_supported);
+        assert!(!meta.requires_oauth);
+        assert_eq!(meta.oauth_refresh_lead_seconds, None);
+
+        let json_str = serde_json::to_string(&meta).expect("serialize ProviderMetadata");
+        let deserialized: ProviderMetadata =
+            serde_json::from_str(&json_str).expect("deserialize ProviderMetadata");
+
+        assert_eq!(deserialized.built_in, meta.built_in);
+        assert_eq!(deserialized.deletable, meta.deletable);
+        assert_eq!(deserialized.supports_quota, meta.supports_quota);
+        assert_eq!(
+            deserialized.quota_refresh_supported,
+            meta.quota_refresh_supported
+        );
+        assert_eq!(deserialized.requires_oauth, meta.requires_oauth);
+        assert_eq!(
+            deserialized.oauth_refresh_lead_seconds,
+            meta.oauth_refresh_lead_seconds
+        );
+    }
 }
