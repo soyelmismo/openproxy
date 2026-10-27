@@ -116,7 +116,7 @@ pub async fn run_quota_sync_scheduler(
             break;
         }
 
-        run_quota_sync_cycle(
+        Box::pin(run_quota_sync_cycle(
             &db_pool,
             &config,
             &upstream_client,
@@ -124,7 +124,7 @@ pub async fn run_quota_sync_scheduler(
             &adapters,
             &oauth_provider_registry,
             Some(&cancel),
-        )
+        ))
         .await;
 
         tokio::select! {

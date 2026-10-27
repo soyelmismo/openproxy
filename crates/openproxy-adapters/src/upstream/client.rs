@@ -47,130 +47,11 @@ pub struct UpstreamRequest {
     pub proxy_status: Option<String>,
 }
 
-/// Build a formatted `"Bearer <token>"` string.
-pub fn format_bearer(token: &str) -> String {
-    format!("Bearer {token}")
-}
-
-/// Build an `("Authorization", "Bearer <token>")` tuple.
-pub fn bearer_auth_header(token: &str) -> (String, String) {
-    ("Authorization".into(), format_bearer(token))
-}
-
-/// Build an `http::HeaderValue` for a Bearer token.
-pub fn bearer_header_value(
-    token: &str,
-) -> Result<http::HeaderValue, http::header::InvalidHeaderValue> {
-    http::HeaderValue::from_str(&format_bearer(token))
-}
-
-impl UpstreamRequest {
-    /// Build a simple GET with no headers / body.
-    pub fn get(url: impl Into<String>) -> Self {
-        Self {
-            method: Method::GET,
-            url: url.into(),
-            headers: HeaderMap::new(),
-            body: None,
-            is_streaming: true,
-            proxy: None,
-            proxy_status: None,
-        }
-    }
-
-    /// Build a GET request with an `Accept: application/json` header.
-    pub fn get_json(url: impl Into<String>) -> Self {
-        let mut req = Self::get(url);
-        req.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req
-    }
-
-    /// Add an `Accept: application/json` header in a builder style.
-    pub fn with_accept_json(mut self) -> Self {
-        self.headers.insert(
-            http::header::ACCEPT,
-            http::HeaderValue::from_static("application/json"),
-        );
-        self
-    }
-
-    /// Add an `Authorization: Bearer <token>` header in a builder style.
-    pub fn with_bearer(mut self, token: &str) -> Self {
-        if let Ok(hv) = bearer_header_value(token) {
-            self.headers.insert(http::header::AUTHORIZATION, hv);
-        }
-        self
-    }
-
-    /// Add a custom header in a builder style.
-    pub fn with_header(mut self, name: http::HeaderName, value: http::HeaderValue) -> Self {
-        self.headers.insert(name, value);
-        self
-    }
-
-    /// Build a simple DELETE with no headers / body.
-    pub fn delete(url: impl Into<String>) -> Self {
-        Self {
-            method: Method::DELETE,
-            url: url.into(),
-            headers: HeaderMap::new(),
-            body: None,
-            is_streaming: true,
-            proxy: None,
-            proxy_status: None,
-        }
-    }
-
-    /// Build a POST with a JSON body and a `Content-Type: application/json` header.
-    pub fn post_json(url: impl Into<String>, body: Bytes) -> Self {
-        let mut headers = HeaderMap::with_capacity(1);
-        headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        Self {
-            method: Method::POST,
-            url: url.into(),
-            headers,
-            body: Some(body),
-            is_streaming: true,
-            proxy: None,
-            proxy_status: None,
-        }
-    }
-
-    /// A POST with a caller-built multipart body. `content_type` must carry
-    /// the boundary, e.g.
-    /// `multipart/form-data; boundary=----WebKitFormBoundary...`. The audio
-    /// transcription handler uses this to forward a pre-built body to
-    /// `/audio/transcriptions`.
-    pub fn post_multipart(url: impl Into<String>, content_type: &str, body: Bytes) -> Self {
-        let mut headers = HeaderMap::with_capacity(1);
-        headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_str(content_type)
-                .unwrap_or_else(|_| http::HeaderValue::from_static("multipart/form-data")),
-        );
-        Self {
-            method: Method::POST,
-            url: url.into(),
-            headers,
-            body: Some(body),
-            // Non-streaming: the upstream builds the full transcription
-            // server-side, so the body-chunk gap timeout would kill it.
-            is_streaming: false,
-            proxy: None,
-            proxy_status: None,
-        }
-    }
-}
+use super::response::TransportBody;
 
 // UpstreamClient
 
-pub trait UpstreamTransport: Send + Sync + std::fmt::Debug {
+pub(crate) trait UpstreamTransport: Send + Sync + std::fmt::Debug {
     fn send_request(
         &self,
         req: Request<RequestBody>,
@@ -178,14 +59,21 @@ pub trait UpstreamTransport: Send + Sync + std::fmt::Debug {
         proxy_url: Option<String>,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
-                > + Send
+            dyn std::future::Future<Output = Result<http::Response<TransportBody>, UpstreamError>>
+                + Send
                 + '_,
         >,
     >;
 
     fn phase_hint(&self) -> Option<UpstreamPhase>;
+
+    fn uses_cooperative_connection(
+        &self,
+        _req: &Request<RequestBody>,
+        _proxy: Option<&str>,
+    ) -> bool {
+        false
+    }
 }
 
 /// A hyper-based HTTP client with per-phase timeouts and a per-host
@@ -253,26 +141,29 @@ impl UpstreamTransport for ProductionTransport {
         proxy_url: Option<String>,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
-                > + Send
+            dyn std::future::Future<Output = Result<http::Response<TransportBody>, UpstreamError>>
+                + Send
                 + '_,
         >,
     > {
         let client = self.client_for_proxy(proxy_url.as_deref());
         Box::pin(async move {
             let fut = async move {
-                client.request(req).await.map_err(|e| {
-                    if let Some(up_err) = hyper_source_connector_error(&e) {
-                        return up_err;
-                    }
-                    let phase = hyper_source_phase(&e);
-                    let msg = format_hyper_error(&e);
-                    match phase {
-                        Some(p) => UpstreamError::Timeout(p),
-                        None => UpstreamError::Http(msg),
-                    }
-                })
+                client
+                    .request(req)
+                    .await
+                    .map(|r| r.map(TransportBody::Legacy))
+                    .map_err(|e| {
+                        if let Some(up_err) = hyper_source_connector_error(&e) {
+                            return up_err;
+                        }
+                        let phase = hyper_source_phase(&e);
+                        let msg = format_hyper_error(&e);
+                        match phase {
+                            Some(p) => UpstreamError::Timeout(p),
+                            None => UpstreamError::Http(msg),
+                        }
+                    })
             };
             let fut = CALL_PROXY.scope(proxy_url, fut);
             let fut = CALL_TIMEOUTS.scope(connector_timeouts, fut);
@@ -330,24 +221,27 @@ where
         proxy_url: Option<String>,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<http::Response<hyper::body::Incoming>, UpstreamError>,
-                > + Send
+            dyn std::future::Future<Output = Result<http::Response<TransportBody>, UpstreamError>>
+                + Send
                 + '_,
         >,
     > {
         Box::pin(async move {
             let fut = async move {
-                self.hyper.request(req).await.map_err(|e| {
-                    if let Some(phase) = hyper_source_phase(&e) {
-                        return UpstreamError::Timeout(phase);
-                    }
-                    if e.is_connect() {
-                        UpstreamError::Connection(e.to_string())
-                    } else {
-                        UpstreamError::Http(format_hyper_error(&e))
-                    }
-                })
+                self.hyper
+                    .request(req)
+                    .await
+                    .map(|r| r.map(TransportBody::Legacy))
+                    .map_err(|e| {
+                        if let Some(phase) = hyper_source_phase(&e) {
+                            return UpstreamError::Timeout(phase);
+                        }
+                        if e.is_connect() {
+                            UpstreamError::Connection(e.to_string())
+                        } else {
+                            UpstreamError::Http(format_hyper_error(&e))
+                        }
+                    })
             };
             let fut = CALL_PROXY.scope(proxy_url, fut);
             let fut = CALL_TIMEOUTS.scope(connector_timeouts, fut);
@@ -361,16 +255,29 @@ where
 }
 
 impl UpstreamClient {
+    #[cfg(test)]
+    pub(super) fn for_test_cooperative() -> Arc<Self> {
+        Arc::new(Self {
+            pool: Pool::new(),
+            transport: Arc::new(super::cooperative_h1::CooperativeH1Transport::new()),
+        })
+    }
+
     /// A client with the default connector (HTTPS via rustls, HTTP plain).
     pub fn new() -> Arc<Self> {
         #[cfg(feature = "upstream-hyper")]
         {
             let pool = Pool::new();
             pool.spawn_eviction_loop();
-            Arc::new(Self {
-                pool,
-                transport: Arc::new(ProductionTransport::new()),
-            })
+            // Plain HTTP/1 upstreams use the direct transport by default.
+            // `OPENPROXY_UPSTREAM_TRANSPORT=legacy` restores hyper-util's
+            // pooled client with one spawned driver task per connection.
+            let transport: Arc<dyn UpstreamTransport> =
+                match std::env::var("OPENPROXY_UPSTREAM_TRANSPORT").as_deref() {
+                    Ok("legacy") => Arc::new(ProductionTransport::new()),
+                    _ => Arc::new(super::cooperative_h1::CooperativeH1Transport::new()),
+                };
+            Arc::new(Self { pool, transport })
         }
         #[cfg(not(feature = "upstream-hyper"))]
         {
@@ -464,6 +371,18 @@ impl UpstreamClient {
             .clone();
         let mut request = request;
         let captured = hyper_util::client::legacy::connect::capture_connection(&mut request);
+        let connection_progress = if self
+            .transport
+            .uses_cooperative_connection(&request, proxy_url.as_deref())
+        {
+            let (sender, receiver) = tokio::sync::watch::channel(None);
+            request
+                .extensions_mut()
+                .insert(super::upload::ConnectionProgressSender(sender));
+            Some(receiver)
+        } else {
+            None
+        };
 
         let pool = Pool::clone(&self.pool);
         let cancel_for_send = CancellationToken::clone(&cancel);
@@ -485,7 +404,7 @@ impl UpstreamClient {
             &deadlines,
             phase_hint,
             cancel_for_send,
-            (captured, upload_progress),
+            (captured, upload_progress, connection_progress),
             is_streaming,
             &timeouts,
         )
@@ -595,7 +514,7 @@ fn handle_dispatch_error(e: UpstreamError) -> UpstreamError {
 /// as plaintext.
 #[cfg(feature = "upstream-hyper")]
 fn wrap_upstream_response(
-    response: hyper::Response<hyper::body::Incoming>,
+    response: hyper::Response<TransportBody>,
     cancel: CancellationToken,
     body_chunk_ms: u64,
     ttft_deadline: Instant,
@@ -632,35 +551,45 @@ async fn race_dispatch<F>(
     deadlines: &ResolvedPhaseDeadlines,
     phase_hint: Option<UpstreamPhase>,
     cancel: CancellationToken,
-    progress: (
-        hyper_util::client::legacy::connect::CaptureConnection,
-        tokio::sync::watch::Receiver<Option<Instant>>,
-    ),
+    progress: super::upload::DispatchProgress,
     is_streaming: bool,
     timeouts: &super::profile::ResolvedTimeouts,
-) -> UpstreamResult<(hyper::Response<hyper::body::Incoming>, Instant)>
+) -> UpstreamResult<(hyper::Response<TransportBody>, Instant)>
 where
-    F: std::future::Future<Output = UpstreamResult<hyper::Response<hyper::body::Incoming>>>,
+    F: std::future::Future<Output = UpstreamResult<hyper::Response<TransportBody>>>,
 {
-    let (mut captured, mut upload) = progress;
+    let (mut captured, mut upload, connection_progress) = progress;
     let upload_status = upload.clone();
     let write_ms = timeouts.write_ms;
     let headers_ms = timeouts.headers_ms;
     // New and pooled connections share the same per-request capture boundary.
     // DNS/dial/TLS have their own timers; upload starts only after connecting.
     let upload_done = async {
+        let mut connection_progress = connection_progress;
         let mut flushed = {
-            let metadata = captured.wait_for_connection_metadata().await;
-            let mut extras = http::Extensions::new();
-            metadata
-                .as_ref()
-                .ok_or_else(|| UpstreamError::Http("missing connection metadata".into()))?
-                .get_extras(&mut extras);
-            extras
-                .get::<FlushProgress>()
-                .ok_or_else(|| UpstreamError::Http("missing flush observer".into()))?
-                .0
-                .clone()
+            if let Some(progress) = connection_progress.as_mut() {
+                loop {
+                    if let Some(flush) = progress.borrow_and_update().clone() {
+                        break flush.0;
+                    }
+                    progress
+                        .changed()
+                        .await
+                        .map_err(|_| UpstreamError::Http("connection interrupted".into()))?;
+                }
+            } else {
+                let metadata = captured.wait_for_connection_metadata().await;
+                let mut extras = http::Extensions::new();
+                metadata
+                    .as_ref()
+                    .ok_or_else(|| UpstreamError::Http("missing connection metadata".into()))?
+                    .get_extras(&mut extras);
+                extras
+                    .get::<FlushProgress>()
+                    .ok_or_else(|| UpstreamError::Http("missing flush observer".into()))?
+                    .0
+                    .clone()
+            }
         };
         let wait = async {
             let consumed_at = loop {
@@ -678,10 +607,15 @@ where
                 {
                     return Ok::<_, UpstreamError>(at);
                 }
-                flushed
-                    .changed()
-                    .await
-                    .map_err(|_| UpstreamError::Http("connection closed during upload".into()))?;
+                if flushed.changed().await.is_ok() {
+                    continue;
+                }
+                // The direct transport replaces a stale pooled connection that
+                // never wrote this request. Follow the replacement's flushes.
+                let closed = || UpstreamError::Http("connection closed during upload".into());
+                let progress = connection_progress.as_mut().ok_or_else(closed)?;
+                progress.changed().await.map_err(|_| closed())?;
+                flushed = progress.borrow_and_update().clone().ok_or_else(closed)?.0;
             }
         };
         tokio::time::timeout(std::time::Duration::from_millis(write_ms), wait)
@@ -746,8 +680,7 @@ fn push_unique_source_str(parts: &mut Vec<String>, s: String) {
 /// pipe", "tls handshake eof"). The default `Display` is only
 /// "client error (SendRequest)".
 #[cfg(feature = "upstream-hyper")]
-fn format_hyper_error(e: &hyper_util::client::legacy::Error) -> String {
-    use std::error::Error as _;
+pub(super) fn format_hyper_error(e: &(dyn std::error::Error + 'static)) -> String {
     let mut parts: Vec<String> = Vec::with_capacity(3);
     parts.push(e.to_string());
     let mut current: Option<&(dyn std::error::Error + 'static)> = e.source();
@@ -759,7 +692,9 @@ fn format_hyper_error(e: &hyper_util::client::legacy::Error) -> String {
 }
 
 #[cfg(feature = "upstream-hyper")]
-fn map_phased_connector_error(p: &super::connector::PhasedConnectorError) -> UpstreamError {
+pub(super) fn map_phased_connector_error(
+    p: &super::connector::PhasedConnectorError,
+) -> UpstreamError {
     match &p.kind {
         super::connector::PhasedErrorKind::Timeout => UpstreamError::Timeout(p.phase),
         super::connector::PhasedErrorKind::InvalidUri(s) => {

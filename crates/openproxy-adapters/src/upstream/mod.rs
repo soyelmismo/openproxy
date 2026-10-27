@@ -39,6 +39,8 @@ mod connector;
 #[cfg(feature = "upstream-hyper")]
 pub(crate) mod connector_types;
 #[cfg(feature = "upstream-hyper")]
+pub(crate) mod cooperative_h1;
+#[cfg(feature = "upstream-hyper")]
 pub(crate) mod dns;
 #[cfg(feature = "upstream-hyper")]
 mod error;
@@ -50,6 +52,8 @@ mod profile;
 pub(crate) mod proxy_tunnel;
 #[cfg(feature = "upstream-hyper")]
 mod request_body;
+#[cfg(feature = "upstream-hyper")]
+pub mod request_builder;
 #[cfg(feature = "upstream-hyper")]
 mod response;
 #[cfg(feature = "upstream-hyper")]
@@ -76,13 +80,13 @@ pub mod tests_helper;
 #[cfg(feature = "upstream-hyper")]
 pub use cancel::CancellationToken;
 #[cfg(feature = "upstream-hyper")]
-pub use client::{
-    UpstreamClient, UpstreamRequest, bearer_auth_header, bearer_header_value, format_bearer,
-};
+pub use client::{UpstreamClient, UpstreamRequest};
 #[cfg(feature = "upstream-hyper")]
 pub use conn_pool::{HostKey, Scheme, UpstreamConnectionPool};
 #[cfg(feature = "upstream-hyper")]
 pub use dns::resolve_public_host;
+#[cfg(feature = "upstream-hyper")]
+pub use request_builder::{bearer_auth_header, bearer_header_value, format_bearer};
 
 pub use connector::{
     PhasedConnector, PhasedConnectorError, PhasedTimeouts, is_private_or_reserved, phased_phase,

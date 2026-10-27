@@ -11,9 +11,12 @@ workspace = true
 
 [features]
 default = ["upstream-hyper", "laya-engine"]
-upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
+upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2", "dep:io-uring", "dep:libc"]
 test-utils = []
 ssrf-bypass = []
+# Bench-only: lets the perf harness trust a local CA for TLS+h2 upstreams.
+# Never enabled by default; production builds do not include the hook.
+bench-tls-hook = []
 laya-engine = ["dep:tokenizers"]
 
 [dependencies]
@@ -54,6 +57,10 @@ rustls = { workspace = true, features = ["logging", "std", "tls12", "ring"], opt
 rustls-pki-types = { workspace = true, optional = true }
 webpki-roots = { workspace = true, optional = true }
 tokenizers = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }
 
 [dev-dependencies]
 hyper = { workspace = true, features = ["server", "http2"] }

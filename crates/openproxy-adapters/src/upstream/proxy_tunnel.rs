@@ -211,14 +211,17 @@ pub(crate) async fn run_proxy_tunnel(
     if scheme.eq_ignore_ascii_case("socks5") {
         socks5_tunnel(stream, dest_host, dest_port)
             .await
+            .and_then(|s| Ok(super::connector_types::Sock::from_tcp(s)?))
             .map(super::connector_types::MaybeTlsStream::Plain)
     } else if scheme.eq_ignore_ascii_case("socks4") {
         socks4_tunnel(stream, dest_host, dest_port)
             .await
+            .and_then(|s| Ok(super::connector_types::Sock::from_tcp(s)?))
             .map(super::connector_types::MaybeTlsStream::Plain)
     } else if scheme.eq_ignore_ascii_case("http") {
         http_connect_tunnel(stream, proxy, dest_host, dest_port)
             .await
+            .and_then(|s| Ok(super::connector_types::Sock::from_tcp(s)?))
             .map(super::connector_types::MaybeTlsStream::Plain)
     } else if scheme.eq_ignore_ascii_case("https") {
         // Security (OP-28): an `https://` proxy previously degraded to a

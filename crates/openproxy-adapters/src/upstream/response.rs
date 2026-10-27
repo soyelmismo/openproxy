@@ -40,6 +40,42 @@ pub const NON_STREAMING_BODY_LIMIT_BYTES: u64 = 32 * 1024 * 1024;
 /// governed by phase deadlines and idle-chunk timeouts.
 pub const STREAMING_BODY_LIMIT_BYTES: u64 = u64::MAX;
 
+/// Legacy (TLS, proxies, `OPENPROXY_UPSTREAM_TRANSPORT=legacy`) stays an
+/// unboxed Incoming. The direct HTTP/1 path owns its connection in the body.
+#[cfg(feature = "upstream-hyper")]
+pub(crate) enum TransportBody {
+    Legacy(hyper::body::Incoming),
+    Cooperative(Box<super::cooperative_h1::CooperativeIncoming>),
+}
+
+#[cfg(feature = "upstream-hyper")]
+impl http_body::Body for TransportBody {
+    type Data = Bytes;
+    type Error = hyper::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, hyper::Error>>> {
+        match self.get_mut() {
+            Self::Legacy(body) => std::pin::Pin::new(body).poll_frame(cx),
+            Self::Cooperative(body) => std::pin::Pin::new(body.as_mut()).poll_frame(cx),
+        }
+    }
+    fn is_end_stream(&self) -> bool {
+        match self {
+            Self::Legacy(body) => http_body::Body::is_end_stream(body),
+            Self::Cooperative(body) => http_body::Body::is_end_stream(body.as_ref()),
+        }
+    }
+    fn size_hint(&self) -> http_body::SizeHint {
+        match self {
+            Self::Legacy(body) => http_body::Body::size_hint(body),
+            Self::Cooperative(body) => http_body::Body::size_hint(body.as_ref()),
+        }
+    }
+}
+
 // Body stream
 
 /// An async stream of `Bytes` chunks coming back from the upstream.
@@ -63,7 +99,7 @@ pub const STREAMING_BODY_LIMIT_BYTES: u64 = u64::MAX;
 /// a chunk carried content.
 pub struct UpstreamBodyStream {
     #[cfg(feature = "upstream-hyper")]
-    inner: Option<http_body_util::BodyStream<http_body_util::Limited<hyper::body::Incoming>>>,
+    inner: Option<http_body_util::BodyStream<http_body_util::Limited<TransportBody>>>,
     cancel: CancellationToken,
     /// Cached watch receiver for async cancel notification.
     /// Polled via `changed()` in the hot loop, no per-chunk allocation.
@@ -95,7 +131,7 @@ impl UpstreamBodyStream {
     /// `ttft_deadline`, later ones by the gap.
     #[cfg(feature = "upstream-hyper")]
     pub(crate) fn from_hyper(
-        body: hyper::body::Incoming,
+        body: TransportBody,
         decoding: BodyDecoding,
         cancel: CancellationToken,
         body_chunk_ms: u64,

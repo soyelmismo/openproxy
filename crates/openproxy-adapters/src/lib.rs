@@ -7,6 +7,8 @@ pub mod client_contract;
 pub mod schema_cleaner;
 pub mod spoofer;
 pub mod upstream;
+#[cfg(all(feature = "upstream-hyper", target_os = "linux"))]
+pub mod uring;
 
 pub use anthropic_cache::{
     count_cache_controls, enforce_cache_control_limit, ensure_anthropic_cache_control,

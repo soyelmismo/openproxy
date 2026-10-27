@@ -10,6 +10,17 @@ use tokio::sync::watch;
 #[derive(Clone, Debug)]
 pub(crate) struct FlushProgress(pub watch::Receiver<Option<Instant>>);
 
+/// Connection publication for a direct hyper driver (legacy capture is private).
+#[derive(Clone, Debug)]
+pub(crate) struct ConnectionProgressSender(pub watch::Sender<Option<FlushProgress>>);
+
+/// Upload-body completion plus connection-flush publication for either driver.
+pub(crate) type DispatchProgress = (
+    hyper_util::client::legacy::connect::CaptureConnection,
+    watch::Receiver<Option<Instant>>,
+    Option<watch::Receiver<Option<FlushProgress>>>,
+);
+
 pub(crate) struct ObservedIo<T> {
     inner: T,
     flushed: watch::Sender<Option<Instant>>,

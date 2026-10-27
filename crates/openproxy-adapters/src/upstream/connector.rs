@@ -328,7 +328,12 @@ async fn proxy_tunnel_phase(
     connect_deadline: std::time::Instant,
 ) -> Result<MaybeTlsStream, PhasedConnectorError> {
     let Some(proxy_config) = proxy_config_opt else {
-        return Ok(MaybeTlsStream::Plain(stream));
+        return Sock::from_tcp(stream)
+            .map(MaybeTlsStream::Plain)
+            .map_err(|e| PhasedConnectorError {
+                phase: UpstreamPhase::Dial,
+                kind: PhasedErrorKind::Io(e),
+            });
     };
 
     let dial_remaining = connect_deadline
