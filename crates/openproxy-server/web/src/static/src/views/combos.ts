@@ -181,6 +181,20 @@ function renderCooldownBar(combo: Combo): TemplateResult {
   return html`<div class="combo-settings-bar"><label><abbr title=${COOLDOWN_MODE_TOOLTIPS[cm]}>${t("combos.detail.cooldown_mode")}</abbr><select @change=${(e: Event) => patchCombo(detailComboId!, { cooldown_mode: (e.target as HTMLSelectElement).value })}>${cooldownModeOptions(cm)}</select></label>${params}</div>`;
 }
 
+function renderModalityGateBar(combo: Combo): TemplateResult {
+  const value = combo.modality_gate === true ? "on" : combo.modality_gate === false ? "off" : "";
+  const onSelect = (e: Event): void => {
+    const raw = (e.target as HTMLSelectElement).value;
+    const next = raw === "on" ? true : raw === "off" ? false : null;
+    void patchCombo(detailComboId!, { modality_gate: next });
+  };
+  return html`<div class="combo-settings-bar"><label><abbr title=${t("combos.detail.modality_gate_hint")}>${t("combos.detail.modality_gate")}</abbr><select @change=${onSelect}>
+    <option value="" ?selected=${value === ""}>${t("combos.detail.modality_gate_inherit")}</option>
+    <option value="on" ?selected=${value === "on"}>${t("combos.detail.modality_gate_on")}</option>
+    <option value="off" ?selected=${value === "off"}>${t("combos.detail.modality_gate_off")}</option>
+  </select></label></div>`;
+}
+
 let touchDragState: { draggedId: number; rowEl: HTMLElement; currentOverEl: HTMLElement | null } | null = null;
 
 function onTouchStartHandle(targetId: number, e: TouchEvent): void {
@@ -655,7 +669,7 @@ function renderComboDetail(): TemplateResult {
     <div class="combo-context-window-bar"><label>${t("combos.detail.max_output_tokens")}
       <input type="number" min="1" placeholder="auto (${autoMotLabel})" .value=${overrideMot != null ? String(overrideMot) : ""} @change=${(e: Event) => onNumInput("max_output_tokens", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
       <span class="cw-hint">${t("combos.detail.auto", { value: autoMotLabel })} · ${t("combos.detail.effective", { value: effectiveMotLabel })}</span></div>
-    ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}
+    ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}${renderModalityGateBar(combo)}
     ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${(e: Event) => detailComboId && testAllTargets(detailComboId, e)}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>

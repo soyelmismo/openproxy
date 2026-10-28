@@ -61,6 +61,10 @@ pub struct Combo {
     pub decision_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_timeout_ms: Option<u64>,
+    /// Per-combo override for the input-modality gate. `None` inherits the
+    /// global `[modality_routing] enabled` setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modality_gate: Option<bool>,
 }
 
 fn default_target_weight() -> i32 {
@@ -146,6 +150,7 @@ impl Default for Combo {
             selection_window_secs: None,
             decision_model: None,
             decision_timeout_ms: None,
+            modality_gate: None,
         }
     }
 }
@@ -380,6 +385,7 @@ mod tests {
             selection_window_secs: None,
             decision_model: None,
             decision_timeout_ms: None,
+            modality_gate: None,
         };
 
         // Default: inherits combo (Flat 60s) -> not disabled

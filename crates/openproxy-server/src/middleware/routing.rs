@@ -334,6 +334,7 @@ async fn translate_plan_to_targets(
                     preventive_rate_limit: false,
                     decision_model: None,
                     decision_timeout_ms: None,
+                    modality_gate: None,
                 };
                 Ok((combo_id, Some(synthetic_combo), Some(targets)))
             } else if has_key_restrictions {

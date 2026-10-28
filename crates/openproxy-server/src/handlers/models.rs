@@ -626,6 +626,7 @@ mod tests {
             selection_window_secs: None,
             decision_model: None,
             decision_timeout_ms: None,
+            modality_gate: None,
         };
         let mut caps = capabilities::ModelCapabilities::empty();
         caps.thinking = Some(true);

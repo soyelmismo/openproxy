@@ -96,6 +96,7 @@ crate::admin_entity_action_handler! {
 
 pub(crate) use super::helpers::{
     parse_nullable_f64, parse_nullable_i64, parse_nullable_str, parse_nullable_u64,
+    parse_optional_bool,
 };
 
 fn apply_combo_cooldown_updates(
@@ -182,6 +183,19 @@ fn apply_combo_general_updates(
         && let Some(enabled) = v.as_bool()
     {
         core_combos::update_preventive_rate_limit(w, id, enabled)?;
+    }
+    match parse_optional_bool(body, "modality_gate")? {
+        Some(enabled) => core_combos::update_modality_gate(w, id, Some(enabled))?,
+        None => {
+            // An explicit JSON null clears the override so the combo inherits
+            // the global `[modality_routing] enabled` setting again.
+            if body
+                .get("modality_gate")
+                .is_some_and(serde_json::Value::is_null)
+            {
+                core_combos::update_modality_gate(w, id, None)?;
+            }
+        }
     }
     Ok(())
 }

@@ -46,6 +46,10 @@ export interface ConfigPayload {
     enabled?: boolean | null;
     threshold_percentage?: number | null;
   } | null;
+  modality_routing?: {
+    enabled?: boolean | null;
+    fallback_to_text_only?: boolean | null;
+  } | null;
   pii?: {
     pii_enabled?: boolean | null;
     pii_reversible?: boolean | null;

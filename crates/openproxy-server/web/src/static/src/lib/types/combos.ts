@@ -27,6 +27,7 @@ export interface Combo {
   preventive_rate_limit?: boolean;
   decision_model?: string | null;
   decision_timeout_ms?: number | null;
+  modality_gate?: boolean | null;
 }
 
 export interface ComboTarget {

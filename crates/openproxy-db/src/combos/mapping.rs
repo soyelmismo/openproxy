@@ -13,7 +13,7 @@ crate::def_table_select!(
      priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
      cooldown_factor, lkgp_exploration_rate, selection_window_secs, \
      COALESCE(preventive_rate_limit, 0), decision_model, decision_timeout_ms, \
-     max_output_tokens"
+     max_output_tokens, modality_gate"
 );
 pub(crate) use combo_select;
 
@@ -124,6 +124,7 @@ pub(crate) fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         decision_model: 14,
         decision_timeout_ms: @opt_u64(15),
         max_output_tokens: 16,
+        modality_gate: @opt_bool(17),
     })
 }
 

@@ -21,6 +21,8 @@ let livePiiReversible = true;
 let livePiiRedactLogs = true;
 let livePiiEntities: string[] = ["email", "phone", "ip", "credit_card", "secret", "person"];
 let liveNotificationsEnabled = true;
+let liveModalityRoutingEnabled = true;
+let liveModalityRoutingFallback = true;
 
 function normalizePiiEntity(e: string): string {
   if (e === "card") return "credit_card";
@@ -44,6 +46,8 @@ export function applyServerConfig(payload: ConfigPayload): void {
   livePiiRedactLogs = p.pii_redact_logs ?? true;
   livePiiEntities = Array.from(new Set((p.pii_entities ?? ["email", "phone", "ip", "credit_card", "secret", "person"]).map(normalizePiiEntity)));
   liveNotificationsEnabled = payload.notifications_enabled ?? true;
+  liveModalityRoutingEnabled = payload.modality_routing?.enabled ?? true;
+  liveModalityRoutingFallback = payload.modality_routing?.fallback_to_text_only ?? true;
 }
 
 async function putConfig(endpoint: string, body: unknown, toastMsg: string): Promise<boolean> {
@@ -90,6 +94,12 @@ async function patchIdleChunkRetryable(val: boolean): Promise<boolean> {
 async function patchQuotaProtection(enabled: boolean, threshold: number): Promise<boolean> {
   const ok = await putConfig("/config/quota-protection", { enabled, threshold_percentage: threshold }, t("config.quota.toast.updated"));
   if (ok) { const cfg = getConfig(); if (cfg) cfg.quota_protection = { enabled, threshold_percentage: threshold }; }
+  return ok;
+}
+
+async function patchModalityRouting(enabled: boolean, fallback: boolean): Promise<boolean> {
+  const ok = await putConfig("/config/modality-routing", { enabled, fallback_to_text_only: fallback }, t("config.modality.toast.updated"));
+  if (ok) { const cfg = getConfig(); if (cfg) cfg.modality_routing = { enabled, fallback_to_text_only: fallback }; }
   return ok;
 }
 
@@ -240,6 +250,22 @@ export function renderNotificationsCard(): TemplateResult {
   return card(t("config.notifications.title"), html`
     <p class="muted">${t("config.notifications.description")}</p>
     ${renderToggle(t("config.notifications.enabled"), liveNotificationsEnabled, t("config.notifications.help_on"), t("config.notifications.help_off"), () => void patchNotificationsEnabled(!liveNotificationsEnabled))}
+  `);
+}
+
+export function renderModalityCard(): TemplateResult {
+  return card(t("config.modality.title"), html`
+    <p class="muted">${t("config.modality.description")}</p>
+    <div class="config-rows-list">
+      ${renderToggle(t("config.modality.enabled"), liveModalityRoutingEnabled, t("config.modality.help_on"), t("config.modality.help_off"), async () => {
+        const next = !liveModalityRoutingEnabled;
+        if (await patchModalityRouting(next, liveModalityRoutingFallback)) liveModalityRoutingEnabled = next;
+      })}
+      ${renderToggle(t("config.modality.fallback"), liveModalityRoutingFallback, t("config.modality.help_fallback_on"), t("config.modality.help_fallback_off"), async () => {
+        const next = !liveModalityRoutingFallback;
+        if (await patchModalityRouting(liveModalityRoutingEnabled, next)) liveModalityRoutingFallback = next;
+      })}
+    </div>
   `);
 }
 

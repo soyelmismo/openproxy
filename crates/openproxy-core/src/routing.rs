@@ -444,6 +444,7 @@ pub fn build_synthetic_combo(
         preventive_rate_limit: false,
         decision_model: None,
         decision_timeout_ms: None,
+        modality_gate: None,
     };
     (combo, vec![target])
 }

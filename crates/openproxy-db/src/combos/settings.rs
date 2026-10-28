@@ -39,6 +39,7 @@ define_column_updaters! {
     pub(crate) fn raw_update_combo_selection_window(window: Option<i64>) => "selection_window_secs";
     pub fn update_decision_model(model: Option<&str>) => "decision_model";
     pub fn update_decision_timeout(timeout_ms: Option<u64> => timeout_ms.map(|v| v as i64)) => "decision_timeout_ms";
+    pub fn update_modality_gate(gate: Option<bool> => gate.map(i64::from)) => "modality_gate";
 }
 
 pub fn update_target_weight(

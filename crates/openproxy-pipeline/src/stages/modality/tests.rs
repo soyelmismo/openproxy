@@ -132,3 +132,34 @@ fn strict_mode_returns_empty_when_none_accept_images() {
     let out = filter_targets_for_input(targets, true, config);
     assert!(out.is_empty());
 }
+
+#[test]
+fn combo_override_forces_gate_off() {
+    let global = ModalityRoutingConfig::default();
+    let effective = effective_config(global, Some(false));
+    assert!(!effective.enabled);
+    // Fallback policy stays global: it is not a per-combo routing taste.
+    assert_eq!(
+        effective.fallback_to_text_only,
+        global.fallback_to_text_only
+    );
+}
+
+#[test]
+fn combo_override_forces_gate_on() {
+    let global = ModalityRoutingConfig {
+        enabled: false,
+        ..ModalityRoutingConfig::default()
+    };
+    let effective = effective_config(global, Some(true));
+    assert!(effective.enabled);
+}
+
+#[test]
+fn combo_without_override_inherits_global() {
+    let global = ModalityRoutingConfig {
+        enabled: false,
+        fallback_to_text_only: false,
+    };
+    assert_eq!(effective_config(global, None), global);
+}

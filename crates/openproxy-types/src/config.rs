@@ -308,7 +308,7 @@ impl Default for QuotaProtectionConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModalityRoutingConfig {
     /// Drop combo targets that cannot accept the request's input modalities.
     ///

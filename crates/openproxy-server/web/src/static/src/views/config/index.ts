@@ -13,8 +13,8 @@ import {
 } from "./shared.js";
 import {
   applyServerConfig,
-  renderCompressionCard, renderIdleChunkCard, renderNotificationsCard, renderPiiCard, renderQuotaCard,
-  renderRecordingTtlCard, renderTimeoutsCard,
+  renderCompressionCard, renderIdleChunkCard, renderModalityCard, renderNotificationsCard,
+  renderPiiCard, renderQuotaCard, renderRecordingTtlCard, renderTimeoutsCard,
 } from "./editable-cards.js";
 import { loadMaintenanceState, pollVacuumStatus, renderMaintenanceCard } from "./maintenance.js";
 import { renderBackupCard } from "./backup.js";
@@ -103,6 +103,7 @@ function renderConfig(): TemplateResult {
         ${renderCompressionCard()}
         ${renderIdleChunkCard()}
         ${renderNotificationsCard()}
+        ${renderModalityCard()}
         ${renderQuotaCard()}
         ${renderPiiCard()}
         ${renderMaintenanceCard()}

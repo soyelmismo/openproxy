@@ -89,10 +89,17 @@ impl PipelineStage for RouterStage {
         let requires_image =
             crate::stages::modality::request_requires_image_input(&ctx.req.openai_request);
         if requires_image {
+            // A per-combo override wins over the global setting: some combos
+            // exist precisely to probe whether a text-only model now accepts
+            // images, and the operator must be able to opt out per combo.
+            let gate_config = crate::stages::modality::effective_config(
+                ctx.pipeline.config.modality_routing,
+                combo.modality_gate,
+            );
             let filtered = crate::stages::modality::filter_targets_for_input(
                 resolved,
                 requires_image,
-                ctx.pipeline.config.modality_routing,
+                gate_config,
             );
             if filtered.is_empty() {
                 return Err(CoreError::NoHealthyTargets(combo.id.0));

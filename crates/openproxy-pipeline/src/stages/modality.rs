@@ -49,6 +49,21 @@ fn target_accepts_image(target: &ResolvedTarget) -> bool {
     target.model.input_modalities_json.is_none() || target.model.input_modalities().has_image()
 }
 
+/// Resolves the effective gate config for one combo walk.
+///
+/// A per-combo `modality_gate` override wins over the global `enabled` flag;
+/// the fallback policy is global because it describes how the proxy answers
+/// when a request cannot be served at all, not a per-combo routing taste.
+pub fn effective_config(
+    global: ModalityRoutingConfig,
+    combo_override: Option<bool>,
+) -> ModalityRoutingConfig {
+    match combo_override {
+        Some(enabled) => ModalityRoutingConfig { enabled, ..global },
+        None => global,
+    }
+}
+
 /// Applies the gate. Returns the target list unchanged when the request is
 /// text-only or the feature is disabled.
 pub fn filter_targets_for_input(
