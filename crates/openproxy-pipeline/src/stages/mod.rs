@@ -1,5 +1,6 @@
 pub mod decision;
 pub mod executor;
+pub mod modality;
 #[cfg(test)]
 #[path = "protocol_finalization_tests.rs"]
 mod protocol_finalization_tests;

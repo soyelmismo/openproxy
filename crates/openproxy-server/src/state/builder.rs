@@ -44,6 +44,7 @@ impl AppState {
         let compression_mode_cell = Arc::new(RwLock::new(compression_mode));
         let quota_protection_cell = Arc::new(RwLock::new(config.quota_protection.clone()));
         let pii_config_cell = Arc::new(RwLock::new(config.pii.clone()));
+        let modality_routing_cell = Arc::new(RwLock::new(config.modality_routing));
         let notifications_enabled_cell = Arc::new(AtomicBool::new(notifications_enabled));
         openproxy_core::notifications::set_enabled(notifications_enabled);
 
@@ -169,6 +170,7 @@ impl AppState {
             idle_chunk_retryable_cell,
             quota_protection_cell,
             pii_config_cell,
+            modality_routing_cell,
             notifications_enabled_cell,
             selection_registry,
             circuit_breaker,
@@ -299,6 +301,7 @@ impl AppState {
             )),
             quota_protection_cell: Arc::new(RwLock::new(config.quota_protection)),
             pii_config_cell: Arc::new(RwLock::new(config.pii)),
+            modality_routing_cell: Arc::new(RwLock::new(config.modality_routing)),
             notifications_enabled_cell: Arc::new(AtomicBool::new(
                 db::app_config::NOTIFICATIONS_ENABLED_DEFAULT,
             )),

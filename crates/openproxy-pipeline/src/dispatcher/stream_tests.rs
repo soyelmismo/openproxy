@@ -45,6 +45,7 @@ pub(super) fn build_dispatcher_for_stream_test(
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     UpstreamDispatcher::new(

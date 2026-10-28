@@ -99,6 +99,7 @@ impl PipelineRunner {
             idle_chunk_retryable: state.idle_chunk_retryable(),
             quota_protection: state.quota_protection(),
             pii_config: state.pii_config(),
+            modality_routing: state.modality_routing(),
             background_tx: state.background_tx(),
         };
         Pipeline::with_db_pool_selection_registry(

@@ -1,7 +1,8 @@
 //! Persistent runtime config KV store.
 
 use openproxy_types::{
-    CompressionMode, PiiConfig, PiiEntity, QuotaProtectionConfig, Result, ResultExt, TimeoutsConfig,
+    CompressionMode, ModalityRoutingConfig, PiiConfig, PiiEntity, QuotaProtectionConfig, Result,
+    ResultExt, TimeoutsConfig,
 };
 use rusqlite::{Connection, params};
 
@@ -22,6 +23,9 @@ pub const QUOTA_PROTECTION_KEY: &str = "quota_protection";
 
 /// Key under which the `idle_chunk_retryable` flag is stored.
 pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
+
+/// Key under which the input-modality routing config is stored.
+pub const MODALITY_ROUTING_KEY: &str = "modality_routing";
 
 /// Key under which the PII config is stored.
 pub const PII_CONFIG_KEY: &str = "pii_config";
@@ -139,6 +143,8 @@ app_config_kv! {
     load_timeouts_override_from_db, save_timeouts_to_db, TIMEOUTS_KEY, &TimeoutsConfig;
     /// Quota protection override.
     load_quota_protection_override_from_db, save_quota_protection_to_db, QUOTA_PROTECTION_KEY, &QuotaProtectionConfig;
+    /// Input-modality routing override.
+    load_modality_routing_from_db, save_modality_routing_to_db, MODALITY_ROUTING_KEY, &ModalityRoutingConfig;
 }
 
 app_config_kv! {

@@ -5,8 +5,8 @@
 use crate::error::{CoreError, Result};
 pub use openproxy_types::config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
-    MaintenanceConfig, PiiConfig, QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig,
-    SmartWarmupConfig, StorageConfig, TimeoutsConfig,
+    MaintenanceConfig, ModalityRoutingConfig, PiiConfig, QuotaProtectionConfig, RacingConfig,
+    RetriesConfig, ServerConfig, SmartWarmupConfig, StorageConfig, TimeoutsConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -143,6 +143,8 @@ pub struct AppConfig {
     pub quota_sync: QuotaSyncConfig,
     #[serde(default)]
     pub pii: PiiConfig,
+    #[serde(default)]
+    pub modality_routing: ModalityRoutingConfig,
 }
 
 impl AppConfig {

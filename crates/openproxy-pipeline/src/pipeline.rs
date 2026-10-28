@@ -37,6 +37,7 @@ pub struct PipelineConfig {
     pub idle_chunk_retryable: bool,
     pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
     pub pii_config: openproxy_types::config::PiiConfig,
+    pub modality_routing: openproxy_types::config::ModalityRoutingConfig,
     pub background_tx: tokio::sync::mpsc::Sender<crate::worker::BackgroundJob>,
 }
 

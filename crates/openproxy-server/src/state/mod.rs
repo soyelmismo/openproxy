@@ -52,6 +52,7 @@ pub struct AppState {
     idle_chunk_retryable_cell: Arc<AtomicBool>,
     quota_protection_cell: Arc<parking_lot::RwLock<openproxy_types::config::QuotaProtectionConfig>>,
     pii_config_cell: Arc<parking_lot::RwLock<openproxy_types::config::PiiConfig>>,
+    modality_routing_cell: Arc<parking_lot::RwLock<openproxy_types::config::ModalityRoutingConfig>>,
     notifications_enabled_cell: Arc<AtomicBool>,
     selection_registry: Arc<openproxy_types::SelectionRegistry>,
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
@@ -396,6 +397,14 @@ impl AppState {
         *self.pii_config_cell.write() = config;
     }
 
+    pub fn modality_routing(&self) -> openproxy_types::config::ModalityRoutingConfig {
+        self.modality_routing_cell.read().to_owned()
+    }
+
+    pub fn set_modality_routing(&self, config: openproxy_types::config::ModalityRoutingConfig) {
+        *self.modality_routing_cell.write() = config;
+    }
+
     pub fn notifications_enabled(&self) -> bool {
         self.notifications_enabled_cell
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -479,6 +488,9 @@ impl AppState {
         }
         if let Ok(Some(pii)) = db::app_config::load_pii_config_from_db(conn) {
             self.set_pii_config(pii);
+        }
+        if let Ok(Some(modality)) = db::app_config::load_modality_routing_from_db(conn) {
+            self.set_modality_routing(modality);
         }
         if let Ok(Some(notif)) = db::app_config::load_notifications_enabled_from_db(conn) {
             self.set_notifications_enabled(notif);

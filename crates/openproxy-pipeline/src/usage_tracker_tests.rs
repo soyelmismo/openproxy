@@ -196,6 +196,7 @@ async fn test_concurrent_compression_stats_isolation() {
         idle_chunk_retryable: false,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
@@ -353,6 +354,7 @@ async fn test_high_concurrency_compression_stats_isolation() {
         idle_chunk_retryable: false,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
@@ -475,6 +477,7 @@ async fn test_compression_stats_empty_requests() {
         idle_chunk_retryable: false,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
@@ -551,6 +554,7 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
         idle_chunk_retryable: false,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);

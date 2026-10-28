@@ -20,6 +20,8 @@ pub struct RuntimeConfigResponse {
     pub idle_chunk_retryable: bool,
     pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
     pub pii: openproxy_types::config::PiiConfig,
+    /// Input-modality routing (image requests restricted to vision targets).
+    pub modality_routing: openproxy_types::config::ModalityRoutingConfig,
     pub pii_enabled: bool,
     pub pii_reversible: bool,
     pub pii_redact_logs: bool,
@@ -50,6 +52,10 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/pii",
             axum::routing::get(get_runtime_pii).put(put_runtime_pii),
+        )
+        .route(
+            "/modality-routing",
+            axum::routing::get(get_runtime_modality_routing).put(put_runtime_modality_routing),
         )
         .route(
             "/maintenance",
@@ -109,6 +115,7 @@ pub async fn get_runtime_config(
         pii_redact_logs: pii.pii_redact_logs,
         pii_entities: pii.pii_entities.clone(),
         pii,
+        modality_routing: s.modality_routing(),
         notifications_enabled: s.notifications_enabled(),
     }))
 }
@@ -251,6 +258,25 @@ runtime_config_put!(
             "updated pii config via admin API"
         ),
         response: serde_json::to_value(&body).unwrap_or_default(),
+    }
+);
+
+pub async fn get_runtime_modality_routing(
+    State(s): State<AppState>,
+) -> Result<Json<openproxy_types::config::ModalityRoutingConfig>, ApiError> {
+    Ok(Json(s.modality_routing()))
+}
+
+runtime_config_put!(
+    put_runtime_modality_routing(body: openproxy_types::config::ModalityRoutingConfig) {
+        save: core_db::app_config::save_modality_routing_to_db,
+        state: set_modality_routing,
+        log: tracing::info!(
+            enabled = body.enabled,
+            fallback_to_text_only = body.fallback_to_text_only,
+            "updated modality_routing via admin API"
+        ),
+        response: serde_json::to_value(body).unwrap_or_default(),
     }
 );
 

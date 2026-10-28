@@ -83,6 +83,23 @@ impl PipelineStage for RouterStage {
             return Err(CoreError::NoHealthyTargets(combo.id.0));
         }
 
+        // Modality gate: a combo advertises the union of its leaves'
+        // capabilities, so an image request must not be routed to a
+        // text-only hop that would answer with a non-retryable 400.
+        let requires_image =
+            crate::stages::modality::request_requires_image_input(&ctx.req.openai_request);
+        if requires_image {
+            let filtered = crate::stages::modality::filter_targets_for_input(
+                resolved,
+                requires_image,
+                ctx.pipeline.config.modality_routing,
+            );
+            if filtered.is_empty() {
+                return Err(CoreError::NoHealthyTargets(combo.id.0));
+            }
+            resolved = filtered;
+        }
+
         let is_decision_mode =
             combo.priority_mode == openproxy_types::combos::PriorityMode::Decision;
         let mut session_hash = None;

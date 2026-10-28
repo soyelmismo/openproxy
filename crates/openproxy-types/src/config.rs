@@ -308,6 +308,45 @@ impl Default for QuotaProtectionConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ModalityRoutingConfig {
+    /// Drop combo targets that cannot accept the request's input modalities.
+    ///
+    /// Today only images are gated: when the payload carries `image_url` /
+    /// `input_image` parts, targets whose model does not advertise `image`
+    /// in `input_modalities` are removed before routing. Combos are
+    /// advertised with the union of their leaves' capabilities, so without
+    /// this gate a text-only first hop happily accepts a vision request and
+    /// fails upstream with a non-retryable 400.
+    #[serde(default = "default_modality_routing_enabled")]
+    pub enabled: bool,
+    /// Keep the unfiltered target set when no target accepts the request.
+    ///
+    /// A combo with no vision-capable leaf would otherwise return
+    /// `no_healthy_targets`. With this on (the default) the gate logs the
+    /// mismatch and falls back to the previous behaviour, letting the
+    /// upstream reject the request instead of the proxy.
+    #[serde(default = "default_modality_routing_fallback")]
+    pub fallback_to_text_only: bool,
+}
+
+fn default_modality_routing_enabled() -> bool {
+    true
+}
+
+fn default_modality_routing_fallback() -> bool {
+    true
+}
+
+impl Default for ModalityRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_modality_routing_enabled(),
+            fallback_to_text_only: default_modality_routing_fallback(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartWarmupConfig {
     #[serde(default = "default_smart_warmup_enabled")]

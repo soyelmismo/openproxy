@@ -68,3 +68,22 @@ enabled = true
 # will have those models marked as protected and avoided if other accounts
 # have quota. Default: 10.
 threshold_percentage = 10
+
+[modality_routing]
+# Restrict combo targets by the request's input modalities.
+#
+# A combo advertises the union of its leaves' capabilities, so a combo with a
+# single vision-capable leaf reports `input_modalities: ["text","image"]` even
+# when its first hops are text-only. With this on, an image request drops every
+# target whose model does not declare `image` in `input_modalities`, so the walk
+# starts on a model that can actually read the pixels instead of dying on a
+# non-retryable 400 from the first text-only hop.
+#
+# Targets whose model never reported modalities are kept (no evidence against
+# them). Default: true.
+enabled = true
+
+# When no target accepts the request's modalities, keep the unfiltered set and
+# let the upstream reject it, instead of failing with `no_healthy_targets`.
+# Set to false to answer 502 immediately. Default: true.
+fallback_to_text_only = true

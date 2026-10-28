@@ -104,6 +104,7 @@ pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
@@ -343,6 +344,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> Pipe
         idle_chunk_retryable: true,
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
+        modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
