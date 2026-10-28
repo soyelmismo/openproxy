@@ -731,4 +731,28 @@ mod snapshot_and_persistence {
         // ...and it still reads as unknown, never as zero.
         assert_eq!(zai_remaining_fraction(kept, "glm-4.6", NOW), None);
     }
+
+    #[test]
+    fn test_parse_reset_time() {
+        // Plain integer seconds
+        assert_eq!(parse_reset_time("3600"), Some(3600));
+        assert_eq!(parse_reset_time("  120  "), Some(120));
+
+        // Floating point seconds
+        assert_eq!(parse_reset_time("12.3"), Some(13));
+        assert_eq!(parse_reset_time("10.0"), Some(10));
+
+        // Compound durations
+        assert_eq!(parse_reset_time("1h"), Some(3600));
+        assert_eq!(parse_reset_time("30m"), Some(1800));
+        assert_eq!(parse_reset_time("45s"), Some(45));
+        assert_eq!(parse_reset_time("1h30m"), Some(5400));
+        assert_eq!(parse_reset_time("1h30m15s"), Some(5415));
+        assert_eq!(parse_reset_time("0.5h"), Some(1800));
+
+        // Invalid or zero durations
+        assert_eq!(parse_reset_time("invalid"), None);
+        assert_eq!(parse_reset_time("0s"), None);
+        assert_eq!(parse_reset_time(""), None);
+    }
 }
