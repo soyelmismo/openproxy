@@ -96,7 +96,6 @@ crate::admin_entity_action_handler! {
 
 pub(crate) use super::helpers::{
     parse_nullable_f64, parse_nullable_i64, parse_nullable_str, parse_nullable_u64,
-    parse_optional_bool,
 };
 
 fn apply_combo_cooldown_updates(
@@ -184,17 +183,18 @@ fn apply_combo_general_updates(
     {
         core_combos::update_preventive_rate_limit(w, id, enabled)?;
     }
-    match parse_optional_bool(body, "modality_gate")? {
-        Some(enabled) => core_combos::update_modality_gate(w, id, Some(enabled))?,
-        None => {
-            // An explicit JSON null clears the override so the combo inherits
-            // the global `[modality_routing] enabled` setting again.
-            if body
-                .get("modality_gate")
-                .is_some_and(serde_json::Value::is_null)
-            {
-                core_combos::update_modality_gate(w, id, None)?;
-            }
+    match body.get("modality_gate") {
+        None => {}
+        // An explicit JSON null clears the override so the combo inherits the
+        // global `[modality_routing] enabled` setting again.
+        Some(serde_json::Value::Null) => core_combos::update_modality_gate(w, id, None)?,
+        Some(serde_json::Value::Bool(enabled)) => {
+            core_combos::update_modality_gate(w, id, Some(*enabled))?;
+        }
+        Some(other) => {
+            return Err(ApiError(CoreError::Validation(format!(
+                "modality_gate must be a boolean or null, got {other}"
+            ))));
         }
     }
     Ok(())
