@@ -334,4 +334,22 @@ mod tests {
         assert_eq!(DefaultableEnum::from_db_opt(Some("unknown")), None);
         assert_eq!(DefaultableEnum::from_db_opt(None), None);
     }
+
+    #[test]
+    fn test_from_db_primitive_types() {
+        use super::FromDb;
+
+        assert_eq!(i32::from_db(Some("123")), 123);
+        assert_eq!(i32::from_db(Some("invalid")), 0);
+        assert_eq!(i32::from_db(None), 0);
+
+        assert_eq!(i32::from_db_opt(Some("123")), Some(123));
+        assert_eq!(i32::from_db_opt(Some("invalid")), None);
+        assert_eq!(i32::from_db_opt(None), None);
+
+        assert!(bool::from_db(Some("true")));
+        assert!(!bool::from_db(Some("false")));
+        assert!(!bool::from_db(Some("not_bool")));
+        assert!(!bool::from_db(None));
+    }
 }
