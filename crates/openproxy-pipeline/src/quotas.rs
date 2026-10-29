@@ -7,29 +7,40 @@ pub enum QuotaStatus {
     Exhausted,
 }
 
+/// Resolve the per-model quota detail that governs `candidates`.
+///
+/// Several names can describe the same request: the model the client asked for
+/// (possibly a combo alias such as `nerd`) and the upstream model the target
+/// actually bills (`claude-opus-4-6-thinking`). Quota is consumed by the model
+/// that runs, so the resolved name is tried first and the requested one is kept
+/// as a fallback for providers that key their details by the requested id.
 fn find_model_quota_detail(
     account: &openproxy_types::accounts::Account,
-    requested_model: &str,
+    candidates: &[&str],
 ) -> Option<openproxy_types::quota::ModelQuotaDetail> {
     let details = account.quota_model_details.as_deref()?;
 
     // Pass 1: exact match (case-insensitive) with zero allocations
-    if let Some(detail) = details
-        .iter()
-        .find(|d| requested_model.eq_ignore_ascii_case(&d.model_id))
-    {
-        return Some(detail.clone());
+    for candidate in candidates {
+        if let Some(detail) = details
+            .iter()
+            .find(|d| candidate.eq_ignore_ascii_case(&d.model_id))
+        {
+            return Some(detail.clone());
+        }
     }
 
     // Pass 2: fallback normalized match
-    let norm_req = openproxy_types::model_normalize::normalize_model_id(requested_model);
-    details
-        .iter()
-        .find(|d| {
+    for candidate in candidates {
+        let norm_req = openproxy_types::model_normalize::normalize_model_id(candidate);
+        if let Some(detail) = details.iter().find(|d| {
             let norm_detail = openproxy_types::model_normalize::normalize_model_id(&d.model_id);
             norm_req.eq_ignore_ascii_case(&norm_detail)
-        })
-        .cloned()
+        }) {
+            return Some(detail.clone());
+        }
+    }
+    None
 }
 
 fn is_monthly_window_exhausted(account: &openproxy_types::accounts::Account) -> bool {
@@ -123,7 +134,23 @@ fn is_credit_balance_exhausted(account: &openproxy_types::accounts::Account) -> 
     get_credit_balance_info(account).is_some_and(|(rem, _)| rem <= 0.0)
 }
 
-fn check_quota_windows_exhausted(account: &openproxy_types::accounts::Account) -> bool {
+fn check_quota_windows_exhausted(
+    account: &openproxy_types::accounts::Account,
+    candidates: &[&str],
+) -> bool {
+    // A per-model detail that matches the requested model is authoritative for
+    // that model. Antigravity exposes several *disjoint* pools under one login
+    // (a Gemini pool and a Claude pool that share no budget), while the
+    // account-wide session/weekly counters hold only the worst bucket across
+    // all of them. Consulting those aggregates here would retire the whole
+    // account for a model whose own pool is untouched.
+    //
+    // Credit balance is not a window: it is real money, so it keeps vetoing
+    // regardless of any per-model reading.
+    if find_model_quota_detail(account, candidates).is_some() {
+        return is_credit_balance_exhausted(account);
+    }
+
     let session_exhausted = matches!(
         (account.quota_session_used, account.quota_session_limit),
         (Some(used), Some(limit)) if used >= limit
@@ -142,7 +169,7 @@ pub(crate) fn evaluate_account_quota(
     quota_protection_enabled: bool,
     threshold_percentage: u32,
     account: &openproxy_types::accounts::Account,
-    requested_model: &str,
+    candidates: &[&str],
 ) -> QuotaStatus {
     if account.provider_id.as_str() == "zai" {
         let Some(pools) = account.quota_pools.as_deref().filter(|p| !p.is_empty()) else {
@@ -168,7 +195,11 @@ pub(crate) fn evaluate_account_quota(
         {
             return QuotaStatus::Available;
         }
-        let remaining = openproxy_types::quota::zai_remaining_fraction(pools, requested_model, now);
+        let remaining = openproxy_types::quota::zai_remaining_fraction(
+            pools,
+            candidates.first().copied().unwrap_or_default(),
+            now,
+        );
         return match remaining {
             Some(value) if value <= 0.0 => QuotaStatus::Exhausted,
             Some(value)
@@ -179,11 +210,11 @@ pub(crate) fn evaluate_account_quota(
             _ => QuotaStatus::Available,
         };
     }
-    if check_quota_windows_exhausted(account) {
+    if check_quota_windows_exhausted(account, candidates) {
         return QuotaStatus::Exhausted;
     }
 
-    let remaining = get_account_remaining_fraction(account, requested_model);
+    let remaining = get_account_remaining_fraction(account, candidates);
     if remaining <= 0.0 {
         return QuotaStatus::Exhausted;
     }
@@ -205,7 +236,7 @@ fn calculate_remaining_fraction(used: Option<i64>, limit: Option<i64>) -> Option
 
 pub(crate) fn get_account_remaining_fraction(
     account: &openproxy_types::accounts::Account,
-    requested_model: &str,
+    candidates: &[&str],
 ) -> f64 {
     if account.provider_id.as_str() == "zai"
         && let Some(pools) = account.quota_pools.as_deref()
@@ -213,18 +244,29 @@ pub(crate) fn get_account_remaining_fraction(
         let now = openproxy_types::now_unix_secs_str()
             .parse::<u64>()
             .unwrap_or(0);
-        return openproxy_types::quota::zai_remaining_fraction(pools, requested_model, now)
-            .unwrap_or(1.0);
+        return openproxy_types::quota::zai_remaining_fraction(
+            pools,
+            candidates.first().copied().unwrap_or_default(),
+            now,
+        )
+        .unwrap_or(1.0);
     }
     if is_credit_balance_exhausted(account) {
         return 0.0;
     }
 
-    let mut min_fraction: Option<f64> = None;
-
-    if let Some(detail) = find_model_quota_detail(account, requested_model) {
-        min_fraction = Some(detail.remaining_fraction);
+    // Per-model detail wins outright when it exists. The account-wide
+    // session/weekly counters are a *minimum across every pool* (see
+    // `parse_antigravity_models_response`), so folding them in with `min()`
+    // would let an exhausted Gemini pool report 0% for a Claude model whose
+    // own pool is full. Providers that publish no per-model detail keep the
+    // old aggregate behaviour untouched.
+    if let Some(detail) = find_model_quota_detail(account, candidates) {
+        let credits = get_credit_balance_fraction(account).unwrap_or(1.0);
+        return detail.remaining_fraction.min(credits);
     }
+
+    let mut min_fraction: Option<f64> = None;
 
     if let Some(credits) = get_credit_balance_fraction(account) {
         min_fraction = Some(match min_fraction {
@@ -277,7 +319,7 @@ fn enrich_target_with_quota(
     threshold_percentage: u32,
     repo: &dyn crate::repository::PipelineRepository,
     master_key: &MasterKey,
-    _requested_model: &str,
+    requested_model: &str,
     target_position: usize,
 ) -> TargetWithQuota {
     let Some(aid) = t.target.account_id else {
@@ -292,18 +334,23 @@ fn enrich_target_with_quota(
 
     match repo.get_account(aid, master_key) {
         Ok(Some(account)) => {
-            let model = if account.provider_id.as_str() == "zai" {
-                t.model.model_id.as_str()
+            // The model this target actually bills comes first: for a combo the
+            // requested name is the combo alias, which never appears in the
+            // upstream quota catalog. The requested name stays as a fallback so
+            // providers keying details by the requested id keep working.
+            let resolved_model = t.model.model_id.as_str();
+            let candidates: &[&str] = if resolved_model.eq_ignore_ascii_case(requested_model) {
+                &[resolved_model]
             } else {
-                _requested_model
+                &[resolved_model, requested_model]
             };
             let status = evaluate_account_quota(
                 quota_protection_enabled,
                 threshold_percentage,
                 &account,
-                model,
+                candidates,
             );
-            let remaining_fraction = get_account_remaining_fraction(&account, model);
+            let remaining_fraction = get_account_remaining_fraction(&account, candidates);
             TargetWithQuota {
                 resolved_target: t,
                 status,
@@ -434,22 +481,22 @@ mod tests {
         let acc_positive = make_test_account(Some(r#"{"credit_balance":"773467"}"#));
         assert!(!is_credit_balance_exhausted(&acc_positive));
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_positive, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_positive, &["MiniMax-M3"]),
             QuotaStatus::Available
         );
 
         let acc_zero = make_test_account(Some(r#"{"credit_balance":"0"}"#));
         assert!(is_credit_balance_exhausted(&acc_zero));
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_zero, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_zero, &["MiniMax-M3"]),
             QuotaStatus::Exhausted
         );
-        assert_eq!(get_account_remaining_fraction(&acc_zero, "MiniMax-M3"), 0.0);
+        assert_eq!(get_account_remaining_fraction(&acc_zero, &["MiniMax-M3"]), 0.0);
 
         let acc_zero_float = make_test_account(Some(r#"{"credit_balance":0.0}"#));
         assert!(is_credit_balance_exhausted(&acc_zero_float));
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_zero_float, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_zero_float, &["MiniMax-M3"]),
             QuotaStatus::Exhausted
         );
 
@@ -460,14 +507,14 @@ mod tests {
         acc_extra_config.extra_config_json = Some(r#"{"credits":"0"}"#.into());
         assert!(is_credit_balance_exhausted(&acc_extra_config));
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_extra_config, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_extra_config, &["MiniMax-M3"]),
             QuotaStatus::Exhausted
         );
 
         let acc_no_specific = make_test_account(None);
         assert!(!is_credit_balance_exhausted(&acc_no_specific));
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_no_specific, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_no_specific, &["MiniMax-M3"]),
             QuotaStatus::Available
         );
     }
@@ -477,37 +524,37 @@ mod tests {
         // MiniMax default baseline is 1,000,000. 50,000 / 1,000,000 = 0.05 (5%)
         let acc_low = make_test_account(Some(r#"{"credit_balance":"50000"}"#));
         assert!(!is_credit_balance_exhausted(&acc_low));
-        let fraction = get_account_remaining_fraction(&acc_low, "MiniMax-M3");
+        let fraction = get_account_remaining_fraction(&acc_low, &["MiniMax-M3"]);
         assert!((fraction - 0.05).abs() < 1e-6);
 
         // Protected when threshold (10%) >= 5%
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_low, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_low, &["MiniMax-M3"]),
             QuotaStatus::Protected
         );
 
         // Available when quota protection is disabled
         assert_eq!(
-            evaluate_account_quota(false, 10, &acc_low, "MiniMax-M3"),
+            evaluate_account_quota(false, 10, &acc_low, &["MiniMax-M3"]),
             QuotaStatus::Available
         );
 
         // Available when threshold (4%) < 5%
         assert_eq!(
-            evaluate_account_quota(true, 4, &acc_low, "MiniMax-M3"),
+            evaluate_account_quota(true, 4, &acc_low, &["MiniMax-M3"]),
             QuotaStatus::Available
         );
 
         // Explicit total_credits: 80 / 1000 = 8%
         let acc_explicit = make_test_account(Some(r#"{"credit_balance":80,"total_credits":1000}"#));
-        let fraction_explicit = get_account_remaining_fraction(&acc_explicit, "MiniMax-M3");
+        let fraction_explicit = get_account_remaining_fraction(&acc_explicit, &["MiniMax-M3"]);
         assert!((fraction_explicit - 0.08).abs() < 1e-6);
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc_explicit, "MiniMax-M3"),
+            evaluate_account_quota(true, 10, &acc_explicit, &["MiniMax-M3"]),
             QuotaStatus::Protected
         );
         assert_eq!(
-            evaluate_account_quota(true, 5, &acc_explicit, "MiniMax-M3"),
+            evaluate_account_quota(true, 5, &acc_explicit, &["MiniMax-M3"]),
             QuotaStatus::Available
         );
     }
@@ -518,19 +565,19 @@ mod tests {
         acc.quota_session_used = Some(95);
         acc.quota_session_limit = Some(100);
 
-        let fraction = get_account_remaining_fraction(&acc, "any-model");
+        let fraction = get_account_remaining_fraction(&acc, &["any-model"]);
         assert!((fraction - 0.05).abs() < 1e-6);
 
         assert_eq!(
-            evaluate_account_quota(true, 10, &acc, "any-model"),
+            evaluate_account_quota(true, 10, &acc, &["any-model"]),
             QuotaStatus::Protected
         );
         assert_eq!(
-            evaluate_account_quota(false, 10, &acc, "any-model"),
+            evaluate_account_quota(false, 10, &acc, &["any-model"]),
             QuotaStatus::Available
         );
         assert_eq!(
-            evaluate_account_quota(true, 3, &acc, "any-model"),
+            evaluate_account_quota(true, 3, &acc, &["any-model"]),
             QuotaStatus::Available
         );
     }
@@ -653,6 +700,139 @@ mod tests {
         assert_eq!(
             compare_targets_with_quota(&t_second, &t_first),
             std::cmp::Ordering::Greater
+        );
+    }
+
+    /// Antigravity exposes two disjoint pools under one login. The
+    /// account-wide `quota_session_used` / `quota_weekly_used` columns hold the
+    /// *worst* bucket of both, so an exhausted Gemini pool used to retire the
+    /// account for Claude too. Measured on production account 67: Claude 5h and
+    /// weekly at 1.0, Gemini at 0.0, weekly aggregate 1000/1000.
+    fn make_split_pool_account() -> Account {
+        let mut acc = make_test_account(None);
+        acc.provider_id = ProviderId("antigravity".into());
+        // Worst-bucket aggregate: Gemini exhausted.
+        acc.quota_session_used = Some(0);
+        acc.quota_session_limit = Some(1000);
+        acc.quota_weekly_used = Some(1000);
+        acc.quota_weekly_limit = Some(1000);
+        acc.quota_model_details = Some(
+            vec![
+                openproxy_types::ModelQuotaDetail {
+                    model_id: "claude-opus-4-6-thinking".into(),
+                    session_used: 0,
+                    session_limit: 1000,
+                    session_reset_at: None,
+                    remaining_fraction: 1.0,
+                },
+                openproxy_types::ModelQuotaDetail {
+                    model_id: "gemini-3.8-flash-tiered".into(),
+                    session_used: 1000,
+                    session_limit: 1000,
+                    session_reset_at: None,
+                    remaining_fraction: 0.0,
+                },
+            ]
+            .into_boxed_slice(),
+        );
+        acc
+    }
+
+    #[test]
+    fn claude_pool_survives_exhausted_gemini_pool() {
+        let acc = make_split_pool_account();
+
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["claude-opus-4-6-thinking"]),
+            QuotaStatus::Available,
+            "a full Claude pool must not be retired by an exhausted Gemini pool"
+        );
+        assert!((get_account_remaining_fraction(&acc, &["claude-opus-4-6-thinking"]) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn gemini_pool_still_reports_exhausted() {
+        let acc = make_split_pool_account();
+
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["gemini-3.8-flash-tiered"]),
+            QuotaStatus::Exhausted
+        );
+        assert_eq!(
+            get_account_remaining_fraction(&acc, &["gemini-3.8-flash-tiered"]),
+            0.0
+        );
+    }
+
+    #[test]
+    fn combo_alias_resolves_to_upstream_model_pool() {
+        let acc = make_split_pool_account();
+
+        // A combo request arrives as `nerd`; the target bills
+        // `claude-opus-4-6-thinking`. The resolved name must win, otherwise the
+        // alias misses the catalog and the aggregate retires the account.
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["claude-opus-4-6-thinking", "nerd"]),
+            QuotaStatus::Available
+        );
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["gemini-3.8-flash-tiered", "nerd"]),
+            QuotaStatus::Exhausted
+        );
+    }
+
+    #[test]
+    fn model_without_detail_keeps_aggregate_behaviour() {
+        let acc = make_split_pool_account();
+
+        // No detail for this model: the old aggregate path applies unchanged.
+        // The status still comes from the weekly window being spent.
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["some-unlisted-model"]),
+            QuotaStatus::Exhausted
+        );
+        // The fraction keeps the pre-existing precedence rule: `session` wins
+        // over `weekly` when both are present, so it reports 1.0 here. That
+        // number only drives sort order; `evaluate_account_quota` already
+        // returned Exhausted above, which is what removes the target.
+        assert_eq!(
+            get_account_remaining_fraction(&acc, &["some-unlisted-model"]),
+            1.0
+        );
+    }
+
+    #[test]
+    fn credit_balance_still_vetoes_a_full_model_pool() {
+        let mut acc = make_split_pool_account();
+        acc.oauth_provider_specific = Some(r#"{"credit_balance":"0"}"#.into());
+
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["claude-opus-4-6-thinking"]),
+            QuotaStatus::Exhausted,
+            "real money is not a per-model window"
+        );
+    }
+
+    #[test]
+    fn exhausted_model_detail_reports_exhausted_without_aggregates() {
+        let mut acc = make_test_account(None);
+        acc.provider_id = ProviderId("antigravity".into());
+        acc.quota_session_used = Some(0);
+        acc.quota_session_limit = Some(1000);
+        acc.quota_model_details = Some(
+            vec![openproxy_types::ModelQuotaDetail {
+                model_id: "claude-sonnet-4-6".into(),
+                session_used: 1000,
+                session_limit: 1000,
+                session_reset_at: None,
+                remaining_fraction: 0.0,
+            }]
+            .into_boxed_slice(),
+        );
+
+        assert_eq!(
+            evaluate_account_quota(true, 10, &acc, &["claude-sonnet-4-6"]),
+            QuotaStatus::Exhausted
         );
     }
 }
