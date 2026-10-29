@@ -22,7 +22,7 @@ fn responses_input_does_not_emit_legacy_item_type() {
         tool_calls: None,
         extra: Default::default(),
     };
-    let input = messages_to_responses_input(&[&user, &tool]);
+    let input = messages_to_responses_input(&[&user, &tool]).expect("ok");
     let items = input.as_array().expect("input array");
     assert_eq!(items[0].get("type"), None);
     assert_eq!(
@@ -43,7 +43,7 @@ fn test_responses_input_assistant_tool_calls_omits_empty_text() {
         ]),
         extra: Default::default(),
     };
-    let input = messages_to_responses_input(&[&assistant]);
+    let input = messages_to_responses_input(&[&assistant]).expect("ok");
     let items = input.as_array().expect("input array");
     assert_eq!(items.len(), 1);
     assert_eq!(
@@ -68,7 +68,7 @@ fn test_responses_input_assistant_commentary_and_tool_calls() {
         ]),
         extra: Default::default(),
     };
-    let input = messages_to_responses_input(&[&assistant]);
+    let input = messages_to_responses_input(&[&assistant]).expect("ok");
     let items = input.as_array().expect("input array");
     assert_eq!(items.len(), 2);
     assert_eq!(

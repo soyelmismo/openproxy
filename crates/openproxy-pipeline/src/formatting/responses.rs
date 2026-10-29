@@ -30,7 +30,7 @@ impl TargetFormatter for ResponsesFormatter {
 
         obj.insert(
             "input".to_string(),
-            messages_to_responses_input(messages_ref),
+            messages_to_responses_input(messages_ref)?,
         );
         obj.insert("stream".to_string(), Value::Bool(stream));
         obj.insert("store".to_string(), Value::Bool(false));
@@ -340,33 +340,165 @@ pub(crate) fn convert_image_source_part(item: &Value) -> Option<Value> {
     convert_image_url_part(item)
 }
 
-pub(crate) fn convert_content_item_to_part(item: &Value, text_type: &str) -> Option<Value> {
+/// Rebuilds the `data:<mime>;base64,<payload>` URI that the Responses file
+/// parts want, from whichever shape the part arrived in.
+fn media_data_uri(raw: &str, mime: &str) -> String {
+    if raw.starts_with("data:") {
+        raw.to_string()
+    } else {
+        format!("data:{mime};base64,{raw}")
+    }
+}
+
+/// Maps a document part onto a Responses `input_file`.
+///
+/// The Responses API takes documents as `input_file` with either
+/// `file_data` (a data URI or plain base64) or `file_id`. Anything else the
+/// upstream rejects, so a part that cannot be expressed this way is dropped
+/// rather than forwarded as an unknown type.
+fn convert_file_part(item: &Value) -> Option<Value> {
+    if let Some(file_id) = item
+        .get("file_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            item.get("file")
+                .and_then(|f| f.get("file_id"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        })
+    {
+        return Some(json!({ "type": "input_file", "file_id": file_id }));
+    }
+
+    let data = item
+        .get("file_data")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            item.get("file")
+                .and_then(|f| f.get("file_data"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            item.get("source")
+                .and_then(|s| s.get("data"))
+                .and_then(Value::as_str)
+        })
+        .filter(|s| !s.is_empty())?;
+    let mime = item
+        .get("media_type")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            item.get("source")
+                .and_then(|s| s.get("media_type"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("application/pdf");
+    let filename = item
+        .get("filename")
+        .and_then(Value::as_str)
+        .unwrap_or("document.pdf");
+    let mut out = json!({
+        "type": "input_file",
+        "filename": filename,
+        "file_data": media_data_uri(data, mime),
+    });
+    if let Some(detail) = item.get("detail").and_then(Value::as_str) {
+        out["detail"] = Value::String(detail.to_string());
+    }
+    Some(out)
+}
+
+/// Maps an audio part onto a Responses `input_audio`.
+fn convert_audio_part(item: &Value) -> Option<Value> {
+    if let Some(audio) = item.get("input_audio").and_then(Value::as_object) {
+        let data = audio.get("data").and_then(Value::as_str)?;
+        let format = audio
+            .get("format")
+            .and_then(Value::as_str)
+            .unwrap_or("wav");
+        return Some(json!({
+            "type": "input_audio",
+            "input_audio": { "data": data, "format": format },
+        }));
+    }
+    let url = item
+        .get("audio_url")
+        .and_then(|v| {
+            v.as_str()
+                .map(str::to_string)
+                .or_else(|| v.get("url").and_then(Value::as_str).map(str::to_string))
+        })
+        .or_else(|| {
+            item.get("source").and_then(|s| {
+                let data = s.get("data").and_then(Value::as_str)?;
+                let mime = s
+                    .get("media_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("audio/wav");
+                Some(media_data_uri(data, mime))
+            })
+        })?;
+    Some(json!({ "type": "input_audio", "audio_url": url }))
+}
+
+pub(crate) fn convert_content_item_to_part(
+    item: &Value,
+    text_type: &str,
+) -> Result<Option<Value>, CoreError> {
     let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("text");
-    match item_type {
+    let part = match item_type {
         "text" | "input_text" | "output_text" => {
             let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("");
             Some(json!({ "type": text_type, "text": text }))
         }
         "image_url" | "input_image" => convert_image_url_part(item),
         "image" => convert_image_source_part(item),
+        "file" | "input_file" | "document" => convert_file_part(item),
+        // The Responses API has no video content type: its accepted values are
+        // input_text, input_image, input_audio, input_file, output_text,
+        // refusal, computer_screenshot, summary_text and encrypted_content.
+        // Forwarding a made-up `input_video` only moves the failure upstream
+        // behind a 400 that reads like a proxy bug, so reject it here.
+        "input_video" | "video_url" | "video" => {
+            return Err(CoreError::Validation(
+                "the Responses API does not accept video input; \
+                 use a model exposed through /v1/chat/completions instead"
+                    .to_string(),
+            ));
+        }
+        "input_audio" | "audio" => convert_audio_part(item),
         _ => None,
-    }
+    };
+    Ok(part)
 }
 
-pub(crate) fn convert_msg_content_to_parts(content: Option<&Value>, text_type: &str) -> Vec<Value> {
-    match content {
+pub(crate) fn convert_msg_content_to_parts(
+    content: Option<&Value>,
+    text_type: &str,
+) -> Result<Vec<Value>, CoreError> {
+    let parts = match content {
         Some(Value::String(text)) if !text.is_empty() => {
             vec![json!({ "type": text_type, "text": text })]
         }
-        Some(Value::Array(arr)) => arr
-            .iter()
-            .filter_map(|item| convert_content_item_to_part(item, text_type))
-            .filter(|part| {
-                part.get("text")
-                    .and_then(Value::as_str)
-                    .is_none_or(|t| !t.is_empty())
-            })
-            .collect(),
+        Some(Value::Array(arr)) => {
+            let mut parts = Vec::with_capacity(arr.len());
+            for item in arr {
+                if let Some(part) = convert_content_item_to_part(item, text_type)? {
+                    // Only text parts can be empty; a media part carries its
+                    // payload in another field, and dropping it here would
+                    // silently turn a multimodal message into a text-only one.
+                    let empty_text = part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(str::is_empty);
+                    if !empty_text {
+                        parts.push(part);
+                    }
+                }
+            }
+            parts
+        }
         Some(value) if !value.is_null() => {
             let s = if let Some(s) = value.as_str() {
                 s.to_string()
@@ -380,7 +512,8 @@ pub(crate) fn convert_msg_content_to_parts(content: Option<&Value>, text_type: &
             }
         }
         _ => Vec::new(),
-    }
+    };
+    Ok(parts)
 }
 
 pub(crate) fn convert_msg_tool_calls(tool_calls: &[Value], input_items: &mut Vec<Value>) {
@@ -453,7 +586,7 @@ pub(crate) fn sanitize_responses_reasoning_item(item: &mut Value) {
 pub(crate) fn convert_single_message_to_responses_input(
     msg: &OpenAIMessage,
     input_items: &mut Vec<Value>,
-) {
+) -> Result<(), CoreError> {
     if msg.role == "tool" {
         let call_id = msg.tool_call_id.as_deref().unwrap_or("call_xyz");
         let content_str = content_to_text(msg.content.as_ref());
@@ -462,11 +595,11 @@ pub(crate) fn convert_single_message_to_responses_input(
             "call_id": call_id,
             "output": content_str
         }));
-        return;
+        return Ok(());
     }
 
     if msg.role == "system" || msg.role == "developer" {
-        let mut parts = convert_msg_content_to_parts(msg.content.as_ref(), "input_text");
+        let mut parts = convert_msg_content_to_parts(msg.content.as_ref(), "input_text")?;
         if parts.is_empty() {
             let text = content_to_text(msg.content.as_ref());
             if !text.is_empty() {
@@ -479,7 +612,7 @@ pub(crate) fn convert_single_message_to_responses_input(
                 "content": parts
             }));
         }
-        return;
+        return Ok(());
     }
 
     let has_tool_calls = msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
@@ -525,7 +658,7 @@ pub(crate) fn convert_single_message_to_responses_input(
             input_items.push(Value::Object(r_item));
         }
 
-        let parts = convert_msg_content_to_parts(msg.content.as_ref(), "output_text");
+        let parts = convert_msg_content_to_parts(msg.content.as_ref(), "output_text")?;
         if !parts.is_empty() {
             input_items.push(json!({
                 "role": "assistant",
@@ -538,7 +671,7 @@ pub(crate) fn convert_single_message_to_responses_input(
             }));
         }
     } else {
-        let mut parts = convert_msg_content_to_parts(msg.content.as_ref(), "input_text");
+        let mut parts = convert_msg_content_to_parts(msg.content.as_ref(), "input_text")?;
         if parts.is_empty() {
             parts.push(json!({ "type": "input_text", "text": "" }));
         }
@@ -551,16 +684,17 @@ pub(crate) fn convert_single_message_to_responses_input(
     if let Some(tool_calls) = &msg.tool_calls {
         convert_msg_tool_calls(tool_calls, input_items);
     }
+    Ok(())
 }
 
 pub(crate) fn messages_to_responses_input<M: crate::context::AsOpenAIMessage>(
     messages: &[M],
-) -> Value {
+) -> Result<Value, CoreError> {
     let mut input_items = Vec::new();
     for msg in messages {
-        convert_single_message_to_responses_input(msg.as_message(), &mut input_items);
+        convert_single_message_to_responses_input(msg.as_message(), &mut input_items)?;
     }
-    Value::Array(input_items)
+    Ok(Value::Array(input_items))
 }
 
 pub(crate) fn content_to_text(content: Option<&Value>) -> String {
@@ -682,7 +816,7 @@ mod tests {
             },
         ];
 
-        let input_val = messages_to_responses_input(&messages);
+        let input_val = messages_to_responses_input(&messages).expect("ok");
         let items = input_val.as_array().expect("items array");
 
         // First item should be the reconstructed reasoning block

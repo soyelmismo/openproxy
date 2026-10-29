@@ -865,3 +865,37 @@ fn test_snapshot_catalog_of_the_pinned_fixture_filters_hidden_models() {
             .any(|m| m.model_id.as_str() == "codex-auto-review")
     );
 }
+
+#[test]
+fn sanitize_flattens_chat_style_file_part_into_input_file() {
+    let mut part = json!({
+        "type": "file",
+        "file": {"filename": "doc.pdf", "file_data": "data:application/pdf;base64,QUJD"}
+    });
+    sanitize_codex_image_part(part.as_object_mut().unwrap());
+    assert_eq!(part["type"], "input_file");
+    assert_eq!(part["filename"], "doc.pdf");
+    assert_eq!(part["file_data"], "data:application/pdf;base64,QUJD");
+    assert!(part.get("file").is_none(), "nested form must be flattened");
+}
+
+#[test]
+fn sanitize_flattens_anthropic_document_block_into_input_file() {
+    let mut part = json!({
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "QUJD"}
+    });
+    sanitize_codex_image_part(part.as_object_mut().unwrap());
+    assert_eq!(part["type"], "input_file");
+    assert_eq!(part["file_data"], "data:application/pdf;base64,QUJD");
+    assert_eq!(part["filename"], "document.pdf");
+}
+
+#[test]
+fn sanitize_keeps_image_parts_untouched() {
+    let mut part = json!({"type": "image", "image": "QUJD", "mime_type": "image/png"});
+    sanitize_codex_image_part(part.as_object_mut().unwrap());
+    assert_eq!(part["type"], "input_image");
+    assert_eq!(part["image_url"], "data:image/png;base64,QUJD");
+    assert!(part.get("image").is_none());
+}

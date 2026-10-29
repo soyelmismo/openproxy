@@ -96,7 +96,7 @@ fn test_responses_formatter_assistant_reasoning_reinjection() {
     ];
 
     let refs: Vec<&OpenAIMessage> = messages.iter().collect();
-    let input_val = messages_to_responses_input(&refs);
+    let input_val = messages_to_responses_input(&refs).expect("ok");
     let items = input_val.as_array().expect("array");
 
     // items should be: user message, reasoning item, assistant message
@@ -470,4 +470,92 @@ fn openai_formatter_raises_max_tokens_to_model_ceiling_when_client_omits_it() {
         .expect("ok");
     let val_pinned: Value = serde_json::from_slice(&body_pinned).unwrap();
     assert_eq!(val_pinned["max_tokens"], json!(2048));
+}
+
+fn media_user(content: serde_json::Value) -> Vec<OpenAIMessage> {
+    vec![OpenAIMessage {
+        role: "user".into(),
+        content: Some(content),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    }]
+}
+
+#[test]
+fn document_part_becomes_input_file_with_data_uri() {
+    let msgs = media_user(json!([
+        {"type": "text", "text": "code?"},
+        {"type": "input_file", "filename": "doc.pdf", "file_data": "QUJD"}
+    ]));
+    let out = messages_to_responses_input(&msgs).expect("ok");
+    let parts = out[0]["content"].as_array().expect("content array");
+    assert_eq!(parts.len(), 2, "document must not be dropped: {out:?}");
+    assert_eq!(parts[1]["type"], "input_file");
+    assert_eq!(parts[1]["filename"], "doc.pdf");
+    assert_eq!(parts[1]["file_data"], "data:application/pdf;base64,QUJD");
+}
+
+#[test]
+fn anthropic_document_block_becomes_input_file() {
+    let msgs = media_user(json!([
+        {"type": "text", "text": "code?"},
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "QUJD"}}
+    ]));
+    let out = messages_to_responses_input(&msgs).expect("ok");
+    let parts = out[0]["content"].as_array().expect("content array");
+    assert_eq!(parts.len(), 2, "document block dropped: {out:?}");
+    assert_eq!(parts[1]["type"], "input_file");
+    assert_eq!(parts[1]["file_data"], "data:application/pdf;base64,QUJD");
+}
+
+#[test]
+fn file_id_document_becomes_input_file_without_payload() {
+    let msgs = media_user(json!([
+        {"type": "text", "text": "read it"},
+        {"type": "file", "file": {"file_id": "file-abc123"}}
+    ]));
+    let out = messages_to_responses_input(&msgs).expect("ok");
+    let parts = out[0]["content"].as_array().expect("content array");
+    assert_eq!(parts.len(), 2, "file_id dropped: {out:?}");
+    assert_eq!(parts[1]["type"], "input_file");
+    assert_eq!(parts[1]["file_id"], "file-abc123");
+    assert!(parts[1].get("file_data").is_none());
+}
+
+#[test]
+fn audio_part_survives_the_responses_input() {
+    let msgs = media_user(json!([
+        {"type": "text", "text": "q"},
+        {"type": "input_audio", "input_audio": {"data": "QUJD", "format": "wav"}}
+    ]));
+    let out = messages_to_responses_input(&msgs).expect("ok");
+    let parts = out[0]["content"].as_array().expect("content array");
+    assert_eq!(parts.len(), 2, "audio dropped: {out:?}");
+    assert_eq!(parts[1]["type"], "input_audio");
+    assert_eq!(parts[1]["input_audio"]["data"], "QUJD");
+    assert_eq!(parts[1]["input_audio"]["format"], "wav");
+}
+
+#[test]
+fn video_is_rejected_instead_of_forwarded_as_an_unknown_type() {
+    let msgs = media_user(json!([
+        {"type": "text", "text": "q"},
+        {"type": "input_video", "video_url": {"url": "data:video/mp4;base64,QUJD"}}
+    ]));
+    let err = messages_to_responses_input(&msgs).expect_err("video must be rejected");
+    assert!(
+        err.to_string().contains("does not accept video"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn text_only_message_still_collapses_to_a_string() {
+    let out = messages_to_responses_input(&media_user(json!("just text"))).expect("ok");
+    assert_eq!(
+        out[0]["content"],
+        json!([{"type": "input_text", "text": "just text"}])
+    );
 }

@@ -378,34 +378,99 @@ fn insert_codex_default(
 }
 
 fn sanitize_codex_image_part(part_obj: &mut serde_json::Map<String, serde_json::Value>) {
-    let is_image = part_obj
+    let part_type = part_obj
         .get("type")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|t| t == "input_image" || t == "image");
-    if is_image {
-        part_obj.insert(
-            "type".to_string(),
-            serde_json::Value::String("input_image".to_string()),
-        );
-        let legacy_image = part_obj.remove("image").and_then(|v| match v {
-            serde_json::Value::String(s) => Some(s),
-            _ => None,
-        });
-        let legacy_mime = part_obj.remove("mime_type").and_then(|v| match v {
-            serde_json::Value::String(s) => Some(s),
-            _ => None,
-        });
-        if !part_obj.contains_key("image_url")
-            && let Some(data) = legacy_image
-        {
-            let mime = legacy_mime.as_deref().unwrap_or("image/jpeg");
-            let url = if data.starts_with("data:") {
-                data
-            } else {
-                format!("data:{mime};base64,{data}")
-            };
-            part_obj.insert("image_url".to_string(), serde_json::Value::String(url));
+        .unwrap_or_default();
+    match part_type {
+        "input_image" | "image" => {
+            part_obj.insert(
+                "type".to_string(),
+                serde_json::Value::String("input_image".to_string()),
+            );
+            let legacy_image = part_obj.remove("image").and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s),
+                _ => None,
+            });
+            let legacy_mime = part_obj.remove("mime_type").and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s),
+                _ => None,
+            });
+            if !part_obj.contains_key("image_url")
+                && let Some(data) = legacy_image
+            {
+                let mime = legacy_mime.as_deref().unwrap_or("image/jpeg");
+                let url = if data.starts_with("data:") {
+                    data
+                } else {
+                    format!("data:{mime};base64,{data}")
+                };
+                part_obj.insert("image_url".to_string(), serde_json::Value::String(url));
+            }
         }
+        // The Responses API takes files as `input_file` with `filename` +
+        // `file_data` (or `file_id`). A `file` part arriving from a Chat
+        // Completions client nests those under `file`, and an Anthropic-shaped
+        // `document` nests the payload under `source`; neither is accepted
+        // upstream as-is, so flatten them into the flat input_file shape.
+        "file" | "input_file" | "document" => {
+            let mut out = serde_json::Map::new();
+            out.insert(
+                "type".to_string(),
+                serde_json::Value::String("input_file".to_string()),
+            );
+            if let Some(file) = part_obj.get("file").and_then(|f| f.as_object()) {
+                for key in ["file_data", "file_id", "filename"] {
+                    if let Some(v) = file.get(key) {
+                        out.insert(key.to_string(), v.clone());
+                    }
+                }
+            }
+            if let Some(source) = part_obj.get("source").and_then(|s| s.as_object()) {
+                if let Some(data) = source.get("data").and_then(|v| v.as_str()) {
+                    let mime = source
+                        .get("media_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("application/pdf");
+                    let uri = if data.starts_with("data:") {
+                        data.to_string()
+                    } else {
+                        format!("data:{mime};base64,{data}")
+                    };
+                    out.insert("file_data".to_string(), serde_json::Value::String(uri));
+                }
+                if let Some(fid) = source.get("file_id").and_then(|v| v.as_str()) {
+                    out.insert(
+                        "file_id".to_string(),
+                        serde_json::Value::String(fid.to_string()),
+                    );
+                }
+            }
+            for key in ["file_data", "file_id", "filename", "detail"] {
+                if let Some(v) = part_obj.get(key) {
+                    out.insert(key.to_string(), v.clone());
+                }
+            }
+            if !out.contains_key("filename") {
+                let mime = out
+                    .get("file_data")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.strip_prefix("data:"))
+                    .and_then(|s| s.split_once(';').map(|(m, _)| m))
+                    .unwrap_or("application/pdf");
+                let name = if mime.contains("pdf") {
+                    "document.pdf"
+                } else {
+                    "document"
+                };
+                out.insert(
+                    "filename".to_string(),
+                    serde_json::Value::String(name.to_string()),
+                );
+            }
+            *part_obj = out;
+        }
+        _ => {}
     }
 }
 
