@@ -790,7 +790,8 @@ mod vl_inference_tests {
     #[test]
     fn inferred_modalities_include_image_for_a_vl_model() {
         let caps = infer_capabilities("nvidia/nemotron-3.5-super-vl-120b-a12b");
-        let mods = infer_input_modalities_for_model("nvidia/nemotron-3.5-super-vl-120b-a12b", &caps);
+        let mods =
+            infer_input_modalities_for_model("nvidia/nemotron-3.5-super-vl-120b-a12b", &caps);
         assert!(mods.contains(&"image"), "modalities: {mods:?}");
     }
 }

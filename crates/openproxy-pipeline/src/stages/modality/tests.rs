@@ -285,7 +285,10 @@ fn pdf_only_model_survives_a_document_request() {
 
 #[test]
 fn pdf_only_model_is_still_rejected_for_image_requests() {
-    let targets = vec![target_with_modalities("pdf-model", Some(r#"["text","pdf"]"#))];
+    let targets = vec![target_with_modalities(
+        "pdf-model",
+        Some(r#"["text","pdf"]"#),
+    )];
     let required = RequiredModalities {
         image: true,
         ..Default::default()
@@ -298,7 +301,10 @@ fn pdf_only_model_is_still_rejected_for_image_requests() {
         fallback_to_text_only: false,
         ..ModalityRoutingConfig::default()
     };
-    let targets = vec![target_with_modalities("pdf-model", Some(r#"["text","pdf"]"#))];
+    let targets = vec![target_with_modalities(
+        "pdf-model",
+        Some(r#"["text","pdf"]"#),
+    )];
     assert!(filter_targets_for_modalities(targets, required, strict).is_empty());
 }
 
@@ -306,10 +312,7 @@ fn pdf_only_model_is_still_rejected_for_image_requests() {
 fn multi_modality_request_needs_every_declared_flag() {
     let targets = vec![
         target_with_modalities("vision", Some(r#"["text","image"]"#)),
-        target_with_modalities(
-            "full",
-            Some(r#"["text","image","video","audio"]"#),
-        ),
+        target_with_modalities("full", Some(r#"["text","image","video","audio"]"#)),
     ];
     let required = RequiredModalities {
         image: true,

@@ -525,8 +525,8 @@ const ONESHOT_BROTLI: &[u8] = &[
 
 #[test]
 fn brotli_body_decodes_at_eof() {
-    let decoded = drive(Some(Codec::Brotli), &one(ONESHOT_BROTLI.to_vec()))
-        .expect("brotli body decodes");
+    let decoded =
+        drive(Some(Codec::Brotli), &one(ONESHOT_BROTLI.to_vec())).expect("brotli body decodes");
     assert_eq!(decoded, ONESHOT_PAYLOAD.as_bytes());
 }
 

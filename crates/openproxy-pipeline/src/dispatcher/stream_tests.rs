@@ -29,7 +29,9 @@ pub(super) fn build_dispatcher_for_stream_test_with_recording(
     let tracker = crate::usage_tracker::UsageTracker {
         conn: std::sync::Arc::clone(&conn_arc),
         background_tx: tokio::sync::mpsc::channel(1).0,
-        record_bodies_and_headers: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(recording)),
+        record_bodies_and_headers: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            recording,
+        )),
         selection_registry: std::sync::Arc::new(openproxy_types::SelectionRegistry::new()),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,

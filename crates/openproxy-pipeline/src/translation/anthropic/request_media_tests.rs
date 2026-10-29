@@ -26,16 +26,10 @@ fn converted_parts(parts: serde_json::Value) -> Vec<serde_json::Value> {
         .iter()
         .find(|m| m.role == "user")
         .expect("user message present");
-    user.content
-        .as_array()
-        .expect("typed block array")
-        .clone()
+    user.content.as_array().expect("typed block array").clone()
 }
 
-fn find_block<'a>(
-    blocks: &'a [serde_json::Value],
-    kind: &str,
-) -> &'a serde_json::Value {
+fn find_block<'a>(blocks: &'a [serde_json::Value], kind: &str) -> &'a serde_json::Value {
     blocks
         .iter()
         .find(|b| b["type"] == kind)
@@ -161,10 +155,7 @@ fn multiple_modalities_in_one_message_all_survive() {
         { "type": "image_url", "image_url": { "url": "data:image/png;base64,IMG" } },
         { "type": "video_url", "video_url": { "url": "https://example.com/v.mp4" } }
     ]));
-    let kinds: Vec<&str> = blocks
-        .iter()
-        .filter_map(|b| b["type"].as_str())
-        .collect();
+    let kinds: Vec<&str> = blocks.iter().filter_map(|b| b["type"].as_str()).collect();
     assert_eq!(kinds, vec!["text", "image", "video"]);
 }
 
@@ -208,7 +199,10 @@ fn system_message_still_extracted_separately() {
         extra: Default::default(),
     };
     let anthropic = openai_to_anthropic(&req, "MiniMax-M3.1-Flash", &messages, false);
-    assert_eq!(anthropic.system.as_ref().and_then(|s| s.as_str()), Some("be brief"));
+    assert_eq!(
+        anthropic.system.as_ref().and_then(|s| s.as_str()),
+        Some("be brief")
+    );
     let user = anthropic
         .messages
         .iter()
@@ -254,12 +248,17 @@ fn tool_result_with_image_keeps_the_image_block() {
         { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } }
     ]));
     assert_eq!(result["tool_use_id"], "call_1");
-    let blocks = result["content"].as_array().expect("content is a block array");
+    let blocks = result["content"]
+        .as_array()
+        .expect("content is a block array");
     let image = find_block(blocks, "image");
     assert_eq!(image["source"]["type"], "base64");
     assert_eq!(image["source"]["media_type"], "image/png");
     assert_eq!(image["source"]["data"], "AAAA");
-    assert_eq!(find_block(blocks, "text")["text"], "Image loaded into your context");
+    assert_eq!(
+        find_block(blocks, "text")["text"],
+        "Image loaded into your context"
+    );
 }
 
 #[test]

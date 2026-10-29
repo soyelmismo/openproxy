@@ -13,7 +13,14 @@ fn seed_usage(conn: &Connection, id: i64, model: &str, audio_ms: Option<i64>, co
         "INSERT INTO usage (id, request_id, trace_id, provider_id, upstream_model_id,
                             status_code, total_ms, audio_ms, cost_usd, created_at, endpoint_kind)
          VALUES (?1, ?2, ?3, 'groq', ?4, 200, 500, ?5, ?6, '2026-10-29T00:00:00Z', 'audio')",
-        rusqlite::params![id, format!("req-{id}"), format!("tr-{id}"), model, audio_ms, cost],
+        rusqlite::params![
+            id,
+            format!("req-{id}"),
+            format!("tr-{id}"),
+            model,
+            audio_ms,
+            cost
+        ],
     )
     .unwrap();
 }

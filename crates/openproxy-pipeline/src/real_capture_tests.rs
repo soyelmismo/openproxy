@@ -34,7 +34,11 @@ fn real_response_body(content: &str) -> serde_json::Value {
 #[test]
 fn real_failure_content_parses_into_terminal_call() {
     let content = real_dsml_content();
-    assert_eq!(content.chars().count(), 656, "fixture must match the capture");
+    assert_eq!(
+        content.chars().count(),
+        656,
+        "fixture must match the capture"
+    );
     assert_eq!(content.len(), 736, "fixture must match the capture bytes");
 
     let out = extract_inline_tools_from_response_value(real_response_body(&content));
@@ -58,7 +62,10 @@ fn real_failure_content_parses_into_terminal_call() {
             .starts_with("cd ~/sandbox/explainroo && export EXPLAINROO_CACHE=$PWD/.cache"),
         "command must survive verbatim: {args}"
     );
-    assert_eq!(args["intent"], "Verificando el MP4 final y listando salidas");
+    assert_eq!(
+        args["intent"],
+        "Verificando el MP4 final y listando salidas"
+    );
     assert_eq!(
         args["timeout_secs"], 600,
         "numeric string must become a number"
@@ -112,6 +119,9 @@ fn real_failure_content_streamed_in_pieces_parses_identically() {
 
     let args: serde_json::Value =
         serde_json::from_str(emitted[0]["function"]["arguments"].as_str().unwrap()).unwrap();
-    assert_eq!(args["intent"], "Verificando el MP4 final y listando salidas");
+    assert_eq!(
+        args["intent"],
+        "Verificando el MP4 final y listando salidas"
+    );
     assert_eq!(args["timeout_secs"], 600);
 }

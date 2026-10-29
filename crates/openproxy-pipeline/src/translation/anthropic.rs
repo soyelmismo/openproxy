@@ -1,10 +1,10 @@
 mod diagnostics;
 mod identity;
 mod request;
-mod response;
-mod reverse;
 #[cfg(test)]
 mod request_media_tests;
+mod response;
+mod reverse;
 #[cfg(test)]
 mod reverse_tests;
 #[cfg(test)]

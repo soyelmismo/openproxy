@@ -114,7 +114,10 @@ pub fn extract_think_from_response(
 /// `raw_response_body` on a partial stream) while still moving `<think>`
 /// blocks out of `content` into `reasoning_content`.
 pub fn extract_think_from_response_value(mut val: serde_json::Value) -> serde_json::Value {
-    let Some(choices) = val.get_mut("choices").and_then(serde_json::Value::as_array_mut) else {
+    let Some(choices) = val
+        .get_mut("choices")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
         return val;
     };
     for choice in choices {

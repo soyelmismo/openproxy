@@ -413,10 +413,7 @@ fn convert_file_part(item: &Value) -> Option<Value> {
 fn convert_audio_part(item: &Value) -> Option<Value> {
     if let Some(audio) = item.get("input_audio").and_then(Value::as_object) {
         let data = audio.get("data").and_then(Value::as_str)?;
-        let format = audio
-            .get("format")
-            .and_then(Value::as_str)
-            .unwrap_or("wav");
+        let format = audio.get("format").and_then(Value::as_str).unwrap_or("wav");
         return Some(json!({
             "type": "input_audio",
             "input_audio": { "data": data, "format": format },

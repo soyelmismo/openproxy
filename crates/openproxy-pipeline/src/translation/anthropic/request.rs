@@ -280,7 +280,10 @@ fn append_assistant_message(
 /// Splits an OpenAI media part into the URL it carries, whatever field the
 /// client used: `image_url`/`video_url` as an object or a bare string, or a
 /// top-level `url`.
-fn openai_part_media_url(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+fn openai_part_media_url(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<String> {
     obj.get(key)
         .and_then(|u| {
             if let Some(s) = u.as_str() {
@@ -351,10 +354,7 @@ fn convert_openai_part_to_anthropic(part: &serde_json::Value) -> serde_json::Val
                 .get("input_audio")
                 .and_then(|a| {
                     let data = a.get("data").and_then(|v| v.as_str())?;
-                    let format = a
-                        .get("format")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("wav");
+                    let format = a.get("format").and_then(|v| v.as_str()).unwrap_or("wav");
                     Some(format!("data:audio/{format};base64,{data}"))
                 })
                 .or_else(|| openai_part_media_url(obj, "audio_url"));
@@ -384,9 +384,11 @@ fn tool_result_content(m: &OpenAIMessage) -> serde_json::Value {
     let Some(serde_json::Value::Array(parts)) = &m.content else {
         return serde_json::Value::String(m.extract_text_cow().into_owned());
     };
-    let has_media = parts
-        .iter()
-        .any(|p| p.get("type").and_then(|t| t.as_str()).is_some_and(|t| t != "text"));
+    let has_media = parts.iter().any(|p| {
+        p.get("type")
+            .and_then(|t| t.as_str())
+            .is_some_and(|t| t != "text")
+    });
     if !has_media {
         return serde_json::Value::String(m.extract_text_cow().into_owned());
     }
@@ -394,7 +396,10 @@ fn tool_result_content(m: &OpenAIMessage) -> serde_json::Value {
         .iter()
         .map(convert_openai_part_to_anthropic)
         .filter(|b| match b.get("type").and_then(|t| t.as_str()) {
-            Some("text") => b.get("text").and_then(|t| t.as_str()).is_some_and(|t| !t.is_empty()),
+            Some("text") => b
+                .get("text")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| !t.is_empty()),
             _ => true,
         })
         .collect();

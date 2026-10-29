@@ -112,10 +112,7 @@ fn canonical_image(obj: &Map<String, Value>) -> Option<Value> {
 fn canonical_audio(obj: &Map<String, Value>) -> Option<Value> {
     if let Some(audio) = obj.get("input_audio").and_then(Value::as_object) {
         let data = audio.get("data").and_then(Value::as_str)?;
-        let format = audio
-            .get("format")
-            .and_then(Value::as_str)
-            .unwrap_or("wav");
+        let format = audio.get("format").and_then(Value::as_str).unwrap_or("wav");
         return Some(json!({
             "type": "input_audio",
             "input_audio": { "data": data, "format": format },

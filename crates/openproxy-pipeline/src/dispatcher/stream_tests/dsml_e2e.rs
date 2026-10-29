@@ -56,10 +56,8 @@ async fn run_case(upstream_frames: String) -> (Vec<String>, String) {
         )
         .expect("seed provider");
     }
-    let dispatcher = build_dispatcher_for_stream_test_with_recording(
-        std::sync::Arc::clone(&conn_arc),
-        true,
-    );
+    let dispatcher =
+        build_dispatcher_for_stream_test_with_recording(std::sync::Arc::clone(&conn_arc), true);
 
     let model = openproxy_types::models::Model {
         row_id: openproxy_types::ids::ModelRowId(1),
@@ -145,12 +143,18 @@ async fn run_case(upstream_frames: String) -> (Vec<String>, String) {
         trace_id: "t-dsml-e2e".to_string(),
         upstream_request: openproxy_adapters::upstream::UpstreamRequest::post_json(
             format!("{base_url}/v1/chat/completions"),
-            bytes::Bytes::from(r#"{"model":"deepseek-v4.1-flash:free","messages":[],"stream":true}"#),
+            bytes::Bytes::from(
+                r#"{"model":"deepseek-v4.1-flash:free","messages":[],"stream":true}"#,
+            ),
         ),
     };
 
     let result = dispatcher.dispatch_upstream_streaming(params).await;
-    assert!(result.error.is_none(), "expected success: {:?}", result.error);
+    assert!(
+        result.error.is_none(),
+        "expected success: {:?}",
+        result.error
+    );
 
     let mut received = Vec::new();
     while let Ok(chunk) = sink_rx.try_recv() {

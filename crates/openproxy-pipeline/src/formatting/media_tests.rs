@@ -193,10 +193,9 @@ fn responses_input_image_reaches_gemini_as_inline_data() {
         {"type": "input_image", "image_url": "data:image/png;base64,QUJD"}
     ]));
     let parts = content.as_array().expect("array");
-    let inline = openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(
-        &parts[1],
-    )
-    .expect("Gemini must see the image");
+    let inline =
+        openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(&parts[1])
+            .expect("Gemini must see the image");
     assert_eq!(inline.mime_type, "image/png");
     assert_eq!(inline.data, "QUJD");
 }
@@ -208,10 +207,9 @@ fn chat_file_part_reaches_gemini_as_inline_pdf() {
         {"type": "file", "file": {"filename": "d.pdf", "file_data": "data:application/pdf;base64,QUJD"}}
     ]));
     let parts = content.as_array().expect("array");
-    let inline = openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(
-        &parts[1],
-    )
-    .expect("Gemini must see the document");
+    let inline =
+        openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(&parts[1])
+            .expect("Gemini must see the document");
     assert_eq!(inline.mime_type, "application/pdf");
     assert_eq!(inline.data, "QUJD");
 }
@@ -223,10 +221,9 @@ fn anthropic_document_reaches_gemini_as_inline_pdf() {
         {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "QUJD"}}
     ]));
     let parts = content.as_array().expect("array");
-    let inline = openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(
-        &parts[1],
-    )
-    .expect("Gemini must see the document");
+    let inline =
+        openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(&parts[1])
+            .expect("Gemini must see the document");
     assert_eq!(inline.mime_type, "application/pdf");
 }
 
@@ -237,10 +234,9 @@ fn video_reaches_gemini_as_inline_video() {
         {"type": "input_video", "video_url": {"url": "data:video/mp4;base64,QUJD"}}
     ]));
     let parts = content.as_array().expect("array");
-    let inline = openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(
-        &parts[1],
-    )
-    .expect("Gemini must see the video");
+    let inline =
+        openproxy_adapters::adapters::gemini::media::parse_media_part_to_inline_data(&parts[1])
+            .expect("Gemini must see the video");
     assert_eq!(inline.mime_type, "video/mp4");
     assert_eq!(inline.data, "QUJD");
 }

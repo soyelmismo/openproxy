@@ -147,12 +147,18 @@ async fn run(frames: String) -> (Vec<String>, String) {
         trace_id: "t-dsml-char".to_string(),
         upstream_request: openproxy_adapters::upstream::UpstreamRequest::post_json(
             format!("{base_url}/v1/chat/completions"),
-            bytes::Bytes::from(r#"{"model":"deepseek-v4.1-flash:free","messages":[],"stream":true}"#),
+            bytes::Bytes::from(
+                r#"{"model":"deepseek-v4.1-flash:free","messages":[],"stream":true}"#,
+            ),
         ),
     };
 
     let result = dispatcher.dispatch_upstream_streaming(params).await;
-    assert!(result.error.is_none(), "expected success: {:?}", result.error);
+    assert!(
+        result.error.is_none(),
+        "expected success: {:?}",
+        result.error
+    );
 
     let mut received = Vec::new();
     while let Ok(chunk) = sink_rx.try_recv() {
@@ -176,7 +182,9 @@ async fn dsml_char_by_char_emits_tool_calls() {
         serde_json::json!({ "role": "assistant", "content": "", "reasoning_content": "thinking..." }),
     ));
     for ch in DSML_BODY.chars() {
-        frames.push_str(&chunk_line(serde_json::json!({ "content": ch.to_string() })));
+        frames.push_str(&chunk_line(
+            serde_json::json!({ "content": ch.to_string() }),
+        ));
     }
     frames.push_str(&format!(
         "data: {}\n\n",
@@ -200,6 +208,12 @@ async fn dsml_char_by_char_emits_tool_calls() {
     }
     println!("\n=== RECORDED ===\n{recorded}\n");
 
-    assert!(all.contains("tool_calls"), "client must receive tool_calls:\n{all}");
-    assert!(!all.contains("DSML"), "no raw DSML may reach the client:\n{all}");
+    assert!(
+        all.contains("tool_calls"),
+        "client must receive tool_calls:\n{all}"
+    );
+    assert!(
+        !all.contains("DSML"),
+        "no raw DSML may reach the client:\n{all}"
+    );
 }

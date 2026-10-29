@@ -551,7 +551,8 @@ impl UpstreamDispatcher {
                 // recording shows the raw upstream text (DSML blocks, think
                 // tags) while the client received clean tool_calls, which makes
                 // the two views disagree.
-                let think_extracted = crate::think_extractor::extract_think_from_response_value(val);
+                let think_extracted =
+                    crate::think_extractor::extract_think_from_response_value(val);
                 crate::inline_tools::extract_inline_tools_from_response_value(think_extracted)
             });
 

@@ -491,7 +491,10 @@ mod tests {
             evaluate_account_quota(true, 10, &acc_zero, &["MiniMax-M3"]),
             QuotaStatus::Exhausted
         );
-        assert_eq!(get_account_remaining_fraction(&acc_zero, &["MiniMax-M3"]), 0.0);
+        assert_eq!(
+            get_account_remaining_fraction(&acc_zero, &["MiniMax-M3"]),
+            0.0
+        );
 
         let acc_zero_float = make_test_account(Some(r#"{"credit_balance":0.0}"#));
         assert!(is_credit_balance_exhausted(&acc_zero_float));
@@ -747,7 +750,10 @@ mod tests {
             QuotaStatus::Available,
             "a full Claude pool must not be retired by an exhausted Gemini pool"
         );
-        assert!((get_account_remaining_fraction(&acc, &["claude-opus-4-6-thinking"]) - 1.0).abs() < 1e-9);
+        assert!(
+            (get_account_remaining_fraction(&acc, &["claude-opus-4-6-thinking"]) - 1.0).abs()
+                < 1e-9
+        );
     }
 
     #[test]

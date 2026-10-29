@@ -60,9 +60,8 @@ impl RequiredModalities {
     fn satisfied_by(&self, declared: ModalityFlags, raw_json: Option<&str>) -> bool {
         let mut flags = self.flags();
         if self.file {
-            let declares_document = raw_json.is_some_and(|s| {
-                s.contains("pdf") || s.contains("file") || s.contains("document")
-            });
+            let declares_document = raw_json
+                .is_some_and(|s| s.contains("pdf") || s.contains("file") || s.contains("document"));
             if declares_document {
                 flags &= !ModalityFlags::IMAGE;
             } else {

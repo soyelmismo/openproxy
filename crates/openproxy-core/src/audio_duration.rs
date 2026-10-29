@@ -135,7 +135,8 @@ fn ogg_duration_ms(b: &[u8]) -> Option<u32> {
     let page = last?;
     let granule = b.get(page + 6..page + 14)?;
     let granule = u64::from_le_bytes([
-        granule[0], granule[1], granule[2], granule[3], granule[4], granule[5], granule[6], granule[7],
+        granule[0], granule[1], granule[2], granule[3], granule[4], granule[5], granule[6],
+        granule[7],
     ]);
     // All-ones means "no packet ends on this page".
     if granule == u64::MAX {
@@ -318,9 +319,9 @@ fn parse_mpeg_header(h: u32) -> Option<(u32, u32, u32)> {
 
     let base_rate = [44_100u32, 48_000, 32_000][rate_idx as usize];
     let rate = match version {
-        3 => base_rate,          // MPEG1
-        2 => base_rate / 2,      // MPEG2
-        0 => base_rate / 4,      // MPEG2.5
+        3 => base_rate,     // MPEG1
+        2 => base_rate / 2, // MPEG2
+        0 => base_rate / 4, // MPEG2.5
         _ => return None,
     };
 
@@ -361,8 +362,8 @@ fn parse_mpeg_header(h: u32) -> Option<(u32, u32, u32)> {
     }
 
     let samples_per_frame = match layer {
-        3 => 384,                        // Layer I
-        2 => 1152,                       // Layer II
+        3 => 384,  // Layer I
+        2 => 1152, // Layer II
         _ => {
             if version == 3 {
                 1152

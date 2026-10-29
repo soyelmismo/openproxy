@@ -49,7 +49,10 @@ fn build_openai_system_message(sys: serde_json::Value) -> OpenAIMessage {
 /// hop instead of being dropped as an unknown block.
 fn anthropic_media_block_to_openai_part(block: &serde_json::Value) -> Option<serde_json::Value> {
     let typ = block.get("type").and_then(|v| v.as_str())?;
-    if matches!(typ, "image_url" | "input_image" | "input_audio" | "input_video") {
+    if matches!(
+        typ,
+        "image_url" | "input_image" | "input_audio" | "input_video"
+    ) {
         return Some(block.clone());
     }
     let openai_kind = match typ {

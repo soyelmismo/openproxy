@@ -44,7 +44,8 @@ fn recorded_body_becomes_tool_calls() {
         "DSML must be stripped from recorded content"
     );
     assert_eq!(
-        choice["message"]["tool_calls"][0]["function"]["name"], "terminal"
+        choice["message"]["tool_calls"][0]["function"]["name"],
+        "terminal"
     );
     assert_eq!(
         choice["message"]["reasoning_content"], "The user asked for a short video about...",
