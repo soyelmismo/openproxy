@@ -19,13 +19,25 @@
 #   ./scripts/rebuild-and-restart.sh                    # build + restart
 #   ./scripts/rebuild-and-restart.sh --no-restart       # solo build
 #   ./scripts/rebuild-and-restart.sh --project /path    # override proyecto
-#   ./scripts/rebuild-and-restart.sh --features default # override features
+#   ./scripts/rebuild-and-restart.sh --features "..."   # features extra (default: ninguna)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-FEATURES="--all-features"
+# Production build uses DEFAULT features only. `--all-features` used to be the
+# default here and it silently compiled three non-production features into the
+# shipped binary:
+#   - dev-auth-bypass   (OP-20) a switch that disables the ENTIRE admin auth
+#                       surface; the crate deliberately gates it behind an
+#                       explicit opt-in so a plain build cannot ship it.
+#   - benchmark-sql / benchmark-profile  per-lock instrumentation on the DB
+#                       writer path, meant for the standalone bench harness.
+#   - bench-tls-hook    extends the TLS trust store from
+#                       OPENPROXY_BENCH_CA_PEM.
+# `laya-engine` is a default feature, so dropping --all-features does not lose
+# it. Pass --features explicitly if a one-off build really needs more.
+FEATURES=""
 DO_RESTART=1
 LOG_PREFIX="[rebuild]"
 
@@ -35,7 +47,7 @@ while [[ $# -gt 0 ]]; do
     --project)    PROJECT_DIR="$2"; shift 2 ;;
     --features)   FEATURES="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,28p' "$0"
+      sed -n '2,22p' "$0"
       exit 0 ;;
     *)
       echo "$LOG_PREFIX argumento desconocido: $1" >&2
