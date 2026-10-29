@@ -153,5 +153,7 @@ export interface RecentUsageRow {
   is_proxy_rotated: boolean;
   endpoint_kind?: string;
   api_key_id?: number | null;
+  /** Audio duration in milliseconds; set only on transcription rows. */
+  audio_ms?: number | null;
   created_at: string;
 }

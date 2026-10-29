@@ -36,3 +36,17 @@ export function formatMs(ms: unknown): string {
 export function formatNumber(n: number, opts: Intl.NumberFormatOptions = {}): string {
   return new Intl.NumberFormat(undefined, opts).format(n);
 }
+
+/** Format an audio duration in milliseconds as `m:ss` (or `h:mm:ss` when long). */
+export function formatAudioDuration(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  const num = Number(ms);
+  if (!Number.isFinite(num) || num <= 0) return "—";
+  const totalSeconds = Math.round(num / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const ss = String(seconds).padStart(2, "0");
+  if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${ss}`;
+  return `${minutes}:${ss}`;
+}

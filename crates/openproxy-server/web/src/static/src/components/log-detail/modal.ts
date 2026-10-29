@@ -10,6 +10,7 @@ import { state } from "../../state/index.js";
 import { api } from "../../lib/api.js";
 import { ensureCombosLoaded } from "../../state/models-sync.js";
 import { ensureModalRoot } from "../../lib/ui-utils.js";
+import { formatAudioDuration } from "../../lib/format.js";
 import { icons, endpointIcon } from "../../lib/icons.js";
 import { liveLogsStore } from "../../state/live-logs-store.js";
 import { clockStore } from "../../state/clock-store.js";
@@ -159,23 +160,32 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     ? `${latVal} ms${ttftMs != null ? ` (ttft ${ttftMs}ms)` : ""}`
     : "—";
 
-  // Tokens: "6,897↓ 150↑ (7,047 tot)"
+  // Tokens: "6,897↓ 150↑ (7,047 tot)". Transcription rows have no token
+  // counts at all — their billable quantity is the audio duration.
+  const isAudio = (log as Record<string, unknown>)["endpoint_kind"] === "audio";
+  const audioMs = (log as Record<string, unknown>)["audio_ms"] as number | null | undefined;
   const promptTokens = log.prompt_tokens;
   const compTokens = log.completion_tokens;
   const totalTokens = (log as Record<string, unknown>)["total_tokens"] as number | undefined
     ?? ((promptTokens != null || compTokens != null) ? ((promptTokens ?? 0) + (compTokens ?? 0)) : null);
   const promptEstimated = log.prompt_tokens_estimated ? "≈" : "";
   const compEstimated = log.completion_tokens_estimated ? "≈" : "";
-  const tokensDisplay = (promptTokens != null || compTokens != null || totalTokens != null)
-    ? `${promptEstimated}${promptTokens != null ? promptTokens.toLocaleString() : "0"}↓ ${compEstimated}${compTokens != null ? compTokens.toLocaleString() : "0"}↑ (${totalTokens != null ? totalTokens.toLocaleString() : "0"} tot)`
-    : "—";
+  const tokensDisplay = isAudio
+    ? (audioMs != null
+        ? `${formatAudioDuration(audioMs)} audio (billed per hour, not per token)`
+        : "— (duration unknown)")
+    : (promptTokens != null || compTokens != null || totalTokens != null)
+      ? `${promptEstimated}${promptTokens != null ? promptTokens.toLocaleString() : "0"}↓ ${compEstimated}${compTokens != null ? compTokens.toLocaleString() : "0"}↑ (${totalTokens != null ? totalTokens.toLocaleString() : "0"} tot)`
+      : "—";
 
   // Speed: "45.9 tok/s"
   const speedDisplay = log.tokens_per_sec != null ? `${log.tokens_per_sec.toFixed(1)} tok/s` : "—";
 
-  // Cost: "$0.0000"
+  // Cost: "$0.0000". Audio costs are fractions of a cent, so they keep 6dp.
   const costDisplay = costRaw != null
-    ? (typeof costRaw === "number" ? `$${costRaw.toFixed(4)}` : `$${Number(costRaw).toFixed(4)}`)
+    ? (typeof costRaw === "number"
+        ? (isAudio ? `$${costRaw.toFixed(6)}` : `$${costRaw.toFixed(4)}`)
+        : (isAudio ? `$${Number(costRaw).toFixed(6)}` : `$${Number(costRaw).toFixed(4)}`))
     : "$0.0000";
 
   const apiKeyDisplay = apiKeyId != null ? `#${String(apiKeyId)}` : "—";

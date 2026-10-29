@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatContext, formatCost, formatMs, formatNumber } from "./format";
+import { formatContext, formatCost, formatMs, formatNumber, formatAudioDuration } from "./format";
 
 describe("formatContext", () => {
   it("handles nullish and invalid inputs", () => {
@@ -62,5 +62,27 @@ describe("formatNumber", () => {
   it("formats numbers using Intl.NumberFormat", () => {
     expect(formatNumber(1000)).toBe("1,000"); // default en-US locale in node/vitest
     expect(formatNumber(1234.56, { maximumFractionDigits: 1 })).toBe("1,234.6");
+  });
+});
+
+describe("formatAudioDuration", () => {
+  it("renders m:ss under an hour", () => {
+    expect(formatAudioDuration(4000)).toBe("0:04");
+    expect(formatAudioDuration(30000)).toBe("0:30");
+    expect(formatAudioDuration(65000)).toBe("1:05");
+    expect(formatAudioDuration(600000)).toBe("10:00");
+  });
+
+  it("renders h:mm:ss past an hour", () => {
+    expect(formatAudioDuration(3600000)).toBe("1:00:00");
+    expect(formatAudioDuration(3661000)).toBe("1:01:01");
+  });
+
+  it("returns an em dash for missing or non-positive durations", () => {
+    expect(formatAudioDuration(null)).toBe("—");
+    expect(formatAudioDuration(undefined)).toBe("—");
+    expect(formatAudioDuration(0)).toBe("—");
+    expect(formatAudioDuration(-1)).toBe("—");
+    expect(formatAudioDuration(NaN)).toBe("—");
   });
 });

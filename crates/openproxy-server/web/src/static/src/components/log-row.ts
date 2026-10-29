@@ -1,7 +1,7 @@
 // components/log-row.ts — single row of the live-logs table (declarative, takes AttemptState).
 
 import { html, type TemplateResult } from 'lit-html';
-import { formatContext } from "../lib/format.js";
+import { formatContext, formatAudioDuration } from "../lib/format.js";
 import { getStageLabel } from "../lib/constants.js";
 import { icons, endpointIcon } from "../lib/icons.js";
 import type { AttemptState } from "../state/live-logs-store.js";
@@ -87,7 +87,14 @@ function buildLogRowCells(
   }
   
   if (has("tokens")) {
-    if (row) {
+    if (row && row.endpoint_kind === "audio") {
+      // STT has no token counts: the billable quantity is the audio duration.
+      const dur = formatAudioDuration(row.audio_ms);
+      const title = row.audio_ms != null
+        ? `Audio duration ${dur} (transcription is billed per hour of audio, not per token)`
+        : "Audio duration not reported by the container header or upstream";
+      cells.push(html`<span class="log-tokens" title="${title}">${icons.audio ? icons.audio() : ""}${dur}</span>`);
+    } else if (row) {
       const ptEst = row.prompt_tokens_estimated ? "≈" : "";
       const ctEst = row.completion_tokens_estimated ? "≈" : "";
       const title = (row.prompt_tokens_estimated || row.completion_tokens_estimated)
@@ -105,7 +112,10 @@ function buildLogRowCells(
   
   if (has("cost")) {
     if (row) {
-      cells.push(html`<span class="log-cost">$${(row.cost_usd || 0).toFixed(4)}</span>`);
+      const costTitle = row.endpoint_kind === "audio" && row.audio_ms != null
+        ? `$${(row.cost_usd || 0).toFixed(6)} for ${formatAudioDuration(row.audio_ms)} of audio`
+        : "";
+      cells.push(html`<span class="log-cost" title="${costTitle}">$${(row.cost_usd || 0).toFixed(4)}</span>`);
     } else {
       cells.push(html`<span class="log-cost">—</span>`);
     }
@@ -161,7 +171,9 @@ function buildMobileCardView(
   }
 
   let tokensText = "—";
-  if (row) {
+  if (row && row.endpoint_kind === "audio") {
+    tokensText = formatAudioDuration(row.audio_ms);
+  } else if (row) {
     const ptEst = row.prompt_tokens_estimated ? "≈" : "";
     const ctEst = row.completion_tokens_estimated ? "≈" : "";
     const pt = row.prompt_tokens != null ? `${ptEst}${formatContext(row.prompt_tokens)}↓` : "—↓";
