@@ -128,6 +128,7 @@ impl UsageTracker {
             stop_reason: None,
             flags: USAGE_FLAG_CLIENT_RESPONSE,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            audio_ms: None,
         };
         if let Err(error) = self
             .enqueue(crate::worker::BackgroundJob::RecordUsage(Box::new(input)))
@@ -181,6 +182,7 @@ impl UsageTracker {
             stop_reason: None,
             flags: 0,
             endpoint_kind: req.endpoint_kind,
+            audio_ms: None,
         };
         if let Err(error) = self
             .enqueue(crate::worker::BackgroundJob::RecordUsage(Box::new(input)))
@@ -688,6 +690,7 @@ impl<'a> UsageRecordBuilder<'a> {
             pii_redacted,
             flags,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+            audio_ms: None,
             proxy_url: self.proxy_url.clone(),
             proxy_status: self.proxy_status.clone(),
         }

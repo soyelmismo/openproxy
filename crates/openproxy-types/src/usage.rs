@@ -47,6 +47,11 @@ pub struct UsageInput {
     pub proxy_url: Option<String>,
     pub proxy_status: Option<String>,
     pub flags: u8,
+    /// Duration of the submitted audio, in milliseconds. Set only for
+    /// transcription requests; STT bills by duration, not by token, and this is
+    /// the quantity the per-hour audio rate multiplies.
+    #[serde(default)]
+    pub audio_ms: Option<u32>,
 }
 
 mod optional_bytes {
@@ -283,6 +288,8 @@ pub struct RecentUsageRow {
     pub flags: u8,
     pub endpoint_kind: EndpointKind,
     pub api_key_id: Option<i64>,
+    /// Audio duration in milliseconds for transcription rows; `None` elsewhere.
+    pub audio_ms: Option<u32>,
 }
 
 impl RecentUsageRow {
@@ -362,6 +369,8 @@ struct RecentUsageRowSerde<'a> {
     pub endpoint_kind: EndpointKind,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub api_key_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_ms: Option<u32>,
 }
 
 impl Serialize for RecentUsageRow {
@@ -407,6 +416,7 @@ impl Serialize for RecentUsageRow {
             is_proxy_rotated: self.has_flag(USAGE_FLAG_PROXY_ROTATED),
             endpoint_kind: self.endpoint_kind,
             api_key_id: self.api_key_id,
+            audio_ms: self.audio_ms,
         }
         .serialize(serializer)
     }
@@ -456,6 +466,7 @@ impl<'de> Deserialize<'de> for RecentUsageRow {
             flags,
             endpoint_kind: s.endpoint_kind,
             api_key_id: s.api_key_id,
+            audio_ms: s.audio_ms,
         })
     }
 }
@@ -565,6 +576,7 @@ mod tests {
             proxy_url: None,
             proxy_status: None,
             flags: 0,
+            audio_ms: None,
         };
 
         assert!(!input.has_flag(USAGE_FLAG_IS_STREAMING));
@@ -611,6 +623,7 @@ mod tests {
                 | USAGE_FLAG_STREAM_COMPLETE,
             endpoint_kind: EndpointKind::Chat,
             api_key_id: Some(999),
+            audio_ms: None,
         };
 
         assert!(row.has_flag(USAGE_FLAG_IS_STREAMING));

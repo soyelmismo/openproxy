@@ -1,0 +1,11 @@
+-- Audio duration in milliseconds, for STT/transcription rows.
+--
+-- Whisper-class models bill by the hour of audio submitted, so the request has
+-- no meaningful prompt/completion token counts to record. Cost for these rows
+-- is `audio_ms / 3_600_000 * usd_per_hour`, which requires the duration to be
+-- persisted separately from `prompt_tokens` (storing milliseconds in a token
+-- column would corrupt every token aggregate and the live-log Tokens cell).
+--
+-- NULL for every non-audio endpoint, and for audio rows where the upstream did
+-- not report a duration.
+ALTER TABLE usage ADD COLUMN audio_ms INTEGER;

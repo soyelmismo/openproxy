@@ -356,6 +356,10 @@ pub struct UnaryUsageArgs<'a> {
     pub endpoint_kind: EndpointKind,
     pub request_body_json: Option<bytes::Bytes>,
     pub response_body_json: Option<serde_json::Value>,
+    /// Duration of the submitted audio in milliseconds. Only set on the
+    /// transcription path, where billing is per hour of audio rather than per
+    /// token.
+    pub audio_ms: Option<u32>,
 }
 
 impl<'a> UnaryUsageArgs<'a> {
@@ -381,6 +385,7 @@ impl<'a> UnaryUsageArgs<'a> {
             endpoint_kind,
             request_body_json: None,
             response_body_json: None,
+            audio_ms: None,
         }
     }
 
@@ -407,6 +412,7 @@ impl<'a> UnaryUsageArgs<'a> {
             endpoint_kind,
             request_body_json: None,
             response_body_json: None,
+            audio_ms: None,
         }
     }
 
@@ -427,6 +433,14 @@ impl<'a> UnaryUsageArgs<'a> {
     ) -> Self {
         self.prompt_tokens = prompt_tokens;
         self.completion_tokens = completion_tokens;
+        self
+    }
+
+    /// Record the submitted audio duration (milliseconds) on a transcription
+    /// usage row. STT is billed per hour of audio, so this — not a token count —
+    /// is the quantity the price multiplies.
+    pub fn with_audio_ms(mut self, audio_ms: Option<u32>) -> Self {
+        self.audio_ms = audio_ms;
         self
     }
 
@@ -458,6 +472,7 @@ pub struct UnaryUsageArgsBuilder<'a> {
     endpoint_kind: EndpointKind,
     request_body_json: Option<bytes::Bytes>,
     response_body_json: Option<serde_json::Value>,
+    audio_ms: Option<u32>,
 }
 
 impl<'a> UnaryUsageArgsBuilder<'a> {
@@ -501,6 +516,11 @@ impl<'a> UnaryUsageArgsBuilder<'a> {
         self
     }
 
+    pub fn audio_ms(mut self, audio_ms: Option<u32>) -> Self {
+        self.audio_ms = audio_ms;
+        self
+    }
+
     pub fn response_body_json(mut self, response_body_json: Option<serde_json::Value>) -> Self {
         self.response_body_json = response_body_json;
         self
@@ -524,6 +544,7 @@ impl<'a> UnaryUsageArgsBuilder<'a> {
             endpoint_kind: self.endpoint_kind,
             request_body_json: self.request_body_json,
             response_body_json: self.response_body_json,
+            audio_ms: self.audio_ms,
         }
     }
 }
@@ -563,6 +584,7 @@ fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
         pii_redacted: None,
         flags: openproxy_types::usage::USAGE_FLAG_CLIENT_RESPONSE,
         endpoint_kind: args.endpoint_kind,
+        audio_ms: args.audio_ms,
     }
 }
 

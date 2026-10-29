@@ -449,6 +449,7 @@ pub(crate) async fn execute_image_multipart(
                 endpoint_kind: EndpointKind::Image,
                 request_body_json: None,
                 response_body_json: resp_json,
+                audio_ms: None,
             },
         )
         .await;

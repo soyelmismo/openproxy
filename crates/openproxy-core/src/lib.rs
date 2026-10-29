@@ -16,6 +16,7 @@ pub use openproxy_oauth::account_scanner;
 pub mod admin;
 pub use openproxy_analytics::{analytics, usage};
 pub mod audio;
+pub mod audio_duration;
 pub mod images;
 pub use images::{
     MultipartFile, ParsedImageMultipartBody, execute_image_edit, execute_image_generation,

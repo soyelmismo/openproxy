@@ -253,16 +253,22 @@ pub async fn execute_transcribe(
         {
             Ok(resp) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                record_unary_target_success_async(
-                    db_pool,
+                // STT bills per hour of audio, so the duration — not the token
+                // counts — is this row's billable quantity. Probe the container
+                // header once; a miss leaves `audio_ms` NULL and the row simply
+                // records zero cost rather than a wrong one.
+                let audio_ms = crate::audio_duration::probe_duration_ms(&parsed_body.file_bytes);
+                let mut args = UnaryUsageArgs::from_target(
                     &target,
                     EndpointKind::Audio,
-                    api_key_id,
                     resp.status_code,
                     total_ms,
-                    (None, None),
                 )
-                .await;
+                .with_api_key_id(api_key_id);
+                if let Some(ms) = audio_ms {
+                    args = args.with_audio_ms(Some(ms));
+                }
+                record_unary_usage_async(db_pool, &args).await;
 
                 tracing::info!("Audio request succeeded after {} attempts", attempt);
                 return Ok(resp);
