@@ -84,11 +84,11 @@ impl PipelineStage for RouterStage {
         }
 
         // Modality gate: a combo advertises the union of its leaves'
-        // capabilities, so an image request must not be routed to a
-        // text-only hop that would answer with a non-retryable 400.
-        let requires_image =
-            crate::stages::modality::request_requires_image_input(&ctx.req.openai_request);
-        if requires_image {
+        // capabilities, so a media request must not be routed to a text-only
+        // hop that would answer with a non-retryable 400.
+        let required =
+            crate::stages::modality::request_required_modalities(&ctx.req.openai_request);
+        if required.any() {
             // A per-combo override wins over the global setting: some combos
             // exist precisely to probe whether a text-only model now accepts
             // images, and the operator must be able to opt out per combo.
@@ -96,9 +96,9 @@ impl PipelineStage for RouterStage {
                 ctx.pipeline.config.modality_routing,
                 combo.modality_gate,
             );
-            let filtered = crate::stages::modality::filter_targets_for_input(
+            let filtered = crate::stages::modality::filter_targets_for_modalities(
                 resolved,
-                requires_image,
+                required,
                 gate_config,
             );
             if filtered.is_empty() {

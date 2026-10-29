@@ -156,14 +156,31 @@ pub fn extract_content_part_text(part: &serde_json::Value) -> String {
         return reasoning.to_string();
     }
 
-    // Ignore image parts in text extraction so base64 payloads don't inflate
+    // Ignore media parts in text extraction so base64 payloads don't inflate
     // estimated text tokens by hundreds of thousands.
     if let Some(part_type) = part.get("type").and_then(|v| v.as_str())
-        && (part_type == "image_url" || part_type == "input_image" || part_type == "image")
+        && matches!(
+            part_type,
+            "image_url"
+                | "input_image"
+                | "image"
+                | "input_audio"
+                | "audio"
+                | "input_video"
+                | "video_url"
+                | "video"
+                | "file"
+                | "input_file"
+                | "document"
+        )
     {
         return String::new();
     }
-    if part.get("image_url").is_some() {
+    if part.get("image_url").is_some()
+        || part.get("video_url").is_some()
+        || part.get("input_audio").is_some()
+        || part.get("file").is_some()
+    {
         return String::new();
     }
 

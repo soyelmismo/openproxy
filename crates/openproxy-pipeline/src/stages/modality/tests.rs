@@ -163,3 +163,133 @@ fn combo_without_override_inherits_global() {
     };
     assert_eq!(effective_config(global, None), global);
 }
+
+fn media_request(parts: serde_json::Value) -> openproxy_types::OpenAIRequest {
+    serde_json::from_value(serde_json::json!({
+        "model": "combo",
+        "messages": [{ "role": "user", "content": parts }]
+    }))
+    .expect("valid request")
+}
+
+#[test]
+fn detects_video_audio_and_file_parts() {
+    let video = media_request(serde_json::json!([
+        { "type": "video_url", "video_url": { "url": "https://example.com/a.mp4" } }
+    ]));
+    assert_eq!(
+        request_required_modalities(&video),
+        RequiredModalities {
+            video: true,
+            ..Default::default()
+        }
+    );
+
+    let audio = media_request(serde_json::json!([
+        { "type": "input_audio", "input_audio": { "data": "AAA", "format": "wav" } }
+    ]));
+    assert_eq!(
+        request_required_modalities(&audio),
+        RequiredModalities {
+            audio: true,
+            ..Default::default()
+        }
+    );
+
+    let file = media_request(serde_json::json!([
+        { "type": "file", "file": { "file_data": "data:application/pdf;base64,AAA" } }
+    ]));
+    assert_eq!(
+        request_required_modalities(&file),
+        RequiredModalities {
+            file: true,
+            ..Default::default()
+        }
+    );
+
+    let anthropic_video = media_request(serde_json::json!([
+        { "type": "video", "source": { "type": "url", "url": "https://example.com/a.mp4" } }
+    ]));
+    assert!(request_required_modalities(&anthropic_video).video);
+
+    let anthropic_document = media_request(serde_json::json!([
+        { "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": "AAA" } }
+    ]));
+    assert!(request_required_modalities(&anthropic_document).file);
+}
+
+#[test]
+fn video_request_drops_targets_without_video() {
+    let targets = vec![
+        target_with_modalities("vision-only", Some(r#"["text","image"]"#)),
+        target_with_modalities("video-capable", Some(r#"["text","image","video"]"#)),
+        target_with_modalities("text-only", Some(r#"["text"]"#)),
+    ];
+    let required = RequiredModalities {
+        video: true,
+        ..Default::default()
+    };
+    let out = filter_targets_for_modalities(targets, required, ModalityRoutingConfig::default());
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].model.model_id.as_str(), "video-capable");
+}
+
+#[test]
+fn audio_request_drops_targets_without_audio() {
+    let targets = vec![
+        target_with_modalities("vision-only", Some(r#"["text","image"]"#)),
+        target_with_modalities("audio-capable", Some(r#"["text","audio"]"#)),
+    ];
+    let required = RequiredModalities {
+        audio: true,
+        ..Default::default()
+    };
+    let out = filter_targets_for_modalities(targets, required, ModalityRoutingConfig::default());
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].model.model_id.as_str(), "audio-capable");
+}
+
+#[test]
+fn file_request_is_gated_as_image_capability() {
+    let targets = vec![
+        target_with_modalities("text-only", Some(r#"["text"]"#)),
+        target_with_modalities("vision", Some(r#"["text","image"]"#)),
+    ];
+    let required = RequiredModalities {
+        file: true,
+        ..Default::default()
+    };
+    let out = filter_targets_for_modalities(targets, required, ModalityRoutingConfig::default());
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].model.model_id.as_str(), "vision");
+}
+
+#[test]
+fn multi_modality_request_needs_every_declared_flag() {
+    let targets = vec![
+        target_with_modalities("vision", Some(r#"["text","image"]"#)),
+        target_with_modalities(
+            "full",
+            Some(r#"["text","image","video","audio"]"#),
+        ),
+    ];
+    let required = RequiredModalities {
+        image: true,
+        video: true,
+        ..Default::default()
+    };
+    let out = filter_targets_for_modalities(targets, required, ModalityRoutingConfig::default());
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].model.model_id.as_str(), "full");
+}
+
+#[test]
+fn text_only_request_never_filters_on_video_or_audio() {
+    let targets = vec![target_with_modalities("text", Some(r#"["text"]"#))];
+    let out = filter_targets_for_modalities(
+        targets,
+        RequiredModalities::default(),
+        ModalityRoutingConfig::default(),
+    );
+    assert_eq!(out.len(), 1);
+}

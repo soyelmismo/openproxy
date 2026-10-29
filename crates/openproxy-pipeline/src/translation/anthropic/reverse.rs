@@ -35,26 +35,96 @@ fn build_openai_system_message(sys: serde_json::Value) -> OpenAIMessage {
     }
 }
 
+/// Converts an inbound Anthropic media block into the OpenAI part the rest of
+/// the pipeline understands.
+///
+/// Anthropic carries pixels and media as `{"type":"image"|"video"|"document",
+/// "source":{...}}` with either a `base64` source (`media_type` + `data`), a
+/// `url` source, or a provider file id. OpenAI clients that speak the Messages
+/// API instead send `image_url` / `input_image` / `input_audio` parts already,
+/// so those pass through untouched.
+///
+/// The `file_id` source is provider-specific (MiniMax uses
+/// `mm_file://{file_id}`); it is mapped onto the URL form so it survives the
+/// hop instead of being dropped as an unknown block.
+fn anthropic_media_block_to_openai_part(block: &serde_json::Value) -> Option<serde_json::Value> {
+    let typ = block.get("type").and_then(|v| v.as_str())?;
+    if matches!(typ, "image_url" | "input_image" | "input_audio" | "input_video") {
+        return Some(block.clone());
+    }
+    let openai_kind = match typ {
+        "image" => "image_url",
+        "video" => "input_video",
+        "document" => "file",
+        _ => return None,
+    };
+
+    let source = block.get("source")?;
+    let url = match source.get("type").and_then(|v| v.as_str())? {
+        "base64" => {
+            let media_type = source.get("media_type").and_then(|v| v.as_str())?;
+            let data = source.get("data").and_then(|v| v.as_str())?;
+            format!("data:{media_type};base64,{data}")
+        }
+        "url" => source.get("url").and_then(|v| v.as_str())?.to_string(),
+        "file" => {
+            let file_id = source.get("file_id").and_then(|v| v.as_str())?;
+            if file_id.contains("://") {
+                file_id.to_string()
+            } else {
+                format!("mm_file://{file_id}")
+            }
+        }
+        _ => return None,
+    };
+
+    let media_type = source.get("media_type").and_then(|v| v.as_str());
+    let mut part = serde_json::json!({ "type": openai_kind });
+    match openai_kind {
+        "image_url" => {
+            part["image_url"] = serde_json::json!({ "url": url });
+        }
+        "input_video" => {
+            part["video_url"] = serde_json::json!({ "url": url });
+        }
+        _ => {
+            part["file"] = serde_json::json!({ "file_data": url });
+        }
+    }
+    if let Some(mt) = media_type
+        && openai_kind != "file"
+    {
+        part["media_type"] = serde_json::json!(mt);
+    }
+    Some(part)
+}
+
 fn parse_anthropic_blocks(
     arr: &[serde_json::Value],
     text_blocks: &mut Vec<String>,
+    media_parts: &mut Vec<serde_json::Value>,
     tool_calls: &mut Vec<serde_json::Value>,
     tool_results: &mut Vec<(String, serde_json::Value)>,
 ) {
     for block in arr {
-        parse_single_anthropic_block(block, text_blocks, tool_calls, tool_results);
+        parse_single_anthropic_block(block, text_blocks, media_parts, tool_calls, tool_results);
     }
 }
 
 fn parse_single_anthropic_block(
     block: &serde_json::Value,
     text_blocks: &mut Vec<String>,
+    media_parts: &mut Vec<serde_json::Value>,
     tool_calls: &mut Vec<serde_json::Value>,
     tool_results: &mut Vec<(String, serde_json::Value)>,
 ) {
     let Some(typ) = block.get("type").and_then(|v| v.as_str()) else {
         return;
     };
+    if let Some(part) = anthropic_media_block_to_openai_part(block) {
+        media_parts.push(part);
+        return;
+    }
     match typ {
         "text" => {
             if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
@@ -89,6 +159,7 @@ fn parse_single_anthropic_block(
 
 fn convert_anthropic_message_to_openai(m: AnthropicMessage, messages: &mut Vec<OpenAIMessage>) {
     let mut text_blocks = Vec::new();
+    let mut media_parts = Vec::new();
     let mut tool_calls = Vec::new();
     let mut tool_results = Vec::new();
     let mut signed_thinking_blocks = Vec::new();
@@ -103,7 +174,13 @@ fn convert_anthropic_message_to_openai(m: AnthropicMessage, messages: &mut Vec<O
                 signed_thinking_blocks.push(b.clone());
             }
         }
-        parse_anthropic_blocks(arr, &mut text_blocks, &mut tool_calls, &mut tool_results);
+        parse_anthropic_blocks(
+            arr,
+            &mut text_blocks,
+            &mut media_parts,
+            &mut tool_calls,
+            &mut tool_results,
+        );
     } else if let Some(s) = m.content.as_str() {
         text_blocks.push(s.to_string());
     }
@@ -135,7 +212,7 @@ fn convert_anthropic_message_to_openai(m: AnthropicMessage, messages: &mut Vec<O
             });
         }
         "user" => {
-            emit_anthropic_user_and_tools(m.role, tool_results, text_blocks, messages);
+            emit_anthropic_user_and_tools(m.role, tool_results, text_blocks, media_parts, messages);
         }
         _ => {
             messages.push(OpenAIMessage {
@@ -154,6 +231,7 @@ fn emit_anthropic_user_and_tools(
     role: String,
     tool_results: Vec<(String, serde_json::Value)>,
     text_blocks: Vec<String>,
+    media_parts: Vec<serde_json::Value>,
     messages: &mut Vec<OpenAIMessage>,
 ) {
     for (id, content) in tool_results {
@@ -182,10 +260,26 @@ fn emit_anthropic_user_and_tools(
             extra: Default::default(),
         });
     }
-    if !text_blocks.is_empty() {
+    if !text_blocks.is_empty() || !media_parts.is_empty() {
+        // A message that carries pixels has to stay a typed part array: the
+        // pipeline's modality gate and every downstream translator look for
+        // `image_url` parts, and a plain string would drop the image again.
+        let content = if media_parts.is_empty() {
+            serde_json::Value::String(text_blocks.join("\n\n"))
+        } else {
+            let mut parts = Vec::with_capacity(text_blocks.len() + media_parts.len());
+            if !text_blocks.is_empty() {
+                parts.push(serde_json::json!({
+                    "type": "text",
+                    "text": text_blocks.join("\n\n")
+                }));
+            }
+            parts.extend(media_parts);
+            serde_json::Value::Array(parts)
+        };
         messages.push(OpenAIMessage {
             role,
-            content: Some(serde_json::Value::String(text_blocks.join("\n\n"))),
+            content: Some(content),
             name: None,
             tool_call_id: None,
             tool_calls: None,

@@ -277,46 +277,100 @@ fn append_assistant_message(
     }
 }
 
-fn convert_openai_part_to_anthropic(part: &serde_json::Value) -> serde_json::Value {
-    if let Some(obj) = part.as_object() {
-        let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if typ == "image_url" || typ == "input_image" {
-            let url_str = obj
-                .get("image_url")
-                .and_then(|u| {
-                    if let Some(s) = u.as_str() {
-                        Some(s)
-                    } else {
-                        u.get("url").and_then(|v| v.as_str())
-                    }
-                })
-                .or_else(|| obj.get("url").and_then(|v| v.as_str()));
-
-            if let Some(url) = url_str {
-                if let Some(data_part) = url.strip_prefix("data:") {
-                    if let Some((media_type, base64_data)) = data_part.split_once(";base64,") {
-                        return json!({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": base64_data,
-                            }
-                        });
-                    }
-                } else if url.starts_with("http://") || url.starts_with("https://") {
-                    return json!({
-                        "type": "image",
-                        "source": {
-                            "type": "url",
-                            "url": url,
-                        }
-                    });
-                }
+/// Splits an OpenAI media part into the URL it carries, whatever field the
+/// client used: `image_url`/`video_url` as an object or a bare string, or a
+/// top-level `url`.
+fn openai_part_media_url(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+    obj.get(key)
+        .and_then(|u| {
+            if let Some(s) = u.as_str() {
+                Some(s)
+            } else {
+                u.get("url").and_then(|v| v.as_str())
             }
-        }
+        })
+        .or_else(|| obj.get("url").and_then(|v| v.as_str()))
+        .map(|s| s.to_string())
+}
+
+/// Builds an Anthropic `source` object from a URL-shaped string: data URIs
+/// become `base64`, plain http(s) URLs become `url`, and anything else (a
+/// provider file id such as `mm_file://...`) becomes a `file` source so the
+/// upstream can resolve it.
+fn anthropic_source_from_url(url: &str, media_type: Option<&str>) -> serde_json::Value {
+    if let Some(data_part) = url.strip_prefix("data:")
+        && let Some((mt, base64_data)) = data_part.split_once(";base64,")
+    {
+        return json!({
+            "type": "base64",
+            "media_type": mt,
+            "data": base64_data,
+        });
     }
-    part.clone()
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return json!({ "type": "url", "url": url });
+    }
+    json!({
+        "type": "file",
+        "file_id": url.strip_prefix("mm_file://").unwrap_or(url),
+        "media_type": media_type.unwrap_or("application/octet-stream"),
+    })
+}
+
+/// Maps one OpenAI content part onto its Anthropic block.
+///
+/// Covers every modality the Messages API accepts from MiniMax M3.1-Flash and
+/// M3 (`text`, `image`, `video`, `document`) plus audio, which reaches this
+/// layer as an OpenAI `input_audio` part.
+fn convert_openai_part_to_anthropic(part: &serde_json::Value) -> serde_json::Value {
+    let Some(obj) = part.as_object() else {
+        return part.clone();
+    };
+    let typ = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    let (anthropic_type, url) = match typ {
+        "image_url" | "input_image" => ("image", openai_part_media_url(obj, "image_url")),
+        "input_video" | "video_url" => ("video", openai_part_media_url(obj, "video_url")),
+        "file" | "input_file" => {
+            let url = obj
+                .get("file")
+                .and_then(|f| {
+                    f.get("file_data")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| f.get("file_id").and_then(|v| v.as_str()))
+                })
+                .or_else(|| obj.get("file_data").and_then(|v| v.as_str()))
+                .or_else(|| obj.get("file_id").and_then(|v| v.as_str()))
+                .map(|s| s.to_string());
+            ("document", url)
+        }
+        "input_audio" => {
+            // OpenAI carries audio inline as `{data, format}`; Anthropic takes a
+            // base64 source, so rebuild the data URI the source builder wants.
+            let url = obj
+                .get("input_audio")
+                .and_then(|a| {
+                    let data = a.get("data").and_then(|v| v.as_str())?;
+                    let format = a
+                        .get("format")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("wav");
+                    Some(format!("data:audio/{format};base64,{data}"))
+                })
+                .or_else(|| openai_part_media_url(obj, "audio_url"));
+            ("audio", url)
+        }
+        _ => return part.clone(),
+    };
+
+    let Some(url) = url else {
+        return part.clone();
+    };
+    let media_type = obj.get("media_type").and_then(|v| v.as_str());
+    json!({
+        "type": anthropic_type,
+        "source": anthropic_source_from_url(&url, media_type),
+    })
 }
 
 fn append_user_message(

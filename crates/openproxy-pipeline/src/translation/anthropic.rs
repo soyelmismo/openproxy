@@ -4,6 +4,10 @@ mod request;
 mod response;
 mod reverse;
 #[cfg(test)]
+mod request_media_tests;
+#[cfg(test)]
+mod reverse_tests;
+#[cfg(test)]
 mod tests;
 
 pub use identity::{
