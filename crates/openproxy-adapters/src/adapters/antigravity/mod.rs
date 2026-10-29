@@ -640,8 +640,7 @@ fn adjust_claude_thinking_config(gen_cfg: &mut serde_json::Map<String, serde_jso
             // to be unconditional — not only when maxOutputTokens is absent.
             let current_max = gen_cfg
                 .get("maxOutputTokens")
-                .and_then(|m| m.as_u64())
-                .map(|m| m as i64)
+                .and_then(serde_json::Value::as_i64)
                 .unwrap_or(0);
             if current_max <= adjusted_budget {
                 gen_cfg.insert(

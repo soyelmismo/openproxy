@@ -35,7 +35,7 @@ impl RequiredModalities {
         self.image || self.video || self.audio || self.file
     }
 
-    fn flags(&self) -> u8 {
+    fn flags(self) -> u8 {
         let mut flags = 0u8;
         if self.image {
             flags |= ModalityFlags::IMAGE;
@@ -57,7 +57,7 @@ impl RequiredModalities {
     /// satisfiable by either the image bit or an explicit `pdf`/`file`
     /// declaration in the raw JSON — otherwise the gate would drop the models
     /// that advertise exactly the modality being asked for.
-    fn satisfied_by(&self, declared: ModalityFlags, raw_json: Option<&str>) -> bool {
+    fn satisfied_by(self, declared: ModalityFlags, raw_json: Option<&str>) -> bool {
         let mut flags = self.flags();
         if self.file {
             let declares_document = raw_json
@@ -133,7 +133,7 @@ pub fn request_requires_image_input(req: &openproxy_types::OpenAIRequest) -> boo
 /// gate only removes targets we have positive evidence about. Silently
 /// excluding unknown models would break combos over providers whose catalog
 /// refresh does not report modalities.
-fn target_accepts(target: &ResolvedTarget, required: &RequiredModalities) -> bool {
+fn target_accepts(target: &ResolvedTarget, required: RequiredModalities) -> bool {
     let Some(raw) = target.model.input_modalities_json.as_deref() else {
         return true;
     };
@@ -187,7 +187,7 @@ pub fn filter_targets_for_modalities(
     let mut kept = Vec::with_capacity(total);
     let mut dropped = 0usize;
     for target in &targets {
-        if target_accepts(target, &required) {
+        if target_accepts(target, required) {
             kept.push(target.clone());
         } else {
             dropped += 1;

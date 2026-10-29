@@ -102,12 +102,7 @@ fn normalize_audio_model_id(model: &str) -> String {
             ":free", "-free", ":beta", "-beta", ":latest", "-latest", ":online", "-online",
         ]
         .iter()
-        .find_map(|suffix| s.strip_suffix(suffix))
-        .or_else(|| {
-            // A trailing `@cf/...` style scope is already handled by the prefix
-            // split above; date/version tails are not meaningful for STT ids.
-            None
-        });
+        .find_map(|suffix| s.strip_suffix(suffix));
         match stripped {
             Some(rest) if !rest.is_empty() => s = rest,
             _ => break,
@@ -316,7 +311,7 @@ pub fn compute_cost_opt_with_cache(
         // *milliseconds* of audio on this path (see `UsageInput::audio_ms`), so
         // the per-hour rate converts as ms / 3_600_000 * usd_per_hour.
         PriceKind::Audio => {
-            let per_hour = price.audio_per_hour.unwrap_or_else(|| price.input_per_1m);
+            let per_hour = price.audio_per_hour.unwrap_or(price.input_per_1m);
             let hours = f64::from(prompt_tokens) / 3_600_000.0;
             Some(per_hour * hours)
         }

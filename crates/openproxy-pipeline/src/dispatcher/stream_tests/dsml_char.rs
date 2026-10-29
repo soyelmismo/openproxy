@@ -6,6 +6,7 @@ use crate::dispatcher::types::StreamDispatchParams;
 use openproxy_types::CancelReason;
 use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::providers::{AuthType, ProviderFormat, RateLimitScope};
+use std::fmt::Write as _;
 
 const DSML_BODY: &str = "\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"terminal\">\n<｜｜DSML｜｜ parameter name=\"command\" string=\"true\">ls -la</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>";
 
@@ -186,7 +187,8 @@ async fn dsml_char_by_char_emits_tool_calls() {
             serde_json::json!({ "content": ch.to_string() }),
         ));
     }
-    frames.push_str(&format!(
+    let _ = write!(
+        frames,
         "data: {}\n\n",
         serde_json::json!({
             "id": "chatcmpl-dsml",
@@ -196,7 +198,7 @@ async fn dsml_char_by_char_emits_tool_calls() {
             "choices": [{ "index": 0, "delta": {}, "finish_reason": serde_json::Value::Null }],
             "usage": { "prompt_tokens": 55254, "completion_tokens": 336, "total_tokens": 55590 }
         })
-    ));
+    );
     frames.push_str("data: [DONE]\n\n");
 
     let (received, recorded) = run(frames).await;

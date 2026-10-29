@@ -47,16 +47,6 @@ fn le_u32(b: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
 }
 
-fn le_u16(b: &[u8], off: usize) -> Option<u16> {
-    let s = b.get(off..off.checked_add(2)?)?;
-    Some(u16::from_le_bytes([s[0], s[1]]))
-}
-
-fn be_u16(b: &[u8], off: usize) -> Option<u16> {
-    let s = b.get(off..off.checked_add(2)?)?;
-    Some(u16::from_be_bytes([s[0], s[1]]))
-}
-
 fn ms_from_frames(frames: u64, rate: u32) -> Option<u32> {
     if rate == 0 {
         return None;
@@ -188,7 +178,7 @@ fn flac_duration_ms(b: &[u8]) -> Option<u32> {
 
 /// MP4/M4A: read `mvhd` for the movie timescale and duration.
 fn mp4_duration_ms(b: &[u8]) -> Option<u32> {
-    let mvhd = find_box(b, b"mvhd", 0, b.len().min(1 << 20))?;
+    let mvhd = find_box(b, *b"mvhd", 0, b.len().min(1 << 20))?;
     // `mvhd` box: size(4) type(4) then the full box body.
     //   version(1) flags(3) creation(4) modification(4) timescale(4) duration(4)
     let body = mvhd + 8;
@@ -208,12 +198,12 @@ fn mp4_duration_ms(b: &[u8]) -> Option<u32> {
 }
 
 /// Depth-first search for a box type within `[start, end)`.
-fn find_box(b: &[u8], kind: &[u8; 4], start: usize, end: usize) -> Option<usize> {
+fn find_box(b: &[u8], kind: [u8; 4], start: usize, end: usize) -> Option<usize> {
     let mut off = start;
     while off + 8 <= end {
         let size = be_u32(b, off)? as usize;
         let ty = b.get(off + 4..off + 8)?;
-        if ty == kind {
+        if ty == kind.as_slice() {
             return Some(off);
         }
         // Containers we must descend into to reach `mvhd`.
@@ -268,14 +258,14 @@ fn mp3_duration_ms(b: &[u8]) -> Option<u32> {
     // Xing/Info sits at a fixed offset after the side information.
     let side_info = if (header >> 19) & 0x3 == 3 { 17 } else { 9 };
     let xing_off = frame + 4 + side_info;
-    if let Some(tag) = b.get(xing_off..xing_off + 4) {
-        if tag == b"Xing" || tag == b"Info" {
-            let flags = be_u32(b, xing_off + 4)?;
-            if flags & 0x1 != 0 {
-                let frames = be_u32(b, xing_off + 8)?;
-                let total_samples = u64::from(frames) * u64::from(samples_per_frame);
-                return ms_from_frames(total_samples, rate);
-            }
+    if let Some(tag) = b.get(xing_off..xing_off + 4)
+        && (tag == b"Xing" || tag == b"Info")
+    {
+        let flags = be_u32(b, xing_off + 4)?;
+        if flags & 0x1 != 0 {
+            let frames = be_u32(b, xing_off + 8)?;
+            let total_samples = u64::from(frames) * u64::from(samples_per_frame);
+            return ms_from_frames(total_samples, rate);
         }
     }
 
@@ -292,12 +282,12 @@ fn mp3_duration_ms(b: &[u8]) -> Option<u32> {
 fn find_mpeg_frame(b: &[u8], from: usize) -> Option<usize> {
     let mut i = from;
     while i + 4 <= b.len() {
-        if b[i] == 0xFF && b.get(i + 1).is_some_and(|v| v & 0xE0 == 0xE0) {
-            if let Some(h) = be_u32(b, i) {
-                if parse_mpeg_header(h).is_some() {
-                    return Some(i);
-                }
-            }
+        if b[i] == 0xFF
+            && b.get(i + 1).is_some_and(|v| v & 0xE0 == 0xE0)
+            && let Some(h) = be_u32(b, i)
+            && parse_mpeg_header(h).is_some()
+        {
+            return Some(i);
         }
         i += 1;
     }

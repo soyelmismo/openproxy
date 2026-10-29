@@ -139,16 +139,19 @@ fn parse_file_part_inline(
     obj: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<GeminiInlineData> {
     // Canonical `{type: "file", file: {filename, file_data}}`.
-    if let Some(file) = obj.get("file").and_then(|f| f.as_object()) {
-        if let Some(data) = file.get("file_data").and_then(|v| v.as_str()) {
-            if let Some(inline) = parse_data_uri(data) {
-                return Some(inline);
-            }
-            return Some(GeminiInlineData {
-                mime_type: "application/pdf".to_string(),
-                data: data.to_string(),
-            });
+    if let Some(data) = obj
+        .get("file")
+        .and_then(|f| f.as_object())
+        .and_then(|file| file.get("file_data"))
+        .and_then(|v| v.as_str())
+    {
+        if let Some(inline) = parse_data_uri(data) {
+            return Some(inline);
         }
+        return Some(GeminiInlineData {
+            mime_type: "application/pdf".to_string(),
+            data: data.to_string(),
+        });
     }
     // Flat `{type: "input_file", file_data: ...}`.
     if let Some(data) = obj.get("file_data").and_then(|v| v.as_str()) {
