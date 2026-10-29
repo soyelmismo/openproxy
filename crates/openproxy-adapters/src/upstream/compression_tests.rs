@@ -507,3 +507,80 @@ fn frame_cap_never_loses_bytes_across_many_frames() {
     assert_eq!(decoded.len(), payload.len());
     assert_eq!(decoded, payload);
 }
+
+// one-shot codecs
+
+/// Brotli output from `brotli.compress` for [`ONESHOT_PAYLOAD`]. Real encoder
+/// output, so the vector exercises the same bytes an upstream sends.
+const ONESHOT_PAYLOAD: &str =
+    r#"{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":"hola mundo"}}]}"#;
+
+const ONESHOT_BROTLI: &[u8] = &[
+    0x1b, 0x56, 0x00, 0x50, 0x8c, 0xd3, 0x15, 0xf3, 0xa2, 0x84, 0x75, 0x8f, 0x20, 0x6f, 0xa9, 0x5f,
+    0x17, 0xb4, 0x2c, 0xfd, 0x08, 0x6c, 0x8c, 0xa0, 0x7d, 0xeb, 0xf4, 0x75, 0xb1, 0x04, 0x87, 0x9c,
+    0x10, 0x7d, 0x6d, 0x61, 0x5b, 0x14, 0x10, 0x07, 0x1b, 0x70, 0x26, 0x59, 0xba, 0xcd, 0x8b, 0x7d,
+    0xa5, 0x35, 0xd0, 0x67, 0xfc, 0x7e, 0xde, 0x2e, 0xd5, 0x4c, 0x2c, 0x2d, 0x81, 0x49, 0x79, 0xa1,
+    0x15, 0xa3, 0x16, 0xf3, 0xee, 0x78, 0xb6, 0xa8, 0x07,
+];
+
+#[test]
+fn brotli_body_decodes_at_eof() {
+    let decoded = drive(Some(Codec::Brotli), &one(ONESHOT_BROTLI.to_vec()))
+        .expect("brotli body decodes");
+    assert_eq!(decoded, ONESHOT_PAYLOAD.as_bytes());
+}
+
+#[test]
+fn brotli_body_split_across_frames_decodes_in_full() {
+    // Every transport frame is buffered, nothing is yielded early, and the
+    // whole payload still comes out at EOF.
+    for size in [1, 7, 16, 32] {
+        let decoded = drive(Some(Codec::Brotli), &frames_of(ONESHOT_BROTLI, size))
+            .expect("chunked brotli decode");
+        assert_eq!(
+            decoded,
+            ONESHOT_PAYLOAD.as_bytes(),
+            "frame size {size} lost or reordered bytes"
+        );
+    }
+}
+
+#[test]
+fn one_shot_decoder_never_claims_it_can_drain_without_input() {
+    // Regression: `can_drain_without_input` used to answer `true` for `br`
+    // and `zstd` once their phase was `Body`, which made `next_chunk` push an
+    // empty frame and `continue` forever. It never polled the transport, so
+    // EOF never arrived, the body never decoded, and the request pinned a
+    // core until `total_deadline` expired — every Groq call answered `br` and
+    // hung the same way. One-shot codecs only decode in `finish`, so they must
+    // never be re-fed.
+    for codec in [Codec::Brotli, Codec::Zstd] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_ENCODING,
+            HeaderValue::from_static(codec.as_str()),
+        );
+        let mut decoding = BodyDecoding::from_response(&headers).expect("codec recognized");
+
+        // Before any input.
+        assert!(
+            !decoding.can_drain_without_input(),
+            "{} claimed progress before any input arrived",
+            codec.as_str()
+        );
+
+        // After a partial body: bytes are buffered, but re-feeding them yields
+        // no plaintext, so there is nothing to drain without more input.
+        decoding.push(&ONESHOT_BROTLI[..16]).expect("push ok");
+        assert!(
+            !decoding.can_drain_without_input(),
+            "{} claimed progress from buffered one-shot input",
+            codec.as_str()
+        );
+        assert!(
+            decoding.take_frame().is_none(),
+            "{} yielded plaintext before EOF",
+            codec.as_str()
+        );
+    }
+}

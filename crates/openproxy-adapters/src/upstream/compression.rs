@@ -415,10 +415,21 @@ impl BodyDecoding {
     ///
     /// While a container header or gzip trailer is still incomplete, only new
     /// input can advance the decoder; re-feeding the same bytes spins.
+    ///
+    /// One-shot codecs (`br`, `zstd`) never answer `true`. They decode only in
+    /// [`finish`](Self::finish), at EOF, so the bytes they hold are buffered
+    /// input, not carried input: re-feeding them yields no plaintext and no
+    /// progress. Reporting `true` made `next_chunk` push an empty frame and
+    /// `continue` forever, never polling the transport, so EOF was never
+    /// reached and the request burned a core until `total_deadline` expired.
     pub(crate) fn can_drain_without_input(&self) -> bool {
-        self.stage.as_ref().is_some_and(|stage| {
-            (self.has_carried_input() || stage.phase == Phase::Body) && !self.blocked_on_input()
-        })
+        let Some(stage) = self.stage.as_ref() else {
+            return false;
+        };
+        if stage.codec.kind() == CodecKind::OneShot {
+            return false;
+        }
+        (self.has_carried_input() || stage.phase == Phase::Body) && !self.blocked_on_input()
     }
 
     /// `true` when the decoder is waiting on input bytes it does not have yet:
