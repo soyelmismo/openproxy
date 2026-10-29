@@ -14,6 +14,7 @@ pub use stream::InlineToolStreamExtractor;
 pub use types::{ExtractedInlineTools, ParsedToolCall, generate_tool_call_id};
 
 use openproxy_types::{OpenAIChoice, OpenAIResponse};
+use serde_json::Value;
 
 /// Enclosing tag pairs recognized by the inline tool extractor.
 const ENCLOSING_TAG_PAIRS: &[(&str, &str)] = &[
@@ -218,6 +219,60 @@ pub fn extract_inline_tools_from_response(mut resp: OpenAIResponse) -> OpenAIRes
         extract_inline_tools_from_choice(choice);
     }
     resp
+}
+
+/// JSON-value form of [`extract_inline_tools_from_response`].
+///
+/// The typed round-trip drops fields that `OpenAIResponse` does not model —
+/// notably `raw_response_body`, which `ResponseAccumulator::finish` attaches to
+/// every partial or empty stream for debugging. Recording that body after a
+/// typed round-trip would silently discard it, so the recording path mutates
+/// the value in place instead.
+pub fn extract_inline_tools_from_response_value(mut val: Value) -> Value {
+    let Some(choices) = val.get_mut("choices").and_then(Value::as_array_mut) else {
+        return val;
+    };
+    for choice in choices {
+        let Some(message) = choice.get_mut("message").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if message.get("role").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = message.get("content").and_then(Value::as_str) else {
+            continue;
+        };
+        if content.is_empty() {
+            continue;
+        }
+        let extracted = extract_inline_tools(content);
+        if !extracted.has_tools() {
+            continue;
+        }
+        if extracted.clean_content.is_empty() {
+            message.insert("content".to_string(), Value::Null);
+        } else {
+            message.insert(
+                "content".to_string(),
+                Value::String(extracted.clean_content),
+            );
+        }
+        let mut existing = message
+            .remove("tool_calls")
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
+        for tc in extracted.tool_calls {
+            existing.push(tc.to_openai_value());
+        }
+        message.insert("tool_calls".to_string(), Value::Array(existing));
+        if let Some(choice_obj) = choice.as_object_mut() {
+            choice_obj.insert(
+                "finish_reason".to_string(),
+                Value::String("tool_calls".to_string()),
+            );
+        }
+    }
+    val
 }
 
 fn find_earliest_enclosing_block(s: &str) -> Option<(usize, usize, &'static str)> {

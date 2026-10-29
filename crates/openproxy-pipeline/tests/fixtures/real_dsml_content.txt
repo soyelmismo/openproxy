@@ -1,0 +1,9 @@
+
+
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="terminal">
+<｜｜DSML｜｜ parameter name="command" string="true">cd ~/sandbox/explainroo && export EXPLAINROO_CACHE=$PWD/.cache && export EXPLAINROO_ESPEAK=$PWD/.local/bin/espeak-ng && node bin/explainroo.js verify videos/escape 2>&1 | tail -25 && echo "=== FILES ===" && ls -lh videos/escape/out/ && echo "=== CHAPTERS ===" && cat videos/escape/out/video.chapters.txt</｜｜DSML｜｜ parameter>
+<｜｜DSML｜｜ parameter name="intent" string="true">Verificando el MP4 final y listando salidas</｜｜DSML｜｜ parameter>
+<｜｜DSML｜｜ parameter name="timeout_secs" string="false">600</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>

@@ -543,7 +543,17 @@ impl UpstreamDispatcher {
 
         let raw_response_body_json: Option<serde_json::Value> = acc
             .as_ref()
-            .map(|a| a.finish(args.chunk_id, args.created, args.model_name));
+            .map(|a| a.finish(args.chunk_id, args.created, args.model_name))
+            .map(|val| {
+                // Normalize the recorded body exactly like the unary path does:
+                // `<think>` blocks move to `reasoning_content`, and inline tool
+                // markup becomes structured `tool_calls`. Without this the
+                // recording shows the raw upstream text (DSML blocks, think
+                // tags) while the client received clean tool_calls, which makes
+                // the two views disagree.
+                let think_extracted = crate::think_extractor::extract_think_from_response_value(val);
+                crate::inline_tools::extract_inline_tools_from_response_value(think_extracted)
+            });
 
         let mut response_body_json = raw_response_body_json.clone();
 
@@ -572,17 +582,31 @@ impl UpstreamDispatcher {
             }
         }
 
+        let is_client_response = !matches!(
+            params.req.stream_sink.as_ref(),
+            Some(crate::race_sink::StreamSink::Discard)
+        ) && !params.req.race_cancelled;
+
+        let derived_stop_reason = response_body_json
+            .as_ref()
+            .and_then(|v| v.get("choices"))
+            .and_then(|c| c.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|choice| choice.get("finish_reason"))
+            .and_then(|fr| fr.as_str())
+            .map(|s| s.to_string());
+
+        let effective_stop_reason = match stop_reason.as_deref() {
+            Some(sr) if !sr.is_empty() => stop_reason,
+            _ => derived_stop_reason,
+        };
+
         let recorded_response_body =
             if self.config.pii_config.pii_enabled && self.config.pii_config.pii_redact_logs {
                 raw_response_body_json
             } else {
                 response_body_json
             };
-
-        let is_client_response = !matches!(
-            params.req.stream_sink.as_ref(),
-            Some(crate::race_sink::StreamSink::Discard)
-        ) && !params.req.race_cancelled;
 
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
@@ -611,7 +635,7 @@ impl UpstreamDispatcher {
         .is_streaming(true)
         .stream_complete(done_sent)
         .client_response(is_client_response)
-        .stop_reason(stop_reason)
+        .stop_reason(effective_stop_reason)
         .record()
         .await
         {

@@ -8,9 +8,20 @@ use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
 use openproxy_types::providers::{AuthType, ProviderFormat, RateLimitScope};
 
 mod cancellation;
+mod dsml_char;
+mod dsml_e2e;
 
 pub(super) fn build_dispatcher_for_stream_test(
     conn_arc: std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
+) -> UpstreamDispatcher {
+    build_dispatcher_for_stream_test_with_recording(conn_arc, false)
+}
+
+/// Same as [`build_dispatcher_for_stream_test`], but with body recording on,
+/// so tests can assert what lands in `usage.response_body_json`.
+pub(super) fn build_dispatcher_for_stream_test_with_recording(
+    conn_arc: std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
+    recording: bool,
 ) -> UpstreamDispatcher {
     let repo = std::sync::Arc::new(crate::repository::SqlitePipelineRepository::new(
         std::sync::Arc::clone(&conn_arc),
@@ -18,7 +29,7 @@ pub(super) fn build_dispatcher_for_stream_test(
     let tracker = crate::usage_tracker::UsageTracker {
         conn: std::sync::Arc::clone(&conn_arc),
         background_tx: tokio::sync::mpsc::channel(1).0,
-        record_bodies_and_headers: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        record_bodies_and_headers: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(recording)),
         selection_registry: std::sync::Arc::new(openproxy_types::SelectionRegistry::new()),
         cooldown_secs: 60,
         cooldown_max_secs: 3600,

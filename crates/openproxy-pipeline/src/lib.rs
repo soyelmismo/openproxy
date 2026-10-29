@@ -62,4 +62,8 @@ pub use response_ext::ResponseExt;
 pub use worker::profile;
 
 #[cfg(test)]
+mod real_capture_tests;
+#[cfg(test)]
+mod recorded_body_tests;
+#[cfg(test)]
 mod repository_tests;

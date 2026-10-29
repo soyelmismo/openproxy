@@ -108,6 +108,55 @@ pub fn extract_think_from_response(
     resp
 }
 
+/// JSON-value form of [`extract_think_from_response`].
+///
+/// Keeps every field the typed round-trip would drop (for example
+/// `raw_response_body` on a partial stream) while still moving `<think>`
+/// blocks out of `content` into `reasoning_content`.
+pub fn extract_think_from_response_value(mut val: serde_json::Value) -> serde_json::Value {
+    let Some(choices) = val.get_mut("choices").and_then(serde_json::Value::as_array_mut) else {
+        return val;
+    };
+    for choice in choices {
+        let Some(message) = choice
+            .get_mut("message")
+            .and_then(serde_json::Value::as_object_mut)
+        else {
+            continue;
+        };
+        if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(content) = message.get("content").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let extracted = extract_think_from_content(content);
+        let has_reasoning = extracted.has_reasoning();
+        if !has_reasoning && extracted.content == content {
+            continue;
+        }
+        if extracted.content != content {
+            message.insert(
+                "content".to_string(),
+                serde_json::Value::String(extracted.content),
+            );
+        }
+        if has_reasoning {
+            let has_existing = message
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| !s.is_empty());
+            if !has_existing {
+                message.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String(extracted.reasoning),
+                );
+            }
+        }
+    }
+    val
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExtractedThink {
     /// `<think>` blocks removed. Empty when the whole response was reasoning.
