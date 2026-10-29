@@ -63,6 +63,8 @@ pub struct UsageDetailRow {
     pub pii_redacted: Option<String>,
     pub created_at: String,
     pub flags: u8,
+    /// Audio duration in milliseconds, for transcription rows only.
+    pub audio_ms: Option<i64>,
 }
 
 impl UsageDetailRow {
@@ -122,6 +124,8 @@ struct UsageDetailRowSerde {
     pub endpoint_kind: EndpointKind,
     pub pii_redacted: Option<String>,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub audio_ms: Option<i64>,
 }
 
 impl Serialize for UsageDetailRow {
@@ -171,6 +175,7 @@ impl Serialize for UsageDetailRow {
             endpoint_kind: self.endpoint_kind,
             pii_redacted: self.pii_redacted.clone(),
             created_at: self.created_at.clone(),
+            audio_ms: self.audio_ms,
         };
         shadow.serialize(serializer)
     }
@@ -240,6 +245,7 @@ impl<'de> Deserialize<'de> for UsageDetailRow {
             pii_redacted: shadow.pii_redacted,
             created_at: shadow.created_at,
             flags,
+            audio_ms: shadow.audio_ms,
         })
     }
 }
@@ -301,6 +307,8 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
     let is_proxy_rotated: i64 = row.get(col_idx)?;
     col_idx += 1;
     let pii_redacted: Option<String> = row.get(col_idx).unwrap_or(None);
+    col_idx += 1;
+    let audio_ms: Option<i64> = row.get(col_idx).unwrap_or(None);
     col_idx += 1;
     let account_label: Option<String> = row.get(col_idx).unwrap_or(None);
     col_idx += 1;
@@ -385,6 +393,7 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
         endpoint_kind,
         pii_redacted,
         flags,
+        audio_ms,
     })
 }
 
@@ -401,7 +410,7 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     u.response_headers, u.error_message, u.client_response, \
                     u.prompt_tokens_estimated, u.completion_tokens_estimated, \
                     u.endpoint_kind, u.proxy_url, u.proxy_status, u.is_proxy_rotated, \
-                    u.pii_redacted, a.label, c.name \
+                    u.pii_redacted, u.audio_ms, a.label, c.name \
              FROM usage u \
              LEFT JOIN accounts a ON u.account_id = a.id \
              LEFT JOIN combos c ON u.combo_id = c.id \
@@ -430,7 +439,7 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     u.response_headers, u.error_message, u.client_response, \
                     u.prompt_tokens_estimated, u.completion_tokens_estimated, \
                     u.endpoint_kind, u.proxy_url, u.proxy_status, u.is_proxy_rotated, \
-                    u.pii_redacted, a.label, c.name \
+                    u.pii_redacted, u.audio_ms, a.label, c.name \
              FROM usage u \
              LEFT JOIN accounts a ON u.account_id = a.id \
              LEFT JOIN combos c ON u.combo_id = c.id \

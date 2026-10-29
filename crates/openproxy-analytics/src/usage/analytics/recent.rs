@@ -101,6 +101,8 @@ pub(crate) fn map_usage_row(row: &Row<'_>) -> rusqlite::Result<RecentUsageRow> {
     let pii_redacted: Option<String> = row.get(col_idx)?;
     col_idx += 1;
     let api_key_id: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let audio_ms: Option<i64> = row.get(col_idx)?;
 
     if !(0..=i64::from(u16::MAX)).contains(&status_code) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -182,6 +184,7 @@ pub(crate) fn map_usage_row(row: &Row<'_>) -> rusqlite::Result<RecentUsageRow> {
         created_at,
         flags,
         api_key_id,
+        audio_ms: audio_ms.and_then(|v| u32::try_from(v).ok()),
     })
 }
 
@@ -197,7 +200,7 @@ openproxy_db::def_table_select!(
      compression_savings_pct, compression_techniques, \
      client_response, prompt_tokens_estimated, completion_tokens_estimated, \
      endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
-     api_key_id",
+     api_key_id, audio_ms",
 );
 
 pub fn recent(conn: &Connection, since_id: i64, limit: u32) -> Result<Vec<RecentUsageRow>> {

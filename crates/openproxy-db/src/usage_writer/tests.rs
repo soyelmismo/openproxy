@@ -36,6 +36,7 @@ fn input() -> UsageInput {
         proxy_url: None,
         proxy_status: None,
         flags: 0,
+        audio_ms: None,
     }
 }
 

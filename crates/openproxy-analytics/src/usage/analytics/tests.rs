@@ -39,7 +39,8 @@ const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
     is_proxy_rotated INTEGER NOT NULL DEFAULT 0,
     cached_tokens INTEGER,
     pii_redacted TEXT,
-    api_key_id INTEGER
+    api_key_id INTEGER,
+    audio_ms INTEGER
 )";
 
 #[test]
@@ -54,11 +55,11 @@ fn map_usage_row_basic() {
             race_total, race_attempts, is_streaming, stream_complete, race_lost,
             created_at, stop_reason, compression_savings_pct, compression_techniques,
             client_response, prompt_tokens_estimated, completion_tokens_estimated,
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id)
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                  ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)",
+                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
         rusqlite::params![
             42i64,
             "req-abc",
@@ -97,6 +98,7 @@ fn map_usage_row_basic() {
             Some(20i64),
             Some("email: 1"),
             Some(777i64),
+            None::<i64>,
         ],
     )
     .unwrap();
@@ -141,11 +143,11 @@ fn map_usage_row_negative_total_ms_returns_error() {
             race_total, race_attempts, is_streaming, stream_complete, race_lost,
             created_at, stop_reason, compression_savings_pct, compression_techniques,
             client_response, prompt_tokens_estimated, completion_tokens_estimated,
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id)
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms)
          VALUES (1, 'r', 't', 'p', 'm', 200, -1, NULL, NULL, NULL,
                  NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                  0, 0, 0, 0, 0, '2026-01-01', NULL, NULL, NULL,
-                 0, 0, 0, 'chat', NULL, NULL, 0, NULL, NULL, NULL)",
+                 0, 0, 0, 'chat', NULL, NULL, 0, NULL, NULL, NULL, NULL)",
     )
     .unwrap();
 
@@ -206,7 +208,8 @@ fn test_detail_by_id_includes_account_label() {
             proxy_url TEXT,
             proxy_status TEXT,
             is_proxy_rotated INTEGER NOT NULL DEFAULT 0,
-            pii_redacted TEXT
+            pii_redacted TEXT,
+            audio_ms INTEGER
         );
         INSERT INTO accounts (id, label) VALUES (205, 'My Custom Account Label');
         INSERT INTO usage (id, request_id, trace_id, attempt, provider_id, account_id,

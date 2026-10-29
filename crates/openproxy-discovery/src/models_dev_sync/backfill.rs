@@ -82,7 +82,7 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     Ok(total)
 }
 
-type UsageRow = (i64, String, String, Option<u32>, Option<u32>);
+type UsageRow = (i64, String, String, Option<u32>, Option<u32>, Option<u32>);
 
 fn resolve_recompute_price(
     conn: &Connection,
@@ -105,24 +105,35 @@ fn compute_usage_row_cost(
     price: Option<crate::pricing::Price>,
     prompt_tokens: Option<u32>,
     completion_tokens: Option<u32>,
+    audio_ms: Option<u32>,
 ) -> Option<f64> {
     let p = price?;
+    // Audio bills by duration at an hourly rate. Without a duration there is
+    // nothing billable to recover, and the token formula would price the row at
+    // zero forever — so return None instead of inventing a cost.
+    if p.kind == crate::pricing::PriceKind::Audio {
+        let per_hour = p.audio_per_hour.unwrap_or(p.input_per_1m);
+        let ms = f64::from(audio_ms.unwrap_or(0));
+        let cost = per_hour * ms / 3_600_000.0;
+        return if cost > 0.0 { Some(cost) } else { None };
+    }
     let prompt = f64::from(prompt_tokens.unwrap_or(0));
     let completion = f64::from(completion_tokens.unwrap_or(0));
     let cost = p.input_per_1m * prompt / 1_000_000.0 + p.output_per_1m * completion / 1_000_000.0;
     if cost > 0.0 { Some(cost) } else { None }
 }
 
-/// Recompute `cost_usd` where it is 0 but `prompt_tokens > 0`.
+/// Recompute `cost_usd` where it is 0 but the row carries a billable quantity
+/// (tokens for chat-style endpoints, `audio_ms` for STT).
 pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     let rows: Vec<UsageRow> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens \
+                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens, audio_ms \
                  FROM usage \
                  WHERE cost_usd = 0.0 \
                    AND status_code >= 200 AND status_code < 400 \
-                   AND (prompt_tokens > 0 OR completion_tokens > 0)",
+                   AND (prompt_tokens > 0 OR completion_tokens > 0 OR audio_ms > 0)",
             )
             .map_err(openproxy_db::error::map_db_error)?;
         let result = stmt
@@ -133,6 +144,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                     row.get::<_, String>(2)?,
                     row.get::<_, Option<u32>>(3)?,
                     row.get::<_, Option<u32>>(4)?,
+                    row.get::<_, Option<u32>>(5)?,
                 ))
             })
             .map_err(openproxy_db::error::map_db_error)?;
@@ -144,9 +156,11 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
         let mut stmt = conn
             .prepare("UPDATE usage SET cost_usd = ?1 WHERE id = ?2")
             .map_err(openproxy_db::error::map_db_error)?;
-        for (id, provider_id, model_id, prompt_tokens, completion_tokens) in &rows {
+        for (id, provider_id, model_id, prompt_tokens, completion_tokens, audio_ms) in &rows {
             let price = resolve_recompute_price(conn, provider_id, model_id);
-            if let Some(cost) = compute_usage_row_cost(price, *prompt_tokens, *completion_tokens) {
+            if let Some(cost) =
+                compute_usage_row_cost(price, *prompt_tokens, *completion_tokens, *audio_ms)
+            {
                 stmt.execute(rusqlite::params![cost, id])
                     .map_err(openproxy_db::error::map_db_error)?;
                 updated += 1;

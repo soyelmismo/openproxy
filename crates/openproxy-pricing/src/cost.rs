@@ -166,6 +166,7 @@ fn build_recent_usage_row(
         endpoint_kind: input.endpoint_kind,
         api_key_id: input.api_key_id.map(|k| k.0),
         flags: input.flags,
+        audio_ms: input.audio_ms,
     }
 }
 
@@ -200,12 +201,12 @@ fn execute_usage_insert(
             response_headers, error_message, is_streaming, stream_complete, \
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, pii_redacted\
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, pii_redacted, audio_ms\
          ) VALUES (\
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-            ?37, ?38, ?39, ?40, ?41\
+            ?37, ?38, ?39, ?40, ?41, ?42\
          )",
         params![
             input.request_id.to_string(),
@@ -249,6 +250,7 @@ fn execute_usage_insert(
             input.proxy_status,
             i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
             input.pii_redacted,
+            input.audio_ms.map(i64::from),
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -260,7 +262,33 @@ fn execute_usage_insert(
 pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
     warn_missing_pricing(input, price.as_ref());
-    let (cost_usd, tps) = compute(price, input);
+    // Audio rows carry their billable quantity in `audio_ms`, not in the token
+    // columns: STT is priced per hour of audio. Feed the duration through the
+    // `prompt_tokens` slot of the cost math (milliseconds, per the Audio arm of
+    // `compute_cost_opt_with_cache`) so the existing signature stays intact.
+    // Without a duration the row must cost zero — never fall through to the
+    // token formula, which would bill audio at a per-token rate.
+    let cost_input;
+    let billable = match (input.audio_ms, price.as_ref().map(|p| p.kind)) {
+        (Some(ms), Some(pricing::PriceKind::Audio)) => {
+            cost_input = UsageInput {
+                prompt_tokens: Some(ms),
+                completion_tokens: Some(0),
+                ..input.clone()
+            };
+            &cost_input
+        }
+        (None, Some(pricing::PriceKind::Audio)) => {
+            cost_input = UsageInput {
+                prompt_tokens: Some(0),
+                completion_tokens: Some(0),
+                ..input.clone()
+            };
+            &cost_input
+        }
+        _ => input,
+    };
+    let (cost_usd, tps) = compute(price, billable);
     let db_err_msgs = sanitize_db_error_msg(input.error_msg.as_deref());
     let error_msg_redacted = db_err_msgs.1.clone();
 
@@ -336,6 +364,7 @@ mod tests {
             pii_redacted: None,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             flags: USAGE_FLAG_IS_STREAMING,
+            audio_ms: None,
         }
     }
 

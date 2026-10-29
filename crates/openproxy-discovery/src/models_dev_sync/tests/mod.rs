@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 
 mod client;
+mod recompute_audio;
 mod sync;
 
 pub(crate) fn create_sync_table(conn: &Connection) {

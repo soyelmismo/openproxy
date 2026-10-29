@@ -1,7 +1,7 @@
 use super::*;
 use openproxy_types::CoreError;
 
-const EXPECTED_COLUMNS: [&str; 37] = [
+const EXPECTED_COLUMNS: [&str; 38] = [
     "id",
     "request_id",
     "trace_id",
@@ -39,6 +39,7 @@ const EXPECTED_COLUMNS: [&str; 37] = [
     "cached_tokens",
     "pii_redacted",
     "api_key_id",
+    "audio_ms",
 ];
 
 #[test]
@@ -51,7 +52,7 @@ fn test_projection_column_contract() {
     ];
     for sql in queries {
         let stmt = conn.prepare(sql).unwrap();
-        assert_eq!(stmt.column_count(), 37);
+        assert_eq!(stmt.column_count(), 38);
         assert_eq!(stmt.column_names(), EXPECTED_COLUMNS);
     }
 }
@@ -79,9 +80,9 @@ fn test_recent_queries_ordering_and_equivalence() {
         race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at,
         stop_reason, compression_savings_pct, compression_techniques, client_response,
         prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url,
-        proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id
+        proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms
     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)";
+              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)";
 
     for id in [3i64, 1, 2] {
         let headers = serde_json::json!({"h": id.to_string()}).to_string();
@@ -125,6 +126,7 @@ fn test_recent_queries_ordering_and_equivalence() {
                 Some(id * 10),
                 Some("pii-ok"),
                 Some(100 + id),
+                None::<i64>,
             ],
         )
         .unwrap();

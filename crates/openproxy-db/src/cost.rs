@@ -85,12 +85,12 @@ fn insert_usage_record(
             stop_reason, compression_savings_pct, compression_techniques, \
             client_response, prompt_tokens_estimated, completion_tokens_estimated, \
             endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
-            was_winner\
+            was_winner, audio_ms\
          ) VALUES (\
             ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
             ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43\
+            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44\
          )",
         params![
             request_id,
@@ -148,6 +148,7 @@ fn insert_usage_record(
             input.cached_tokens.map(i64::from),
             input.pii_redacted,
             i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
+            input.audio_ms.map(i64::from),
         ],
     )
     .map_err(crate::error::map_db_error)?;
@@ -191,7 +192,33 @@ pub fn record_row(
     {
         warn_missing_pricing_once(input.provider_id.as_str(), &input.upstream_model_id);
     }
-    let (cost_usd, tps) = compute(price, input);
+    let (cost_usd, tps) = {
+        // STT bills per hour of audio, and its duration lives in `audio_ms`
+        // rather than the token columns. Route it through the `prompt_tokens`
+        // slot of the cost math (milliseconds) so `PriceKind::Audio` sees a
+        // billable quantity instead of pricing the row at zero.
+        let cost_input;
+        let billable = match (input.audio_ms, price.as_ref().map(|p| p.kind)) {
+            (Some(ms), Some(pricing::PriceKind::Audio)) => {
+                cost_input = UsageInput {
+                    prompt_tokens: Some(ms),
+                    completion_tokens: Some(0),
+                    ..input.clone()
+                };
+                &cost_input
+            }
+            (None, Some(pricing::PriceKind::Audio)) => {
+                cost_input = UsageInput {
+                    prompt_tokens: Some(0),
+                    completion_tokens: Some(0),
+                    ..input.clone()
+                };
+                &cost_input
+            }
+            _ => input,
+        };
+        compute(price, billable)
+    };
     let error_msg_for_db = prepare_usage_error_msg(input.error_msg.as_ref());
 
     let rowid = insert_usage_record(
@@ -234,6 +261,7 @@ pub fn record_row(
         flags: input.flags,
         endpoint_kind: input.endpoint_kind,
         api_key_id: input.api_key_id.map(|k| k.0),
+        audio_ms: input.audio_ms,
     };
 
     Ok((UsageId(rowid), row))
@@ -283,7 +311,21 @@ fn update_backfill_price(
     upstream_model_id: &str,
     price: Option<pricing::Price>,
 ) -> openproxy_types::Result<usize> {
+    use pricing::PriceKind;
     match price {
+        // Audio rows bill on `audio_ms` at an hourly rate; the token formula
+        // below would price them at zero forever.
+        Some(p) if p.kind == PriceKind::Audio => {
+            let per_hour = p.audio_per_hour.unwrap_or(p.input_per_1m);
+            conn.execute(
+                "UPDATE usage \
+                 SET cost_usd = (?1 * audio_ms / 3600000.0) \
+                 WHERE provider_id = ?2 AND upstream_model_id = ?3 \
+                   AND audio_ms > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                params![per_hour, provider_id, upstream_model_id],
+            )
+            .map_err(crate::error::map_db_error)
+        }
         Some(p) => conn
             .execute(
                 "UPDATE usage \
@@ -316,7 +358,8 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
         .prepare(
             "SELECT DISTINCT provider_id, upstream_model_id \
              FROM usage \
-             WHERE prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+             WHERE (prompt_tokens > 0 OR audio_ms > 0) \
+               AND (cost_usd = 0.0 OR cost_usd IS NULL)",
         )
         .map_err(crate::error::map_db_error)?;
 
@@ -367,6 +410,7 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
     let cached_tokens: Option<u32> = r.get(29)?;
     let pii_redacted: Option<String> = r.get(30)?;
     let api_key_id: Option<i64> = r.get(31)?;
+    let audio_ms: Option<u32> = r.get(32)?;
 
     let flags = ((race_lost != 0) as u8 * USAGE_FLAG_RACE_LOST)
         | ((is_streaming != 0) as u8 * USAGE_FLAG_IS_STREAMING)
@@ -407,6 +451,7 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
         flags,
         endpoint_kind: endpoint_kind_str.parse().unwrap_or_default(),
         api_key_id,
+        audio_ms,
     })
 }
 
@@ -415,7 +460,7 @@ const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream
     error_msg, race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at, \
     stop_reason, compression_savings_pct, compression_techniques, client_response, \
     prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url, \
-    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id";
+    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms";
 
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     let affected = conn
@@ -527,6 +572,7 @@ mod tests {
             proxy_status: None,
             cached_tokens: None,
             flags,
+            audio_ms: None,
         }
     }
 
@@ -536,6 +582,7 @@ mod tests {
             input_per_1m: 1.0,
             output_per_1m: 2.0,
             kind: crate::pricing::PriceKind::Chat,
+            audio_per_hour: None,
         };
         let mut input = test_input(
             100,

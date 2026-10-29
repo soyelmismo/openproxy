@@ -99,6 +99,7 @@ pub fn sample_usage_input(request_id: RequestId, seed: u64) -> UsageInput {
         proxy_url: None,
         proxy_status: None,
         flags: USAGE_FLAG_CLIENT_RESPONSE | USAGE_FLAG_STREAM_COMPLETE,
+        audio_ms: None,
     }
 }
 
