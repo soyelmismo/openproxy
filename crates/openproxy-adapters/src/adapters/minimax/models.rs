@@ -59,7 +59,19 @@ fn build_minimax_builtin_model(
         caps.thinking = Some(reasoning);
     }
     if vision {
-        m.input_modalities = Some(vec!["text".to_string(), "image".to_string()].into());
+        // M3.1-Flash and M3 accept image *and* video through the Anthropic
+        // endpoint; M2.x has no vision at all. The fallback list has no
+        // separate video flag, and every vision-capable MiniMax model here is
+        // an M3-generation one.
+        m.input_modalities = Some(
+            vec![
+                "text".to_string(),
+                "image".to_string(),
+                "video".to_string(),
+                "pdf".to_string(),
+            ]
+            .into(),
+        );
     }
     m
 }

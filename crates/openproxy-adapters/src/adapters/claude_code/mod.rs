@@ -236,7 +236,8 @@ pub fn claude_code_builtin_models() -> Vec<DiscoveredModel> {
                 context_length: Some(ctx),
                 max_output_tokens: Some(max_out),
                 input_modalities: Some(
-                    vec!["text".to_string(), "image".to_string()].into_boxed_slice(),
+                    vec!["text".to_string(), "image".to_string(), "pdf".to_string()]
+                        .into_boxed_slice(),
                 ),
                 output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
                 model_type: Some("chat".to_string()),
@@ -294,7 +295,8 @@ pub fn parse_claude_models_response(body: &serde_json::Value) -> Option<Vec<Disc
             context_length: Some(ctx),
             max_output_tokens: Some(max_out),
             input_modalities: Some(
-                vec!["text".to_string(), "image".to_string()].into_boxed_slice(),
+                vec!["text".to_string(), "image".to_string(), "pdf".to_string()]
+                    .into_boxed_slice(),
             ),
             output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
             model_type: Some("chat".to_string()),

@@ -265,6 +265,44 @@ fn file_request_is_gated_as_image_capability() {
 }
 
 #[test]
+fn pdf_only_model_survives_a_document_request() {
+    // `["text","pdf"]` parses as text-only because ModalityFlags has no
+    // document bit. Dropping it would reject the one model that advertises
+    // exactly what the request carries.
+    let targets = vec![
+        target_with_modalities("text-only", Some(r#"["text"]"#)),
+        target_with_modalities("pdf-model", Some(r#"["text","pdf"]"#)),
+        target_with_modalities("vision", Some(r#"["text","image"]"#)),
+    ];
+    let required = RequiredModalities {
+        file: true,
+        ..Default::default()
+    };
+    let out = filter_targets_for_modalities(targets, required, ModalityRoutingConfig::default());
+    let kept: Vec<&str> = out.iter().map(|t| t.model.model_id.as_str()).collect();
+    assert_eq!(kept, vec!["pdf-model", "vision"]);
+}
+
+#[test]
+fn pdf_only_model_is_still_rejected_for_image_requests() {
+    let targets = vec![target_with_modalities("pdf-model", Some(r#"["text","pdf"]"#))];
+    let required = RequiredModalities {
+        image: true,
+        ..Default::default()
+    };
+    let out = filter_targets_for_modalities(targets, required, ModalityRoutingConfig::default());
+    // Nothing accepts an image, so the fallback keeps the set unfiltered.
+    assert_eq!(out.len(), 1);
+
+    let strict = ModalityRoutingConfig {
+        fallback_to_text_only: false,
+        ..ModalityRoutingConfig::default()
+    };
+    let targets = vec![target_with_modalities("pdf-model", Some(r#"["text","pdf"]"#))];
+    assert!(filter_targets_for_modalities(targets, required, strict).is_empty());
+}
+
+#[test]
 fn multi_modality_request_needs_every_declared_flag() {
     let targets = vec![
         target_with_modalities("vision", Some(r#"["text","image"]"#)),

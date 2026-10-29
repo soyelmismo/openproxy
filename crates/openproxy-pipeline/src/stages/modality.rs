@@ -49,16 +49,27 @@ impl RequiredModalities {
         flags
     }
 
-    /// A file part is not a modality of its own: a PDF is an image-ish
-    /// document and every provider that accepts `file` also accepts images.
-    /// Treating it as an image requirement keeps the gate useful instead of
-    /// dropping every target whose catalog never listed `file`.
-    fn gate_flags(&self) -> u8 {
+    /// Whether a model that declares `declared` flags plus the raw catalog JSON
+    /// can serve this request.
+    ///
+    /// `ModalityFlags` has no bit for documents, so a catalog entry of
+    /// `["text","pdf"]` parses as text-only. A document request is therefore
+    /// satisfiable by either the image bit or an explicit `pdf`/`file`
+    /// declaration in the raw JSON — otherwise the gate would drop the models
+    /// that advertise exactly the modality being asked for.
+    fn satisfied_by(&self, declared: ModalityFlags, raw_json: Option<&str>) -> bool {
         let mut flags = self.flags();
         if self.file {
-            flags |= ModalityFlags::IMAGE;
+            let declares_document = raw_json.is_some_and(|s| {
+                s.contains("pdf") || s.contains("file") || s.contains("document")
+            });
+            if declares_document {
+                flags &= !ModalityFlags::IMAGE;
+            } else {
+                flags |= ModalityFlags::IMAGE;
+            }
         }
-        flags
+        declared.0 & flags == flags
     }
 }
 
@@ -124,12 +135,11 @@ pub fn request_requires_image_input(req: &openproxy_types::OpenAIRequest) -> boo
 /// excluding unknown models would break combos over providers whose catalog
 /// refresh does not report modalities.
 fn target_accepts(target: &ResolvedTarget, required: &RequiredModalities) -> bool {
-    let Some(_) = target.model.input_modalities_json else {
+    let Some(raw) = target.model.input_modalities_json.as_deref() else {
         return true;
     };
     let declared = target.model.input_modalities();
-    let needed = required.gate_flags();
-    declared.0 & needed == needed
+    required.satisfied_by(declared, Some(raw))
 }
 
 /// Resolves the effective gate config for one combo walk.
