@@ -358,14 +358,40 @@ pub(crate) fn prepare_messages_for_formatting(
             &ctx.req.openai_request.messages,
             ctx.pipeline.config.compression_mode,
         );
+        // Canonicalise media unconditionally. Every target formatter reads one
+        // vocabulary, so a part that keeps the dialect it arrived in (an
+        // `input_image` from a Responses client, an Anthropic `document`) is
+        // dropped by whichever formatter does not know that spelling. Doing it
+        // here — before the formatter is even selected — is what makes the
+        // translation matrix work for every client/target pair instead of only
+        // for the OpenAI target, whose formatter happens to normalise.
+        let media_needs_canonicalisation = ctx
+            .req
+            .openai_request
+            .messages
+            .iter()
+            .any(|m| matches!(&m.content, Some(serde_json::Value::Array(_))));
 
-        if !pii_enabled && !compression_needed {
+        if !pii_enabled && !compression_needed && !media_needs_canonicalisation {
             *ctx.req.compression_stats.lock() =
                 Some(openproxy_compression::stats::CompressionStats::empty());
             return None;
         }
 
         let mut msgs = ctx.req.openai_request.messages.clone();
+
+        if media_needs_canonicalisation {
+            for msg in &mut msgs {
+                if let Some(serde_json::Value::Array(parts)) = &msg.content {
+                    let canonical = crate::formatting::media::canonical_media_parts(parts);
+                    msg.content = Some(if canonical.is_empty() {
+                        serde_json::Value::String(msg.extract_text())
+                    } else {
+                        serde_json::Value::Array(canonical)
+                    });
+                }
+            }
+        }
 
         if pii_enabled {
             let engine = crate::pii::PiiEngine::from_config(&ctx.pipeline.config.pii_config);

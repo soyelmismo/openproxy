@@ -5,6 +5,7 @@ use openproxy_types::models::Model;
 use openproxy_types::{OpenAIMessage, OpenAIRequestView, TargetFormat};
 use serde_json::Value;
 
+pub mod media;
 pub mod responses;
 pub use responses::ResponsesFormatter;
 
@@ -160,39 +161,15 @@ fn message_needs_openai_normalization(m: &OpenAIMessage) -> bool {
     {
         return true;
     }
-    if let Some(Value::Array(parts)) = &m.content {
-        let mut has_media = false;
-        for p in parts {
-            if let Some(obj) = p.as_object() {
-                if obj.contains_key("annotations") {
-                    return true;
-                }
-                if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
-                    if t == "output_text" || t == "input_text" {
-                        return true;
-                    }
-                    if matches!(
-                        t,
-                        "image_url"
-                            | "input_image"
-                            | "input_audio"
-                            | "input_video"
-                            | "video_url"
-                            | "image"
-                            | "video"
-                            | "audio"
-                            | "file"
-                            | "input_file"
-                            | "document"
-                    ) {
-                        has_media = true;
-                    }
-                }
-            }
-        }
-        if !has_media {
-            return true;
-        }
+    // Any content array needs normalisation. The whole point is to rewrite
+    // dialect-specific spellings (`input_image`, `document`, `input_video`)
+    // into the canonical vocabulary every formatter reads, and media needs it
+    // MORE than text does. The previous version returned early exactly when
+    // media was present, so a multimodal message skipped the normaliser and
+    // reached the target still speaking its own dialect — Gemini then dropped
+    // the part and answered about an image it never received.
+    if matches!(&m.content, Some(Value::Array(_))) {
+        return true;
     }
     if let Some(ref tcs) = m.tool_calls
         && tool_calls_need_normalization(tcs)
@@ -406,34 +383,21 @@ fn normalize_openai_message(m: &OpenAIMessage) -> OpenAIMessage {
         if !has_media {
             patched.content = Some(Value::String(patched.extract_text()));
         } else {
-            let sanitized_parts = parts
-                .iter()
-                .map(|p| {
-                    if let Some(obj) = p.as_object() {
-                        let mut new_obj = obj.clone();
-                        new_obj.remove("annotations");
-                        if let Some(t) = new_obj.get("type").and_then(|v| v.as_str())
-                            && (t == "output_text" || t == "input_text")
-                        {
-                            new_obj.insert("type".to_string(), Value::String("text".to_string()));
-                        }
-                        if !new_obj.contains_key("text")
-                            && let Some(cnt) = new_obj.remove("content")
-                        {
-                            new_obj.insert("text".to_string(), cnt);
-                        }
-                        Value::Object(new_obj)
-                    } else {
-                        p.clone()
-                    }
-                })
-                .collect();
-            patched.content = Some(Value::Array(sanitized_parts));
+            // Rewrite every media part to the canonical Chat Completions
+            // vocabulary. A part that keeps the dialect it arrived in (an
+            // `input_image` from a Responses client, an Anthropic `document`)
+            // is silently dropped by target formatters that only know their own
+            // spelling, and the model then answers about media it never got.
+            let canonical = media::canonical_media_parts(parts);
+            if canonical.is_empty() {
+                patched.content = Some(Value::String(patched.extract_text()));
+            } else {
+                patched.content = Some(Value::Array(canonical));
+            }
         }
     }
     patched
 }
-
 pub struct AnthropicFormatter;
 impl TargetFormatter for AnthropicFormatter {
     fn format_request(

@@ -218,6 +218,10 @@ fn infer_capabilities_lower(lower: &str) -> ModelCapabilities {
         "minicpm-v",
         "internvl",
         "glm-4v",
+        // Vision-language families whose names carry no "vision" keyword. The
+        // `-vl` suffix is the standard HuggingFace/NVIDIA marker for a VLM, and
+        // Nemotron VL models are multimodal without spelling it out.
+        "nemotron",
     ];
     const REASONING_KW: &[&str] = &[
         "o1",
@@ -235,6 +239,15 @@ fn infer_capabilities_lower(lower: &str) -> ModelCapabilities {
     let mut caps = ModelCapabilities::empty();
 
     if VISION_KW.iter().any(|k| lower.contains(k)) {
+        caps.vision = Some(true);
+    }
+
+    // `-vl` / `-vlm` suffix: the standard HuggingFace and NVIDIA marker for a
+    // vision-language model. Checked as a delimited token so a model like
+    // `qwen3-vl-8b` is caught without matching an unrelated `...vl...` substring.
+    if !caps.vision.unwrap_or(false)
+        && (contains_delimited_token(lower, "vl") || contains_delimited_token(lower, "vlm"))
+    {
         caps.vision = Some(true);
     }
 
@@ -741,3 +754,43 @@ pub fn infer_family(model_id: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "capabilities_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod vl_inference_tests {
+    use super::*;
+
+    #[test]
+    fn nemotron_vl_is_detected_as_vision() {
+        let caps = infer_capabilities("nvidia/nemotron-3.5-super-vl-120b-a12b");
+        assert_eq!(caps.vision, Some(true));
+    }
+
+    #[test]
+    fn vl_suffix_marks_a_model_as_vision() {
+        for id in ["qwen3-vl-8b", "Qwen/Qwen3-VL-32B", "some-vlm-model"] {
+            assert_eq!(
+                infer_capabilities(id).vision,
+                Some(true),
+                "{id} should be vision"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_text_models_stay_text_only() {
+        for id in ["llama-3.3-70b", "qwen3-27b", "deepseek-chat"] {
+            assert_ne!(
+                infer_capabilities(id).vision,
+                Some(true),
+                "{id} must not be vision"
+            );
+        }
+    }
+
+    #[test]
+    fn inferred_modalities_include_image_for_a_vl_model() {
+        let caps = infer_capabilities("nvidia/nemotron-3.5-super-vl-120b-a12b");
+        let mods = infer_input_modalities_for_model("nvidia/nemotron-3.5-super-vl-120b-a12b", &caps);
+        assert!(mods.contains(&"image"), "modalities: {mods:?}");
+    }
+}
