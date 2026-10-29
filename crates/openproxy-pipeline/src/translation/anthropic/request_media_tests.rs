@@ -217,3 +217,55 @@ fn system_message_still_extracted_separately() {
     let parts = user.content.as_array().expect("typed block array");
     assert!(parts.iter().any(|p| p["type"] == "image"));
 }
+
+fn tool_result_after_call(tool_content: serde_json::Value) -> serde_json::Value {
+    let req: OpenAIRequest = serde_json::from_value(json!({
+        "model": "claude-opus-5-5",
+        "messages": [
+            { "role": "user", "content": "look at the image" },
+            {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": { "name": "vision_analyze", "arguments": "{}" }
+                }]
+            },
+            { "role": "tool", "tool_call_id": "call_1", "content": tool_content }
+        ]
+    }))
+    .expect("request deserializes");
+    let anthropic = openai_to_anthropic(&req, "claude-opus-5-5", &req.messages, false);
+    anthropic
+        .messages
+        .iter()
+        .flat_map(|m| m.content.as_array().cloned().unwrap_or_default())
+        .find(|b| b["type"] == "tool_result")
+        .expect("tool_result block present")
+}
+
+#[test]
+fn tool_result_with_image_keeps_the_image_block() {
+    // Hermes' vision_analyze returns pixels as a tool message; flattening it to
+    // text left the model with "Image loaded into your context" and no image.
+    let result = tool_result_after_call(json!([
+        { "type": "text", "text": "Image loaded into your context" },
+        { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } }
+    ]));
+    assert_eq!(result["tool_use_id"], "call_1");
+    let blocks = result["content"].as_array().expect("content is a block array");
+    let image = find_block(blocks, "image");
+    assert_eq!(image["source"]["type"], "base64");
+    assert_eq!(image["source"]["media_type"], "image/png");
+    assert_eq!(image["source"]["data"], "AAAA");
+    assert_eq!(find_block(blocks, "text")["text"], "Image loaded into your context");
+}
+
+#[test]
+fn text_only_tool_result_stays_a_string() {
+    let result = tool_result_after_call(json!([{ "type": "text", "text": "ok" }]));
+    assert_eq!(result["content"], "ok");
+    let result = tool_result_after_call(json!("plain"));
+    assert_eq!(result["content"], "plain");
+}

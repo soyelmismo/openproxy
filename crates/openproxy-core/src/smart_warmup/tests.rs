@@ -17,8 +17,8 @@ fn warmup_request_shapes_for_claude_and_gemini() {
     assert_eq!(claude.max_tokens, None);
     assert_eq!(claude.temperature, Some(0.0));
 
-    let gemini = build_warmup_request("gemini-pro-agent");
-    assert_eq!(gemini.model, "gemini-pro-agent");
+    let gemini = build_warmup_request("gemini-3.1-pro-high");
+    assert_eq!(gemini.model, "gemini-3.1-pro-high");
     let content = gemini.messages[0]
         .content
         .as_ref()

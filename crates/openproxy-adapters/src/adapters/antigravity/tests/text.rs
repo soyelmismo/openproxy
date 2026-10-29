@@ -102,7 +102,8 @@ fn claude_empty_text_does_not_change_nonempty_text_or_images() {
     let parts = request["contents"][0]["parts"].as_array().unwrap();
     assert_eq!(parts.len(), 2);
     assert_eq!(parts[0]["text"], "  Hola 世界  ");
-    assert_eq!(parts[1]["inline_data"]["data"], "aGVsbG8=");
+    assert_eq!(parts[1]["inlineData"]["data"], "aGVsbG8=");
+    assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
 }
 
 #[test]

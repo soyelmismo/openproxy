@@ -16,9 +16,17 @@ pub struct GeminiSafetySetting {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeminiRequest {
     pub contents: Vec<GeminiContent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "systemInstruction",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub system_instruction: Option<GeminiContent>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "generationConfig",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub generation_config: Option<GeminiGenerationConfig>,
     #[serde(
         default,
@@ -44,6 +52,7 @@ pub struct GeminiContent {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct GeminiInlineData {
+    #[serde(rename = "mimeType")]
     pub mime_type: String,
     pub data: String,
 }
@@ -77,7 +86,11 @@ pub struct GeminiPart {
         skip_serializing_if = "Option::is_none"
     )]
     pub thought_signature: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "inlineData",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub inline_data: Option<GeminiInlineData>,
     #[serde(
         default,
@@ -101,13 +114,21 @@ pub struct GeminiThinkingConfig {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GeminiGenerationConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "maxOutputTokens",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "stopSequences",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub stop_sequences: Option<Vec<String>>,
     #[serde(
         default,

@@ -216,8 +216,7 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
             .get("project_id")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let physical_model =
-            openproxy_adapters::adapters::antigravity::map_antigravity_physical_model(model);
+        let physical_model = model;
         let request = build_warmup_request(model);
         let request_payload = serde_json::to_value(
             openproxy_adapters::adapters::gemini::openai_to_gemini(&request, &request.messages),

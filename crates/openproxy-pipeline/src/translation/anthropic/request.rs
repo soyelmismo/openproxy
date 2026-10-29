@@ -373,6 +373,34 @@ fn convert_openai_part_to_anthropic(part: &serde_json::Value) -> serde_json::Val
     })
 }
 
+/// Content of an Anthropic `tool_result` built from an OpenAI `tool` message.
+///
+/// Clients such as Hermes return screenshots and `vision_analyze` pixels as a
+/// tool message whose content is `[text, image_url]`. Flattening that to text
+/// drops the image inside the proxy: the model answers from the text stub and
+/// never sees the pixels. `tool_result.content` accepts `text` and `image`
+/// blocks, so media parts are carried as blocks; plain text stays a string.
+fn tool_result_content(m: &OpenAIMessage) -> serde_json::Value {
+    let Some(serde_json::Value::Array(parts)) = &m.content else {
+        return serde_json::Value::String(m.extract_text_cow().into_owned());
+    };
+    let has_media = parts
+        .iter()
+        .any(|p| p.get("type").and_then(|t| t.as_str()).is_some_and(|t| t != "text"));
+    if !has_media {
+        return serde_json::Value::String(m.extract_text_cow().into_owned());
+    }
+    let blocks: Vec<serde_json::Value> = parts
+        .iter()
+        .map(convert_openai_part_to_anthropic)
+        .filter(|b| match b.get("type").and_then(|t| t.as_str()) {
+            Some("text") => b.get("text").and_then(|t| t.as_str()).is_some_and(|t| !t.is_empty()),
+            _ => true,
+        })
+        .collect();
+    serde_json::Value::Array(blocks)
+}
+
 fn append_user_message(
     m: &OpenAIMessage,
     conversation: &mut Vec<AnthropicMessage>,
@@ -440,11 +468,10 @@ fn build_anthropic_conversation(
             }
             "tool" => {
                 let tool_use_id = m.tool_call_id.as_deref().unwrap_or("");
-                let content_text = m.extract_text_cow();
                 pending_tool_results.push(json!({
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
-                    "content": content_text,
+                    "content": tool_result_content(m),
                 }));
             }
             _ => {}

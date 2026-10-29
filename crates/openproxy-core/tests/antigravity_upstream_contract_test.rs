@@ -207,8 +207,8 @@ fn test_antigravity_golden_contract_spec_parity() {
     let val: serde_json::Value = serde_json::from_slice(&wrapped).expect("valid json");
     assert_eq!(val["project"], "p-proj-123");
     assert_eq!(
-        val["model"], "gemini-pro-agent",
-        "must map gemini-3.1-pro to physical gemini-pro-agent"
+        val["model"], "gemini-3.1-pro",
+        "model id must reach the upstream verbatim: physical ids come from fetchAvailableModels"
     );
     assert_eq!(val["requestType"], "agent");
     assert_eq!(val["userAgent"], "antigravity");
@@ -261,8 +261,8 @@ fn test_antigravity_golden_contract_spec_parity() {
         .expect("wrap antigravity request for flash");
     let flash_val: serde_json::Value = serde_json::from_slice(&flash_wrapped).expect("valid json");
     assert_eq!(
-        flash_val["model"], "gemini-3-flash-agent",
-        "must map gemini-3.8-flash to physical gemini-3-flash-agent"
+        flash_val["model"], "gemini-3.8-flash",
+        "model id must reach the upstream verbatim (no rewrite table)"
     );
 }
 
@@ -398,7 +398,7 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
         .call(
             UpstreamRequest::get(&thinking_url),
             TimeoutProfile::OAuth,
-            cancel,
+            cancel.clone(),
         )
         .await
     {
@@ -422,9 +422,42 @@ async fn test_antigravity_remote_upstream_live_contract_parity() {
         thinking_ts.contains("skip_thought_signature_validator"),
         "Upstream thinking_store.rs SENTINEL_SIGNATURE diverged from OpenProxy"
     );
+
+    // The physical model catalog lives in variant_mapping.rs, not in
+    // thinking_store.rs. gemini-pro-agent was retired upstream (issue #3737);
+    // the 3.1 Pro family now resolves to gemini-3.1-pro-high/-low.
+    let mapping_url = format!("{raw_base}/src-tauri/src/proxy/common/variant_mapping.rs");
+    let resp = match client
+        .call(
+            UpstreamRequest::get(&mapping_url),
+            TimeoutProfile::OAuth,
+            cancel.clone(),
+        )
+        .await
+    {
+        Ok(r) if r.status.is_success() => r,
+        Ok(r) => {
+            eprintln!(
+                "[AntigravityContractTest] Fetch variant_mapping.rs HTTP {}, skipping",
+                r.status
+            );
+            return;
+        }
+        Err(e) => {
+            eprintln!("[AntigravityContractTest] Fetch variant_mapping.rs error ({e}), skipping");
+            return;
+        }
+    };
+    let mapping_bytes = resp.collect().await.expect("read variant_mapping body");
+    let mapping_ts = String::from_utf8_lossy(&mapping_bytes);
+
     assert!(
-        thinking_ts.contains("gemini-pro-agent"),
-        "Upstream thinking_store.rs missing physical gemini-pro-agent"
+        mapping_ts.contains("gemini-3.1-pro-high"),
+        "Upstream variant_mapping.rs missing physical gemini-3.1-pro-high"
+    );
+    assert!(
+        mapping_ts.contains("gemini-3.1-pro-low"),
+        "Upstream variant_mapping.rs missing physical gemini-3.1-pro-low"
     );
 }
 

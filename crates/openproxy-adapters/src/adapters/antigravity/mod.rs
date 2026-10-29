@@ -22,28 +22,16 @@ pub use tokens::{
     load_code_assist, onboard_user, parse_total_tokens,
 };
 
-crate::define_jump_map! {
-    /// Jump map for Antigravity physical model translation.
-    pub fn map_antigravity_physical_model(model: &str) -> &str {
-        "gemini-3.1-pro" | "gemini-3.1-pro-high" | "gemini-3.1-pro-medium" | "gemini-3-pro" => "gemini-pro-agent",
-        "gemini-3.5-flash"
-        | "gemini-3.5-flash-high"
-        | "gemini-3.5-flash-medium"
-        | "gemini-3.6-flash"
-        | "gemini-3.6-flash-high"
-        | "gemini-3.6-flash-medium"
-        | "gemini-3.7-flash"
-        | "gemini-3.7-flash-high"
-        | "gemini-3.7-flash-medium"
-        | "gemini-3.8-flash"
-        | "gemini-3.8-flash-high"
-        | "gemini-3.8-flash-medium"
-        | "gemini-3-flash" => "gemini-3-flash-agent",
-        other => other,
-    }
-}
-
 pub const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
+
+// Model ids are sent to the upstream verbatim: they come from
+// `fetchAvailableModels` and are already physical. Do not reintroduce a
+// translation table here. The one that used to live at this spot mapped
+// `gemini-3.1-pro*` to the retired `gemini-pro-agent` codename and every 3.x
+// flash to `gemini-3-flash-agent`; neither target appears in any account's
+// catalog, so those requests were rejected with
+// `503 No accounts available with quota for model`. Aliases belong in the
+// combo/model catalog, where they can be resolved per account.
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct AntigravityAdapter {
@@ -245,7 +233,7 @@ impl ProviderAdapter for AntigravityAdapter {
         model: &ModelId,
         _resolved_target: &openproxy_types::context::ResolvedTarget,
     ) -> std::result::Result<bytes::Bytes, CoreError> {
-        let physical_model = map_antigravity_physical_model(model.as_str());
+        let physical_model = model.as_str();
         crate::antigravity_headers::finalize_antigravity_content_headers(headers, physical_model);
         Ok(body)
     }
@@ -265,7 +253,7 @@ impl ProviderAdapter for AntigravityAdapter {
                 .as_ref()
                 .and_then(|m| m.antigravity_project.as_deref())
                 .unwrap_or_default();
-            let physical_model = map_antigravity_physical_model(model.as_str());
+            let physical_model = model.as_str();
             let is_claude = physical_model.to_ascii_lowercase().contains("claude");
 
             if let Some(contents) = json.get_mut("contents") {
@@ -278,6 +266,8 @@ impl ProviderAdapter for AntigravityAdapter {
             if let Some(tools) = json.get_mut("tools") {
                 normalize_antigravity_tools(tools);
             }
+
+            normalize_gemini_wire_keys(&mut json);
 
             if let Some(gen_cfg) = json
                 .get_mut("generationConfig")
@@ -641,15 +631,110 @@ fn adjust_claude_thinking_config(gen_cfg: &mut serde_json::Map<String, serde_jso
                 "thinkingBudget".to_string(),
                 serde_json::json!(adjusted_budget),
             );
+            // Anthropic rejects the request with 400 INVALID_ARGUMENT when
+            // `max_tokens <= thinking.budget_tokens`. Thinking tokens are
+            // drawn from the same budget as the visible answer, so the output
+            // ceiling must always leave room above the thinking budget. The
+            // client's own max_tokens (often 4096) is smaller than the budget
+            // we derive from reasoning_effort (up to 32768), so this clamp has
+            // to be unconditional — not only when maxOutputTokens is absent.
             let current_max = gen_cfg
                 .get("maxOutputTokens")
                 .and_then(|m| m.as_u64())
-                .unwrap_or(8192) as i64;
+                .map(|m| m as i64)
+                .unwrap_or(0);
             if current_max <= adjusted_budget {
                 gen_cfg.insert(
                     "maxOutputTokens".to_string(),
                     serde_json::json!(adjusted_budget + 1024),
                 );
+            }
+        }
+    }
+}
+
+/// Normalizes the snake_case keys the typed Gemini serializer emits into the
+/// camelCase wire form Google's Cloud Code endpoint requires.
+///
+/// `GeminiRequest`/`GeminiGenerationConfig` are serialized from Rust structs
+/// whose fields are snake_case. Any field that was not given an explicit
+/// `#[serde(rename)]` reaches the wire as `generation_config`,
+/// `max_output_tokens`, `top_p`, `stop_sequences`, `inline_data`, … which the
+/// upstream silently ignores (it treats them as unknown fields). That made the
+/// Claude thinking clamp above a no-op and produced
+/// `400 max_tokens must be greater than thinking.budget_tokens`.
+fn normalize_gemini_wire_keys(json: &mut serde_json::Value) {
+    const RENAMES: [(&str, &str); 8] = [
+        ("generation_config", "generationConfig"),
+        ("system_instruction", "systemInstruction"),
+        ("max_output_tokens", "maxOutputTokens"),
+        ("stop_sequences", "stopSequences"),
+        ("inline_data", "inlineData"),
+        ("mime_type", "mimeType"),
+        ("tool_config", "toolConfig"),
+        ("safety_settings", "safetySettings"),
+    ];
+
+    let Some(obj) = json.as_object_mut() else {
+        return;
+    };
+
+    for (snake, camel) in RENAMES {
+        if let Some(value) = obj.remove(snake) {
+            obj.entry(camel.to_string()).or_insert(value);
+        }
+    }
+
+    // Nested: generationConfig and inlineData parts carry their own snake_case
+    // fields that the top-level pass does not reach.
+    if let Some(gen_cfg) = obj
+        .get_mut("generationConfig")
+        .and_then(|v| v.as_object_mut())
+    {
+        for (snake, camel) in [
+            ("max_output_tokens", "maxOutputTokens"),
+            ("stop_sequences", "stopSequences"),
+            ("thinking_config", "thinkingConfig"),
+        ] {
+            if let Some(value) = gen_cfg.remove(snake) {
+                gen_cfg.entry(camel.to_string()).or_insert(value);
+            }
+        }
+        if let Some(tc) = gen_cfg
+            .get_mut("thinkingConfig")
+            .and_then(|v| v.as_object_mut())
+            && let Some(value) = tc.remove("thinking_budget")
+        {
+            tc.entry("thinkingBudget".to_string()).or_insert(value);
+        }
+    }
+
+    if let Some(contents) = obj.get_mut("contents").and_then(|v| v.as_array_mut()) {
+        for content in contents {
+            let Some(parts) = content.get_mut("parts").and_then(|p| p.as_array_mut()) else {
+                continue;
+            };
+            for part in parts {
+                let Some(part_obj) = part.as_object_mut() else {
+                    continue;
+                };
+                for (snake, camel) in [
+                    ("inline_data", "inlineData"),
+                    ("thought_signature", "thoughtSignature"),
+                    ("function_call", "functionCall"),
+                    ("function_response", "functionResponse"),
+                ] {
+                    if let Some(value) = part_obj.remove(snake) {
+                        part_obj.entry(camel.to_string()).or_insert(value);
+                    }
+                }
+                if let Some(inline) = part_obj
+                    .get_mut("inlineData")
+                    .and_then(|v| v.as_object_mut())
+                    && let Some(value) = inline.remove("mime_type")
+                {
+                    inline.entry("mimeType".to_string()).or_insert(value);
+                }
             }
         }
     }
