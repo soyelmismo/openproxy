@@ -188,6 +188,81 @@ fn enrich_via_normalized_matches_date_suffix() {
 }
 
 #[test]
+fn enrich_translates_video_modalities_into_type_and_caps() {
+    // models.dev expresses video only through `modalities.input`/`output`.
+    // The enrichment must translate a video-only output into
+    // `model_type = 'video'` and a `video` flag in `capabilities_json`.
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE models (
+             provider_id         TEXT NOT NULL,
+             model_id            TEXT NOT NULL,
+             context_length      INTEGER,
+             max_output_tokens   INTEGER,
+             capabilities_json   TEXT,
+             family              TEXT,
+             input_modalities_json TEXT,
+             output_modalities_json TEXT,
+             model_type          TEXT NOT NULL DEFAULT 'chat',
+             target_format       TEXT NOT NULL DEFAULT 'openai',
+             custom              INTEGER NOT NULL DEFAULT 0,
+             model_id_normalized TEXT,
+             UNIQUE(provider_id, model_id)
+         );",
+    )
+    .unwrap();
+    create_sync_table(&conn);
+
+    let json = r#"{
+        "someprovider": {
+            "id": "someprovider",
+            "models": {
+                "vidgen-x1": {
+                    "id": "vidgen-x1",
+                    "limit": { "context": 8192, "output": 0 },
+                    "modalities": {
+                        "input": ["text", "image"],
+                        "output": ["video"]
+                    }
+                }
+            }
+        }
+    }"#;
+    upsert_models_dev(json.as_bytes(), &conn).unwrap();
+
+    // A non-custom models row whose normalized id matches the sync row.
+    let normalized = crate::model_normalize::normalize_model_id("vidgen-x1");
+    conn.execute(
+        "INSERT INTO models (provider_id, model_id, custom, model_id_normalized) \
+         VALUES ('someprovider', 'vidgen-x1', 0, ?1)",
+        rusqlite::params![&normalized],
+    )
+    .unwrap();
+
+    let touched = enrich_models_from_sync(&conn).unwrap();
+    assert!(touched >= 1);
+
+    let (model_type, caps_json, out_mods): (String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT model_type, capabilities_json, output_modalities_json FROM models \
+             WHERE provider_id = 'someprovider' AND model_id = 'vidgen-x1'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(model_type, "video", "video-only output must map to 'video'");
+    let caps_json = caps_json.expect("capabilities_json must be patched");
+    let caps: serde_json::Value = serde_json::from_str(&caps_json).unwrap();
+    assert_eq!(
+        caps.get("video"),
+        Some(&serde_json::json!(1)),
+        "video flag translated from modalities: {caps_json}"
+    );
+    assert_eq!(out_mods.as_deref(), Some(r#"["video"]"#));
+}
+
+#[test]
 fn test_resolved_provider_map_uses_adapter_metadata() {
     let map = &*RESOLVED_PROVIDER_MAP;
 

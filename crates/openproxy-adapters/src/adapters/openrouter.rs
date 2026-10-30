@@ -195,6 +195,10 @@ fn derive_vision_capabilities(
         caps.vision = Some(true);
         caps.attachment = Some(true);
     }
+    let has_video_input = arch.is_some_and(|a| a.input_modalities.iter().any(|m| m == "video"));
+    if has_video_input {
+        caps.video = Some(true);
+    }
 }
 
 fn derive_params_capabilities(caps: &mut openproxy_types::ModelCapabilities, params: &[String]) {
@@ -257,10 +261,13 @@ fn detect_non_text_modality(arch: &OpenRouterArchitecture) -> Option<&'static st
     }
     let has_image = arch.output_modalities.iter().any(|m| m == "image");
     let has_audio = arch.output_modalities.iter().any(|m| m == "audio");
-    if has_image && !has_audio {
+    let has_video = arch.output_modalities.iter().any(|m| m == "video");
+    if has_image && !has_audio && !has_video {
         Some("image")
-    } else if has_audio && !has_image {
+    } else if has_audio && !has_image && !has_video {
         Some("audio")
+    } else if has_video && !has_image && !has_audio {
+        Some("video")
     } else {
         None
     }
@@ -332,5 +339,36 @@ mod tests {
             infer_model_type_openrouter("some-model", Some(&decision_arch)),
             "decision"
         );
+
+        let video_arch = OpenRouterArchitecture {
+            input_modalities: vec!["text".to_string(), "image".to_string()],
+            output_modalities: vec!["video".to_string()],
+        };
+        assert_eq!(
+            infer_model_type_openrouter("some-model", Some(&video_arch)),
+            "video"
+        );
+    }
+
+    #[test]
+    fn test_video_input_sets_video_capability() {
+        let entry = OpenRouterModelEntry {
+            id: Some("some-model".to_string()),
+            name: None,
+            canonical_slug: None,
+            hugging_face_id: None,
+            context_length: None,
+            architecture: Some(OpenRouterArchitecture {
+                input_modalities: vec!["text".to_string(), "video".to_string()],
+                output_modalities: vec!["text".to_string()],
+            }),
+            top_provider: None,
+            supported_parameters: None,
+        };
+        let caps = derive_capabilities(&entry);
+        assert_eq!(caps.video, Some(true));
+        // Video input still implies vision+attachment, as before.
+        assert_eq!(caps.vision, Some(true));
+        assert_eq!(caps.attachment, Some(true));
     }
 }

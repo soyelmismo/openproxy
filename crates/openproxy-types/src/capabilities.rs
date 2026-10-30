@@ -103,6 +103,12 @@ pub struct ModelCapabilities {
         deserialize_with = "deserialize_flex_bool"
     )]
     pub streaming: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
+    pub video: Option<bool>,
 }
 
 impl ModelCapabilities {
@@ -121,6 +127,7 @@ impl ModelCapabilities {
             self.temperature,
             self.decisions,
             self.streaming,
+            self.video,
         ]
         .iter()
         .all(Option::is_none)
@@ -163,6 +170,9 @@ impl ModelCapabilities {
         }
         if other.decisions == Some(true) {
             self.decisions = Some(true);
+        }
+        if other.video == Some(true) {
+            self.video = Some(true);
         }
     }
 }
@@ -260,6 +270,10 @@ fn infer_capabilities_lower(lower: &str) -> ModelCapabilities {
         caps.decisions = Some(true);
     }
 
+    if is_video_model(lower) {
+        caps.video = Some(true);
+    }
+
     caps.tool_calling = Some(true);
     caps.structured_output = Some(true);
     caps.temperature = Some(true);
@@ -275,6 +289,9 @@ pub fn infer_input_modalities(caps: &ModelCapabilities) -> Vec<&'static str> {
     let mut out = vec!["text"];
     if caps.vision.unwrap_or(false) {
         out.push("image");
+    }
+    if caps.video.unwrap_or(false) {
+        out.push("video");
     }
     out
 }
@@ -305,12 +322,18 @@ fn is_native_audio_model(lower: &str) -> bool {
 fn infer_chat_input_modalities(lower: &str, caps: &ModelCapabilities) -> Vec<&'static str> {
     let has_vision = caps.vision.unwrap_or(false);
     let has_audio = is_native_audio_model(lower);
-    match (has_vision, has_audio) {
-        (true, true) => vec!["text", "image", "audio"],
-        (true, false) => vec!["text", "image"],
-        (false, true) => vec!["text", "audio"],
-        (false, false) => vec!["text"],
+    let has_video = caps.video.unwrap_or(false);
+    let mut out = vec!["text"];
+    if has_vision {
+        out.push("image");
     }
+    if has_audio {
+        out.push("audio");
+    }
+    if has_video {
+        out.push("video");
+    }
+    out
 }
 
 fn infer_input_modalities_for_model_lower(
@@ -327,6 +350,12 @@ fn infer_input_modalities_for_model_lower(
         }
         "rerank" => vec!["text"],
         "decision" => vec!["text"],
+        "video" => {
+            // Generative video models accept a prompt plus optional reference
+            // media. No reliable keyword tells image reference support apart,
+            // so advertise both and let upstream validation decide.
+            vec!["text", "image"]
+        }
         "image" => {
             if is_image_editing_model(lower) {
                 vec!["text", "image"]
@@ -371,6 +400,7 @@ fn infer_output_modalities_lower(lower: &str) -> Vec<&'static str> {
         "decision" => vec!["decision"],
         "embedding" => vec!["embedding"],
         "image" => vec!["image"],
+        "video" => vec!["video"],
         "audio" => infer_audio_output_modalities(lower),
         "rerank" => vec!["text"],
         _ => infer_chat_output_modalities(lower),
@@ -605,6 +635,35 @@ pub const IMAGE_KEYWORDS: &[&str] = &[
     "quiverai/arrow",
 ];
 
+/// Generative-video model families matched as substrings. Long, specific
+/// compounds only — short brand names live in [`VIDEO_TOKENS`] because bare
+/// substrings like `veo` or `gen-3` collide with unrelated names
+/// (`imagen-3.0-generate-002` was caught by `gen-3`).
+pub const VIDEO_KEYWORDS: &[&str] = &[
+    "cogvideo",
+    "hunyuan-video",
+    "wanx",
+    "stable-video",
+    "video-diffusion",
+    "video_gen",
+    "video-gen",
+];
+
+/// Generative-video brands matched only as delimited tokens (`-`, `_`, `/`,
+/// `.`, `:`, space), so `gen-3` matches Runway's `gen-3-alpha` but not
+/// `generate-002`, and `veo` matches `veo-3.1` but not `video`.
+pub const VIDEO_TOKENS: &[&str] = &[
+    "video", "sora", "veo", "kling", "luma", "runway", "gen-2", "gen-3", "gen-4", "hailuo", "vidu",
+    "wan2", "wan2.1", "wan2.2", "wan2.5", "ltx", "mochi",
+];
+
+pub fn is_video_model(lower: &str) -> bool {
+    VIDEO_KEYWORDS.iter().any(|k| lower.contains(k))
+        || VIDEO_TOKENS
+            .iter()
+            .any(|t| contains_delimited_token(lower, t))
+}
+
 pub fn infer_model_type(model_id: &str) -> &'static str {
     let lower = to_lower_cow(model_id);
     infer_model_type_lower(&lower)
@@ -659,6 +718,10 @@ fn infer_model_type_lower(lower: &str) -> &'static str {
         "embedding"
     } else if let Some(guarded_type) = check_chat_guard_model(lower) {
         guarded_type
+    } else if is_video_model(lower) {
+        // Before image/audio: `stable-video-diffusion` or `kling-tts`-style
+        // composites must keep their video-generation classification.
+        "video"
     } else if is_audio_model(lower) {
         "audio"
     } else if is_image_model(lower) {

@@ -47,6 +47,11 @@ fn enrich_max_output_tokens(conn: &Connection) -> Result<usize> {
 }
 
 fn enrich_capabilities(conn: &Connection) -> Result<usize> {
+    // 'video' is not a dedicated models.dev flag: it is translated from the
+    // synced modality lists (`modalities_input`/`modalities_output`), which
+    // carry strings like ["text","image","video"]. The CASE yields an
+    // integer flag matching the boolean columns the ModelCapabilities
+    // deserializer accepts, or NULL so json_patch leaves the key absent.
     conn.execute(
         "UPDATE models SET capabilities_json = (
         SELECT json_patch(
@@ -55,13 +60,20 @@ fn enrich_capabilities(conn: &Connection) -> Result<usize> {
                 'vision',            s.vision,
                 'tool_calling',      s.tool_call,
                 'reasoning',         s.reasoning,
-                'structured_output', s.structured_output
+                'structured_output', s.structured_output,
+                'video',             CASE
+                    WHEN s.modalities_input LIKE '%\"video\"%'
+                      OR s.modalities_output LIKE '%\"video\"%' THEN 1
+                    ELSE NULL
+                END
             )
         )
         FROM model_capabilities_sync s
         WHERE s.model_id_normalized = models.model_id_normalized
           AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-               OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+               OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL
+               OR s.modalities_input LIKE '%\"video\"%'
+               OR s.modalities_output LIKE '%\"video\"%')
         LIMIT 1
      )
      WHERE models.custom = 0
@@ -70,7 +82,9 @@ fn enrich_capabilities(conn: &Connection) -> Result<usize> {
          SELECT 1 FROM model_capabilities_sync s
          WHERE s.model_id_normalized = models.model_id_normalized
            AND (s.vision IS NOT NULL OR s.tool_call IS NOT NULL
-                OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL)
+                OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL
+                OR s.modalities_input LIKE '%\"video\"%'
+                OR s.modalities_output LIKE '%\"video\"%')
        )",
         [],
     )
@@ -103,13 +117,19 @@ fn enrich_metadata(conn: &Connection) -> Result<usize> {
                 )
             END,
             model_type = CASE
-                WHEN models.model_id_normalized LIKE '%embed%'
+                WHEN (models.model_id_normalized LIKE '%embed%'
                   OR models.model_id_normalized LIKE '%bge-%'
                   OR EXISTS (
                     SELECT 1 FROM model_capabilities_sync s
                     WHERE s.model_id_normalized = models.model_id_normalized
                       AND s.modalities_output = '[\"embedding\"]'
-                  ) THEN 'embedding'
+                  )) THEN 'embedding'
+                WHEN EXISTS (
+                    SELECT 1 FROM model_capabilities_sync s
+                    WHERE s.model_id_normalized = models.model_id_normalized
+                      AND s.modalities_output LIKE '%\"video\"%'
+                      AND s.modalities_output NOT LIKE '%\"text\"%'
+                  ) THEN 'video'
                 WHEN (models.model_id_normalized LIKE '%dall-e%'
                   OR models.model_id_normalized LIKE '%sdxl%'
                   OR models.model_id_normalized LIKE '%stable-diffusion%'

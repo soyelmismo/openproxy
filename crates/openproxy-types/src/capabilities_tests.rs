@@ -307,3 +307,85 @@ fn test_is_stt_model() {
 fn test_infer_default_output_modalities() {
     assert_eq!(infer_default_output_modalities(), vec!["text"]);
 }
+
+#[test]
+fn video_model_type_and_modalities() {
+    for id in [
+        "openai/sora-2",
+        "google/veo-3.1-generate-preview",
+        "kling-2.5-turbo",
+        "hunyuan-video-art",
+        "stable-video-diffusion",
+        "wan2.2-t2v",
+    ] {
+        assert_eq!(
+            infer_model_type(id),
+            "video",
+            "{id} must be classified as video"
+        );
+        assert_eq!(infer_output_modalities(id), vec!["video"], "{id} output");
+        assert_eq!(
+            infer_input_modalities_json(id),
+            r#"["text","image"]"#,
+            "{id} input"
+        );
+    }
+    // The video flag must surface in capabilities like every other flag.
+    let caps = infer_capabilities("openai/sora-2");
+    assert_eq!(caps.video, Some(true));
+}
+
+#[test]
+fn video_input_flag_flows_into_chat_modalities() {
+    // A chat model whose stored capabilities declare video must advertise the
+    // video input modality when the catalog falls back to inference.
+    let mut caps = ModelCapabilities::empty();
+    caps.video = Some(true);
+    assert_eq!(
+        infer_input_modalities(&caps),
+        vec!["text", "video"],
+        "caps.video must push the video input modality"
+    );
+    let mods = infer_input_modalities_for_model("some-chat-model", &caps);
+    assert_eq!(mods, vec!["text", "video"]);
+}
+
+#[test]
+fn video_capability_serializes_and_merges() {
+    let json = r#"{"video":1}"#;
+    let caps = ModelCapabilities::from_json(Some(json));
+    assert_eq!(caps.video, Some(true));
+    assert!(!caps.is_empty());
+    assert_eq!(caps.to_json().as_deref(), Some(r#"{"video":true}"#));
+
+    let mut merged = ModelCapabilities::empty();
+    merged.merge_union(&caps);
+    assert_eq!(merged.video, Some(true));
+    // Union never downgrades a positive flag from the other side.
+    let mut has_video = ModelCapabilities {
+        video: Some(true),
+        ..ModelCapabilities::empty()
+    };
+    has_video.merge_union(&ModelCapabilities::empty());
+    assert_eq!(has_video.video, Some(true));
+}
+
+#[test]
+fn text_models_are_not_video() {
+    for id in [
+        "gpt-4o",
+        "deepseek-chat",
+        "qwen3-vl-8b",
+        "dall-e-3",
+        "whisper-1",
+    ] {
+        assert_ne!(
+            infer_model_type(id),
+            "video",
+            "{id} must not be classified as video"
+        );
+        assert_eq!(infer_capabilities(id).video, None, "{id} caps.video");
+    }
+    // A chat guard family wins over a video-looking name, same as image/audio.
+    assert_eq!(infer_model_type("gemini-2.5-flash"), "chat");
+}

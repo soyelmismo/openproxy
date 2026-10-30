@@ -54,6 +54,10 @@ fn build_minimax_builtin_model(
     );
     if let Some(ref mut caps) = m.capabilities {
         caps.vision = Some(vision);
+        // Same rule as the `input_modalities` block below: every
+        // vision-capable MiniMax model here is M3-generation and accepts
+        // video; M2.x has no vision (and no video) at all.
+        caps.video = Some(vision);
         caps.tool_calling = Some(true);
         caps.reasoning = Some(reasoning);
         caps.thinking = Some(reasoning);
@@ -334,6 +338,7 @@ fn parse_single_minimax_model(key: &str, body: &str) -> Option<DiscoveredModel> 
 
     let mut caps = openproxy_types::capabilities::infer_capabilities(key);
     caps.vision = Some(has_image);
+    caps.video = Some(has_video);
     caps.tool_calling = Some(has_tools);
     caps.reasoning = Some(has_reasoning);
     caps.thinking = Some(has_reasoning || has_thinking);

@@ -369,7 +369,7 @@ fn build_model_entry(m: &models::Model) -> serde_json::Value {
 /// client checks correct.
 fn build_capabilities_object(caps: &capabilities::ModelCapabilities) -> serde_json::Value {
     let mut out = serde_json::Map::new();
-    let fields: [(&str, Option<bool>); 8] = [
+    let fields: [(&str, Option<bool>); 9] = [
         ("vision", caps.vision),
         ("tool_calling", caps.tool_calling),
         ("reasoning", caps.reasoning),
@@ -378,6 +378,7 @@ fn build_capabilities_object(caps: &capabilities::ModelCapabilities) -> serde_js
         ("structured_output", caps.structured_output),
         ("temperature", caps.temperature),
         ("decisions", caps.decisions),
+        ("video", caps.video),
     ];
     for (name, val) in fields {
         if let Some(v) = val {
