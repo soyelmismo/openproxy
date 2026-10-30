@@ -99,6 +99,7 @@ impl ApiError {
             | openproxy_types::TargetFormat::Gemini
             | openproxy_types::TargetFormat::Atomesus
             | openproxy_types::TargetFormat::CommandCodeGo
+            | openproxy_types::TargetFormat::Devin
             | openproxy_types::TargetFormat::SystemOne => {
                 let error_json = serde_json::json!({
                     "error": {
@@ -125,6 +126,7 @@ impl ApiError {
             | openproxy_types::TargetFormat::Gemini
             | openproxy_types::TargetFormat::Atomesus
             | openproxy_types::TargetFormat::CommandCodeGo
+            | openproxy_types::TargetFormat::Devin
             | openproxy_types::TargetFormat::SystemOne => {
                 frame.extend_from_slice(b"data: ");
             }

@@ -22,6 +22,12 @@ impl ChunkInterceptor for ChunkProcessor<'_> {
             return Ok(crate::streaming::ChunkEvent::Done);
         }
 
+        if ctx.target_format == openproxy_types::TargetFormat::Devin {
+            // `Box::pin` keeps the Devin frame path's state out of this
+            // already-large chain future (debug stack margins are thin).
+            return Box::pin(self.process_devin_frame(ctx, stream, &line_bytes)).await;
+        }
+
         let Some(line) = decode_and_record_line(self.state, &line_bytes) else {
             return Ok(crate::streaming::ChunkEvent::Skip);
         };

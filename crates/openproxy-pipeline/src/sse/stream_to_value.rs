@@ -173,6 +173,12 @@ pub fn parse_sse_stream_to_openai_response(
                 "SSE streaming is not supported for target format {target_format}"
             )));
         }
+        TargetFormat::Devin => {
+            return Err(CoreError::Parse(
+                "devin bodies are Connect-RPC frames; use fold_devin_body_to_openai_response"
+                    .to_string(),
+            ));
+        }
     }
 
     let val = acc.finish(chunk_id, created, model_name);

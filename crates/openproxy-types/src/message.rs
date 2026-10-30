@@ -13,6 +13,7 @@ impl_string_enum! {
         Atomesus => "atomesus",
         CommandCodeGo => "commandcodego",
         SystemOne => "systemone",
+        Devin => "devin",
     }
     core_error: "target_format"
 }
@@ -38,6 +39,7 @@ impl TargetFormat {
         Self::SystemOne,
         Self::Atomesus,
         Self::CommandCodeGo,
+        Self::Devin,
     ];
 
     #[inline]
@@ -91,6 +93,13 @@ impl TargetFormat {
                 label: Cow::Borrowed("CommandCodeGo"),
                 endpoint: None,
                 description: Cow::Borrowed("CommandCode Go bridge wire format"),
+            },
+            Self::Devin => TargetFormatDescriptor {
+                id: Self::Devin,
+                name: Cow::Borrowed("Devin"),
+                label: Cow::Borrowed("Devin (Connect-RPC)"),
+                endpoint: None,
+                description: Cow::Borrowed("Devin Connect-RPC protobuf wire format"),
             },
         }
     }

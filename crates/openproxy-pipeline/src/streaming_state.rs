@@ -1,3 +1,4 @@
+mod devin;
 mod normalizer;
 mod openai;
 mod processor;
@@ -41,6 +42,11 @@ pub(crate) struct StreamingState {
     /// True una vez emitido el evento `info` de primera actividad de
     /// razonamiento (evita ruido: como máximo uno por request).
     reasoning_first_logged: bool,
+    /// Estado del traductor Devin (índices de tool-call por id, último stop
+    /// reason para el chunk terminal). Boxed para no inflar la future del
+    /// pipeline en formatos que nunca lo tocan.
+    /// `target_format == Devin`.
+    pub devin: Box<crate::sse::devin::DevinStreamState>,
 }
 
 pub(crate) struct StreamContext<'a> {
@@ -91,6 +97,7 @@ impl StreamingState {
             tool_name_restore: None,
             reasoning_progress: reasoning_progress::ReasoningProgress::default(),
             reasoning_first_logged: false,
+            devin: Box::new(crate::sse::devin::DevinStreamState::default()),
         }
     }
 

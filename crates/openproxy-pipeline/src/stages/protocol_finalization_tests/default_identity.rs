@@ -26,6 +26,10 @@ fn default_finalize_request_is_identity_for_all_target_formats() {
         (AdapterFormat::Atomesus, TargetFormat::Atomesus),
         (AdapterFormat::CommandCodeGo, TargetFormat::CommandCodeGo),
         (AdapterFormat::SystemOne, TargetFormat::SystemOne),
+        // Devin's real `wrap_request_body` emits a protobuf envelope; the
+        // stub adapter keeps the JSON carrier, which is enough to prove the
+        // finalize hook itself is the identity for this format too.
+        (AdapterFormat::Devin, TargetFormat::Devin),
     ];
 
     // Guard: the table must cover every TargetFormat that exists.

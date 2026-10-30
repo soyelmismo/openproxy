@@ -476,12 +476,21 @@ static GEMINI_FORMATTER: GenericFormatter = GenericFormatter {
     format_spec: TargetFormat::Gemini,
 };
 
+static DEVIN_FORMATTER: GenericFormatter = GenericFormatter {
+    format_spec: TargetFormat::Devin,
+};
+
 pub fn get_formatter(target_format: TargetFormat) -> &'static dyn TargetFormatter {
     match target_format {
         TargetFormat::Openai
         | TargetFormat::Atomesus
         | TargetFormat::CommandCodeGo
         | TargetFormat::SystemOne => &OpenaiFormatter,
+        // Devin goes through `adapter.format_request`: the adapter emits the
+        // request carrier (full OpenAI request + effective messages), which
+        // `wrap_request_body` then encodes into the Connect-RPC protobuf
+        // envelope once the resolved account token is available.
+        TargetFormat::Devin => &DEVIN_FORMATTER,
         TargetFormat::Anthropic => &AnthropicFormatter,
         TargetFormat::Gemini => &GEMINI_FORMATTER,
         TargetFormat::Responses => &responses::ResponsesFormatter,

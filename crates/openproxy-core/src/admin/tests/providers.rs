@@ -61,6 +61,7 @@ fn test_quota_capability_anti_drift() {
         "codebuddy",
         "claude-code",
         "opencode-go",
+        "devin",
     ];
     for adapter in adapters {
         let id = adapter.id().as_str();

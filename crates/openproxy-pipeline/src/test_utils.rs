@@ -149,6 +149,7 @@ pub fn seed_provider_and_model(
                 TargetFormat::Atomesus => ProviderFormat::Atomesus,
                 TargetFormat::CommandCodeGo => ProviderFormat::CommandCodeGo,
                 TargetFormat::SystemOne => ProviderFormat::SystemOne,
+                TargetFormat::Devin => ProviderFormat::Devin,
             },
             extra_headers_json: None,
             auto_activate_keyword: None,

@@ -10,6 +10,15 @@ pub(crate) async fn run_pipeline(
     mut sse_parser: SseParser,
     processor: &mut impl ChunkInterceptor,
 ) -> Result<ChunkResult, CoreError> {
+    // Devin upstreams emit Connect-RPC envelopes (flag + u32BE len + protobuf
+    // payload), not newline-framed SSE. Those responses take the binary
+    // deframer; every other format keeps the SSE line framer. `saw_eos`
+    // tracks the mandatory trailer frame — a stream that closes without it
+    // is truncated, not clean (upstream treats it identically).
+    let mut devin_deframer = (ctx.target_format == openproxy_types::TargetFormat::Devin)
+        .then(openproxy_adapters::adapters::devin::wire::DevinDeframer::new);
+    let mut devin_saw_eos = false;
+
     loop {
         if is_race_cancelled(ctx) {
             return Ok(ChunkResult::Break);
@@ -24,6 +33,26 @@ pub(crate) async fn run_pipeline(
             },
         };
 
+        if let Some(deframer) = devin_deframer.as_mut() {
+            deframer.push(&bytes);
+            loop {
+                let frame = deframer
+                    .next_frame()
+                    .map_err(|e| CoreError::UpstreamConnection(format!("devin frame: {e}")))?;
+                let Some(frame) = frame else { break };
+                devin_saw_eos |= frame.is_end_stream();
+                let mut event_bytes = Vec::with_capacity(frame.payload.len() + 1);
+                event_bytes.push(frame.flag);
+                event_bytes.extend_from_slice(&frame.payload);
+                let event = ChunkEvent::Data(bytes::Bytes::from(event_bytes));
+                if let Some(res) = process_and_dispatch_event(ctx, stream, processor, event).await?
+                {
+                    return Ok(res);
+                }
+            }
+            continue;
+        }
+
         sse_parser.push_bytes(bytes)?;
 
         loop {
@@ -37,6 +66,19 @@ pub(crate) async fn run_pipeline(
             if let Some(res) = process_and_dispatch_event(ctx, stream, processor, event).await? {
                 return Ok(res);
             }
+        }
+    }
+
+    if let Some(deframer) = devin_deframer.as_ref() {
+        if deframer.has_partial() {
+            return Err(CoreError::UpstreamConnection(
+                "devin stream truncated mid-frame".to_string(),
+            ));
+        }
+        if !devin_saw_eos {
+            return Err(CoreError::UpstreamConnection(
+                "devin stream terminated before EOS trailer".to_string(),
+            ));
         }
     }
 

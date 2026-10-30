@@ -210,6 +210,7 @@ struct ProviderCustomFields {
     codex_workspace_id: Option<String>,
     claude_account_uuid: Option<String>,
     claude_metadata: Option<String>,
+    devin_device_seed: Option<String>,
 }
 
 fn extract_provider_custom_meta(
@@ -291,6 +292,26 @@ fn extract_provider_custom_meta(
                 ..Default::default()
             }
         }
+        "devin" => {
+            let decrypted = openproxy_db::accounts::decrypt_oauth_provider_specific(
+                raw_account.oauth_provider_specific.as_deref(),
+                master_key,
+            );
+            let device_seed = decrypted
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .and_then(|meta| {
+                    meta.get("device_seed")
+                        .or_else(|| meta.get("deviceSeed"))
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.is_empty())
+                        .map(ToString::to_string)
+                });
+            ProviderCustomFields {
+                devin_device_seed: device_seed,
+                ..Default::default()
+            }
+        }
         _ => ProviderCustomFields::default(),
     }
 }
@@ -367,6 +388,7 @@ fn resolve_account_oauth_meta(
         codex_workspace_id: fields.codex_workspace_id,
         claude_account_uuid: fields.claude_account_uuid,
         claude_metadata: fields.claude_metadata,
+        devin_device_seed: fields.devin_device_seed,
     })
 }
 

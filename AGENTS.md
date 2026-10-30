@@ -143,7 +143,7 @@ Las reglas de concurrencia, SSE, UTF-8, Serde, CSS y orquestación están enunci
 ## 6. Base de Datos SQLite, Cifrado y Migraciones
 
 1. **Migraciones Secuenciales:**
-   - Añadir el archivo numerado a `crates/openproxy-db/migrations/` (siguiente número libre; a fecha de hoy el último es `000097_usage_audio_ms.sql`, así que un ejemplo de nombre válido sería `000098_feature_name.sql`). El array `MIGRATIONS` NO se edita a mano: `crates/openproxy-db/build.rs` lo genera en `OUT_DIR/migrations_generated.rs` desde el prefijo numérico de seis dígitos de cada archivo, y el runner es idempotente.
+   - Añadir el archivo numerado a `crates/openproxy-db/migrations/` (siguiente número libre; a fecha de hoy el último es `000098_add_devin_format.sql`, así que un ejemplo de nombre válido sería `000099_feature_name.sql`). El array `MIGRATIONS` NO se edita a mano: `crates/openproxy-db/build.rs` lo genera en `OUT_DIR/migrations_generated.rs` desde el prefijo numérico de seis dígitos de cada archivo, y el runner es idempotente.
    - Verificar el número libre antes de elegir prefijo. Si el build falla con una migración ausente en `OUT_DIR`, es una migración obsoleta en caché: tocar el directorio y recompilar.
 2. **Cifrado en Reposo:**
    - Sellar credenciales upstream, tokens OAuth y API keys privadas con **AES-256-GCM** mediante la master key en `OPENPROXY_MASTER_KEY` (y `OPENPROXY_MASTER_KEY_PREVIOUS` durante rotación). Ver `crates/openproxy-db/src/secrets.rs`.

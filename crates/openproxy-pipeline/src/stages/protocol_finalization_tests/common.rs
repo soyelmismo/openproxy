@@ -109,6 +109,7 @@ fn blank_custom_meta(access_token: String) -> CustomProviderMeta {
         codex_workspace_id: None,
         claude_account_uuid: None,
         claude_metadata: None,
+        devin_device_seed: None,
     }
 }
 
@@ -261,6 +262,7 @@ fn resolve_format(adapter: &ProviderAdapterEnum, model_format: TargetFormat) -> 
         AdapterFormat::Atomesus => TargetFormat::Atomesus,
         AdapterFormat::CommandCodeGo => TargetFormat::CommandCodeGo,
         AdapterFormat::SystemOne => TargetFormat::SystemOne,
+        AdapterFormat::Devin => TargetFormat::Devin,
     }
 }
 

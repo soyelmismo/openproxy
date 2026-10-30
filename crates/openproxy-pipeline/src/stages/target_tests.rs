@@ -418,6 +418,7 @@ fn make_test_target(
             codex_workspace_id: None,
             claude_account_uuid: None,
             claude_metadata: None,
+            devin_device_seed: None,
         }),
     }
 }

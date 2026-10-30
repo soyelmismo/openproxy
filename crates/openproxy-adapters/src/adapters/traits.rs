@@ -128,6 +128,7 @@ pub(crate) fn resolve_target_format(format: AdapterFormat, fallback: TargetForma
         AdapterFormat::CommandCodeGo => TargetFormat::CommandCodeGo,
         AdapterFormat::Gemini => TargetFormat::Gemini,
         AdapterFormat::SystemOne => TargetFormat::SystemOne,
+        AdapterFormat::Devin => TargetFormat::Devin,
     }
 }
 
@@ -139,6 +140,7 @@ pub(crate) fn target_format_path(target_format: TargetFormat) -> &'static str {
         TargetFormat::Atomesus => "/chat/atomesus",
         TargetFormat::CommandCodeGo => "/alpha/generate",
         TargetFormat::SystemOne => "/systemone",
+        TargetFormat::Devin => "/exa.api_server_pb.ApiServerService/GetChatMessage",
     }
 }
 

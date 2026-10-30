@@ -9,6 +9,7 @@
 mod anthropic;
 mod atomesus;
 pub mod commandcode;
+pub(crate) mod devin;
 mod gemini;
 mod openai;
 mod responses;

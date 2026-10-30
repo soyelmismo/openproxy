@@ -53,6 +53,7 @@ impl_string_enum! {
         Atomesus => "atomesus",
         CommandCodeGo => "commandcodego",
         SystemOne => "systemone",
+        Devin => "devin",
     }
     error: "provider format"
 }
@@ -67,6 +68,7 @@ impl ProviderFormat {
         Self::SystemOne,
         Self::Atomesus,
         Self::CommandCodeGo,
+        Self::Devin,
     ];
 
     /// Return the default target format for this provider format.
@@ -80,6 +82,7 @@ impl ProviderFormat {
             Self::CommandCodeGo => TargetFormat::CommandCodeGo,
             Self::SystemOne => TargetFormat::SystemOne,
             Self::Openai | Self::Mixed => TargetFormat::Openai,
+            Self::Devin => TargetFormat::Devin,
         }
     }
 
@@ -141,6 +144,13 @@ impl ProviderFormat {
                 label: Cow::Borrowed("CommandCodeGo"),
                 default_target_format: TargetFormat::CommandCodeGo,
                 description: Cow::Borrowed("CommandCode Go bridge protocol"),
+            },
+            Self::Devin => ProviderFormatDescriptor {
+                id: Self::Devin,
+                name: Cow::Borrowed("Devin"),
+                label: Cow::Borrowed("Devin (Connect-RPC)"),
+                default_target_format: TargetFormat::Devin,
+                description: Cow::Borrowed("Devin Connect-RPC protobuf protocol"),
             },
         }
     }

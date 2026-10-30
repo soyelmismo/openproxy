@@ -263,9 +263,9 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 24, "first call inserts all twenty-four");
+        assert_eq!(n, 25, "first call inserts all twenty-five");
 
-        // all twenty-four present and reachable by id
+        // all twenty-five present and reachable by id
         for id in [
             "atomesus",
             "openrouter",
@@ -291,6 +291,7 @@ mod tests {
             "laya",
             "claude-code",
             "eac",
+            "devin",
         ] {
             let p = providers::get(&conn, &ProviderId::new(id))
                 .expect("get")
@@ -304,14 +305,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 24);
+        assert_eq!(first, 25);
 
         // running again must not insert more rows
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 24, "still exactly twenty-four rows");
+        assert_eq!(count, 25, "still exactly twenty-five rows");
     }
 
     #[test]
@@ -335,7 +336,7 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 23, "only the twenty-three missing ones");
+        assert_eq!(n, 24, "only the twenty-four missing ones");
 
         // the pre-seeded row's name was not overwritten
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -450,7 +451,7 @@ mod tests {
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 24);
+        assert_eq!(ids.len(), 25);
         assert!(ids.iter().any(|s| s == "claude-code"));
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));

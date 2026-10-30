@@ -66,6 +66,7 @@ pub fn resolve_effective_target_format(
             openproxy_core::models::TargetFormat::CommandCodeGo
         }
         adapters::AdapterFormat::SystemOne => openproxy_core::models::TargetFormat::SystemOne,
+        adapters::AdapterFormat::Devin => openproxy_core::models::TargetFormat::Devin,
     }
 }
 
@@ -330,6 +331,7 @@ pub fn build_custom_provider_meta(
             codex_workspace_id: None,
             claude_account_uuid: None,
             claude_metadata: None,
+            devin_device_seed: None,
         })
     } else if provider_id == "kiro" {
         let (region, profile_arn) = extract_kiro_meta(raw_account_opt);
@@ -343,6 +345,7 @@ pub fn build_custom_provider_meta(
             codex_workspace_id: None,
             claude_account_uuid: None,
             claude_metadata: None,
+            devin_device_seed: None,
         })
     } else if provider_id == "codex" {
         let codex_workspace_id = raw_account_opt
@@ -365,6 +368,7 @@ pub fn build_custom_provider_meta(
             codex_workspace_id,
             claude_account_uuid: None,
             claude_metadata: None,
+            devin_device_seed: None,
         })
     } else if provider_id == "claude-code" || provider_id == "claude" {
         let account_uuid = raw_account_opt
@@ -390,6 +394,7 @@ pub fn build_custom_provider_meta(
             codex_workspace_id: None,
             claude_account_uuid: account_uuid,
             claude_metadata,
+            devin_device_seed: None,
         })
     } else {
         None

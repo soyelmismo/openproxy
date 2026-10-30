@@ -246,6 +246,11 @@ impl PipelineStage for FormattingStage {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             })
             .and_then(|body| {
+                // Devin bodies are protobuf envelopes by this point — JSON
+                // param stripping would fail the parse on binary input.
+                if target_format == openproxy_types::TargetFormat::Devin {
+                    return Ok(body);
+                }
                 crate::formatting::strip_provider_configured_params_from_body(
                     body,
                     &adapter.config().extra_headers,
@@ -277,8 +282,14 @@ fn enforce_stream_body(
     format: openproxy_types::TargetFormat,
     stream: bool,
 ) -> Result<bytes::Bytes, CoreError> {
-    if format == openproxy_types::TargetFormat::Gemini {
-        return Ok(body); // Gemini selects streaming through the URL, not JSON.
+    if matches!(
+        format,
+        openproxy_types::TargetFormat::Gemini | openproxy_types::TargetFormat::Devin
+    ) {
+        // Gemini selects streaming through the URL, not JSON. Devin's body is
+        // a Connect-RPC protobuf envelope: JSON patching would corrupt it and
+        // the RPC has no stream flag (the endpoint is always server-streaming).
+        return Ok(body);
     }
     openproxy_adapters::adapters::traits::patch_json_request_body(body, |obj| {
         if format == openproxy_types::TargetFormat::CommandCodeGo {
@@ -346,6 +357,7 @@ fn resolve_target_format(
         openproxy_adapters::adapters::AdapterFormat::SystemOne => {
             openproxy_types::TargetFormat::SystemOne
         }
+        openproxy_adapters::adapters::AdapterFormat::Devin => openproxy_types::TargetFormat::Devin,
     }
 }
 

@@ -53,6 +53,9 @@ pub(super) fn parse_translated_sse_line(
             )
         }
         openproxy_types::TargetFormat::SystemOne => Ok(None),
+        // Devin frames bypass `parse_translated_sse_line`: the binary deframer
+        // hands whole envelopes to `ChunkProcessor::process_devin_frame`.
+        openproxy_types::TargetFormat::Devin => Ok(None),
     }
 }
 

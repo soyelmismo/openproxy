@@ -12,6 +12,10 @@ pub struct CustomProviderMeta {
     pub codex_workspace_id: Option<String>,
     pub claude_account_uuid: Option<String>,
     pub claude_metadata: Option<String>,
+    /// Per-account Devin device-fingerprint seed (upstream
+    /// `auth.Attributes["device_seed"]`); empty means a fresh random
+    /// fingerprint per request, matching upstream's default.
+    pub devin_device_seed: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -62,6 +66,7 @@ mod tests {
             codex_workspace_id: Some("ws_123".to_string()),
             claude_account_uuid: Some("acc_123".to_string()),
             claude_metadata: Some("meta_json".to_string()),
+            devin_device_seed: Some("seed_123".to_string()),
         };
 
         let cloned = meta.clone();
