@@ -36,23 +36,6 @@ fn is_provider_blacklisted(blacklisted: Option<&[String]>, provider: Option<&str
     }
 }
 
-fn is_model_permitted_by_allowlist(
-    allowed_models: Option<&[String]>,
-    model: &str,
-    bare_model: &str,
-    full_id: Option<&str>,
-) -> bool {
-    let Some(allowed) = allowed_models else {
-        return true;
-    };
-    if allowed.is_empty() {
-        return true;
-    }
-    allowed
-        .iter()
-        .any(|m| model_matches_pattern(m, model, bare_model, full_id))
-}
-
 fn is_model_blocked_by_blacklist(
     blacklisted_models: Option<&[String]>,
     model: &str,
@@ -83,34 +66,32 @@ impl ApiKey {
             }
         });
 
-        // An explicit `allowed_models` entry grants access to the model even
-        // when its provider is blacklisted: the allowlist is a deliberate
-        // whitelist exception (e.g. allow `devin/swe-2:free` while `devin`
-        // stays provider-blocked).
+        // `allowed_models` is ADDITIVE, not a whitelist: it grants access on
+        // top of the default-permit, and an entry overrides BOTH the model and
+        // the provider blacklists (e.g. open `devin/swe-2:free` while `devin`
+        // stays provider-blocked). Models not in the list are still allowed
+        // unless a blacklist matches them.
         let explicitly_allowed = self.allowed_models.as_deref().is_some_and(|allowed| {
             !allowed.is_empty()
                 && allowed
                     .iter()
                     .any(|m| model_matches_pattern(m, model, bare_model, full_id.as_deref()))
         });
+        if explicitly_allowed {
+            return true;
+        }
 
-        is_model_permitted_by_allowlist(
-            self.allowed_models.as_deref(),
+        if is_model_blocked_by_blacklist(
+            self.blacklisted_models.as_deref(),
             model,
             bare_model,
             full_id.as_deref(),
-        ) && (explicitly_allowed
-            || (!is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-                && !is_provider_blacklisted(
-                    self.blacklisted_providers.as_deref(),
-                    prov_from_model,
-                )))
-            && !is_model_blocked_by_blacklist(
-                self.blacklisted_models.as_deref(),
-                model,
-                bare_model,
-                full_id.as_deref(),
-            )
+        ) {
+            return false;
+        }
+
+        !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+            && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
     }
 
     /// Returns whether the specified provider is permitted by this key.

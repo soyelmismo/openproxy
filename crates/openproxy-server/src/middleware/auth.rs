@@ -59,34 +59,31 @@ impl ValidatedApiToken {
             }
         });
 
-        // An explicit `allowed_models` entry grants access to the model even
-        // when its provider is blacklisted: the allowlist is a deliberate
-        // whitelist exception (e.g. allow `devin/swe-2:free` while `devin`
-        // stays provider-blocked). Compute membership first.
+        // `allowed_models` is ADDITIVE, not a whitelist: it grants access on
+        // top of the default-permit, and an entry overrides BOTH the model and
+        // the provider blacklists (that is its purpose — e.g. open
+        // `devin/swe-2:free` while `devin` stays provider-blocked). Models not
+        // in the list are still allowed unless a blacklist matches them.
         let explicitly_allowed = self.key.allowed_models.as_ref().is_some_and(|allowed| {
             !allowed.is_empty()
                 && allowed
                     .iter()
                     .any(|m| matches_any_model_pattern(m, model, bare_model, full_id.as_deref()))
         });
-        if let Some(allowed) = &self.key.allowed_models
-            && !allowed.is_empty()
-            && !explicitly_allowed
-        {
-            return false;
-        }
-
-        if !explicitly_allowed
-            && let Some(blacklisted_provs) = &self.key.blacklisted_providers
-            && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
-        {
-            return false;
+        if explicitly_allowed {
+            return true;
         }
 
         if let Some(blacklisted) = &self.key.blacklisted_models
             && blacklisted
                 .iter()
                 .any(|b| matches_any_model_pattern(b, model, bare_model, full_id.as_deref()))
+        {
+            return false;
+        }
+
+        if let Some(blacklisted_provs) = &self.key.blacklisted_providers
+            && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
         {
             return false;
         }
