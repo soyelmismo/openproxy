@@ -6,8 +6,13 @@ import {
   dateToSeconds,
   fmtDuration,
   fmtPercent,
+  formatRankValue,
   groupByStatus,
+  parseHashParams,
+  parseRank,
   pivotMonthlyByProvider,
+  rankMetricValue,
+  type RankingItem,
 } from "./shared.js";
 
 function mrow(provider_id: string, month: string, total_cost_usd: number, reqs: number = 1): MonthlyByProviderRow {
@@ -159,6 +164,59 @@ describe("dailyUsageData", () => {
     expect(pthru[0]).toEqual([Date.UTC(2026, 5, 22) / 1000, Date.UTC(2026, 5, 21) / 1000]);
     const gap = dailyUsageData([drow("2026-06-21", 1, 0, 1), drow("2026-06-23", 3, 1, 3)]);
     expect(gap[0]).toHaveLength(2);
+  });
+});
+
+describe("parseHashParams (model filter + rank metric)", () => {
+  it("defaults modelId to empty and rank to cost", () => {
+    location.hash = "#/analytics";
+    expect(parseHashParams().modelId).toBe("");
+    expect(parseHashParams().rank).toBe("cost");
+  });
+
+  it("reads model_id and rank from the hash", () => {
+    location.hash = "#/analytics?range=7d&provider_id=p1&api_key_id=3&model_id=swe-2:free&rank=tokens";
+    const p = parseHashParams();
+    expect(p.preset).toBe("7d");
+    expect(p.providerId).toBe("p1");
+    expect(p.apiKeyId).toBe("3");
+    expect(p.modelId).toBe("swe-2:free");
+    expect(p.rank).toBe("tokens");
+  });
+
+  it("falls back to cost for an unknown rank value", () => {
+    location.hash = "#/analytics?rank=bogus";
+    expect(parseHashParams().rank).toBe("cost");
+    location.hash = "#/analytics?rank=requests";
+    expect(parseHashParams().rank).toBe("requests");
+  });
+});
+
+describe("parseRank", () => {
+  it("accepts only known metrics", () => {
+    expect(parseRank("cost")).toBe("cost");
+    expect(parseRank("requests")).toBe("requests");
+    expect(parseRank("tokens")).toBe("tokens");
+    expect(parseRank("")).toBe("cost");
+    expect(parseRank(null)).toBe("cost");
+    expect(parseRank("dollars")).toBe("cost");
+  });
+});
+
+describe("rankMetricValue / formatRankValue", () => {
+  const item: RankingItem = { name: "m1", context: "p1", requests: 1200, tokens: 98_400, cost: 3.5 };
+
+  it("projects the item onto the selected metric", () => {
+    expect(rankMetricValue(item, "cost")).toBe(3.5);
+    expect(rankMetricValue(item, "requests")).toBe(1200);
+    expect(rankMetricValue(item, "tokens")).toBe(98_400);
+  });
+
+  it("formats each metric with its unit", () => {
+    expect(formatRankValue("cost", 3.5)).toBe("$3.50");
+    expect(formatRankValue("cost", 0.004)).toBe("$0.0040");
+    expect(formatRankValue("requests", 1200)).toBe("1.2K req");
+    expect(formatRankValue("tokens", 98_400)).toBe("98.4K tok");
   });
 });
 

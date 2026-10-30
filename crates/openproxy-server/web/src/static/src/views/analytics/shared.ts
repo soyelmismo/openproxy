@@ -69,6 +69,8 @@ export interface AnalyticsHashParams {
   preset: UsagePreset;
   providerId: string;
   apiKeyId: string;
+  modelId: string;
+  rank: RankMetric;
 }
 
 /** Ranking list item used by `renderRanking`. */
@@ -76,8 +78,22 @@ export interface RankingItem {
   name: string;
   context: string;
   requests: number;
+  tokens: number;
   cost: number;
 }
+
+/** Metric the model/provider ranking lists sort and display by. */
+export type RankMetric = "cost" | "requests" | "tokens";
+
+/** Ordered metrics rendered as the segmented control above the rankings. */
+export const RANK_METRICS: readonly RankMetric[] = ["cost", "requests", "tokens"];
+
+/** i18n label keys for the ranking metric switch, keyed by metric value. */
+export const RANK_LABEL_KEYS = {
+  cost: "analytics.rank.cost",
+  requests: "analytics.rank.requests",
+  tokens: "analytics.rank.tokens",
+} satisfies Record<RankMetric, string>;
 
 // ── Presets ─────────────────────────────────────────────────────────
 
@@ -150,7 +166,16 @@ export function parseHashParams(): AnalyticsHashParams {
     preset,
     providerId: params.get("provider_id") || "",
     apiKeyId: params.get("api_key_id") || "",
+    modelId: params.get("model_id") || "",
+    rank: parseRank(params.get("rank")),
   };
+}
+
+/** Coerce a raw hash value into a `RankMetric`, defaulting to cost. */
+export function parseRank(raw: string | null): RankMetric {
+  return (RANK_METRICS as readonly string[]).includes(raw || "")
+    ? (raw as RankMetric)
+    : "cost";
 }
 
 export function setHashParams(updates: Partial<AnalyticsHashParams>): void {
@@ -167,6 +192,16 @@ export function setHashParams(updates: Partial<AnalyticsHashParams>): void {
   if (updates.apiKeyId !== undefined) {
     if (updates.apiKeyId) params.set("api_key_id", updates.apiKeyId);
     else params.delete("api_key_id");
+  }
+  if (updates.modelId !== undefined) {
+    if (updates.modelId) params.set("model_id", updates.modelId);
+    else params.delete("model_id");
+  }
+  if (updates.rank !== undefined) {
+    // `cost` is the default, so an explicit cost clears the param and keeps
+    // shared URLs clean.
+    if (updates.rank && updates.rank !== "cost") params.set("rank", updates.rank);
+    else params.delete("rank");
   }
   const qs = params.toString();
   location.hash = qs ? `${path}?${qs}` : path;
@@ -382,6 +417,31 @@ export let charts: AnalyticsCharts | null = null;
 
 export function setCharts(c: AnalyticsCharts | null): void {
   charts = c;
+}
+
+// ── Ranking metric state ────────────────────────────────────────────
+// Presentation-only: switching the metric re-sorts the two ranking cards
+// without refetching. Initialized from the `rank` hash param on mount so a
+// shared URL keeps the selection.
+
+export let rankMetric: RankMetric = "cost";
+
+export function setRankMetric(m: RankMetric): void {
+  rankMetric = m;
+}
+
+/** Numeric value a ranking item contributes under the given metric. */
+export function rankMetricValue(item: RankingItem, metric: RankMetric): number {
+  if (metric === "requests") return item.requests;
+  if (metric === "tokens") return item.tokens;
+  return item.cost;
+}
+
+/** Display string for a ranking value under the given metric. */
+export function formatRankValue(metric: RankMetric, v: number): string {
+  if (metric === "cost") return fmtCost(v);
+  if (metric === "requests") return `${fmtNumber(v)} req`;
+  return `${fmtNumber(v)} tok`;
 }
 
 // ── Utility templates ───────────────────────────────────────────────

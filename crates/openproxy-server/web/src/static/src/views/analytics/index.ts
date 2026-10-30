@@ -15,12 +15,17 @@ import {
   fmtNumber,
   fmtPercent,
   fmtDuration,
+  formatRankValue,
   groupByStatus,
   latency,
   loading,
   metric,
   parseHashParams,
   races,
+  rankMetric,
+  rankMetricValue,
+  RANK_LABEL_KEYS,
+  setRankMetric,
   setViewState,
   summary,
   type ApiKeyFilterRow,
@@ -33,6 +38,8 @@ import {
   destroyAnalyticsCharts,
   refreshAnalyticsChartTheme,
   renderAnalyticsToolbar,
+  renderRankMetricSwitch,
+  resetAnalyticsMenus,
 } from "./charts.js";
 import {
   renderByModelTable,
@@ -77,9 +84,11 @@ function renderMetrics(): TemplateResult {
 // ── Ranking list (used by model + provider strips) ──────────────────
 
 function renderRanking(title: string, subtitle: string, items: RankingItem[]): TemplateResult {
-  const ranked = [...items].sort((a, b) => b.cost - a.cost).slice(0, 8);
-  const total = items.reduce((sum, item) => sum + item.cost, 0);
-  const max = ranked[0]?.cost ?? 0;
+  const ranked = [...items]
+    .sort((a, b) => rankMetricValue(b, rankMetric) - rankMetricValue(a, rankMetric))
+    .slice(0, 8);
+  const total = items.reduce((sum, item) => sum + rankMetricValue(item, rankMetric), 0);
+  const max = ranked.length > 0 ? rankMetricValue(ranked[0]!, rankMetric) : 0;
   return html`<section class="card analytics-ranking-card">
     <div class="analytics-card-heading">
       <div><h3>${title}</h3><p>${subtitle}</p></div>
@@ -87,8 +96,9 @@ function renderRanking(title: string, subtitle: string, items: RankingItem[]): T
     ${ranked.length === 0 ? html`<p class="empty">${t("analytics.empty.no_usage")}</p>` : html`
       <div class="analytics-ranking-list">
         ${ranked.map((item, index) => {
-          const width = max > 0 ? Math.max(2, item.cost / max * 100) : 0;
-          const share = total > 0 ? item.cost / total : 0;
+          const value = rankMetricValue(item, rankMetric);
+          const width = max > 0 ? Math.max(2, value / max * 100) : 0;
+          const share = total > 0 ? value / total : 0;
           return html`<div class="analytics-ranking-row">
             <span class="analytics-rank">${index + 1}</span>
             <div class="analytics-ranking-main">
@@ -96,7 +106,7 @@ function renderRanking(title: string, subtitle: string, items: RankingItem[]): T
                 <span class="analytics-ranking-name" title=${item.name}>${item.name}</span>
                 <span class="analytics-ranking-context">${item.context} · ${fmtNumber(item.requests)} req</span>
               </div>
-              <div class="analytics-ranking-value"><strong>${fmtCost(item.cost)}</strong><span>${fmtPercent(share)}</span></div>
+              <div class="analytics-ranking-value"><strong>${formatRankValue(rankMetric, value)}</strong><span>${fmtPercent(share)}</span></div>
               <div class="analytics-ranking-track" aria-hidden="true"><span style=${`width:${width}%`}></span></div>
             </div>
           </div>`;
@@ -199,14 +209,17 @@ function renderBody(): TemplateResult {
     name: row.upstream_model_id,
     context: row.provider_id,
     requests: row.unique_requests,
+    tokens: row.total_prompt_tokens + row.total_completion_tokens,
     cost: row.total_cost_usd,
   }));
   const providerItems: RankingItem[] = byProvider.map((row) => ({
     name: row.provider_id,
     context: `${fmtNumber(row.total_prompt_tokens + row.total_completion_tokens)} tok`,
     requests: row.unique_requests,
+    tokens: row.total_prompt_tokens + row.total_completion_tokens,
     cost: row.total_cost_usd,
   }));
+  const rankSubtitle = t("analytics.rank.by", { metric: t(RANK_LABEL_KEYS[rankMetric]) });
 
   return html`
     ${nullPricingBanner}
@@ -219,8 +232,12 @@ function renderBody(): TemplateResult {
       ${renderStatusHealth()}
     </div>
     <div class="analytics-insight-grid">
-      ${renderRanking(t("analytics.chart.by_model"), t("analytics.chart.by_model.subtitle"), modelItems)}
-      ${renderRanking(t("analytics.chart.by_provider"), t("analytics.chart.by_provider.subtitle"), providerItems)}
+      <div class="analytics-rank-head">
+        <span class="analytics-rank-head-label">${t("analytics.rank.label")}</span>
+        ${renderRankMetricSwitch()}
+      </div>
+      ${renderRanking(t("analytics.chart.by_model"), rankSubtitle, modelItems)}
+      ${renderRanking(t("analytics.chart.by_provider"), rankSubtitle, providerItems)}
     </div>
     <div class="analytics-insight-grid">
       ${renderLatencyBlock()}
@@ -238,13 +255,13 @@ function renderBody(): TemplateResult {
 }
 
 function renderAnalytics(): TemplateResult {
-  const { preset, providerId, apiKeyId } = parseHashParams();
+  const { preset, providerId, apiKeyId, modelId } = parseHashParams();
   return html`
     <div class="analytics-dashboard">
       <div class="page-header analytics-header">
         <div><span class="page-eyebrow">${t("nav.analytics")}</span><h2>${t("analytics.title")}</h2><p>${t("analytics.subtitle")}</p></div>
       </div>
-      ${renderAnalyticsToolbar(providerId, apiKeyId, preset)}
+      ${renderAnalyticsToolbar(providerId, apiKeyId, modelId, preset)}
       ${renderBody()}
     </div>`;
 }
@@ -260,14 +277,19 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
     loading: true,
     errorMsg: null,
   });
+  // A hash change remounts the view: clear any popover left anchored to a
+  // trigger rect that no longer exists.
+  resetAnalyticsMenus();
   const cleanupReactive = mountView(el, renderAnalytics);
   document.addEventListener("themechange", refreshAnalyticsChartTheme);
 
-  const { preset, providerId, apiKeyId } = parseHashParams();
+  const { preset, providerId, apiKeyId, modelId, rank } = parseHashParams();
+  setRankMetric(rank);
   try {
     // Shared by every `/usage/*` fetch; errors adds `limit=10` to cap the table.
-    const usageQ = buildUsageQuery(preset, providerId, apiKeyId);
-    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10" });
+    const modelFilter = modelId ? { model_id: modelId } : {};
+    const usageQ = buildUsageQuery(preset, providerId, apiKeyId, modelFilter);
+    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10", ...modelFilter });
     const [
       summaryResp, byModelResp, byProviderResp, monthlyByProviderResp, latencyResp, racesResp,
       byDayResp, byStatusResp, errorsResp, providersResp, apiKeysResp,

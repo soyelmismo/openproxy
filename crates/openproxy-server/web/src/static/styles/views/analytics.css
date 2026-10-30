@@ -422,6 +422,54 @@ table.monthly-matrix {
 .analytics-filter-field .filter-dropdown { width: 100%; min-width: 0; padding: 0.48rem 0.65rem; border-color: var(--color-border-soft); }
 .analytics-clear-btn { margin-left: auto; color: var(--color-error); border-color: transparent; background: transparent; }
 .analytics-clear-btn:hover { border-color: var(--color-error); background: var(--color-error-soft); }
+
+/* Model filter: themed popover (clones the combos account-menu pattern —
+   position:fixed + viewport clamp + backdrop close). */
+.analytics-model-trigger { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); text-align: left; }
+.analytics-model-trigger-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-model-backdrop { position: fixed; inset: 0; z-index: 9998; background: transparent; }
+.analytics-model-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 6px 0;
+  box-sizing: border-box;
+}
+.analytics-model-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs, 0.78rem);
+  text-align: left;
+  cursor: pointer;
+}
+.analytics-model-item:hover { background: var(--color-surface-hover, rgba(255, 255, 255, 0.06)); }
+.analytics-model-item.active { color: var(--color-primary); }
+.analytics-model-check { width: 12px; flex: none; color: var(--color-primary); }
+.analytics-model-item-main { display: flex; flex-direction: column; min-width: 0; }
+.analytics-model-item-main strong { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-model-item-main small { opacity: 0.7; }
+.analytics-model-empty { padding: 8px 12px; font-size: var(--fs-xs, 0.78rem); opacity: 0.7; }
+
+/* Ranking metric switch: reuses the preset segmented-control language. */
+.analytics-rank-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); grid-column: 1 / -1; flex-wrap: wrap; }
+.analytics-rank-head-label { font-size: var(--fs-xs, 0.78rem); text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.7; }
+.analytics-rank-switch { display: flex; gap: var(--space-1); }
+.analytics-rank-switch .preset-btn { border-color: transparent; border-radius: var(--radius-pill); background: transparent; }
+.analytics-rank-switch .preset-btn.active { background: var(--color-text); color: var(--color-surface); border-color: var(--color-text); }
 .analytics-range-row { display: flex; align-items: center; gap: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border-soft); }
 .analytics-range-label { flex: none; }
 .analytics-range-row .preset-selector { display: flex; flex-wrap: nowrap; gap: var(--space-1); min-width: 0; margin: 0; overflow-x: auto; scrollbar-width: thin; }
