@@ -1,4 +1,6 @@
-use super::tests_basic::{CountingJob, policy};
+#![allow(clippy::pedantic, clippy::wildcard_imports)]
+
+use super::tests_basic::{counting_service, policy};
 use super::*;
 use crate::background::BackgroundSupervisor;
 use openproxy_adapters::client_contract::{
@@ -135,20 +137,34 @@ impl ContractValidator<CodexProfile> for CodexBaseOnly {
     }
 }
 
-#[tokio::test]
-async fn the_codex_job_reports_a_transport_failure_and_publishes_nothing() {
+/// Fixture de Codex sin red: un [`CodexReleaseDriver`] sobre el transporte
+/// que siempre responde `404` y un store aislado en `temp_dir(tag)`. El
+/// directorio se devuelve para que el test lo limpie al final.
+fn codex_fixture(
+    tag: &str,
+) -> (
+    Arc<CodexReleaseDriver>,
+    std::path::PathBuf,
+    Arc<ContractStore<CodexProfile>>,
+) {
     let driver = Arc::new(CodexReleaseDriver::new(
         Arc::new(MissingTransport),
         Arc::new(TransportCache::new()),
         ContractLimits::default(),
     ));
-    let dir = temp_dir("codex-job");
+    let dir = temp_dir(tag);
     let store: Arc<ContractStore<CodexProfile>> = Arc::new(ContractStore::new(
         ContractId::Codex,
         StoreConfig::new(&dir).with_limits(ContractLimits::tight()),
         None,
         Arc::new(CodexBaseOnly),
     ));
+    (driver, dir, store)
+}
+
+#[tokio::test]
+async fn the_codex_job_reports_a_transport_failure_and_publishes_nothing() {
+    let (driver, dir, store) = codex_fixture("codex-job");
 
     let job = CodexContractJob::new(Arc::clone(&driver), Arc::clone(&store));
     assert_eq!(job.name(), "codex_contract");
@@ -177,18 +193,7 @@ async fn the_codex_job_reports_a_transport_failure_and_publishes_nothing() {
 /// el supervisor para con la ronda pendiente.
 #[tokio::test]
 async fn the_codex_job_discards_an_acquisition_on_cancellation() {
-    let driver = Arc::new(CodexReleaseDriver::new(
-        Arc::new(MissingTransport),
-        Arc::new(TransportCache::new()),
-        ContractLimits::default(),
-    ));
-    let dir = temp_dir("codex-cancel");
-    let store: Arc<ContractStore<CodexProfile>> = Arc::new(ContractStore::new(
-        ContractId::Codex,
-        StoreConfig::new(&dir).with_limits(ContractLimits::tight()),
-        None,
-        Arc::new(CodexBaseOnly),
-    ));
+    let (driver, dir, store) = codex_fixture("codex-cancel");
     let job = CodexContractJob::new(Arc::clone(&driver), Arc::clone(&store));
 
     // Token ya cancelado: la adquisición ni empieza.
@@ -279,12 +284,10 @@ impl ContractRefreshJob for DrainingJob {
 #[tokio::test]
 async fn two_rounds_queued_on_the_gate_share_one_max_rounds_ceiling() {
     let job_rounds = Arc::new(AtomicU64::new(0));
-    let service = Arc::new(ContractRefreshService::new(
-        CountingJob {
-            rounds: Arc::clone(&job_rounds),
-            started: Arc::new(Notify::new()),
-            fail: Arc::new(AtomicBool::new(false)),
-        },
+    let service = Arc::new(counting_service(
+        Arc::clone(&job_rounds),
+        Arc::new(Notify::new()),
+        Arc::new(AtomicBool::new(false)),
         policy().with_max_rounds(Some(1)),
     ));
 

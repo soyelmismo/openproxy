@@ -1,3 +1,5 @@
+#![allow(clippy::pedantic, clippy::wildcard_imports)]
+
 use super::*;
 use crate::background::BackgroundSupervisor;
 use std::sync::atomic::AtomicUsize;
@@ -28,6 +30,24 @@ async fn wait_for(counter: &AtomicU64, target: u64) {
 /// perdida en el reloj real arruine la determinación.
 pub(super) fn policy() -> RefreshPolicy {
     RefreshPolicy::default().with_interval(Duration::from_secs(3600))
+}
+
+/// Servicio de fixture con un [`CountingJob`]: las sondas que el test
+/// conserva se pasan ya clonadas para observar las rondas desde fuera.
+pub(super) fn counting_service(
+    rounds: Arc<AtomicU64>,
+    started: Arc<Notify>,
+    fail: Arc<AtomicBool>,
+    policy: RefreshPolicy,
+) -> ContractRefreshService<CountingJob> {
+    ContractRefreshService::new(
+        CountingJob {
+            rounds,
+            started,
+            fail,
+        },
+        policy,
+    )
 }
 
 /// Cuenta rondas, avisa en cuanto empieza una y falla mientras `fail` valga.
@@ -151,17 +171,42 @@ impl ContractRefreshJob for SlowJob {
     }
 }
 
+/// Servicio de fixture con un [`SlowJob`]: devuelve el supervisor, el
+/// servicio envuelto en `Arc` y las sondas de rondas del trabajo, para que
+/// cada test decida cuántos handles admite y conserve su `spawn_under`.
+///
+/// Sin tope de rondas: los contadores son compartidos, así que un tope
+/// cortaría el segundo handle antes de su ronda de arranque.
+fn slow_service() -> (
+    BackgroundSupervisor,
+    Arc<ContractRefreshService<SlowJob>>,
+    Arc<AtomicU64>,
+    Arc<AtomicUsize>,
+) {
+    let rounds = Arc::new(AtomicU64::new(0));
+    let live = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let supervisor = BackgroundSupervisor::new();
+    let service = Arc::new(ContractRefreshService::new(
+        SlowJob {
+            rounds: Arc::clone(&rounds),
+            live: Arc::clone(&live),
+            peak: Arc::clone(&peak),
+        },
+        policy(),
+    ));
+    (supervisor, service, rounds, peak)
+}
+
 #[tokio::test]
 async fn a_startup_round_runs_before_the_first_wait_and_stops_at_the_ceiling() {
     let rounds = Arc::new(AtomicU64::new(0));
     let started = Arc::new(Notify::new());
     let supervisor = BackgroundSupervisor::new();
-    let service = Arc::new(ContractRefreshService::new(
-        CountingJob {
-            rounds: Arc::clone(&rounds),
-            started: Arc::clone(&started),
-            fail: Arc::new(AtomicBool::new(false)),
-        },
+    let service = Arc::new(counting_service(
+        Arc::clone(&rounds),
+        Arc::clone(&started),
+        Arc::new(AtomicBool::new(false)),
         policy().with_max_rounds(Some(1)),
     ));
     assert!(service.spawn_under(&supervisor));
@@ -184,12 +229,10 @@ async fn a_failed_round_waits_the_backoff_until_a_trigger_arrives() {
     let started = Arc::new(Notify::new());
     let fail = Arc::new(AtomicBool::new(true));
     let supervisor = BackgroundSupervisor::new();
-    let service = Arc::new(ContractRefreshService::new(
-        CountingJob {
-            rounds: Arc::clone(&rounds),
-            started: Arc::clone(&started),
-            fail: Arc::clone(&fail),
-        },
+    let service = Arc::new(counting_service(
+        Arc::clone(&rounds),
+        Arc::clone(&started),
+        Arc::clone(&fail),
         policy(),
     ));
     assert!(service.spawn_under(&supervisor));
@@ -216,12 +259,10 @@ async fn a_failed_round_waits_the_backoff_until_a_trigger_arrives() {
 
 #[test]
 fn the_backoff_doubles_is_capped_and_honours_retry_after_within_the_ceiling() {
-    let service = ContractRefreshService::new(
-        CountingJob {
-            rounds: Arc::new(AtomicU64::new(0)),
-            started: Arc::new(Notify::new()),
-            fail: Arc::new(AtomicBool::new(false)),
-        },
+    let service = counting_service(
+        Arc::new(AtomicU64::new(0)),
+        Arc::new(Notify::new()),
+        Arc::new(AtomicBool::new(false)),
         policy(),
     );
     let failures = &service.counters.consecutive_failures;
@@ -313,12 +354,10 @@ async fn concurrent_triggers_never_overlap_two_rounds() {
 async fn cancellation_stops_the_loop_without_starting_a_round() {
     let rounds = Arc::new(AtomicU64::new(0));
     let supervisor = BackgroundSupervisor::new();
-    let service = Arc::new(ContractRefreshService::new(
-        CountingJob {
-            rounds: Arc::clone(&rounds),
-            started: Arc::new(Notify::new()),
-            fail: Arc::new(AtomicBool::new(false)),
-        },
+    let service = Arc::new(counting_service(
+        Arc::clone(&rounds),
+        Arc::new(Notify::new()),
+        Arc::new(AtomicBool::new(false)),
         policy().with_startup_refresh(false),
     ));
     assert!(service.spawn_under(&supervisor));
@@ -336,12 +375,10 @@ async fn cancellation_stops_the_loop_without_starting_a_round() {
 async fn an_already_cancelled_token_before_startup_runs_no_round() {
     let rounds = Arc::new(AtomicU64::new(0));
     let started = Arc::new(Notify::new());
-    let service = ContractRefreshService::new(
-        CountingJob {
-            rounds: Arc::clone(&rounds),
-            started: Arc::clone(&started),
-            fail: Arc::new(AtomicBool::new(false)),
-        },
+    let service = counting_service(
+        Arc::clone(&rounds),
+        Arc::clone(&started),
+        Arc::new(AtomicBool::new(false)),
         policy(),
     );
     let cancel = CancellationToken::new();
@@ -398,20 +435,7 @@ async fn cancellation_during_a_pending_acquisition_publishes_nothing() {
 /// solapan rondas: la compuerta es compartida, no por handle.
 #[tokio::test]
 async fn two_handles_spawned_under_one_supervisor_never_overlap() {
-    let rounds = Arc::new(AtomicU64::new(0));
-    let live = Arc::new(AtomicUsize::new(0));
-    let peak = Arc::new(AtomicUsize::new(0));
-    let supervisor = BackgroundSupervisor::new();
-    let service = Arc::new(ContractRefreshService::new(
-        SlowJob {
-            rounds: Arc::clone(&rounds),
-            live: Arc::clone(&live),
-            peak: Arc::clone(&peak),
-        },
-        // Sin tope de rondas: los contadores son compartidos, así que un
-        // tope cortaría el segundo handle antes de su ronda de arranque.
-        policy(),
-    ));
+    let (supervisor, service, rounds, peak) = slow_service();
     assert!(service.spawn_under(&supervisor));
     assert!(service.spawn_under(&supervisor));
 
@@ -435,18 +459,7 @@ async fn two_handles_spawned_under_one_supervisor_never_overlap() {
 /// *wedged*: el guard la suelta y una ronda posterior puede tomarla.
 #[tokio::test]
 async fn cancelling_the_owner_never_wedges_the_gate() {
-    let rounds = Arc::new(AtomicU64::new(0));
-    let live = Arc::new(AtomicUsize::new(0));
-    let peak = Arc::new(AtomicUsize::new(0));
-    let supervisor = BackgroundSupervisor::new();
-    let service = Arc::new(ContractRefreshService::new(
-        SlowJob {
-            rounds: Arc::clone(&rounds),
-            live: Arc::clone(&live),
-            peak: Arc::clone(&peak),
-        },
-        policy(),
-    ));
+    let (supervisor, service, rounds, peak) = slow_service();
     assert!(service.spawn_under(&supervisor));
 
     // Ronda en vuelo cuando llega la parada.
