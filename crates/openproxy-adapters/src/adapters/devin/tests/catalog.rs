@@ -582,7 +582,9 @@ fn parses_pricing_fields_and_marks_free() {
 }
 
 #[test]
-fn promo_alone_marks_free() {
+fn promo_alone_does_not_mark_free() {
+    // promos ride on paid models (gemini-4-argon: tier HIGH + active promo;
+    // swe-2-lightning carries a literal "30% off" promo field).
     let row = parse_client_model_configs(&cfg_blob(&[cfg_row_priced(
         "kimi-k3-high",
         "kimi-k3",
@@ -590,7 +592,10 @@ fn promo_alone_marks_free() {
         3,
         true,
     )]));
-    assert!(row[0].is_free(), "an active promo must mark the row free");
+    assert!(
+        !row[0].is_free(),
+        "an active promo must not mark the row free"
+    );
 }
 
 #[test]
@@ -614,6 +619,7 @@ fn free_base_lists_with_free_suffix() {
     let _g = lock();
     catalog::clear_live_catalog();
     catalog::store_live_catalog(parse_client_model_configs(&cfg_blob(&[
+        // swe-2: free tier AND an active promo — promo is irrelevant.
         cfg_row_priced("swe-2-high", "swe-2", 9.0, 4, true),
         cfg_row_priced("glm-5-3-low", "glm-5.3", 1.0, 1, false),
     ])));

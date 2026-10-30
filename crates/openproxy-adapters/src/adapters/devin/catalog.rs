@@ -60,11 +60,14 @@ pub struct DevinLiveModelRow {
 const COST_TIER_FREE: i64 = 4;
 
 impl DevinLiveModelRow {
-    /// Whether the variant bills zero: free cost tier or an active promo.
-    /// A zero `credit_multiplier` alone proves nothing — an absent field also
-    /// decodes to 0.0, so only the explicit markers gate freeness.
+    /// Whether the variant bills zero. `model_cost_tier` is the only
+    /// reliable signal: `promo_status.is_active` rides on paid models too
+    /// (gemini-4-argon stays tier HIGH under an active promo; swe-2-lightning
+    /// carries a literal "30% off" promo), so a promo alone cannot mean
+    /// "free". A zero `credit_multiplier` is likewise ambiguous — an absent
+    /// field also decodes to 0.0.
     pub fn is_free(&self) -> bool {
-        self.cost_tier == COST_TIER_FREE || self.promo_active
+        self.cost_tier == COST_TIER_FREE
     }
 }
 
@@ -131,7 +134,7 @@ impl DevinLiveCatalog {
             .map(|rows| rows.iter().any(|r| r.supports_images))
     }
 
-    /// Whether any variant of `base` bills zero (free tier or active promo).
+    /// Whether any variant of `base` bills zero (free cost tier).
     /// `None` when the base is absent from the live feed.
     pub fn base_is_free(&self, base: &str) -> Option<bool> {
         self.rows_for_base(base)

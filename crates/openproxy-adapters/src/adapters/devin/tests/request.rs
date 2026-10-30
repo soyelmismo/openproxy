@@ -785,8 +785,9 @@ fn devin_builtin_models_catalog() {
 #[test]
 fn free_models_emit_full_fraction_quota_detail() {
     use super::super::catalog::parse_client_model_configs;
-    // A user_status whose catalog marks swe-2 free (cost tier 4 + promo) and
-    // leaves a paid sibling (glm-5.3) untouched.
+    // A user_status whose catalog marks swe-2 free (cost tier 4; promo is
+    // irrelevant — paid models carry active promos too) and leaves a paid
+    // sibling (glm-5.3) untouched.
     let mut swe2_cfg = Vec::new();
     protoc::append_fixed32(&mut swe2_cfg, 3, 9.0f32.to_bits());
     protoc::append_string(&mut swe2_cfg, 22, "swe-2-high");
