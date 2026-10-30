@@ -13,15 +13,18 @@
 //! ClientMetadata protobuf field — which is why request formatting runs in
 //! two stages (see [`DevinAdapter::format_request`]).
 
+pub mod catalog;
 pub mod models;
 pub mod protoc;
 pub mod quota;
 pub mod response;
 pub mod signature;
+pub mod specs;
 pub mod tools;
 pub mod turn;
 pub mod wire;
 
+pub use catalog::*;
 pub use models::*;
 pub use protoc::*;
 pub use quota::*;

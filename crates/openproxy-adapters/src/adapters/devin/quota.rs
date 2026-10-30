@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use openproxy_types::{AccountQuota, CoreError, ModelQuotaDetail, Result};
 
+use super::catalog::{self, DevinLiveModelRow};
 use super::protoc::{self, ProtoReader};
 use super::wire;
 use crate::adapters::{CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest};
@@ -37,6 +38,10 @@ pub struct DevinUserStatus {
     pub weekly_remaining_pct: Option<i64>,
     pub daily_reset_unix: Option<i64>,
     pub weekly_reset_unix: Option<i64>,
+    /// `cascade_model_config_data.client_model_configs` — the live model
+    /// catalog the account can serve (field 33). Empty when the upstream
+    /// omits the blob.
+    pub model_configs: Vec<DevinLiveModelRow>,
 }
 
 fn reader_str(bytes: &[u8]) -> String {
@@ -154,6 +159,9 @@ fn parse_user_status_field(payload: &[u8], us: &mut DevinUserStatus) -> Option<(
             (13, protoc::WIRE_LEN) => {
                 let plan = reader.bytes_value()?;
                 parse_plan_status(plan, us);
+            }
+            (33, protoc::WIRE_LEN) => {
+                us.model_configs = catalog::parse_client_model_configs(reader.bytes_value()?);
             }
             (36, protoc::WIRE_LEN) => us.user_id = reader_str(reader.bytes_value()?),
             _ => reader.skip(wire)?,
@@ -319,8 +327,13 @@ pub async fn fetch_devin_user_status(
         ));
     }
 
-    parse_user_status(&body)
-        .ok_or_else(|| CoreError::Parse("devin user status: parse response".into()))
+    let us = parse_user_status(&body)
+        .ok_or_else(|| CoreError::Parse("devin user status: parse response".into()))?;
+    // Refresh the live model catalog snapshot: every successful
+    // GetUserStatus carries the full cascade config blob, so quota fetches
+    // and the OAuth post-exchange hook both keep it warm.
+    catalog::store_live_catalog(us.model_configs.clone());
+    Ok(us)
 }
 
 /// `POST {base}/exa.seat_management_pb.SeatManagementService/GetUserStatus`.

@@ -1,306 +1,15 @@
-//! Devin static model catalog and `chat_model_uid` resolution.
+//! Devin `chat_model_uid` resolution and builtin model listing.
 //!
 //! Ported from CLIProxyAPI's `ResolveDevinChatModelUID` + Devin model registry:
 //! the wire model identifier carries the thinking effort as a suffix, so the
 //! resolver combines the requested model, an optional `:effort` marker and the
-//! explicit thinking level/budget into the catalog's canonical spelling.
+//! explicit thinking level/budget into the catalog's canonical spelling. The
+//! static catalog table lives in `specs.rs`; the live feed in `catalog.rs`
+//! supersedes it once a `GetUserStatus` response arrives.
 
+use super::catalog;
+use super::specs::{CATALOG, DEVIN_MAX_COMPLETION_TOKENS, DevinModelSpec, TEXT_ONLY_BASES};
 use crate::adapters::{DiscoveredModel, ModelId, TargetFormat};
-
-/// Max completion tokens every catalog entry advertises.
-const DEVIN_MAX_COMPLETION_TOKENS: i64 = 64_000;
-
-const DEFAULT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
-const MED_HI_MAX: &[&str] = &["medium", "high", "max"];
-const NONE_TO_MAX: &[&str] = &["none", "low", "medium", "high", "xhigh", "max"];
-const NONE_MAX: &[&str] = &["none", "max"];
-const MEDIUM_ONLY: &[&str] = &["medium"];
-const LIGHTNING_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max", "none"];
-const THINKING_ONLY: &[&str] = &["thinking"];
-const FAST_ONLY: &[&str] = &["fast"];
-
-struct DevinModelSpec {
-    id: &'static str,
-    display_name: &'static str,
-    owner: &'static str,
-    context_length: i64,
-    /// Allowed thinking-effort levels for the uid suffix.
-    thinking_levels: &'static [&'static str],
-}
-
-/// Catalog row: (id, display name, owner, context length, thinking levels).
-const fn spec(
-    id: &'static str,
-    display_name: &'static str,
-    owner: &'static str,
-    context_length: i64,
-    thinking_levels: &'static [&'static str],
-) -> DevinModelSpec {
-    DevinModelSpec {
-        id,
-        display_name,
-        owner,
-        context_length,
-        thinking_levels,
-    }
-}
-
-/// Static Devin catalog, ported from upstream `devin_models.json` (46 models).
-/// No upstream models-list RPC exists: the Codeium backend only serves
-/// `GetChatMessage`/`GetUserStatus`, so the catalog is maintained here and in
-/// upstream's embedded JSON.
-const CATALOG: &[DevinModelSpec] = &[
-    spec("swe-2", "SWE-2", "cognition", 262_000, MED_HI_MAX),
-    spec(
-        "claude-fable-5-1",
-        "Claude Fable 5.1",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-opus-5-5",
-        "Claude Opus 5.5",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gpt-6-astra",
-        "GPT-6 Astra",
-        "openai",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec("gpt-6-sol", "GPT-6 Sol", "openai", 1_000_000, NONE_TO_MAX),
-    spec("gpt-6-luna", "GPT-6 Luna", "openai", 1_000_000, NONE_TO_MAX),
-    spec(
-        "gemini-4-argon",
-        "Gemini 4 Argon",
-        "google",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec("kimi-k3", "Kimi K3", "moonshot", 1_048_576, DEFAULT_LEVELS),
-    spec("glm-5-2", "GLM 5.2", "zhipu", 200_000, NONE_MAX),
-    spec("glm-5-3", "GLM 5.3", "zhipu", 1_048_576, DEFAULT_LEVELS),
-    spec(
-        "claude-sonnet-5-5",
-        "Claude Sonnet 5.5",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gemini-3-8-flash",
-        "Gemini 3.8 Flash",
-        "google",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-opus-4-7",
-        "Claude Opus 4.7",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-opus-4-8",
-        "Claude Opus 4.8",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-opus-5",
-        "Claude Opus 5",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-5-fable",
-        "Claude 5 Fable",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-sonnet-5",
-        "Claude Sonnet 5",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-haiku-5-5",
-        "Claude Haiku 5.5",
-        "anthropic",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gemini-3-5-flash",
-        "Gemini 3.5 Flash",
-        "google",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gemini-3-6-flash",
-        "Gemini 3.6 Flash",
-        "google",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gemini-3-7-flash",
-        "Gemini 3.7 Flash",
-        "google",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gpt-5-6-sol",
-        "GPT 5.6 Sol",
-        "openai",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gpt-5-6-terra",
-        "GPT 5.6 Terra",
-        "openai",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gpt-5-6-luna",
-        "GPT 5.6 Luna",
-        "openai",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "gpt-6-1-sol",
-        "GPT 6.1 Sol",
-        "openai",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "glm-5-2-1m",
-        "GLM 5.2 1M",
-        "zhipu",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec("grok-4-6", "Grok 4.6", "xai", 500_000, DEFAULT_LEVELS),
-    spec("grok-4-7", "Grok 4.7", "xai", 500_000, DEFAULT_LEVELS),
-    spec(
-        "muse-wonder-1-0",
-        "Muse Wonder 1.0",
-        "devin",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "glm-5-3-flash",
-        "GLM 5.3 Flash",
-        "zhipu",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "deepseek-v4-flash",
-        "DeepSeek V4 Flash",
-        "deepseek",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "deepseek-v4-1-flash-1017",
-        "DeepSeek V4.1 Flash 1017",
-        "deepseek",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-    spec("swe-1-7", "SWE 1.7", "cognition", 262_000, MEDIUM_ONLY),
-    spec(
-        "swe-2-lightning",
-        "SWE 2 Lightning",
-        "cognition",
-        262_144,
-        LIGHTNING_LEVELS,
-    ),
-    spec(
-        "claude-opus-4-6",
-        "Claude Opus 4.6",
-        "anthropic",
-        200_000,
-        THINKING_ONLY,
-    ),
-    spec(
-        "claude-opus-4-6-1m",
-        "Claude Opus 4.6 1M",
-        "anthropic",
-        1_000_000,
-        THINKING_ONLY,
-    ),
-    spec("gpt-5-4", "GPT 5.4", "openai", 272_000, DEFAULT_LEVELS),
-    spec("gpt-5-5", "GPT 5.5", "openai", 272_000, DEFAULT_LEVELS),
-    spec(
-        "gpt-5-4-mini",
-        "GPT 5.4 Mini",
-        "openai",
-        400_000,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "claude-sonnet-4-6",
-        "Claude Sonnet 4.6",
-        "anthropic",
-        200_000,
-        THINKING_ONLY,
-    ),
-    spec(
-        "claude-sonnet-4-6-1m",
-        "Claude Sonnet 4.6 1M",
-        "anthropic",
-        1_000_000,
-        THINKING_ONLY,
-    ),
-    spec(
-        "kimi-k2-6",
-        "Kimi K2.6",
-        "moonshot",
-        262_144,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "kimi-k2-7",
-        "Kimi K2.7",
-        "moonshot",
-        262_144,
-        DEFAULT_LEVELS,
-    ),
-    spec(
-        "nemotron-3-ultra",
-        "Nemotron 3 Ultra",
-        "nvidia",
-        1_000_000,
-        DEFAULT_LEVELS,
-    ),
-    spec("swe-1-6", "SWE 1.6", "cognition", 200_000, FAST_ONLY),
-    spec(
-        "deepseek-v4-pro",
-        "DeepSeek V4 Pro",
-        "deepseek",
-        1_048_576,
-        DEFAULT_LEVELS,
-    ),
-];
 
 /// Effort suffixes that make a model string already fully-qualified.
 const KNOWN_SUFFIXES: &[&str] = &[
@@ -352,17 +61,37 @@ fn catalog_lookup(id: &str) -> Option<&'static DevinModelSpec> {
     CATALOG.iter().find(|spec| spec.id == id)
 }
 
-/// Completion-token ceiling for a resolved `chat_model_uid` (or bare model
-/// id). `None` when the model is not in the catalog — callers then keep the
-/// protocol default.
-pub fn devin_max_completion_tokens_for(uid: &str) -> Option<u64> {
-    let lower = uid.trim().to_ascii_lowercase();
-    let stem = lower.strip_suffix("-lightning").unwrap_or(&lower);
-    let base = KNOWN_SUFFIXES
+/// Strip `-lightning` and every known effort/variant suffix, leaving the
+/// catalog base id (`swe-2-high` → `swe-2`, `glm-5-2-max-1m` → `glm-5-2-1m`
+/// only when the 1m form is its own base — callers probe both spellings).
+fn uid_stem(uid: &str) -> &str {
+    let lower = uid.trim();
+    let stem = lower.strip_suffix("-lightning").unwrap_or(lower);
+    KNOWN_SUFFIXES
         .iter()
         .find_map(|s| stem.strip_suffix(s))
-        .unwrap_or(stem);
-    catalog_lookup(base).map(|_| DEVIN_MAX_COMPLETION_TOKENS as u64)
+        .unwrap_or(stem)
+}
+
+/// Completion-token ceiling for a resolved `chat_model_uid` (or bare model
+/// id). Live `model_info.max_output_tokens` wins; the static table then
+/// reports its flat catalog cap. `None` for unknown models — callers keep
+/// the protocol default there.
+pub fn devin_max_completion_tokens_for(uid: &str) -> Option<u64> {
+    let lower = uid.trim().to_ascii_lowercase();
+    if let Some(cat) = catalog::live_catalog() {
+        if let Some(row) = cat.row_for_uid(&lower)
+            && row.max_output_tokens > 0
+        {
+            return Some(row.max_output_tokens as u64);
+        }
+        if let Some((_, max_out)) = cat.base_limits(uid_stem(&lower))
+            && max_out > 0
+        {
+            return Some(max_out as u64);
+        }
+    }
+    catalog_lookup(uid_stem(&lower)).map(|_| DEVIN_MAX_COMPLETION_TOKENS as u64)
 }
 
 /// `NormalizeThinkingLevel`: map free-form level/budget hints onto the
@@ -451,9 +180,71 @@ fn ends_with_known_suffix(lower: &str) -> bool {
     KNOWN_SUFFIXES.iter().any(|s| lower.ends_with(s))
 }
 
+/// Strip a `devin/` provider prefix (case-insensitive), preserving the
+/// original spelling of what follows.
+fn strip_devin_prefix(trimmed: &str) -> &str {
+    let has_prefix = trimmed
+        .get(..6)
+        .is_some_and(|head| head.eq_ignore_ascii_case("devin/"));
+    if has_prefix {
+        trimmed
+            .get(6..)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(trimmed)
+    } else {
+        trimmed
+    }
+}
+
+/// CPA effort conventions: `model(level)` wins over `model:level`; either
+/// overrides the body's thinking_level.
+fn split_effort_suffix(stripped: &str) -> (&str, &str) {
+    match stripped.rfind('(') {
+        Some(open) if stripped.ends_with(')') => {
+            (&stripped[..open], &stripped[open + 1..stripped.len() - 1])
+        }
+        _ => match stripped.rsplit_once(':') {
+            Some((base, level)) => (base, level),
+            None => (stripped, ""),
+        },
+    }
+}
+
+/// Effort the request actually asked for, merging the model suffix with
+/// `thinking_level`/`budget_tokens` exactly like the static resolver.
+fn requested_effort(stripped: &str, thinking_level: &str, budget_tokens: i64) -> String {
+    let (_, level_from_model) = split_effort_suffix(stripped);
+    normalize_thinking_level(
+        if level_from_model.is_empty() {
+            thinking_level
+        } else {
+            level_from_model
+        },
+        budget_tokens,
+    )
+}
+
 /// Resolve the wire `chat_model_uid` from the requested model plus thinking
-/// hints. Port of upstream `ResolveDevinChatModelUID`.
+/// hints. Port of upstream `ResolveDevinChatModelUID`, with a live-catalog
+/// correction pass on top: whatever the static rules emit is returned
+/// verbatim when the live feed confirms it, and misses are re-resolved
+/// against the live row set of the base (covers bases absent from the
+/// static table entirely, like `gpt-6-1-terra`).
 pub fn resolve_devin_chat_model_uid(
+    model: &str,
+    thinking_level: &str,
+    budget_tokens: i64,
+) -> String {
+    let resolved = resolve_devin_chat_model_uid_static(model, thinking_level, budget_tokens);
+    live_corrected_uid(model, &resolved, thinking_level, budget_tokens)
+}
+
+/// Static resolution — everything upstream's `devin_models.go` +
+/// `devin_models.json` encode: special aliases, effort spelling, lightning
+/// and thinking variants. Returns the uid the curated tables produce,
+/// regardless of what the live feed says.
+fn resolve_devin_chat_model_uid_static(
     model: &str,
     thinking_level: &str,
     budget_tokens: i64,
@@ -463,19 +254,7 @@ pub fn resolve_devin_chat_model_uid(
         return "swe-2-high".to_string();
     }
 
-    // Strip a "devin/" provider prefix (case-insensitive).
-    let has_prefix = trimmed
-        .get(..6)
-        .is_some_and(|head| head.eq_ignore_ascii_case("devin/"));
-    let stripped = if has_prefix {
-        trimmed
-            .get(6..)
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(trimmed)
-    } else {
-        trimmed
-    };
+    let stripped = strip_devin_prefix(trimmed);
     let lower = stripped.to_ascii_lowercase();
 
     // Already carries a known effort suffix → fully qualified.
@@ -483,25 +262,8 @@ pub fn resolve_devin_chat_model_uid(
         return stripped.to_string();
     }
 
-    // CPA suffix conventions: `model(level)` wins over `model:level`, and
-    // either overrides the body's thinking_level.
-    let (base_raw, level_from_model) = match stripped.rfind('(') {
-        Some(open) if stripped.ends_with(')') => {
-            (&stripped[..open], &stripped[open + 1..stripped.len() - 1])
-        }
-        _ => match stripped.rsplit_once(':') {
-            Some((base, level)) => (base, level),
-            None => (stripped, ""),
-        },
-    };
-    let effort = normalize_thinking_level(
-        if level_from_model.is_empty() {
-            thinking_level
-        } else {
-            level_from_model
-        },
-        budget_tokens,
-    );
+    let (base_raw, _) = split_effort_suffix(stripped);
+    let effort = requested_effort(stripped, thinking_level, budget_tokens);
 
     let mut canonical_base = base_raw.to_ascii_lowercase().replace('.', "-");
 
@@ -621,21 +383,150 @@ pub fn resolve_devin_chat_model_uid(
     format!("{}-{effort}", spec.id)
 }
 
-/// Static Devin catalog as `DiscoveredModel`s.
-pub fn devin_builtin_models() -> Vec<DiscoveredModel> {
-    CATALOG
+/// Live-catalog correction pass over the static resolution.
+///
+/// - `resolved` is a live uid → returned verbatim.
+/// - A request already fully qualified (`swe-2-low-lightning`) is trusted
+///   verbatim: the client named a concrete variant and the live snapshot
+///   may simply lag behind it.
+/// - Otherwise the live row set of the resolved/request stem picks a uid:
+///   single-row bases return their bare uid, labeled rows match the
+///   requested effort clamped onto the live level set.
+/// - No live base found → the static answer stands (enum aliases and
+///   models the account's feed does not carry).
+fn live_corrected_uid(model: &str, resolved: &str, level: &str, budget: i64) -> String {
+    let Some(cat) = catalog::live_catalog() else {
+        return resolved.to_string();
+    };
+    if cat.is_live_uid(resolved) {
+        return resolved.to_string();
+    }
+    let request = strip_devin_prefix(model.trim());
+    let lower_request = request.to_ascii_lowercase();
+    if ends_with_known_suffix(&lower_request) {
+        return resolved.to_string();
+    }
+    let effort = requested_effort(request, level, budget);
+    for cand in [resolved, request] {
+        let normalized = catalog::normalize_base_id(strip_devin_prefix(cand.trim()));
+        let stem = uid_stem(&normalized);
+        if cat.rows_for_base(stem).is_none() {
+            continue;
+        }
+        let levels = cat.base_effort_levels(stem);
+        let level_refs: Vec<&str> = levels.iter().map(String::as_str).collect();
+        let default = select_default_effort(stem, &level_refs);
+        let chosen = clamp_effort(&effort, &level_refs, &default);
+        if let Some(uid) = cat.pick_uid(stem, &chosen, &default) {
+            return uid;
+        }
+    }
+    resolved.to_string()
+}
+
+/// Owner label for a live-only base id — prefix inference matching the
+/// families the static catalog encodes.
+fn owner_for(base_id: &str) -> &'static str {
+    const OWNERS: &[(&str, &str)] = &[
+        ("claude", "anthropic"),
+        ("gpt", "openai"),
+        ("gemini", "google"),
+        ("kimi", "moonshot"),
+        ("glm", "zhipu"),
+        ("deepseek", "deepseek"),
+        ("grok", "xai"),
+        ("swe", "cognition"),
+        ("nemotron", "nvidia"),
+        ("muse", "devin"),
+    ];
+    OWNERS
         .iter()
-        .map(|spec| DiscoveredModel {
-            model_id: ModelId::new(spec.id),
-            display_name: Some(spec.display_name.to_string()),
-            target_format: TargetFormat::Devin,
-            context_length: Some(spec.context_length),
-            max_output_tokens: Some(DEVIN_MAX_COMPLETION_TOKENS),
-            input_modalities: Some(Box::new(["text".to_string(), "image".to_string()])),
-            output_modalities: Some(Box::new(["text".to_string()])),
-            model_type: Some("chat".to_string()),
-            family: Some(spec.owner.to_string()),
-            capabilities: None,
+        .find(|(prefix, _)| base_id.starts_with(prefix))
+        .map_or("devin", |(_, owner)| *owner)
+}
+
+fn builtin_model(
+    id: &str,
+    display_name: &str,
+    owner: &str,
+    context_length: i64,
+    max_output_tokens: i64,
+    images: bool,
+) -> DiscoveredModel {
+    DiscoveredModel {
+        model_id: ModelId::new(id),
+        display_name: Some(display_name.to_string()),
+        target_format: TargetFormat::Devin,
+        context_length: Some(context_length),
+        max_output_tokens: Some(max_output_tokens),
+        input_modalities: Some(if images {
+            Box::new(["text".to_string(), "image".to_string()])
+        } else {
+            Box::new(["text".to_string()])
+        }),
+        output_modalities: Some(Box::new(["text".to_string()])),
+        model_type: Some("chat".to_string()),
+        family: Some(owner.to_string()),
+        capabilities: None,
+    }
+}
+
+/// Devin catalog as `DiscoveredModel`s: the static table overlaid with the
+/// live `client_model_configs` feed once a `GetUserStatus` has delivered it.
+/// Live rows refresh context/completion ceilings and image support per uid
+/// or base, and bases absent from the static table are appended.
+pub fn devin_builtin_models() -> Vec<DiscoveredModel> {
+    let live = catalog::live_catalog();
+    let mut out: Vec<DiscoveredModel> = CATALOG
+        .iter()
+        .map(|spec| {
+            let (ctx, max_out) = live
+                .as_ref()
+                .and_then(|cat| {
+                    cat.row_for_uid(spec.id)
+                        .map(|r| (r.context_length, r.max_output_tokens))
+                        .or_else(|| cat.base_limits(spec.id))
+                })
+                .unwrap_or((spec.context_length, DEVIN_MAX_COMPLETION_TOKENS));
+            let images = live
+                .as_ref()
+                .and_then(|cat| {
+                    cat.row_for_uid(spec.id)
+                        .map(|r| r.supports_images)
+                        .or_else(|| cat.base_supports_images(spec.id))
+                })
+                .unwrap_or_else(|| !TEXT_ONLY_BASES.contains(&spec.id));
+            builtin_model(
+                spec.id,
+                spec.display_name,
+                spec.owner,
+                ctx,
+                max_out.max(1),
+                images,
+            )
         })
-        .collect()
+        .collect();
+    if let Some(cat) = live.as_ref() {
+        for base_id in cat.base_ids() {
+            if CATALOG.iter().any(|s| s.id == base_id) {
+                continue;
+            }
+            let (ctx, max_out) = cat
+                .base_limits(base_id)
+                .unwrap_or((1_048_576, DEVIN_MAX_COMPLETION_TOKENS));
+            let images = cat.base_supports_images(base_id).unwrap_or(true);
+            let display = cat
+                .base_display_name(base_id)
+                .unwrap_or_else(|| base_id.clone());
+            out.push(builtin_model(
+                base_id,
+                &display,
+                owner_for(base_id),
+                ctx,
+                max_out.max(1),
+                images,
+            ));
+        }
+    }
+    out
 }

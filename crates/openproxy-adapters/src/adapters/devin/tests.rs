@@ -601,4 +601,5 @@ fn error_body_message_strips_wrapper() {
     );
 }
 
+mod catalog;
 mod request;
