@@ -2,7 +2,7 @@
 
 use openproxy_types::quota::AccountQuota;
 use openproxy_types::{AccountId, CoreError, Result, ResultExt};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 /// Serialize the optional JSON sidecars of a quota snapshot.
 ///
@@ -90,4 +90,24 @@ pub fn set_quota(conn: &Connection, id: AccountId, q: &AccountQuota) -> Result<(
         format!("update quota for account {}", id.0),
         || CoreError::AccountNotFound(id.0),
     )
+}
+
+/// Read the persisted session (daily) and weekly quota reset timestamps.
+///
+/// Quota columns are unencrypted, so no master key is needed. Returns
+/// `(None, None)` for a missing account row.
+pub fn quota_reset_at(
+    conn: &Connection,
+    id: AccountId,
+) -> Result<(Option<String>, Option<String>)> {
+    conn.query_row(
+        "SELECT quota_session_reset_at, quota_weekly_reset_at FROM accounts WHERE id = ?1",
+        params![id.0],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map(|row| row.unwrap_or((None, None)))
+    .map_err(crate::error::map_db_error_ctx(
+        "read quota reset timestamps",
+    ))
 }

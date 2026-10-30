@@ -396,3 +396,13 @@ pub fn parse_devin_trailer_error(payload: &[u8]) -> Option<(u16, String)> {
     };
     Some((status, format!("devin upstream error ({code}): {message}")))
 }
+
+/// Recover the upstream error message from a `body` produced by
+/// [`parse_devin_trailer_error`]. Returns `body` unchanged when it does not
+/// carry the `devin upstream error (code): ` wrapper (e.g. a raw HTTP error
+/// body), so callers can classify on the same text upstream would see.
+pub fn devin_error_body_message(body: &str) -> &str {
+    body.strip_prefix("devin upstream error (")
+        .and_then(|rest| rest.split_once("): "))
+        .map_or(body, |(_, msg)| msg)
+}

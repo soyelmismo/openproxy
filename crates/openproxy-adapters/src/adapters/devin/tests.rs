@@ -1,6 +1,8 @@
 //! Unit tests for the Devin Connect-RPC adapter.
 
 use super::protoc::{self, ProtoReader};
+use super::quota::{DevinQuotaKind, classify_devin_quota_exhaustion};
+use super::response::devin_error_body_message;
 use super::tools::*;
 use super::turn::*;
 use super::wire::*;
@@ -492,6 +494,111 @@ fn sanitize_write_stdin_description() {
     );
     assert!(no_period.contains("a existing unified exec session"));
     assert!(!no_period.ends_with('.'));
+}
+
+// ---------------------------------------------------------------------------
+// trailer errors + quota exhaustion classification
+// ---------------------------------------------------------------------------
+
+#[test]
+fn trailer_error_mapping() {
+    assert_eq!(parse_devin_trailer_error(b""), None);
+    assert_eq!(parse_devin_trailer_error(b"{}"), None);
+    assert_eq!(parse_devin_trailer_error(b"not json"), None);
+    assert_eq!(
+        parse_devin_trailer_error(
+            br#"{"error":{"code":"invalid_argument","message":"bad input"}}"#
+        ),
+        Some((
+            400,
+            "devin upstream error (invalid_argument): bad input".into()
+        ))
+    );
+    assert_eq!(
+        parse_devin_trailer_error(
+            br#"{"error":{"code":"invalid_argument","message":"internal error in x"}}"#
+        )
+        .map(|(s, _)| s),
+        Some(502)
+    );
+    for (code, msg, want) in [
+        ("internal", "boom", 502),
+        ("unauthenticated", "no auth", 401),
+        ("permission_denied", "server under high demand", 429),
+        ("permission_denied", "forbidden", 403),
+        ("resource_exhausted", "quota", 429),
+        ("unavailable", "down", 503),
+        ("canceled", "ctx done", 499),
+        ("deadline_exceeded", "slow", 504),
+        ("failed_precondition", "daily quota exhausted", 429),
+        ("failed_precondition", "acu limit reached", 429),
+        ("failed_precondition", "plain failure", 400),
+    ] {
+        let payload = format!(r#"{{"error":{{"code":"{code}","message":"{msg}"}}}}"#);
+        assert_eq!(
+            parse_devin_trailer_error(payload.as_bytes()).map(|(s, _)| s),
+            Some(want),
+            "code={code} msg={msg}"
+        );
+    }
+    // Unknown codes default to 502 like upstream's switch fallthrough.
+    assert_eq!(
+        parse_devin_trailer_error(br#"{"error":{"code":"unknown_code","message":"x"}}"#)
+            .map(|(s, _)| s),
+        Some(502)
+    );
+}
+
+#[test]
+fn classify_quota_exhaustion() {
+    assert_eq!(
+        classify_devin_quota_exhaustion("your Daily quota is exhausted"),
+        Some(DevinQuotaKind::Daily)
+    );
+    assert_eq!(
+        classify_devin_quota_exhaustion("Weekly quota exhausted; daily also"),
+        Some(DevinQuotaKind::Weekly)
+    );
+    assert_eq!(classify_devin_quota_exhaustion("quota exhausted"), None);
+    assert_eq!(classify_devin_quota_exhaustion("exhausted"), None);
+    assert_eq!(classify_devin_quota_exhaustion("quota"), None);
+    // Monthly ACU exhaustion is a different pool: never upgrades to the
+    // daily/weekly cooldown (upstream keeps it deliberately narrow).
+    assert_eq!(
+        classify_devin_quota_exhaustion("monthly acu quota exhausted"),
+        None
+    );
+    // Generic rate limit without the quota word.
+    assert_eq!(
+        classify_devin_quota_exhaustion("daily request exhausted"),
+        None
+    );
+}
+
+#[test]
+fn error_body_message_strips_wrapper() {
+    // The trailer wrapper adds `devin upstream error (code): ` around the
+    // raw upstream message; classification must see only the raw text so
+    // the code cannot supply the "exhausted" word itself.
+    assert_eq!(
+        devin_error_body_message("devin upstream error (resource_exhausted): weekly quota limit"),
+        "weekly quota limit"
+    );
+    assert_eq!(
+        devin_error_body_message(
+            "devin upstream error (failed_precondition): daily quota exhausted"
+        ),
+        "daily quota exhausted"
+    );
+    // Raw HTTP error bodies pass through unchanged.
+    assert_eq!(devin_error_body_message("plain body"), "plain body");
+    // False-positive guard: code alone carrying "exhausted" must not match.
+    assert_eq!(
+        classify_devin_quota_exhaustion(devin_error_body_message(
+            "devin upstream error (resource_exhausted): weekly quota limit"
+        )),
+        None
+    );
 }
 
 mod request;

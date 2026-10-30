@@ -220,6 +220,49 @@ pub(crate) fn update_predictive_limiter_on_result(
     }
 }
 
+/// Classify a Devin daily/weekly usage-quota exhaustion. Only explicit
+/// account-wide quota exhaustion on a 429 upgrades the cooldown to the
+/// window's persisted reset; monthly ACU messages, generic rate limits and
+/// explicit `RateLimited` errors (which already carry `retry_after_ms`,
+/// matching upstream's "explicit Retry-After wins" rule) keep the default
+/// backoff. Pure so it can be unit-tested without a full `Pipeline`.
+fn devin_quota_exhaustion_kind(
+    err: &CoreError,
+    status_code: u16,
+    provider_id: &str,
+) -> Option<openproxy_adapters::adapters::devin::DevinQuotaKind> {
+    let CoreError::UpstreamError { body, .. } = err else {
+        return None;
+    };
+    if status_code != 429 || provider_id != "devin" {
+        return None;
+    }
+    openproxy_adapters::adapters::devin::classify_devin_quota_exhaustion(
+        openproxy_adapters::adapters::devin::devin_error_body_message(body),
+    )
+}
+
+/// Upstream parks a Devin credential until the reset of the quota window
+/// named in the exhaustion message (8-day plausibility cap, matching
+/// `devinQuotaResetMaxDelay`). Returns the reset instant as RFC3339, or
+/// `None` when no plausible reset is stored — the caller then keeps the
+/// default backoff.
+fn devin_quota_reset_until(
+    conn: &rusqlite::Connection,
+    aid: openproxy_types::ids::AccountId,
+    kind: openproxy_adapters::adapters::devin::DevinQuotaKind,
+) -> Option<String> {
+    use openproxy_adapters::adapters::devin::DevinQuotaKind;
+    let (session_reset, weekly_reset) = openproxy_db::accounts::quota_reset_at(conn, aid).ok()?;
+    let reset = match kind {
+        DevinQuotaKind::Daily => session_reset,
+        DevinQuotaKind::Weekly => weekly_reset,
+    }?;
+    let reset_at = chrono::DateTime::parse_from_rfc3339(&reset).ok()?;
+    let delay = reset_at.timestamp() - chrono::Utc::now().timestamp();
+    (delay > 0 && delay <= 8 * 24 * 3600).then(|| reset_at.to_rfc3339())
+}
+
 pub(crate) fn update_account_rate_limited_until_on_result(
     pipeline: &crate::Pipeline,
     target: &openproxy_types::ComboTarget,
@@ -229,16 +272,25 @@ pub(crate) fn update_account_rate_limited_until_on_result(
         return;
     };
     if let Some(err) = &result.error {
+        // Devin reports daily/weekly usage-quota exhaustion in the trailer
+        // error body; upstream parks the credential until that window's
+        // persisted reset instead of a fixed backoff (devin_quota.go).
+        let devin_quota =
+            devin_quota_exhaustion_kind(err, result.status_code, target.provider_id.as_str());
         let retry_secs = match err {
             CoreError::RateLimited { retry_after_ms, .. } => Some((*retry_after_ms / 1000).max(5)),
             _ if result.status_code == 429 => Some(60),
             _ => None,
         };
         if let Some(secs) = retry_secs {
-            let until = (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339();
             let conn_clone = Arc::clone(&pipeline.conn);
             let handle = tokio::task::spawn_blocking(move || {
                 let conn = conn_clone.lock();
+                let until = devin_quota
+                    .and_then(|kind| devin_quota_reset_until(&conn, aid, kind))
+                    .unwrap_or_else(|| {
+                        (chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339()
+                    });
                 if let Err(e) =
                     openproxy_db::accounts::set_rate_limited_until(&conn, aid, Some(&until))
                 {
@@ -317,4 +369,220 @@ pub(crate) fn notify_circuit_breaker_opened(
             Some(&provider_id_str),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use openproxy_adapters::adapters::devin::DevinQuotaKind;
+
+    fn devin_err(status: u16, body: &str) -> CoreError {
+        CoreError::UpstreamError {
+            status,
+            provider: "devin".into(),
+            model: "m".into(),
+            body: body.into(),
+            is_proxy_rotated: false,
+            class: crate::error_classification::classify_upstream_error(status, body),
+            is_hard_skip: false,
+        }
+    }
+
+    #[test]
+    fn devin_quota_kind_matches_explicit_window_exhaustion() {
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(
+                    429,
+                    "devin upstream error (resource_exhausted): daily quota exhausted"
+                ),
+                429,
+                "devin"
+            ),
+            Some(DevinQuotaKind::Daily)
+        );
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(
+                    429,
+                    "devin upstream error (resource_exhausted): Weekly quota exhausted"
+                ),
+                429,
+                "devin"
+            ),
+            Some(DevinQuotaKind::Weekly)
+        );
+        // Weekly wins when both periods are named.
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(
+                    429,
+                    "devin upstream error (resource_exhausted): daily and weekly quota exhausted"
+                ),
+                429,
+                "devin"
+            ),
+            Some(DevinQuotaKind::Weekly)
+        );
+    }
+
+    #[test]
+    fn devin_quota_kind_rejects_non_window_messages() {
+        // Monthly ACU exhaustion is not a daily/weekly window.
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(
+                    429,
+                    "devin upstream error (resource_exhausted): monthly acu quota exhausted"
+                ),
+                429,
+                "devin"
+            ),
+            None
+        );
+        // Generic rate limit: no "quota" word.
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(
+                    429,
+                    "devin upstream error (resource_exhausted): high demand"
+                ),
+                429,
+                "devin"
+            ),
+            None
+        );
+        // The wrapper's code ("resource_exhausted") must not supply the
+        // "exhausted" word: raw message lacks it.
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(
+                    429,
+                    "devin upstream error (resource_exhausted): weekly quota limit"
+                ),
+                429,
+                "devin"
+            ),
+            None
+        );
+        // Non-429 status, non-devin provider, and RateLimited (explicit
+        // retry_after_ms takes precedence upstream) never match.
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(400, "devin upstream error (x): daily quota exhausted"),
+                400,
+                "devin"
+            ),
+            None
+        );
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &devin_err(429, "devin upstream error (x): daily quota exhausted"),
+                429,
+                "other"
+            ),
+            None
+        );
+        assert_eq!(
+            devin_quota_exhaustion_kind(
+                &CoreError::RateLimited {
+                    provider: "devin".into(),
+                    retry_after_ms: 1000,
+                    is_proxy_rotated: false,
+                },
+                429,
+                "devin"
+            ),
+            None
+        );
+    }
+
+    fn account_with_resets(session: Option<&str>, weekly: Option<&str>) -> rusqlite::Connection {
+        let conn = openproxy_db::test_db::open_in_memory();
+        openproxy_db::test_db::seed_antigravity_provider(&conn);
+        conn.execute(
+            "INSERT INTO accounts(provider_id, label) VALUES ('antigravity', 'a1')",
+            [],
+        )
+        .expect("insert account");
+        conn.execute(
+            "UPDATE accounts SET quota_session_reset_at = ?1, quota_weekly_reset_at = ?2 \
+             WHERE id = 1",
+            rusqlite::params![session, weekly],
+        )
+        .expect("set resets");
+        conn
+    }
+
+    #[test]
+    fn devin_quota_reset_until_uses_window_reset() {
+        let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        let weekly_future = (chrono::Utc::now() + chrono::Duration::days(3)).to_rfc3339();
+        let conn = account_with_resets(Some(&future), Some(&weekly_future));
+        let aid = openproxy_types::ids::AccountId(1);
+
+        let daily = devin_quota_reset_until(&conn, aid, DevinQuotaKind::Daily).expect("daily");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(&daily)
+                .unwrap()
+                .timestamp(),
+            chrono::DateTime::parse_from_rfc3339(&future)
+                .unwrap()
+                .timestamp()
+        );
+        let weekly = devin_quota_reset_until(&conn, aid, DevinQuotaKind::Weekly).expect("weekly");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(&weekly)
+                .unwrap()
+                .timestamp(),
+            chrono::DateTime::parse_from_rfc3339(&weekly_future)
+                .unwrap()
+                .timestamp()
+        );
+    }
+
+    #[test]
+    fn devin_quota_reset_until_rejects_unusable_resets() {
+        let aid = openproxy_types::ids::AccountId(1);
+        let future = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+        let past = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let far = (chrono::Utc::now() + chrono::Duration::days(9)).to_rfc3339();
+
+        // Past timestamp.
+        let conn = account_with_resets(Some(&past), Some(&future));
+        assert_eq!(
+            devin_quota_reset_until(&conn, aid, DevinQuotaKind::Daily),
+            None
+        );
+        assert!(devin_quota_reset_until(&conn, aid, DevinQuotaKind::Weekly).is_some());
+
+        // Beyond the 8-day plausibility cap.
+        let conn = account_with_resets(Some(&far), None);
+        assert_eq!(
+            devin_quota_reset_until(&conn, aid, DevinQuotaKind::Daily),
+            None
+        );
+
+        // Unparseable timestamp.
+        let conn = account_with_resets(Some("not-a-date"), None);
+        assert_eq!(
+            devin_quota_reset_until(&conn, aid, DevinQuotaKind::Daily),
+            None
+        );
+
+        // Window without a stored reset, and a missing account row.
+        let conn = account_with_resets(None, Some(&future));
+        assert_eq!(
+            devin_quota_reset_until(&conn, aid, DevinQuotaKind::Daily),
+            None
+        );
+        assert_eq!(
+            devin_quota_reset_until(
+                &conn,
+                openproxy_types::ids::AccountId(999),
+                DevinQuotaKind::Daily
+            ),
+            None
+        );
+    }
 }

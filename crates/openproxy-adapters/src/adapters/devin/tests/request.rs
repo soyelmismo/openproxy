@@ -344,59 +344,6 @@ fn parse_devin_frame_truncated_err() {
 }
 
 // ---------------------------------------------------------------------------
-// trailer errors
-// ---------------------------------------------------------------------------
-
-#[test]
-fn trailer_error_mapping() {
-    assert_eq!(parse_devin_trailer_error(b""), None);
-    assert_eq!(parse_devin_trailer_error(b"{}"), None);
-    assert_eq!(parse_devin_trailer_error(b"not json"), None);
-    assert_eq!(
-        parse_devin_trailer_error(
-            br#"{"error":{"code":"invalid_argument","message":"bad input"}}"#
-        ),
-        Some((
-            400,
-            "devin upstream error (invalid_argument): bad input".into()
-        ))
-    );
-    assert_eq!(
-        parse_devin_trailer_error(
-            br#"{"error":{"code":"invalid_argument","message":"internal error in x"}}"#
-        )
-        .map(|(s, _)| s),
-        Some(502)
-    );
-    for (code, msg, want) in [
-        ("internal", "boom", 502),
-        ("unauthenticated", "no auth", 401),
-        ("permission_denied", "server under high demand", 429),
-        ("permission_denied", "forbidden", 403),
-        ("resource_exhausted", "quota", 429),
-        ("unavailable", "down", 503),
-        ("canceled", "ctx done", 499),
-        ("deadline_exceeded", "slow", 504),
-        ("failed_precondition", "daily quota exhausted", 429),
-        ("failed_precondition", "acu limit reached", 429),
-        ("failed_precondition", "plain failure", 400),
-    ] {
-        let payload = format!(r#"{{"error":{{"code":"{code}","message":"{msg}"}}}}"#);
-        assert_eq!(
-            parse_devin_trailer_error(payload.as_bytes()).map(|(s, _)| s),
-            Some(want),
-            "code={code} msg={msg}"
-        );
-    }
-    // Unknown codes default to 502 like upstream's switch fallthrough.
-    assert_eq!(
-        parse_devin_trailer_error(br#"{"error":{"code":"unknown_code","message":"x"}}"#)
-            .map(|(s, _)| s),
-        Some(502)
-    );
-}
-
-// ---------------------------------------------------------------------------
 // chat_model_uid resolution
 // ---------------------------------------------------------------------------
 
@@ -639,21 +586,6 @@ fn user_status_parse_to_quota() {
     assert_eq!(details.len(), 2);
     assert!((details[0].remaining_fraction - 0.73).abs() < 1e-9);
     assert!((details[1].remaining_fraction - 0.40).abs() < 1e-9);
-}
-
-#[test]
-fn classify_quota_exhaustion() {
-    assert_eq!(
-        classify_devin_quota_exhaustion("your Daily quota is exhausted"),
-        Some(DevinQuotaKind::Daily)
-    );
-    assert_eq!(
-        classify_devin_quota_exhaustion("Weekly quota exhausted; daily also"),
-        Some(DevinQuotaKind::Weekly)
-    );
-    assert_eq!(classify_devin_quota_exhaustion("quota exhausted"), None);
-    assert_eq!(classify_devin_quota_exhaustion("exhausted"), None);
-    assert_eq!(classify_devin_quota_exhaustion("quota"), None);
 }
 
 // ---------------------------------------------------------------------------
