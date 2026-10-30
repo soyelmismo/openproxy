@@ -279,9 +279,21 @@ async fn account_override_is_not_replaced_by_the_auth_snapshot() {
 
 #[tokio::test]
 async fn reused_combo_preserves_blacklist_and_allowlist_checks() {
-    for (allowed_models, blacklisted_models, blacklisted_providers, expected) in [
-        (None, None, Some(vec!["prov-a".into()]), StatusCode::OK),
-        (None, None, Some(vec!["*".into()]), StatusCode::UNAUTHORIZED),
+    for (allowed_models, blacklisted_models, blacklisted_providers, expected, expected_provider) in [
+        (
+            None,
+            None,
+            Some(vec!["prov-a".into()]),
+            StatusCode::OK,
+            "prov-b",
+        ),
+        (
+            None,
+            None,
+            Some(vec!["*".into()]),
+            StatusCode::UNAUTHORIZED,
+            "",
+        ),
         (
             Some(vec![
                 "combo:reuse-combo".into(),
@@ -290,12 +302,26 @@ async fn reused_combo_preserves_blacklist_and_allowlist_checks() {
             None,
             None,
             StatusCode::OK,
+            "prov-b",
         ),
         (
             None,
             Some(vec!["reuse-model".into()]),
             None,
             StatusCode::UNAUTHORIZED,
+            "",
+        ),
+        // An explicit allowlist entry overrides a provider blacklist: whitelisting
+        // `prov-a/reuse-model` grants it even though `prov-a` is provider-blocked.
+        (
+            Some(vec![
+                "combo:reuse-combo".into(),
+                "prov-a/reuse-model".into(),
+            ]),
+            None,
+            Some(vec!["prov-a".into()]),
+            StatusCode::OK,
+            "prov-a",
         ),
     ] {
         let f = fixture(CreateApiKeyInput {
@@ -310,7 +336,7 @@ async fn reused_combo_preserves_blacklist_and_allowlist_checks() {
         assert_eq!(status, expected, "{body}");
         if status == StatusCode::OK {
             assert_eq!(body["targets"].as_array().unwrap().len(), 1, "{body}");
-            assert_eq!(body["targets"][0]["provider"], "prov-b");
+            assert_eq!(body["targets"][0]["provider"], expected_provider, "{body}");
         }
         f.state.shutdown_usage_worker().await.unwrap();
     }

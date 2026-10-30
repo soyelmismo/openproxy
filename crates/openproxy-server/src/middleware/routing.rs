@@ -203,20 +203,20 @@ fn filter_combo_targets_by_auth(
 ) -> Result<(), ApiError> {
     let r = state.db_pool().reader();
     targets.retain(|target| {
-        if !auth.is_provider_allowed(target.provider_id.as_str()) {
-            return false;
+        let model_allowed = target
+            .model_row_id
+            .and_then(|row_id| {
+                openproxy_core::models::get_by_row_id(&r, row_id)
+                    .ok()
+                    .flatten()
+            })
+            .map(|m| auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str())));
+        // An explicitly allowlisted model survives its provider's blacklist;
+        // otherwise a blacklisted provider drops the target outright.
+        match model_allowed {
+            Some(allowed) => allowed,
+            None => auth.is_provider_allowed(target.provider_id.as_str()),
         }
-        if let Some(row_id) = target.model_row_id {
-            let model = openproxy_core::models::get_by_row_id(&r, row_id)
-                .ok()
-                .flatten();
-            if let Some(m) = model
-                && !auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str()))
-            {
-                return false;
-            }
-        }
-        true
     });
 
     if targets.is_empty() {

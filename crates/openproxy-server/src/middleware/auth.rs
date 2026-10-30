@@ -59,16 +59,25 @@ impl ValidatedApiToken {
             }
         });
 
+        // An explicit `allowed_models` entry grants access to the model even
+        // when its provider is blacklisted: the allowlist is a deliberate
+        // whitelist exception (e.g. allow `devin/swe-2:free` while `devin`
+        // stays provider-blocked). Compute membership first.
+        let explicitly_allowed = self.key.allowed_models.as_ref().is_some_and(|allowed| {
+            !allowed.is_empty()
+                && allowed
+                    .iter()
+                    .any(|m| matches_any_model_pattern(m, model, bare_model, full_id.as_deref()))
+        });
         if let Some(allowed) = &self.key.allowed_models
             && !allowed.is_empty()
-            && !allowed
-                .iter()
-                .any(|m| matches_any_model_pattern(m, model, bare_model, full_id.as_deref()))
+            && !explicitly_allowed
         {
             return false;
         }
 
-        if let Some(blacklisted_provs) = &self.key.blacklisted_providers
+        if !explicitly_allowed
+            && let Some(blacklisted_provs) = &self.key.blacklisted_providers
             && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
         {
             return false;
