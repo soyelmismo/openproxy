@@ -114,6 +114,35 @@ describe("api", () => {
     expect(location.hash).toBe("#/login");
   });
 
+  it("clears token on 401 with the auth error envelope", async () => {
+    localStorage.setItem(TOKEN_KEY, "dead-token");
+    location.hash = "#/keys";
+    fetchSpy.mockResolvedValue(
+      response('{"error":{"code":"auth","message":"invalid api key"}}', 401),
+    );
+
+    await expect(api("/keys")).rejects.toThrow("401: ");
+
+    expect(localStorage.getItem(TOKEN_KEY)).toBeNull();
+    expect(location.hash).toBe("#/login");
+  });
+
+  it("keeps the token when a 401 carries an upstream error envelope", async () => {
+    localStorage.setItem(TOKEN_KEY, "live-token");
+    location.hash = "#/providers";
+    fetchSpy.mockResolvedValue(
+      response(
+        '{"error":{"code":"upstream_error","message":"devin exchange: upstream error 401"}}',
+        401,
+      ),
+    );
+
+    await expect(api("/oauth/devin/exchange")).rejects.toThrow("401: ");
+
+    expect(localStorage.getItem(TOKEN_KEY)).toBe("live-token");
+    expect(location.hash).toBe("#/providers");
+  });
+
   it("reads the response body before throwing", async () => {
     const r = response("body was consumed", 502);
     const textSpy = vi.spyOn(r, "text");

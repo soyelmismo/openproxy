@@ -119,15 +119,20 @@ export const OAuthLogin: OAuthLoginShape = {
     if (!input) { showToast("Please paste the callback URL or API key", "error"); return; }
     let code: string | null = null;
     let callbackState: string | null = null;
+    let parsedAsUrl = false;
     try {
       const url = new URL(input);
+      parsedAsUrl = true;
       code = url.searchParams.get("code") || url.searchParams.get("apiKey") || url.searchParams.get("token") || url.searchParams.get("key");
       callbackState = url.searchParams.get("state") || url.hash.replace(/^#/, "") || null;
     } catch {
       // Not a full URL - treat as raw key or fragment
     }
 
-    if (!code) {
+    // Same guard as oauth-tab.ts: a parsed URL with no code param (e.g. an
+    // authorize URL pasted by mistake) is rejected instead of being shipped
+    // to the token endpoint as the code itself.
+    if (!code && !parsedAsUrl) {
       const keyMatch = input.match(/(cmd_[a-zA-Z0-9_\-]+|user_[a-zA-Z0-9_\-]+)/);
       if (keyMatch) {
         code = keyMatch[1] ?? null;

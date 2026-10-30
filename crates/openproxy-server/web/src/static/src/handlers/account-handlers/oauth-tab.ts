@@ -378,8 +378,10 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     }
     let code: string | null = null;
     let callbackState: string | null = null;
+    let parsedAsUrl = false;
     try {
       const url = new URL(input);
+      parsedAsUrl = true;
       code =
         url.searchParams.get("code") ||
         url.searchParams.get("apiKey") ||
@@ -391,7 +393,11 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
       // Not a full URL — treat as a raw key or fragment.
     }
 
-    if (!code) {
+    // A URL that parsed but carried no code-like parameter (e.g. an
+    // *authorize* URL pasted instead of the callback URL) is rejected here —
+    // the raw-input heuristics below would otherwise ship the whole URL to
+    // the token endpoint as the code.
+    if (!code && !parsedAsUrl) {
       const keyMatch = input.match(
         /(cmd_[a-zA-Z0-9_\-]+|user_[a-zA-Z0-9_\-]+)/,
       );

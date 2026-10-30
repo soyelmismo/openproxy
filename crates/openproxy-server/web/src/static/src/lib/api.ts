@@ -32,13 +32,13 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
   const r: Response = await fetch("/admin/api" + path, init);
 
   if (!r.ok) {
-    if (r.status === 401) {
+    const txt: string = await r.text();
+    if (r.status === 401 && isAuthFailureBody(txt)) {
       clearToken();
       if (typeof location !== "undefined" && !location.hash.startsWith("#/login") && path !== "/notifications/unread-count") {
         location.hash = "#/login";
       }
     }
-    const txt: string = await r.text();
     throw new Error(`${r.status}: ${txt}`);
   }
   // 204 No Content (e.g. DELETE success with an empty body)
@@ -51,6 +51,21 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
 
 // Latency in ms of the last `api()` call. Used by the sidebar health pill.
 export function lastApiLatency(): number { return state.lastApiLatencyMs; }
+
+/** A 401 only ends the admin session when the server says the credential
+ *  itself failed (`error.code === "auth"`). Responses that merely carry an
+ *  upstream 4xx — e.g. an OAuth provider rejecting a pasted callback code
+ *  through `/oauth/{provider}/exchange` — must not log the operator out. A body that
+ *  is not the standard JSON envelope fails closed (still treated as auth
+ *  failure) so a genuinely dead session never lingers. */
+function isAuthFailureBody(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown } } | null;
+    return parsed?.error?.code === "auth";
+  } catch {
+    return true;
+  }
+}
 
 // ── Debug logs — typed wrappers around GET /admin/api/debug/logs and POST ──
 // /admin/api/debug/clear ─────────────────────────────────────────────────────
