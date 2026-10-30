@@ -20,14 +20,43 @@ const CONNECT_END_STREAM_MASK: u8 = 0x02;
 /// Assigns (or reuses) the OpenAI tool-call `index` for a Devin tool-call id.
 /// Returns `(index, first_seen)` — first-seen deltas must carry `id`/`name`
 /// per the OpenAI streaming convention.
+///
+/// Deltas carrying an id resolve by id. Id-less deltas continue the most
+/// recently touched call (`active_tool_index`): upstream emits argument
+/// fragments on bare deltas carrying neither id nor name, and the reference
+/// executor attributes them to the last open call (`lastBuilderIdx`).
 fn devin_tool_index(state: &mut DevinStreamState, id: &str) -> (u32, bool) {
-    if let Some(&index) = state.tool_index_by_id.get(id) {
+    if !id.is_empty() {
+        if let Some(&index) = state.tool_index_by_id.get(id) {
+            state.active_tool_index = Some(index);
+            return (index, false);
+        }
+        let index = state.next_tool_index;
+        state.next_tool_index += 1;
+        state.tool_index_by_id.insert(id.to_string(), index);
+        state.active_tool_index = Some(index);
+        return (index, true);
+    }
+    if let Some(index) = state.active_tool_index {
         return (index, false);
     }
+    // Id-less delta with no open call: an anonymous call starts here. Its
+    // index is intentionally not keyed under "" so a later real id still
+    // opens its own call.
     let index = state.next_tool_index;
     state.next_tool_index += 1;
-    state.tool_index_by_id.insert(id.to_string(), index);
+    state.active_tool_index = Some(index);
     (index, true)
+}
+
+/// Argument fragment carried by a delta: `invalid_json_str` holds the raw
+/// payload when upstream could not parse the call arguments as JSON.
+fn devin_tool_call_args(tc: &wire::DevinToolCallDelta) -> &str {
+    if tc.arguments.is_empty() {
+        &tc.invalid_json_str
+    } else {
+        &tc.arguments
+    }
 }
 
 /// Per-request Devin stream state. Tool-call deltas reference the call by id
@@ -39,6 +68,9 @@ fn devin_tool_index(state: &mut DevinStreamState, id: &str) -> (u32, bool) {
 pub(crate) struct DevinStreamState {
     pub tool_index_by_id: std::collections::HashMap<String, u32>,
     pub next_tool_index: u32,
+    /// Index of the call the next id-less delta continues. Follows the slot
+    /// the last delta landed on, matching upstream's `lastBuilderIdx`.
+    pub active_tool_index: Option<u32>,
     pub last_stop_reason: u64,
     pub saw_tool_calls: bool,
 }
@@ -132,11 +164,14 @@ pub(crate) fn devin_frame_to_chunk(
             state.saw_tool_calls = true;
             has_content = true;
             let mut function = serde_json::Map::new();
-            if first_seen && !tc.name.is_empty() {
+            // Name is forwarded on any non-empty delta, not only the first:
+            // continuation deltas may carry it late.
+            if !tc.name.is_empty() {
                 function.insert("name".into(), Value::String(tc.name.clone()));
             }
-            if !tc.arguments.is_empty() {
-                function.insert("arguments".into(), Value::String(tc.arguments.clone()));
+            let args = devin_tool_call_args(tc);
+            if !args.is_empty() {
+                function.insert("arguments".into(), Value::String(args.to_string()));
                 has_content = true;
             }
             let mut call = serde_json::Map::new();
@@ -287,9 +322,13 @@ pub(crate) fn fold_devin_body_to_openai_response(
                 // Same namespacing as the streaming path so follow-up
                 // requests round-trip through `restore_devin_tool_call_ids`.
                 entry.0 = wire::encode_devin_tool_call_id(&tc.id);
+            }
+            // Latest non-empty name wins — it may arrive on a continuation
+            // delta after the id-only opening delta.
+            if !tc.name.is_empty() {
                 entry.1 = tc.name.clone();
             }
-            entry.2.push_str(&tc.arguments);
+            entry.2.push_str(devin_tool_call_args(tc));
         }
     }
 
@@ -362,10 +401,25 @@ mod tests {
     }
 
     fn tool_call_frame(id: &str, name: &str, args: &str) -> Vec<u8> {
+        tool_delta_frame(id, name, args, "")
+    }
+
+    /// One field-6 tool-call delta with optional fields skipped when empty —
+    /// continuation deltas on the wire carry only `arguments`.
+    fn tool_delta_frame(id: &str, name: &str, args: &str, invalid_json: &str) -> Vec<u8> {
         let mut tc = Vec::new();
-        protoc::append_string(&mut tc, 1, id);
-        protoc::append_string(&mut tc, 2, name);
-        protoc::append_string(&mut tc, 3, args);
+        if !id.is_empty() {
+            protoc::append_string(&mut tc, 1, id);
+        }
+        if !name.is_empty() {
+            protoc::append_string(&mut tc, 2, name);
+        }
+        if !args.is_empty() {
+            protoc::append_string(&mut tc, 3, args);
+        }
+        if !invalid_json.is_empty() {
+            protoc::append_string(&mut tc, 4, invalid_json);
+        }
         let mut p = Vec::new();
         protoc::append_message(&mut p, 6, &tc);
         frame_event(&p)
@@ -591,5 +645,84 @@ mod tests {
         body.truncate(body.len() - 2);
         let err = fold_devin_body_to_openai_response(&body, "m").unwrap_err();
         assert!(matches!(err, CoreError::UpstreamConnection(_)));
+    }
+
+    // Regression: upstream sends call metadata (id/name) on the first delta
+    // and bare argument fragments on id-less continuation deltas. Those must
+    // merge into one call instead of spawning a phantom id-less call.
+    #[test]
+    fn unary_fold_idless_deltas_continue_active_call() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&tool_delta_frame("toolu_1", "terminal", "", ""));
+        body.extend_from_slice(&tool_delta_frame("", "", "{\"command\":\"", ""));
+        body.extend_from_slice(&tool_delta_frame("", "", "ls\"}", ""));
+        body.extend_from_slice(&eos_trailer(b"{}"));
+
+        let resp = fold_devin_body_to_openai_response(&body, "m").unwrap();
+        let calls = resp.choices[0].message.tool_calls.as_ref().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["id"], "toolu_1");
+        assert_eq!(calls[0]["function"]["name"], "terminal");
+        assert_eq!(calls[0]["function"]["arguments"], "{\"command\":\"ls\"}");
+    }
+
+    #[test]
+    fn unary_fold_idless_delta_goes_to_last_touched_call() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&tool_delta_frame("a", "exec", "{\"a\":1}", ""));
+        body.extend_from_slice(&tool_delta_frame("b", "read", "", ""));
+        // Id-less fragment continues call "b", not "a".
+        body.extend_from_slice(&tool_delta_frame("", "", "{\"p\":2}", ""));
+        body.extend_from_slice(&eos_trailer(b"{}"));
+
+        let resp = fold_devin_body_to_openai_response(&body, "m").unwrap();
+        let calls = resp.choices[0].message.tool_calls.as_ref().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["function"]["arguments"], "{\"a\":1}");
+        assert_eq!(calls[1]["id"], "b");
+        assert_eq!(calls[1]["function"]["arguments"], "{\"p\":2}");
+    }
+
+    // Regression: when upstream cannot parse arguments it ships the raw
+    // payload on `invalid_json_str`; it must surface as the call arguments.
+    #[test]
+    fn unary_fold_invalid_json_str_fills_arguments() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&tool_delta_frame("t", "apply_patch", "", "*** begin"));
+        body.extend_from_slice(&tool_delta_frame("", "", "", " patch ***"));
+        body.extend_from_slice(&eos_trailer(b"{}"));
+
+        let resp = fold_devin_body_to_openai_response(&body, "m").unwrap();
+        let calls = resp.choices[0].message.tool_calls.as_ref().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["arguments"], "*** begin patch ***");
+    }
+
+    #[test]
+    fn chunk_idless_delta_continues_active_index() {
+        let mut state = DevinStreamState::default();
+        let open = wire::DevinFrame {
+            tool_call_deltas: vec![wire::DevinToolCallDelta {
+                id: "toolu_9".into(),
+                name: "terminal".into(),
+                ..Default::default()
+            }],
+            ..base_frame()
+        };
+        let cont = wire::DevinFrame {
+            tool_call_deltas: vec![wire::DevinToolCallDelta {
+                arguments: "{\"command\":\"ls\"}".into(),
+                ..Default::default()
+            }],
+            ..base_frame()
+        };
+        devin_frame_to_chunk(&mut state, &open, "id", 0, "m");
+        let chunk = devin_frame_to_chunk(&mut state, &cont, "id", 0, "m").unwrap();
+        let calls = chunk.payload["choices"][0]["delta"]["tool_calls"]
+            .as_array()
+            .unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["index"], 0);
+        assert_eq!(calls[0]["function"]["arguments"], "{\"command\":\"ls\"}");
     }
 }
