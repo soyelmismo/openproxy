@@ -84,6 +84,37 @@ fn format_session_token(raw: &str) -> String {
     }
 }
 
+/// Devin's authorization page strictly allows `http://127.0.0.1:<port>/callback`
+/// redirects — http scheme, literal `127.0.0.1` host and `/callback` path.
+/// Keep the dashboard listener's port (the only part of the server-supplied
+/// redirect URI that is valid on this allowlist) so the browser lands on the
+/// unauthenticated `GET /callback` bridge served by the admin router. Remote
+/// browsers cannot reach `127.0.0.1` on their own machine and complete the
+/// login through the manual-paste field instead, matching upstream.
+fn devin_loopback_redirect(redirect_uri: &str) -> String {
+    let authority = redirect_uri
+        .split_once("://")
+        .map(|(_, rest)| rest.split('/').next().unwrap_or_default())
+        .unwrap_or_default();
+    // `rsplit_once` keeps IPv6 authorities like `[::1]:8787` intact — the
+    // host is irrelevant here, only the port is reused.
+    let port = authority
+        .rsplit_once(':')
+        .map(|(_, p)| p)
+        .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        .map_or_else(
+            || {
+                if redirect_uri.starts_with("https://") {
+                    "443".into()
+                } else {
+                    "80".into()
+                }
+            },
+            str::to_string,
+        );
+    format!("http://127.0.0.1:{port}/callback")
+}
+
 impl OAuthProvider for DevinOAuthProvider {
     fn name(&self) -> &'static str {
         "devin"
@@ -102,15 +133,16 @@ impl OAuthProvider for DevinOAuthProvider {
         let code_challenge = super::generic::code_challenge_s256(&code_verifier);
         let state_buf: [u8; 16] = rand::random();
         let state = openproxy_types::to_hex_lower(&state_buf);
+        let loopback_redirect = devin_loopback_redirect(redirect_uri);
         let url = format!(
             "{}/auth/cli/continue?redirect_uri={}&state={}&prompt=select_account\
              &code_challenge={}&code_challenge_method=S256",
             self.app.base_url().trim_end_matches('/'),
-            urlencoding::encode(redirect_uri),
+            urlencoding::encode(&loopback_redirect),
             state,
             code_challenge,
         );
-        std::future::ready(Ok((url, code_verifier, redirect_uri.to_string(), state)))
+        std::future::ready(Ok((url, code_verifier, loopback_redirect, state)))
     }
 
     async fn exchange_code(
@@ -302,8 +334,10 @@ mod tests {
             "https://app.example.test",
             "https://api.example.test",
         );
+        // The dashboard callback URI is rewritten to the only shape Devin's
+        // allowlist accepts: http://127.0.0.1:<port>/callback.
         let (url, verifier, redirect, state) = provider
-            .build_auth_url("http://127.0.0.1:1455/callback")
+            .build_auth_url("http://localhost:1455/admin/callback.html")
             .now_or_never()
             .expect("build_auth_url is ready")
             .expect("build_auth_url ok");
@@ -324,6 +358,27 @@ mod tests {
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         );
         assert_eq!(state.len(), 32);
+    }
+
+    #[test]
+    fn loopback_redirect_keeps_only_the_port() {
+        assert_eq!(
+            devin_loopback_redirect("http://localhost:8787/admin/callback.html"),
+            "http://127.0.0.1:8787/callback"
+        );
+        assert_eq!(
+            devin_loopback_redirect("http://127.0.0.1:9999/callback"),
+            "http://127.0.0.1:9999/callback"
+        );
+        // No explicit port: scheme defaults apply.
+        assert_eq!(
+            devin_loopback_redirect("http://dashboard.example/admin/callback.html"),
+            "http://127.0.0.1:80/callback"
+        );
+        assert_eq!(
+            devin_loopback_redirect("https://dashboard.example/admin/callback.html"),
+            "http://127.0.0.1:443/callback"
+        );
     }
 
     #[test]

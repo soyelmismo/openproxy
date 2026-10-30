@@ -78,6 +78,15 @@ fn admin_routes(state: &AppState) -> Router<AppState> {
             "/admin/",
             get(|| async { axum::response::Redirect::temporary("/admin") }),
         )
+        // Providers whose authorization allowlist only accepts a literal
+        // `http://127.0.0.1:<port>/callback` redirect (Devin) land on this
+        // root-level twin of `/admin/callback.html`. Same unauthenticated
+        // bridge page: it postMessages the `code` back to the dashboard
+        // opener and shows it for manual paste.
+        .route(
+            "/callback",
+            get(admin_ui::callback_html).post(admin_ui::callback_html),
+        )
         .nest("/admin", build_admin_router(state))
 }
 

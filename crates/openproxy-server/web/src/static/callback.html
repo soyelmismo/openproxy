@@ -32,9 +32,20 @@
           return;
         }
 
-        // Send the code to the parent window
+        // Send the code to the parent window. The dashboard may be open on
+        // `localhost` while this callback lands on `127.0.0.1` (Devin's
+        // allowlist only accepts the literal IP), so post to every loopback
+        // alias of this origin — non-matching targets are dropped by the
+        // browser, the matching one delivers to our own opener only.
         if (window.opener) {
-          window.opener.postMessage({ type: 'oauth_code', code: code }, window.location.origin);
+          const origins = [
+            window.location.origin,
+            window.location.origin.replace('127.0.0.1', 'localhost'),
+            window.location.origin.replace('localhost', '127.0.0.1'),
+          ];
+          for (const target of new Set(origins)) {
+            window.opener.postMessage({ type: 'oauth_code', code: code }, target);
+          }
           status.textContent = 'Authorization successful! You can close this window.';
           setTimeout(() => window.close(), 2000);
         } else {
