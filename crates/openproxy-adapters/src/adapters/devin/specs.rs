@@ -57,6 +57,13 @@ pub const fn spec(
     }
 }
 
+/// Bases known to bill zero when no live `GetUserStatus` has arrived yet.
+/// Verified against the wire on 2026-10-30: `swe-2` carries
+/// `MODEL_COST_TIER_FREE` and an active `promo_status` in
+/// `client_model_configs` despite a nominal 9.0 credit multiplier. The live
+/// feed supersedes this list the moment it lands.
+pub const STATIC_FREE_BASES: &[&str] = &["swe-2"];
+
 /// Static Devin catalog, ported from upstream `devin_models.json` (46 models).
 /// No upstream models-list RPC exists: the Codeium backend only serves
 /// `GetChatMessage`/`GetUserStatus`, so the catalog is maintained here and in

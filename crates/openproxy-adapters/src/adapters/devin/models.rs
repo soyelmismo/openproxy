@@ -7,8 +7,8 @@
 //! static catalog table lives in `specs.rs`; the live feed in `catalog.rs`
 //! supersedes it once a `GetUserStatus` response arrives.
 
-use super::catalog;
-use super::specs::{CATALOG, DEVIN_MAX_COMPLETION_TOKENS, DevinModelSpec, TEXT_ONLY_BASES};
+use super::catalog::{self, DevinLiveModelRow};
+use super::specs::{self, CATALOG, DEVIN_MAX_COMPLETION_TOKENS, DevinModelSpec, TEXT_ONLY_BASES};
 use crate::adapters::{DiscoveredModel, ModelId, TargetFormat};
 
 /// Effort suffixes that make a model string already fully-qualified.
@@ -249,7 +249,8 @@ fn resolve_devin_chat_model_uid_static(
     thinking_level: &str,
     budget_tokens: i64,
 ) -> String {
-    let trimmed = model.trim();
+    // `:free` is a listing-time marker (quota exemption), never wire data.
+    let trimmed = model.trim().strip_suffix(":free").unwrap_or(model.trim());
     if trimmed.is_empty() {
         return "swe-2-high".to_string();
     }
@@ -452,9 +453,18 @@ fn builtin_model(
     context_length: i64,
     max_output_tokens: i64,
     images: bool,
+    is_free: bool,
 ) -> DiscoveredModel {
+    // The `:free` suffix follows the CodeBuddy convention: it marks the model
+    // as quota-exempt in listings and is stripped back off during uid
+    // resolution, so it never reaches the wire.
+    let listed_id = if is_free && !id.ends_with(":free") {
+        format!("{id}:free")
+    } else {
+        id.to_string()
+    };
     DiscoveredModel {
-        model_id: ModelId::new(id),
+        model_id: ModelId::new(listed_id),
         display_name: Some(display_name.to_string()),
         target_format: TargetFormat::Devin,
         context_length: Some(context_length),
@@ -469,6 +479,20 @@ fn builtin_model(
         family: Some(owner.to_string()),
         capabilities: None,
     }
+}
+
+/// Whether `base` currently bills zero: live `model_cost_tier`/`promo_status`
+/// wins; the static fallback list covers the cold-start window before the
+/// first `GetUserStatus` (swe-2 is free as of 2026-10 — the wire carries
+/// `MODEL_COST_TIER_FREE` plus an active promo).
+pub fn is_devin_model_free(base: &str) -> bool {
+    let base = base.trim().trim_end_matches(":free");
+    if let Some(free) = catalog::live_catalog().and_then(|cat| cat.base_is_free(base)) {
+        return free;
+    }
+    specs::STATIC_FREE_BASES
+        .iter()
+        .any(|b| b.eq_ignore_ascii_case(base))
 }
 
 /// Devin catalog as `DiscoveredModel`s: the static table overlaid with the
@@ -496,6 +520,14 @@ pub fn devin_builtin_models() -> Vec<DiscoveredModel> {
                         .or_else(|| cat.base_supports_images(spec.id))
                 })
                 .unwrap_or_else(|| !TEXT_ONLY_BASES.contains(&spec.id));
+            let is_free = live
+                .as_ref()
+                .and_then(|cat| {
+                    cat.row_for_uid(spec.id)
+                        .map(DevinLiveModelRow::is_free)
+                        .or_else(|| cat.base_is_free(spec.id))
+                })
+                .unwrap_or_else(|| is_devin_model_free(spec.id));
             builtin_model(
                 spec.id,
                 spec.display_name,
@@ -503,6 +535,7 @@ pub fn devin_builtin_models() -> Vec<DiscoveredModel> {
                 ctx,
                 max_out.max(1),
                 images,
+                is_free,
             )
         })
         .collect();
@@ -518,6 +551,7 @@ pub fn devin_builtin_models() -> Vec<DiscoveredModel> {
             let display = cat
                 .base_display_name(base_id)
                 .unwrap_or_else(|| base_id.clone());
+            let is_free = cat.base_is_free(base_id).unwrap_or(false);
             out.push(builtin_model(
                 base_id,
                 &display,
@@ -525,6 +559,7 @@ pub fn devin_builtin_models() -> Vec<DiscoveredModel> {
                 ctx,
                 max_out.max(1),
                 images,
+                is_free,
             ));
         }
     }

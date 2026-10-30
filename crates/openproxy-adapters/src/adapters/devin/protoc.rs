@@ -93,6 +93,12 @@ pub fn append_fixed64(buf: &mut Vec<u8>, field: u32, value: u64) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
 
+/// Append a fixed32 field (wire 5), little-endian.
+pub fn append_fixed32(buf: &mut Vec<u8>, field: u32, value: u32) {
+    append_tag(buf, field, WIRE_32BIT);
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
 /// Append a nested message field: tag (wire 2), varint length, `sub` verbatim.
 pub fn append_message(buf: &mut Vec<u8>, field: u32, sub: &[u8]) {
     append_bytes(buf, field, sub);

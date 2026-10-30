@@ -226,6 +226,32 @@ pub fn to_account_quota(us: &DevinUserStatus) -> AccountQuota {
         });
     }
 
+    // Free models (free cost tier or active promo) never draw from the paid
+    // pool, so they get a full-fraction detail of their own. Without it, an
+    // exhausted account window would still gate them out in
+    // `check_quota_windows_exhausted` — the account `devin` details only
+    // cover models that actually bill. Named `{base}:free` so both the
+    // listed model id and the bare base match `find_model_quota_detail`.
+    for row in &us.model_configs {
+        if !row.is_free() {
+            continue;
+        }
+        let base = catalog::normalize_base_id(&row.base);
+        if model_details
+            .iter()
+            .any(|d| d.model_id == format!("{base}:free") || d.model_id == base)
+        {
+            continue;
+        }
+        model_details.push(ModelQuotaDetail {
+            model_id: format!("{base}:free"),
+            session_used: 0,
+            session_limit: 9_999,
+            session_reset_at: session_reset_at.clone(),
+            remaining_fraction: 1.0,
+        });
+    }
+
     let plan_name = if us.plan_name.trim().is_empty() {
         None
     } else {

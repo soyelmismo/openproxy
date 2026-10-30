@@ -43,6 +43,29 @@ pub struct DevinLiveModelRow {
     /// (`high`, `max`, `none`, …). Empty when the variant carries no effort
     /// dimension (bare-uid models such as `kimi-k2-6`).
     pub effort: String,
+    /// `credit_multiplier` (field 3, fixed32): per-request credit cost of the
+    /// variant. Free models still carry their nominal multiplier (swe-2: 9.0)
+    /// — freeness comes from the cost tier or an active promo, not from 0.
+    pub credit_multiplier: f32,
+    /// `model_cost_tier` (field 24, varint): `MODEL_COST_TIER_*` —
+    /// 0=unspecified, 1=low, 2=medium, 3=high, 4=free.
+    pub cost_tier: i64,
+    /// `promo_status.is_active` (field 19.1): an active promo makes the model
+    /// free for the promo window regardless of tier (swe-2 carries this).
+    pub promo_active: bool,
+}
+
+/// `MODEL_COST_TIER_FREE` — the tier value Devin assigns to models billed
+/// at zero regardless of their `credit_multiplier`.
+const COST_TIER_FREE: i64 = 4;
+
+impl DevinLiveModelRow {
+    /// Whether the variant bills zero: free cost tier or an active promo.
+    /// A zero `credit_multiplier` alone proves nothing — an absent field also
+    /// decodes to 0.0, so only the explicit markers gate freeness.
+    pub fn is_free(&self) -> bool {
+        self.cost_tier == COST_TIER_FREE || self.promo_active
+    }
 }
 
 /// Normalize a catalog base or request model id to the dashed, lowercase
@@ -106,6 +129,22 @@ impl DevinLiveCatalog {
     pub fn base_supports_images(&self, base: &str) -> Option<bool> {
         self.rows_for_base(base)
             .map(|rows| rows.iter().any(|r| r.supports_images))
+    }
+
+    /// Whether any variant of `base` bills zero (free tier or active promo).
+    /// `None` when the base is absent from the live feed.
+    pub fn base_is_free(&self, base: &str) -> Option<bool> {
+        self.rows_for_base(base)
+            .map(|rows| rows.iter().any(DevinLiveModelRow::is_free))
+    }
+
+    /// Normalized base ids with at least one free variant.
+    pub fn free_base_ids(&self) -> Vec<String> {
+        self.by_base
+            .iter()
+            .filter(|(_, rows)| rows.iter().any(DevinLiveModelRow::is_free))
+            .map(|(base, _)| base.clone())
+            .collect()
     }
 
     /// Display name of the base model (from the first row carrying one).
@@ -279,16 +318,43 @@ fn parse_model_info(info: &[u8], row: &mut DevinLiveModelRow) -> Option<()> {
     Some(())
 }
 
+/// `promo_status` (`f19`): `{1: is_active, 2: end_date, 3: label}` — only the
+/// active flag matters for billing.
+fn parse_promo_status(promo: &[u8]) -> bool {
+    let mut active = false;
+    let mut reader = ProtoReader::new(promo);
+    while let Some((field, wire)) = reader.tag() {
+        match (field, wire) {
+            (1, protoc::WIRE_VARINT) => {
+                if let Some(v) = reader.varint() {
+                    active = v != 0;
+                }
+            }
+            _ => {
+                if reader.skip(wire).is_none() {
+                    break;
+                }
+            }
+        }
+    }
+    active
+}
+
 /// One `ClientModelConfig` row (`client_model_configs` repeated field 1).
 fn parse_client_model_config(config: &[u8], row: &mut DevinLiveModelRow) -> Option<()> {
     let mut reader = ProtoReader::new(config);
     while let Some((field, wire)) = reader.tag() {
         match (field, wire) {
+            (3, protoc::WIRE_32BIT) => {
+                row.credit_multiplier = f32::from_bits(reader.fixed32_value()?);
+            }
             // f5: supports_images — presence marks the variant image-capable.
             (5, protoc::WIRE_VARINT) => row.supports_images = reader.varint()? != 0,
             (18, protoc::WIRE_VARINT) => row.context_length = reader.varint()? as i64,
+            (19, protoc::WIRE_LEN) => row.promo_active = parse_promo_status(reader.bytes_value()?),
             (22, protoc::WIRE_LEN) => row.uid = reader_str(reader.bytes_value()?),
             (23, protoc::WIRE_LEN) => parse_model_info(reader.bytes_value()?, row)?,
+            (24, protoc::WIRE_VARINT) => row.cost_tier = reader.varint()? as i64,
             (30, protoc::WIRE_LEN) => parse_display(reader.bytes_value()?, row)?,
             _ => reader.skip(wire)?,
         }

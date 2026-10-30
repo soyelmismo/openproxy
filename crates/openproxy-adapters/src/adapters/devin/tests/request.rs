@@ -769,9 +769,10 @@ fn oauth_account_embeds_access_token_in_metadata() {
 fn devin_builtin_models_catalog() {
     let models = devin_builtin_models();
     assert_eq!(models.len(), 46);
+    // swe-2 lists as swe-2:free (free cost tier on the wire).
     let swe2 = models
         .iter()
-        .find(|m| m.model_id.as_str() == "swe-2")
+        .find(|m| m.model_id.as_str() == "swe-2:free")
         .unwrap();
     assert_eq!(swe2.display_name.as_deref(), Some("SWE-2"));
     assert_eq!(swe2.target_format, openproxy_types::TargetFormat::Devin);
@@ -779,4 +780,56 @@ fn devin_builtin_models_catalog() {
     assert_eq!(swe2.max_output_tokens, Some(64_000));
     assert_eq!(swe2.family.as_deref(), Some("cognition"));
     assert_eq!(swe2.model_type.as_deref(), Some("chat"));
+}
+
+#[test]
+fn free_models_emit_full_fraction_quota_detail() {
+    use super::super::catalog::parse_client_model_configs;
+    // A user_status whose catalog marks swe-2 free (cost tier 4 + promo) and
+    // leaves a paid sibling (glm-5.3) untouched.
+    let mut swe2_cfg = Vec::new();
+    protoc::append_fixed32(&mut swe2_cfg, 3, 9.0f32.to_bits());
+    protoc::append_string(&mut swe2_cfg, 22, "swe-2-high");
+    let mut swe2_info = Vec::new();
+    protoc::append_string(&mut swe2_info, 23, "swe-2");
+    protoc::append_message(&mut swe2_cfg, 23, &swe2_info);
+    protoc::append_varint_field(&mut swe2_cfg, 24, 4);
+    let mut promo = Vec::new();
+    protoc::append_varint_field(&mut promo, 1, 1);
+    protoc::append_message(&mut swe2_cfg, 19, &promo);
+
+    let mut paid_cfg = Vec::new();
+    protoc::append_fixed32(&mut paid_cfg, 3, 1.0f32.to_bits());
+    protoc::append_string(&mut paid_cfg, 22, "glm-5-3-low");
+    let mut paid_info = Vec::new();
+    protoc::append_string(&mut paid_info, 23, "glm-5.3");
+    protoc::append_message(&mut paid_cfg, 23, &paid_info);
+    protoc::append_varint_field(&mut paid_cfg, 24, 1);
+
+    let mut catalog_blob = Vec::new();
+    protoc::append_message(&mut catalog_blob, 1, &swe2_cfg);
+    protoc::append_message(&mut catalog_blob, 1, &paid_cfg);
+
+    let mut us_msg = Vec::new();
+    protoc::append_message(&mut us_msg, 33, &catalog_blob);
+    let mut body = Vec::new();
+    protoc::append_message(&mut body, 1, &us_msg);
+
+    let us = parse_user_status(&body).unwrap();
+    assert_eq!(us.model_configs.len(), 2);
+
+    let q = to_account_quota(&us);
+    let details = q.model_details.unwrap();
+    let free = details
+        .iter()
+        .find(|d| d.model_id == "swe-2:free")
+        .expect("swe-2:free detail");
+    assert_eq!(free.remaining_fraction, 1.0);
+    assert_eq!(free.session_limit, 9_999);
+    assert!(
+        !details.iter().any(|d| d.model_id == "glm-5-3:free"),
+        "paid models get no free detail"
+    );
+    // Catalog parsing cross-check: the fixture really did mark swe-2 free.
+    assert!(parse_client_model_configs(&catalog_blob)[0].is_free());
 }

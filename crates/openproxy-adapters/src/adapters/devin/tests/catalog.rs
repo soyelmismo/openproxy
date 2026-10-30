@@ -492,9 +492,10 @@ fn builtin_models_static_fallback_modalities() {
             "{id} must be text-only"
         );
     }
+    // swe-2 is free (MODEL_COST_TIER_FREE on the wire) → listed as swe-2:free.
     let swe2 = models
         .iter()
-        .find(|m| m.model_id.as_str() == "swe-2")
+        .find(|m| m.model_id.as_str() == "swe-2:free")
         .unwrap();
     assert_eq!(
         swe2.input_modalities.as_deref(),
@@ -526,4 +527,111 @@ fn empty_parse_never_clobbers_snapshot() {
     catalog::store_live_catalog(Vec::new());
     assert!(catalog::live_catalog().is_some());
     catalog::clear_live_catalog();
+}
+
+// ---------- pricing fields (credit_multiplier / model_cost_tier / promo) ----------
+
+/// ClientModelConfig row carrying the pricing fields (fields 3, 19, 24)
+/// on top of the identity fields the fixture helper emits.
+fn cfg_row_priced(
+    uid: &str,
+    base: &str,
+    credit_multiplier: f32,
+    cost_tier: i64,
+    promo_active: bool,
+) -> Vec<u8> {
+    let mut out = cfg_row(uid, base, base, 262_000, 128_000, true, "High");
+    protoc::append_fixed32(&mut out, 3, credit_multiplier.to_bits());
+    if promo_active {
+        let mut promo = Vec::new();
+        protoc::append_varint_field(&mut promo, 1, 1);
+        protoc::append_message(&mut out, 19, &promo);
+    }
+    protoc::append_varint_field(&mut out, 24, cost_tier as u64);
+    out
+}
+
+#[test]
+fn parses_pricing_fields_and_marks_free() {
+    let _g = lock();
+    catalog::clear_live_catalog();
+    let rows = parse_client_model_configs(&cfg_blob(&[
+        cfg_row_priced("swe-2-high", "swe-2", 9.0, 4, true),
+        cfg_row_priced("claude-opus-5-5-medium", "claude-opus-5.5", 45.0, 3, false),
+        cfg_row_priced("deepseek-v4-flash-high", "deepseek-v4-flash", 0.5, 1, false),
+    ]));
+    let swe2 = rows.iter().find(|r| r.uid == "swe-2-high").unwrap();
+    assert!(swe2.is_free());
+    assert_eq!(swe2.cost_tier, 4);
+    assert!(swe2.promo_active);
+    assert!((swe2.credit_multiplier - 9.0).abs() < f32::EPSILON);
+    assert!(
+        !rows
+            .iter()
+            .find(|r| r.uid == "claude-opus-5-5-medium")
+            .unwrap()
+            .is_free()
+    );
+    assert!(
+        !rows
+            .iter()
+            .find(|r| r.uid == "deepseek-v4-flash-high")
+            .unwrap()
+            .is_free()
+    );
+}
+
+#[test]
+fn promo_alone_marks_free() {
+    let row = parse_client_model_configs(&cfg_blob(&[cfg_row_priced(
+        "kimi-k3-high",
+        "kimi-k3",
+        6.0,
+        3,
+        true,
+    )]));
+    assert!(row[0].is_free(), "an active promo must mark the row free");
+}
+
+#[test]
+fn catalog_base_is_free_and_free_base_ids() {
+    let _g = lock();
+    catalog::clear_live_catalog();
+    catalog::store_live_catalog(parse_client_model_configs(&cfg_blob(&[
+        cfg_row_priced("swe-2-high", "swe-2", 9.0, 4, false),
+        cfg_row_priced("swe-2-max", "swe-2", 9.0, 4, false),
+        cfg_row_priced("glm-5-3-low", "glm-5.3", 1.0, 1, false),
+    ])));
+    let cat = catalog::live_catalog().unwrap();
+    assert_eq!(cat.base_is_free("swe-2"), Some(true));
+    assert_eq!(cat.base_is_free("glm-5-3"), Some(false));
+    assert_eq!(cat.base_is_free("missing"), None);
+    assert_eq!(cat.free_base_ids(), vec!["swe-2".to_string()]);
+}
+
+#[test]
+fn free_base_lists_with_free_suffix() {
+    let _g = lock();
+    catalog::clear_live_catalog();
+    catalog::store_live_catalog(parse_client_model_configs(&cfg_blob(&[
+        cfg_row_priced("swe-2-high", "swe-2", 9.0, 4, true),
+        cfg_row_priced("glm-5-3-low", "glm-5.3", 1.0, 1, false),
+    ])));
+    let models = devin_builtin_models();
+    assert!(models.iter().any(|m| m.model_id.as_str() == "swe-2:free"));
+    assert!(!models.iter().any(|m| m.model_id.as_str() == "swe-2"));
+    assert!(models.iter().any(|m| m.model_id.as_str() == "glm-5-3"));
+    assert!(!models.iter().any(|m| m.model_id.as_str() == "glm-5-3:free"));
+}
+
+#[test]
+fn free_suffix_stripped_during_uid_resolution() {
+    assert_eq!(
+        resolve_devin_chat_model_uid("swe-2:free", "", 0),
+        "swe-2-high"
+    );
+    assert_eq!(
+        resolve_devin_chat_model_uid("devin/swe-2:free", "", 0),
+        "swe-2-high"
+    );
 }
