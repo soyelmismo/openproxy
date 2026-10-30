@@ -44,6 +44,12 @@ struct AnthropicContentBlockProbe {
     id: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// Some vendors (MiniMax) ship the whole `tool_use` arguments object
+    /// inline in `content_block_start` instead of streaming
+    /// `input_json_delta` fragments. Capture it so the accumulated arguments
+    /// are not left empty.
+    #[serde(default)]
+    input: Option<serde_json::Value>,
 }
 
 fn handle_anthropic_input_json_delta(
@@ -199,11 +205,20 @@ fn translate_anthropic_content_block_start(
     let index = *tool_call_index_counter;
     *tool_call_index_counter += 1;
 
-    *tool_use_acc = Some(AnthropicToolUseAccumulator::new_with_bounds(
-        index,
-        id.clone(),
-        name.clone(),
-    )?);
+    let mut acc = AnthropicToolUseAccumulator::new_with_bounds(index, id.clone(), name.clone())?;
+    // Seed inline `input` arguments when the vendor ships them upfront
+    // (spec sends `{}` here; MiniMax may send the full object). Any later
+    // `input_json_delta` fragments simply append — vendors that seed inline
+    // do not also stream deltas for the same block.
+    if let Some(input) = block.input.as_ref()
+        && let Ok(serialized) = serde_json::to_string(input)
+        && !serialized.is_empty()
+        && serialized != "{}"
+        && serialized.len() <= MAX_TOOL_ARGUMENTS_BYTES
+    {
+        acc.arguments.push_str(&serialized);
+    }
+    *tool_use_acc = Some(acc);
 
     let chunk = serde_json::json!({
         "id": chunk_id,
@@ -282,11 +297,111 @@ pub fn translate_anthropic_sse_event(
             *tool_use_acc = None;
             Ok(None)
         }
+        "message" => translate_anthropic_full_message(data_json, chunk_id, created, model),
+        "error" => translate_anthropic_inline_error(data_json),
         _ => {
             let rebuilt = format!("{event_type}\n{data_json}");
             translate_anthropic_sse_payload(&rebuilt, chunk_id, created, model)
         }
     }
+}
+
+/// Some vendors deliver the whole Anthropic message as a single SSE `data:`
+/// event (`{"type":"message","content":[...]}`) instead of the incremental
+/// `message_start`/`content_block_*`/`message_delta` sequence. Translate it
+/// through the unary converter and emit one terminal OpenAI chunk carrying
+/// the delta (content, reasoning, tool_calls) plus finish_reason.
+fn translate_anthropic_full_message(
+    data_json: &str,
+    chunk_id: &str,
+    created: u64,
+    model: &str,
+) -> Result<Option<UpstreamSseChunk>> {
+    let resp: crate::translation::AnthropicResponse =
+        serde_json::from_str(data_json).ctx_parse("anthropic sse full message")?;
+    let openai = crate::translation::anthropic_to_openai(&resp);
+
+    let mut delta = serde_json::Map::new();
+    delta.insert("role".to_string(), serde_json::json!("assistant"));
+    let mut reasoning_out = String::new();
+    let mut has_content = false;
+    if let Some(choice) = openai.choices.first() {
+        if let Some(c) = choice
+            .message
+            .content
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            && !c.is_empty()
+        {
+            delta.insert("content".to_string(), serde_json::json!(c));
+            has_content = true;
+        }
+        for key in ["reasoning", "reasoning_content"] {
+            if let Some(r) = choice
+                .message
+                .extra
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                && !r.is_empty()
+            {
+                delta.insert(key.to_string(), serde_json::json!(r));
+                reasoning_out = r.to_string();
+                has_content = true;
+            }
+        }
+        if let Some(tc) = choice.message.tool_calls.as_ref() {
+            delta.insert("tool_calls".to_string(), serde_json::json!(tc));
+            has_content = true;
+        }
+    }
+    let finish_reason = openai
+        .choices
+        .first()
+        .and_then(|c| c.finish_reason.clone())
+        .unwrap_or_else(|| "stop".to_string());
+
+    let payload = serde_json::json!({
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": serde_json::Value::Object(delta),
+            "finish_reason": finish_reason
+        }]
+    });
+
+    Ok(Some(UpstreamSseChunk {
+        raw_payload: None,
+        payload,
+        done: true,
+        usage: openai.usage,
+        stop_reason: resp.stop_reason,
+        delta_reasoning: (!reasoning_out.is_empty()).then_some(reasoning_out),
+        delta_tool_calls: Vec::new(),
+        has_content,
+    }))
+}
+
+/// Anthropic-style inline error event (`{"type":"error","error":{...}}`)
+/// surfaced as a terminal failure instead of a silent drop.
+fn translate_anthropic_inline_error(data_json: &str) -> Result<Option<UpstreamSseChunk>> {
+    let probe =
+        serde_json::from_str::<serde_json::Value>(data_json).ctx_parse("anthropic sse error")?;
+    let message = probe
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("upstream error event");
+    let err_type = probe
+        .get("error")
+        .and_then(|e| e.get("type"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("error");
+    Err(openproxy_types::error::CoreError::UpstreamConnection(
+        format!("{err_type}: {message}"),
+    ))
 }
 
 #[cfg(test)]
@@ -426,5 +541,140 @@ mod tests {
         let done = UpstreamSseChunk::done();
         assert!(done.done);
         assert!(!done.is_liveness());
+    }
+
+    /// MiniMax ships `tool_use` blocks with the full `input` object inline in
+    /// `content_block_start` instead of streaming `input_json_delta`
+    /// fragments. The accumulator must be seeded so the final arguments are
+    /// not silently empty.
+    #[test]
+    fn tool_use_with_inline_input_seeds_arguments() {
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter = 0u32;
+        let payload = format!(
+            "{}\n{}",
+            "content_block_start",
+            r#"{"index":0,"content_block":{"type":"tool_use","id":"call_x","name":"execute_code","input":{"code":"print(1)"}}}"#
+        );
+        let chunk = translate_anthropic_sse_event(
+            &payload,
+            "chatcmpl-1",
+            1_700_000_000,
+            "m",
+            &mut acc,
+            &mut counter,
+        )
+        .expect("content_block_start must translate")
+        .expect("tool_use start must emit a chunk");
+        assert!(!chunk.done);
+        let acc = acc.expect("tool_use accumulator must be created");
+        assert_eq!(acc.arguments, r#"{"code":"print(1)"}"#);
+    }
+
+    /// Spec-compliant `content_block_start` carries `input: {}` — that must
+    /// NOT seed garbage into the accumulator; later `input_json_delta`
+    /// fragments own the arguments string.
+    #[test]
+    fn tool_use_with_empty_inline_input_stays_empty() {
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter = 0u32;
+        let payload = format!(
+            "{}\n{}",
+            "content_block_start",
+            r#"{"index":0,"content_block":{"type":"tool_use","id":"call_y","name":"read","input":{}}}"#
+        );
+        translate_anthropic_sse_event(
+            &payload,
+            "chatcmpl-1",
+            1_700_000_000,
+            "m",
+            &mut acc,
+            &mut counter,
+        )
+        .expect("content_block_start must translate");
+        let acc = acc.expect("tool_use accumulator must be created");
+        assert!(acc.arguments.is_empty());
+    }
+
+    /// A whole-message `data:` event (MiniMax unary-in-stream shape: `type:
+    /// message` plus `base_resp`) must translate into ONE terminal chunk that
+    /// carries the assistant delta, tool_calls, finish_reason and usage —
+    /// never a silent `Ok(None)` drop.
+    #[test]
+    fn whole_message_event_produces_done_chunk() {
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter = 0u32;
+        let payload = format!(
+            "{}\n{}",
+            "message",
+            r#"{"type":"message","base_resp":{"status_code":0,"status_msg":""},"role":"assistant","model":"MiniMax-M3.1-Flash","stop_reason":"tool_use","content":[{"type":"thinking","thinking":"hmm"},{"type":"tool_use","id":"toolu_1","name":"execute_code","input":{"code":"x=1"}}],"usage":{"input_tokens":10,"output_tokens":5}}"#
+        );
+        let chunk = translate_anthropic_sse_event(
+            &payload,
+            "chatcmpl-1",
+            1_700_000_000,
+            "m",
+            &mut acc,
+            &mut counter,
+        )
+        .expect("message event must translate")
+        .expect("message event must emit a chunk");
+        assert!(chunk.done);
+        let choice = &chunk.payload["choices"][0];
+        assert_eq!(choice["finish_reason"], "tool_calls");
+        let tc = &choice["delta"]["tool_calls"][0];
+        assert_eq!(tc["function"]["name"], "execute_code");
+        assert_eq!(tc["function"]["arguments"], r#"{"code":"x=1"}"#);
+        assert_eq!(chunk.usage.as_ref().map(|u| u.completion_tokens), Some(5));
+        assert_eq!(chunk.stop_reason.as_deref(), Some("tool_use"));
+        assert_eq!(chunk.delta_reasoning.as_deref(), Some("hmm"));
+    }
+
+    /// The MiniMax envelope sometimes omits the `type` tag entirely (only
+    /// `base_resp` + `content`). The message branch must still translate it.
+    #[test]
+    fn whole_message_without_type_tag_produces_done_chunk() {
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter = 0u32;
+        let payload = format!(
+            "{}\n{}",
+            "message",
+            r#"{"base_resp":{"status_code":0},"role":"assistant","content":[{"type":"text","text":"hola"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}}"#
+        );
+        let chunk = translate_anthropic_sse_event(
+            &payload,
+            "chatcmpl-1",
+            1_700_000_000,
+            "m",
+            &mut acc,
+            &mut counter,
+        )
+        .expect("message event must translate")
+        .expect("message event must emit a chunk");
+        assert!(chunk.done);
+        let choice = &chunk.payload["choices"][0];
+        assert_eq!(choice["delta"]["content"], "hola");
+    }
+
+    /// An `error`-typed SSE event must surface a failure instead of becoming
+    /// a silently dropped `Ok(None)`.
+    #[test]
+    fn error_event_surfaces_failure() {
+        let mut acc: Option<AnthropicToolUseAccumulator> = None;
+        let mut counter = 0u32;
+        let payload = format!(
+            "{}\n{}",
+            "error",
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#
+        );
+        let res = translate_anthropic_sse_event(
+            &payload,
+            "chatcmpl-1",
+            1_700_000_000,
+            "m",
+            &mut acc,
+            &mut counter,
+        );
+        assert!(res.is_err());
     }
 }

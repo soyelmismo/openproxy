@@ -39,14 +39,19 @@ pub struct AnthropicMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnthropicResponse {
+    #[serde(default)]
     pub id: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub response_type: String,
+    #[serde(default)]
     pub role: String,
+    #[serde(default)]
     pub content: Vec<serde_json::Value>,
+    #[serde(default)]
     pub model: String,
     #[serde(default)]
     pub stop_reason: Option<String>,
+    #[serde(default)]
     pub usage: AnthropicUsage,
 }
 
@@ -57,9 +62,11 @@ pub struct AnthropicContentBlock {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AnthropicUsage {
+    #[serde(default)]
     pub input_tokens: u32,
+    #[serde(default)]
     pub output_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_tokens: Option<u32>,
