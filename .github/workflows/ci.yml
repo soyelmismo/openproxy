@@ -368,15 +368,16 @@ jobs:
 # - target: x86_64-apple-darwin
 #   runner: macos-13
 #   os_family: macos
-          - target: aarch64-apple-darwin
-            runner: macos-14
-            os_family: macos
-            allow_failure: true
+# DISABLED: macos-14 jobs are cancelled by GitHub in ~1s with zero steps
+# (no macOS runner capacity / minutes on this account). continue-on-error
+# does NOT cover cancelled conclusions — only failures — so the leg had to
+# be removed for the run to go green. Re-enable when macOS runners work.
+#           - target: aarch64-apple-darwin
+#             runner: macos-14
+#             os_family: macos
+#             allow_failure: true
     runs-on: ${{ matrix.runner }}
-    # macOS runners cancel instantly when the account has no macos-14
-    # capacity left (billing/minutes) — that leg must not fail the whole
-    # release matrix. All other targets stay hard-required.
-    continue-on-error: ${{ matrix.allow_failure || false }}
+    continue-on-error: false
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
