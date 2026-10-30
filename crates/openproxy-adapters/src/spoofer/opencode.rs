@@ -227,6 +227,9 @@ pub fn is_valid_opencode_session_id(id: &str) -> bool {
         return false;
     }
     let suffix = &trimmed[4..];
+    if !suffix.is_char_boundary(12) {
+        return false;
+    }
     let (hex_part, b62_part) = suffix.split_at(12);
     hex_part
         .chars()
@@ -242,6 +245,9 @@ pub fn is_valid_opencode_request_id(id: &str) -> bool {
         return false;
     }
     let suffix = &trimmed[4..];
+    if !suffix.is_char_boundary(12) {
+        return false;
+    }
     let (hex_part, b62_part) = suffix.split_at(12);
     hex_part
         .chars()

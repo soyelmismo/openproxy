@@ -1,5 +1,22 @@
 use super::*;
 pub(super) fn resolved_for(model_id: &str) -> openproxy_types::context::ResolvedTarget {
+    resolved_target_for(
+        model_id,
+        200_000,
+        8192,
+        Some(openproxy_types::context::CustomProviderMeta {
+            access_token: "test-token".to_string(),
+            ..Default::default()
+        }),
+    )
+}
+
+pub(super) fn resolved_target_for(
+    model_id: &str,
+    context_length: i64,
+    max_output_tokens: i64,
+    custom_meta: Option<openproxy_types::context::CustomProviderMeta>,
+) -> openproxy_types::context::ResolvedTarget {
     openproxy_types::context::ResolvedTarget {
         target: openproxy_types::combos::ComboTarget {
             id: openproxy_types::ComboTargetId(1),
@@ -15,18 +32,15 @@ pub(super) fn resolved_for(model_id: &str) -> openproxy_types::context::Resolved
             target_format: openproxy_types::TargetFormat::Anthropic,
             discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
             model_id: ModelId::new(model_id),
-            context_length: Some(200_000),
-            max_output_tokens: Some(8192),
+            context_length: Some(context_length),
+            max_output_tokens: Some(max_output_tokens),
             model_type: "chat".into(),
             family: Some("claude".into()),
             active: true,
             ..Default::default()
         },
         api_key: "test-token".to_string(),
-        custom_meta: Some(openproxy_types::context::CustomProviderMeta {
-            access_token: "test-token".to_string(),
-            ..Default::default()
-        }),
+        custom_meta,
         ..Default::default()
     }
 }

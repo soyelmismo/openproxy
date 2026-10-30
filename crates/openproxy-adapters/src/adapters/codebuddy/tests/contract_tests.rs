@@ -48,12 +48,7 @@ fn test_codebuddy_pinned_contract_drives_the_announced_headers() {
 
     let headers =
         adapter.build_headers("test-token", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    let find = |key: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
-    };
+    let find = |key: &str| find_header(&headers, key);
     // Versión y user-agent salen del MISMO snapshot: una sola generación
     // coherente para toda la petición.
     assert_eq!(find("x-ide-version"), Some(version.as_str()));
@@ -112,12 +107,7 @@ fn test_codebuddy_config_override_wins_over_the_pinned_contract() {
 
     let headers =
         adapter.build_headers("test-token", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    let find = |key: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
-    };
+    let find = |key: &str| find_header(&headers, key);
     // El override explícito del despliegue gana sobre el contrato.
     assert_eq!(find("x-ide-version"), Some("9.9.9"));
 }

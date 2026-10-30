@@ -204,12 +204,7 @@ fn test_pinned_contract_drives_headers_and_body_of_one_generation() {
         TargetFormat::Responses,
         &ModelId::new("gpt-5.6-luna"),
     );
-    let find = |k: &str| {
-        headers
-            .iter()
-            .find(|(hk, _)| hk.eq_ignore_ascii_case(k))
-            .map(|(_, v)| v.as_str())
-    };
+    let find = |k: &str| find_header(&headers, k);
     assert_eq!(
         find("version"),
         Some("0.163.0"),
@@ -223,29 +218,7 @@ fn test_pinned_contract_drives_headers_and_body_of_one_generation() {
     let body = bytes::Bytes::from(
         serde_json::to_vec(&serde_json::json!({"model": "gpt-5.6-luna", "input": []})).unwrap(),
     );
-    let resolved_target = openproxy_types::context::ResolvedTarget {
-        target: openproxy_types::combos::ComboTarget {
-            id: openproxy_types::ComboTargetId(1),
-            combo_id: openproxy_types::ComboId(1),
-            provider_id: openproxy_types::ProviderId::new("codex"),
-            model_row_id: Some(openproxy_types::ModelRowId(1)),
-            weight: 100,
-            ..Default::default()
-        },
-        model: openproxy_types::Model {
-            row_id: openproxy_types::ModelRowId(1),
-            provider_id: openproxy_types::ProviderId::new("codex"),
-            model_id: openproxy_types::ModelId::new("gpt-5.6-luna"),
-            target_format: openproxy_types::TargetFormat::Responses,
-            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
-            context_length: Some(272_000),
-            max_output_tokens: Some(32_768),
-            model_type: "chat".into(),
-            ..Default::default()
-        },
-        api_key: "tok".to_string(),
-        ..Default::default()
-    };
+    let resolved_target = dummy_codex_resolved_target();
     let wrapped = adapter
         .wrap_request_body(
             body,
@@ -275,29 +248,7 @@ fn test_without_a_pinned_contract_the_body_keeps_its_shape() {
     let body = bytes::Bytes::from(
         serde_json::to_vec(&serde_json::json!({"model": "gpt-5.6-luna", "input": []})).unwrap(),
     );
-    let resolved_target = openproxy_types::context::ResolvedTarget {
-        target: openproxy_types::combos::ComboTarget {
-            id: openproxy_types::ComboTargetId(1),
-            combo_id: openproxy_types::ComboId(1),
-            provider_id: openproxy_types::ProviderId::new("codex"),
-            model_row_id: Some(openproxy_types::ModelRowId(1)),
-            weight: 100,
-            ..Default::default()
-        },
-        model: openproxy_types::Model {
-            row_id: openproxy_types::ModelRowId(1),
-            provider_id: openproxy_types::ProviderId::new("codex"),
-            model_id: openproxy_types::ModelId::new("gpt-5.6-luna"),
-            target_format: openproxy_types::TargetFormat::Responses,
-            discovered_at: openproxy_types::now_unix_secs_str().into_boxed_str(),
-            context_length: Some(272_000),
-            max_output_tokens: Some(32_768),
-            model_type: "chat".into(),
-            ..Default::default()
-        },
-        api_key: "tok".to_string(),
-        ..Default::default()
-    };
+    let resolved_target = dummy_codex_resolved_target();
     let wrapped = adapter
         .wrap_request_body(
             body,

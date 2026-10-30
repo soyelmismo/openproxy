@@ -8,6 +8,9 @@ use super::{
     EvidenceKind, IDENTITY_ORIGIN_OFFICIAL, SourceDescriptor, SourceRef, decode_utf8, is_json_body,
     parse_version, raw_url, step,
 };
+
+/// Metadata mutable de `releases/latest`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleaseMetadata {
     /// Tag de la release.
     pub tag: String,

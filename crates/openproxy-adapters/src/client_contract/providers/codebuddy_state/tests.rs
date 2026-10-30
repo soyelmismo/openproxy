@@ -1,9 +1,13 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use super::*;
 use crate::client_contract::providers::codebuddy_runtime::{
     CODEBUDDY_REGISTRY_LATEST_URL, CODEBUDDY_UNPKG_PREFIX, CodeBuddyReleaseDriver,
     pinned_package_url, pinned_product_url,
 };
-use crate::client_contract::{FetchRequest, FetchResponse, validate_candidate_shape};
+use crate::client_contract::{
+    FetchRequest, FetchResponse, RefreshReport, validate_candidate_shape,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
@@ -79,9 +83,9 @@ fn pin_map(version: &str, overrides: Vec<(&str, FetchResponse)>) -> MapTransport
         REGISTRY_LATEST_JSON.as_bytes().to_vec()
     } else {
         format!(
-                r#"{{"name":"{CODEBUDDY_PACKAGE}","version":"{version}","dist":{{"integrity":"sha512-x"}}}}"#
-            )
-            .into_bytes()
+            r#"{{"name":"{CODEBUDDY_PACKAGE}","version":"{version}","dist":{{"integrity":"sha512-x"}}}}"#
+        )
+        .into_bytes()
     };
     let package = if version == CODEBUDDY_VERSION {
         PINNED_PACKAGE_JSON.as_bytes().to_vec()
@@ -370,11 +374,7 @@ fn the_default_store_root_follows_the_environment() {
     // convención que el resto del workspace para mutar el entorno.
     let _guard = crate::spoofer::codebuddy::CODEBUDDY_TEST_LOCK
         .lock()
-        .unwrap_or_else(|poison| {
-            crate::spoofer::codebuddy::CODEBUDDY_TEST_LOCK.clear_poison();
-            poison.into_inner()
-        });
-    // SAFETY: CODEBUDDY_TEST_LOCK guarantees exclusive single-threaded access to environment variables.
+        .unwrap_or_else(|poison| poison.into_inner());
     unsafe {
         std::env::set_var(
             "OPENPROXY_CODEBUDDY_STORE_DIR",
@@ -383,18 +383,12 @@ fn the_default_store_root_follows_the_environment() {
     }
     let root = default_store_root();
     match previous {
-        Some(value) => {
-            // SAFETY: CODEBUDDY_TEST_LOCK guarantees exclusive single-threaded access to environment variables.
-            unsafe {
-                std::env::set_var("OPENPROXY_CODEBUDDY_STORE_DIR", value);
-            }
-        }
-        None => {
-            // SAFETY: CODEBUDDY_TEST_LOCK guarantees exclusive single-threaded access to environment variables.
-            unsafe {
-                std::env::remove_var("OPENPROXY_CODEBUDDY_STORE_DIR");
-            }
-        }
+        Some(value) => unsafe {
+            std::env::set_var("OPENPROXY_CODEBUDDY_STORE_DIR", value);
+        },
+        None => unsafe {
+            std::env::remove_var("OPENPROXY_CODEBUDDY_STORE_DIR");
+        },
     }
     assert_eq!(root, PathBuf::from("/tmp/openproxy-codebuddy-state-env"));
 }

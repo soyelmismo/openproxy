@@ -1,6 +1,10 @@
 use serde_json::Value;
 
-use super::{ContractError, is_json_body, parse_version};
+use super::{ContractError, parse_version};
+use crate::client_contract::refresh::is_json_body;
+
+/// Metadata mutable del registro npm, tal como la lee el driver.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegistryMetadata {
     /// Versión anunciada por `latest`.
     pub version: String,

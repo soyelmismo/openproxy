@@ -1,7 +1,9 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use super::*;
 use crate::client_contract::providers::codex_runtime::is_commit_sha;
 use crate::client_contract::validate_candidate_shape;
-use crate::client_contract::{FetchRequest, FetchResponse};
+use crate::client_contract::{FetchRequest, FetchResponse, RefreshReport};
 use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
@@ -353,11 +355,7 @@ fn the_default_store_root_follows_the_environment() {
     // convención que el resto del workspace para mutar el entorno.
     let _guard = crate::spoofer::codex::CODEX_TEST_LOCK
         .lock()
-        .unwrap_or_else(|poison| {
-            crate::spoofer::codex::CODEX_TEST_LOCK.clear_poison();
-            poison.into_inner()
-        });
-    // SAFETY: CODEX_TEST_LOCK guarantees exclusive single-threaded access to environment variables.
+        .unwrap_or_else(|poison| poison.into_inner());
     unsafe {
         std::env::set_var(
             "OPENPROXY_CODEX_STORE_DIR",
@@ -366,18 +364,12 @@ fn the_default_store_root_follows_the_environment() {
     }
     let root = default_store_root();
     match previous {
-        Some(value) => {
-            // SAFETY: CODEX_TEST_LOCK guarantees exclusive single-threaded access to environment variables.
-            unsafe {
-                std::env::set_var("OPENPROXY_CODEX_STORE_DIR", value);
-            }
-        }
-        None => {
-            // SAFETY: CODEX_TEST_LOCK guarantees exclusive single-threaded access to environment variables.
-            unsafe {
-                std::env::remove_var("OPENPROXY_CODEX_STORE_DIR");
-            }
-        }
+        Some(value) => unsafe {
+            std::env::set_var("OPENPROXY_CODEX_STORE_DIR", value);
+        },
+        None => unsafe {
+            std::env::remove_var("OPENPROXY_CODEX_STORE_DIR");
+        },
     }
     assert_eq!(root, PathBuf::from("/tmp/openproxy-codex-state-env"));
 }

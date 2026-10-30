@@ -1,7 +1,10 @@
-use super::*;
+#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+use super::*;
+use crate::client_contract::{FetchRequest, FetchResponse};
 
 /// Transporte que responde desde un mapa de URL. Ninguna petición sale del
 /// proceso; una URL ausente se comporta como `404`.
@@ -91,9 +94,9 @@ fn pin_map(announced: &str) -> MapTransport {
         registry
     } else {
         format!(
-                r#"{{"name":"{CODEBUDDY_PACKAGE}","version":"{announced}","dist":{{"integrity":"sha512-x"}}}}"#
-            )
-            .into_bytes()
+            r#"{{"name":"{CODEBUDDY_PACKAGE}","version":"{announced}","dist":{{"integrity":"sha512-x"}}}}"#
+        )
+        .into_bytes()
     };
     MapTransport::with(vec![
         (

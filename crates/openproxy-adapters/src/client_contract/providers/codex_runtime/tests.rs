@@ -1,6 +1,9 @@
-use super::*;
+#![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::HashMap;
 use std::sync::Mutex;
+
+use super::*;
 
 /// Transporte que responde desde un mapa de URL. Ninguna petición sale del
 /// proceso; una URL ausente se comporta como `404`.
@@ -269,9 +272,9 @@ async fn a_new_revision_with_broken_guards_is_rejected() {
 #[test]
 fn the_version_comes_from_the_tag_not_from_the_release_name() {
     let meta = parse_release_metadata(
-            br#"{"tag_name":"rust-v0.163.0","name":"Codex 9.9.9 (editable)","prerelease":false,"draft":false}"#,
-        )
-        .unwrap();
+        br#"{"tag_name":"rust-v0.163.0","name":"Codex 9.9.9 (editable)","prerelease":false,"draft":false}"#,
+    )
+    .unwrap();
     assert_eq!(meta.version, "0.163.0");
     assert_eq!(meta.tag, "rust-v0.163.0");
 }
@@ -351,23 +354,23 @@ async fn a_lightweight_tag_pointing_at_a_commit_is_rejected() {
 async fn a_nested_tag_chain_beyond_the_limit_is_rejected() {
     let chained = r#"{"object":{"sha":"2222222222222222222222222222222222222222","type":"tag"}}"#;
     let transport = MapTransport::with(vec![
-            (
-                CODEX_RELEASES_LATEST_URL.to_string(),
-                ok_json(r#"{"tag_name":"rust-v0.162.1","name":"0.162.1","prerelease":false,"draft":false}"#),
-            ),
-            (
-                "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1".to_string(),
-                ok_json(r#"{"object":{"sha":"3333333333333333333333333333333333333333","type":"tag"}}"#),
-            ),
-            (
-                "https://api.github.com/repos/openai/codex/git/tags/3333333333333333333333333333333333333333".to_string(),
-                ok_json(chained),
-            ),
-            (
-                "https://api.github.com/repos/openai/codex/git/tags/2222222222222222222222222222222222222222".to_string(),
-                ok_json(chained),
-            ),
-        ]);
+        (
+            CODEX_RELEASES_LATEST_URL.to_string(),
+            ok_json(r#"{"tag_name":"rust-v0.162.1","name":"0.162.1","prerelease":false,"draft":false}"#),
+        ),
+        (
+            "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1".to_string(),
+            ok_json(r#"{"object":{"sha":"3333333333333333333333333333333333333333","type":"tag"}}"#),
+        ),
+        (
+            "https://api.github.com/repos/openai/codex/git/tags/3333333333333333333333333333333333333333".to_string(),
+            ok_json(chained),
+        ),
+        (
+            "https://api.github.com/repos/openai/codex/git/tags/2222222222222222222222222222222222222222".to_string(),
+            ok_json(chained),
+        ),
+    ]);
     let error = driver(transport).resolve_pin().await.unwrap_err();
     assert!(
         matches!(error, ContractError::Rejected(ref message) if message.contains("desreferencias")),
@@ -455,5 +458,4 @@ async fn a_server_error_is_a_source_unavailable_error() {
     );
 }
 
-#[path = "tests_extraction.rs"]
 mod tests_extraction;

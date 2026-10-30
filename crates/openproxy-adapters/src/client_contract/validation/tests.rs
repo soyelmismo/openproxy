@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::*;
 use crate::client_contract::{Candidate, ClientIdentity, SourceRef};
 

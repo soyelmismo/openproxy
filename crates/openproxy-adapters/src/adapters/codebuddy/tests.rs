@@ -1,5 +1,8 @@
 use super::*;
 
+mod contract_tests;
+mod refresh_tests;
+
 #[test]
 fn test_codebuddy_adapter_config() {
     let adapter = CodeBuddyAdapter::new();
@@ -155,6 +158,13 @@ fn dummy_codebuddy_resolved_target() -> openproxy_types::context::ResolvedTarget
         api_key: "test-token".to_string(),
         ..Default::default()
     }
+}
+
+fn find_header<'a>(headers: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.as_str())
 }
 
 #[test]
@@ -330,12 +340,7 @@ fn test_codebuddy_headers_generation() {
         TargetFormat::Openai,
         &ModelId::new("gpt-5.5"),
     );
-    let find = |key: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
-    };
+    let find = |key: &str| find_header(&headers, key);
 
     assert_eq!(find("Authorization"), Some("Bearer test-token-123"));
     assert_eq!(find("Content-Type"), Some("application/json"));
@@ -395,167 +400,6 @@ fn test_codebuddy_npm_metadata_url_override() {
         std::env::remove_var("OPENPROXY_CODEBUDDY_NPM_METADATA_URL");
     }
     assert_eq!(codebuddy_npm_metadata_url(), NPM_CODEBUDDY_METADATA_URL);
-}
-
-use crate::client_contract::providers::codebuddy_runtime::{
-    CODEBUDDY_REGISTRY_LATEST_URL, pinned_package_url, pinned_product_url,
-};
-use crate::client_contract::providers::codebuddy_state::CodeBuddyContractRuntime;
-use crate::client_contract::{ContractError, ContractTransport, FetchRequest, FetchResponse};
-
-const REFRESH_REGISTRY_JSON: &str =
-    include_str!("../../../../../fixtures/codebuddy/registry-latest.json");
-const REFRESH_PACKAGE_JSON: &str =
-    include_str!("../../../../../fixtures/codebuddy-extracted/package.json");
-const REFRESH_PRODUCT_JSON: &str =
-    include_str!("../../../../../fixtures/codebuddy-extracted/product.json");
-
-/// Transporte hermético del refresh: responde desde un mapa de URL y ninguna
-/// petición sale del proceso. Una URL ausente se comporta como 404.
-struct RefreshTransport {
-    responses: std::sync::Mutex<std::collections::HashMap<String, FetchResponse>>,
-}
-
-impl RefreshTransport {
-    fn with(entries: Vec<(String, FetchResponse)>) -> Self {
-        Self {
-            responses: std::sync::Mutex::new(entries.into_iter().collect()),
-        }
-    }
-}
-
-impl ContractTransport for RefreshTransport {
-    fn fetch(
-        &self,
-        request: &FetchRequest,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = std::result::Result<FetchResponse, ContractError>>
-                + Send
-                + '_,
-        >,
-    > {
-        let response = self
-            .responses
-            .lock()
-            .unwrap()
-            .get(&request.url)
-            .cloned()
-            .unwrap_or(FetchResponse {
-                status: 404,
-                headers: Vec::new(),
-                body: Vec::new(),
-            });
-        Box::pin(async move { Ok(response) })
-    }
-}
-
-fn refresh_ok_json(body: &[u8]) -> FetchResponse {
-    FetchResponse {
-        status: 200,
-        headers: Vec::new(),
-        body: body.to_vec(),
-    }
-}
-
-fn refresh_temp_dir(name: &str) -> std::path::PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("openproxy-codebuddy-refresh-{name}-{stamp}"));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-/// Ruta de refresh validada sobre runtime hermético: la metadata que anuncia
-/// otra versión es rechazada y la generación activa se conserva.
-#[tokio::test]
-async fn test_codebuddy_refresh_rejects_metadata_only_elevation() {
-    let dir = refresh_temp_dir("metadata-only");
-    let runtime = CodeBuddyContractRuntime::new(&dir);
-    let seed = runtime.load().expect("seed embebido");
-
-    let transport = std::sync::Arc::new(RefreshTransport::with(vec![
-        (
-            CODEBUDDY_REGISTRY_LATEST_URL.to_string(),
-            refresh_ok_json(br#"{"name":"@tencent-ai/codebuddy-code","version":"2.199.9"}"#),
-        ),
-        (
-            pinned_package_url("2.199.9"),
-            refresh_ok_json(br#"{"name":"@tencent-ai/codebuddy-code","version":"2.199.9"}"#),
-        ),
-        (pinned_product_url("2.199.9"), refresh_ok_json(b"{}")),
-    ]));
-    let elevated = runtime.refresh_validated(transport).await;
-    assert_eq!(elevated, None, "metadata sola no eleva la identidad");
-    assert_eq!(
-        runtime.snapshot().unwrap().generation,
-        seed.generation,
-        "la generación activa no cambia"
-    );
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// La ruta de refresh validada publica el catálogo como overlay, pero sin
-/// correspondencia paquete→commit verificada la versión anunciada no sube.
-#[tokio::test]
-async fn test_codebuddy_refresh_pinned_round_does_not_elevate_the_version() {
-    let dir = refresh_temp_dir("pinned-round");
-    let runtime = CodeBuddyContractRuntime::new(&dir);
-    let seed = runtime.load().expect("seed embebido");
-    let version = seed.payload.version.clone();
-
-    let transport = std::sync::Arc::new(RefreshTransport::with(vec![
-        (
-            CODEBUDDY_REGISTRY_LATEST_URL.to_string(),
-            refresh_ok_json(REFRESH_REGISTRY_JSON.as_bytes()),
-        ),
-        (
-            pinned_package_url(&version),
-            refresh_ok_json(REFRESH_PACKAGE_JSON.as_bytes()),
-        ),
-        (
-            pinned_product_url(&version),
-            refresh_ok_json(REFRESH_PRODUCT_JSON.as_bytes()),
-        ),
-    ]));
-    let elevated = runtime.refresh_validated(transport).await;
-    assert_eq!(elevated, None, "sin gitHead no hay identidad activable");
-    let snapshot = runtime.snapshot().unwrap();
-    assert_eq!(snapshot.payload.version, version);
-    assert!(!snapshot.payload.identity_activatable);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Fallas de adquisición son fail-closed: `None`, sin pánico y sin cambiar la
-/// generación activa.
-#[tokio::test]
-async fn test_codebuddy_refresh_failures_are_fail_closed() {
-    let dir = refresh_temp_dir("failures");
-    let runtime = CodeBuddyContractRuntime::new(&dir);
-    let seed = runtime.load().expect("seed embebido");
-
-    // 429 en el registro: error de adquisición, generación intacta.
-    let throttled = std::sync::Arc::new(RefreshTransport::with(vec![(
-        CODEBUDDY_REGISTRY_LATEST_URL.to_string(),
-        FetchResponse {
-            status: 429,
-            headers: Vec::new(),
-            body: Vec::new(),
-        },
-    )]));
-    assert_eq!(runtime.refresh_validated(throttled).await, None);
-
-    // 200 con un cuerpo que no es JSON: el parseo falla, generación intacta.
-    let not_json = std::sync::Arc::new(RefreshTransport::with(vec![(
-        CODEBUDDY_REGISTRY_LATEST_URL.to_string(),
-        refresh_ok_json(b"NotJson"),
-    )]));
-    assert_eq!(runtime.refresh_validated(not_json).await, None);
-
-    assert_eq!(runtime.snapshot().unwrap().generation, seed.generation);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -721,124 +565,4 @@ fn test_build_codebuddy_resource_request_headers() {
         req.headers.get("x-ide-type").unwrap().to_str().unwrap(),
         "CLI"
     );
-}
-
-#[test]
-fn test_codebuddy_pinned_unverified_contract_does_not_elevate_headers() {
-    let snapshot = crate::client_contract::providers::codebuddy_state::embedded_snapshot();
-    assert!(!snapshot.payload.identity_activatable);
-    assert!(snapshot.client_identity.version.is_none());
-    let baseline = CodeBuddyAdapter::new().build_headers(
-        "test-token",
-        TargetFormat::Openai,
-        &ModelId::new("gpt-5.5"),
-    );
-    let adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));
-    let headers =
-        adapter.build_headers("test-token", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    let strip_dynamic = |list: &[(String, String)]| -> Vec<(String, String)> {
-        list.iter()
-            .filter(|(k, _)| {
-                !k.eq_ignore_ascii_case("x-conversation-id")
-                    && !k.eq_ignore_ascii_case("x-conversation-request-id")
-                    && !k.eq_ignore_ascii_case("x-conversation-message-id")
-            })
-            .cloned()
-            .collect()
-    };
-    assert_eq!(
-        strip_dynamic(&headers),
-        strip_dynamic(&baseline),
-        "el catálogo no autoriza elevar identidad"
-    );
-}
-
-#[test]
-fn test_codebuddy_pinned_contract_drives_the_announced_headers() {
-    // Snapshot sintético activable: comprueba solo el consumo del adapter.
-    let mut snapshot = crate::client_contract::providers::codebuddy_state::embedded_snapshot();
-    snapshot.payload.identity_activatable = true;
-    snapshot.client_identity.version = Some("2.199.9".to_string());
-    let version = snapshot.client_identity.version.clone().unwrap();
-    let adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));
-
-    assert!(
-        adapter.pinned_contract().is_some(),
-        "el pin debe quedar congelado"
-    );
-
-    let headers =
-        adapter.build_headers("test-token", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    let find = |key: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
-    };
-    // Versión y user-agent salen del MISMO snapshot: una sola generación
-    // coherente para toda la petición.
-    assert_eq!(find("x-ide-version"), Some(version.as_str()));
-    assert_eq!(
-        find("user-agent"),
-        Some(format!("CLI/{version} CodeBuddy/{version}").as_str())
-    );
-    // El resto de la identidad anunciada no cambia.
-    assert_eq!(find("x-ide-type"), Some("CLI"));
-    assert_eq!(find("x-codebuddy-request"), Some("1"));
-}
-
-#[tokio::test]
-async fn test_codebuddy_discovery_reads_the_pinned_catalog_not_the_static_list() {
-    let mut snapshot = crate::client_contract::providers::codebuddy_state::embedded_snapshot();
-    let mut product: serde_json::Value =
-        serde_json::from_slice(snapshot.catalog_body().unwrap()).unwrap();
-    product["models"].as_array_mut().unwrap().truncate(1);
-    let mut expected_id = product["models"][0]["id"].as_str().unwrap().to_string();
-    if is_codebuddy_model_free(product["models"][0].get("credits").and_then(|c| c.as_str())) {
-        expected_id.push_str(":free");
-    }
-    let expected_input = product["models"][0]["maxInputTokens"].as_i64();
-    snapshot.catalog = Some(Arc::from(serde_json::to_vec(&product).unwrap()));
-    let adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));
-    let discovered = adapter
-        .fetch_models(&UpstreamClient::new(), "unused")
-        .await
-        .unwrap();
-    assert_eq!(discovered.len(), 1);
-    assert_eq!(discovered[0].model_id.as_str(), expected_id);
-    assert_eq!(discovered[0].context_length, expected_input);
-}
-
-#[tokio::test]
-async fn test_codebuddy_discovery_falls_back_when_snapshot_has_no_catalog() {
-    let mut snapshot = crate::client_contract::providers::codebuddy_state::embedded_snapshot();
-    snapshot.catalog = None;
-    let adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));
-    let discovered = adapter
-        .fetch_models(&UpstreamClient::new(), "unused")
-        .await
-        .unwrap();
-    assert_eq!(discovered.len(), CODEBUDDY_MODELS.len());
-}
-
-#[test]
-fn test_codebuddy_config_override_wins_over_the_pinned_contract() {
-    let snapshot = crate::client_contract::providers::codebuddy_state::embedded_snapshot();
-    let mut adapter = CodeBuddyAdapter::new().with_pinned_contract(Arc::new(snapshot));
-    adapter
-        .config_mut()
-        .expect("config mutable")
-        .extra_headers
-        .push(("x-ide-version".to_string(), "9.9.9".to_string()));
-
-    let headers =
-        adapter.build_headers("test-token", TargetFormat::Openai, &ModelId::new("gpt-5.5"));
-    let find = |key: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(key))
-            .map(|(_, v)| v.as_str())
-    };
-    // El override explícito del despliegue gana sobre el contrato.
-    assert_eq!(find("x-ide-version"), Some("9.9.9"));
 }

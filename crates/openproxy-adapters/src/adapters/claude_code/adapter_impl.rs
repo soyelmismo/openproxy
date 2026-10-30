@@ -372,75 +372,65 @@ pub(crate) async fn fetch_claude_code_quota(
     Ok(parse_claude_code_usage_response(&json))
 }
 
+/// Reads one usage window (`five_hour`, `seven_day`) into
+/// `(used, limit, reset_at)`. A missing utilization keeps both the used and
+/// limit fields unset, matching upstream's sparse responses.
+fn claude_quota_window(
+    section: Option<&serde_json::Value>,
+) -> (Option<i64>, Option<i64>, Option<String>) {
+    let mut used = None;
+    let mut limit = None;
+    let mut reset_at = None;
+    if let Some(obj) = section.and_then(|v| v.as_object()) {
+        if let Some(util) = obj.get("utilization").and_then(|v| v.as_f64()) {
+            used = Some(util.round() as i64);
+            limit = Some(100);
+        }
+        if let Some(r) = obj.get("resets_at").and_then(|v| v.as_str()) {
+            reset_at = Some(r.to_string());
+        }
+    }
+    (used, limit, reset_at)
+}
+
+/// Appends a per-model quota detail from a `utilization`/`percent` object.
+fn push_quota_detail(
+    model_details: &mut Vec<ModelQuotaDetail>,
+    obj: &serde_json::Map<String, serde_json::Value>,
+    model_id: &str,
+) {
+    let util = obj
+        .get("utilization")
+        .or_else(|| obj.get("percent"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let resets_at = obj
+        .get("resets_at")
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string);
+    let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
+    model_details.push(ModelQuotaDetail {
+        model_id: model_id.to_string(),
+        session_used: util.round() as i64,
+        session_limit: 100,
+        session_reset_at: resets_at,
+        remaining_fraction,
+    });
+}
+
 pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> AccountQuota {
-    let mut session_used = None;
-    let mut session_limit = None;
-    let mut session_reset_at = None;
-
-    if let Some(h5) = json.get("five_hour").and_then(|v| v.as_object()) {
-        if let Some(util) = h5.get("utilization").and_then(|v| v.as_f64()) {
-            session_used = Some(util.round() as i64);
-            session_limit = Some(100);
-        }
-        if let Some(r) = h5.get("resets_at").and_then(|v| v.as_str()) {
-            session_reset_at = Some(r.to_string());
-        }
-    }
-
-    let mut weekly_used = None;
-    let mut weekly_limit = None;
-    let mut weekly_reset_at = None;
-
-    if let Some(d7) = json.get("seven_day").and_then(|v| v.as_object()) {
-        if let Some(util) = d7.get("utilization").and_then(|v| v.as_f64()) {
-            weekly_used = Some(util.round() as i64);
-            weekly_limit = Some(100);
-        }
-        if let Some(r) = d7.get("resets_at").and_then(|v| v.as_str()) {
-            weekly_reset_at = Some(r.to_string());
-        }
-    }
+    let (session_used, session_limit, session_reset_at) =
+        claude_quota_window(json.get("five_hour"));
+    let (weekly_used, weekly_limit, weekly_reset_at) = claude_quota_window(json.get("seven_day"));
 
     let mut model_details = Vec::new();
 
     if let Some(opus) = json.get("seven_day_opus").and_then(|v| v.as_object()) {
-        let util = opus
-            .get("utilization")
-            .or_else(|| opus.get("percent"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let resets_at = opus
-            .get("resets_at")
-            .and_then(|v| v.as_str())
-            .map(ToString::to_string);
-        let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
-        model_details.push(ModelQuotaDetail {
-            model_id: "Claude Opus (Weekly)".to_string(),
-            session_used: util.round() as i64,
-            session_limit: 100,
-            session_reset_at: resets_at,
-            remaining_fraction,
-        });
+        push_quota_detail(&mut model_details, opus, "Claude Opus (Weekly)");
     }
 
     if let Some(sonnet) = json.get("seven_day_sonnet").and_then(|v| v.as_object()) {
-        let util = sonnet
-            .get("utilization")
-            .or_else(|| sonnet.get("percent"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
-        let resets_at = sonnet
-            .get("resets_at")
-            .and_then(|v| v.as_str())
-            .map(ToString::to_string);
-        let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
-        model_details.push(ModelQuotaDetail {
-            model_id: "Claude Sonnet (Weekly)".to_string(),
-            session_used: util.round() as i64,
-            session_limit: 100,
-            session_reset_at: resets_at,
-            remaining_fraction,
-        });
+        push_quota_detail(&mut model_details, sonnet, "Claude Sonnet (Weekly)");
     }
 
     if let Some(limits) = json.get("limits").and_then(|v| v.as_array()) {
@@ -458,23 +448,10 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
             else {
                 continue;
             };
-            let util = lim
-                .get("utilization")
-                .or_else(|| lim.get("percent"))
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let resets_at = lim
-                .get("resets_at")
-                .and_then(|v| v.as_str())
-                .map(ToString::to_string);
-            let remaining_fraction = ((100.0 - util).max(0.0) / 100.0).clamp(0.0, 1.0);
-            model_details.push(ModelQuotaDetail {
-                model_id: name.to_string(),
-                session_used: util.round() as i64,
-                session_limit: 100,
-                session_reset_at: resets_at,
-                remaining_fraction,
-            });
+            let Some(obj) = lim.as_object() else {
+                continue;
+            };
+            push_quota_detail(&mut model_details, obj, name);
         }
     }
 

@@ -155,23 +155,23 @@ async fn a_non_json_catalog_rejects_the_candidate() {
 #[tokio::test]
 async fn a_missing_watched_file_rejects_the_candidate() {
     let transport = MapTransport::with(vec![
-            (
-                CODEX_RELEASES_LATEST_URL.to_string(),
-                ok_json(r#"{"tag_name":"rust-v0.162.1","name":"0.162.1","prerelease":false,"draft":false}"#),
-            ),
-            (
-                "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1".to_string(),
-                ok_json(r#"{"object":{"sha":"7a078f6bb4ce0dc2a81408b334ce52979d92c603","type":"tag"}}"#),
-            ),
-            (
-                "https://api.github.com/repos/openai/codex/git/tags/7a078f6bb4ce0dc2a81408b334ce52979d92c603".to_string(),
-                ok_json(&format!(r#"{{"object":{{"sha":"{PIN_COMMIT}","type":"commit"}}}}"#)),
-            ),
-            (
-                format!("https://raw.githubusercontent.com/openai/codex/{PIN_COMMIT}/codex-rs/Cargo.toml"),
-                ok_raw(&fixture_bytes("codex-rust-v0.162.1/codex-rs/Cargo.toml")),
-            ),
-        ]);
+        (
+            CODEX_RELEASES_LATEST_URL.to_string(),
+            ok_json(r#"{"tag_name":"rust-v0.162.1","name":"0.162.1","prerelease":false,"draft":false}"#),
+        ),
+        (
+            "https://api.github.com/repos/openai/codex/git/refs/tags/rust-v0.162.1".to_string(),
+            ok_json(r#"{"object":{"sha":"7a078f6bb4ce0dc2a81408b334ce52979d92c603","type":"tag"}}"#),
+        ),
+        (
+            "https://api.github.com/repos/openai/codex/git/tags/7a078f6bb4ce0dc2a81408b334ce52979d92c603".to_string(),
+            ok_json(&format!(r#"{{"object":{{"sha":"{PIN_COMMIT}","type":"commit"}}}}"#)),
+        ),
+        (
+            format!("https://raw.githubusercontent.com/openai/codex/{PIN_COMMIT}/codex-rs/Cargo.toml"),
+            ok_raw(&fixture_bytes("codex-rust-v0.162.1/codex-rs/Cargo.toml")),
+        ),
+    ]);
     let error = driver(transport).build_candidate(&pin()).await.unwrap_err();
     assert!(
         matches!(error, ContractError::SourceMissing { .. }),

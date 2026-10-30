@@ -70,6 +70,10 @@ mod compression_tests;
 #[cfg(test)]
 mod compression_http_tests;
 
+#[cfg(feature = "upstream-hyper")]
+#[cfg(test)]
+mod compression_internal_tests;
+
 #[cfg(all(feature = "upstream-hyper", test))]
 mod upload_tests;
 
