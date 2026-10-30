@@ -239,7 +239,9 @@ fn store_oauth_tokens_expiry_handling() {
     )
     .unwrap();
     let acc = get(&conn, id, &mk).unwrap().unwrap();
-    assert!(acc.expires_at.is_some());
+    // `expires_at = None` persists NULL — an unknown deadline is never
+    // fabricated (the now+1h fallback was removed in 000099).
+    assert!(acc.expires_at.is_none());
 
     let explicit = "2030-01-01T00:00:00Z";
     store_oauth_tokens(
