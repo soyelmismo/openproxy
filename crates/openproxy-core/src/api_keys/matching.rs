@@ -83,13 +83,28 @@ impl ApiKey {
             }
         });
 
+        // An explicit `allowed_models` entry grants access to the model even
+        // when its provider is blacklisted: the allowlist is a deliberate
+        // whitelist exception (e.g. allow `devin/swe-2:free` while `devin`
+        // stays provider-blocked).
+        let explicitly_allowed = self.allowed_models.as_deref().is_some_and(|allowed| {
+            !allowed.is_empty()
+                && allowed
+                    .iter()
+                    .any(|m| model_matches_pattern(m, model, bare_model, full_id.as_deref()))
+        });
+
         is_model_permitted_by_allowlist(
             self.allowed_models.as_deref(),
             model,
             bare_model,
             full_id.as_deref(),
-        ) && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-            && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
+        ) && (explicitly_allowed
+            || (!is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+                && !is_provider_blacklisted(
+                    self.blacklisted_providers.as_deref(),
+                    prov_from_model,
+                )))
             && !is_model_blocked_by_blacklist(
                 self.blacklisted_models.as_deref(),
                 model,
