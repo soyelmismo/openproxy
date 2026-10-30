@@ -108,7 +108,14 @@ async fn resolve_or_create_oauth_account(
     .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?
 }
 
-fn compute_oauth_expires_at(expires_in: Option<u64>, access_token: &str) -> Option<String> {
+fn compute_oauth_expires_at(
+    expires_in: Option<u64>,
+    access_token: &str,
+    provider_impl: &OAuthProviderEnum,
+) -> Option<String> {
+    if !provider_impl.access_tokens_expire() {
+        return None;
+    }
     openproxy_adapters::jwt::expires_at_for_token(expires_in, access_token)
 }
 
@@ -120,7 +127,7 @@ async fn save_oauth_token_and_notify(
     token: &TokenResponse,
     custom_provider_specific: Option<String>,
 ) -> Result<(), ApiError> {
-    let expires_at = compute_oauth_expires_at(token.expires_in, &token.access_token);
+    let expires_at = compute_oauth_expires_at(token.expires_in, &token.access_token, provider_impl);
     let provider_specific =
         custom_provider_specific.or_else(|| provider_impl.provider_specific_from_token(token));
     let email = provider_impl.email_from_token(token);

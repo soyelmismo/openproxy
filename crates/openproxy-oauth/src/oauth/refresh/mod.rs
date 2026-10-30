@@ -393,13 +393,22 @@ pub async fn resolve_oauth_token(
     })
     .await
     .map_err(|e| CoreError::Internal(format!("spawn failed: {e}")))?
-    .map_err(|e| CoreError::Internal(format!("decrypt refresh token failed: {e}")))?
-    .ok_or_else(|| {
-        CoreError::Auth(format!(
-            "account {} has no refresh token, cannot refresh",
-            account.id.0
-        ))
-    })?;
+    .map_err(|e| CoreError::Internal(format!("decrypt refresh token failed: {e}")))?;
+
+    let Some(refresh_token) = refresh_token else {
+        // No renewal grant exists for this account (permanent session tokens
+        // like Devin's, or a row that lost its refresh token). The recorded
+        // deadline is unverifiable locally, so hand back the access token and
+        // let the upstream arbitrate — the same verdict the pipeline's
+        // `resolve_oauth_refresh` reaches.
+        tracing::debug!(
+            account = account.id.0,
+            provider = provider_id,
+            "oauth token past recorded expiry but no refresh token stored; \
+             using access token as-is"
+        );
+        return Ok(access_token);
+    };
 
     let provider = registry.get(provider_id).ok_or_else(|| {
         CoreError::Auth(format!("no OAuth provider registered for '{provider_id}'"))

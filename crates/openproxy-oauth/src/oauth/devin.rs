@@ -223,6 +223,14 @@ impl OAuthProvider for DevinOAuthProvider {
         )))
     }
 
+    /// Session tokens are permanent credentials: the JWT carries an `exp`
+    /// claim but the reasoning backend does not enforce it, and no refresh
+    /// grant exists to renew one. Recording it would flag the account as
+    /// eternally expiring.
+    fn access_tokens_expire(&self) -> bool {
+        false
+    }
+
     fn provider_specific_from_token(&self, _token: &TokenResponse) -> Option<String> {
         // A fresh random seed per login anchors the wire device fingerprint,
         // matching upstream which stores one seed per auth record.
@@ -441,5 +449,7 @@ mod tests {
         let provider = DevinOAuthProvider::new();
         assert_eq!(provider.flow(), OAuthFlow::AuthorizationCodePkce);
         assert_eq!(provider.name(), "devin");
+        // Permanent session tokens: no deadline is recorded for them.
+        assert!(!provider.access_tokens_expire());
     }
 }

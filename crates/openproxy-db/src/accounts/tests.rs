@@ -291,6 +291,51 @@ fn test_account_select_canonical_projection() {
     );
 }
 
+#[test]
+fn store_oauth_tokens_without_expiry_keeps_expires_at_null() {
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let master = MasterKey::generate().unwrap();
+    let id = create(
+        &conn,
+        &openproxy_types::ProviderId::new("antigravity"),
+        None,
+        &master,
+        Some("undated"),
+        0,
+        None,
+    )
+    .unwrap();
+
+    store_oauth_tokens(
+        &conn,
+        id,
+        &master,
+        openproxy_types::accounts::StoreOAuthTokensParams {
+            access_token: "permanent-session-token",
+            refresh_token: None,
+            token_type: "Bearer",
+            expires_at: None,
+            scope: None,
+            provider_specific: None,
+            email: None,
+        },
+    )
+    .unwrap();
+
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT expires_at FROM accounts WHERE id = ?1",
+            [id.0],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        stored.is_none(),
+        "an unknown deadline must persist NULL, not a fabricated expiry"
+    );
+}
+
 // ===== quota_pools persistence (migration 000089) =====
 
 use openproxy_types::AccountId;

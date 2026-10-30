@@ -5,8 +5,6 @@ use openproxy_types::accounts::{Account, StoreOAuthTokensParams};
 use openproxy_types::{AccountId, CoreError, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 
-const DEFAULT_EXPIRES_IN_SECS: i64 = 3600;
-
 crate::def_table_select!(
     account_access_token_select,
     "accounts",
@@ -59,17 +57,10 @@ pub fn decrypt_oauth_provider_specific(
     }
 }
 
-fn resolve_oauth_expiry(expires_at: Option<&str>) -> String {
-    expires_at.map_or_else(
-        || {
-            (chrono::Utc::now() + chrono::Duration::seconds(DEFAULT_EXPIRES_IN_SECS))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string()
-        },
-        str::to_string,
-    )
-}
-
+/// `expires_at = NULL` is the designed "deadline unknown" state: undated
+/// accounts are tracked by `list_undated_oauth_accounts` when a refresh
+/// token exists, and tokens with no renewal path keep working until the
+/// upstream itself rejects them. No deadline is ever fabricated here.
 pub fn store_oauth_tokens(
     conn: &Connection,
     id: AccountId,
@@ -86,8 +77,6 @@ pub fn store_oauth_tokens(
         .provider_specific
         .map(|ps| encrypt_oauth_provider_specific(ps, master_key))
         .transpose()?;
-
-    let expires_at_resolved = resolve_oauth_expiry(params.expires_at);
 
     crate::crud::execute_check_affected(
         conn,
@@ -109,7 +98,7 @@ pub fn store_oauth_tokens(
             access_blob,
             refresh_blob,
             params.token_type,
-            expires_at_resolved,
+            params.expires_at,
             params.scope,
             provider_specific_encrypted,
             params.email,

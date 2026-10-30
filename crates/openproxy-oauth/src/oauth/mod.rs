@@ -282,6 +282,16 @@ pub trait OAuthProvider: Send + Sync {
         None
     }
 
+    /// Whether the provider's access tokens carry a deadline worth tracking.
+    ///
+    /// Providers issuing permanent session credentials (no refresh grant
+    /// exists and the issuer does not enforce the token's own `exp` claim)
+    /// return `false` so no `expires_at` is recorded: a fabricated deadline
+    /// would send the account through refresh paths that can never succeed.
+    fn access_tokens_expire(&self) -> bool {
+        true
+    }
+
     /// Post-exchange hook, called after tokens are stored for extra setup such as
     /// fetching user info.
     ///
@@ -417,6 +427,12 @@ macro_rules! define_oauth_provider {
                 match self {
                     $( Self::$b_variant(inner) => inner.email_from_token(token), )+
                     $( Self::$c_variant(inner) => inner.email_from_token(token), )+
+                }
+            }
+            fn access_tokens_expire(&self) -> bool {
+                match self {
+                    $( Self::$b_variant(inner) => inner.access_tokens_expire(), )+
+                    $( Self::$c_variant(inner) => inner.access_tokens_expire(), )+
                 }
             }
             async fn post_exchange(

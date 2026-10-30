@@ -324,6 +324,64 @@ async fn test_shared_lock_contention_and_token_reuse_without_http() {
     assert_eq!(res.scope.as_deref(), Some("test-scope"));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn resolve_oauth_token_returns_access_token_without_refresh_grant() {
+    // Permanent-session providers store no refresh token; an account whose
+    // recorded deadline already passed must still resolve its access token —
+    // the upstream is the arbiter, matching the pipeline's resolve path.
+    let (pool, _path) = openproxy_db::testing::fresh_pool();
+    let master_key = openproxy_db::secrets::MasterKey::generate().unwrap();
+    let account_id = {
+        let conn = pool.writer();
+        conn.execute(
+            "INSERT INTO providers (id, name, base_url, auth_type, format) \
+             VALUES ('devin', 'Devin', 'https://api.devin.ai', 'oauth', 'devin')",
+            [],
+        )
+        .unwrap();
+        let id = openproxy_db::accounts::create(
+            &conn,
+            &ProviderId::new("devin"),
+            None,
+            &master_key,
+            Some("devin-acc"),
+            0,
+            None,
+        )
+        .unwrap();
+        crate::accounts::store_oauth_tokens(
+            &conn,
+            id,
+            &master_key,
+            crate::accounts::StoreOAuthTokensParams {
+                access_token: "devin-session-token$tok",
+                refresh_token: None,
+                token_type: "Bearer",
+                expires_at: Some("2020-01-01T00:00:00Z"),
+                scope: None,
+                provider_specific: None,
+                email: None,
+            },
+        )
+        .unwrap();
+        id
+    };
+    let account = {
+        let conn = pool.writer();
+        openproxy_db::accounts::get(&conn, account_id, &master_key)
+            .unwrap()
+            .unwrap()
+    };
+
+    let reg = OAuthProviderRegistry::builtin();
+    let client = std::sync::Arc::new(openproxy_adapters::upstream::UpstreamClient::new());
+    let token =
+        crate::oauth::resolve_oauth_token(&pool, &account, "devin", &reg, &client, &master_key)
+            .await
+            .expect("access token returned despite missing refresh grant");
+    assert_eq!(token, "devin-session-token$tok");
+}
+
 #[tokio::test]
 async fn test_run_refresh_scheduler_pre_cancelled_returns_before_db() {
     let pool = Arc::new(openproxy_db::testing::fresh_pool_only());
