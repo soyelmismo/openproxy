@@ -259,18 +259,19 @@ pub fn classify_devin_quota_exhaustion(msg: &str) -> Option<DevinQuotaKind> {
     None
 }
 
-/// `POST {base}/exa.seat_management_pb.SeatManagementService/GetUserStatus`.
-pub async fn fetch_devin_quota(
+/// `POST {base}/exa.seat_management_pb.SeatManagementService/GetUserStatus`,
+/// returning the raw parsed status (profile fields included).
+pub async fn fetch_devin_user_status(
     upstream: &Arc<UpstreamClient>,
     base_url: &str,
     api_key: &str,
     device_seed: &str,
     proxy_url: Option<&str>,
-) -> Result<AccountQuota> {
+) -> Result<DevinUserStatus> {
     let token = api_key.trim();
     if token.is_empty() {
         return Err(CoreError::Validation(
-            "devin: missing session token for quota fetch".into(),
+            "devin: missing session token for status fetch".into(),
         ));
     }
     let url = format!(
@@ -299,26 +300,37 @@ pub async fn fetch_devin_quota(
     let resp = upstream
         .call(req, TimeoutProfile::Quota, CancellationToken::new())
         .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("devin quota: {e}")))?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("devin user status: {e}")))?;
 
     let status = resp.status;
     let body = resp
         .collect()
         .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("devin quota body: {e}")))?;
+        .map_err(|e| CoreError::UpstreamConnection(format!("devin user status body: {e}")))?;
 
     if !status.is_success() {
         let body_str = String::from_utf8_lossy(&body).to_string();
         return Err(CoreError::upstream_error(
             status.as_u16(),
             "devin",
-            "<quota>",
+            "<user-status>",
             body_str,
             false,
         ));
     }
 
-    let us = parse_user_status(&body)
-        .ok_or_else(|| CoreError::Parse("devin quota: parse user status".into()))?;
+    parse_user_status(&body)
+        .ok_or_else(|| CoreError::Parse("devin user status: parse response".into()))
+}
+
+/// `POST {base}/exa.seat_management_pb.SeatManagementService/GetUserStatus`.
+pub async fn fetch_devin_quota(
+    upstream: &Arc<UpstreamClient>,
+    base_url: &str,
+    api_key: &str,
+    device_seed: &str,
+    proxy_url: Option<&str>,
+) -> Result<AccountQuota> {
+    let us = fetch_devin_user_status(upstream, base_url, api_key, device_seed, proxy_url).await?;
     Ok(to_account_quota(&us))
 }
