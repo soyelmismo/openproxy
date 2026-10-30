@@ -371,8 +371,12 @@ jobs:
           - target: aarch64-apple-darwin
             runner: macos-14
             os_family: macos
+            allow_failure: true
     runs-on: ${{ matrix.runner }}
-    continue-on-error: false
+    # macOS runners cancel instantly when the account has no macos-14
+    # capacity left (billing/minutes) — that leg must not fail the whole
+    # release matrix. All other targets stay hard-required.
+    continue-on-error: ${{ matrix.allow_failure || false }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
