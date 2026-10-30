@@ -141,6 +141,9 @@ async fn test_tier1_models_list_includes_combos() {
 #[tokio::test]
 async fn test_tier1_models_list_key_scoped_filtering() {
     let harness = TestHarness::new().await;
+    // `allowed_models` is additive: it grants access to the named models on
+    // top of the default-permit catalog, never hides the rest. The key must
+    // therefore still see the whole catalog, including its whitelisted model.
     let (status, new_key) = harness
         .admin_post(
             "/admin/api/keys",
@@ -157,12 +160,47 @@ async fn test_tier1_models_list_key_scoped_filtering() {
         .unwrap();
     let (status, resp) = harness.oneshot_json(req).await;
     assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = resp["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
     assert!(
-        resp["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|m| m["id"].as_str().is_some_and(|s| s.contains("mock-gpt-4")))
+        ids.iter().any(|id| id.contains("mock-gpt-4")),
+        "whitelisted model must be visible: {ids:?}"
+    );
+    // Filtering still applies via blacklists: a key that blacklists
+    // mock-embed must not see it.
+    let (status, bl_key) = harness
+        .admin_post(
+            "/admin/api/keys",
+            json!({"label": "bl-key", "scopes": ["chat"], "blacklisted_models": ["mock-embed"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let plaintext = bl_key["plaintext"].as_str().unwrap();
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/v1/models")
+        .header(header::AUTHORIZATION, format!("Bearer {plaintext}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, resp) = harness.oneshot_json(req).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec<&str> = resp["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert!(
+        !ids.iter().any(|id| id.contains("mock-embed")),
+        "blacklisted model must be filtered: {ids:?}"
+    );
+    assert!(
+        ids.iter().any(|id| id.contains("mock-gpt-4")),
+        "non-blacklisted model stays visible: {ids:?}"
     );
 }
 
