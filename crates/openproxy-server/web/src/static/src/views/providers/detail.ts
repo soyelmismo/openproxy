@@ -16,6 +16,7 @@ import {
   editProviderHeadersPrompt,
 } from '../../handlers/provider-handlers/index.js';
 import type { Provider } from '../../lib/types/api.js';
+import { FALLBACK_PROVIDER_FORMATS } from '../../lib/types/common.js';
 import {
   detailProviderId,
   loadError,
@@ -333,14 +334,9 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
               .value=${provider.format}
               @change=${(e: Event) => onChangeProviderFormat(provider.id, e)}
             >
-              <option value="openai" ?selected=${provider.format === 'openai'}>openai</option>
-              <option value="responses" ?selected=${provider.format === 'responses'}>responses</option>
-              <option value="anthropic" ?selected=${provider.format === 'anthropic'}>anthropic</option>
-              <option value="gemini" ?selected=${provider.format === 'gemini'}>gemini</option>
-              <option value="mixed" ?selected=${provider.format === 'mixed'}>mixed</option>
-              <option value="systemone" ?selected=${provider.format === 'systemone'}>systemone</option>
-              <option value="atomesus" ?selected=${provider.format === 'atomesus'}>atomesus</option>
-              <option value="commandcodego" ?selected=${provider.format === 'commandcodego'}>commandcodego</option>
+              ${(state.formats?.provider_formats ?? FALLBACK_PROVIDER_FORMATS).map(
+                (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${provider.format === fmt.id}>${fmt.id}</option>`
+              )}
             </select>
             <span class="chip auth-chip">${provider.auth_type}</span>
             <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>

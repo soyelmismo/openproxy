@@ -8,12 +8,12 @@ export type UsageId = number;
 export type ApiKeyId = number;
 
 export type HealthStatus = "healthy" | "degraded" | "unhealthy";
-export type ProviderFormat = "openai" | "anthropic" | "mixed" | "gemini" | "responses" | "atomesus" | "commandcodego" | "systemone";
+export type ProviderFormat = "openai" | "anthropic" | "mixed" | "gemini" | "responses" | "atomesus" | "commandcodego" | "systemone" | "devin";
 export type AuthType = "bearer" | "x-api-key" | "goog-api-key" | "oauth" | "none";
 export type Strategy = "priority" | "round_robin" | "shuffle";
 export type PriorityMode = "strict" | "lkgp" | "weighted" | "least_used" | "p2c" | "decision";
 export type CooldownMode = "flat" | "exponential" | "none";
-export type TargetFormat = "openai" | "anthropic" | "gemini" | "responses" | "atomesus" | "commandcodego" | "systemone";
+export type TargetFormat = "openai" | "anthropic" | "gemini" | "responses" | "atomesus" | "commandcodego" | "systemone" | "devin";
 
 export interface ApiErrorBody {
   code: string;
@@ -53,6 +53,7 @@ export const FALLBACK_TARGET_FORMATS: readonly TargetFormatDescriptor[] = [
   { id: "systemone", name: "SystemOne Decision", label: "SystemOne (Decision / Fast Engine)", endpoint: "/v1/decisions", description: "SystemOne fast decision engine wire format" },
   { id: "atomesus", name: "Atomesus", label: "Atomesus", endpoint: null, description: "Atomesus upstream wire format" },
   { id: "commandcodego", name: "CommandCodeGo", label: "CommandCodeGo", endpoint: null, description: "CommandCode Go bridge wire format" },
+  { id: "devin", name: "Devin", label: "Devin (Connect-RPC)", endpoint: null, description: "Devin Connect-RPC protobuf wire format" },
 ];
 
 export const FALLBACK_PROVIDER_FORMATS: readonly ProviderFormatDescriptor[] = [
@@ -64,4 +65,5 @@ export const FALLBACK_PROVIDER_FORMATS: readonly ProviderFormatDescriptor[] = [
   { id: "systemone", name: "SystemOne Decision", label: "SystemOne (Decision / Fast Engine)", default_target_format: "systemone", description: "SystemOne fast decision engine protocol" },
   { id: "atomesus", name: "Atomesus", label: "Atomesus", default_target_format: "atomesus", description: "Atomesus upstream protocol" },
   { id: "commandcodego", name: "CommandCodeGo", label: "CommandCodeGo", default_target_format: "commandcodego", description: "CommandCode Go bridge protocol" },
+  { id: "devin", name: "Devin", label: "Devin (Connect-RPC)", default_target_format: "devin", description: "Devin Connect-RPC protobuf protocol" },
 ];

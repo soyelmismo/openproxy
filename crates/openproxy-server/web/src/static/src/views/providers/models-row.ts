@@ -15,6 +15,7 @@ import { statusPillClass } from '../../lib/constants.js';
 import { formatContextBadge } from '../../lib/format.js';
 import { renderCapabilityBadges } from './shared.js';
 import type { Model } from '../../lib/types/api.js';
+import { FALLBACK_TARGET_FORMATS } from '../../lib/types/common.js';
 
 
 export async function onChangeModelFormat(rowId: number, e: Event): Promise<void> {
@@ -227,13 +228,9 @@ export function renderModelRow(m: Model): TemplateResult {
         .value=${m.target_format || 'openai'}
         @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
       >
-        <option value="openai" ?selected=${(m.target_format || 'openai') === 'openai'}>openai</option>
-        <option value="responses" ?selected=${m.target_format === 'responses'}>responses</option>
-        <option value="anthropic" ?selected=${m.target_format === 'anthropic'}>anthropic</option>
-        <option value="gemini" ?selected=${m.target_format === 'gemini'}>gemini</option>
-        <option value="systemone" ?selected=${m.target_format === 'systemone'}>systemone</option>
-        <option value="atomesus" ?selected=${m.target_format === 'atomesus'}>atomesus</option>
-        <option value="commandcodego" ?selected=${m.target_format === 'commandcodego'}>commandcodego</option>
+        ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
+          (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
+        )}
       </select>
     </td>
     <td class="col-model-context" data-label="Context"><span class="model-spec-val">${formatContextBadge(m.context_length)}</span></td>
@@ -337,13 +334,9 @@ export function renderModelRow(m: Model): TemplateResult {
             .value=${m.target_format || 'openai'}
             @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
           >
-            <option value="openai" ?selected=${(m.target_format || 'openai') === 'openai'}>openai</option>
-            <option value="responses" ?selected=${m.target_format === 'responses'}>responses</option>
-            <option value="anthropic" ?selected=${m.target_format === 'anthropic'}>anthropic</option>
-            <option value="gemini" ?selected=${m.target_format === 'gemini'}>gemini</option>
-            <option value="systemone" ?selected=${m.target_format === 'systemone'}>systemone</option>
-            <option value="atomesus" ?selected=${m.target_format === 'atomesus'}>atomesus</option>
-            <option value="commandcodego" ?selected=${m.target_format === 'commandcodego'}>commandcodego</option>
+            ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
+              (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
+            )}
           </select>
         </div>
         <div class="config-item">
