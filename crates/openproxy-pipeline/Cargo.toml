@@ -57,3 +57,7 @@ memchr = { workspace = true }
 chrono = { workspace = true }
 regex = { workspace = true }
 aho-corasick = { workspace = true }
+
+[[bench]]
+name = "sse_openai_parse"
+harness = false

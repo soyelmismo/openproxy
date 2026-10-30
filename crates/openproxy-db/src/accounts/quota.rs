@@ -32,6 +32,7 @@ fn quota_pools_json(pools: Option<&[openproxy_types::quota::QuotaPool]>) -> Resu
 /// [`CoreError::AccountNotFound`].
 pub fn set_quota(conn: &Connection, id: AccountId, q: &AccountQuota) -> Result<()> {
     use rusqlite::OptionalExtension;
+    super::bump_epoch();
     let prior: Option<String> = conn
         .query_row(
             "SELECT quota_pools FROM accounts WHERE id = ?1",

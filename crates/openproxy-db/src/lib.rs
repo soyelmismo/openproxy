@@ -24,7 +24,10 @@ pub use batch::{
     query_in_chunks_by, query_in_chunks_by_with_params, query_in_chunks_with_params,
     values_placeholders,
 };
-pub use conn::{ArcReaderGuard, ArcWriterGuard, DbPool, ReaderGuard, WriterGuard};
+pub use conn::{
+    ArcReaderGuard, ArcWriterGuard, DbPool, ReaderGuard, WriterGuard, routing_config_epoch,
+    routing_cooldown_epoch,
+};
 pub use crud::FromRow;
 pub use secrets::MasterKey;
 pub mod combos;

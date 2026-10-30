@@ -40,6 +40,7 @@ pub fn create(
     priority: i32,
     extra_config_json: Option<&str>,
 ) -> Result<AccountId> {
+    super::bump_epoch();
     let blob = api_key.map(|key| master_key.encrypt(key)).transpose()?;
 
     let result = conn.execute(
@@ -203,6 +204,7 @@ pub fn set_health_with_error(
     health: HealthStatus,
     error: Option<&str>,
 ) -> Result<()> {
+    super::bump_epoch();
     crate::crud::execute_check_affected(
         conn,
         "UPDATE accounts SET health_status = ?1, quota_fetch_error = ?2, rate_limited_until = NULL WHERE id = ?3",
@@ -217,6 +219,7 @@ pub fn set_rate_limited_until(
     id: AccountId,
     iso_ts: Option<&str>,
 ) -> Result<()> {
+    super::bump_epoch();
     let affected = crate::db_update_field!(
         conn,
         "accounts",
@@ -230,6 +233,7 @@ pub fn set_rate_limited_until(
 /// Clears an active rate limit. A no-op (no write at all) when none is set,
 /// which keeps the per-request success path off the serialized writer's disk.
 pub fn clear_rate_limited_until(conn: &Connection, id: AccountId) -> Result<bool> {
+    super::bump_epoch();
     let affected = conn
         .execute(
             "UPDATE accounts SET rate_limited_until = NULL \
@@ -249,6 +253,7 @@ pub fn update_api_key(
     api_key: Option<&str>,
     master_key: &MasterKey,
 ) -> Result<()> {
+    super::bump_epoch();
     let blob = if let Some(key) = api_key {
         Some(master_key.encrypt(key)?)
     } else {
@@ -269,6 +274,7 @@ pub fn update_api_key(
 }
 
 pub fn update_label(conn: &Connection, id: AccountId, label: Option<&str>) -> Result<()> {
+    super::bump_epoch();
     let affected = crate::db_update_field!(
         conn,
         "accounts",
@@ -280,6 +286,7 @@ pub fn update_label(conn: &Connection, id: AccountId, label: Option<&str>) -> Re
 }
 
 pub fn delete(conn: &Connection, id: AccountId) -> Result<()> {
+    super::bump_epoch();
     conn.execute(
         "UPDATE combo_targets SET account_id = NULL WHERE account_id = ?1",
         params![id.0],
@@ -307,6 +314,7 @@ pub fn reorder_accounts(
     provider_id: &ProviderId,
     ids: &[AccountId],
 ) -> Result<()> {
+    super::bump_epoch();
     crate::error::with_busy_retry("reorder_accounts", || {
         let existing: Vec<i64> = crate::db_query_all!(
             conn,
@@ -364,6 +372,7 @@ pub fn update_current_proxy(
     id: AccountId,
     proxy_id: Option<&str>,
 ) -> Result<()> {
+    super::bump_epoch();
     let affected = crate::db_update_field!(
         conn,
         "accounts",
@@ -386,6 +395,7 @@ pub fn get_current_proxy_id(conn: &Connection, account_id: AccountId) -> Result<
 }
 
 pub fn clear_current_proxy_id(conn: &Connection, account_id: AccountId) -> Result<()> {
+    super::bump_epoch();
     conn.execute(
         "UPDATE accounts SET current_proxy_id = NULL WHERE id = ?1",
         params![account_id.0],

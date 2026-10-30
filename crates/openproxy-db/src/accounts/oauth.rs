@@ -67,6 +67,7 @@ pub fn store_oauth_tokens(
     master_key: &MasterKey,
     params: StoreOAuthTokensParams<'_>,
 ) -> Result<()> {
+    super::bump_epoch();
     let access_blob = master_key.encrypt(params.access_token)?;
     let refresh_blob = params
         .refresh_token
@@ -434,6 +435,7 @@ pub fn update_antigravity_project_id(
     account_id: i64,
     new_project_id: &str,
 ) -> Result<()> {
+    super::bump_epoch();
     let current_json_opt: Option<String> = conn
         .query_row(
             account_oauth_specific_select!("WHERE id = ?1"),
@@ -469,6 +471,7 @@ pub fn update_codex_reset_credits(
     account_id: i64,
     reset_credits: u32,
 ) -> Result<()> {
+    super::bump_epoch();
     let current_json_opt: Option<String> = conn
         .query_row(
             account_oauth_specific_select!("WHERE id = ?1"),
@@ -568,6 +571,7 @@ pub fn read_antigravity_project(
 /// Only fills a gap: `expires_at IS NULL` in the predicate means a deadline that
 /// a concurrent refresh already recorded is never overwritten with an older one.
 pub fn set_oauth_expires_at(conn: &Connection, account_id: i64, expires_at: &str) -> Result<()> {
+    super::bump_epoch();
     conn.execute(
         "UPDATE accounts SET expires_at = ?1 WHERE id = ?2 AND expires_at IS NULL",
         params![expires_at, account_id],
@@ -588,6 +592,7 @@ pub fn set_oauth_expires_at(conn: &Connection, account_id: i64, expires_at: &str
 /// Keeping the deadline in the past leaves the row due. Pacing comes from the
 /// scheduler's failure backoff, not from hiding the row.
 pub fn mark_oauth_expiry_due(conn: &Connection, account_id: i64) -> Result<()> {
+    super::bump_epoch();
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     conn.execute(
         "UPDATE accounts SET expires_at = ?1 WHERE id = ?2",

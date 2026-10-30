@@ -14,7 +14,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use bytes::Bytes;
+use bytes::{BufMut, Bytes};
 use futures::stream::Stream;
 use openproxy_pipeline::ResponseExt;
 use openproxy_pipeline::{Pipeline, PipelineRequest};
@@ -165,31 +165,44 @@ pub(crate) async fn handle_sync_response(
         return Err(ApiError(err));
     }
 
-    let body_value = match result.final_response {
-        Some(resp) => serde_json::to_value(&resp).unwrap_or_else(|e| {
-            let err = ApiError(openproxy_types::CoreError::Internal(format!(
-                "serialize response: {e}"
-            )));
-            json!({
-                "error": {
-                    "code": "internal",
-                    "message": err.sanitized_message(),
+    // Serialize straight into the response body instead of building a
+    // `serde_json::Value` first (which allocates a DOM and reserializes it
+    // inside `Json`). `to_writer` into a `BytesMut` is one pass.
+    match result.final_response {
+        Some(resp) => {
+            let mut buf = bytes::BytesMut::with_capacity(1024).writer();
+            match serde_json::to_writer(&mut buf, &resp) {
+                Ok(()) => Ok((
+                    [(axum::http::header::CONTENT_TYPE, "application/json")],
+                    buf.into_inner().freeze(),
+                )
+                    .into_response()),
+                Err(e) => {
+                    let err = ApiError(openproxy_types::CoreError::Internal(format!(
+                        "serialize response: {e}"
+                    )));
+                    Ok(Json(json!({
+                        "error": {
+                            "code": "internal",
+                            "message": err.sanitized_message(),
+                        }
+                    }))
+                    .into_response())
                 }
-            })
-        }),
+            }
+        }
         None => {
             tracing::warn!(
                 attempts = result.attempts,
                 elapsed_ms,
                 "chat_completions: pipeline returned neither error nor response"
             );
-            json!({
+            Ok(Json(json!({
                 "error": {"code": "internal", "message": "no response from pipeline"}
-            })
+            }))
+            .into_response())
         }
-    };
-
-    Ok(Json(body_value).into_response())
+    }
 }
 
 /// Non-streaming Responses path (GAP-2). Mirrors [`handle_sync_response`] but

@@ -187,12 +187,23 @@ fn resolve_raw_routing_plan(
             None => Err(ApiError(CoreError::ComboNotFound(0))),
         }
     } else {
-        Ok(routing::resolve_with_options(
-            &r,
+        // Snapshot fast path: hash lookups against the in-memory routing
+        // snapshot (PRAGMA data_version invalidation). Falls back to the
+        // SQL path only when the snapshot itself can't be built.
+        match routing::snapshot::resolve_with_options_snap(
+            state.db_pool(),
             model,
             provider_override,
             account_override,
-        )?)
+        ) {
+            Ok(plan) => Ok(plan),
+            Err(_) => Ok(routing::resolve_with_options(
+                &r,
+                model,
+                provider_override,
+                account_override,
+            )?),
+        }
     }
 }
 

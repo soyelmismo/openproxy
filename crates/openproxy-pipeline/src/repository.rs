@@ -134,7 +134,31 @@ pub trait PipelineRepository: Send + Sync {
     ) -> Result<Option<openproxy_types::providers::Provider>>;
 }
 
-#[derive(Clone)]
+/// Cache for `get_account`: the hot-path quota stage calls it once per
+/// target per request, and each call would otherwise pay a SQLite round-trip
+/// plus (for OAuth accounts) an AES-GCM decrypt. Entries are dropped as a
+/// batch when `openproxy_db::accounts::epoch()` moves — every accounts-table
+/// write path bumps it. The file/write/external versions guard against
+/// writers outside this pool (CLI, restores), which the epoch cannot see.
+struct AccountCache {
+    epoch: u64,
+    file_version: (u64, u64),
+    write_epoch: u64,
+    external_version: Option<u64>,
+    map: HashMap<i64, Option<Account>>,
+}
+
+static ACCOUNT_CACHE: std::sync::LazyLock<std::sync::RwLock<AccountCache>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::RwLock::new(AccountCache {
+            epoch: 0,
+            file_version: (0, 0),
+            write_epoch: 0,
+            external_version: None,
+            map: HashMap::new(),
+        })
+    });
+
 pub struct SqlitePipelineRepository {
     connections: RepositoryConnections,
 }
@@ -191,7 +215,57 @@ impl PipelineRepository for SqlitePipelineRepository {
         account_id: AccountId,
         master_key: &MasterKey,
     ) -> Result<Option<Account>> {
-        openproxy_db::accounts::get(&self.reader(), account_id, master_key)
+        // Per-request callers (quota stage) hit this once per attempt. The
+        // decrypted/parsed `Account` is cached behind the accounts epoch:
+        // any write path bumps it and the next call re-reads.
+        // The accounts epoch sees every accounts write path in this process
+        // (each one bumps it). External writers (CLI, restores) do not bump
+        // it — for pools, file/write/external versions close that hole.
+        // Note: including the pool write_epoch alone would wrongly drop the
+        // cache on every usage-row commit, hence the epoch pair.
+        let epoch = openproxy_db::accounts::epoch();
+        let probe = match &self.connections {
+            RepositoryConnections::Pool(pool) => {
+                Some((pool.file_version(), pool.write_epoch(), pool))
+            }
+            RepositoryConnections::Legacy(_) => None,
+        };
+        {
+            let mut cache = ACCOUNT_CACHE.write().unwrap_or_else(|e| e.into_inner());
+            if let Some((file_v, write_v, pool)) = probe {
+                let file_moved = cache.file_version != file_v;
+                // External commit detected when the file moved and either no
+                // internal commit explains it, or data_version advanced too
+                // (mixed internal+external window).
+                let external_write = file_moved
+                    && (cache.write_epoch == write_v
+                        || cache.external_version != pool.external_version());
+                if external_write {
+                    cache.map.clear();
+                    cache.epoch = epoch;
+                }
+                cache.file_version = file_v;
+                cache.write_epoch = write_v;
+                if file_moved {
+                    cache.external_version = pool.external_version();
+                }
+            }
+            if cache.epoch == epoch
+                && let Some(acc) = cache.map.get(&account_id.0)
+            {
+                return Ok(acc.clone());
+            }
+        }
+        let acc = openproxy_db::accounts::get(&self.reader(), account_id, master_key)?;
+        {
+            let mut cache = ACCOUNT_CACHE.write().unwrap_or_else(|e| e.into_inner());
+            if cache.epoch != epoch {
+                cache.epoch = epoch;
+                cache.map.clear();
+            }
+            cache.map.insert(account_id.0, acc.clone());
+        }
+        Ok(acc)
     }
 
     fn decrypt_account_key(&self, account_id: AccountId, master_key: &MasterKey) -> Result<String> {

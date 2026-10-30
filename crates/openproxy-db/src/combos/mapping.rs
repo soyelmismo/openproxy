@@ -128,7 +128,7 @@ pub(crate) fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
     })
 }
 
-pub(crate) fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
+pub fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
     crate::map_row_struct!(row, ComboTarget {
         id: @id(0, ComboTargetId),
         combo_id: @id(1, ComboId),

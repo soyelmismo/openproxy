@@ -692,3 +692,5 @@ mod tests {
         assert_eq!(targets[0].account_id, Some(account_id));
     }
 }
+
+pub mod snapshot;

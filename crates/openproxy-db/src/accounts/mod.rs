@@ -1,5 +1,24 @@
 //! Account storage, OAuth tokens, credentials and quota persistence.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic epoch bumped by every `accounts`-table mutation in this
+/// process. Read-side caches (e.g. the pipeline's `get_account` cache) key
+/// themselves on this value: a bump makes every cached entry stale at once
+/// without tracking which function wrote.
+static ACCOUNTS_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Current epoch value.
+pub fn epoch() -> u64 {
+    ACCOUNTS_EPOCH.load(Ordering::Acquire)
+}
+
+/// Bump the epoch. Called at the top of every write path — cheap enough
+/// (one atomic fetch-add) that bumping on no-op writes is fine.
+pub(crate) fn bump_epoch() {
+    ACCOUNTS_EPOCH.fetch_add(1, Ordering::AcqRel);
+}
+
 crate::def_table_select!(
     account_select,
     "accounts",

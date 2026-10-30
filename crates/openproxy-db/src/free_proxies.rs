@@ -207,6 +207,7 @@ fn save_assigned_proxy(
 ) -> Result<()> {
     if is_per_account {
         if let Some(acc_id) = account_id {
+            crate::accounts::bump_epoch();
             conn.execute(
                 "UPDATE accounts SET current_proxy_id = ?1 WHERE id = ?2",
                 params![new_id, acc_id.0],

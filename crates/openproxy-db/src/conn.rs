@@ -42,7 +42,45 @@ pub struct DbPool {
     /// handle requires opening the file again.
     path: Arc<Path>,
     synchronous: SqliteSynchronous,
+    /// Monotonic epoch bumped by the writer connection's commit hook on
+    /// every COMMIT. Read-side caches (routing snapshot, account cache) key
+    /// on (epoch) and rebuild when it moves — `PRAGMA data_version` does not
+    /// observe same-process commits, so this counter is the correctness
+    /// anchor for in-process writes.
+    epoch: Arc<std::sync::atomic::AtomicU64>,
+    /// Dedicated probe connection for `PRAGMA data_version`, the mirror
+    /// signal of `epoch`: it moves ONLY on commits made by *other*
+    /// connections/processes. Together the two classify any file change:
+    /// epoch moved → internal, data_version moved → external, both → mixed.
+    /// `None` when the pool has no on-disk path worth probing.
+    probe: Option<Arc<Mutex<Connection>>>,
     _cleanup: Option<Arc<crate::testing::TempDir>>,
+}
+
+/// Routing-surface epochs bumped by the writer's update hook. `CONFIG`
+/// covers `models`, `providers`, `combos`, `combo_targets`: a bump
+/// invalidates the routing snapshot immediately. `COOLDOWN` covers
+/// `target_cooldowns`: cooldown rows churn at request rate, so the snapshot
+/// serves them from its stored timestamps and only rebuilds them on a short
+/// debounce — a new cooldown becomes visible within ~50ms instead of
+/// forcing a full 8k-model rebuild per failed request.
+static ROUTING_CONFIG_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ROUTING_COOLDOWN_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn routing_config_epoch() -> u64 {
+    ROUTING_CONFIG_EPOCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub fn routing_cooldown_epoch() -> u64 {
+    ROUTING_COOLDOWN_EPOCH.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(crate) fn bump_routing_config_epoch() {
+    ROUTING_CONFIG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
+pub(crate) fn bump_routing_cooldown_epoch() {
+    ROUTING_COOLDOWN_EPOCH.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 }
 
 /// Writer-lock budget for hot-path operations.
@@ -138,6 +176,12 @@ impl DbPool {
         configure_temp_dir(&writer, path);
         configure_connection(&writer, true, synchronous)?;
 
+        // Commit hook bumps the pool epoch so read-side caches can tell a
+        // write happened without polling `PRAGMA data_version` (which only
+        // sees external commits).
+        let epoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        install_cache_hooks(&writer, &epoch);
+
         // Extra handles on the same file keep mutex contention off the
         // high-throughput API endpoints.
         let mut readers = Vec::with_capacity(num_readers);
@@ -146,12 +190,20 @@ impl DbPool {
             readers.push(Arc::new(Mutex::new(reader)));
         }
 
+        // External-commit probe. If it cannot be opened the pool still
+        // works; the caches just fall back to the mtime heuristic.
+        let probe = open_and_configure_reader(path, flags, usize::MAX, synchronous)
+            .ok()
+            .map(|c| Arc::new(Mutex::new(c)));
+
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
             readers: Arc::new(readers),
             next_reader: Arc::new(AtomicUsize::new(0)),
             path: Arc::from(path),
             synchronous,
+            epoch,
+            probe,
             _cleanup: None,
         })
     }
@@ -180,6 +232,8 @@ impl DbPool {
             next_reader: pool.next_reader,
             path: pool.path,
             synchronous: pool.synchronous,
+            epoch: pool.epoch,
+            probe: pool.probe,
             _cleanup: Some(temp_dir),
         })
     }
@@ -377,6 +431,57 @@ impl DbPool {
         &self.path
     }
 
+    /// Epoch bumped by the writer's commit hook. Cheap read-side cache
+    /// invalidation: `load + compare` replaces a `PRAGMA data_version`
+    /// round-trip and also sees commits made by this process.
+    pub fn write_epoch(&self) -> u64 {
+        self.epoch.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// External-writer probe: the modification times of the database file and
+    /// its WAL. The writer's update/commit hooks only observe commits made
+    /// through this pool — an `sqlite3` CLI session, a backup restore, or a
+    /// second process writes the same file without touching our epochs. A
+    /// pair of `stat` calls (~200ns) per request closes that hole: caches key
+    /// on this value alongside the epochs and rebuild when either moves.
+    ///
+    /// WAL mode writes go to `<db>-wal`, not the main file, until a
+    /// checkpoint — so both mtimes must be tracked. A missing WAL (fresh DB,
+    /// just-checkpointed) reports 0 and is fine.
+    pub fn file_version(&self) -> (u64, u64) {
+        fn mtime_nanos(p: &std::path::Path) -> u64 {
+            std::fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos() as u64)
+        }
+        let mut wal_path = self.path.as_os_str().to_os_string();
+        wal_path.push("-wal");
+        (
+            mtime_nanos(&self.path),
+            mtime_nanos(std::path::Path::new(&wal_path)),
+        )
+    }
+
+    /// `PRAGMA data_version` read on the dedicated probe connection: moves
+    /// only when a commit lands through *another* connection or process.
+    /// Returns `None` when the probe could not be opened — callers then
+    /// treat any file change as potentially external (conservative rebuild).
+    /// Costs one short lock + one cached PRAGMA query; call it only when the
+    /// cheaper `file_version`/`write_epoch` pair is ambiguous, never per
+    /// request unconditionally.
+    pub fn external_version(&self) -> Option<u64> {
+        self.probe
+            .as_ref()
+            .and_then(|p| p.try_lock())
+            .and_then(|c| {
+                c.pragma_query_value(None, "data_version", |r| r.get::<_, i64>(0))
+                    .ok()
+                    .map(|v| v.max(0) as u64)
+            })
+    }
+
     /// Reopen ALL connections (writer + readers) against the database file.
     ///
     /// Closes every existing `rusqlite::Connection` and opens a fresh one
@@ -396,6 +501,7 @@ impl DbPool {
             crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
         )?;
         configure_connection(&new_writer, true, self.synchronous)?;
+        install_cache_hooks(&new_writer, &self.epoch);
 
         let mut new_readers = Vec::with_capacity(self.readers.len());
         for (i, _) in self.readers.iter().enumerate() {
@@ -410,6 +516,14 @@ impl DbPool {
         *self.writer.lock() = new_writer;
         for (slot, new_r) in self.readers.iter().zip(new_readers) {
             *parking_lot::Mutex::lock(slot) = new_r;
+        }
+        // The probe connection is a separate handle on the same file; swap
+        // it too so post-VACUUM probes keep working.
+        if let Some(probe) = &self.probe
+            && let Ok(new_probe) =
+                open_and_configure_reader(&self.path, flags, usize::MAX, self.synchronous)
+        {
+            *probe.lock() = new_probe;
         }
 
         tracing::info!("DbPool: reopened all connections (writer + readers)");
@@ -455,6 +569,40 @@ fn configure_temp_dir(conn: &Connection, path: &Path) {
         if !p_str.is_empty() {
             let _ = conn.pragma_update(None, "temp_store_directory", &*p_str);
         }
+    }
+}
+
+/// Install the commit + update hooks that keep read-side caches (routing
+/// snapshot, account cache) in sync with the writer. Called at pool open
+/// AND inside `reopen()` — a reopened `Connection` is a fresh SQLite handle
+/// and loses every hook installed on the old one, so skipping this would
+/// silently freeze the caches after a VACUUM/repair reopen.
+fn install_cache_hooks(writer: &Connection, epoch: &Arc<std::sync::atomic::AtomicU64>) {
+    {
+        let epoch = Arc::clone(epoch);
+        if let Err(e) = writer.commit_hook(Some(move || {
+            epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            false
+        })) {
+            debug_assert!(false, "commit_hook install failed: {e}");
+        }
+    }
+
+    // Update hook bumps per-surface epochs by table name, covering every
+    // write path — including raw `execute` calls that bypass the helper
+    // functions. `accounts` feeds the pipeline's get_account cache; the
+    // routing tables feed the in-memory routing snapshot. A rolled-back
+    // transaction still bumps (harmless extra rebuild, never staleness).
+    fn table_epoch_hook(_action: rusqlite::hooks::Action, _db: &str, table: &str, _rowid: i64) {
+        match table {
+            "accounts" => crate::accounts::bump_epoch(),
+            "target_cooldowns" => bump_routing_cooldown_epoch(),
+            "models" | "providers" | "combos" | "combo_targets" => bump_routing_config_epoch(),
+            _ => {}
+        }
+    }
+    if let Err(e) = writer.update_hook(Some(table_epoch_hook)) {
+        debug_assert!(false, "update_hook install failed: {e}");
     }
 }
 
