@@ -29,6 +29,13 @@ pub const MAX_DECOMPRESSED_FRAME: usize = 64 * 1024 * 1024;
 /// Length of the sentry device fingerprint sent in ClientMetadata.31.
 pub const DEVICE_FINGERPRINT_LEN: usize = 732;
 
+/// Lowest temperature the upstream Devin sampler tolerates. The backend
+/// divides by temperature when sampling, so a verbatim `0` or a negative
+/// value makes it return `invalid_argument` on every model. `0.0001` keeps
+/// the output deterministic in practice while staying inside the accepted
+/// range (any value `> 0`, however small, passes).
+pub const DEVIN_MIN_TEMPERATURE: f32 = 0.0001;
+
 // ---------------------------------------------------------------------------
 // Identity helpers
 // ---------------------------------------------------------------------------
@@ -563,8 +570,17 @@ pub fn build_devin_request(
         protoc::append_varint_field(&mut gen_cfg, 3, 400);
         // Temperature is unconditional upstream (default 1.0); the 0.95
         // constant is written through the same f32→f64 widening upstream
-        // performs, preserving exact wire bits.
+        // performs, preserving exact wire bits. Clamp `<= 0` to the smallest
+        // temperature the upstream sampler accepts: verbatim 0 or negative
+        // values make the Codeium backend return `invalid_argument` on every
+        // model (it divides by temperature inside the softmax), while
+        // 0.0001 is indistinguishable from greedy decoding downstream.
         let temperature = req.temperature.unwrap_or(1.0);
+        let temperature = if temperature <= 0.0 {
+            DEVIN_MIN_TEMPERATURE
+        } else {
+            temperature
+        };
         protoc::append_fixed64(&mut gen_cfg, 5, f64::from(temperature).to_bits());
         protoc::append_varint_field(&mut gen_cfg, 7, 40);
         protoc::append_fixed64(&mut gen_cfg, 8, f64::from(0.95_f32).to_bits());

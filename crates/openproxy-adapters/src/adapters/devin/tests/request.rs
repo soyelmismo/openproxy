@@ -165,6 +165,35 @@ fn build_devin_request_golden_fields() {
 }
 
 #[test]
+fn build_devin_request_clamps_nonpositive_temperature() {
+    // Upstream sampler divides by temperature: a verbatim 0 (or negative)
+    // makes every Devin model answer `invalid_argument`. The wire must clamp
+    // it to the smallest positive value, which downstream reads as greedy.
+    for (input, want_bits) in [
+        (Some(0.0f32), f64::from(DEVIN_MIN_TEMPERATURE).to_bits()),
+        (Some(-0.5f32), f64::from(DEVIN_MIN_TEMPERATURE).to_bits()),
+        (Some(0.0001f32), f64::from(0.0001f32).to_bits()),
+        (Some(0.5f32), f64::from(0.5f32).to_bits()),
+        (Some(1.0f32), f64::from(1.0f32).to_bits()),
+        (None, f64::from(1.0f32).to_bits()),
+    ] {
+        let mut req = req_with(vec![msg("user", json!("hi"))]);
+        req.temperature = input;
+        let body = build_devin_request(&req, "t", "swe-2", "").unwrap();
+        let fields = decode_request(&body);
+        let gen_cfg = collect(match get(&fields, 8).unwrap() {
+            Fv::Bytes(b) => b,
+            _ => panic!(),
+        });
+        assert_eq!(
+            get(&gen_cfg, 5),
+            Some(&Fv::F64(want_bits)),
+            "temperature {input:?} produced wrong wire bits"
+        );
+    }
+}
+
+#[test]
 fn build_devin_request_fresh_user_turn_sets_field_15_4() {
     let mut req = req_with(vec![msg("user", json!("hello"))]);
     req.extra.insert("sessionId".into(), json!("s2"));
