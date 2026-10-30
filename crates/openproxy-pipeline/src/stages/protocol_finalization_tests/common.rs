@@ -46,17 +46,9 @@ use std::sync::Arc;
 fn antigravity_full_chain_cleans_claude_metadata_and_keeps_user_content() {
     let adapter = ProviderAdapterEnum::Antigravity(Box::default());
     let mut resolved = resolved_target_for("antigravity", TargetFormat::Gemini);
-    resolved.custom_meta = Some(CustomProviderMeta {
-        access_token: "test-token".into(),
-        maybe_refresh: None,
-        kiro_region: None,
-        kiro_profile_arn: None,
-        antigravity_project: Some("project-contract-test".into()),
-        antigravity_metadata: None,
-        codex_workspace_id: None,
-        claude_account_uuid: None,
-        claude_metadata: None,
-    });
+    let mut meta = blank_custom_meta("test-token".into());
+    meta.antigravity_project = Some("project-contract-test".into());
+    resolved.custom_meta = Some(meta);
     let (mut req, _tx) = make_request(ComboId(1));
     Arc::get_mut(&mut req.openai_request).expect("fresh request").messages = serde_json::from_value(json!([
         {"role":"system","content":"You are Claude Code, Anthropic's official CLI for Claude.\nPreserve this application instruction."},
@@ -89,12 +81,42 @@ fn antigravity_full_chain_cleans_claude_metadata_and_keeps_user_content() {
     assert_eq!(header("x-anthropic-billing-header"), None);
 }
 
+/// Length of the embedded CCH signature.
 pub(crate) const CCH_LEN: usize = 5;
+
+/// A test credential. Not a real key; never a production secret.
 pub(crate) const TEST_CREDENTIAL: &str = "test-credential-not-real";
+
+/// A Claude Code account UUID used to make identity derivation deterministic.
 pub(crate) const TEST_ACCOUNT_UUID: &str = "11111111-2222-4333-8444-555555555555";
+
+/// The explicit session used across the Claude Code tests.
 pub(crate) const TEST_SESSION: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+/// A base URL nothing ever dials (port 1 is reserved/closed).
 pub(crate) const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
 
+/// A `CustomProviderMeta` holding only an access token; every
+/// provider-specific field stays empty so tests opt in per field.
+fn blank_custom_meta(access_token: String) -> CustomProviderMeta {
+    CustomProviderMeta {
+        access_token,
+        maybe_refresh: None,
+        kiro_region: None,
+        kiro_profile_arn: None,
+        antigravity_project: None,
+        antigravity_metadata: None,
+        codex_workspace_id: None,
+        claude_account_uuid: None,
+        claude_metadata: None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fixtures (mirrors of the real ones in target_tests.rs)
+// ---------------------------------------------------------------------------
+
+/// Build a `Model` for a target format with no capabilities.
 pub(crate) fn model_for(format: TargetFormat) -> Model {
     Model {
         model_id: "claude-sonnet-4-5-20250929".into(),
@@ -103,6 +125,7 @@ pub(crate) fn model_for(format: TargetFormat) -> Model {
     }
 }
 
+/// Build a `ComboTarget` for a provider id, using the real struct defaults.
 pub(crate) fn target_for(provider_id: &str) -> ComboTarget {
     ComboTarget {
         id: ComboTargetId(1),
@@ -115,6 +138,7 @@ pub(crate) fn target_for(provider_id: &str) -> ComboTarget {
     }
 }
 
+/// Build a `ResolvedTarget` for a provider id and format.
 pub(crate) fn resolved_target_for(provider_id: &str, format: TargetFormat) -> ResolvedTarget {
     let (api_key,) = (TEST_CREDENTIAL.to_owned(),);
     ResolvedTarget {
@@ -126,28 +150,16 @@ pub(crate) fn resolved_target_for(provider_id: &str, format: TargetFormat) -> Re
     }
 }
 
+/// Build a `ResolvedTarget` carrying Claude Code account metadata.
 pub(crate) fn claude_resolved_target() -> ResolvedTarget {
-    let (api_key,) = (TEST_CREDENTIAL.to_owned(),);
-    let (access_token,) = (TEST_CREDENTIAL.to_owned(),);
-    ResolvedTarget {
-        target: target_for("claude-code"),
-        model: model_for(TargetFormat::Anthropic),
-        api_key,
-        api_key_label: None,
-        custom_meta: Some(CustomProviderMeta {
-            access_token,
-            maybe_refresh: None,
-            kiro_region: None,
-            kiro_profile_arn: None,
-            antigravity_project: None,
-            antigravity_metadata: None,
-            codex_workspace_id: None,
-            claude_account_uuid: Some(TEST_ACCOUNT_UUID.to_string()),
-            claude_metadata: None,
-        }),
-    }
+    let mut resolved = resolved_target_for("claude-code", TargetFormat::Anthropic);
+    let mut meta = blank_custom_meta(TEST_CREDENTIAL.to_owned());
+    meta.claude_account_uuid = Some(TEST_ACCOUNT_UUID.to_string());
+    resolved.custom_meta = Some(meta);
+    resolved
 }
 
+/// A generic custom adapter with no provider-specific transforms.
 pub(crate) fn plain_adapter(provider_id: &str, format: AdapterFormat) -> ProviderAdapterEnum {
     ProviderAdapterEnum::Custom(Box::new(CustomAdapter::from_config(
         ProviderAdapterConfig {
@@ -163,16 +175,23 @@ pub(crate) fn plain_adapter(provider_id: &str, format: AdapterFormat) -> Provide
     )))
 }
 
+/// A Claude Code adapter pointed at a base URL we never dial.
 pub(crate) fn claude_code_adapter() -> ProviderAdapterEnum {
     ProviderAdapterEnum::ClaudeCode(Box::new(ClaudeCodeAdapter::with_base_url(UNREACHABLE_BASE)))
 }
 
+/// Result of running the real production chain by hand, stopping right before
+/// the upstream HTTP call. Mirrors `FormattingStage` then `DispatchStage`'s
+/// body/header preparation.
 pub(crate) struct ChainResult {
     pub(crate) target_format: TargetFormat,
     pub(crate) body: Bytes,
     pub(crate) headers: Vec<(String, String)>,
 }
 
+/// Run the exact production chain: formatter -> wrap -> strip -> propagate
+/// headers -> finalize. Mirrors `target.rs`'s `FormattingStage` and the
+/// body/header half of `DispatchStage`, minus the upstream HTTP call.
 pub(crate) fn run_chain(
     adapter: &ProviderAdapterEnum,
     resolved: &ResolvedTarget,
@@ -245,11 +264,13 @@ fn resolve_format(adapter: &ProviderAdapterEnum, model_format: TargetFormat) -> 
     }
 }
 
+/// Compute the CCH signature the way production does: clone, sign, return.
 pub(crate) fn expected_cch(body: &[u8]) -> String {
     let mut clone = body.to_vec();
     sign_anthropic_messages_body(&mut clone).expect("body must be signable")
 }
 
+/// Read the 5-char CCH signature embedded in a Claude Code body.
 pub(crate) fn embedded_cch(body: &[u8]) -> String {
     let off = body
         .windows(4)
@@ -258,6 +279,7 @@ pub(crate) fn embedded_cch(body: &[u8]) -> String {
     String::from_utf8(body[off + 4..off + 4 + CCH_LEN].to_vec()).expect("cch must be valid utf-8")
 }
 
+/// Read the session id out of a Claude Code body's `metadata.user_id`.
 pub(crate) fn body_session(body: &Bytes) -> String {
     let v: Value = serde_json::from_slice(body).expect("final body must be JSON");
     let meta_str = v["metadata"]["user_id"]
@@ -267,6 +289,8 @@ pub(crate) fn body_session(body: &Bytes) -> String {
     meta["session_id"].as_str().expect("session_id").to_string()
 }
 
+/// A Claude Code style request: system instruction, a user turn, a tool and a
+/// provider-specific param (`top_k`) that a strip stage can remove.
 pub(crate) fn claude_code_request(explicit_session_header: Option<&str>) -> PipelineRequest {
     let (mut req, _tx) = make_request(ComboId(1));
     let openai = Arc::get_mut(&mut req.openai_request).expect("fresh request is uniquely owned");

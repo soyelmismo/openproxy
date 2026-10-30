@@ -7,9 +7,9 @@ use openproxy_types::TargetFormat;
 use openproxy_types::ids::ComboId;
 use serde_json::Value;
 
-// ==========
+// ===========================================================================
 // Part 2 — default identity hook: every TargetFormat, no schema mutation
-// ==========
+// ===========================================================================
 
 /// For every `TargetFormat` and its default provider format,
 /// `finalize_request` must be the identity function: body bytes and headers

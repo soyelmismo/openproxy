@@ -1,12 +1,19 @@
 use super::common::*;
+use crate::PipelineRequest;
 use openproxy_types::TargetFormat;
 use openproxy_types::ids::format_as_v4_uuid;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-// ==========
+// ===========================================================================
 // Part 1 — Claude Code: semantic preservation through the whole chain
-// ==========
+// ===========================================================================
+
+/// Run the full production chain against the standard Claude Code adapter
+/// and resolved-target fixtures.
+fn run_claude_code_chain(req: &PipelineRequest) -> ChainResult {
+    run_chain(&claude_code_adapter(), &claude_resolved_target(), req)
+}
 
 /// An explicit client session survives formatting, wrapping, stripping and
 /// finalization: it appears in the body's `metadata.user_id` and is forwarded
@@ -14,10 +21,8 @@ use std::sync::Arc;
 #[test]
 fn claude_code_explicit_session_preserved_through_chain() {
     let req = claude_code_request(Some(TEST_SESSION));
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
 
-    let out = run_chain(&adapter, &resolved, &req);
+    let out = run_claude_code_chain(&req);
     assert_eq!(out.target_format, TargetFormat::Anthropic);
 
     // Body session.
@@ -69,10 +74,8 @@ fn claude_code_explicit_session_preserved_through_chain() {
 #[test]
 fn claude_code_tool_names_roundtrip_through_chain() {
     let req = claude_code_request(Some(TEST_SESSION));
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
 
-    let out = run_chain(&adapter, &resolved, &req);
+    let out = run_claude_code_chain(&req);
     let body: Value = serde_json::from_slice(&out.body).expect("final body must be JSON");
     assert_eq!(
         body["tools"][0]["name"].as_str(),
@@ -142,12 +145,9 @@ fn claude_code_tool_names_roundtrip_through_chain() {
 /// deterministic across runs, which is what gives multi-turn KV cache affinity.
 #[test]
 fn claude_code_derived_session_is_deterministic() {
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
-
     let req = claude_code_request(None);
-    let first = run_chain(&adapter, &resolved, &req);
-    let second = run_chain(&adapter, &resolved, &req);
+    let first = run_claude_code_chain(&req);
+    let second = run_claude_code_chain(&req);
 
     let s1 = body_session(&first.body);
     let s2 = body_session(&second.body);
@@ -166,7 +166,7 @@ fn claude_code_derived_session_is_deterministic() {
     let mut other = claude_code_request(None);
     let openai = Arc::get_mut(&mut other.openai_request).expect("owned");
     openai.messages[1].content = Some(json!("A completely different question."));
-    let third = run_chain(&adapter, &resolved, &other);
+    let third = run_claude_code_chain(&other);
     assert_ne!(
         s1,
         body_session(&third.body),
@@ -180,10 +180,8 @@ fn claude_code_derived_session_is_deterministic() {
 #[test]
 fn claude_code_instructions_preserved_through_chain() {
     let req = claude_code_request(Some(TEST_SESSION));
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
 
-    let out = run_chain(&adapter, &resolved, &req);
+    let out = run_claude_code_chain(&req);
     let body: Value = serde_json::from_slice(&out.body).expect("JSON");
 
     // The caller instruction survives somewhere in the final bytes.
@@ -251,10 +249,8 @@ fn claude_code_cch_resigns_over_post_strip_bytes() {
 #[test]
 fn claude_code_cch_signature_is_fixed_point_without_strip() {
     let req = claude_code_request(Some(TEST_SESSION));
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
 
-    let out = run_chain(&adapter, &resolved, &req);
+    let out = run_claude_code_chain(&req);
     assert_eq!(
         embedded_cch(&out.body),
         expected_cch(&out.body),
@@ -297,9 +293,7 @@ fn claude_code_multi_turn_session_stable() {
         extra: serde_json::Map::new(),
     });
 
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
-    let out = run_chain(&adapter, &resolved, &req);
+    let out = run_claude_code_chain(&req);
     let body: Value = serde_json::from_slice(&out.body).expect("JSON");
 
     // Session is still the explicit one.
@@ -339,10 +333,8 @@ fn claude_code_multi_turn_session_stable() {
 #[test]
 fn claude_code_finalize_receives_already_wrapped_body() {
     let req = claude_code_request(Some(TEST_SESSION));
-    let adapter = claude_code_adapter();
-    let resolved = claude_resolved_target();
 
-    let out = run_chain(&adapter, &resolved, &req);
+    let out = run_claude_code_chain(&req);
     assert!(
         String::from_utf8_lossy(&out.body).contains("cc_entrypoint=cli"),
         "final bytes must carry the Claude Code billing header"
