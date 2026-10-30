@@ -185,7 +185,17 @@ impl ProviderAdapter for DevinAdapter {
             .as_ref()
             .and_then(|m| m.devin_device_seed.as_deref())
             .unwrap_or("");
-        wire::build_devin_request(&req, &resolved_target.api_key, &upstream_model, device_seed)
+        // The session token embedded in ClientMetadata must be the same
+        // credential the Authorization header carried — for OAuth accounts
+        // that is custom_meta.access_token, not the (empty) api_key
+        // (mirrors the effective-key resolution in stages/target.rs).
+        let token = resolved_target
+            .custom_meta
+            .as_ref()
+            .map_or(resolved_target.api_key.as_str(), |m| {
+                m.access_token.as_str()
+            });
+        wire::build_devin_request(&req, token, &upstream_model, device_seed)
     }
 
     fn models_url(&self) -> Option<String> {

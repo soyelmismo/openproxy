@@ -680,6 +680,63 @@ fn adapter_two_stage_body_build() {
 }
 
 #[test]
+fn oauth_account_embeds_access_token_in_metadata() {
+    // OAuth accounts carry an empty api_key; the session token lives in
+    // custom_meta.access_token. ClientMetadata field 3 must embed that same
+    // credential or Devin denies the call (permission_denied) even though
+    // the Authorization header was right.
+    let adapter = DevinAdapter::new();
+    let req = req_with(vec![msg("user", json!("hi"))]);
+    let model = openproxy_types::ModelId::new("swe-2");
+    let carrier = adapter
+        .format_request(
+            openproxy_types::TargetFormat::Devin,
+            &req,
+            &model,
+            &req.messages,
+            true,
+        )
+        .unwrap();
+
+    let meta = openproxy_types::context::CustomProviderMeta {
+        access_token: "devin-session-token$oauth".into(),
+        maybe_refresh: None,
+        kiro_region: None,
+        kiro_profile_arn: None,
+        antigravity_project: None,
+        antigravity_metadata: None,
+        codex_workspace_id: None,
+        claude_account_uuid: None,
+        claude_metadata: None,
+        devin_device_seed: None,
+    };
+    let resolved = openproxy_types::context::ResolvedTarget {
+        target: openproxy_types::ComboTarget::default(),
+        model: openproxy_types::models::Model::default(),
+        api_key: String::new(),
+        api_key_label: None,
+        custom_meta: Some(meta),
+    };
+    let body = adapter
+        .wrap_request_body(
+            carrier,
+            openproxy_types::TargetFormat::Devin,
+            &model,
+            &resolved,
+        )
+        .unwrap();
+    let fields = decode_request(&body);
+    let client_meta = collect(match get(&fields, 1).unwrap() {
+        Fv::Bytes(b) => b,
+        _ => panic!(),
+    });
+    assert_eq!(
+        as_str(get(&client_meta, 3).unwrap()),
+        "devin-session-token$oauth"
+    );
+}
+
+#[test]
 fn devin_builtin_models_catalog() {
     let models = devin_builtin_models();
     assert_eq!(models.len(), 46);
