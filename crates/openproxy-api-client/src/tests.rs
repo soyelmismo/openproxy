@@ -166,6 +166,31 @@ fn test_list_combo_targets() {
     assert_eq!(res[0].provider_id.as_str(), "p1");
 }
 
+#[test]
+fn test_create_account() {
+    unsafe {
+        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
+    }
+    let server = httpmock::MockServer::start();
+    let client = Client::new(server.base_url());
+
+    server.mock(|when, then| {
+        when.method(httpmock::Method::POST).path("/admin/accounts");
+        then.status(200).json_body(json!({ "id": 42 }));
+    });
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let input = CreateAccountInput {
+        provider_id: "p1".to_string(),
+        label: Some("test-account".to_string()),
+        api_key: Some("secret-key".to_string()),
+        priority: Some(1),
+        extra_config_json: None,
+    };
+    let account_id = rt.block_on(client.create_account(input)).unwrap();
+    assert_eq!(account_id, AccountId::new(42));
+}
+
 fn check_string_errors() {
     assert!(matches!(
         CoreError::from_code_and_message("auth", "unauthorized"),
