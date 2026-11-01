@@ -79,7 +79,6 @@ static OnnxHandle* onnx_handle_open(
     const char* onnx_lib_path,
     const char* model_path,
     int num_threads,
-    int enable_cpu_mem_arena,
     const char* env_name,
     char* err_buf,
     size_t err_buf_len
@@ -164,13 +163,17 @@ static OnnxHandle* onnx_handle_open(
     ort->SetSessionGraphOptimizationLevel(h->opts, ORT_ENABLE_ALL);
     /* ORT's CPU memory arena never releases activation buffers: it grows to the
      * high-water mark of every tensor shape ever run and keeps those pages as
-     * anonymous dirty RSS for the life of the session. For Laya (1024-token
-     * batches) that is ~1.7 GiB of resident memory after the first inference,
-     * which is pure waste once the request is done. Disable the arena where the
-     * allocator churn is cheaper than the permanent footprint. */
-    if (!enable_cpu_mem_arena) {
-        ort->DisableCpuMemArena(h->opts);
-    }
+     * anonymous dirty RSS for the life of the session. Measured on this host,
+     * resident memory after inference versus arena off:
+     *
+     *   laya (max_len 1024, batch 4)      2168 MB -> 670 MB
+     *   embeddinggemma seq 512, batch 4    789 MB -> 195 MB
+     *   embeddinggemma seq 1024, batch 4  1850 MB -> 215 MB
+     *   embeddinggemma seq 2048, batch 4  >5 GB  -> ~200 MB
+     *
+     * Latency is unchanged within noise in every configuration tested, so the
+     * arena buys nothing and costs hundreds of megabytes to gigabytes of RSS. */
+    ort->DisableCpuMemArena(h->opts);
 
 #ifdef _WIN32
     wchar_t w_model_path[1024];
@@ -316,7 +319,7 @@ LayaSession* laya_session_create(
     size_t err_buf_len
 ) {
     OnnxHandle* h = onnx_handle_open(onnx_lib_path, model_path, num_threads,
-                                     0, "laya_engine", err_buf, err_buf_len);
+                                     "laya_engine", err_buf, err_buf_len);
     if (!h) return NULL;
     LayaSession* s = (LayaSession*)calloc(1, sizeof(LayaSession));
     if (!s) {
@@ -489,7 +492,7 @@ EmbedSession* embed_session_create(
     size_t err_buf_len
 ) {
     OnnxHandle* h = onnx_handle_open(onnx_lib_path, model_path, num_threads,
-                                     1, "embed_engine", err_buf, err_buf_len);
+                                     "embed_engine", err_buf, err_buf_len);
     if (!h) return NULL;
     EmbedSession* s = (EmbedSession*)calloc(1, sizeof(EmbedSession));
     if (!s) {
@@ -650,7 +653,7 @@ VisionSession* vision_session_create(
     size_t err_buf_len
 ) {
     OnnxHandle* h = onnx_handle_open(onnx_lib_path, model_path, num_threads,
-                                     1, "embed_vision", err_buf, err_buf_len);
+                                     "embed_vision", err_buf, err_buf_len);
     if (!h) return NULL;
     VisionSession* s = (VisionSession*)calloc(1, sizeof(VisionSession));
     if (!s) {
@@ -775,7 +778,7 @@ AudioSession* audio_session_create(
     size_t err_buf_len
 ) {
     OnnxHandle* h = onnx_handle_open(onnx_lib_path, model_path, num_threads,
-                                     1, "embed_audio", err_buf, err_buf_len);
+                                     "embed_audio", err_buf, err_buf_len);
     if (!h) return NULL;
     AudioSession* s = (AudioSession*)calloc(1, sizeof(AudioSession));
     if (!s) {
