@@ -28,7 +28,12 @@ fn mutate_via_trait<A: ProviderAdapter>(adapter: &mut A, k: &str, v: &str) -> bo
 #[test]
 fn test_trait_parity_metadata_and_canonical_ids_all_adapters() {
     let mut adapters = builtin_adapters();
-    assert_eq!(adapters.len(), 25);
+    let expected = if cfg!(feature = "embed-engine") {
+        26
+    } else {
+        25
+    };
+    assert_eq!(adapters.len(), expected);
     adapters.push(make_custom_enum());
 
     for adapter in &adapters {

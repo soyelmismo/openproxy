@@ -305,8 +305,25 @@ pub fn infer_input_modalities_for_model(
 }
 
 fn is_multimodal_embedding(lower: &str) -> bool {
+    // NVIDIA's embedding family is multimodal, but the version number sits
+    // between the vendor and the word: `nemotron-3.5-embed-8b` never contains
+    // the literal `nemotron-embed`, so a keyword list cannot catch it. The two
+    // halves are matched separately instead.
+    if lower.contains("nemotron") && lower.contains("embed") {
+        return true;
+    }
     const EMBED_VL_KW: &[&str] = &["vl", "multimodal", "embed-vl", "gemini-embedding-2"];
     EMBED_VL_KW.iter().any(|k| lower.contains(k))
+}
+
+/// gemini-embedding-2 and its previews: the only embedding models that accept
+/// text, image, audio, video and documents alike.
+///
+/// The `-2` is load-bearing. `gemini-embedding-001` is text-only, and the
+/// preview shares the second generation's modalities, so both match while the
+/// first generation does not.
+fn is_gemini_embedding_2(lower: &str) -> bool {
+    lower.contains("gemini-embedding-2")
 }
 
 fn is_image_editing_model(lower: &str) -> bool {
@@ -342,7 +359,12 @@ fn infer_input_modalities_for_model_lower(
 ) -> Vec<&'static str> {
     match infer_model_type_lower(lower) {
         "embedding" => {
-            if is_multimodal_embedding(lower) {
+            // gemini-embedding-2 is the only embedding model here that takes
+            // every modality, documents included. The rest of the multimodal
+            // embeddings are text plus image, which is what their cards say.
+            if is_gemini_embedding_2(lower) {
+                vec!["text", "image", "audio", "video", "document"]
+            } else if is_multimodal_embedding(lower) {
                 vec!["text", "image"]
             } else {
                 vec!["text"]

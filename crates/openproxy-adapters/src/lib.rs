@@ -25,6 +25,8 @@ pub use spoofer::{
 #[cfg(any(test, feature = "test-utils"))]
 pub use adapters::MockAdapter;
 #[cfg(feature = "laya-engine")]
+pub use adapters::embed_engine;
+#[cfg(feature = "laya-engine")]
 pub use adapters::laya_engine;
 pub use adapters::{
     AdapterAuthType, AdapterFactory, AdapterFormat, ProviderAdapter, ProviderAdapterConfig,

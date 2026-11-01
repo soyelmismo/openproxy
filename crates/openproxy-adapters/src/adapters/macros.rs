@@ -20,8 +20,10 @@ macro_rules! define_provider_adapter {
             $( $(#[$c_varmeta])* $c_variant(Box<$($c_mod)::*::$c_adapter>) ),+
         }
 
-        // Re-export every builtin adapter.
-        $( pub use $($b_mod)::*::$b_adapter; )+
+        // Re-export every builtin adapter. The attribute is forwarded here too,
+        // otherwise a feature-gated entry re-exports a module that is not
+        // compiled and the whole crate fails to resolve.
+        $( $(#[$b_varmeta])* pub use $($b_mod)::*::$b_adapter; )+
 
         pub fn builtin_adapters() -> Vec<ProviderAdapterEnum> {
             vec![
@@ -43,7 +45,7 @@ macro_rules! define_provider_adapter {
             #[inline]
             pub fn pin_request_contract(&mut self) {
                 match self {
-                    $( Self::$b_variant(inner) => inner.pin_request_contract(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.pin_request_contract(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.pin_request_contract(), )+
                 }
             }
@@ -65,19 +67,19 @@ macro_rules! define_provider_adapter {
         impl ProviderAdapterEnum {
             pub fn id(&self) -> &openproxy_types::ProviderId {
                 match self {
-                    $( Self::$b_variant(inner) => inner.id(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.id(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.id(), )+
                 }
             }
             pub fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
                 match self {
-                    $( Self::$b_variant(inner) => inner.config(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.config(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.config(), )+
                 }
             }
             pub fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.config_mut(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.config_mut(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.config_mut(), )+
                 }
             }
@@ -94,19 +96,19 @@ macro_rules! define_provider_adapter {
             }
             pub fn metadata(&self) -> openproxy_types::ProviderMetadata {
                 match self {
-                    $( Self::$b_variant(inner) => inner.metadata(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.metadata(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.metadata(), )+
                 }
             }
             pub fn is_anonymous_fallback(&self) -> bool {
                 match self {
-                    $( Self::$b_variant(inner) => inner.is_anonymous_fallback(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.is_anonymous_fallback(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.is_anonymous_fallback(), )+
                 }
             }
             pub fn models_dev_canonical_ids(&self) -> &'static [&'static str] {
                 match self {
-                    $( Self::$b_variant(inner) => inner.models_dev_canonical_ids(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.models_dev_canonical_ids(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_dev_canonical_ids(), )+
                 }
             }
@@ -118,7 +120,7 @@ macro_rules! define_provider_adapter {
                 resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.wrap_request_body(body, target_format, model, resolved_target), )+
                 }
             }
@@ -131,25 +133,25 @@ macro_rules! define_provider_adapter {
                 resolved_target: &openproxy_types::context::ResolvedTarget,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.finalize_request(body, headers, target_format, model, resolved_target), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.finalize_request(body, headers, target_format, model, resolved_target), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.finalize_request(body, headers, target_format, model, resolved_target), )+
                 }
             }
             pub fn auth_type(&self) -> $crate::adapters::AdapterAuthType {
                 match self {
-                    $( Self::$b_variant(inner) => inner.auth_type(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.auth_type(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.auth_type(), )+
                 }
             }
             pub fn format(&self) -> $crate::adapters::AdapterFormat {
                 match self {
-                    $( Self::$b_variant(inner) => inner.format(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format(), )+
                 }
             }
             pub fn build_chat_url(&self, target_format: openproxy_types::TargetFormat, model: &openproxy_types::ModelId) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_chat_url(target_format, model), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_chat_url(target_format, model), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_chat_url(target_format, model), )+
                 }
             }
@@ -160,47 +162,60 @@ macro_rules! define_provider_adapter {
                 account_label: &str,
             ) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_chat_url_for_account(target_format, model, account_label), )+
                 }
             }
             pub fn build_transcription_url(&self) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_transcription_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_transcription_url(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_transcription_url(), )+
                 }
             }
-            pub fn build_embeddings_url(&self) -> String {
+            pub fn build_embeddings_url(&self, model: &openproxy_types::ModelId) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_embeddings_url(), )+
-                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_embeddings_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_embeddings_url(model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_embeddings_url(model), )+
                 }
             }
             pub fn format_embedding_request(
                 &self,
+                target_format: TargetFormat,
                 req: &openproxy_types::embeddings::EmbeddingRequest,
                 upstream_model: &str,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.format_embedding_request(req, upstream_model), )+
-                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_embedding_request(req, upstream_model), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_embedding_request(target_format, req, upstream_model), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_embedding_request(target_format, req, upstream_model), )+
+                }
+            }
+            pub fn translate_embedding_response(
+                &self,
+                response_body: serde_json::Value,
+            ) -> std::result::Result<
+                openproxy_types::embeddings::EmbeddingResponse,
+                openproxy_types::error::CoreError,
+            > {
+                match self {
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.translate_embedding_response(response_body.clone()), )+
+                    $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.translate_embedding_response(response_body.clone()), )+
                 }
             }
             pub fn build_image_url(&self) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_image_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_image_url(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_url(), )+
                 }
             }
             pub fn build_image_edits_url(&self) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_image_edits_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_image_edits_url(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_edits_url(), )+
                 }
             }
             pub fn build_image_variations_url(&self) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_image_variations_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_image_variations_url(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_image_variations_url(), )+
                 }
             }
@@ -210,13 +225,13 @@ macro_rules! define_provider_adapter {
                 upstream_model: &str,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.format_image_request(req, upstream_model), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_image_request(req, upstream_model), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_image_request(req, upstream_model), )+
                 }
             }
             pub fn build_system_one_url(&self) -> String {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_system_one_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_system_one_url(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_system_one_url(), )+
                 }
             }
@@ -226,13 +241,13 @@ macro_rules! define_provider_adapter {
                 upstream_model: &str,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.format_system_one_request(req, upstream_model), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_system_one_request(req, upstream_model), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_system_one_request(req, upstream_model), )+
                 }
             }
             pub fn build_auth_header(&self, api_key: &str) -> Option<(String, String)> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_auth_header(api_key), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_auth_header(api_key), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_auth_header(api_key), )+
                 }
             }
@@ -243,19 +258,19 @@ macro_rules! define_provider_adapter {
                 model: &openproxy_types::ModelId,
             ) -> Vec<(String, String)> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.build_headers(api_key, target_format, model), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.build_headers(api_key, target_format, model), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.build_headers(api_key, target_format, model), )+
                 }
             }
             pub fn models_url(&self) -> Option<String> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.models_url(), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.models_url(), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_url(), )+
                 }
             }
             pub fn models_url_for_account(&self, account_label: &str) -> Option<String> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.models_url_for_account(account_label), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.models_url_for_account(account_label), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.models_url_for_account(account_label), )+
                 }
             }
@@ -265,7 +280,7 @@ macro_rules! define_provider_adapter {
                 api_key: &str,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models(upstream_client, api_key).await, )+
                 }
             }
@@ -276,7 +291,7 @@ macro_rules! define_provider_adapter {
                 account_label: &str,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_for_account(upstream_client, api_key, account_label).await, )+
                 }
             }
@@ -287,7 +302,7 @@ macro_rules! define_provider_adapter {
                 proxy_url: Option<&str>,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.fetch_models_with_proxy(upstream_client, api_key, proxy_url).await, )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_models_with_proxy(upstream_client, api_key, proxy_url).await, )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_with_proxy(upstream_client, api_key, proxy_url).await, )+
                 }
             }
@@ -299,13 +314,13 @@ macro_rules! define_provider_adapter {
                 proxy_url: Option<&str>,
             ) -> openproxy_types::Result<Vec<openproxy_types::DiscoveredModel>> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.fetch_models_for_account_with_proxy(upstream_client, api_key, account_label, proxy_url).await, )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_models_for_account_with_proxy(upstream_client, api_key, account_label, proxy_url).await, )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_models_for_account_with_proxy(upstream_client, api_key, account_label, proxy_url).await, )+
                 }
             }
             pub fn normalize_openai_request(&self, view: &mut openproxy_types::OpenAIRequestView) {
                 match self {
-                    $( Self::$b_variant(inner) => inner.normalize_openai_request(view), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.normalize_openai_request(view), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.normalize_openai_request(view), )+
                 }
             }
@@ -318,7 +333,7 @@ macro_rules! define_provider_adapter {
                 stream: bool,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.format_request(target_format, req, model, messages, stream), )+
                 }
             }
@@ -328,7 +343,7 @@ macro_rules! define_provider_adapter {
                 response_body: serde_json::Value,
             ) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.translate_non_streaming_response(target_format, response_body), )+
                 }
             }
@@ -350,7 +365,7 @@ macro_rules! define_provider_adapter {
                 proxy_url: Option<&str>,
             ) -> Option<openproxy_types::Result<openproxy_types::AccountQuota>> {
                 match self {
-                    $( Self::$b_variant(inner) => inner.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url).await, )+
+                    $( $(#[$b_varmeta])* Self::$b_variant(inner) => inner.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url).await, )+
                     $( $(#[$c_varmeta])* Self::$c_variant(inner) => inner.fetch_quota_with_proxy(upstream_client, api_key, access_token, provider_specific, proxy_url).await, )+
                 }
             }
@@ -386,15 +401,25 @@ macro_rules! define_provider_adapter {
             fn build_transcription_url(&self) -> String {
                 self.build_transcription_url()
             }
-            fn build_embeddings_url(&self) -> String {
-                self.build_embeddings_url()
+            fn build_embeddings_url(&self, model: &openproxy_types::ModelId) -> String {
+                self.build_embeddings_url(model)
             }
             fn format_embedding_request(
                 &self,
+                target_format: openproxy_types::TargetFormat,
                 req: &openproxy_types::embeddings::EmbeddingRequest,
                 upstream_model: &str,
             ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
-                self.format_embedding_request(req, upstream_model)
+                self.format_embedding_request(target_format, req, upstream_model)
+            }
+            fn translate_embedding_response(
+                &self,
+                response_body: serde_json::Value,
+            ) -> std::result::Result<
+                openproxy_types::embeddings::EmbeddingResponse,
+                openproxy_types::error::CoreError,
+            > {
+                self.translate_embedding_response(response_body)
             }
             fn build_image_url(&self) -> String {
                 self.build_image_url()

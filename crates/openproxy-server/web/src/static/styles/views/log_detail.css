@@ -464,3 +464,12 @@
   background: var(--color-surface-3, var(--color-surface-2));
   color: var(--color-text);
 }
+
+/* Embedding input/output in the Request & Response tabs. */
+.log-detail-embedding-input { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) 0; }
+.log-detail-embedding-item { padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-2); }
+.log-detail-embedding-text { white-space: pre-wrap; word-break: break-word; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.5; padding: var(--space-1) 0; }
+.log-detail-embedding-parts { display: flex; flex-direction: column; gap: var(--space-1); }
+.log-detail-embedding-media { display: flex; flex-direction: column; gap: var(--space-1); align-items: flex-start; }
+.log-detail-embedding-badge { display: inline-block; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--color-surface); border: 1px solid var(--color-border); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); }
+.log-detail-embedding-media-part { display: flex; flex-direction: column; gap: var(--space-1); }

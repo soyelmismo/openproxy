@@ -1,10 +1,73 @@
 use super::{
     AdapterAuthType, AdapterFormat, Arc, Deserialize, DiscoveredModel, ModelId, ProviderAdapter,
     ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient,
-    fetch_openai_compatible_models_with_mapper,
+    build_discovered_model_full, fetch_openai_compatible_models_with_mapper,
 };
 
 // OpenRouter
+
+/// Embeddings OpenRouter serves but does not list in `/api/v1/models`.
+///
+/// Verified against the live API on 2026-10-31: the public models endpoint
+/// returns 456 entries and not one of them is an embedding, so discovery alone
+/// can never populate this catalog. These rows are declared here so the
+/// provider shows the models it actually serves.
+///
+/// Modalities are not hardcoded here. `build_discovered_model_full` derives
+/// them from the model id through the shared capability inference, which is
+/// what keeps this list honest when a new family shows up: the fix lands in one
+/// place instead of in every curated row.
+///
+/// The Gemini and NVIDIA rows are the multimodal ones. The rest are text-only,
+/// which is what their own cards state.
+const OPENROUTER_EMBEDDING_MODELS: &[(&str, &str)] = &[
+    ("google/gemini-embedding-001", "Gemini Embedding 001"),
+    ("google/gemini-embedding-2", "Gemini Embedding 2"),
+    ("openai/text-embedding-3-large", "Text Embedding 3 Large"),
+    ("openai/text-embedding-3-small", "Text Embedding 3 Small"),
+    ("mistralai/mistral-embed-2312", "Mistral Embed 2312"),
+    ("perplexity/pplx-embed-v1-0.6b", "PPLX Embed v1 0.6B"),
+    ("perplexity/pplx-embed-v1-4b", "PPLX Embed v1 4B"),
+    ("qwen/qwen3-embedding-4b", "Qwen3 Embedding 4B"),
+    ("qwen/qwen3-embedding-8b", "Qwen3 Embedding 8B"),
+    (
+        "nvidia/nemotron-3.5-embed-8b:free",
+        "Nemotron 3.5 Embed 8B (free)",
+    ),
+    (
+        "nvidia/nemotron-3.5-embed-1b:free",
+        "Nemotron 3.5 Embed 1B (free)",
+    ),
+    (
+        "nvidia/nemotron-3-embed-1b:free",
+        "Nemotron 3 Embed 1B (free)",
+    ),
+    (
+        "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+        "Llama Nemotron Embed VL 1B V2 (free)",
+    ),
+];
+
+/// Appends the curated embeddings to whatever `/models` returned.
+///
+/// Ids already present are skipped, so if OpenRouter ever starts listing its
+/// embeddings the upstream row wins and no duplicate is created.
+fn append_curated_embeddings(models: &mut Vec<DiscoveredModel>) {
+    for (id, display_name) in OPENROUTER_EMBEDDING_MODELS {
+        if models.iter().any(|m| m.model_id.as_str() == *id) {
+            continue;
+        }
+        // Context and output limits are left to the shared inference: guessing
+        // them here would put a stale number in the catalog.
+        models.push(build_discovered_model_full(
+            (*id).to_string(),
+            Some((*display_name).to_string()),
+            TargetFormat::Openai,
+            None,
+            None,
+        ));
+    }
+}
 
 /// Adapter for <https://openrouter.ai>.
 ///
@@ -88,6 +151,12 @@ impl ProviderAdapter for OpenRouterAdapter {
             map_openrouter_entry,
         )
         .await
+        .map(|mut models| {
+            // `/models` never lists embeddings, so the curated catalog is what
+            // puts them in front of the router.
+            append_curated_embeddings(&mut models);
+            models
+        })
     }
 }
 
@@ -299,6 +368,97 @@ fn derive_family_from_id(id: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every embedding the catalog declares must actually be classified as an
+    /// embedding, or the router would send it down the chat path.
+    #[test]
+    fn every_curated_embedding_is_typed_as_an_embedding() {
+        for (id, _) in OPENROUTER_EMBEDDING_MODELS {
+            assert_eq!(
+                openproxy_types::capabilities::infer_model_type(id),
+                "embedding",
+                "{id} must be typed as an embedding"
+            );
+        }
+    }
+
+    /// The modalities each curated row ends up with, which is the whole point of
+    /// the catalog: these models are absent from `/models`, so nothing else
+    /// would ever declare what they accept.
+    #[test]
+    fn curated_embeddings_carry_the_modalities_their_cards_state() {
+        let expected: &[(&str, &[&str])] = &[
+            (
+                "google/gemini-embedding-2",
+                &["text", "image", "audio", "video", "document"],
+            ),
+            ("nvidia/nemotron-3.5-embed-8b:free", &["text", "image"]),
+            ("nvidia/nemotron-3.5-embed-1b:free", &["text", "image"]),
+            ("nvidia/nemotron-3-embed-1b:free", &["text", "image"]),
+            (
+                "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+                &["text", "image"],
+            ),
+            ("google/gemini-embedding-001", &["text"]),
+            ("openai/text-embedding-3-large", &["text"]),
+            ("qwen/qwen3-embedding-8b", &["text"]),
+            ("perplexity/pplx-embed-v1-4b", &["text"]),
+            ("mistralai/mistral-embed-2312", &["text"]),
+        ];
+
+        for (id, modalities) in expected {
+            let caps = openproxy_types::capabilities::infer_capabilities(id);
+            let inferred =
+                openproxy_types::capabilities::infer_input_modalities_for_model(id, &caps);
+            assert_eq!(inferred.to_vec(), *modalities, "{id}");
+        }
+    }
+
+    /// The catalog is appended to whatever the upstream returned, which is how
+    /// the rows reach the database.
+    #[test]
+    fn curated_embeddings_are_appended_to_the_discovered_list() {
+        let mut models = Vec::new();
+        append_curated_embeddings(&mut models);
+        assert_eq!(models.len(), OPENROUTER_EMBEDDING_MODELS.len());
+
+        let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
+        for (id, _) in OPENROUTER_EMBEDDING_MODELS {
+            assert!(ids.contains(id), "{id} missing from the appended catalog");
+        }
+        // Every row is typed and carries modalities, not left blank.
+        for model in &models {
+            assert_eq!(model.model_type.as_deref(), Some("embedding"));
+            assert!(model.input_modalities.is_some());
+        }
+    }
+
+    /// If OpenRouter ever starts listing its embeddings, the upstream row must
+    /// win instead of producing a duplicate.
+    #[test]
+    fn curated_embeddings_do_not_duplicate_what_upstream_already_listed() {
+        let upstream = build_discovered_model_full(
+            "nvidia/nemotron-3.5-embed-8b:free".to_string(),
+            Some("from upstream".to_string()),
+            TargetFormat::Openai,
+            Some(32_768),
+            None,
+        );
+        let mut models = vec![upstream];
+        append_curated_embeddings(&mut models);
+
+        let matching: Vec<&DiscoveredModel> = models
+            .iter()
+            .filter(|m| m.model_id.as_str() == "nvidia/nemotron-3.5-embed-8b:free")
+            .collect();
+        assert_eq!(matching.len(), 1, "the curated row must not be added twice");
+        assert_eq!(
+            matching[0].display_name.as_deref(),
+            Some("from upstream"),
+            "the upstream row must survive untouched"
+        );
+        assert_eq!(matching[0].context_length, Some(32_768));
+    }
 
     #[test]
     fn test_infer_model_type_openrouter() {

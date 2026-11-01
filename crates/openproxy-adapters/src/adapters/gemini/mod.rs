@@ -4,6 +4,7 @@ use super::{
     build_discovered_model_full, fetch_models_with_auth,
 };
 
+pub mod embeddings;
 pub mod media;
 pub mod translate;
 pub mod types;
@@ -11,6 +12,7 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
+pub use embeddings::*;
 pub use media::*;
 pub use translate::*;
 pub use types::*;
@@ -65,6 +67,37 @@ impl ProviderAdapter for GeminiAdapter {
 
     fn models_url(&self) -> Option<String> {
         Some(format!("{}/models", self.config.base_url))
+    }
+
+    /// Gemini's embeddings endpoint takes the model in the path, unlike OpenAI
+    /// which puts it in the body.
+    ///
+    /// `batchEmbedContents` is used unconditionally, even for a single item, so
+    /// there is exactly one request shape and one response shape. The response
+    /// translator still understands the singular envelope.
+    fn build_embeddings_url(&self, model: &ModelId) -> String {
+        let model_str = model.as_str();
+        let safe_model = model_str.replace('/', "");
+        format!(
+            "{}/models/{}:batchEmbedContents",
+            self.config.base_url, safe_model
+        )
+    }
+
+    fn format_embedding_request(
+        &self,
+        _target_format: TargetFormat,
+        req: &openproxy_types::embeddings::EmbeddingRequest,
+        upstream_model: &str,
+    ) -> std::result::Result<bytes::Bytes, CoreError> {
+        serialize_gemini_embedding_request(req, upstream_model)
+    }
+
+    fn translate_embedding_response(
+        &self,
+        response_body: serde_json::Value,
+    ) -> std::result::Result<openproxy_types::embeddings::EmbeddingResponse, CoreError> {
+        deserialize_gemini_embedding_response(response_body)
     }
 
     async fn fetch_models(

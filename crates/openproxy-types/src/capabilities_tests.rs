@@ -389,3 +389,38 @@ fn text_models_are_not_video() {
     // A chat guard family wins over a video-looking name, same as image/audio.
     assert_eq!(infer_model_type("gemini-2.5-flash"), "chat");
 }
+
+#[test]
+fn embedding_input_modalities_parse_into_the_typed_vocabulary() {
+    // Seam guard: the capability layer emits bare strings, the multimodal
+    // embedding schema parses them into `EmbeddingModality`. If either side
+    // drifts, this fails instead of a request silently losing a modality.
+    use crate::EmbeddingModality;
+
+    let multimodal = infer_input_modalities_for_model(
+        "voyage-multimodal-3",
+        &infer_capabilities("voyage-multimodal-3"),
+    );
+    assert!(multimodal.contains(&"image"), "{multimodal:?}");
+
+    let text_only = infer_input_modalities_for_model(
+        "text-embedding-3-small",
+        &infer_capabilities("text-embedding-3-small"),
+    );
+    assert_eq!(text_only, vec!["text"]);
+
+    for model in [
+        "voyage-multimodal-3",
+        "text-embedding-3-small",
+        "jina-clip-v2",
+        "gemini-embedding-2",
+        "bge-m3",
+    ] {
+        for emitted in infer_input_modalities_for_model(model, &infer_capabilities(model)) {
+            assert!(
+                EmbeddingModality::parse(emitted).is_ok(),
+                "capabilities emit {emitted:?} for {model}, which the embedding schema cannot parse"
+            );
+        }
+    }
+}

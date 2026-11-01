@@ -179,6 +179,35 @@ fn needs_model_type_fix(current_type: &str, inferred_type: &str) -> bool {
         || (current_type == "embedding" && inferred_type == "rerank")
 }
 
+/// Whether a row's stored modalities are narrower than what inference now says.
+///
+/// Rows populated by an older inference pass keep their original value because
+/// the update uses `COALESCE`, so a model that gained a modality upstream stays
+/// text-only forever. This detects that case.
+///
+/// The check is deliberately one-directional: it fires only when inference
+/// covers everything stored and adds more. A stored value that names a modality
+/// inference does not is a choice, not staleness, and must survive untouched.
+/// Custom rows never reach here, they return early above.
+fn modalities_are_stale(stored: Option<&str>, inferred: &str) -> bool {
+    let Some(stored) = stored else {
+        return false;
+    };
+    let Ok(stored_list) = serde_json::from_str::<Vec<String>>(stored) else {
+        return false;
+    };
+    let Ok(inferred_list) = serde_json::from_str::<Vec<String>>(inferred) else {
+        return false;
+    };
+    let covers_everything_stored = stored_list
+        .iter()
+        .all(|modality| inferred_list.contains(modality));
+    let adds_something_new = inferred_list
+        .iter()
+        .any(|modality| !stored_list.contains(modality));
+    covers_everything_stored && adds_something_new
+}
+
 fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> Result<usize> {
     if m.custom {
         return Ok(0);
@@ -186,8 +215,14 @@ fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> 
     let model_id = m.model_id.as_ref();
     let inferred_model_type = capabilities::infer_model_type(model_id);
     let model_type_needs_fix = needs_model_type_fix(&m.model_type, inferred_model_type);
+    let input_mods = capabilities::infer_input_modalities_json(model_id);
+    let modalities_stale = modalities_are_stale(m.input_modalities_json.as_deref(), &input_mods);
 
-    if m.context_length.is_some() && m.capabilities_json.is_some() && !model_type_needs_fix {
+    if m.context_length.is_some()
+        && m.capabilities_json.is_some()
+        && !model_type_needs_fix
+        && !modalities_stale
+    {
         return Ok(0);
     }
 
@@ -195,7 +230,6 @@ fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> 
     let max_output_tokens = capabilities::infer_max_output_tokens(model_id);
     let caps = capabilities::infer_capabilities(model_id);
     let caps_json = caps.to_json();
-    let input_mods = capabilities::infer_input_modalities_json(model_id);
     let output_mods = capabilities::infer_output_modalities_json(model_id);
 
     let model_type = if model_type_needs_fix {
@@ -205,16 +239,25 @@ fn update_single_model_metadata(conn: &Connection, m: &crate::models::Model) -> 
     };
     let family = capabilities::infer_family(model_id);
 
+    // A stale row must be overwritten, not preserved by COALESCE.
+    let input_modalities_assignment = if modalities_stale {
+        "?5"
+    } else {
+        "COALESCE(?5, input_modalities_json)"
+    };
+
     conn.execute(
-        "UPDATE models SET
+        &format!(
+            "UPDATE models SET
             context_length         = COALESCE(?1, context_length),
             max_output_tokens      = COALESCE(?2, max_output_tokens),
             capabilities_json      = COALESCE(?3, capabilities_json),
             model_type             = ?4,
-            input_modalities_json  = COALESCE(?5, input_modalities_json),
+            input_modalities_json  = {input_modalities_assignment},
             output_modalities_json = ?6,
             family                 = COALESCE(?7, family)
-         WHERE id = ?8",
+         WHERE id = ?8"
+        ),
         params![
             context_length,
             max_output_tokens,
@@ -247,6 +290,41 @@ pub fn backfill_model_metadata(conn: &Connection) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_narrower_stored_value_is_detected_as_stale() {
+        // The exact shape the NVIDIA embedding rows were left in by the old
+        // inference: text-only, while the model also takes images.
+        assert!(modalities_are_stale(
+            Some(r#"["text"]"#),
+            r#"["text","image"]"#
+        ));
+    }
+
+    #[test]
+    fn an_already_wide_value_is_not_stale() {
+        assert!(!modalities_are_stale(
+            Some(r#"["text","image"]"#),
+            r#"["text","image"]"#
+        ));
+    }
+
+    #[test]
+    fn a_deliberately_narrowed_value_is_never_widened() {
+        // The guard that keeps this safe: a stored value the inference does not
+        // cover is a choice, not staleness, and must survive.
+        assert!(!modalities_are_stale(
+            Some(r#"["text","audio"]"#),
+            r#"["text","image"]"#
+        ));
+    }
+
+    #[test]
+    fn a_missing_or_unparseable_value_is_not_stale() {
+        assert!(!modalities_are_stale(None, r#"["text"]"#));
+        assert!(!modalities_are_stale(Some("not json"), r#"["text"]"#));
+        assert!(!modalities_are_stale(Some(r#"["text"]"#), "not json"));
+    }
     use openproxy_db::conn::DbPool;
 
     use std::path::PathBuf;
@@ -263,7 +341,14 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 25, "first call inserts all twenty-five");
+        // `embed-engine` adds the native EmbeddingGemma adapter; core forwards
+        // the flag to adapters, so it is a faithful proxy for the adapter count.
+        let expected = if cfg!(feature = "embed-engine") {
+            26
+        } else {
+            25
+        };
+        assert_eq!(n, expected, "first call inserts every builtin");
 
         // all twenty-five present and reachable by id
         for id in [
@@ -305,14 +390,21 @@ mod tests {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         let first = seed_builtin_providers(&conn).expect("first");
-        assert_eq!(first, 25);
+        // `embed-engine` adds the native EmbeddingGemma adapter; core forwards
+        // the flag to adapters, so it is a faithful proxy for the adapter count.
+        let expected = if cfg!(feature = "embed-engine") {
+            26
+        } else {
+            25
+        };
+        assert_eq!(first, expected);
 
         // running again must not insert more rows
         let second = seed_builtin_providers(&conn).expect("second");
         assert_eq!(second, 0, "no new rows on second call");
 
         let count = providers::list(&conn).expect("list").len();
-        assert_eq!(count, 25, "still exactly twenty-five rows");
+        assert_eq!(count, expected, "no extra rows on second call");
     }
 
     #[test]
@@ -336,7 +428,12 @@ mod tests {
         .expect("pre-seed");
 
         let n = seed_builtin_providers(&conn).expect("seed");
-        assert_eq!(n, 24, "only the twenty-four missing ones");
+        let expected = if cfg!(feature = "embed-engine") {
+            26
+        } else {
+            25
+        };
+        assert_eq!(n, expected - 1, "only the missing ones");
 
         // the pre-seeded row's name was not overwritten
         let p = providers::get(&conn, &ProviderId::new("openrouter"))
@@ -451,7 +548,12 @@ mod tests {
     #[test]
     fn builtin_provider_ids_lists_all() {
         let ids = builtin_provider_ids();
-        assert_eq!(ids.len(), 25);
+        let expected = if cfg!(feature = "embed-engine") {
+            26
+        } else {
+            25
+        };
+        assert_eq!(ids.len(), expected);
         assert!(ids.iter().any(|s| s == "claude-code"));
         assert!(ids.iter().any(|s| s == "atomesus"));
         assert!(ids.iter().any(|s| s == "openrouter"));
@@ -474,6 +576,9 @@ mod tests {
         assert!(ids.iter().any(|s| s == "zai"));
         assert!(ids.iter().any(|s| s == "typesafe"));
         assert!(ids.iter().any(|s| s == "laya"));
+        if cfg!(feature = "embed-engine") {
+            assert!(ids.iter().any(|s| s == "embeddinggemma"));
+        }
         assert!(ids.iter().any(|s| s == "eac"));
     }
 

@@ -362,6 +362,10 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--laya-worker") {
         return openproxy_adapters::laya_engine::run_worker().map_err(Into::into);
     }
+    #[cfg(feature = "embed-engine")]
+    if std::env::args().nth(1).as_deref() == Some("--embed-worker") {
+        return openproxy_adapters::embed_engine::run_worker().map_err(Into::into);
+    }
     // Healthcheck mode (OP-23): distroless containers have no shell, wget or
     // curl, so the image's HEALTHCHECK invokes the binary itself. This runs a
     // TCP connect against the configured bind address and exits 0/1 — usable
@@ -441,12 +445,35 @@ fn run_main() -> anyhow::Result<()> {
             .await?;
         }
 
+        // Same lazy gate for the native embeddings engine: the provider row is
+        // the switch, nothing is downloaded or loaded at boot.
+        #[cfg(feature = "embed-engine")]
+        {
+            let pool = std::sync::Arc::clone(state.db_pool());
+            tokio::task::spawn_blocking(move || {
+                let conn = pool.writer();
+                let is_embed_active = openproxy_core::providers::get(
+                    &conn,
+                    &openproxy_types::ProviderId::new("embeddinggemma"),
+                )
+                .is_ok_and(|p_opt| p_opt.is_some_and(|p| p.active));
+                if is_embed_active {
+                    openproxy_adapters::embed_engine::spawn_init_background();
+                } else {
+                    openproxy_adapters::embed_engine::shutdown();
+                }
+            })
+            .await?;
+        }
+
         unsafe {
             libmimalloc_sys::mi_collect(true);
         }
         let result = run_server(state).await;
         #[cfg(feature = "laya-engine")]
         openproxy_adapters::laya_engine::shutdown();
+        #[cfg(feature = "embed-engine")]
+        openproxy_adapters::embed_engine::shutdown();
         result
     })
 }

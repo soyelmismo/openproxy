@@ -222,7 +222,12 @@ fn classify_zen_target_format_heuristic() {
 #[test]
 fn builtin_adapters_returns_all() {
     let v = builtin_adapters();
-    assert_eq!(v.len(), 25);
+    let expected = if cfg!(feature = "embed-engine") {
+        26
+    } else {
+        25
+    };
+    assert_eq!(v.len(), expected);
     let ids: Vec<&str> = v.iter().map(|a| a.id().as_str()).collect();
     assert!(ids.contains(&"claude-code"));
     assert!(ids.contains(&"atomesus"));

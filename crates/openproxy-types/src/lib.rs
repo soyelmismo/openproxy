@@ -53,7 +53,8 @@ pub use images::{
 };
 pub mod embeddings;
 pub use embeddings::{
-    EmbeddingInput, EmbeddingObject, EmbeddingRequest, EmbeddingResponse, EmbeddingUsage,
+    EmbeddingBatchItem, EmbeddingInput, EmbeddingItem, EmbeddingModalities, EmbeddingModality,
+    EmbeddingObject, EmbeddingPart, EmbeddingRequest, EmbeddingResponse, EmbeddingUsage,
     EmbeddingVector,
 };
 

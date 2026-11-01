@@ -21,6 +21,7 @@ import { executeRequest } from './dispatcher.js';
 import { renderStudioHeader } from './studio-header.js';
 import { renderChatWorkspace } from './chat.js';
 import { renderImageStudioWorkspace } from './image.js';
+import { renderDecisionWorkspace } from './decision.js';
 import {
   renderResponseInspector,
   renderInspectorSidebar,
@@ -136,71 +137,6 @@ function renderAudioWorkspace(st: PlaygroundState): TemplateResult {
     </div>
   `;
 }
-
-function renderDecisionWorkspace(st: PlaygroundState): TemplateResult {
-  return html`
-    <div class="playground-workspace-column">
-      <div class="playground-card">
-        <div class="playground-card-header">
-          <h3>${t('playground.decision.title')}</h3>
-          <button
-            class="button small"
-            @click=${() => {
-              st.decisionState =
-                'User request: Can you help me optimize this database query for high throughput?\nCombo routing targets: [coding-expert, general-chat]';
-              st.decisionQuestions = JSON.stringify(
-                {
-                  route: {
-                    type: 'choice',
-                    instructions: 'Select the optimal model category for this request',
-                    options: ['coding-expert', 'general-chat'],
-                  },
-                  complexity: {
-                    type: 'score',
-                    instructions: 'Score the complexity from 0 (trivial) to 1 (highly complex)',
-                  },
-                },
-                null,
-                2,
-              );
-              requestUpdate();
-            }}
-          >
-            ${t('playground.decision.sample')}
-          </button>
-        </div>
-
-        <div class="field">
-          <label class="field-label">${t('playground.decision.state_label')}</label>
-          <textarea
-            rows="5"
-            placeholder="Describe the state or prompt to evaluate..."
-            .value=${st.decisionState}
-            @input=${(e: Event) => {
-              st.decisionState = (e.target as HTMLTextAreaElement).value;
-            }}
-          ></textarea>
-        </div>
-
-        <div class="field" style="margin-top: var(--space-2);">
-          <label class="field-label">${t('playground.decision.questions_label')}</label>
-          <textarea
-            rows="8"
-            style="font-family: var(--font-mono); font-size: var(--fs-xs);"
-            placeholder='{\n  "status": {\n    "type": "choice",\n    "options": ["ok", "escalate"]\n  }\n}'
-            .value=${st.decisionQuestions}
-            @input=${(e: Event) => {
-              st.decisionQuestions = (e.target as HTMLTextAreaElement).value;
-            }}
-          ></textarea>
-        </div>
-      </div>
-
-      ${renderResponseInspector(st)}
-    </div>
-  `;
-}
-
 
 function renderPlayground(): TemplateResult {
   const st = stateInternal;

@@ -34,6 +34,10 @@ pub mod commandcode;
 pub mod custom_adapter;
 pub mod devin;
 pub mod eac;
+#[cfg(feature = "laya-engine")]
+pub mod embed_engine;
+#[cfg(feature = "embed-engine")]
+pub mod embed_engine_adapter;
 pub mod factory;
 pub mod gemini;
 pub mod horde;
@@ -78,6 +82,8 @@ define_provider_adapter! {
             "commandcodego" => CommandCodeGo(commandcode, CommandCodeGoAdapter),
             "devin" => Devin(devin, DevinAdapter),
             "eac" => Eac(eac, EacAdapter),
+            #[cfg(feature = "embed-engine")]
+            "embeddinggemma" => EmbedEngine(embed_engine_adapter, EmbedEngineAdapter),
             "gemini" => Gemini(gemini, GeminiAdapter),
             "horde" => Horde(horde, HordeAdapter),
             "kilocode" => Kilocode(kilocode, KilocodeAdapter),

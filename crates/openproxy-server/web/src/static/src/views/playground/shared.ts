@@ -23,6 +23,20 @@ export interface StreamChunkItem {
   raw: string;
 }
 
+export type DecisionQuestionType = 'choice' | 'score' | 'noul';
+
+export interface DecisionQuestion {
+  id: string;
+  name: string;
+  type: DecisionQuestionType;
+  instructions: string;
+  // choice → option keys · score → level labels (index = score) · noul → unused
+  options: string[];
+  // noul only: text the model reads for each arm of the boolean
+  falseLabel: string;
+  trueLabel: string;
+}
+
 export interface RequestMetrics {
   statusCode: number | null;
   statusText: string | null;
@@ -100,6 +114,9 @@ export interface PlaygroundState {
 
   decisionState: string;
   decisionQuestions: string;
+  decisionQuestionsList: DecisionQuestion[];
+  decisionJsonMode: boolean;
+  decisionJsonError: string | null;
 
   isLoading: boolean;
   abortController: AbortController | null;
@@ -190,12 +207,35 @@ export function createInitialPlaygroundState(): PlaygroundState {
         },
         complexity: {
           type: 'score',
-          instructions: 'Score the complexity from 0 (trivial) to 1 (highly complex)',
+          instructions: 'Rate the complexity of this request',
+          criteria: ['trivial', 'moderate', 'highly complex'],
         },
       },
       null,
       2,
     ),
+    decisionQuestionsList: [
+      {
+        id: 'dq-1',
+        name: 'route',
+        type: 'choice',
+        instructions: 'Select the optimal model category for this request',
+        options: ['coding-expert', 'general-chat'],
+        falseLabel: '',
+        trueLabel: '',
+      },
+      {
+        id: 'dq-2',
+        name: 'complexity',
+        type: 'score',
+        instructions: 'Rate the complexity of this request',
+        options: ['trivial', 'moderate', 'highly complex'],
+        falseLabel: '',
+        trueLabel: '',
+      },
+    ],
+    decisionJsonMode: false,
+    decisionJsonError: null,
 
     isLoading: false,
     abortController: null,

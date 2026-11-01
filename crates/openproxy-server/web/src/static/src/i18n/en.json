@@ -20,7 +20,6 @@
   "common.connection_restored": "Connection restored.",
   "common.live": "Live",
   "common.realtime": "Real-time",
-
   "nav.dashboard": "Dashboard",
   "nav.providers": "Providers",
   "nav.combos": "Combos",
@@ -33,14 +32,12 @@
   "nav.config": "Config",
   "nav.system": "System",
   "nav.logout": "Logout",
-
   "login.title": "Login",
   "login.subtitle": "Enter your manage-scope API key to access the dashboard",
   "login.api_key_label": "API Key",
   "login.submit": "Login",
   "login.error_invalid": "Invalid API key — please check and try again",
   "login.help_text": "Don't have a key? Create one via the CLI or the admin API.",
-
   "notifications.title": "Notifications",
   "notifications.unread_count_one": "{{count}} unread",
   "notifications.unread_count_other": "{{count}} unread",
@@ -100,7 +97,6 @@
   "notifications.ago.hours_other": "{{count}} hours ago",
   "notifications.ago.days_one": "{{count}} day ago",
   "notifications.ago.days_other": "{{count}} days ago",
-
   "home.title": "Live Dashboard",
   "home.subtitle": "Real-time request flow, throughput, and cost telemetry",
   "home.kpi.active_requests": "Active requests",
@@ -150,7 +146,6 @@
   "home.disconnected": "Disconnected from real-time stream",
   "home.connecting": "Connecting…",
   "home.connected": "Connected — streaming live data",
-
   "analytics.title": "Analytics",
   "analytics.subtitle": "Reliability, latency, usage, and spend in one operational view",
   "analytics.filters_label": "Analytics filters",
@@ -257,21 +252,18 @@
   "analytics.table.col_winners": "Winners",
   "analytics.table.col_prompt_tok": "Prompt tok",
   "analytics.table.col_completion_tok": "Completion tok",
-
   "providers.title": "Providers",
   "combos.title": "Combos",
   "keys.title": "API Keys",
   "logs.title": "Live Logs",
   "debug_logs.title": "Debug Logs",
   "config.title": "Config",
-
   "errors.network": "Network error",
   "errors.unauthorized": "Unauthorized — check your API key",
   "errors.not_found": "Not found",
   "errors.server": "Server error",
   "errors.ws_disconnected": "Real-time connection lost",
   "errors.ws_failed_to_connect": "Could not establish real-time connection",
-  
   "nav.proxies": "Free Proxies",
   "proxies.title": "Free Proxies",
   "proxies.subtitle": "Monitor and test free public proxy lists and custom entries",
@@ -310,7 +302,6 @@
   "proxies.toast.test_failed": "Proxy {{host}}:{{port}} is dead",
   "proxies.toast.delete_success": "Proxy deleted successfully",
   "proxies.toast.add_success": "Proxy {{host}}:{{port}} added successfully",
-
   "providers.list.heading": "Providers",
   "providers.list.btn.refresh_all": "Refresh all",
   "providers.list.btn.add": "Add provider",
@@ -328,7 +319,6 @@
   "providers.detail.notif_keyword_only": "Notify on keyword matches only",
   "providers.detail.notif_keyword_only_help_on": "ON — only fire a notification when a newly discovered model matches the auto-activate keyword",
   "providers.detail.notif_keyword_only_help_off": "OFF — notify for every newly discovered model (default)",
-
   "keys.list.heading": "API Keys",
   "keys.list.btn.create": "Create key",
   "keys.list.col.label": "Label",
@@ -366,7 +356,6 @@
   "keys.list.confirm.delete.message": "Delete key \"{{label}}\"?\n\nThis is irreversible. Historical usage rows will keep the api_key_id but the key row itself will be gone.",
   "keys.list.confirm.delete.confirm": "Delete",
   "keys.list.toast.error_prefix": "Error: ",
-
   "proxies.list.btn.sync_progress": "Syncing...",
   "proxies.list.test_url_placeholder": "Proxy test URL...",
   "proxies.list.avg_latency_unit": "ms",
@@ -387,7 +376,6 @@
   "proxies.list.time.hours_other": "{{count}}h ago",
   "proxies.list.time.days_one": "{{count}}d ago",
   "proxies.list.time.days_other": "{{count}}d ago",
-
   "stage.started": "Processing payload",
   "stage.connecting": "Connecting to upstream",
   "stage.waiting_ttft": "Waiting for TTFT",
@@ -396,7 +384,6 @@
   "stage.failed": "Failed",
   "stage.cancelled": "Cancelled",
   "stage.predict_skipped": "Predict skipped",
-
   "combos.grid.title": "Combos",
   "combos.grid.create": "Create combo",
   "combos.grid.empty": "No combos yet. Create one to start routing.",
@@ -477,7 +464,6 @@
   "combos.confirm.remove_message": "Are you sure you want to remove this target from the combo?",
   "combos.confirm.remove_btn": "Remove",
   "combos.target.load_error": "Loading...",
-
   "config.banner.live_values": "Live values.",
   "config.banner.live_values_body": "The values below are the ones the server is currently using. Timeouts, Recording TTL, Compression, the Idle Chunk Retryable flag, and Database Maintenance are editable; the other sections reflect the loaded config.toml.",
   "config.banner.live_applies": "Live — applies to next requests",
@@ -616,7 +602,6 @@
   "config.precedence.step2": "Override <code>ttft</code> and <code>idle_chunk</code> from <code>models.timeout_overrides_json</code> if the target model sets them.",
   "config.precedence.per_model_note": "Per-model overrides live in the database (not in <code>config.toml</code>), so they <em>can</em> change without a restart — but they are not exposed in this view. Use the Providers / Combos detail screens for those.",
   "config.toast.error": "Error: {{message}}",
-
   "playground.title": "Playground",
   "playground.embedding.title": "Embedding Input Vectorizer",
   "playground.embedding.sample_text": "Sample Text",
@@ -644,7 +629,6 @@
   "playground.chat.copy_message": "Copy message",
   "playground.chat.delete_message": "Delete message",
   "playground.chat.add_message": "Add Message",
-  "playground.chat.add_to_thread": "Add to Thread",
   "playground.chat.send_prompt": "Send Prompt",
   "playground.chat.directives_label": "Directives:",
   "playground.chat.directive_json": "JSON Mode",
@@ -680,7 +664,7 @@
   "playground.modality.decision": "Decisions",
   "playground.decision.title": "System One Decision Evaluation",
   "playground.decision.state_label": "Input State (Context / Prompt / Ticket)",
-  "playground.decision.questions_label": "Questions JSON Specification",
+  "playground.decision.questions_label": "Questions",
   "playground.decision.sample": "Load Sample",
   "playground.request.api_key_error": "Please provide an API Key or log in to send requests",
   "playground.request.model_error": "Please select or enter a Model Target",
@@ -751,5 +735,22 @@
   "playground.metrics.tokens": "Tokens",
   "playground.metrics.size": "Size",
   "playground.metrics.error": "Error",
-  "playground.empty.no_response": "No response to display."
+  "playground.empty.no_response": "No response to display.",
+  "playground.decision.state_placeholder": "Describe the state or prompt to evaluate...",
+  "playground.decision.question_name": "question name (e.g. route)",
+  "playground.decision.instructions_placeholder": "Instructions for the model...",
+  "playground.decision.choice_options": "Options",
+  "playground.decision.score_levels": "Score levels (index = score value)",
+  "playground.decision.add_option": "Add option",
+  "playground.decision.remove_option": "Remove option",
+  "playground.decision.remove_question": "Remove question",
+  "playground.decision.add_question": "Add question",
+  "playground.decision.mode_builder": "Builder",
+  "playground.decision.empty": "No questions yet. Add one to define what the model must answer.",
+  "playground.decision.false_placeholder": "what 'false' means...",
+  "playground.decision.true_placeholder": "what 'true' means...",
+  "playground.decision.json_hint": "Raw questions map. Valid JSON applies to the builder on change.",
+  "playground.decision.json_not_object": "Questions must be a JSON object: {\"name\": {\"type\": ...}}",
+  "playground.decision.warn_no_name": "Set a name for this question",
+  "playground.decision.warn_no_options": "Needs at least 1 option or it will fail (1..=128)"
 }

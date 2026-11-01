@@ -183,7 +183,7 @@ fn custom_adapter_embedding_url_and_format() {
     );
     let a = CustomAdapter::from_provider_row(&p);
     assert_eq!(
-        a.build_embeddings_url(),
+        a.build_embeddings_url(&openproxy_types::ModelId::new("text-embedding-3-small")),
         "https://zenmux.example.com/v1/embeddings"
     );
 
@@ -195,7 +195,11 @@ fn custom_adapter_embedding_url_and_format() {
         user: None,
     };
     let formatted = a
-        .format_embedding_request(&req, "text-embedding-3-small")
+        .format_embedding_request(
+            openproxy_types::TargetFormat::Openai,
+            &req,
+            "text-embedding-3-small",
+        )
         .unwrap();
     let val: serde_json::Value = serde_json::from_slice(&formatted).unwrap();
     assert_eq!(val["model"], "text-embedding-3-small");

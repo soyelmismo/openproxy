@@ -490,6 +490,39 @@ impl LayaEngine {
             items.push(item);
         }
 
+        let out_logits = self.run_batch(&items)?;
+
+        let mut answers = BTreeMap::new();
+        for (r, key) in q_keys.into_iter().enumerate() {
+            let q = &req.questions[&key];
+            let item = &items[r];
+            let k = item.markers.len();
+            if k == 0 {
+                continue;
+            }
+            let marker_offset = r * max_markers_slice(&items);
+            let raw_logits = &out_logits[marker_offset..marker_offset + k];
+            Self::push_answer(&mut answers, &self.config, key, q, item, raw_logits);
+        }
+
+        let resp_model = req
+            .model
+            .clone()
+            .unwrap_or_else(|| "laya-multilingual".into());
+        Ok(SystemOneResponse {
+            model: Some(resp_model),
+            answers,
+            usage: Some(SystemOneUsage {
+                input_tokens: total_tokens_of(&items),
+                output_tokens: 0,
+                total_tokens: Some(total_tokens_of(&items)),
+            }),
+        })
+    }
+
+    /// Flatten `items` into the batch tensors, invoke the ONNX session, and
+    /// return the raw logits (one row of `max_markers` per question).
+    fn run_batch(&self, items: &[PreparedItem]) -> Result<Vec<f32>, CoreError> {
         let batch_size = items.len() as i64;
         let max_seq_len = items.iter().map(|it| it.ids.len()).max().unwrap_or(1) as i64;
         let max_markers = items.iter().map(|it| it.markers.len()).max().unwrap_or(1) as i64;
@@ -503,14 +536,11 @@ impl LayaEngine {
         let mut marker_mask = vec![0u8; total_marker_elems];
         let mut qtype = vec![0i64; batch_size as usize];
 
-        let mut total_tokens = 0u64;
-
         for (i, it) in items.iter().enumerate() {
             let seq_offset = i * (max_seq_len as usize);
             for (j, &id) in it.ids.iter().enumerate() {
                 input_ids[seq_offset + j] = id;
                 attention_mask[seq_offset + j] = 1;
-                total_tokens += 1;
             }
 
             let marker_offset = i * (max_markers as usize);
@@ -554,114 +584,100 @@ impl LayaEngine {
                 "Laya returned non-finite logits".into(),
             ));
         }
-        let mut answers = BTreeMap::new();
-
-        for (r, key) in q_keys.into_iter().enumerate() {
-            let q = &req.questions[&key];
-            let item = &items[r];
-            let k = item.markers.len();
-            if k == 0 {
-                continue;
-            }
-
-            let marker_offset = r * (max_markers as usize);
-            let raw_logits = &out_logits[marker_offset..marker_offset + k];
-
-            let temp = self.get_temperature(item.qtype, k);
-            let inv_temp = 1.0 / temp.max(1e-3);
-
-            let mut scaled: Vec<f32> = raw_logits.iter().map(|&x| x * inv_temp).collect();
-            let max_logit = scaled.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let mut sum_exp = 0.0f32;
-            for x in &mut scaled {
-                *x = (*x - max_logit).exp();
-                sum_exp += *x;
-            }
-            let probs: Vec<f64> = scaled
-                .iter()
-                .map(|&x| ((x / sum_exp) as f64).clamp(0.0, 1.0))
-                .collect();
-
-            let conf = confidence_from_probs(&probs, k);
-
-            match q.question_type {
-                SystemOneQuestionType::Choice => {
-                    let best_idx = probs
-                        .iter()
-                        .enumerate()
-                        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                        .map_or(0, |(idx, _)| idx);
-
-                    let choice_name = item
-                        .option_keys
-                        .get(best_idx)
-                        .cloned()
-                        .unwrap_or_else(|| format!("{best_idx}"));
-
-                    let mut prob_map = BTreeMap::new();
-                    for (idx, opt_name) in item.option_keys.iter().enumerate() {
-                        prob_map.insert(opt_name.clone(), round_4(probs[idx]));
-                    }
-
-                    answers.insert(
-                        key,
-                        SystemOneAnswer {
-                            question_type: SystemOneQuestionType::Choice,
-                            choice: Some(choice_name),
-                            confidence: Some(round_4(conf)),
-                            probabilities: Some(prob_map),
-                            ..Default::default()
-                        },
-                    );
-                }
-                SystemOneQuestionType::Score => {
-                    let score: f64 = probs
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, &p)| (idx as f64) * p)
-                        .sum();
-
-                    answers.insert(
-                        key,
-                        SystemOneAnswer {
-                            question_type: SystemOneQuestionType::Score,
-                            score: Some(round_4(score)),
-                            confidence: Some(round_4(conf)),
-                            ..Default::default()
-                        },
-                    );
-                }
-                SystemOneQuestionType::Noul => {
-                    let noul_prob = probs.get(1).copied().unwrap_or(0.0);
-                    answers.insert(
-                        key,
-                        SystemOneAnswer {
-                            question_type: SystemOneQuestionType::Noul,
-                            noul: Some(round_4(noul_prob)),
-                            confidence: Some(round_4(conf)),
-                            ..Default::default()
-                        },
-                    );
-                }
-            }
-        }
-
-        let resp_model = req
-            .model
-            .clone()
-            .unwrap_or_else(|| "laya-multilingual".into());
-        Ok(SystemOneResponse {
-            model: Some(resp_model),
-            answers,
-            usage: Some(SystemOneUsage {
-                input_tokens: total_tokens,
-                output_tokens: 0,
-                total_tokens: Some(total_tokens),
-            }),
-        })
+        Ok(out_logits)
     }
 
-    fn get_temperature(&self, qtype: i64, k: usize) -> f32 {
+    /// Softmax each marker row with its per-type/per-size temperature and push
+    /// the decoded answer into `answers`.
+    fn push_answer(
+        answers: &mut BTreeMap<String, SystemOneAnswer>,
+        config: &LayaConfig,
+        key: String,
+        q: &SystemOneQuestion,
+        item: &PreparedItem,
+        raw_logits: &[f32],
+    ) {
+        let k = item.markers.len();
+        let temp = Self::get_temperature(config, item.qtype, k);
+        let inv_temp = 1.0 / temp.max(1e-3);
+
+        let mut scaled: Vec<f32> = raw_logits.iter().map(|&x| x * inv_temp).collect();
+        let max_logit = scaled.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mut sum_exp = 0.0f32;
+        for x in &mut scaled {
+            *x = (*x - max_logit).exp();
+            sum_exp += *x;
+        }
+        let probs: Vec<f64> = scaled
+            .iter()
+            .map(|&x| ((x / sum_exp) as f64).clamp(0.0, 1.0))
+            .collect();
+
+        let conf = confidence_from_probs(&probs, k);
+
+        match q.question_type {
+            SystemOneQuestionType::Choice => {
+                let best_idx = probs
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map_or(0, |(idx, _)| idx);
+
+                let choice_name = item
+                    .option_keys
+                    .get(best_idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{best_idx}"));
+
+                let mut prob_map = BTreeMap::new();
+                for (idx, opt_name) in item.option_keys.iter().enumerate() {
+                    prob_map.insert(opt_name.clone(), round_4(probs[idx]));
+                }
+
+                answers.insert(
+                    key,
+                    SystemOneAnswer {
+                        question_type: SystemOneQuestionType::Choice,
+                        choice: Some(choice_name),
+                        confidence: Some(round_4(conf)),
+                        probabilities: Some(prob_map),
+                        ..Default::default()
+                    },
+                );
+            }
+            SystemOneQuestionType::Score => {
+                let score: f64 = probs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &p)| (idx as f64) * p)
+                    .sum();
+
+                answers.insert(
+                    key,
+                    SystemOneAnswer {
+                        question_type: SystemOneQuestionType::Score,
+                        score: Some(round_4(score)),
+                        confidence: Some(round_4(conf)),
+                        ..Default::default()
+                    },
+                );
+            }
+            SystemOneQuestionType::Noul => {
+                let noul_prob = probs.get(1).copied().unwrap_or(0.0);
+                answers.insert(
+                    key,
+                    SystemOneAnswer {
+                        question_type: SystemOneQuestionType::Noul,
+                        noul: Some(round_4(noul_prob)),
+                        confidence: Some(round_4(conf)),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+
+    fn get_temperature(config: &LayaConfig, qtype: i64, k: usize) -> f32 {
         let type_str = match qtype {
             0 => "choice",
             1 => "score",
@@ -677,15 +693,23 @@ impl LayaEngine {
             "11+"
         };
         let bucket = format!("{type_str}:{size_str}");
-        if let Some(&t) = self.config.temperature_by_options.get(&bucket) {
+        if let Some(&t) = config.temperature_by_options.get(&bucket) {
             return t;
         }
-        self.config
+        config
             .temperature
             .get(qtype as usize)
             .copied()
             .unwrap_or(1.0)
     }
+}
+
+fn max_markers_slice(items: &[PreparedItem]) -> usize {
+    items.iter().map(|it| it.markers.len()).max().unwrap_or(1)
+}
+
+fn total_tokens_of(items: &[PreparedItem]) -> u64 {
+    items.iter().map(|it| it.ids.len() as u64).sum()
 }
 
 pub(crate) fn confidence_from_probs(probs: &[f64], k: usize) -> f64 {
@@ -742,6 +766,106 @@ mod safety_tests {
                 ..Default::default()
             })
             .is_err()
+        );
+    }
+}
+
+// Manual profile harness: times the two hot phases of `classify` on the real
+// model so we can see where the ~200ms goes. Not part of `cargo test`; run it
+// explicitly with
+//   cargo test -p openproxy-adapters --release --features laya-engine \
+//     -- --ignored laya_profile_breakdown --nocapture
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn question(
+        ty: SystemOneQuestionType,
+        instructions: &str,
+        opts: Vec<String>,
+    ) -> SystemOneQuestion {
+        match ty {
+            SystemOneQuestionType::Choice => SystemOneQuestion {
+                question_type: ty,
+                instructions: instructions.into(),
+                criteria: None,
+                options: Some(opts),
+            },
+            SystemOneQuestionType::Score => SystemOneQuestion {
+                question_type: ty,
+                instructions: instructions.into(),
+                criteria: Some(serde_json::json!(opts)),
+                options: None,
+            },
+            SystemOneQuestionType::Noul => SystemOneQuestion {
+                question_type: ty,
+                instructions: instructions.into(),
+                criteria: None,
+                options: None,
+            },
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local Laya weights + ONNX runtime; profiling harness"]
+    fn laya_profile_breakdown() {
+        let engine = load_engine(None, None, None, None).expect("load engine");
+        let state_str = "User request: Can you help me optimize this database query for high throughput?\nCombo routing targets: [coding-expert, general-chat]";
+
+        let mut questions = std::collections::BTreeMap::new();
+        questions.insert(
+            "route".to_string(),
+            question(
+                SystemOneQuestionType::Choice,
+                "Select the optimal model category for this request",
+                vec!["coding-expert".into(), "general-chat".into()],
+            ),
+        );
+        questions.insert(
+            "complexity".to_string(),
+            question(
+                SystemOneQuestionType::Score,
+                "Rate the complexity of this request",
+                vec!["trivial".into(), "moderate".into(), "highly complex".into()],
+            ),
+        );
+        let req = SystemOneRequest {
+            state: serde_json::json!(state_str),
+            model: Some("laya-multilingual".into()),
+            questions,
+        };
+
+        // Warm-up
+        let _ = engine.classify(&req);
+
+        let q_keys: Vec<String> = req.questions.keys().cloned().collect();
+        const ITERS: u32 = 20;
+        let mut tok_ms = 0f64;
+        let mut ffi_ms = 0f64;
+        let mut seq_elems = 0usize;
+        for _ in 0..ITERS {
+            let t0 = Instant::now();
+            let mut items = Vec::with_capacity(q_keys.len());
+            for key in &q_keys {
+                items.push(
+                    engine
+                        .build_sequence(state_str, &req.questions[key])
+                        .unwrap(),
+                );
+            }
+            tok_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            seq_elems = items.iter().map(|it| it.ids.len()).sum();
+
+            let t1 = Instant::now();
+            let _ = engine.run_batch(&items).unwrap();
+            ffi_ms += t1.elapsed().as_secs_f64() * 1000.0;
+        }
+        eprintln!(
+            "\n=== LAYA PROFILE ({ITERS} iters, seq_elems={seq_elems}) ===\n  build_sequence (tokenize):  {:>7.2} ms avg\n  run_batch      (ONNX FFI):   {:>7.2} ms avg\n  total classify:              {:>7.2} ms avg",
+            tok_ms / ITERS as f64,
+            ffi_ms / ITERS as f64,
+            (tok_ms + ffi_ms) / ITERS as f64,
         );
     }
 }

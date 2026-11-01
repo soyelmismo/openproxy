@@ -119,10 +119,11 @@ fn sandbox_blocks_network_secrets_writes_and_exec() {
         return;
     }
     unsafe extern "C" {
-        fn laya_worker_sandbox(
+        fn worker_sandbox(
             model: *const std::ffi::c_char,
             tokenizer: *const std::ffi::c_char,
             config: *const std::ffi::c_char,
+            allow_model_dir: std::ffi::c_int,
         ) -> std::ffi::c_int;
     }
     // Refer to the adapters crate so its native archive is linked into this test.
@@ -131,7 +132,7 @@ fn sandbox_blocks_network_secrets_writes_and_exec() {
     let model = directory.join("model");
     std::fs::write(&model, b"fixture").unwrap();
     let c_path = std::ffi::CString::new(model.to_str().unwrap()).unwrap();
-    let rc = unsafe { laya_worker_sandbox(c_path.as_ptr(), c_path.as_ptr(), c_path.as_ptr()) };
+    let rc = unsafe { worker_sandbox(c_path.as_ptr(), c_path.as_ptr(), c_path.as_ptr(), 0) };
     if rc != 0 {
         // Unavailable kernels must fail closed; actual inference test checks the supported host.
         return;

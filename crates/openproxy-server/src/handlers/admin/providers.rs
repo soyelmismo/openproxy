@@ -241,6 +241,19 @@ pub async fn set_provider_active(
         }
     }
 
+    // Same live switch for the native embeddings engine: the provider row is the
+    // only gate, and nothing is downloaded or loaded until the first request.
+    #[cfg(feature = "embed-engine")]
+    if id == "embeddinggemma" {
+        if active {
+            openproxy_adapters::embed_engine::spawn_init_background();
+        } else {
+            tokio::task::spawn_blocking(openproxy_adapters::embed_engine::shutdown)
+                .await
+                .map_err(|e| CoreError::Internal(format!("EmbeddingGemma shutdown: {e}")))?;
+        }
+    }
+
     Ok(Json(serde_json::json!({ "id": id, "active": active })))
 }
 

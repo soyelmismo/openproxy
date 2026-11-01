@@ -47,7 +47,20 @@ pub async fn create_embeddings(
         crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, &req.model)
             .await?;
 
-    let response = call_unary_executor!(execute_embeddings, state, req, api_key_id);
+    let response = execute_embeddings(
+        openproxy_core::embeddings::UnaryDeps {
+            db_pool: state.db_pool().as_ref(),
+            adapters: state.adapters().as_slice(),
+            upstream_client: state.upstream_client(),
+            circuit_breaker: &state.circuit_breaker(),
+            master_key: state.master_key().as_ref(),
+        },
+        req,
+        api_key_id,
+        state.is_recording(),
+    )
+    .await
+    .map_err(crate::error::ApiError)?;
 
     Ok(Json(response).into_response())
 }

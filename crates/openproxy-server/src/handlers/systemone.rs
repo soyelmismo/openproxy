@@ -47,18 +47,17 @@ pub async fn handle_system_one(
         crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, model_name)
             .await?;
 
-    let response = execute_system_one(
-        state.db_pool().as_ref(),
-        state.adapters().as_slice(),
-        state.upstream_client(),
-        &state.circuit_breaker(),
-        state.master_key().as_ref(),
-        req,
-        api_key_id,
-        state.is_recording(),
-    )
-    .await
-    .map_err(crate::error::ApiError)?;
+    let adapters_arc = state.adapters();
+    let deps = openproxy_core::unary::UnaryDeps {
+        db_pool: state.db_pool().as_ref(),
+        adapters: adapters_arc.as_slice(),
+        upstream_client: state.upstream_client(),
+        circuit_breaker: &state.circuit_breaker(),
+        master_key: state.master_key().as_ref(),
+    };
+    let response = execute_system_one(deps, req, api_key_id, state.is_recording())
+        .await
+        .map_err(crate::error::ApiError)?;
 
     Ok(Json(response).into_response())
 }

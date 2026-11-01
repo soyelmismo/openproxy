@@ -15,6 +15,7 @@ workspace = true
 # feature flag is only a compile-time switch for the new module.
 default = ["upstream-hyper", "laya-engine"]
 laya-engine = ["openproxy-adapters/laya-engine"]
+embed-engine = ["openproxy-adapters/embed-engine"]
 upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
 # Stub gate for callers that want to disable just this client (e.g.
 # downstream consumers building with `default-features = false`).

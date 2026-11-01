@@ -118,7 +118,12 @@ where
     Ok(bytes::Bytes::from(new_body))
 }
 
-pub(crate) fn resolve_target_format(format: AdapterFormat, fallback: TargetFormat) -> TargetFormat {
+/// Resolves the wire format a provider speaks.
+///
+/// `Mixed` is the only format that defers to the model row, because the
+/// provider hosts models in more than one dialect. Shared by the chat pipeline
+/// and the embeddings dispatch so the two cannot drift apart.
+pub fn resolve_target_format(format: AdapterFormat, fallback: TargetFormat) -> TargetFormat {
     match format {
         AdapterFormat::Mixed => fallback,
         AdapterFormat::Openai => TargetFormat::Openai,
@@ -237,16 +242,36 @@ pub trait ProviderAdapter: Send + Sync {
         format!("{}/audio/transcriptions", self.config().base_url)
     }
 
-    fn build_embeddings_url(&self) -> String {
+    fn build_embeddings_url(&self, model: &ModelId) -> String {
+        let _ = model;
         format!("{}/embeddings", self.config().base_url)
     }
 
     fn format_embedding_request(
         &self,
+        _target_format: TargetFormat,
         req: &openproxy_types::embeddings::EmbeddingRequest,
         upstream_model: &str,
     ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
         inject_model_and_serialize(req, upstream_model)
+    }
+
+    /// Translates a non-OpenAI embeddings response body into the canonical
+    /// [`EmbeddingResponse`].
+    ///
+    /// The default is the identity, which is correct for every provider whose
+    /// embeddings endpoint already speaks OpenAI. Providers that use a
+    /// different envelope (Gemini returns `{"embedding":{"values":[...]}}`)
+    /// override this. Unlike chat, embeddings have no streaming variant, so
+    /// there is only one hook.
+    fn translate_embedding_response(
+        &self,
+        response_body: serde_json::Value,
+    ) -> std::result::Result<
+        openproxy_types::embeddings::EmbeddingResponse,
+        openproxy_types::error::CoreError,
+    > {
+        serde_json::from_value(response_body).ctx_parse("failed to parse embedding response")
     }
 
     fn build_image_url(&self) -> String {

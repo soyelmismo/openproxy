@@ -11,10 +11,15 @@ const FRAME_LIMIT: usize = 4 * 1024 * 1024;
 pub const WORKER_ARGUMENT: &str = "--laya-worker";
 
 unsafe extern "C" {
-    fn laya_worker_sandbox(
+    /// Shared worker confinement (landlock + seccomp). `allow_model_dir` grants
+    /// read access to the model's parent directory for engines with external
+    /// weights (HF `model.onnx` + `.onnx_data`); laya ships a single file and
+    /// passes 0.
+    fn worker_sandbox(
         model: *const std::ffi::c_char,
         tokenizer: *const std::ffi::c_char,
         config: *const std::ffi::c_char,
+        allow_model_dir: std::ffi::c_int,
     ) -> std::ffi::c_int;
 }
 
@@ -25,12 +30,13 @@ pub(super) fn validate_request(req: &SystemOneRequest) -> Result<(), CoreError> 
             "Laya supports at most 64 questions per batch".into(),
         ));
     }
-    for q in req.questions.values() {
+    for (name, q) in &req.questions {
         let count = super::render_options(q).len();
         if count == 0 || count > 128 {
-            return Err(CoreError::Validation(
-                "Laya questions require 1..=128 options".into(),
-            ));
+            return Err(CoreError::Validation(format!(
+                "Laya question '{name}' ({}) resolved {count} options; each question requires 1..=128",
+                q.question_type.as_str(),
+            )));
         }
     }
     Ok(())
@@ -109,7 +115,7 @@ fn initialize(settings: &Settings) -> Result<super::LayaEngine, CoreError> {
     let [model_c, tokenizer_c, config_c] = paths;
     let (model_c, tokenizer_c, config_c) = (model_c?, tokenizer_c?, config_c?);
     let rc =
-        unsafe { laya_worker_sandbox(model_c.as_ptr(), tokenizer_c.as_ptr(), config_c.as_ptr()) };
+        unsafe { worker_sandbox(model_c.as_ptr(), tokenizer_c.as_ptr(), config_c.as_ptr(), 0) };
     if rc != 0 {
         return Err(internal(format!(
             "sandbox unavailable (code {rc}); refusing native inference"

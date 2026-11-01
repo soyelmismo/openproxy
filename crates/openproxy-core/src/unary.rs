@@ -30,6 +30,22 @@ pub use usage::{
     record_unary_usage_async,
 };
 
+/// The infrastructure every unary executor shares: storage, adapters, the HTTP
+/// client, the circuit breaker, and the master key for credential decryption.
+///
+/// Grouped into one struct so adding a knob that only some endpoints need —
+/// like `recording` on `/v1/embeddings` — does not push the signature past the
+/// argument-count lint. The endpoints that still take five separate parameters
+/// can be migrated here one at a time.
+#[derive(Clone, Copy)]
+pub struct UnaryDeps<'a> {
+    pub db_pool: &'a DbPool,
+    pub adapters: &'a [ProviderAdapterEnum],
+    pub upstream_client: &'a Arc<UpstreamClient>,
+    pub circuit_breaker: &'a CircuitBreakerRegistry,
+    pub master_key: &'a MasterKey,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnaryTarget {
     pub provider: ProviderId,

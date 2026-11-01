@@ -48,6 +48,9 @@ export function clearPlayground(st: PlaygroundState): void {
   } else if (modality === 'decision') {
     st.decisionState = '';
     st.decisionQuestions = '{}';
+    st.decisionQuestionsList = [];
+    st.decisionJsonError = null;
+    st.decisionJsonMode = false;
   }
   resetExecutionState(st);
   requestUpdate();

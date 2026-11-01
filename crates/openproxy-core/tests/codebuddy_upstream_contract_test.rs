@@ -260,7 +260,14 @@ fn test_codebuddy_builtin_seed_and_registration() {
     let conn = pool.writer();
 
     let seeded = seed_builtin_providers(&conn).expect("seed");
-    assert_eq!(seeded, 25, "should seed all 25 built-in providers");
+    // `embed-engine` adds the native EmbeddingGemma adapter; core forwards the
+    // flag to adapters, so it is a faithful proxy for the adapter count.
+    let expected = if cfg!(feature = "embed-engine") {
+        26
+    } else {
+        25
+    };
+    assert_eq!(seeded, expected, "should seed every built-in provider");
 
     let cb = providers::get(&conn, &ProviderId::new("codebuddy"))
         .expect("get")

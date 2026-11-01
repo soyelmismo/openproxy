@@ -330,35 +330,14 @@ fn stream_request_url(url: String, stream: bool) -> String {
     }
 }
 
+/// Resolves the wire format a provider speaks, deferring to the model row only
+/// for `Mixed` providers. Delegates to the shared resolver so the chat and
+/// embeddings paths cannot drift apart.
 fn resolve_target_format(
     adapter: &openproxy_adapters::adapters::ProviderAdapterEnum,
     model_format: openproxy_types::TargetFormat,
 ) -> openproxy_types::TargetFormat {
-    match adapter.format() {
-        openproxy_adapters::adapters::AdapterFormat::Openai => {
-            openproxy_types::TargetFormat::Openai
-        }
-        openproxy_adapters::adapters::AdapterFormat::Anthropic => {
-            openproxy_types::TargetFormat::Anthropic
-        }
-        openproxy_adapters::adapters::AdapterFormat::Mixed => model_format,
-        openproxy_adapters::adapters::AdapterFormat::Gemini => {
-            openproxy_types::TargetFormat::Gemini
-        }
-        openproxy_adapters::adapters::AdapterFormat::Responses => {
-            openproxy_types::TargetFormat::Responses
-        }
-        openproxy_adapters::adapters::AdapterFormat::Atomesus => {
-            openproxy_types::TargetFormat::Atomesus
-        }
-        openproxy_adapters::adapters::AdapterFormat::CommandCodeGo => {
-            openproxy_types::TargetFormat::CommandCodeGo
-        }
-        openproxy_adapters::adapters::AdapterFormat::SystemOne => {
-            openproxy_types::TargetFormat::SystemOne
-        }
-        openproxy_adapters::adapters::AdapterFormat::Devin => openproxy_types::TargetFormat::Devin,
-    }
+    openproxy_adapters::adapters::resolve_target_format(adapter.format(), model_format)
 }
 
 pub(crate) fn prepare_messages_for_formatting(

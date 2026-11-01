@@ -237,13 +237,33 @@ pub fn build_audio_or_specialized_payload(
     is_embedding: bool,
     is_image: bool,
     _is_tts: bool,
+    target_format: openproxy_core::models::TargetFormat,
 ) -> (String, serde_json::Value) {
     if is_embedding {
-        let url = adapter.build_embeddings_url();
-        let val = serde_json::json!({
-            "model": model.model_id.as_str(),
-            "input": "hello"
-        });
+        let url = adapter.build_embeddings_url(&model.model_id);
+        // Route through the same translation the real dispatch uses. The URL is
+        // provider-specific, so posting an OpenAI-shaped body at it only works
+        // for providers whose embeddings dialect happens to be OpenAI. Gemini
+        // wants `{"requests":[{"content":{"parts":[...]}}]}` and rejects `input`.
+        let req = openproxy_types::embeddings::EmbeddingRequest {
+            model: model.model_id.to_string(),
+            input: openproxy_types::embeddings::EmbeddingInput::Single("hello".to_string()),
+            encoding_format: None,
+            dimensions: None,
+            user: None,
+        };
+        let val = adapter
+            .format_embedding_request(target_format, &req, model.model_id.as_str())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| {
+                // Translation is not supposed to fail. If it ever does, fall
+                // back to the plain body rather than sending nothing.
+                serde_json::json!({
+                    "model": model.model_id.as_str(),
+                    "input": "hello"
+                })
+            });
         (url, val)
     } else if is_image {
         let url = adapter.build_image_url();
@@ -422,5 +442,81 @@ pub fn build_test_openai_request(model_id: &str) -> openproxy_types::OpenAIReque
         top_k: None,
         user: None,
         extra: serde_json::Map::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn embedding_model(provider_id: &str, model_id: &str) -> openproxy_types::Model {
+        openproxy_types::Model {
+            row_id: ModelRowId(0),
+            provider_id: openproxy_types::ids::ProviderId::new(provider_id.to_string()),
+            model_id: openproxy_types::ids::ModelId::new(model_id.to_string()),
+            display_name: None,
+            discovered_at: Box::<str>::default(),
+            expires_at: None,
+            timeout_overrides_json: None,
+            last_test_at: None,
+            context_length: None,
+            max_output_tokens: None,
+            capabilities_json: None,
+            family: None,
+            model_type: "embedding".to_string().into_boxed_str(),
+            input_modalities_json: None,
+            output_modalities_json: None,
+            last_test_status: None,
+            target_format: openproxy_core::models::TargetFormat::Openai,
+            active: true,
+            custom: false,
+            manually_disabled_at: None,
+        }
+    }
+
+    /// The tester must send the body the provider actually speaks. It builds the
+    /// URL with `build_embeddings_url`, which is provider-specific, so a body
+    /// left in the OpenAI dialect would 400 at every non-OpenAI endpoint.
+    #[test]
+    fn an_embedding_test_payload_is_translated_to_the_provider_dialect() {
+        let adapter = adapters::ProviderAdapterEnum::from_provider_id("gemini").expect("gemini");
+        let model = embedding_model("gemini", "gemini-embedding-2");
+
+        let (url, body) = build_audio_or_specialized_payload(
+            &adapter,
+            &model,
+            true,
+            false,
+            false,
+            openproxy_core::models::TargetFormat::Gemini,
+        );
+
+        assert!(url.ends_with(":batchEmbedContents"), "url was {url}");
+        assert!(
+            body.get("requests").is_some(),
+            "body was not translated to the Gemini dialect: {body}"
+        );
+        assert!(body.get("input").is_none(), "OpenAI key leaked through");
+    }
+
+    /// A provider whose embeddings dialect is OpenAI must keep working.
+    #[test]
+    fn an_openai_dialect_embedding_payload_is_unchanged() {
+        let adapter =
+            adapters::ProviderAdapterEnum::from_provider_id("openrouter").expect("openrouter");
+        let model = embedding_model("openrouter", "nvidia/nemotron-3.5-embed-8b:free");
+
+        let (url, body) = build_audio_or_specialized_payload(
+            &adapter,
+            &model,
+            true,
+            false,
+            false,
+            openproxy_core::models::TargetFormat::Openai,
+        );
+
+        assert!(url.ends_with("/embeddings"), "url was {url}");
+        assert_eq!(body["model"], "nvidia/nemotron-3.5-embed-8b:free");
+        assert_eq!(body["input"], "hello");
     }
 }

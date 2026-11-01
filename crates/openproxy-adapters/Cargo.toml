@@ -18,6 +18,8 @@ ssrf-bypass = []
 # Never enabled by default; production builds do not include the hook.
 bench-tls-hook = []
 laya-engine = ["dep:tokenizers"]
+# embed_engine shares the same ORT FFI bridge, sandbox and worker lifecycle.
+embed-engine = ["laya-engine"]
 
 [dependencies]
 base64.workspace = true

@@ -150,15 +150,18 @@ async fn dispatch_single_system_one(
 }
 
 pub async fn execute_system_one(
-    db_pool: &DbPool,
-    adapters: &[ProviderAdapterEnum],
-    upstream_client: &Arc<UpstreamClient>,
-    circuit_breaker: &CircuitBreakerRegistry,
-    master_key: &MasterKey,
+    deps: crate::unary::UnaryDeps<'_>,
     req: SystemOneRequest,
     api_key_id: Option<ApiKeyId>,
     recording: bool,
 ) -> Result<SystemOneResponse> {
+    let crate::unary::UnaryDeps {
+        db_pool,
+        adapters,
+        upstream_client,
+        circuit_breaker,
+        master_key,
+    } = deps;
     let started = Instant::now();
     let req_model = req.model.as_deref().unwrap_or("jev-latest");
     let routing_plan = routing::resolve_routing(db_pool, req_model).await?;

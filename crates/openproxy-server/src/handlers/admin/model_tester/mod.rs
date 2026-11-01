@@ -207,6 +207,7 @@ pub async fn run_test_for_model(
                     is_embedding,
                     is_image,
                     is_tts,
+                    effective_target_format,
                 );
                 (u, v, None)
             };
@@ -347,17 +348,17 @@ pub async fn run_test_for_model(
                             openproxy_adapters::laya_engine::execute_decision(&s1_req)
                         })
                         .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|res| res.map_err(|e| e.to_string())),
-                        Err(e) => Err(e.to_string()),
+                        .map_err(|e| CoreError::Internal(format!("laya_engine join error: {e}")))
+                        .and_then(|res| res),
+                        Err(e) => Err(CoreError::Parse(format!("invalid request: {e}"))),
                     };
                     let elapsed_ms = start_req.elapsed().as_millis() as u64;
                     let (status, error_msg, resp_val) = match eval_res {
                         Ok(resp) => (200, None, serde_json::to_value(&resp).ok()),
                         Err(e) => (
-                            500,
-                            Some(e.clone()),
-                            Some(serde_json::json!({ "error": e })),
+                            e.http_status(),
+                            Some(e.to_string()),
+                            Some(serde_json::json!({ "error": e.to_string() })),
                         ),
                     };
                     let debug_payload = Some(serde_json::json!({

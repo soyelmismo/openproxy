@@ -14,6 +14,7 @@
 #include <linux/securebits.h>
 #include <sched.h>
 #include <stddef.h>
+#include <string.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -33,7 +34,8 @@ static int allow_read(int ruleset, const char* path, int directory, int optional
     return rc;
 }
 
-static int restrict_files(const char* model, const char* tokenizer, const char* config) {
+static int restrict_files_extended(const char* model, const char* tokenizer,
+                                   const char* config, int allow_model_dir) {
     /* ABI 3 handles truncate as well as creation/removal/writes. Fail closed on
      * older kernels: a process boundary alone is not a security sandbox. */
     int abi = syscall(SYS_landlock_create_ruleset, NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
@@ -52,6 +54,18 @@ static int restrict_files(const char* model, const char* tokenizer, const char* 
         allow_read(fd, "/etc/ld.so.cache", 0, 1) ||
         allow_read(fd, "/sys/devices/system/cpu", 1, 1) ||
         allow_read(fd, "/proc/cpuinfo", 0, 1) || allow_read(fd, "/proc/meminfo", 0, 1);
+    if (!rc && allow_model_dir) {
+        char parent[4096];
+        strncpy(parent, model, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        char* slash = strrchr(parent, '/');
+        if (slash && slash != parent) {
+            *slash = '\0';
+            rc = allow_read(fd, parent, 1, 0);
+        } else {
+            rc = allow_read(fd, ".", 1, 0);
+        }
+    }
     const char* lib = getenv("OPENPROXY_ONNX_LIB");
     if (!rc && lib) rc = allow_read(fd, lib, 0, 0);
     if (!rc) rc = syscall(SYS_landlock_restrict_self, fd, 0);
@@ -127,7 +141,14 @@ static int restrict_syscalls(void) {
     return prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program);
 }
 
-int laya_worker_sandbox(const char* model, const char* tokenizer, const char* config) {
+/* Worker confinement shared by every native ONNX engine (laya, embed, ...).
+ *
+ * `allow_model_dir`: grant read access to the model's parent directory so
+ * engines with external weights (HF `model.onnx` + `model.onnx_data` pairs)
+ * can resolve them. Single-file models pass 0.
+ */
+int worker_sandbox(const char* model, const char* tokenizer, const char* config,
+                   int allow_model_dir) {
     /* Defense in depth: discard non-CLOEXEC descriptors from any gateway library. */
     if (syscall(SYS_close_range, 3U, UINT_MAX, 0U)) return -9;
     struct rlimit no_core = {0, 0};
@@ -144,14 +165,15 @@ int laya_worker_sandbox(const char* model, const char* tokenizer, const char* co
     struct __user_cap_header_struct header = { .version = _LINUX_CAPABILITY_VERSION_3, .pid = 0 };
     struct __user_cap_data_struct capabilities[2] = {{0}, {0}};
     if (syscall(SYS_capset, &header, capabilities)) return -8;
-    if (restrict_files(model, tokenizer, config)) return -4;
+    if (restrict_files_extended(model, tokenizer, config, allow_model_dir)) return -4;
     if (restrict_syscalls()) return -5;
     return 0;
 }
 #else
 /* No silent fallback to unconfined native execution on unsupported platforms. */
-int laya_worker_sandbox(const char* model, const char* tokenizer, const char* config) {
-    (void)model; (void)tokenizer; (void)config;
+int worker_sandbox(const char* model, const char* tokenizer, const char* config,
+                   int allow_model_dir) {
+    (void)model; (void)tokenizer; (void)config; (void)allow_model_dir;
     return -6;
 }
 #endif

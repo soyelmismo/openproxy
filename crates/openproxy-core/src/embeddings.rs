@@ -15,7 +15,7 @@ use openproxy_types::{
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
-    UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs, is_target_available,
+    UnaryDeps, UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs, is_target_available,
     map_upstream_status_error, record_unary_target_success_async, record_unary_usage,
     record_unary_usage_async, resolve_api_key, resolve_unary_targets,
 };
@@ -45,9 +45,10 @@ pub async fn dispatch_embedding_request(
     upstream_url: &str,
     api_key: &str,
     upstream_model_id: &str,
+    target_format: openproxy_types::TargetFormat,
     req: &EmbeddingRequest,
 ) -> Result<UpstreamResponse> {
-    let payload = adapter.format_embedding_request(req, upstream_model_id)?;
+    let payload = adapter.format_embedding_request(target_format, req, upstream_model_id)?;
     crate::unary::call_unary_upstream(
         upstream_client,
         adapter,
@@ -69,7 +70,74 @@ async fn dispatch_single_embedding(
     target: &UnaryTarget,
     req: &EmbeddingRequest,
 ) -> Result<(EmbeddingResponse, u16)> {
-    let upstream_url = adapter.build_embeddings_url();
+    // Native engine: same semantics as the laya shortcut in systemone.rs — the
+    // provider id is the switch, and no HTTP hop happens at all. Task side is
+    // decided by the model alias: `*-doc` (or any alias containing "doc")
+    // embeds corpus text, everything else is a query.
+    #[cfg(feature = "embed-engine")]
+    if target.provider.as_str() == "embeddinggemma"
+        && openproxy_adapters::embed_engine::is_enabled()
+    {
+        let task = if target.upstream_model.contains("doc") {
+            openproxy_adapters::embed_engine::EmbedTask::Document
+        } else {
+            openproxy_adapters::embed_engine::EmbedTask::Query
+        };
+        let inputs: Vec<openproxy_adapters::embed_engine::EmbedInput> = match &req.input {
+            openproxy_types::embeddings::EmbeddingInput::Single(s) => {
+                vec![openproxy_adapters::embed_engine::EmbedInput::Text { text: s.clone() }]
+            }
+            openproxy_types::embeddings::EmbeddingInput::Array(arr) => arr
+                .iter()
+                .map(|s| openproxy_adapters::embed_engine::EmbedInput::Text { text: s.clone() })
+                .collect(),
+            _ => {
+                return Err(CoreError::Validation(
+                    "native embed engine accepts text input only".into(),
+                ));
+            }
+        };
+        let dimensions = req.dimensions.unwrap_or(0) as usize;
+        let vectors = openproxy_adapters::embed_engine::execute_embedding(inputs, task, dimensions)
+            .await
+            .map_err(|e| CoreError::Internal(format!("embed_engine execution error: {e}")))?;
+
+        crate::guarded_unary_target!(record_success: circuit_breaker, target);
+        let data = vectors
+            .into_iter()
+            .enumerate()
+            .map(
+                |(index, embedding)| openproxy_types::embeddings::EmbeddingObject {
+                    object: "embedding".to_string(),
+                    embedding: openproxy_types::embeddings::EmbeddingVector::Floats(
+                        embedding.into_boxed_slice(),
+                    ),
+                    index,
+                },
+            )
+            .collect();
+        return Ok((
+            EmbeddingResponse {
+                object: "list".to_string(),
+                data,
+                model: req.model.clone(),
+                usage: openproxy_types::embeddings::EmbeddingUsage::default(),
+            },
+            200,
+        ));
+    }
+
+    // The wire format is derived from the provider, not the request: Gemini
+    // speaks Gemini whatever the caller sent. `Mixed` providers fall back to
+    // OpenAI, which is the dialect every embeddings endpoint shares.
+    let target_format = openproxy_adapters::adapters::resolve_target_format(
+        adapter.format(),
+        openproxy_types::TargetFormat::Openai,
+    );
+
+    let upstream_url = adapter.build_embeddings_url(&openproxy_types::ModelId::new(
+        target.upstream_model.clone(),
+    ));
     let api_key = crate::unary::resolve_api_key_async(
         db_pool,
         master_key,
@@ -84,6 +152,7 @@ async fn dispatch_single_embedding(
         &upstream_url,
         &api_key,
         &target.upstream_model,
+        target_format,
         req,
     )
     .await
@@ -126,8 +195,15 @@ async fn dispatch_single_embedding(
         ));
     }
 
-    let parsed_response: EmbeddingResponse =
-        serde_json::from_slice(&body_bytes).ctx_parse("failed to parse embedding response")?;
+    // Embeddings have no streaming variant, so this is the single response
+    // hook. The default is the identity, which is correct for every
+    // OpenAI-shaped provider; the others override it on the adapter.
+    let parsed_response: EmbeddingResponse = adapter
+        .translate_embedding_response(
+            serde_json::from_slice(&body_bytes)
+                .ctx_parse("failed to parse embedding response body")?,
+        )
+        .ctx_parse("failed to translate embedding response")?;
 
     if let Some(account_id) = target.account_id {
         circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));
@@ -137,14 +213,18 @@ async fn dispatch_single_embedding(
 }
 
 pub async fn execute_embeddings(
-    db_pool: &DbPool,
-    adapters: &[ProviderAdapterEnum],
-    upstream_client: &Arc<UpstreamClient>,
-    circuit_breaker: &CircuitBreakerRegistry,
-    master_key: &MasterKey,
+    deps: UnaryDeps<'_>,
     req: EmbeddingRequest,
     api_key_id: Option<ApiKeyId>,
+    recording: bool,
 ) -> Result<EmbeddingResponse> {
+    let UnaryDeps {
+        db_pool,
+        adapters,
+        upstream_client,
+        circuit_breaker,
+        master_key,
+    } = deps;
     let started = Instant::now();
 
     let routing_plan = routing::resolve_routing(db_pool, &req.model).await?;
@@ -188,16 +268,30 @@ pub async fn execute_embeddings(
         {
             Ok((parsed_response, status_code)) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                record_unary_target_success_async(
-                    db_pool,
+                // Bodies go to the log only while the operator's recording
+                // toggle is on, matching the chat path. The client wire shape
+                // (`req`) is recorded, not the translated upstream body, so the
+                // log shows what the caller actually sent.
+                let (request_body, response_body) = if recording {
+                    (
+                        serde_json::to_vec(&req).ok().map(bytes::Bytes::from),
+                        serde_json::to_value(&parsed_response).ok(),
+                    )
+                } else {
+                    (None, None)
+                };
+                let mut args = UnaryUsageArgs::from_target(
                     &target,
                     EndpointKind::Embedding,
-                    api_key_id,
                     status_code,
                     total_ms,
-                    (Some(parsed_response.usage.prompt_tokens), None),
                 )
-                .await;
+                .with_api_key_id(api_key_id)
+                .with_json(request_body, response_body);
+                if parsed_response.usage.prompt_tokens > 0 {
+                    args = args.with_tokens(Some(parsed_response.usage.prompt_tokens), None);
+                }
+                record_unary_usage_async(db_pool, &args).await;
 
                 tracing::info!("Embedding request succeeded after {attempt} attempts");
                 return Ok(parsed_response);

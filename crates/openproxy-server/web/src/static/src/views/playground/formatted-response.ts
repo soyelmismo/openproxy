@@ -10,6 +10,7 @@ import { t } from '../../i18n/index.js';
 import type { PlaygroundState } from './shared.js';
 import { extractThinkingProcess, copyText } from './shared.js';
 import { renderMarkdownContent } from '../../components/markdown-content.js';
+import { renderEmbeddingVectorCards } from '../../components/embedding-vectors.js';
 import { generateCurlCommand } from './curl.js';
 
 
@@ -206,33 +207,7 @@ function renderImageResponse(st: PlaygroundState): TemplateResult {
 
 function renderEmbeddingResponse(st: PlaygroundState): TemplateResult {
   const data = (st.parsedResponseJson as { data?: Array<{ embedding?: number[]; index?: number }> })?.data;
-  if (!data || data.length === 0) {
-    return html`<div class="playground-empty-response">${t('playground.embedding.empty')}</div>`;
-  }
-
-  return html`
-    <div class="playground-embedding-results">
-      ${data.map((emb, idx) => {
-        const vector = emb.embedding || [];
-        const preview = vector.slice(0, 8);
-        return html`
-          <div class="playground-vector-card">
-            <h4>${t('playground.embedding.dimensions', { index: idx + 1, count: vector.length })}</h4>
-            <div class="playground-vector-preview">
-              [${preview.map((v) => v.toFixed(6)).join(', ')}${vector.length > 8 ? ', …' : ''}]
-            </div>
-            <div class="playground-vector-bars">
-              ${vector.slice(0, 80).map((v) => {
-                const heightPct = Math.min(100, Math.max(5, Math.abs(v) * 500));
-                const isPos = v >= 0;
-                return html`<div class="vector-bar ${isPos ? 'pos' : 'neg'}" style="height: ${heightPct}%;" title="${v}"></div>`;
-              })}
-            </div>
-          </div>
-        `;
-      })}
-    </div>
-  `;
+  return renderEmbeddingVectorCards(data, t('playground.embedding.empty'));
 }
 
 

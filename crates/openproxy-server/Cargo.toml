@@ -10,7 +10,7 @@ authors.workspace = true
 workspace = true
 
 [features]
-default = ["laya-engine"]
+default = ["laya-engine", "embed-engine"]
 # OP-20: opt-in build flag for the local-development admin auth bypass
 # (OPENPROXY_DASHBOARD_AUTH_BYPASS). Never enabled by default.
 dev-auth-bypass = []
@@ -18,6 +18,10 @@ laya-engine = [
     "openproxy-adapters/laya-engine",
     "openproxy-pipeline/laya-engine",
     "openproxy-core/laya-engine",
+]
+embed-engine = [
+    "openproxy-adapters/embed-engine",
+    "openproxy-core/embed-engine",
 ]
 # Opt-in statement counting for the standalone performance harness only.
 benchmark-sql = [
