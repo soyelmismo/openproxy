@@ -153,4 +153,16 @@ log "is-active: openproxy=$svc_active"
 
 [[ "$svc_active" == "active" ]] || die "openproxy no quedó active (=$svc_active). Revisa: journalctl -u openproxy -n 50"
 
+# Warmup Laya worker in background so the first client request hits a warm model
+(
+  sleep 1
+  KEY=$(grep -E '^\s*api_key:' /root/.hermes/config.yaml 2>/dev/null | head -1 | awk '{print $2}')
+  if [[ -n "$KEY" ]]; then
+    curl -s -X POST http://127.0.0.1:8787/v1/systemone \
+      -H "Authorization: Bearer $KEY" \
+      -H "Content-Type: application/json" \
+      -d '{"model":"laya","state":"warmup","questions":{"q":{"type":"choice","options":["yes","no"]}}}' >/dev/null 2>&1 || true
+  fi
+) &
+
 log "OK ✅  openproxy corriendo con la build nueva"
