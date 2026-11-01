@@ -148,6 +148,8 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
     ? "/v1/embeddings"
     : endpointKind === "video"
     ? "/v1/video/generations"
+    : endpointKind === "systemone" || endpointKind === "decision"
+    ? "/v1/systemone"
     : "/v1/chat/completions";
 
   // Latency: "3,277 ms (ttft 8ms)"

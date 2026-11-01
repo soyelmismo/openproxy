@@ -81,6 +81,7 @@ export function endpointIcon(kind: string, cls = "icon"): TemplateResult {
     case "video":
       return icons.video(cls);
     case "decision":
+    case "systemone":
       return icons.decision(cls);
     case "chat":
     default:

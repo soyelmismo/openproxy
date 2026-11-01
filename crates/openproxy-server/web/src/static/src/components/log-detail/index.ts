@@ -10,6 +10,7 @@
 import { html, type TemplateResult } from "lit-html";
 import { formatJson } from "./json-prune.js";
 import { renderLogMessageContent, renderLogMessagePayload } from "./message-content.js";
+import { renderEmbeddingVectorCards, type EmbeddingEntry } from "../embedding-vectors.js";
 import {
   computeTtlExpiryHint,
   detectPartialResponse,
@@ -295,6 +296,19 @@ function renderObjectRequestBody(obj: Record<string, unknown>): TemplateResult[]
     if (rendered.has(key)) continue;
     const value = obj[key];
     if (isEmptyValue(value)) continue;
+
+    if (key === "input") {
+      // An embedding request is the only wire shape that carries a top-level
+      // `input` holding text, ids, or multimodal parts. A dedicated renderer
+      // avoids dumping a base64 blob into the generic JSON viewer.
+      const embedInput = renderEmbeddingInput(value);
+      if (embedInput != null) {
+        blocks.push(embedInput);
+        rendered.add(key);
+        continue;
+      }
+    }
+
     blocks.push(html`<details class="log-detail-collapsible">
       <summary><span class="log-detail-key">${key}</span></summary>
       <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
@@ -302,6 +316,147 @@ function renderObjectRequestBody(obj: Record<string, unknown>): TemplateResult[]
   }
 
   return blocks;
+}
+
+// ---------- embedding input / output (log-detail) ----------
+
+/** A media URL from a canonical embedding part, rendered as a bounded badge.
+ *  `data:` URLs are shown only by kind and length — embedding one into the
+ *  page would flash a megabyte of base64 into the DOM. A small inline image is
+ *  the exception: a thumbnail is worth a thousand chars. */
+const INLINE_IMAGE_MAX_CHARS = 262_144; // 256 KiB of base64
+
+function renderEmbeddingMediaBadge(url: string): TemplateResult {
+  const isData = url.startsWith("data:");
+  const mime = isData ? url.slice(5, url.indexOf(";") > -1 ? url.indexOf(";") : url.indexOf(",")) : "";
+  const isImage = url.startsWith("data:image/") || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(url);
+  if (isImage) {
+    // Show a thumbnail only for a reasonably-sized payload; a huge data URL
+    // gets a badge naming it instead of a DOM-sized base64 blob.
+    if (!isData || url.length <= INLINE_IMAGE_MAX_CHARS) {
+      return html`<div class="log-detail-embedding-media">
+        <img src=${url} alt="embedding input" loading="lazy" style="max-width:180px;max-height:180px;border-radius:var(--radius-sm);border:1px solid var(--color-border);display:block;" />
+        <span class="log-detail-embedding-badge">${isData ? `inline image (${url.length.toLocaleString()} chars)` : "image URL"}</span>
+      </div>`;
+    }
+    return html`<div class="log-detail-embedding-media">
+      <span class="log-detail-embedding-badge">inline image (${url.length.toLocaleString()} chars)</span>
+    </div>`;
+  }
+  const kind = isData && mime ? mime : "media";
+  return html`<span class="log-detail-embedding-badge">${isData ? `inline ${kind} (${url.length.toLocaleString()} chars)` : html`<a href=${url} target="_blank" rel="noopener">${url}</a>`}</span>`;
+}
+
+/** One canonical `EmbeddingPart` ({type:"text"|"image"|"audio"|"video"|"document", …})
+ *  or a dialect that names a `text`/`content`/`url` field. Returns null when the
+ *  value is not a part the renderer understands, so the caller can fall back. */
+function renderEmbeddingPart(part: unknown): TemplateResult | null {
+  if (typeof part === "string") {
+    return part.trim() === "" ? null : html`<div class="log-detail-embedding-text">${part}</div>`;
+  }
+  if (part == null || typeof part !== "object" || Array.isArray(part)) return null;
+  const p = part as Record<string, unknown>;
+
+  // Text first, matching the backend's normalization order.
+  for (const key of ["text", "content"]) {
+    const text = p[key];
+    if (typeof text === "string" && text !== "") {
+      return html`<div class="log-detail-embedding-text">${text}</div>`;
+    }
+  }
+
+  // A media part: the canonical `url`, or the flattened dialect fields.
+  const url =
+    (typeof p["url"] === "string" ? p["url"] : null) ??
+    (typeof p["image_url"] === "string" ? p["image_url"] : null) ??
+    (p["image_url"] && typeof p["image_url"] === "object" && typeof (p["image_url"] as Record<string, unknown>)["url"] === "string"
+      ? (p["image_url"] as Record<string, unknown>)["url"] as string : null) ??
+    (p["file_url"] && typeof p["file_url"] === "object" && typeof (p["file_url"] as Record<string, unknown>)["url"] === "string"
+      ? (p["file_url"] as Record<string, unknown>)["url"] as string : null);
+  if (typeof url === "string" && url !== "") {
+    const kind = typeof p["type"] === "string" ? p["type"] : "media";
+    return html`<div class="log-detail-embedding-media-part">
+      <span class="log-detail-embedding-badge">${kind}</span>
+      ${renderEmbeddingMediaBadge(url)}
+    </div>`;
+  }
+  return null;
+}
+
+/** A top-level `input` of an embedding request, or null when it does not match
+ *  any shape the renderer can lay out — letting the generic JSON viewer keep it. */
+function renderEmbeddingInput(value: unknown): TemplateResult | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const text = value;
+    return html`<details class="log-detail-collapsible" open>
+      <summary><span class="log-detail-key">input</span> <span class="log-detail-key-meta">text</span></summary>
+      <div class="log-detail-embedding-text">${text}</div>
+    </details>`;
+  }
+
+  const parts: TemplateResult[] = [];
+  const metaBits: string[] = [];
+
+  const push = (node: TemplateResult | null) => { if (node != null) parts.push(node); };
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return null;
+    const first = value[0];
+    if (typeof first === "number") {
+      return html`<details class="log-detail-collapsible">
+        <summary><span class="log-detail-key">input</span> <span class="log-detail-key-meta">${value.length} token id(s)</span></summary>
+        <pre class="json-viewer log-detail-collapsible-body">${formatJson(value)}</pre>
+      </details>`;
+    }
+    if (typeof first === "string") {
+      value.forEach((s, i) => push(s !== "" ? html`<div class="log-detail-embedding-text" title="item ${i + 1}">${s}</div>` : null));
+      metaBits.push(`${value.length} text item(s)`);
+    } else if (first != null && typeof first === "object") {
+      // Either a parts array (PartArrays) or a single multimodal item (Parts).
+      const isNestedBatch = Array.isArray(first);
+      const items = isNestedBatch ? (value as unknown[]) : [value];
+      items.forEach((item, itemIdx) => {
+        const itemParts = Array.isArray(item) ? item : [item];
+        const rendered = itemParts.map(renderEmbeddingPart).filter((x): x is TemplateResult => x != null);
+        if (rendered.length === 0) return;
+        const content = rendered.length === 1
+          ? rendered[0]
+          : html`<div class="log-detail-embedding-parts">${rendered}</div>`;
+        push(html`<div class="log-detail-embedding-item" title="item ${itemIdx + 1}">${content}</div>`);
+      });
+      if (parts.length === 0) return null;
+      metaBits.push(`${items.length} item(s)`);
+    } else {
+      return null;
+    }
+  } else if (typeof value === "object" && !Array.isArray(value)) {
+    // A single part object not wrapped in an array (defensive).
+    const node = renderEmbeddingPart(value);
+    if (node == null) return null;
+    push(node);
+    metaBits.push("1 part");
+  } else {
+    return null;
+  }
+
+  const meta = metaBits.length > 0 ? html` <span class="log-detail-key-meta">${metaBits.join(" · ")}</span>` : null;
+  return html`<details class="log-detail-collapsible" open>
+    <summary><span class="log-detail-key">input</span>${meta}</summary>
+    <div class="log-detail-embedding-input">${parts}</div>
+  </details>`;
+}
+
+/** The `data[]` block of an embeddings response as vector cards. */
+function renderEmbeddingResponseLog(response: Record<string, unknown>): TemplateResult {
+  const data = response["data"];
+  if (!Array.isArray(data) || data.length === 0) {
+    return html`<p class="muted">No embedding vectors in response.</p>`;
+  }
+  return html`<details class="log-detail-collapsible" open>
+    <summary>Embedding vectors (${data.length})</summary>
+    ${renderEmbeddingVectorCards(data as EmbeddingEntry[], html`${data.length} embedding(s)`)}
+  </details>`;
 }
 
 /** Request tab, handling the empty / object / non-object body shapes.
@@ -421,9 +576,13 @@ export function renderResponseTab(
 
 
   const parsed = parseResponsePayload(response);
-  const blocks = parsed != null
+  const blocks: TemplateResult[] = parsed != null
     ? renderParsedResponseBlocks(parsed, response)
-    : renderFallbackResponseBlocks(response);
+    : isEmbeddingResponse(response)
+      ? [renderEmbeddingResponseLog(response), renderRawResponseBlock(response)]
+      : isDecisionResponse(response)
+        ? [renderDecisionResponseLog(response), renderRawResponseBlock(response)]
+        : renderFallbackResponseBlocks(response);
 
   return html`<section class="log-detail-section" data-log-tab="response">
     <h4>Response</h4>
@@ -431,4 +590,64 @@ export function renderResponseTab(
     ${rawResponseBodyBlock}
     ${blocks}
   </section>`;
+}
+
+/** A response body that is a decision / SystemOne answer map (`{answers:{…}}`). */
+function isDecisionResponse(response: unknown): response is Record<string, unknown> {
+  if (response == null || typeof response !== "object" || Array.isArray(response)) return false;
+  const r = response as Record<string, unknown>;
+  const answers = r["answers"];
+  return answers != null && typeof answers === "object" && !Array.isArray(answers);
+}
+
+/** Structured collapsible for decision / SystemOne answers. */
+function renderDecisionResponseLog(response: Record<string, unknown>): TemplateResult {
+  const answers = (response["answers"] || {}) as Record<string, unknown>;
+  const entries = Object.entries(answers);
+  if (entries.length === 0) {
+    return html`<p class="muted">No decision answers in response.</p>`;
+  }
+  return html`<details class="log-detail-collapsible" open>
+    <summary><span class="log-detail-key">Decisions / Answers</span> <span class="log-detail-key-meta">${entries.length} question(s)</span></summary>
+    <div class="log-detail-collapsible-body" style="display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-2);">
+      ${entries.map(([key, val]) => {
+        const v = val as Record<string, unknown>;
+        const choice = v?.["choice"] ?? v?.["response"] ?? "—";
+        const conf = typeof v?.["confidence"] === "number" ? Math.round((v["confidence"] as number) * 100) : null;
+        const probs = v?.["probabilities"] && typeof v["probabilities"] === "object" ? v["probabilities"] as Record<string, number> : null;
+        const isYes = String(choice).toLowerCase() === "yes";
+        const badgeColor = isYes ? "var(--color-success)" : "var(--color-text-muted)";
+        const badgeBg = isYes ? "rgba(16, 185, 129, 0.15)" : "var(--color-surface-2)";
+
+        return html`
+          <div style="display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2); background: var(--color-surface-2); border-radius: var(--radius-sm); border: 1px solid var(--color-border);">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <span style="font-weight: 600; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text);">${key}</span>
+              <span class="badge" style="font-weight: 700; font-family: var(--font-mono); font-size: var(--fs-xs); padding: 2px 8px; border-radius: 4px; background: ${badgeBg}; color: ${badgeColor}; border: 1px solid var(--color-border);">${String(choice).toUpperCase()}</span>
+            </div>
+            ${conf != null || probs != null ? html`
+              <div style="display: flex; gap: var(--space-3); font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: 2px;">
+                ${conf != null ? html`<span>confidence: <strong style="color: var(--color-text);">${conf}%</strong></span>` : null}
+                ${probs != null ? Object.entries(probs).map(([opt, p]) => html`<span>${opt}: ${Math.round(p * 100)}%</span>`) : null}
+              </div>
+            ` : null}
+          </div>
+        `;
+      })}
+    </div>
+  </details>`;
+}
+
+/** A response body that is an embedding vector list (`{data:[{embedding:[…]}]}`),
+ *  detected before the generic fallback so the Response tab can draw the same
+ *  vector visualization the playground uses. */
+function isEmbeddingResponse(response: unknown): response is Record<string, unknown> {
+  if (response == null || typeof response !== "object" || Array.isArray(response)) return false;
+  const r = response as Record<string, unknown>;
+  const data = r["data"];
+  if (!Array.isArray(data)) return false;
+  return data.some(
+    (e) => e != null && typeof e === "object" && !Array.isArray(e)
+      && Array.isArray((e as Record<string, unknown>)["embedding"]),
+  );
 }

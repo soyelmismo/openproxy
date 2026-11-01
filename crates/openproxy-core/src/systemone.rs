@@ -81,8 +81,7 @@ async fn dispatch_single_system_one(
             openproxy_adapters::laya_engine::execute_decision(&req_clone)
         })
         .await
-        .map_err(|e| CoreError::Internal(format!("laya_engine join error: {e}")))?
-        .map_err(|e| CoreError::Internal(format!("laya_engine execution error: {e}")))?;
+        .map_err(|e| CoreError::Internal(format!("laya_engine join error: {e}")))??;
 
         crate::guarded_unary_target!(record_success: circuit_breaker, target);
         return Ok((parsed_response, 200));
@@ -158,6 +157,7 @@ pub async fn execute_system_one(
     master_key: &MasterKey,
     req: SystemOneRequest,
     api_key_id: Option<ApiKeyId>,
+    recording: bool,
 ) -> Result<SystemOneResponse> {
     let started = Instant::now();
     let req_model = req.model.as_deref().unwrap_or("jev-latest");
@@ -211,16 +211,27 @@ pub async fn execute_system_one(
                         (Some(u.input_tokens as u32), Some(u.output_tokens as u32))
                     });
 
-                record_unary_target_success_async(
-                    db_pool,
+                let (request_body, response_body) = if recording {
+                    (
+                        serde_json::to_vec(&req).ok().map(bytes::Bytes::from),
+                        serde_json::to_value(&parsed_response).ok(),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                let mut args = crate::unary::UnaryUsageArgs::from_target(
                     &target,
                     EndpointKind::SystemOne,
-                    api_key_id,
                     status_code,
                     total_ms,
-                    (input_tokens, output_tokens),
                 )
-                .await;
+                .with_api_key_id(api_key_id)
+                .with_json(request_body, response_body);
+                if input_tokens.is_some() || output_tokens.is_some() {
+                    args = args.with_tokens(input_tokens, output_tokens);
+                }
+                crate::unary::record_unary_usage_async(db_pool, &args).await;
 
                 tracing::info!("SystemOne request succeeded after {attempt} attempts");
                 return Ok(parsed_response);

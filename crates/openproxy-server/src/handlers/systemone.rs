@@ -47,7 +47,18 @@ pub async fn handle_system_one(
         crate::middleware::auth::authenticate_and_authorize_model(&state, &headers, model_name)
             .await?;
 
-    let response = call_unary_executor!(execute_system_one, state, req, api_key_id);
+    let response = execute_system_one(
+        state.db_pool().as_ref(),
+        state.adapters().as_slice(),
+        state.upstream_client(),
+        &state.circuit_breaker(),
+        state.master_key().as_ref(),
+        req,
+        api_key_id,
+        state.is_recording(),
+    )
+    .await
+    .map_err(crate::error::ApiError)?;
 
     Ok(Json(response).into_response())
 }

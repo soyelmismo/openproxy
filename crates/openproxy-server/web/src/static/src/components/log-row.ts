@@ -57,6 +57,8 @@ function buildLogRowCells(
       ? "/v1/embeddings"
       : rawKind === "video"
       ? "/v1/video/generations"
+      : rawKind === "systemone" || rawKind === "decision"
+      ? "/v1/systemone"
       : "/v1/chat/completions";
     const pii = row?.pii_redacted;
     cells.push(html`<span class="log-type" title="Endpoint: POST ${path} (${rawKind})"><span class="log-type-tag log-type-tag--${rawKind}" title="${rawKind}">${endpointIcon(rawKind)}</span>${pii ? html`<span class="log-type-tag log-type-tag--pii" title="PII Redacted: ${pii}">${icons.eye()}</span>` : ""}</span>`);
