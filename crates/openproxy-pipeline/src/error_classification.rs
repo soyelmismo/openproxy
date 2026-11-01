@@ -48,6 +48,7 @@ pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
         }
         if !body.is_empty()
             && (lower.contains("base64")
+                || lower.contains("input_invalid")
                 || lower.contains("invalid value")
                 || lower.contains("invalid_request_error")
                 || lower.contains("invalid_argument")
@@ -204,6 +205,13 @@ mod tests {
             classify_upstream_error(
                 400,
                 r#"{"error":{"message":"Error from provider (Console): arguments must be valid JSON","type":"invalid_request_error"}}"#
+            ),
+            UpstreamErrorClass::InvalidPayload
+        );
+        assert_eq!(
+            classify_upstream_error(
+                400,
+                r#"{"error":{"message":"The input you provided is invalid","type":"input_invalid"}}"#
             ),
             UpstreamErrorClass::InvalidPayload
         );

@@ -759,4 +759,71 @@ mod tests {
             "DB row must have last_used_at persisted even after shutdown"
         );
     }
+
+    #[test]
+    fn test_sanitize_tool_calls_disambiguates_duplicate_ids() {
+        use openproxy_types::OpenAIMessage;
+        use serde_json::json;
+
+        let mut messages = vec![
+            OpenAIMessage {
+                role: "assistant".to_string(),
+                content: Some(json!("Calling tools in parallel")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: Some(vec![
+                    json!({"id": "call_0", "type": "function", "function": {"name": "terminal", "arguments": "{}"}}),
+                    json!({"id": "call_0", "type": "function", "function": {"name": "web_search", "arguments": "{}"}}),
+                    json!({"id": "call_0", "type": "function", "function": {"name": "terminal", "arguments": "{}"}}),
+                ]),
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("res 1")),
+                name: None,
+                tool_call_id: Some("call_0".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("res 2")),
+                name: None,
+                tool_call_id: Some("call_0".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "tool".to_string(),
+                content: Some(json!("res 3")),
+                name: None,
+                tool_call_id: Some("call_0".to_string()),
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+            OpenAIMessage {
+                role: "user".to_string(),
+                content: Some(json!("next prompt")),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: serde_json::Map::new(),
+            },
+        ];
+
+        sanitize_tool_calls(&mut messages);
+
+        // Assistant tool_calls should have unique IDs
+        let assistant_calls = messages[0].tool_calls.as_ref().unwrap();
+        assert_eq!(assistant_calls.len(), 3);
+        assert_eq!(assistant_calls[0]["id"], "call_0");
+        assert_eq!(assistant_calls[1]["id"], "call_0_1");
+        assert_eq!(assistant_calls[2]["id"], "call_0_2");
+
+        // Tool messages should have updated matching IDs in 1-to-1 order
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("call_0"));
+        assert_eq!(messages[2].tool_call_id.as_deref(), Some("call_0_1"));
+        assert_eq!(messages[3].tool_call_id.as_deref(), Some("call_0_2"));
+    }
 }

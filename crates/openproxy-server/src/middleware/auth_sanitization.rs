@@ -5,6 +5,8 @@ const MAX_TOOL_CALLS: usize = 64;
 const MAX_ID_LEN: usize = 128;
 
 pub(crate) fn sanitize_tool_calls(messages: &mut Vec<openproxy_types::OpenAIMessage>) {
+    disambiguate_duplicate_tool_call_ids(messages);
+
     let mut last_assistant_tool_calls: Vec<String> = Vec::new();
 
     messages.retain_mut(|msg| match msg.role.as_str() {
@@ -26,6 +28,65 @@ pub(crate) fn sanitize_tool_calls(messages: &mut Vec<openproxy_types::OpenAIMess
     });
 
     prune_unfulfilled_tool_calls(messages);
+}
+
+/// Disambiguates duplicate `id`s within each assistant message's `tool_calls`
+/// and updates the immediately following corresponding `tool` messages to match.
+///
+/// If an assistant message contains multiple tool calls with the same `id` (e.g.
+/// three calls all with `id: "call_0"`), OpenAI-compatible providers like StepFun
+/// reject the request with HTTP 400 `input_invalid`. This renames duplicate IDs
+/// sequentially (`call_0`, `call_0_1`, `call_0_2`) and updates the trailing `tool`
+/// responses in 1-to-1 matching order.
+fn disambiguate_duplicate_tool_call_ids(messages: &mut [openproxy_types::OpenAIMessage]) {
+    let mut i = 0;
+    while i < messages.len() {
+        if messages[i].role == "assistant"
+            && let Some(calls) = &mut messages[i].tool_calls
+            && !calls.is_empty()
+        {
+            let mut seen_ids = std::collections::HashMap::<String, usize>::new();
+            let mut replacements = std::collections::HashMap::<String, Vec<String>>::new();
+
+            for call in calls.iter_mut() {
+                if let Some(obj) = call.as_object_mut()
+                    && let Some(id_val) = obj.get_mut("id")
+                    && let Some(id_str) = id_val.as_str()
+                {
+                    let count = seen_ids.entry(id_str.to_string()).or_insert(0);
+                    if *count > 0 {
+                        let new_id = format!("{id_str}_{count}");
+                        replacements
+                            .entry(id_str.to_string())
+                            .or_default()
+                            .push(new_id.clone());
+                        *id_val = serde_json::Value::String(new_id);
+                    }
+                    *count += 1;
+                }
+            }
+
+            // Update matching subsequent tool messages before the next non-tool turn
+            if !replacements.is_empty() {
+                let mut tool_idx = i + 1;
+                let mut replacement_cursors = std::collections::HashMap::<String, usize>::new();
+
+                while tool_idx < messages.len() && messages[tool_idx].role == "tool" {
+                    if let Some(t_id) = messages[tool_idx].tool_call_id.as_deref()
+                        && let Some(new_ids) = replacements.get(t_id)
+                    {
+                        let cursor = replacement_cursors.entry(t_id.to_string()).or_insert(0);
+                        if *cursor > 0 && (*cursor - 1) < new_ids.len() {
+                            messages[tool_idx].tool_call_id = Some(new_ids[*cursor - 1].clone());
+                        }
+                        *cursor += 1;
+                    }
+                    tool_idx += 1;
+                }
+            }
+        }
+        i += 1;
+    }
 }
 
 fn extract_assistant_tool_call_ids(msg: &mut openproxy_types::OpenAIMessage) -> Vec<String> {
