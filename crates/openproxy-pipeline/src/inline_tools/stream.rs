@@ -359,8 +359,8 @@ fn find_earliest_tool_tag(input: &str) -> Option<(usize, usize, &'static str)> {
             let abs_pos = cursor + pos;
             let after_tag = abs_pos + open.len();
             let next_byte = input.as_bytes().get(after_tag);
-            let is_boundary =
-                next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            let is_boundary = next_byte
+                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=');
             if is_boundary {
                 if let Some(tag_end) = input[abs_pos..].find('>') {
                     let full_open_end = abs_pos + tag_end + 1;

@@ -765,4 +765,23 @@ Verificando endpoints públicos de muse.ai
         }
         other => panic!("expected Mutate with tool_calls in stream, got {other:?}"),
     }
+
+    // Test step 5 exact text
+    let step5_input = r#"<tool_call>
+<function=terminal>
+<parameter=command>
+ss -tlnp 2>/dev/null | grep -E "8787|openproxy" ; echo "--- proc ---"; ps aux | grep -i "[o]penproxy" | head -5 | cut -c1-160; echo "--- api_keys ---"; cd /root/.openproxy && sqlite3 -header -column data.db "SELECT id, name, substr(key_prefix,1,12) AS prefix, scopes, active FROM api_keys LIMIT 10;" 2>&1 | head -20
+</parameter>
+<parameter=intent>
+Verificando servicio openproxy y claves admin disponibles
+</parameter>
+</function>
+</tool_call>"#;
+    let extracted2 = extract_inline_tools(step5_input);
+    assert!(extracted2.clean_content.trim().is_empty());
+    assert_eq!(extracted2.tool_calls.len(), 1);
+    assert_eq!(extracted2.tool_calls[0].name, "terminal");
+    let args2: Value = serde_json::from_str(&extracted2.tool_calls[0].arguments).unwrap();
+    assert!(args2["command"].as_str().unwrap().contains("openproxy"));
+    assert_eq!(args2["intent"], "Verificando servicio openproxy y claves admin disponibles");
 }
