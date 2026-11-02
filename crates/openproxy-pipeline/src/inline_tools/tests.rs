@@ -698,3 +698,71 @@ fn test_dsml_tool_calls_extraction() {
         "cd /root/proyectos/gpthon-rs && ls -la && echo \"---\" && find . -name \"subagent.rs\" -o -name \"stream_timeline\" -type d | head -20"
     );
 }
+
+#[test]
+fn test_xml_shorthand_function_and_parameter_tags() {
+    let input = r#"<tool_call>
+<function=terminal>
+<parameter=command>
+curl -sS -m 15 -o /dev/null -w "root: %{http_code} %{url_effective}
+" -L https://muse.ai/ ; curl -sS -m 15 -o /dev/null -w "models: %{http_code}
+" https://muse.ai/v1/models ; curl -sS -m 15 -o /dev/null -w "docs: %{http_code}
+" -L https://muse.ai/docs ; curl -sS -m 15 -o /dev/null -w "api: %{http_code}
+" -L https://api.muse.ai/
+</parameter>
+<parameter=intent>
+Verificando endpoints públicos de muse.ai
+</parameter>
+</function>
+</tool_call>"#;
+
+    let extracted = extract_inline_tools(input);
+    assert!(extracted.clean_content.trim().is_empty());
+    assert_eq!(extracted.tool_calls.len(), 1);
+    assert_eq!(extracted.tool_calls[0].name, "terminal");
+    let args: Value = serde_json::from_str(&extracted.tool_calls[0].arguments).unwrap();
+    assert!(
+        args["command"]
+            .as_str()
+            .unwrap()
+            .contains("https://muse.ai/")
+    );
+    assert_eq!(args["intent"], "Verificando endpoints públicos de muse.ai");
+
+    // Also verify streaming extractor handles this inline block
+    let mut extractor = InlineToolStreamExtractor::new();
+    let chunk = json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": input },
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let res = extractor.process_chunk(&chunk);
+    match res {
+        StreamAction::Mutate(s) => {
+            let val: Value = serde_json::from_str(&s).unwrap();
+            let choice = &val["choices"][0];
+            assert_eq!(choice["finish_reason"], "tool_calls");
+            let delta = &choice["delta"];
+            assert!(delta.get("content").is_none());
+            let tc = &delta["tool_calls"];
+            assert_eq!(tc.as_array().unwrap().len(), 1);
+            assert_eq!(tc[0]["function"]["name"], "terminal");
+            let s_args: Value =
+                serde_json::from_str(tc[0]["function"]["arguments"].as_str().unwrap()).unwrap();
+            assert!(
+                s_args["command"]
+                    .as_str()
+                    .unwrap()
+                    .contains("https://muse.ai/")
+            );
+            assert_eq!(
+                s_args["intent"],
+                "Verificando endpoints públicos de muse.ai"
+            );
+        }
+        other => panic!("expected Mutate with tool_calls in stream, got {other:?}"),
+    }
+}

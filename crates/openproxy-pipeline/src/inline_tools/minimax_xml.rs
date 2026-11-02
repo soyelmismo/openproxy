@@ -45,7 +45,8 @@ pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
 
         let open_tag_content = &text[abs_tag_start..tag_body_start];
         let func_name = extract_xml_attribute(open_tag_content, "name")
-            .or_else(|| extract_xml_attribute(open_tag_content, "function"));
+            .or_else(|| extract_xml_attribute(open_tag_content, "function"))
+            .or_else(|| extract_xml_shorthand_name(open_tag_content));
         let explicit_id = extract_xml_attribute(open_tag_content, "id")
             .or_else(|| extract_xml_attribute(open_tag_content, "call_id"));
 
@@ -107,8 +108,8 @@ fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
             let after_tag = abs_pos + open.len();
             // After the tag name only whitespace, '>' or '/' is valid.
             let next_byte = s.as_bytes().get(after_tag);
-            let is_boundary =
-                next_byte.is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/');
+            let is_boundary = next_byte
+                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=');
             if is_boundary {
                 if best.is_none_or(|(p, _)| abs_pos < p) {
                     best = Some((abs_pos, close));
@@ -228,6 +229,30 @@ pub fn extract_xml_attribute(tag_str: &str, attr_name: &str) -> Option<String> {
         .into_iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(attr_name))
         .map(|(_, v)| v)
+}
+
+/// Supports XML shorthand tag names like `<function=terminal>` or `<invoke=search>`
+pub fn extract_xml_shorthand_name(tag_str: &str) -> Option<String> {
+    let trimmed = tag_str
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim();
+    let (tag_part, val_part) = trimmed.split_once('=')?;
+    let tag_clean = tag_part.trim();
+    if tag_clean.eq_ignore_ascii_case("function")
+        || tag_clean.eq_ignore_ascii_case("invoke")
+        || tag_clean.eq_ignore_ascii_case("call")
+    {
+        let val_clean = val_part
+            .split_whitespace()
+            .next()?
+            .trim_matches(|c| c == '"' || c == '\'' || c == '/');
+        if !val_clean.is_empty() {
+            return Some(val_clean.to_string());
+        }
+    }
+    None
 }
 
 fn extract_extra_attributes(tag_str: &str) -> Vec<(String, String)> {
@@ -423,6 +448,8 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
         let first = parts.next().unwrap_or("");
         let raw_tag_name = if first == "｜｜DSML｜｜" || first == "｜DSML｜" {
             parts.next().unwrap_or("").trim_end_matches('/')
+        } else if let Some((tag, _)) = first.split_once('=') {
+            tag.trim_end_matches('/')
         } else {
             first.trim_end_matches('/')
         };
@@ -480,6 +507,13 @@ fn parse_invoke_body_to_json_arguments(body: &str) -> String {
             || raw_tag_name.eq_ignore_ascii_case("param")
         {
             extract_xml_attribute(open_tag_header, "name")
+                .or_else(|| {
+                    open_tag_header.split_once('=').map(|(_, val)| {
+                        val.trim()
+                            .trim_matches(|c| c == '"' || c == '\'')
+                            .to_string()
+                    })
+                })
                 .unwrap_or_else(|| "parameter".to_string())
         } else {
             raw_tag_name.to_string()
