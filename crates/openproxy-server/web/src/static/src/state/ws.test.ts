@@ -120,7 +120,7 @@ describe("ws store — connection and cursors", () => {
     expect(calls.length).toBe(1);
     expect(calls[0]!.url).toBe("/admin/api/ws-ticket");
     expect(calls[0]!.init?.method).toBe("POST");
-    expect((calls[0]!.init?.headers as Record<string, string>)["Authorization"]).toBe("Bearer test-token");
+    expect(new Headers(calls[0]!.init?.headers).get("Authorization")).toBe("Bearer test-token");
     expect(MockWebSocket.instances.length).toBe(1);
     expect(MockWebSocket.instances[0]!.url).toContain("/admin/ws?ticket=tkt-xyz");
     expect(MockWebSocket.instances[0]!.url).not.toContain("test-token");

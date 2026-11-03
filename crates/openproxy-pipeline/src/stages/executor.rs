@@ -192,6 +192,11 @@ pub(super) async fn execute_sequential_targets(
             TargetLoopOutcome::Continue(res) => {
                 if let Some(ref r) = res
                     && let Some(ref err) = r.error
+                {
+                    check_and_handle_thread_errors(ctx, &target.target, err);
+                }
+                if let Some(ref r) = res
+                    && let Some(ref err) = r.error
                     && (crate::pipeline::is_upstream_health_issue(err) || err.is_hard_skip())
                 {
                     failed_targets.insert(TargetExecutionId::from_target(&target.target));
@@ -223,6 +228,33 @@ pub(super) async fn execute_sequential_targets(
     }
 
     finalize_exhausted_combo(ctx, combo.id.0, to_run.len(), last_result).await
+}
+
+fn check_and_handle_thread_errors(
+    ctx: &PipelineContext,
+    target: &openproxy_types::ComboTarget,
+    err: &CoreError,
+) {
+    if target.provider_id.as_str() != "claude-code" {
+        return;
+    }
+    let CoreError::UpstreamError { status, body, .. } = err else {
+        return;
+    };
+    let canonical = crate::stages::target_headers::session::resolve_canonical_session(
+        &ctx.req.request_headers,
+        &ctx.req.openai_request,
+    );
+    if *status == 404
+        || body.contains("thread_not_found")
+        || body.contains("thread_fingerprint_mismatch")
+        || body.contains("thread_already_continued")
+        || body.contains("previous_message_id_invalid")
+    {
+        ctx.pipeline.message_threads.invalidate(&canonical);
+    } else if body.contains("thread_unsupported_request") {
+        ctx.pipeline.message_threads.mark_stateless(&canonical);
+    }
 }
 
 async fn execute_single_target_step(

@@ -62,7 +62,7 @@ function tryParseJsonString(val: string): unknown | null {
   if (!isJsonEnclosed) return null;
   try {
     return JSON.parse(val);
-  } catch (_e) {
+  } catch {
     return null;
   }
 }
@@ -116,7 +116,7 @@ export function formatJson(value: unknown): string {
   try {
     const pruned = pruneValueForDisplay(value);
     return typeof pruned === "string" ? pruned : JSON.stringify(pruned, null, 2);
-  } catch (_e: unknown) {
+  } catch {
     return String(value);
   }
 }

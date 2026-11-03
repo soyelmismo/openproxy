@@ -240,8 +240,31 @@ impl PipelineStage for FormattingStage {
         };
 
         let formatter = crate::formatting::get_formatter(target_format);
+        let (effective_messages_ref, synthetic_thread_header) =
+            crate::message_threads::resolve_synthetic_thread_plan(
+                ctx,
+                target_format,
+                adapter.id().as_str(),
+                messages_ref,
+            );
+
         let body_bytes = match formatter
-            .format_request(req_ref, &effective_model, messages_ref, stream, &adapter)
+            .format_request(
+                req_ref,
+                &effective_model,
+                effective_messages_ref,
+                stream,
+                &adapter,
+            )
+            .and_then(|body| {
+                if let Some(thread_obj) = synthetic_thread_header.as_ref() {
+                    openproxy_adapters::adapters::traits::patch_json_request_body(body, |obj| {
+                        obj.insert("thread".to_string(), thread_obj.clone());
+                    })
+                } else {
+                    Ok(body)
+                }
+            })
             .and_then(|body| {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             })

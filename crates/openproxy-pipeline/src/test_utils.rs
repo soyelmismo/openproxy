@@ -394,18 +394,21 @@ pub fn seed_target_with_account(
 
 /// Helper to construct a test `Pipeline` backed by a `DbPool`.
 pub fn test_pipeline_with_pool(pool: DbPool, config: PipelineConfig) -> crate::Pipeline {
-    crate::Pipeline::with_db_pool_selection_registry(
+    crate::Pipeline::with_db_pool_services(
         pool,
         config,
-        Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        Arc::new(openproxy_types::SelectionRegistry::new()),
-        crate::circuit_breaker::CircuitBreakerRegistry::new(
-            &openproxy_types::config::CircuitBreakerConfig {
-                failure_threshold: 5,
-                unhealthy_duration_ms: 60_000,
-            },
-        ),
-        Arc::new(crate::predictive_rate_limit::PredictiveRateLimiter::new()),
-        Arc::new(crate::session_affinity::SessionAffinityRegistry::new()),
+        crate::PipelineServices {
+            record_bodies_and_headers: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            selection_registry: Arc::new(openproxy_types::SelectionRegistry::new()),
+            circuit_breaker: crate::circuit_breaker::CircuitBreakerRegistry::new(
+                &openproxy_types::config::CircuitBreakerConfig {
+                    failure_threshold: 5,
+                    unhealthy_duration_ms: 60_000,
+                },
+            ),
+            predictive_limiter: Arc::new(crate::predictive_rate_limit::PredictiveRateLimiter::new()),
+            session_affinity: Arc::new(crate::session_affinity::SessionAffinityRegistry::new()),
+            message_threads: Arc::new(crate::message_threads::MessageThreadRegistry::new()),
+        },
     )
 }

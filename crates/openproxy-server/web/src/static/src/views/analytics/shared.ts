@@ -345,10 +345,10 @@ export function dateToSeconds(date: string): number {
 
 /** Convert daily usage rows into uPlot `AlignedData`: [xs, reqs, errors, cost]. */
 export function dailyUsageData(rows: ByDayRow[]): uPlot.AlignedData {
-  const xs: number[] = new Array<number>(rows.length);
-  const reqs: number[] = new Array<number>(rows.length);
-  const errors: number[] = new Array<number>(rows.length);
-  const cost: number[] = new Array<number>(rows.length);
+  const xs: number[] = Array.from({ length: rows.length });
+  const reqs: number[] = Array.from({ length: rows.length });
+  const errors: number[] = Array.from({ length: rows.length });
+  const cost: number[] = Array.from({ length: rows.length });
   for (let i = 0; i < rows.length; i++) {
     const r: ByDayRow = rows[i]!;
     xs[i] = dateToSeconds(r.date);

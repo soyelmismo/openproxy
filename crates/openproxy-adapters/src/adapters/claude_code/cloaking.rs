@@ -43,6 +43,7 @@ pub const BETA_EFFORT: &str = "effort-2025-11-24";
 pub const BETA_MID_CONV_SYSTEM: &str = "mid-conversation-system-2026-04-07";
 pub const BETA_MID_CONV_TOOL: &str = "mid-conversation-tool-changes-2026-07-01";
 pub const BETA_PER_TURN_CONTROL: &str = "per-turn-control-2026-07-01";
+pub const BETA_MESSAGE_THREADS: &str = "message-threads-2026-08-12";
 pub const BETA_OAUTH: &str = "oauth-2025-04-20";
 pub const BETA_FALLBACKS: [&str; 2] = [
     "server-side-fallback-2026-06-01",
@@ -543,47 +544,74 @@ pub fn cloak_claude_request_body_from_profile(
     if let Some(ttl) = caller_system_ttl {
         identity_block["cache_control"]["ttl"] = ttl;
     }
-    let mut system_blocks = vec![billing_block, identity_block];
-    let lower_model = normalize_model(model_id);
-    if model_matches(&lower_model, "fable-5-1") {
-        system_blocks.push(serde_json::json!({
-            "type": "text",
-            "text": CLAUDE_CODE_FABLE_REPORTING_OUTCOMES
-        }));
+    // Thread continue requests omit system, tools, output_config, context_management, fallbacks, etc.
+    // Anthropic validates that continue requests carry ONLY:
+    // model, max_tokens, messages, thread, metadata (user_id/session_id), thinking, stream.
+    // Any extra inputs (like context_management, output_config, system, tools, fallbacks) trigger
+    // "thread: Extra inputs are not permitted".
+    let is_thread_continue = json
+        .get("thread")
+        .and_then(|t| t.get("type"))
+        .and_then(|t| t.as_str())
+        == Some("continue");
+
+    if !is_thread_continue {
+        let mut system_blocks = vec![billing_block, identity_block];
+        let lower_model = normalize_model(model_id);
+        if model_matches(&lower_model, "fable-5-1") {
+            system_blocks.push(serde_json::json!({
+                "type": "text",
+                "text": CLAUDE_CODE_FABLE_REPORTING_OUTCOMES
+            }));
+        }
+
+        if let Some(obj) = json.as_object_mut() {
+            obj.insert(
+                "system".to_string(),
+                serde_json::Value::Array(system_blocks),
+            );
+        }
+
+        if !caller_prompts.is_empty() {
+            let combined = caller_prompts.join("\n\n");
+            inject_system_reminder(json, &combined);
+        }
+    } else if let Some(obj) = json.as_object_mut() {
+        // Continue turns inherit system and tools from the thread anchor; omit them completely.
+        obj.remove("system");
+        obj.remove("tools");
     }
 
-    if let Some(obj) = json.as_object_mut() {
-        obj.insert(
-            "system".to_string(),
-            serde_json::Value::Array(system_blocks),
-        );
+    if !is_thread_continue {
+        // Upstreams classify third-party clients partly by the shape of the tool
+        // names: snake_case in volume is rejected. Rename them to TitleCase here so
+        // the signature below and every later stage see the cloaked bytes; the
+        // response side maps the names back to what the client sent.
+        let tool_rename_map = build_tool_rename_map(json);
+        rename_tool_names_in_body(json, &tool_rename_map);
+
+        // Body defaults come from the pinned profile snapshot and never overwrite
+        // an explicit caller value.
+        apply_thinking_defaults(json, model_id, profile);
+        apply_output_config_defaults(json, model_id, profile);
+        apply_context_management_defaults(json, profile);
+
+        apply_model_fallbacks(json, model_id);
+        apply_user_id_metadata(json, account_uuid, session_id, device_id);
+
+        crate::anthropic_cache::ensure_anthropic_cache_control(json);
+        crate::anthropic_cache::inject_tools_cache_control(json);
+        // Promote the freshly placed breakpoints to the native 1h TTL, preserving
+        // any explicit caller TTL such as a pinned `5m`.
+        apply_claude_code_cache_ttl(json, &profile.cache_ttl);
+        crate::anthropic_cache::enforce_cache_control_limit(json, 4);
+    } else {
+        apply_thinking_defaults(json, model_id, profile);
+        apply_user_id_metadata(json, account_uuid, session_id, device_id);
+        if let Some(obj) = json.as_object_mut() {
+            obj.remove("output_config");
+            obj.remove("context_management");
+            obj.remove("fallbacks");
+        }
     }
-
-    if !caller_prompts.is_empty() {
-        let combined = caller_prompts.join("\n\n");
-        inject_system_reminder(json, &combined);
-    }
-
-    // Upstreams classify third-party clients partly by the shape of the tool
-    // names: snake_case in volume is rejected. Rename them to TitleCase here so
-    // the signature below and every later stage see the cloaked bytes; the
-    // response side maps the names back to what the client sent.
-    let tool_rename_map = build_tool_rename_map(json);
-    rename_tool_names_in_body(json, &tool_rename_map);
-
-    // Body defaults come from the pinned profile snapshot and never overwrite
-    // an explicit caller value.
-    apply_thinking_defaults(json, model_id, profile);
-    apply_output_config_defaults(json, model_id, profile);
-    apply_context_management_defaults(json, profile);
-
-    apply_model_fallbacks(json, model_id);
-    apply_user_id_metadata(json, account_uuid, session_id, device_id);
-
-    crate::anthropic_cache::ensure_anthropic_cache_control(json);
-    crate::anthropic_cache::inject_tools_cache_control(json);
-    // Promote the freshly placed breakpoints to the native 1h TTL, preserving
-    // any explicit caller TTL such as a pinned `5m`.
-    apply_claude_code_cache_ttl(json, &profile.cache_ttl);
-    crate::anthropic_cache::enforce_cache_control_limit(json, 4);
 }

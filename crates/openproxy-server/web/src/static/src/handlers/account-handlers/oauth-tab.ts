@@ -399,7 +399,7 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     // the token endpoint as the code.
     if (!code && !parsedAsUrl) {
       const keyMatch = input.match(
-        /(cmd_[a-zA-Z0-9_\-]+|user_[a-zA-Z0-9_\-]+)/,
+        /(cmd_[a-zA-Z0-9_-]+|user_[a-zA-Z0-9_-]+)/,
       );
       if (keyMatch) {
         code = keyMatch[1] ?? null;

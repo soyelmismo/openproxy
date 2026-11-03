@@ -123,7 +123,7 @@ export async function copyAccountApiKey(id: number): Promise<void> {
       try {
         await copyToClipboard(res.api_key);
         showToast("API key copied to clipboard", "success");
-      } catch (_e: unknown) {
+      } catch {
         showApiKeyDisplay(res.api_key);
       }
     } else {

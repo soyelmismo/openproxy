@@ -43,6 +43,16 @@ pub(super) fn parse_translated_sse_line(
             else {
                 return Ok(None);
             };
+            if state.upstream_message_id.is_none()
+                && let Some(rest) = payload.strip_prefix("message_start\n")
+                && let Ok(v) = serde_json::from_str::<serde_json::Value>(rest)
+                && let Some(mid) = v
+                    .get("message")
+                    .and_then(|m| m.get("id"))
+                    .and_then(|i| i.as_str())
+            {
+                state.upstream_message_id = Some(mid.to_string());
+            }
             crate::sse::translate_anthropic_sse_event(
                 &payload,
                 chunk_id,

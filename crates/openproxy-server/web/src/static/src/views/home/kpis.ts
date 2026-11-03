@@ -159,8 +159,8 @@ function sparklineData(
 ): uPlot.AlignedData {
   const start: number = Math.max(0, points.length - n);
   const len: number = points.length - start;
-  const xs: number[] = new Array<number>(len);
-  const ys: number[] = new Array<number>(len);
+  const xs: number[] = Array.from({ length: len });
+  const ys: number[] = Array.from({ length: len });
   for (let i = 0; i < len; i++) {
     const p: ThroughputPoint = points[start + i]!;
     xs[i] = i;
@@ -170,8 +170,8 @@ function sparklineData(
 }
 
 function successSparkline(points: StatusCodePoint[]): uPlot.AlignedData {
-  const xs: number[] = new Array<number>(points.length);
-  const ys: Array<number | null> = new Array<number | null>(points.length);
+  const xs: number[] = Array.from({ length: points.length });
+  const ys: Array<number | null> = Array.from({ length: points.length });
   for (let i = 0; i < points.length; i++) {
     const p: StatusCodePoint = points[i]!;
     const total: number = p.s2xx + p.s4xx + p.s5xx;

@@ -22,7 +22,7 @@ function summarizeRequestBody(body: unknown): string {
   let parsed: unknown = body;
   if (typeof body === "string") {
     try { parsed = JSON.parse(body); }
-    catch (_e: unknown) {
+    catch {
       return truncateForBundle(body);
     }
   }
@@ -306,7 +306,7 @@ export async function copyRawJson(rawJson: unknown, _e?: Event): Promise<void> {
   try {
     await copyToClipboard(text);
     showToast("Log JSON copiado al portapapeles.", "success");
-  } catch (_err) {
+  } catch {
     showToast("No se pudo copiar el JSON al portapapeles.", "warning");
   }
 }
@@ -365,7 +365,7 @@ export async function copyDebugBundle(): Promise<void> {
   try {
     await copyToClipboard(bundle);
     showToast("Debug bundle copied to clipboard.", "success");
-  } catch (_err) {
+  } catch {
     showBundleInModal(bundle, "Copy failed — select the text below and press Ctrl+C");
     showToast("Copy unavailable — bundle shown in a window for manual copy.", "warning");
   }

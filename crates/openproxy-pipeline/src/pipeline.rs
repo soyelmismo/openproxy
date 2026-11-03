@@ -148,17 +148,19 @@ pub struct Pipeline {
     pub(crate) record_bodies_and_headers: Arc<AtomicBool>,
     pub predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
     pub session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
+    pub message_threads: Arc<crate::message_threads::MessageThreadRegistry>,
     pub tracker: crate::usage_tracker::UsageTracker,
     pub dispatcher: crate::upstream_dispatcher::UpstreamDispatcher,
     pub(crate) repo: Arc<dyn crate::repository::PipelineRepository>,
 }
 
-struct PipelineServices {
-    record_bodies_and_headers: Arc<AtomicBool>,
-    selection_registry: Arc<SelectionRegistry>,
-    circuit_breaker: CircuitBreakerRegistry,
-    predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
-    session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
+pub struct PipelineServices {
+    pub record_bodies_and_headers: Arc<AtomicBool>,
+    pub selection_registry: Arc<SelectionRegistry>,
+    pub circuit_breaker: CircuitBreakerRegistry,
+    pub predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
+    pub session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
+    pub message_threads: Arc<crate::message_threads::MessageThreadRegistry>,
 }
 
 impl Pipeline {
@@ -226,6 +228,7 @@ impl Pipeline {
                 circuit_breaker,
                 predictive_limiter,
                 session_affinity,
+                message_threads: Arc::new(crate::message_threads::MessageThreadRegistry::new()),
             },
         )
     }
@@ -256,6 +259,7 @@ impl Pipeline {
             circuit_breaker,
             predictive_limiter,
             session_affinity,
+            message_threads,
         } = services;
         let tracker = crate::usage_tracker::UsageTracker {
             conn: Arc::clone(&conn),
@@ -268,12 +272,13 @@ impl Pipeline {
             repo: Arc::clone(&repo),
             coordinator: None,
         };
-        let dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
+        let mut dispatcher = crate::upstream_dispatcher::UpstreamDispatcher::new(
             Arc::clone(&conn),
             config.clone(),
             tracker.clone(),
             Arc::clone(&record_bodies_and_headers),
         );
+        dispatcher.message_threads = Some(Arc::clone(&message_threads));
         Self {
             conn,
             db_pool,
@@ -284,6 +289,7 @@ impl Pipeline {
             record_bodies_and_headers,
             predictive_limiter,
             session_affinity,
+            message_threads,
             tracker,
             dispatcher,
             repo,
@@ -313,33 +319,19 @@ impl Pipeline {
                     crate::predictive_rate_limit::PredictiveRateLimiter::new(),
                 ),
                 session_affinity: Arc::new(crate::session_affinity::SessionAffinityRegistry::new()),
+                message_threads: Arc::new(crate::message_threads::MessageThreadRegistry::new()),
             },
             repo,
         )
     }
 
     /// Production constructor: reads use the pool's readers; writes use its writer.
-    pub fn with_db_pool_selection_registry(
+    pub fn with_db_pool_services(
         pool: openproxy_db::DbPool,
         config: PipelineConfig,
-        record_bodies_and_headers: Arc<AtomicBool>,
-        selection_registry: Arc<SelectionRegistry>,
-        circuit_breaker: CircuitBreakerRegistry,
-        predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
-        session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
+        services: PipelineServices,
     ) -> Self {
-        Self::build(
-            pool.writer_arc(),
-            Some(pool),
-            config,
-            PipelineServices {
-                record_bodies_and_headers,
-                selection_registry,
-                circuit_breaker,
-                predictive_limiter,
-                session_affinity,
-            },
-        )
+        Self::build(pool.writer_arc(), Some(pool), config, services)
     }
 
     pub fn with_journal_coordinator(

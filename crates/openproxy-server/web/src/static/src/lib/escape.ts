@@ -28,5 +28,5 @@ export function extractApiErrorMessage(e: unknown): string | null {
   const m = message.match(/"error"\s*:\s*\{[\s\S]*?"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (!m) return null;
   try { return JSON.parse('"' + (m[1] ?? "") + '"') as string; }
-  catch (_err: unknown) { return m[1] ?? null; }
+  catch { return m[1] ?? null; }
 }

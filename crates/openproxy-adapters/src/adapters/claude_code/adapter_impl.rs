@@ -218,6 +218,7 @@ impl ProviderAdapter for ClaudeCodeAdapter {
                         cloaking::BETA_EXTENDED_CACHE_TTL,
                         cloaking::BETA_STRUCTURED_OUTPUTS,
                         cloaking::BETA_EFFORT,
+                        cloaking::BETA_MESSAGE_THREADS,
                     ]
                     .iter()
                     .any(|conditional| beta.eq_ignore_ascii_case(conditional))
@@ -248,8 +249,16 @@ impl ProviderAdapter for ClaudeCodeAdapter {
         // Sign the CCH over the exact finalized bytes. This runs after
         // formatting, wrapping, parameter stripping and header propagation, so
         // the checksum describes the payload that is actually dispatched.
-        // Signing failures are surfaced, never ignored.
-        signing::sign_anthropic_messages_body(&mut body_bytes)?;
+        // Thread continue requests omit `system` (including billing header), so
+        // CCH placeholder is not expected on continue turns.
+        let is_thread_continue = json
+            .get("thread")
+            .and_then(|t| t.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("continue");
+        if !is_thread_continue {
+            signing::sign_anthropic_messages_body(&mut body_bytes)?;
+        }
 
         Ok(bytes::Bytes::from(body_bytes))
     }

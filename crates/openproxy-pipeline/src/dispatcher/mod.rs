@@ -32,6 +32,7 @@ pub struct UpstreamDispatcher {
     pub(crate) config: crate::PipelineConfig,
     pub(crate) tracker: crate::usage_tracker::UsageTracker,
     pub(crate) record_bodies_and_headers: Arc<std::sync::atomic::AtomicBool>,
+    pub message_threads: Option<Arc<crate::message_threads::MessageThreadRegistry>>,
 }
 
 pub trait Dispatcher: Send + Sync {
@@ -62,6 +63,7 @@ impl UpstreamDispatcher {
             config,
             tracker,
             record_bodies_and_headers,
+            message_threads: None,
         }
     }
 

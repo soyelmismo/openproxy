@@ -151,7 +151,7 @@ export async function refreshUnreadCount(): Promise<void> {
         dirty = false;
       }
     }
-  } catch (_e: unknown) {
+  } catch {
     // Swallow: the 30s poll retries. The badge stays at its last-known value rather than
     // flickering to 0.
   }
@@ -268,7 +268,7 @@ export function formatRelativeAgo(iso: string, nowMs: number = Date.now()): stri
     }
     createdMs = Date.parse(normalizedIso);
     if (!Number.isFinite(createdMs)) return "";
-  } catch (_e: unknown) {
+  } catch {
     return "";
   }
   const deltaSec: number = Math.max(0, Math.floor((nowMs - createdMs) / 1000));
@@ -304,7 +304,7 @@ export function initNotificationsStore(): void {
     if (!isLoggedIn()) return;
     const ws: WebSocket | null = state.logs.ws;
     if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-      try { connectLogsWebSocket(); } catch (_e: unknown) { /* swallow — next tick */ }
+      try { connectLogsWebSocket(); } catch { /* swallow — next tick */ }
     }
   }, 5000);
 

@@ -11,12 +11,12 @@ let current: Theme = "light";
 
 function readStored(): string | null {
   try { return localStorage.getItem(THEME_STORAGE_KEY); }
-  catch (_e: unknown) { return null; }
+  catch { return null; }
 }
 
 function writeStored(value: string): void {
   try { localStorage.setItem(THEME_STORAGE_KEY, value); }
-  catch (_e: unknown) { /* private mode etc. */ }
+  catch { /* private mode etc. */ }
 }
 
 function detectInitial(): Theme {

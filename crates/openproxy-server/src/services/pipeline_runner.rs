@@ -102,16 +102,16 @@ impl PipelineRunner {
             modality_routing: state.modality_routing(),
             background_tx: state.background_tx(),
         };
-        Pipeline::with_db_pool_selection_registry(
-            state.db_pool().as_ref().clone(),
-            config,
-            state.record_bodies_and_flags(),
-            state.selection_registry(),
-            state.circuit_breaker(),
-            state.predictive_limiter(),
-            state.session_affinity(),
-        )
-        .with_journal_coordinator(Arc::clone(state.usage_worker().coordinator()))
+        let services = openproxy_pipeline::PipelineServices {
+            record_bodies_and_headers: state.record_bodies_and_flags(),
+            selection_registry: state.selection_registry(),
+            circuit_breaker: state.circuit_breaker(),
+            predictive_limiter: state.predictive_limiter(),
+            session_affinity: state.session_affinity(),
+            message_threads: state.message_threads(),
+        };
+        Pipeline::with_db_pool_services(state.db_pool().as_ref().clone(), config, services)
+            .with_journal_coordinator(Arc::clone(state.usage_worker().coordinator()))
     }
 
     /// Calculate watchdog budget in milliseconds respecting `x-request-deadline-ms` header.

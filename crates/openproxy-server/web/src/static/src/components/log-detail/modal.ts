@@ -426,7 +426,7 @@ function renderModal() {
     stages: [safeAttempt],
     detail: undefined
   } : {
-    ...(detailObj ?? {}),
+    ...detailObj,
     id: attempt.rowId ?? detailObj?.['id'],
     request_id: attempt.requestId,
     trace_id: attempt.traceId,

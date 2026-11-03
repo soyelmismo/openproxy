@@ -281,14 +281,14 @@ function parseToolCallArguments(args: unknown): { pretty: string } | null {
     try {
       const parsed: unknown = JSON.parse(args);
       return { pretty: JSON.stringify(parsed, null, 2) };
-    } catch (_e: unknown) {
+    } catch {
       return { pretty: args };
     }
   }
   if (Array.isArray(args) || (typeof args === "object" && args !== null)) {
     try {
       return { pretty: JSON.stringify(args, null, 2) };
-    } catch (_e: unknown) {
+    } catch {
       return { pretty: String(args) };
     }
   }
@@ -304,7 +304,7 @@ function renderToolCallArgsBlock(args: unknown): TemplateResult | null {
   let parsed: Record<string, unknown> | null = null;
   if (typeof args === "string") {
     try { parsed = JSON.parse(args) as Record<string, unknown>; }
-    catch (_e: unknown) { /* fall through to raw */ }
+    catch { /* fall through to raw */ }
   } else if (typeof args === "object" && args !== null && !Array.isArray(args)) {
     parsed = args as Record<string, unknown>;
   }
@@ -481,7 +481,7 @@ function extractFallbackResponseData(response: unknown): {
   let content: string | null = null;
   let reasoning: string | null = null;
   let toolCalls: ToolCall[] = [];
-  let otherProperties: Record<string, unknown> | null = null;
+  let otherProperties: Record<string, unknown> = {};
 
   const choices: unknown = obj["choices"];
   if (Array.isArray(choices) && choices.length > 0) {
@@ -499,7 +499,7 @@ function extractFallbackResponseData(response: unknown): {
       }
       const choiceProps = collectFilteredProperties(c0, CHOICE_RESPONSE_IGNORED_KEYS, "choice.");
       if (Object.keys(choiceProps).length > 0) {
-        otherProperties = { ...(otherProperties ?? {}), ...choiceProps };
+        otherProperties = { ...otherProperties, ...choiceProps };
       }
     }
   } else {
@@ -515,7 +515,7 @@ function extractFallbackResponseData(response: unknown): {
 
   const topLevelProps = collectFilteredProperties(obj, TOP_LEVEL_RESPONSE_IGNORED_KEYS);
   if (Object.keys(topLevelProps).length > 0) {
-    otherProperties = { ...(otherProperties ?? {}), ...topLevelProps };
+    otherProperties = { ...otherProperties, ...topLevelProps };
   }
 
   return { content, reasoning, toolCalls, otherProperties };

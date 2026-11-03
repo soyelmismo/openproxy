@@ -493,7 +493,7 @@ export function renderRequestTab(requestBody: unknown, createdAt?: string): Temp
     const trimmed = body.trimStart();
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       try { body = JSON.parse(body); }
-      catch (_e: unknown) { /* fall through with the raw string */ }
+      catch { /* fall through with the raw string */ }
     }
   }
 
@@ -560,7 +560,7 @@ export function renderResponseTab(
     let parsed: Record<string, unknown> | null = null;
     try {
       parsed = JSON.parse(response) as Record<string, unknown>;
-    } catch (_e: unknown) {
+    } catch {
       parsed = null;
     }
     if (parsed != null && typeof parsed === "object") {

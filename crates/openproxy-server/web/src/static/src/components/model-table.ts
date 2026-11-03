@@ -49,7 +49,7 @@ export function renderCapabilityBadges(json: string | null | undefined, modelTyp
   if (json != null) {
     let caps: unknown;
     if (typeof json === "string") {
-      try { caps = JSON.parse(json) as unknown; } catch (_e: unknown) { caps = null; }
+      try { caps = JSON.parse(json) as unknown; } catch { caps = null; }
     } else {
       caps = json;
     }

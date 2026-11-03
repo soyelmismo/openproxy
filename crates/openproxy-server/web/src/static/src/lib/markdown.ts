@@ -390,7 +390,7 @@ export function renderMarkdownAndMath(rawText: string): string {
   });
 
   // Step 3: pre-process inline math ($...$ and \(...\))
-  text = text.replace(/\$([^\$\s](?:[^\$]*?[^\$\s])?)\$/g, (_match, mathContent) => {
+  text = text.replace(/\$([^$\s](?:[^$]*?[^$\s])?)\$/g, (_match, mathContent) => {
     if (/^\d+(?:\.\d+)?$/.test(mathContent.trim())) {
       return `$${mathContent}$`;
     }
@@ -432,7 +432,7 @@ export function renderMarkdownAndMath(rawText: string): string {
   // Step 11: parse inline Markdown (bold, italic, strikethrough, links).
   text = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   text = text.replace(/__(.*?)__/g, '<strong>$1</strong>');
-  text = text.replace(/(^|[^\*])\*([^\*]+)\*([^\*]|$)/g, '$1<em>$2</em>$3');
+  text = text.replace(/(^|[^*])\*([^*]+)\*([^*]|$)/g, '$1<em>$2</em>$3');
   text = text.replace(/(^|[^_])_([^_]+)_([^_]|$)/g, '$1<em>$2</em>$3');
   text = text.replace(/~~(.*?)~~/g, '<del>$1</del>');
   // Links: only allowlisted URL schemes become anchors (see `isSafeLinkHref`); rejected

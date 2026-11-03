@@ -88,7 +88,7 @@ export async function refreshUnviewedCount(): Promise<void> {
     });
     latestSeq = resp.latest_seq;
     setUnviewedWarnErrorCount(resp.total_in_buffer);
-  } catch (_e: unknown) {
+  } catch {
     // Next tick retries; the badge keeps its last-known value.
   }
 }

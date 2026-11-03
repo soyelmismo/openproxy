@@ -609,6 +609,26 @@ impl UpstreamDispatcher {
                 response_body_json
             };
 
+        if let Some(registry) = self.message_threads.as_ref()
+            && params.target.provider_id.as_str() == "claude-code"
+        {
+            let canonical = crate::stages::target_headers::session::resolve_canonical_session(
+                &params.req.request_headers,
+                &params.req.openai_request,
+            );
+            let message_id_to_record = args
+                .state
+                .upstream_message_id
+                .as_deref()
+                .unwrap_or(args.chunk_id);
+            registry.record_success(
+                &canonical,
+                Some(params.target.id),
+                &params.req.openai_request.messages,
+                message_id_to_record,
+            );
+        }
+
         let usage_tuple = match crate::usage_tracker::UsageRecordBuilder::new(
             &self.tracker,
             params.req,

@@ -23,9 +23,9 @@ import { formatCompact, formatLatency } from "./kpis.js";
 
 /** Convert throughput points into `[time, requests/s, tokens/s]`. */
 export function throughputData(points: ThroughputPoint[]): uPlot.AlignedData {
-  const xs: number[] = new Array<number>(points.length);
-  const rps: number[] = new Array<number>(points.length);
-  const tps: number[] = new Array<number>(points.length);
+  const xs: number[] = Array.from({ length: points.length });
+  const rps: number[] = Array.from({ length: points.length });
+  const tps: number[] = Array.from({ length: points.length });
   for (let i = 0; i < points.length; i++) {
     const p: ThroughputPoint = points[i]!;
     xs[i] = p.t / 1000;
@@ -36,10 +36,10 @@ export function throughputData(points: ThroughputPoint[]): uPlot.AlignedData {
 }
 
 export function statusCodesData(points: StatusCodePoint[]): uPlot.AlignedData {
-  const xs: number[] = new Array<number>(points.length);
-  const s2xx: number[] = new Array<number>(points.length);
-  const s4xx: number[] = new Array<number>(points.length);
-  const s5xx: number[] = new Array<number>(points.length);
+  const xs: number[] = Array.from({ length: points.length });
+  const s2xx: number[] = Array.from({ length: points.length });
+  const s4xx: number[] = Array.from({ length: points.length });
+  const s5xx: number[] = Array.from({ length: points.length });
   for (let i = 0; i < points.length; i++) {
     const p: StatusCodePoint = points[i]!;
     xs[i] = p.t / 1000;
@@ -53,10 +53,10 @@ export function statusCodesData(points: StatusCodePoint[]): uPlot.AlignedData {
 /** Convert latency points into uPlot's `AlignedData` format:
  *  `[xs, p50, p95, p99]`. */
 export function latencyData(points: LatencyPoint[]): uPlot.AlignedData {
-  const xs: number[] = new Array<number>(points.length);
-  const p50: number[] = new Array<number>(points.length);
-  const p95: number[] = new Array<number>(points.length);
-  const p99: number[] = new Array<number>(points.length);
+  const xs: number[] = Array.from({ length: points.length });
+  const p50: number[] = Array.from({ length: points.length });
+  const p95: number[] = Array.from({ length: points.length });
+  const p99: number[] = Array.from({ length: points.length });
   for (let i = 0; i < points.length; i++) {
     const p: LatencyPoint = points[i]!;
     xs[i] = p.t / 1000;

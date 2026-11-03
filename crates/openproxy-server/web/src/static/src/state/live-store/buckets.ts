@@ -141,7 +141,7 @@ export function windowPercentile(windowBuckets: Bucket[], p: number): number {
   let total = 0;
   for (const b of windowBuckets) total += b.latencies.length;
   if (total === 0) return 0;
-  const all: number[] = new Array<number>(total);
+  const all: number[] = Array.from({ length: total });
   let i = 0;
   for (const b of windowBuckets) {
     for (const lat of b.latencies) {

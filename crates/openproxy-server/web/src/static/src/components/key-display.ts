@@ -36,7 +36,7 @@ export function showPlaintextKey(
               try {
                 await copyToClipboard(plaintext);
                 btn.textContent = "Copied!";
-              } catch (_e: unknown) {
+              } catch {
                 showToast("Copy failed", "error");
               }
             }}>Copy</button>

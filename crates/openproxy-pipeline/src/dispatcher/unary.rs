@@ -332,6 +332,22 @@ impl UpstreamDispatcher {
             .and_then(|d| d.cached_tokens);
 
         let total_ms_now = params.started.elapsed().as_millis() as u64;
+
+        if let Some(registry) = self.message_threads.as_ref()
+            && params.target.provider_id.as_str() == "claude-code"
+        {
+            let canonical = crate::stages::target_headers::session::resolve_canonical_session(
+                &params.req.request_headers,
+                &params.req.openai_request,
+            );
+            registry.record_success(
+                &canonical,
+                Some(params.target.id),
+                &params.req.openai_request.messages,
+                &args.openai_response.id,
+            );
+        }
+
         let request_headers_btm = if self.tracker.is_recording() {
             Some(crate::redact::redact_btreemap_sensitive(
                 params

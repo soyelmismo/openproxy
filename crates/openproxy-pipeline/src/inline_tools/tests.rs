@@ -783,5 +783,8 @@ Verificando servicio openproxy y claves admin disponibles
     assert_eq!(extracted2.tool_calls[0].name, "terminal");
     let args2: Value = serde_json::from_str(&extracted2.tool_calls[0].arguments).unwrap();
     assert!(args2["command"].as_str().unwrap().contains("openproxy"));
-    assert_eq!(args2["intent"], "Verificando servicio openproxy y claves admin disponibles");
+    assert_eq!(
+        args2["intent"],
+        "Verificando servicio openproxy y claves admin disponibles"
+    );
 }

@@ -142,7 +142,7 @@ export function errStr(e: unknown): string {
   const m = e.message.match(/"error"\s*:\s*\{[\s\S]*?"message"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (m) {
     try { return JSON.parse('"' + (m[1] ?? "") + '"') as string; }
-    catch (_err: unknown) { return m[1] ?? e.message; }
+    catch { return m[1] ?? e.message; }
   }
   return e.message;
 }

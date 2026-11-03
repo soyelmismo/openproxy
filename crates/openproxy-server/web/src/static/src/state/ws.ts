@@ -157,13 +157,13 @@ function openLogsWebSocket(url: string): void {
     // No traffic for 30s: the close handler drives the reconnect.
     if (Date.now() - lastPong > 30_000) {
       console.warn("[openproxy] live-logs WS heartbeat timeout — no pong in 30s, forcing reconnect");
-      try { ws.close(); } catch (_e: unknown) { /* already closed */ }
+      try { ws.close(); } catch { /* already closed */ }
       clearInterval(heartbeatHandle);
       return;
     }
     try {
       ws.send(JSON.stringify({ type: "ping" }));
-    } catch (_e: unknown) {
+    } catch {
       // Send failed — connection is broken. The close handler
       // will trigger a reconnect.
       clearInterval(heartbeatHandle);
@@ -215,7 +215,7 @@ function openLogsWebSocket(url: string): void {
             dispatchWs(parsed as WsEnvelope);
           }
         }
-      } catch (_e) {
+      } catch {
         // Malformed JSON — logs handler already toasted. Skip dispatch.
       }
     }
@@ -237,7 +237,7 @@ export function disconnectLogsWebSocket(): void {
   clearLogsReconnectTimer();
   connectGeneration += 1; // invalidate any in-flight ticket request
   if (state.logs.ws) {
-    try { state.logs.ws.close(); } catch (_e: unknown) { /* already closed */ }
+    try { state.logs.ws.close(); } catch { /* already closed */ }
     state.logs.ws = null;
   }
   setLogsStatus("disconnected");

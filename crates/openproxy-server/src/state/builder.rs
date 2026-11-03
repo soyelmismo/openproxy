@@ -125,6 +125,7 @@ impl AppState {
         );
         let predictive_limiter = Arc::new(openproxy_pipeline::PredictiveRateLimiter::new());
         let session_affinity = Arc::new(openproxy_pipeline::SessionAffinityRegistry::new());
+        let message_threads = Arc::new(openproxy_pipeline::MessageThreadRegistry::new());
         let api_key_cache = Arc::new(dashmap::DashMap::new());
         spawn_memory_cleanup(
             &supervisor,
@@ -176,6 +177,7 @@ impl AppState {
             circuit_breaker,
             predictive_limiter,
             session_affinity,
+            message_threads,
             maintenance_cell,
             vacuum_status,
             backfill_status,
@@ -309,6 +311,7 @@ impl AppState {
             circuit_breaker,
             predictive_limiter,
             session_affinity: Arc::new(openproxy_pipeline::SessionAffinityRegistry::new()),
+            message_threads: Arc::new(openproxy_pipeline::MessageThreadRegistry::new()),
             maintenance_cell,
             vacuum_status,
             backfill_status,

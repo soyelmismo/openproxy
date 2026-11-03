@@ -41,7 +41,7 @@ function runTickAndRearm(cb: TickCallback, state: { stopped: boolean }, rearm: (
   void (async () => {
     try {
       await cb();
-    } catch (_e: unknown) {
+    } catch {
       // Swallow: the next tick retries, matching the chained-setTimeout polls
       // this replaces.
     } finally {

@@ -3,8 +3,8 @@
 pub mod pipeline;
 pub use pipeline::{
     ErrorPhase, FailureContext, PartialFailureParams, Pipeline, PipelineConfig, PipelineRequest,
-    PipelineResult, SSE_DONE_BYTES, SingleExecutionParams, is_upstream_health_issue,
-    parse_retry_after_ms,
+    PipelineResult, PipelineServices, SSE_DONE_BYTES, SingleExecutionParams,
+    is_upstream_health_issue, parse_retry_after_ms,
 };
 pub mod race_sink;
 pub use race_sink::{StreamSink, StreamSinkError};
@@ -37,8 +37,10 @@ pub mod pii;
 pub mod policy;
 pub use pii::{PiiEngine, PiiRestorationStage, PiiSession, StreamingWindowReplacer};
 pub use policy::EffectiveTargetPolicy;
+pub mod message_threads;
 pub mod redact;
 pub mod schema_sanitizer;
+pub use message_threads::MessageThreadRegistry;
 pub mod session_affinity;
 pub mod sse;
 pub mod sse_accumulator;

@@ -12,7 +12,7 @@ export interface ParsedKeyEntry {
 }
 
 export function cleanApiKeyToken(token: string): string {
-  return token.replace(/^["'`(\[{<\s]+|["'`)\]}>,;\.\s]+$/g, "").trim();
+  return token.replace(/^["'`([{<\s]+|["'`)\]}>,;.\s]+$/g, "").trim();
 }
 
 export function looksLikeApiKey(token: string): boolean {
@@ -20,11 +20,11 @@ export function looksLikeApiKey(token: string): boolean {
   if (cleaned.length < 8) return false;
 
   // 1. Google AI Studio (AIzaSy…) and Vertex OAuth/refresh (AQ.Ab…)
-  if (/^AIza[0-9A-Za-z\-_]{30,}$/.test(cleaned)) return true;
-  if (/^AQ\.[a-zA-Z0-9_\-\.]{20,}$/.test(cleaned)) return true;
+  if (/^AIza[0-9A-Za-z-_]{30,}$/.test(cleaned)) return true;
+  if (/^AQ\.[a-zA-Z0-9_\-.]{20,}$/.test(cleaned)) return true;
 
   // 2. JWTs (eyJh…)
-  if (/^eyJh[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+$/.test(cleaned)) return true;
+  if (/^eyJh[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/.test(cleaned)) return true;
 
   // 3. UUIDs: 8-4-4-4-12
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cleaned)) {
@@ -37,7 +37,7 @@ export function looksLikeApiKey(token: string): boolean {
   }
 
   // 5. Prefixed keys: 2–10 alphanumeric prefix + '-' or '_' + a ≥ 12 char token
-  if (/^[a-zA-Z0-9]{2,10}[-_][a-zA-Z0-9_\-\.]{12,}$/.test(cleaned)) {
+  if (/^[a-zA-Z0-9]{2,10}[-_][a-zA-Z0-9_\-.]{12,}$/.test(cleaned)) {
     const hasDigit = /[0-9]/.test(cleaned);
     const hasMixed = /[a-z]/.test(cleaned) && /[A-Z]/.test(cleaned);
     if (hasDigit || hasMixed) return true;
@@ -45,7 +45,7 @@ export function looksLikeApiKey(token: string): boolean {
 
   // 6. Generic high-entropy base64 or alphanumeric tokens
   if (
-    /^[A-Za-z0-9_\-\.]{20,}$/.test(cleaned) &&
+    /^[A-Za-z0-9_\-.]{20,}$/.test(cleaned) &&
     /[0-9]/.test(cleaned) &&
     /[a-zA-Z]/.test(cleaned)
   ) {
@@ -126,18 +126,18 @@ export function extractKeysFromDirtyLine(line: string): ParsedKeyEntry[] {
     }
   };
 
-  const jwtRegex = /\b(eyJh[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+)\b/g;
+  const jwtRegex = /\b(eyJh[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)\b/g;
   let m: RegExpExecArray | null;
   while ((m = jwtRegex.exec(line)) !== null) {
     if (m[1]) add(m[1]);
   }
 
-  const googleRegex = /\b(AIza[0-9A-Za-z\-_]{30,}|AQ\.[a-zA-Z0-9_\-\.]{20,})\b/g;
+  const googleRegex = /\b(AIza[0-9A-Za-z-_]{30,}|AQ\.[a-zA-Z0-9_\-.]{20,})\b/g;
   while ((m = googleRegex.exec(line)) !== null) {
     if (m[1]) add(m[1]);
   }
 
-  const prefixRegex = /\b([a-zA-Z0-9]{2,10}[-_][a-zA-Z0-9_\-\.]{12,})\b/g;
+  const prefixRegex = /\b([a-zA-Z0-9]{2,10}[-_][a-zA-Z0-9_\-.]{12,})\b/g;
   while ((m = prefixRegex.exec(line)) !== null) {
     if (m[1]) add(m[1]);
   }
@@ -152,7 +152,7 @@ export function extractKeysFromDirtyLine(line: string): ParsedKeyEntry[] {
     if (m[1]) add(m[1]);
   }
 
-  const tokens = line.split(/[\s,;"'<>`()\[\]{}|=:]+/);
+  const tokens = line.split(/[\s,;"'<>`()[]{}=|:]+/);
   for (const t of tokens) {
     add(t);
   }
@@ -225,7 +225,7 @@ export function parseBulkApiKeys(rawText: string): ParsedKeyEntry[] {
     }
 
     // Strip markdown list markers: "1. ", "- ", "* ", "• ", "[1] "
-    line = line.replace(/^(?:[-*+•]|\d+[\.\)]|\[\d+\])\s+/, "").trim();
+    line = line.replace(/^(?:[-*+•]|\d+[.)]|\[\d+\])\s+/, "").trim();
 
     // Inline comment: "key # label" or "key // label"
     let inlineComment: string | undefined;

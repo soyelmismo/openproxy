@@ -1,7 +1,7 @@
 use super::cloaking::{
     BETA_CLAUDE_CODE, BETA_EFFORT, BETA_EXTENDED_CACHE_TTL, BETA_FALLBACKS,
-    BETA_INTERLEAVED_THINKING, BETA_MID_CONV_SYSTEM, BETA_MID_CONV_TOOL, BETA_OAUTH,
-    BETA_PER_TURN_CONTROL, BETA_REDACT_THINKING, BETA_STRUCTURED_OUTPUTS,
+    BETA_INTERLEAVED_THINKING, BETA_MESSAGE_THREADS, BETA_MID_CONV_SYSTEM, BETA_MID_CONV_TOOL,
+    BETA_OAUTH, BETA_PER_TURN_CONTROL, BETA_REDACT_THINKING, BETA_STRUCTURED_OUTPUTS,
     BETA_THINKING_DISPLAY_UPDATES, extended_cache_ttl_active, model_matches, normalize_model,
     structured_outputs_active, supports_adaptive_thinking, supports_effort, thinking_active,
     thinking_display_updates_active,
@@ -168,6 +168,12 @@ pub fn build_claude_code_betas_for_body_from_profile(
         betas.push(BETA_EXTENDED_CACHE_TTL.to_string());
     } else if !extended_ttl {
         betas.retain(|beta| beta != BETA_EXTENDED_CACHE_TTL);
+    }
+
+    // Anthropic-Beta header must always include `message-threads-2026-08-12`
+    // whenever a `thread` parameter is present in the request body (both create and continue).
+    if json.get("thread").is_some() && !betas.iter().any(|b| b == BETA_MESSAGE_THREADS) {
+        betas.push(BETA_MESSAGE_THREADS.to_string());
     }
 
     if json

@@ -137,7 +137,7 @@ async function sendImageToInpainting(st: PlaygroundState, b64OrUrl: string, isBa
     if (isBase64) {
       const cleanB64 = b64OrUrl.replace(/^data:image\/\w+;base64,/, '');
       const byteCharacters = atob(cleanB64);
-      const byteNumbers = new Array(byteCharacters.length);
+      const byteNumbers: number[] = Array.from({ length: byteCharacters.length });
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }

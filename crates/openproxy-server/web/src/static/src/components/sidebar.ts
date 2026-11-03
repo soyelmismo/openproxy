@@ -263,8 +263,8 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
 export function toggleSidebar(): void {
   const s = mutableState();
   const nextCollapsed = !s.ui?.sidebarCollapsed;
-  s.ui = { ...(s.ui ?? {}), sidebarCollapsed: nextCollapsed };
-  try { localStorage.setItem(STORAGE_KEY, nextCollapsed ? "1" : "0"); } catch (_e: unknown) {}
+  s.ui = { ...s.ui, sidebarCollapsed: nextCollapsed };
+  try { localStorage.setItem(STORAGE_KEY, nextCollapsed ? "1" : "0"); } catch {}
   renderSidebar();
 }
 
@@ -283,8 +283,8 @@ export function logout(): void {
 export function loadSidebarCollapsedFromStorage(): void {
   const s = mutableState();
   let stored: string | null = null;
-  try { stored = localStorage.getItem(STORAGE_KEY); } catch (_e: unknown) { stored = null; }
+  try { stored = localStorage.getItem(STORAGE_KEY); } catch { stored = null; }
   if (stored !== null) {
-    s.ui = { ...(s.ui ?? {}), sidebarCollapsed: stored === "1" };
+    s.ui = { ...s.ui, sidebarCollapsed: stored === "1" };
   }
 }

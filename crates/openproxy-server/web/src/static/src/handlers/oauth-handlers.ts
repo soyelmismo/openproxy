@@ -133,7 +133,7 @@ export const OAuthLogin: OAuthLoginShape = {
     // authorize URL pasted by mistake) is rejected instead of being shipped
     // to the token endpoint as the code itself.
     if (!code && !parsedAsUrl) {
-      const keyMatch = input.match(/(cmd_[a-zA-Z0-9_\-]+|user_[a-zA-Z0-9_\-]+)/);
+      const keyMatch = input.match(/(cmd_[a-zA-Z0-9_-]+|user_[a-zA-Z0-9_-]+)/);
       if (keyMatch) {
         code = keyMatch[1] ?? null;
       } else if (input.startsWith("cmd_") || input.startsWith("user_") || input.length >= 16) {
@@ -210,7 +210,7 @@ export const OAuthLogin: OAuthLoginShape = {
             if (deviceInfo) deviceInfo.style.display = "none";
             showToast("Device code expired", "error");
           }
-        } catch (_e: unknown) { /* swallow, keep polling */ }
+        } catch { /* swallow, keep polling */ }
       }, 5000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
