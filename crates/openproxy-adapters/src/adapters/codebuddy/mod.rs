@@ -9,6 +9,7 @@ use crate::client_contract::providers::codebuddy_state;
 
 pub mod models;
 pub mod quota;
+pub mod sanitizer;
 #[cfg(test)]
 mod tests;
 
@@ -341,14 +342,19 @@ fn patch_codebuddy_request_object(obj: &mut serde_json::Map<String, serde_json::
         obj.insert("stream".to_string(), serde_json::Value::Bool(true));
     }
 
-    if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut())
-        && (messages.is_empty()
+    sanitizer::normalize_tool_choice(obj);
+    sanitizer::compact_oversized_tools(obj);
+
+    if let Some(messages) = obj.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        if messages.is_empty()
             || messages[0].get("role").and_then(|r| r.as_str()) != Some("system")
             || messages
                 .iter()
-                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer")))
-    {
-        ensure_codebuddy_system_prompt_json(messages);
+                .any(|m| m.get("role").and_then(|r| r.as_str()) == Some("developer"))
+        {
+            ensure_codebuddy_system_prompt_json(messages);
+        }
+        sanitizer::sanitize_system_messages(messages);
     }
 }
 

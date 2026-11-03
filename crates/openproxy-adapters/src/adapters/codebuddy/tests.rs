@@ -566,3 +566,43 @@ fn test_build_codebuddy_resource_request_headers() {
         "CLI"
     );
 }
+
+#[test]
+fn test_codebuddy_sanitizer_normalizes_agent_system_prompts_and_tool_choice() {
+    use super::sanitizer::{
+        NEUTRAL_CODEBUDDY_SYSTEM_PROMPT, normalize_tool_choice, sanitize_system_messages,
+    };
+    use serde_json::json;
+
+    // 1. Agent prompt sanitization
+    let mut messages = vec![
+        json!({
+            "role": "system",
+            "content": "x-anthropic-billing-header: cc_version=2.1.302.974; cc_entrypoint=cli;You are a security monitor for autonomous AI coding agents."
+        }),
+        json!({
+            "role": "user",
+            "content": "hello"
+        }),
+    ];
+    sanitize_system_messages(&mut messages);
+    assert_eq!(
+        messages[0]["content"], NEUTRAL_CODEBUDDY_SYSTEM_PROMPT,
+        "Agent billing/identity header in system message must be neutralized"
+    );
+
+    // 2. Structured tool_choice sanitization
+    let mut req_obj = serde_json::Map::new();
+    req_obj.insert(
+        "tool_choice".to_string(),
+        json!({"type": "function", "function": {"name": "test_func"}}),
+    );
+    normalize_tool_choice(&mut req_obj);
+    assert_eq!(
+        req_obj
+            .get("tool_choice")
+            .and_then(serde_json::Value::as_str),
+        Some("auto"),
+        "Structured tool_choice object must be converted to string 'auto' for Tencent Go backend"
+    );
+}
