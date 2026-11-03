@@ -55,13 +55,33 @@ impl KiroAdapter {
             ..Default::default()
         };
 
+        let token_limits = item.get("tokenLimits");
+        let context_length = token_limits
+            .and_then(|v| v.get("maxInputTokens"))
+            .and_then(|v| v.as_i64())
+            .or(Some(200_000));
+        let max_output_tokens = token_limits
+            .and_then(|v| v.get("maxOutputTokens"))
+            .and_then(|v| v.as_i64())
+            .or(Some(64_000));
+
+        let input_modalities = item
+            .get("supportedInputTypes")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| t.as_str())
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect()
+            });
+
         Some(DiscoveredModel {
             model_id: ModelId::new(model_id_str),
             display_name: Some(display_name_str.to_string()),
             target_format: TargetFormat::Openai,
-            context_length: Some(200_000),
-            max_output_tokens: Some(64_000),
-            input_modalities: None,
+            context_length,
+            max_output_tokens,
+            input_modalities,
             output_modalities: None,
             model_type: Some("chat".to_string()),
             family: None,
