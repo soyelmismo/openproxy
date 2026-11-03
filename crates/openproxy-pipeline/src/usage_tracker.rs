@@ -230,7 +230,10 @@ impl UsageTracker {
         let response_body_json: Option<serde_json::Value> =
             acc.filter(|a| !a.is_completely_empty()).map(|a| {
                 let chunk_id_str = chunk_id.unwrap_or("partial");
-                a.finish(chunk_id_str, created, model_name)
+                let val = a.finish(chunk_id_str, created, model_name);
+                let think_extracted =
+                    crate::think_extractor::extract_think_from_response_value(val);
+                crate::inline_tools::extract_inline_tools_from_response_value(think_extracted)
             });
 
         let is_streaming = req.stream_sink.is_some() || req.openai_request.stream;
