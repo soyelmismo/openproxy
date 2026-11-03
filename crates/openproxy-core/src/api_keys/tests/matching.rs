@@ -128,7 +128,7 @@ fn only_whitelisted_restricts_the_catalog_to_the_allowlist() {
         CreateApiKeyInput {
             label: Some("strict".into()),
             scopes: vec!["chat".into()],
-            allowed_models: Some(vec!["openai".into()]),
+            allowed_models: Some(vec!["openai".into(), "openai/*".into()]),
             only_whitelisted: true,
             ..Default::default()
         },
