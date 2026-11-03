@@ -180,4 +180,16 @@ mod tests {
     fn token_without_expiry_at_all_reports_unknown() {
         assert_eq!(expires_at_for_token(None, "opaque-access-token"), None);
     }
+
+    #[test]
+    fn numeric_claims_with_whitespace_and_invalid_strings() {
+        let token = jwt(&serde_json::json!({
+            "exp": "  1792998934  ",
+            "iat": "invalid-num",
+            "nbf": true
+        }));
+        assert_eq!(claim_i64(&token, "exp"), Some(1_792_998_934));
+        assert_eq!(claim_i64(&token, "iat"), None);
+        assert_eq!(claim_i64(&token, "nbf"), None);
+    }
 }
