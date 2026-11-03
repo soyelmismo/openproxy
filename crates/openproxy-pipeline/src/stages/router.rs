@@ -34,6 +34,12 @@ fn partition_healthy_targets(
             "all targets' accounts unhealthy in circuit_breaker; falling through to pre-CB dispatch"
         );
         parked
+    } else if !parked.is_empty() {
+        // Health-as-priority: try healthy targets first, but append degraded/unhealthy targets
+        // at the end of the candidate list so they act as failovers instead of being dropped.
+        let mut combined = eligible;
+        combined.extend(parked);
+        combined
     } else {
         eligible
     }
@@ -172,5 +178,70 @@ impl PipelineStage for RouterStage {
         }
 
         Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
+    use openproxy_types::ProviderId;
+    use openproxy_types::config::CircuitBreakerConfig;
+    use openproxy_types::ids::{AccountId, ComboTargetId};
+
+    fn make_cb() -> CircuitBreakerRegistry {
+        CircuitBreakerRegistry::new(&CircuitBreakerConfig {
+            failure_threshold: 1,
+            unhealthy_duration_ms: 60_000,
+        })
+    }
+
+    fn make_target(id: i64, account_id: Option<i64>) -> ComboTarget {
+        ComboTarget {
+            id: ComboTargetId(id),
+            provider_id: ProviderId::from("p1"),
+            account_id: account_id.map(AccountId),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_partition_healthy_targets_with_all_healthy() {
+        let cb = make_cb();
+        let targets = vec![make_target(1, Some(10)), make_target(2, Some(20))];
+        let result = partition_healthy_targets(&cb, targets, 1);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id.0, 1);
+        assert_eq!(result[1].id.0, 2);
+    }
+
+    #[test]
+    fn test_partition_healthy_targets_with_all_unhealthy_falls_through() {
+        let cb = make_cb();
+        cb.record_failure(CircuitBreakerKey::Account(AccountId(10)));
+        cb.record_failure(CircuitBreakerKey::Account(AccountId(20)));
+
+        let targets = vec![make_target(1, Some(10)), make_target(2, Some(20))];
+        let result = partition_healthy_targets(&cb, targets, 1);
+        // Does not reject! Falls through to parked targets as failover
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id.0, 1);
+        assert_eq!(result[1].id.0, 2);
+    }
+
+    #[test]
+    fn test_partition_healthy_targets_prioritizes_healthy_then_unhealthy() {
+        let cb = make_cb();
+        cb.record_failure(CircuitBreakerKey::Account(AccountId(10)));
+
+        let targets = vec![
+            make_target(1, Some(10)), // unhealthy
+            make_target(2, Some(20)), // healthy
+        ];
+        let result = partition_healthy_targets(&cb, targets, 1);
+        assert_eq!(result.len(), 2);
+        // Healthy target 2 must come first, unhealthy target 1 must follow as failover
+        assert_eq!(result[0].id.0, 2);
+        assert_eq!(result[1].id.0, 1);
     }
 }

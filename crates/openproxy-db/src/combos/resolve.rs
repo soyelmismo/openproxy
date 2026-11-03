@@ -360,37 +360,62 @@ pub fn resolve_combo_to_targets(
     Ok(flat)
 }
 
-fn query_healthy_account_ids(
+fn query_accounts_by_health(
     conn: &rusqlite::Connection,
     provider_id: &ProviderId,
+    health_status: &str,
     check_rate_limit: bool,
 ) -> Result<Vec<AccountId>> {
     let sql = if check_rate_limit {
         account_healthy_ids_select!(
-            "WHERE provider_id = ?1 AND health_status = 'healthy' AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
+            "WHERE provider_id = ?1 AND health_status = ?2 AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
         )
     } else {
         account_healthy_ids_select!(
-            "WHERE provider_id = ?1 AND health_status = 'healthy' ORDER BY priority ASC, id ASC"
+            "WHERE provider_id = ?1 AND health_status = ?2 ORDER BY priority ASC, id ASC"
         )
     };
     let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error)?;
     let rows = stmt
-        .query_map(params![provider_id.as_str()], |r| r.get::<_, i64>(0))
+        .query_map(params![provider_id.as_str(), health_status], |r| {
+            r.get::<_, i64>(0)
+        })
         .map_err(crate::error::map_db_error)?;
     Ok(rows.flatten().map(AccountId).collect())
 }
 
-fn fetch_healthy_accounts(
+/// Fetches accounts for a provider sorted by health priority:
+/// 1. Healthy (not rate limited, then rate-limited fallback)
+/// 2. Degraded (not rate limited, then rate-limited fallback)
+/// 3. Unhealthy / unknown (as last-resort fallback)
+fn fetch_accounts_by_health_priority(
     conn: &rusqlite::Connection,
     provider_id: &ProviderId,
 ) -> Result<Vec<AccountId>> {
-    let accounts = query_healthy_account_ids(conn, provider_id, true)?;
-    if accounts.is_empty() {
-        query_healthy_account_ids(conn, provider_id, false)
-    } else {
-        Ok(accounts)
+    let mut all = Vec::new();
+
+    // 1. Healthy
+    let mut healthy = query_accounts_by_health(conn, provider_id, "healthy", true)?;
+    if healthy.is_empty() {
+        healthy = query_accounts_by_health(conn, provider_id, "healthy", false)?;
     }
+    all.extend(healthy);
+
+    // 2. Degraded
+    let mut degraded = query_accounts_by_health(conn, provider_id, "degraded", true)?;
+    if degraded.is_empty() {
+        degraded = query_accounts_by_health(conn, provider_id, "degraded", false)?;
+    }
+    all.extend(degraded);
+
+    // 3. Unhealthy as last resort
+    let mut unhealthy = query_accounts_by_health(conn, provider_id, "unhealthy", true)?;
+    if unhealthy.is_empty() {
+        unhealthy = query_accounts_by_health(conn, provider_id, "unhealthy", false)?;
+    }
+    all.extend(unhealthy);
+
+    Ok(all)
 }
 
 fn expand_single_target_rotation(
@@ -402,37 +427,30 @@ fn expand_single_target_rotation(
         out.push(target);
         return Ok(());
     }
-    if let Some(aid) = target.account_id {
-        let is_healthy: bool = conn
-            .query_row(
-                "SELECT health_status = 'healthy' FROM accounts WHERE id = ?1",
-                params![aid.0],
-                |r| r.get(0),
-            )
-            .unwrap_or(true);
-        if is_healthy {
-            out.push(target);
-        }
+    if target.account_id.is_some() {
+        // Explicit single account target: always attempt it regardless of health status
+        // so that non-healthy targets can be attempted as failovers.
+        out.push(target);
         return Ok(());
     }
-    let healthy_accounts = fetch_healthy_accounts(conn, &target.provider_id)?;
+    let prioritized_accounts = fetch_accounts_by_health_priority(conn, &target.provider_id)?;
     let candidate_accounts: Vec<AccountId> = if let Some(ref allowed) = target.selected_accounts {
         if allowed.is_empty() {
             // Empty list means no accounts allowed/all ignored
             Vec::new()
         } else {
-            healthy_accounts
+            prioritized_accounts
                 .into_iter()
                 .filter(|id| allowed.contains(id))
                 .collect()
         }
     } else {
-        healthy_accounts
+        prioritized_accounts
     };
 
     if candidate_accounts.is_empty() {
         if target.selected_accounts.is_some() {
-            // User explicitly restricted accounts and none are eligible/healthy
+            // User explicitly restricted accounts and none are eligible
             return Ok(());
         }
         out.push(target);
