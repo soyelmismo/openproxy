@@ -265,6 +265,12 @@
 .playground-msg-card.role-system {
   border-left: 3px solid var(--color-warn);
 }
+.playground-msg-card.role-developer {
+  border-left: 3px solid var(--chart-purple-dark, #8b5cf6);
+}
+.playground-msg-card.role-tool {
+  border-left: 3px solid var(--chart-warn, #f59e0b);
+}
 .playground-msg-card-header {
   display: flex;
   justify-content: space-between;
@@ -283,6 +289,31 @@
   width: auto;
   border: var(--border-w) var(--border-style) var(--color-border-soft);
   text-transform: uppercase;
+}
+.playground-role-badge-select.select-user {
+  color: var(--color-primary);
+}
+.playground-role-badge-select.select-assistant {
+  color: var(--color-success);
+}
+.playground-role-badge-select.select-system {
+  color: var(--color-warn);
+}
+.playground-role-badge-select.select-developer {
+  color: var(--chart-purple-dark, #8b5cf6);
+}
+.playground-role-badge-select.select-tool {
+  color: var(--chart-warn, #f59e0b);
+}
+.playground-tool-id-input {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  padding: 1px 6px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  max-width: 140px;
 }
 .msg-token-badge {
   font-size: var(--fs-2xs);

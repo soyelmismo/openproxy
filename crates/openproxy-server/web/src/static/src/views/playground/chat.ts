@@ -68,16 +68,32 @@ export function renderChatWorkspace(st: PlaygroundState): TemplateResult {
                     class="playground-role-badge-select select-${msg.role}"
                     .value=${msg.role}
                     @change=${(e: Event) => {
-                      msg.role = (e.target as HTMLSelectElement).value as 'system' | 'user' | 'assistant';
+                      msg.role = (e.target as HTMLSelectElement).value as import('./shared.js').ChatMessageRole;
                       requestUpdate();
                     }}
                   >
                      <option value="user">${t('playground.chat.user')}</option>
                      <option value="assistant">${t('playground.chat.assistant')}</option>
                      <option value="system">${t('playground.chat.system')}</option>
+                     <option value="tool">${t('playground.chat.tool') || 'Tool'}</option>
+                     <option value="developer">${t('playground.chat.developer') || 'Developer'}</option>
                   </select>
                   <span class="msg-token-badge">~${approxTokens} tokens</span>
                   <span class="msg-index-num">#${index + 1}</span>
+                  ${msg.role === 'tool'
+                    ? html`
+                        <input
+                          type="text"
+                          class="playground-tool-id-input"
+                          placeholder="tool_call_id"
+                          title="Tool Call ID (matching tool_calls[].id)"
+                          .value=${msg.tool_call_id || ''}
+                          @input=${(e: Event) => {
+                            msg.tool_call_id = (e.target as HTMLInputElement).value;
+                          }}
+                        />
+                      `
+                    : ''}
                 </div>
                 <div class="msg-card-actions">
                   <button
@@ -212,7 +228,7 @@ export async function executeChatRequest(
   model: string,
   startTime: number,
 ): Promise<void> {
-  const messages: Array<{ role: string; content: string }> = [];
+  const messages: Array<{ role: string; content: string; tool_call_id?: string; name?: string }> = [];
 
   if (st.systemInstruction.trim().length > 0) {
     messages.push({ role: 'system', content: st.systemInstruction.trim() });
@@ -220,7 +236,17 @@ export async function executeChatRequest(
 
   for (const m of st.chatMessages) {
     if (m.content.trim().length > 0) {
-      messages.push({ role: m.role, content: m.content });
+      const entry: { role: string; content: string; tool_call_id?: string; name?: string } = {
+        role: m.role,
+        content: m.content,
+      };
+      if (m.role === 'tool' && m.tool_call_id) {
+        entry.tool_call_id = m.tool_call_id;
+      }
+      if (m.name) {
+        entry.name = m.name;
+      }
+      messages.push(entry);
     }
   }
 

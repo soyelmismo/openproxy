@@ -10,10 +10,16 @@ import { showToast } from '../../components/toast.js';
 export type ModalityType = 'chat' | 'image' | 'embedding' | 'audio' | 'decision';
 export type ResponseTab = 'formatted' | 'raw' | 'headers' | 'stream';
 
+export type ChatMessageRole = 'system' | 'user' | 'assistant' | 'tool' | 'developer';
+
 export interface ChatMessage {
   id: string;
-  role: 'system' | 'user' | 'assistant';
+  role: ChatMessageRole;
   content: string;
+  /** Optional tool_call_id when role is 'tool' */
+  tool_call_id?: string | undefined;
+  /** Optional function name when role is 'tool' */
+  name?: string | undefined;
 }
 
 export interface StreamChunkItem {

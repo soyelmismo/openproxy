@@ -7,7 +7,7 @@
 // the playground are different route views, so the value has to survive a
 // full teardown/mount cycle. Key prefix matches the other openproxy keys.
 
-import type { PlaygroundState } from '../views/playground/shared.js';
+import type { PlaygroundState, ChatMessageRole } from '../views/playground/shared.js';
 
 const PLAYGROUND_PAYLOAD_KEY = 'openproxy:playground:pendingPayload';
 
@@ -16,7 +16,7 @@ const PLAYGROUND_PAYLOAD_KEY = 'openproxy:playground:pendingPayload';
  *  how to edit. Unknown keys are ignored on load. */
 export interface PlaygroundHandoffPayload {
   model: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: Array<{ role: string; content: string; tool_call_id?: string; name?: string }>;
   temperature?: number | undefined;
   top_p?: number | null;
   max_tokens?: number | null;
@@ -123,8 +123,17 @@ export function applyHandoffToPlaygroundState(
           .filter((s) => s.length > 0)
           .join('\n\n');
       }
-      const role = m.role === 'system' || m.role === 'assistant' ? m.role : 'user';
-      return { id: `msg-${Math.random().toString(36).slice(2, 9)}`, role: role as 'system' | 'user' | 'assistant', content };
+      const validRoles: readonly ChatMessageRole[] = ['system', 'user', 'assistant', 'tool', 'developer'];
+      const role: ChatMessageRole = validRoles.includes(m.role as ChatMessageRole)
+        ? (m.role as ChatMessageRole)
+        : 'user';
+      return {
+        id: `msg-${Math.random().toString(36).slice(2, 9)}`,
+        role,
+        content,
+        tool_call_id: m.tool_call_id,
+        name: m.name,
+      };
     });
 
   if (messages.length > 0) {

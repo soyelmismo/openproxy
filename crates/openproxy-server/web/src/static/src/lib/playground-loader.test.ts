@@ -54,25 +54,32 @@ describe('applyHandoffToPlaygroundState', () => {
     st = createInitialPlaygroundState();
   });
 
-  it('restores chat messages 1:1 and clears composer', () => {
+  it('restores chat messages with all roles 1:1 and clears composer', () => {
     st.composerContent = 'stale composer text';
     const payload: PlaygroundHandoffPayload = {
       model: 'claude-3-7-sonnet',
       messages: [
+        { role: 'developer', content: 'developer instruction' },
         { role: 'user', content: 'first prompt' },
         { role: 'assistant', content: 'first answer' },
+        { role: 'tool', content: '{"result": 42}', tool_call_id: 'call_123' },
         { role: 'user', content: 'follow-up' },
       ],
     };
     applyHandoffToPlaygroundState(st, payload);
 
-    expect(st.chatMessages.length).toBe(3);
-    expect(st.chatMessages[0]?.role).toBe('user');
-    expect(st.chatMessages[0]?.content).toBe('first prompt');
-    expect(st.chatMessages[1]?.role).toBe('assistant');
-    expect(st.chatMessages[1]?.content).toBe('first answer');
-    expect(st.chatMessages[2]?.role).toBe('user');
-    expect(st.chatMessages[2]?.content).toBe('follow-up');
+    expect(st.chatMessages.length).toBe(5);
+    expect(st.chatMessages[0]?.role).toBe('developer');
+    expect(st.chatMessages[0]?.content).toBe('developer instruction');
+    expect(st.chatMessages[1]?.role).toBe('user');
+    expect(st.chatMessages[1]?.content).toBe('first prompt');
+    expect(st.chatMessages[2]?.role).toBe('assistant');
+    expect(st.chatMessages[2]?.content).toBe('first answer');
+    expect(st.chatMessages[3]?.role).toBe('tool');
+    expect(st.chatMessages[3]?.content).toBe('{"result": 42}');
+    expect(st.chatMessages[3]?.tool_call_id).toBe('call_123');
+    expect(st.chatMessages[4]?.role).toBe('user');
+    expect(st.chatMessages[4]?.content).toBe('follow-up');
     expect(st.composerContent).toBe('');
   });
 

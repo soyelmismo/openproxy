@@ -646,6 +646,8 @@
   "playground.chat.hide": "Hide",
   "playground.chat.show": "Show",
   "playground.chat.assistant": "Assistant",
+  "playground.chat.tool": "Tool",
+  "playground.chat.developer": "Developer",
   "playground.chat.generating": "Generating…",
   "playground.chat.reasoning": "Reasoning…",
   "playground.chat.drafting": "Drafting answer…",

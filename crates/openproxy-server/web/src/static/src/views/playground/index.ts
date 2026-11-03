@@ -32,7 +32,7 @@ import {
   hasPlaygroundHandoff,
 } from '../../lib/playground-loader.js';
 
-export type { ModalityType } from './shared.js';
+export type { ModalityType, ChatMessageRole } from './shared.js';
 export type { ResponseTab, ChatMessage, RequestMetrics, StreamChunkItem } from './shared.js';
 
 
