@@ -340,3 +340,64 @@ fn test_models_dev_sync_persists_and_enriches_routing_format() {
     assert_eq!(query_routing("gemini-3-flash"), Some("gemini".into()));
     assert_eq!(query_routing("deepseek-v4-flash"), Some("openai".into()));
 }
+
+#[test]
+fn test_enrich_prioritizes_matching_provider_over_arbitrary_first() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE models (
+             provider_id         TEXT NOT NULL,
+             model_id            TEXT NOT NULL,
+             context_length      INTEGER,
+             max_output_tokens   INTEGER,
+             capabilities_json   TEXT,
+             family              TEXT,
+             input_modalities_json TEXT,
+             output_modalities_json TEXT,
+             model_type          TEXT NOT NULL DEFAULT 'chat',
+             target_format       TEXT NOT NULL DEFAULT 'openai',
+             custom              INTEGER NOT NULL DEFAULT 0,
+             model_id_normalized TEXT,
+             UNIQUE(provider_id, model_id)
+         );",
+    )
+    .unwrap();
+    create_sync_table(&conn);
+
+    // Two sync entries with identical normalized ID:
+    // 1) "opencode" with 1M context
+    // 2) "nvidia-nim" with 256K context
+    conn.execute(
+        "INSERT INTO model_capabilities_sync (
+             provider_id, model_id, model_id_normalized, context_length, max_output_tokens
+         ) VALUES
+         ('opencode', 'minimax-m3.1-flash', 'minimax-m3.1-flash', 1000000, 512000),
+         ('nvidia-nim', 'minimaxai/minimax-m3.1-flash', 'minimax-m3.1-flash', 262144, 262144)",
+        [],
+    )
+    .unwrap();
+
+    // Insert model for nvidia-nim
+    conn.execute(
+        "INSERT INTO models (provider_id, model_id, context_length, custom, model_id_normalized)
+         VALUES ('nvidia-nim', 'minimaxai/minimax-m3.1-flash', NULL, 0, 'minimax-m3.1-flash')",
+        [],
+    )
+    .unwrap();
+
+    let touched = enrich_models_from_sync(&conn).unwrap();
+    assert!(touched >= 1);
+
+    let ctx: i64 = conn
+        .query_row(
+            "SELECT context_length FROM models WHERE provider_id = 'nvidia-nim' AND model_id = 'minimaxai/minimax-m3.1-flash'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx, 262_144,
+        "enrichment must pick provider's own context_length (262144), not opencode's (1000000)"
+    );
+}

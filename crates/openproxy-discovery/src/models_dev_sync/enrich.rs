@@ -10,6 +10,7 @@ fn enrich_context_length(conn: &Connection) -> Result<usize> {
         (SELECT s.context_length FROM model_capabilities_sync s
          WHERE s.model_id_normalized = models.model_id_normalized
            AND s.context_length IS NOT NULL
+         ORDER BY CASE WHEN s.provider_id = models.provider_id THEN 0 ELSE 1 END
          LIMIT 1),
         models.context_length
      )
@@ -31,6 +32,7 @@ fn enrich_max_output_tokens(conn: &Connection) -> Result<usize> {
         (SELECT s.max_output_tokens FROM model_capabilities_sync s
          WHERE s.model_id_normalized = models.model_id_normalized
            AND s.max_output_tokens IS NOT NULL
+         ORDER BY CASE WHEN s.provider_id = models.provider_id THEN 0 ELSE 1 END
          LIMIT 1),
         models.max_output_tokens
      )
@@ -74,6 +76,7 @@ fn enrich_capabilities(conn: &Connection) -> Result<usize> {
                OR s.reasoning IS NOT NULL OR s.structured_output IS NOT NULL
                OR s.modalities_input LIKE '%\"video\"%'
                OR s.modalities_output LIKE '%\"video\"%')
+        ORDER BY CASE WHEN s.provider_id = models.provider_id THEN 0 ELSE 1 END
         LIMIT 1
      )
      WHERE models.custom = 0
@@ -97,13 +100,17 @@ fn enrich_metadata(conn: &Connection) -> Result<usize> {
             family = COALESCE(
                 (SELECT s.family FROM model_capabilities_sync s
                  WHERE s.model_id_normalized = models.model_id_normalized
-                   AND s.family IS NOT NULL LIMIT 1),
+                   AND s.family IS NOT NULL
+                 ORDER BY CASE WHEN s.provider_id = models.provider_id THEN 0 ELSE 1 END
+                 LIMIT 1),
                 models.family
             ),
             input_modalities_json = COALESCE(
                 (SELECT s.modalities_input FROM model_capabilities_sync s
                  WHERE s.model_id_normalized = models.model_id_normalized
-                   AND s.modalities_input IS NOT NULL LIMIT 1),
+                   AND s.modalities_input IS NOT NULL
+                 ORDER BY CASE WHEN s.provider_id = models.provider_id THEN 0 ELSE 1 END
+                 LIMIT 1),
                 models.input_modalities_json
             ),
             output_modalities_json = CASE
@@ -112,7 +119,9 @@ fn enrich_metadata(conn: &Connection) -> Result<usize> {
                 ELSE COALESCE(
                     (SELECT s.modalities_output FROM model_capabilities_sync s
                      WHERE s.model_id_normalized = models.model_id_normalized
-                       AND s.modalities_output IS NOT NULL LIMIT 1),
+                       AND s.modalities_output IS NOT NULL
+                     ORDER BY CASE WHEN s.provider_id = models.provider_id THEN 0 ELSE 1 END
+                     LIMIT 1),
                     models.output_modalities_json
                 )
             END,
