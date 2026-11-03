@@ -3,18 +3,25 @@ use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::json;
 
 #[test]
-fn test_split_history_empty() {
+fn test_build_kiro_request_empty() {
     let req = OpenAIRequest {
         messages: vec![],
         ..Default::default()
     };
-    let (history, current) = split_history(&req);
-    assert!(history.is_empty());
-    assert!(current.is_none());
+    let kiro_req = build_kiro_request(&req, None);
+    assert_eq!(
+        kiro_req
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content,
+        "(empty)"
+    );
+    assert!(kiro_req.conversation_state.history.is_none());
 }
 
 #[test]
-fn test_split_history_single_user() {
+fn test_build_kiro_request_single_user() {
     let req = OpenAIRequest {
         messages: vec![OpenAIMessage {
             role: "user".to_string(),
@@ -26,14 +33,20 @@ fn test_split_history_single_user() {
         }],
         ..Default::default()
     };
-    let (history, current) = split_history(&req);
-    assert!(history.is_empty());
-    assert_eq!(current.unwrap().role, "user");
-    assert_eq!(current.unwrap().content.as_ref().unwrap(), &json!("hello"));
+    let kiro_req = build_kiro_request(&req, None);
+    assert_eq!(
+        kiro_req
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content,
+        "hello"
+    );
+    assert!(kiro_req.conversation_state.history.is_none());
 }
 
 #[test]
-fn test_split_history_multiple_turns() {
+fn test_build_kiro_request_multiple_turns() {
     let req = OpenAIRequest {
         messages: vec![
             OpenAIMessage {
@@ -63,48 +76,29 @@ fn test_split_history_multiple_turns() {
         ],
         ..Default::default()
     };
-    let (history, current) = split_history(&req);
+    let kiro_req = build_kiro_request(&req, None);
+    let history = kiro_req.conversation_state.history.unwrap();
     assert_eq!(history.len(), 2);
-    assert_eq!(history[0].role, "user");
-    assert_eq!(history[1].role, "assistant");
-
-    let current_msg = current.unwrap();
-    assert_eq!(current_msg.role, "user");
     assert_eq!(
-        current_msg.content.as_ref().unwrap(),
-        &json!("how are you?")
+        kiro_req
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content,
+        "how are you?"
     );
 }
 
 #[test]
-fn test_split_history_no_user_message() {
-    let req = OpenAIRequest {
-        messages: vec![
-            OpenAIMessage {
-                role: "system".to_string(),
-                content: Some(json!("You are helpful.")),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: Default::default(),
-            },
-            OpenAIMessage {
-                role: "assistant".to_string(),
-                content: Some(json!("I am ready.")),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: Default::default(),
-            },
-        ],
-        ..Default::default()
-    };
-    // fallback to using the last message when there is no user message.
-    let (history, current) = split_history(&req);
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].role, "system");
-
-    let current_msg = current.unwrap();
-    assert_eq!(current_msg.role, "assistant");
-    assert_eq!(current_msg.content.as_ref().unwrap(), &json!("I am ready."));
+fn test_extract_agentic_request_limits_credit() {
+    let data = json!({
+        "usageBreakdownList": [{
+            "resourceType": "CREDIT",
+            "currentUsageWithPrecision": 0.76,
+            "usageLimitWithPrecision": 50.0
+        }]
+    });
+    let (used, limit) = extract_agentic_request_limits(&data);
+    assert_eq!(used, Some(1));
+    assert_eq!(limit, Some(50));
 }

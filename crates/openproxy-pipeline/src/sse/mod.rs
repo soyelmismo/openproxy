@@ -11,6 +11,7 @@ mod atomesus;
 pub mod commandcode;
 pub(crate) mod devin;
 mod gemini;
+pub(crate) mod kiro;
 pub mod openai;
 mod responses;
 mod stream_to_value;

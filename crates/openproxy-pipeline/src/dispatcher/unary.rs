@@ -6,9 +6,7 @@ use crate::PipelineResult;
 use crate::inline_tools::extract_inline_tools_from_response;
 use crate::think_extractor::extract_think_from_response;
 use crate::translation::OpenAIResponse;
-use openproxy_adapters::ProviderAdapter;
 use openproxy_adapters::upstream::{UpstreamError, UpstreamRequest};
-use openproxy_types::ResultExt;
 use openproxy_types::error::CoreError;
 use std::time::Instant;
 
@@ -53,103 +51,7 @@ pub(crate) fn ensure_streaming_accept(upstream_request: &mut UpstreamRequest) {
     }
 }
 
-/// `OpenAIResponse` minimalista desde `choices[0].message.content` del body
-/// crudo, para adapters que no producen OpenAI nativo.
-pub(super) fn translate_simple_text_response(
-    response_body_raw: &serde_json::Value,
-    model_name: String,
-) -> OpenAIResponse {
-    let text = response_body_raw
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|s| s.as_str())
-        .or_else(|| response_body_raw.get("content").and_then(|s| s.as_str()))
-        .unwrap_or("");
-
-    let mut id = String::with_capacity(48);
-    use std::fmt::Write;
-    let _ = write!(&mut id, "chatcmpl_{}", uuid::Uuid::new_v4());
-
-    OpenAIResponse {
-        id,
-        object: "chat.completion".to_string(),
-        created: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-        model: model_name,
-        choices: vec![openproxy_types::OpenAIChoice {
-            index: 0,
-            message: openproxy_types::OpenAIMessage {
-                role: "assistant".to_string(),
-                content: Some(serde_json::Value::String(text.to_string())),
-                name: None,
-                tool_call_id: None,
-                tool_calls: None,
-                extra: Default::default(),
-            },
-            finish_reason: Some("stop".to_string()),
-        }],
-        usage: None,
-    }
-}
-
-/// Traduce el body según `target_format`. Gemini delega en su propia
-/// traducción; Atomesus cae al fallback simple.
-pub(super) fn translate_non_streaming_body(
-    target_format: openproxy_types::TargetFormat,
-    response_body_raw: &serde_json::Value,
-    req: &crate::PipelineRequest,
-) -> Result<OpenAIResponse, CoreError> {
-    match target_format {
-        openproxy_types::TargetFormat::Responses => {
-            crate::translation::responses_to_openai(response_body_raw, &req.openai_request.model)
-        }
-        openproxy_types::TargetFormat::Openai => {
-            <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-                .ctx_parse("parse openai response")
-        }
-        openproxy_types::TargetFormat::Anthropic => {
-            let anthropic_resp: crate::translation::AnthropicResponse =
-                <crate::translation::AnthropicResponse as serde::Deserialize>::deserialize(
-                    response_body_raw,
-                )
-                .ctx_parse("parse anthropic response")?;
-            Ok(crate::translation::anthropic_to_openai(&anthropic_resp))
-        }
-        openproxy_types::TargetFormat::Gemini => {
-            let adapter = openproxy_adapters::GeminiAdapter::new();
-            adapter.translate_non_streaming_response(target_format, response_body_raw.clone())
-        }
-        openproxy_types::TargetFormat::Atomesus => Ok(translate_simple_text_response(
-            response_body_raw,
-            req.openai_request.model.clone(),
-        )),
-        openproxy_types::TargetFormat::CommandCodeGo => {
-            if let Ok(resp) = <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-            {
-                Ok(resp)
-            } else {
-                let body_str = serde_json::to_string(response_body_raw).unwrap_or_default();
-                crate::sse::parse_sse_stream_to_openai_response(
-                    target_format,
-                    &body_str,
-                    &req.openai_request.model,
-                )
-            }
-        }
-        openproxy_types::TargetFormat::SystemOne => {
-            <OpenAIResponse as serde::Deserialize>::deserialize(response_body_raw)
-                .ctx_parse("parse systemone response")
-        }
-        // Unreachable in practice: Devin bodies are Connect-RPC protobuf and
-        // `dispatch_upstream_non_streaming` folds them before JSON parse.
-        openproxy_types::TargetFormat::Devin => {
-            Err(CoreError::Parse("devin unary body is not JSON".to_string()))
-        }
-    }
-}
+pub(crate) use super::translation::translate_non_streaming_body;
 
 /// `true` cuando la respuesta 200 no trae contenido útil. Se trata como
 /// error para forzar el retry.
@@ -542,41 +444,70 @@ impl UpstreamDispatcher {
                 .await;
         }
 
-        // Devin's Connect-RPC endpoint is server-streaming: a unary client
-        // still receives flag/len-framed protobuf envelopes, so the body is
-        // folded into a single response instead of parsed as JSON.
-        let (response_body_raw, mut openai_response) = match params.target_format {
-            openproxy_types::TargetFormat::Devin => {
-                match crate::sse::devin::fold_devin_body_to_openai_response(
-                    &body_bytes,
-                    &params.req.openai_request.model,
-                ) {
-                    Ok(resp) => {
-                        let raw = serde_json::to_value(&resp).unwrap_or_default();
-                        (raw, resp)
-                    }
-                    Err(err) => {
-                        return self
-                            .record_and_fail(
-                                params.req,
-                                params.combo,
-                                params.target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            )
-                            .await;
-                    }
+        // Devin and Kiro endpoints emit stream envelopes (Connect-RPC protobuf
+        // or AWS EventStream binary). A unary client folds the whole body into
+        // an OpenAI response instead of parsing as JSON.
+        let is_kiro = params.target.provider_id.as_str() == "kiro";
+        let (response_body_raw, mut openai_response) = if is_kiro {
+            match openproxy_adapters::adapters::kiro::fold_kiro_body_to_openai_response(
+                &body_bytes,
+                &params.req.openai_request.model,
+            ) {
+                Ok(resp) => {
+                    let raw = serde_json::to_value(&resp).unwrap_or_default();
+                    (raw, resp)
+                }
+                Err(err) => {
+                    return self
+                        .record_and_fail(
+                            params.req,
+                            params.combo,
+                            params.target,
+                            dctx.fail_ctx_code(
+                                &err,
+                                Some(connect_and_send_ms),
+                                Some(ttft_ms),
+                                err.http_status(),
+                            ),
+                        )
+                        .await;
                 }
             }
-            _ => match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                Ok(raw) => {
-                    let resp =
-                        match translate_non_streaming_body(params.target_format, &raw, &params.req)
-                        {
+        } else {
+            match params.target_format {
+                openproxy_types::TargetFormat::Devin => {
+                    match crate::sse::devin::fold_devin_body_to_openai_response(
+                        &body_bytes,
+                        &params.req.openai_request.model,
+                    ) {
+                        Ok(resp) => {
+                            let raw = serde_json::to_value(&resp).unwrap_or_default();
+                            (raw, resp)
+                        }
+                        Err(err) => {
+                            return self
+                                .record_and_fail(
+                                    params.req,
+                                    params.combo,
+                                    params.target,
+                                    dctx.fail_ctx_code(
+                                        &err,
+                                        Some(connect_and_send_ms),
+                                        Some(ttft_ms),
+                                        err.http_status(),
+                                    ),
+                                )
+                                .await;
+                        }
+                    }
+                }
+                _ => match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                    Ok(raw) => {
+                        let resp = match translate_non_streaming_body(
+                            params.target_format,
+                            &raw,
+                            &params.req,
+                        ) {
                             Ok(r) => {
                                 let think_extracted = extract_think_from_response(r);
                                 extract_inline_tools_from_response(think_extracted)
@@ -597,62 +528,63 @@ impl UpstreamDispatcher {
                                     .await;
                             }
                         };
-                    (raw, resp)
-                }
-                Err(e) => {
-                    let body_str = String::from_utf8_lossy(&body_bytes);
-                    if params.target_format == openproxy_types::TargetFormat::CommandCodeGo
-                        || body_str.starts_with("data:")
-                        || body_str.starts_with("event:")
-                        || body_str.contains("\ndata:")
-                        || body_str.contains("\nevent:")
-                        || (body_str.trim_start().starts_with('{') && body_str.contains('\n'))
-                    {
-                        match crate::sse::parse_sse_stream_to_openai_response(
-                            params.target_format,
-                            &body_str,
-                            &params.req.openai_request.model,
-                        ) {
-                            Ok(resp) => {
-                                let raw = serde_json::to_value(&resp).unwrap_or_default();
-                                let think_extracted = extract_think_from_response(resp);
-                                (raw, extract_inline_tools_from_response(think_extracted))
-                            }
-                            Err(err) => {
-                                return self
-                                    .record_and_fail(
-                                        params.req,
-                                        params.combo,
-                                        params.target,
-                                        dctx.fail_ctx_code(
-                                            &err,
-                                            Some(connect_and_send_ms),
-                                            Some(ttft_ms),
-                                            err.http_status(),
-                                        ),
-                                    )
-                                    .await;
-                            }
-                        }
-                    } else {
-                        let err =
-                            CoreError::Parse(format!("invalid json in upstream response: {e}"));
-                        return self
-                            .record_and_fail(
-                                params.req,
-                                params.combo,
-                                params.target,
-                                dctx.fail_ctx_code(
-                                    &err,
-                                    Some(connect_and_send_ms),
-                                    Some(ttft_ms),
-                                    err.http_status(),
-                                ),
-                            )
-                            .await;
+                        (raw, resp)
                     }
-                }
-            },
+                    Err(e) => {
+                        let body_str = String::from_utf8_lossy(&body_bytes);
+                        if params.target_format == openproxy_types::TargetFormat::CommandCodeGo
+                            || body_str.starts_with("data:")
+                            || body_str.starts_with("event:")
+                            || body_str.contains("\ndata:")
+                            || body_str.contains("\nevent:")
+                            || (body_str.trim_start().starts_with('{') && body_str.contains('\n'))
+                        {
+                            match crate::sse::parse_sse_stream_to_openai_response(
+                                params.target_format,
+                                &body_str,
+                                &params.req.openai_request.model,
+                            ) {
+                                Ok(resp) => {
+                                    let raw = serde_json::to_value(&resp).unwrap_or_default();
+                                    let think_extracted = extract_think_from_response(resp);
+                                    (raw, extract_inline_tools_from_response(think_extracted))
+                                }
+                                Err(err) => {
+                                    return self
+                                        .record_and_fail(
+                                            params.req,
+                                            params.combo,
+                                            params.target,
+                                            dctx.fail_ctx_code(
+                                                &err,
+                                                Some(connect_and_send_ms),
+                                                Some(ttft_ms),
+                                                err.http_status(),
+                                            ),
+                                        )
+                                        .await;
+                                }
+                            }
+                        } else {
+                            let err =
+                                CoreError::Parse(format!("invalid json in upstream response: {e}"));
+                            return self
+                                .record_and_fail(
+                                    params.req,
+                                    params.combo,
+                                    params.target,
+                                    dctx.fail_ctx_code(
+                                        &err,
+                                        Some(connect_and_send_ms),
+                                        Some(ttft_ms),
+                                        err.http_status(),
+                                    ),
+                                )
+                                .await;
+                        }
+                    }
+                },
+            }
         };
 
         for choice in &mut openai_response.choices {

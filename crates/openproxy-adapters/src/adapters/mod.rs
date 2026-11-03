@@ -42,6 +42,7 @@ pub mod factory;
 pub mod gemini;
 pub mod horde;
 pub mod kilocode;
+pub mod kiro;
 pub mod kiro_ai;
 pub mod laya;
 #[cfg(feature = "laya-engine")]

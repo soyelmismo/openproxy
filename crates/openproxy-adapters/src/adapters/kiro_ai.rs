@@ -1,12 +1,14 @@
+pub use super::kiro::{
+    KiroDeframer, KiroEventType, KiroFrameEvent, KiroRequest, build_kiro_request,
+    fold_kiro_body_to_openai_response,
+};
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, Deserialize,
-    DiscoveredModel, ModelId, ProviderAdapter, ProviderAdapterConfig, ProviderId, Result,
-    Serialize, TargetFormat, TimeoutProfile, UpstreamClient, UpstreamRequest,
+    AdapterAuthType, AdapterFormat, Arc, CancellationToken, CoreError, DiscoveredModel, ModelId,
+    ProviderAdapter, ProviderAdapterConfig, ProviderId, Result, TargetFormat, TimeoutProfile,
+    UpstreamClient, UpstreamRequest,
 };
 use crate::spoofer::KiroSpoofer;
 use openproxy_types::ResultExt;
-use openproxy_types::{OpenAIMessage, OpenAIRequest};
-use serde_json::Value;
 use std::sync::LazyLock;
 
 static REGION_RE: LazyLock<regex::Regex> =
@@ -426,7 +428,7 @@ fn build_kiro_usage_limits_request(
     access_token: &str,
     profile_arn: Option<&str>,
 ) -> Option<UpstreamRequest> {
-    let url = format!("{base_url}/");
+    let url = base_url.trim_end_matches('/').to_string();
     let mut payload = serde_json::json!({
         "origin": "AI_EDITOR",
         "resourceType": "AGENTIC_REQUEST"
@@ -443,6 +445,10 @@ fn build_kiro_usage_limits_request(
     };
 
     let mut req = UpstreamRequest::post_json(&url, bytes::Bytes::from(body_bytes));
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/x-amz-json-1.0"),
+    );
     if let Ok(v) = crate::antigravity_headers::build_bearer_header(access_token) {
         req.headers.insert(http::header::AUTHORIZATION, v);
     }
@@ -452,7 +458,7 @@ fn build_kiro_usage_limits_request(
     );
     req.headers.insert(
         http::header::HeaderName::from_static("x-amz-user-agent"),
-        http::HeaderValue::from_static("aws-sdk-js/3.0.0 kiro/0.1"),
+        http::HeaderValue::from_static("aws-sdk-js/1.0.0 KiroIDE"),
     );
     Some(req)
 }
@@ -503,17 +509,45 @@ fn extract_agentic_request_limits(data: &serde_json::Value) -> (Option<i64>, Opt
             .get("resourceType")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if resource_type.eq_ignore_ascii_case("agentic_request") {
+        if resource_type.eq_ignore_ascii_case("agentic_request")
+            || resource_type.eq_ignore_ascii_case("credit")
+            || resource_type.is_empty()
+        {
             let current = breakdown
                 .get("currentUsageWithPrecision")
                 .or_else(|| breakdown.get("currentUsage"))
                 .and_then(serde_json::Value::as_f64)
                 .map(|v| v.round() as i64);
-            let limit = breakdown
+            let mut limit = breakdown
                 .get("usageLimitWithPrecision")
                 .or_else(|| breakdown.get("usageLimit"))
                 .and_then(serde_json::Value::as_f64)
                 .map(|v| v.round() as i64);
+
+            // Sum up bonuses and overageCredits if present
+            if let Some(bonuses) = breakdown.get("bonuses").and_then(|v| v.as_array()) {
+                for bonus in bonuses {
+                    if let Some(bonus_limit) = bonus
+                        .get("usageLimitWithPrecision")
+                        .or_else(|| bonus.get("usageLimit"))
+                        .and_then(serde_json::Value::as_f64)
+                    {
+                        *limit.get_or_insert(0) += bonus_limit.round() as i64;
+                    }
+                }
+            }
+            if let Some(overages) = breakdown.get("overageCredits").and_then(|v| v.as_array()) {
+                for overage in overages {
+                    if let Some(overage_limit) = overage
+                        .get("usageLimitWithPrecision")
+                        .or_else(|| overage.get("usageLimit"))
+                        .and_then(serde_json::Value::as_f64)
+                    {
+                        *limit.get_or_insert(0) += overage_limit.round() as i64;
+                    }
+                }
+            }
+
             return (current, limit);
         }
     }
@@ -549,8 +583,17 @@ impl KiroAdapter {
         let reset_at = data
             .get("nextDateReset")
             .or_else(|| data.get("resetDate"))
-            .and_then(|v| v.as_str())
-            .map(std::string::ToString::to_string);
+            .and_then(|v| {
+                if let Some(s) = v.as_str() {
+                    Some(s.to_string())
+                } else if let Some(n) = v.as_i64() {
+                    chrono::DateTime::from_timestamp(n, 0).map(|dt| dt.to_rfc3339())
+                } else if let Some(f) = v.as_f64() {
+                    chrono::DateTime::from_timestamp(f as i64, 0).map(|dt| dt.to_rfc3339())
+                } else {
+                    None
+                }
+            });
 
         let (session_used, session_limit) = extract_agentic_request_limits(&data);
 
@@ -575,172 +618,6 @@ impl KiroAdapter {
             model_details: None,
         })
     }
-}
-/// Request body envelope used by `generateAssistantResponse`.
-///
-/// Only `conversationState` and (optionally) `profileArn` +
-/// `inferenceConfig` are required. The executor builds the
-/// `currentMessage` from the most recent `user` message in the
-/// OpenAI request, and folds prior turns into
-/// `conversationState.history` so multi-turn conversations work.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroRequest {
-    #[serde(rename = "conversationState")]
-    pub conversation_state: KiroConversationState,
-    #[serde(rename = "profileArn", skip_serializing_if = "Option::is_none")]
-    pub profile_arn: Option<String>,
-    #[serde(rename = "inferenceConfig", skip_serializing_if = "Option::is_none")]
-    pub inference_config: Option<KiroInferenceConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroConversationState {
-    #[serde(rename = "currentMessage")]
-    pub current_message: KiroCurrentMessage,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub history: Option<Vec<KiroHistoryItem>>,
-    #[serde(rename = "chatTriggerType")]
-    pub chat_trigger_type: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroCurrentMessage {
-    #[serde(rename = "userInputMessage")]
-    pub user_input_message: KiroUserInputMessage,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroUserInputMessage {
-    pub content: String,
-    #[serde(rename = "modelId")]
-    pub model_id: String,
-    pub origin: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroHistoryItem {
-    #[serde(rename = "userInputMessage")]
-    pub user_input_message: KiroUserInputMessage,
-    #[serde(rename = "assistantResponseMessage")]
-    pub assistant_response_message: KiroAssistantResponseMessage,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct KiroAssistantResponseMessage {
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroInferenceConfig {
-    #[serde(rename = "maxTokens", skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(rename = "topP", skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stop: Option<Vec<String>>,
-}
-
-/// Build a [`KiroRequest`] from an OpenAI [`OpenAIRequest`].
-///
-/// The conversion rules:
-/// - `model` → `conversationState.currentMessage.userInputMessage.modelId`
-/// - Last `user` message → `currentMessage.userInputMessage.content`
-/// - Preceding `user`/`assistant` turns → `conversationState.history`
-/// - `max_tokens` / `temperature` / `top_p` / `stop` → `inferenceConfig`
-/// - `stream` is dropped (Kiro is always-on for the protocol
-///   variant we use; the streaming variant is the EventStream
-///   binary format and is a follow-up)
-pub const KIRO_DEFAULT_MODEL: &str = "kiro-default-model";
-
-fn build_kiro_history_item(pair: &[&openproxy_types::OpenAIMessage]) -> Option<KiroHistoryItem> {
-    let [user, assistant] = pair else {
-        return None;
-    };
-    Some(KiroHistoryItem {
-        user_input_message: KiroUserInputMessage {
-            content: user
-                .content
-                .as_ref()
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            model_id: KIRO_DEFAULT_MODEL.to_string(),
-            origin: "AI_EDITOR".to_string(),
-        },
-        assistant_response_message: KiroAssistantResponseMessage {
-            content: assistant
-                .content
-                .as_ref()
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        },
-    })
-}
-
-fn build_kiro_inference_config(openai: &OpenAIRequest) -> Option<KiroInferenceConfig> {
-    let has_any = openai.max_tokens.is_some()
-        || openai.temperature.is_some()
-        || openai.top_p.is_some()
-        || openai.stop.is_some();
-    has_any.then(|| KiroInferenceConfig {
-        max_tokens: openai.max_tokens,
-        temperature: openai.temperature,
-        top_p: openai.top_p,
-        stop: openai.stop.clone(),
-    })
-}
-
-fn build_kiro_request(openai: &OpenAIRequest, profile_arn: Option<&str>) -> KiroRequest {
-    let (history_msgs, current_msg) = split_history(openai);
-
-    let history: Vec<KiroHistoryItem> = history_msgs
-        .chunks(2)
-        .filter_map(build_kiro_history_item)
-        .collect();
-
-    let inference_config = build_kiro_inference_config(openai);
-
-    let current_content = current_msg
-        .and_then(|m| m.content.as_ref())
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-
-    KiroRequest {
-        conversation_state: KiroConversationState {
-            current_message: KiroCurrentMessage {
-                user_input_message: KiroUserInputMessage {
-                    content: current_content,
-                    model_id: openai.model.clone(),
-                    origin: "AI_EDITOR".to_string(),
-                },
-            },
-            history: (!history.is_empty()).then_some(history),
-            chat_trigger_type: "MANUAL".to_string(),
-        },
-        profile_arn: profile_arn.map(std::string::ToString::to_string),
-        inference_config,
-    }
-}
-
-/// Split the OpenAI messages into `(history, current_user_message)`. Kiro's
-/// `currentMessage` holds a single user turn, so the most recent user message
-/// stays out of the history list.
-fn split_history(req: &OpenAIRequest) -> (Vec<&OpenAIMessage>, Option<&OpenAIMessage>) {
-    if req.messages.is_empty() {
-        return (Vec::new(), None);
-    }
-    let last_user_idx = req
-        .messages
-        .iter()
-        .rposition(|m| m.role == "user")
-        .unwrap_or(req.messages.len() - 1);
-    let history: Vec<&OpenAIMessage> = req.messages[..last_user_idx].iter().collect();
-    let current = &req.messages[last_user_idx];
-    (history, Some(current))
 }
 
 #[cfg(test)]

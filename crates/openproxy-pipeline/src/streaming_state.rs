@@ -1,4 +1,5 @@
 mod devin;
+mod kiro;
 mod normalizer;
 mod openai;
 mod processor;
@@ -48,6 +49,7 @@ pub(crate) struct StreamingState {
     /// pipeline en formatos que nunca lo tocan.
     /// `target_format == Devin`.
     pub devin: Box<crate::sse::devin::DevinStreamState>,
+    pub kiro: Box<crate::sse::kiro::KiroStreamState>,
 }
 
 pub(crate) struct StreamContext<'a> {
@@ -100,6 +102,7 @@ impl StreamingState {
             reasoning_progress: reasoning_progress::ReasoningProgress::default(),
             reasoning_first_logged: false,
             devin: Box::new(crate::sse::devin::DevinStreamState::default()),
+            kiro: Box::new(crate::sse::kiro::KiroStreamState::default()),
         }
     }
 

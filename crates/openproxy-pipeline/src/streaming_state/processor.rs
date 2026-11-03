@@ -28,6 +28,10 @@ impl ChunkInterceptor for ChunkProcessor<'_> {
             return Box::pin(self.process_devin_frame(ctx, stream, &line_bytes)).await;
         }
 
+        if ctx.target.provider_id.as_str() == "kiro" {
+            return Box::pin(self.process_kiro_frame(ctx, stream, &line_bytes)).await;
+        }
+
         let Some(line) = decode_and_record_line(self.state, &line_bytes) else {
             return Ok(crate::streaming::ChunkEvent::Skip);
         };

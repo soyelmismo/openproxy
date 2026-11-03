@@ -17,6 +17,7 @@ pub(super) mod stream;
 mod stream_tests;
 #[cfg(test)]
 mod tests;
+pub(super) mod translation;
 pub mod types;
 pub(super) mod unary;
 

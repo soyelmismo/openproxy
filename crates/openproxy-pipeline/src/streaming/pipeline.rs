@@ -19,6 +19,9 @@ pub(crate) async fn run_pipeline(
         .then(openproxy_adapters::adapters::devin::wire::DevinDeframer::new);
     let mut devin_saw_eos = false;
 
+    let is_kiro = ctx.target.provider_id.as_str() == "kiro";
+    let mut kiro_deframer = is_kiro.then(openproxy_adapters::adapters::kiro::KiroDeframer::new);
+
     loop {
         if is_race_cancelled(ctx) {
             return Ok(ChunkResult::Break);
@@ -43,6 +46,40 @@ pub(crate) async fn run_pipeline(
                 devin_saw_eos |= frame.is_end_stream();
                 let mut event_bytes = Vec::with_capacity(frame.payload.len() + 1);
                 event_bytes.push(frame.flag);
+                event_bytes.extend_from_slice(&frame.payload);
+                let event = ChunkEvent::Data(bytes::Bytes::from(event_bytes));
+                if let Some(res) = process_and_dispatch_event(ctx, stream, processor, event).await?
+                {
+                    return Ok(res);
+                }
+            }
+            continue;
+        }
+
+        if let Some(deframer) = kiro_deframer.as_mut() {
+            deframer.push(&bytes);
+            loop {
+                let frame = deframer
+                    .next_frame()
+                    .map_err(|e| CoreError::UpstreamConnection(format!("kiro frame: {e}")))?;
+                let Some(frame) = frame else { break };
+                let event_type_str = match &frame.event_type {
+                    openproxy_adapters::adapters::kiro::KiroEventType::AssistantResponse => {
+                        "assistantResponseEvent"
+                    }
+                    openproxy_adapters::adapters::kiro::KiroEventType::ToolUse => "toolUseEvent",
+                    openproxy_adapters::adapters::kiro::KiroEventType::MessageStop => {
+                        "messageStopEvent"
+                    }
+                    openproxy_adapters::adapters::kiro::KiroEventType::ContextUsage => {
+                        "contextUsageEvent"
+                    }
+                    _ => "other",
+                };
+                let mut event_bytes =
+                    Vec::with_capacity(event_type_str.len() + 1 + frame.payload.len());
+                event_bytes.extend_from_slice(event_type_str.as_bytes());
+                event_bytes.push(0);
                 event_bytes.extend_from_slice(&frame.payload);
                 let event = ChunkEvent::Data(bytes::Bytes::from(event_bytes));
                 if let Some(res) = process_and_dispatch_event(ctx, stream, processor, event).await?
