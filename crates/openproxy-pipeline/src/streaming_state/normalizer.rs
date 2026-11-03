@@ -156,8 +156,8 @@ struct FastDelta<'a> {
 struct NestedOpenAiChunkProbe<'a> {
     #[serde(borrow)]
     choices: Option<Vec<NestedOpenAiChoiceProbe<'a>>>,
-    #[serde(borrow)]
-    response: Option<std::borrow::Cow<'a, str>>,
+    #[serde(default)]
+    response: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -213,7 +213,15 @@ fn unwrap_nested_sse_content<'a>(content: &'a str) -> Option<NestedSseUnwrapResu
     }
 
     if let Some(resp) = probe.response {
-        return Some((Some(resp), None, false));
+        let text = match resp {
+            serde_json::Value::String(s) => std::borrow::Cow::Owned(s),
+            serde_json::Value::Number(n) => std::borrow::Cow::Owned(n.to_string()),
+            serde_json::Value::Bool(b) => {
+                std::borrow::Cow::Borrowed(if b { "true" } else { "false" })
+            }
+            _ => std::borrow::Cow::Borrowed(""),
+        };
+        return Some((Some(text), None, false));
     }
 
     // Any other valid JSON inside `data: {...}` that has usage or object metadata
