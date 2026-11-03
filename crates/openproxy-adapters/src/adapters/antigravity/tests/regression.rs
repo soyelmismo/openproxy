@@ -69,6 +69,41 @@ fn claude_thinking_keeps_max_output_tokens_above_budget() {
     }
 }
 
+#[test]
+fn claude_temperature_is_clamped_to_zero_one_range() {
+    // Regression test for issue with Vertex rejecting temperature outside 0..1:
+    // `temperature: range: 0..1` (status=400 INVALID_ARGUMENT)
+    for (input_temp, expected_temp) in [
+        (2.0, 1.0),
+        (1.5, 1.0),
+        (1.0, 1.0),
+        (0.7, 0.7),
+        (0.0, 0.0),
+        (-0.5, 0.0),
+    ] {
+        let req = wrapped(
+            "claude-opus-4-6-thinking",
+            json!({
+                "model": "claude-opus-4-6-thinking",
+                "temperature": input_temp,
+                "messages": [{"role": "user", "content": "hi"}],
+            }),
+        );
+        let gen_cfg = req
+            .get("generationConfig")
+            .and_then(|v| v.as_object())
+            .expect("generationConfig object");
+        let temp = gen_cfg
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .expect("temperature");
+        assert!(
+            (temp - expected_temp).abs() < 1e-6,
+            "input_temp {input_temp} should be clamped to {expected_temp}, got {temp}"
+        );
+    }
+}
+
 /// The Gemini wire format is camelCase. A snake_case key is silently dropped by
 /// the upstream as an unknown field, so every one of these must be renamed.
 #[test]

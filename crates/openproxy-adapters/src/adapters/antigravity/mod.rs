@@ -264,7 +264,7 @@ impl ProviderAdapter for AntigravityAdapter {
             PromptSanitizer::sanitize_gemini_request(&mut json);
 
             if let Some(tools) = json.get_mut("tools") {
-                normalize_antigravity_tools(tools);
+                crate::adapters::antigravity::sanitizer::normalize_antigravity_tools(tools);
             }
 
             normalize_gemini_wire_keys(&mut json);
@@ -554,70 +554,20 @@ fn sanitize_antigravity_contents(contents: &mut serde_json::Value, physical_mode
     *arr = merged;
 }
 
-fn normalize_antigravity_tools(tools_val: &mut serde_json::Value) {
-    let Some(tools_arr) = tools_val.as_array_mut() else {
-        return;
-    };
-    let mut expanded: Vec<serde_json::Value> = Vec::new();
-    for tool in tools_arr.drain(..) {
-        if let Some(obj) = tool.as_object() {
-            if let Some(decls) = obj
-                .get("functionDeclarations")
-                .or_else(|| obj.get("function_declarations"))
-                .and_then(|v| v.as_array())
-            {
-                for decl in decls {
-                    let mut decl_clone = decl.clone();
-                    if let Some(params) = decl_clone.get_mut("parameters") {
-                        enforce_uppercase_schema_types(params);
-                    }
-                    expanded.push(serde_json::json!({
-                        "functionDeclarations": [decl_clone]
-                    }));
-                }
-            } else {
-                expanded.push(tool);
-            }
-        } else {
-            expanded.push(tool);
-        }
-    }
-    *tools_arr = expanded;
-}
-
-fn enforce_uppercase_schema_types(val: &mut serde_json::Value) {
-    match val {
-        serde_json::Value::Object(map) => {
-            if let Some(serde_json::Value::String(s)) = map.get_mut("type") {
-                *s = s.to_uppercase();
-            }
-            if !map.contains_key("type") {
-                map.insert("type".to_string(), serde_json::json!("OBJECT"));
-            }
-            if map.get("type").and_then(|t| t.as_str()) == Some("OBJECT")
-                && !map.contains_key("properties")
-            {
-                map.insert("properties".to_string(), serde_json::json!({}));
-            }
-            if let Some(serde_json::Value::Object(props)) = map.get_mut("properties") {
-                for prop in props.values_mut() {
-                    enforce_uppercase_schema_types(prop);
-                }
-            }
-            if let Some(items) = map.get_mut("items") {
-                enforce_uppercase_schema_types(items);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for item in arr {
-                enforce_uppercase_schema_types(item);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn adjust_claude_thinking_config(gen_cfg: &mut serde_json::Map<String, serde_json::Value>) {
+    // Vertex/Anthropic requires temperature to be in 0.0..=1.0 for Claude models.
+    // When OpenAI-compatible clients send temperature > 1.0 (e.g. 2.0 or 1.5),
+    // Vertex rejects with `400 temperature: range: 0..1`.
+    if let Some(temp) = gen_cfg.get_mut("temperature")
+        && let Some(val) = temp.as_f64()
+    {
+        if val > 1.0 {
+            *temp = serde_json::json!(1.0);
+        } else if val < 0.0 {
+            *temp = serde_json::json!(0.0);
+        }
+    }
+
     if let Some(tc) = gen_cfg
         .get_mut("thinkingConfig")
         .and_then(|v| v.as_object_mut())
