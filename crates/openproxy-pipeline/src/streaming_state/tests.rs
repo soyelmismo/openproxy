@@ -3,6 +3,7 @@ use crate::streaming::{StreamAction, StreamingChunkStage};
 
 mod fast_paths;
 mod framed;
+mod nested_sse;
 
 #[test]
 fn test_reasoning_normalizer_stage_mutates_think_tags() {

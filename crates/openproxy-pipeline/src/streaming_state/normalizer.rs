@@ -49,22 +49,57 @@ fn normalize_choice_content(
     delta: &mut FastDelta<'_>,
     think_extractor: &mut crate::think_extractor::ThinkStreamExtractor,
 ) -> bool {
-    let Some(content) = delta.content.as_ref() else {
+    let Some(content_cow) = delta.content.take() else {
         return false;
     };
     let mut modified = false;
-    let (clean_content, extracted_reasoning) = think_extractor.process(content);
-    if clean_content != *content {
-        delta.content = Some(std::borrow::Cow::Owned(clean_content));
-        modified = true;
+
+    // Check if the upstream nested an entire SSE frame into delta.content
+    let (target_content, direct_reasoning) =
+        if let Some((unwrapped_content, unwrapped_reasoning, is_done)) =
+            unwrap_nested_sse_content(&content_cow)
+        {
+            modified = true;
+            if is_done {
+                delta.content = Some(std::borrow::Cow::Borrowed(""));
+                return true;
+            }
+            (
+                unwrapped_content.map(|c| c.into_owned()),
+                unwrapped_reasoning.map(|r| r.into_owned()),
+            )
+        } else {
+            (Some(content_cow.to_string()), None)
+        };
+
+    if let Some(r) = direct_reasoning {
+        let has_native_reasoning =
+            delta.reasoning_content.is_some() || delta.extra.contains_key("reasoning_content");
+        if !has_native_reasoning {
+            delta.reasoning_content = Some(std::borrow::Cow::Owned(r));
+            modified = true;
+        }
     }
 
-    let has_native_reasoning =
-        delta.reasoning_content.is_some() || delta.extra.contains_key("reasoning_content");
-    if !extracted_reasoning.is_empty() && !has_native_reasoning {
-        delta.reasoning_content = Some(std::borrow::Cow::Owned(extracted_reasoning));
-        modified = true;
+    if let Some(c) = target_content {
+        let (clean_content, extracted_reasoning) = think_extractor.process(&c);
+        let has_native_reasoning =
+            delta.reasoning_content.is_some() || delta.extra.contains_key("reasoning_content");
+        if !extracted_reasoning.is_empty() && !has_native_reasoning {
+            delta.reasoning_content = Some(std::borrow::Cow::Owned(extracted_reasoning));
+            modified = true;
+        }
+        if clean_content != *content_cow {
+            modified = true;
+        }
+        delta.content = Some(std::borrow::Cow::Owned(clean_content));
+    } else {
+        if !content_cow.is_empty() {
+            modified = true;
+        }
+        delta.content = Some(std::borrow::Cow::Borrowed(""));
     }
+
     modified
 }
 
@@ -116,6 +151,78 @@ struct FastDelta<'a> {
     #[serde(flatten)]
     extra: std::collections::HashMap<String, serde_json::Value>,
 }
+
+#[derive(serde::Deserialize)]
+struct NestedOpenAiChunkProbe<'a> {
+    #[serde(borrow)]
+    choices: Option<Vec<NestedOpenAiChoiceProbe<'a>>>,
+    #[serde(borrow)]
+    response: Option<std::borrow::Cow<'a, str>>,
+}
+
+#[derive(serde::Deserialize)]
+struct NestedOpenAiChoiceProbe<'a> {
+    #[serde(borrow)]
+    delta: Option<NestedOpenAiDeltaProbe<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+struct NestedOpenAiDeltaProbe<'a> {
+    #[serde(borrow)]
+    content: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    reasoning_content: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    reasoning: Option<std::borrow::Cow<'a, str>>,
+}
+
+type NestedSseUnwrapResult<'a> = (
+    Option<std::borrow::Cow<'a, str>>,
+    Option<std::borrow::Cow<'a, str>>,
+    bool,
+);
+
+/// Unwraps double-wrapped SSE chunks where an upstream (e.g. misconfigured
+/// Cloudflare Worker) literally places an entire inner SSE data line or Cloudflare
+/// AI response chunk into `delta.content`.
+///
+/// Returns `Some((clean_content, extracted_reasoning, is_done))` when nested SSE was detected.
+fn unwrap_nested_sse_content<'a>(content: &'a str) -> Option<NestedSseUnwrapResult<'a>> {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("data:") {
+        return None;
+    }
+    let payload = trimmed[5..].trim();
+    if payload == "[DONE]" {
+        return Some((None, None, true));
+    }
+    if !payload.starts_with('{') {
+        return None;
+    }
+
+    let probe = serde_json::from_str::<NestedOpenAiChunkProbe<'a>>(payload).ok()?;
+    if let Some(choices) = probe.choices {
+        if let Some(choice) = choices.into_iter().next()
+            && let Some(delta) = choice.delta
+        {
+            let reasoning = delta.reasoning_content.or(delta.reasoning);
+            return Some((delta.content, reasoning, false));
+        }
+        // If choices is empty (e.g. usage-only or terminal metadata chunk), treat as empty content
+        return Some((Some(std::borrow::Cow::Borrowed("")), None, false));
+    }
+
+    if let Some(resp) = probe.response {
+        return Some((Some(resp), None, false));
+    }
+
+    // Any other valid JSON inside `data: {...}` that has usage or object metadata
+    if payload.contains("\"usage\"") || payload.contains("\"object\"") {
+        return Some((Some(std::borrow::Cow::Borrowed("")), None, false));
+    }
+
+    None
+}
 #[derive(serde::Deserialize, serde::Serialize)]
 struct FastToolCall<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,9 +260,12 @@ pub(crate) fn apply_reasoning_normalizations(
     }
 
     // Every tool delta must initialize/update its accumulator, including the
-    // first one. Only unescaped ordinary text can bypass deserialization.
+    // first one. Only unescaped ordinary text that has no think tags and no nested SSE
+    // can bypass deserialization.
+    let has_nested_sse = p.contains("data:");
     if !has_tool_calls
-        && (!has_content || (!escaped && !think_extractor.has_active_state_or_tag(p)))
+        && (!has_content
+            || (!escaped && !has_nested_sse && !think_extractor.has_active_state_or_tag(p)))
     {
         return normalized;
     }

@@ -51,7 +51,7 @@ pub(crate) fn ensure_streaming_accept(upstream_request: &mut UpstreamRequest) {
     }
 }
 
-pub(crate) use super::translation::translate_non_streaming_body;
+pub(crate) use super::translation::{ensure_usage_populated, translate_non_streaming_body};
 
 /// `true` cuando la respuesta 200 no trae contenido útil. Se trata como
 /// error para forzar el retry.
@@ -620,6 +620,9 @@ impl UpstreamDispatcher {
             session.restore_openai_response(&mut openai_response);
         }
 
+        // Guarantee robust BPE token estimation if upstream omitted usage or returned 0
+        ensure_usage_populated(&mut openai_response, &params.req.openai_request.messages);
+
         let recorded_response_body =
             if self.config.pii_config.pii_enabled && !self.config.pii_config.pii_redact_logs {
                 serde_json::to_value(&openai_response).unwrap_or_else(|_| response_body_raw.clone())
@@ -710,4 +713,87 @@ async fn emit_unary_response_to_stream_sink(
         }
     }
     let _ = sink.send(crate::pipeline::SSE_DONE_BYTES).await;
+}
+
+#[cfg(test)]
+mod ensure_usage_tests {
+    use super::*;
+    use openproxy_types::{OpenAIChoice, OpenAIMessage, OpenAIResponse, OpenAIUsage};
+
+    #[test]
+    fn test_ensure_usage_populates_missing() {
+        let messages = vec![OpenAIMessage {
+            role: "user".to_string(),
+            content: Some(serde_json::Value::String(
+                "Hello world from unit test".to_string(),
+            )),
+            name: None,
+            tool_call_id: None,
+            tool_calls: None,
+            extra: Default::default(),
+        }];
+
+        let mut resp = OpenAIResponse {
+            id: "test-id".to_string(),
+            object: "chat.completion".to_string(),
+            created: 123456,
+            model: "test-model".to_string(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".to_string(),
+                    content: Some(serde_json::Value::String(
+                        "Hi! This is a test response.".to_string(),
+                    )),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: Default::default(),
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: None,
+        };
+
+        ensure_usage_populated(&mut resp, &messages);
+
+        assert!(resp.usage.is_some());
+        let u = resp.usage.unwrap();
+        assert!(
+            u.prompt_tokens >= 4,
+            "expected at least 4 prompt tokens, got {}",
+            u.prompt_tokens
+        );
+        assert!(
+            u.completion_tokens >= 4,
+            "expected at least 4 completion tokens, got {}",
+            u.completion_tokens
+        );
+        assert_eq!(u.total_tokens, u.prompt_tokens + u.completion_tokens);
+    }
+
+    #[test]
+    fn test_ensure_usage_preserves_existing() {
+        let messages = vec![];
+        let mut resp = OpenAIResponse {
+            id: "test-id".to_string(),
+            object: "chat.completion".to_string(),
+            created: 123456,
+            model: "test-model".to_string(),
+            choices: vec![],
+            usage: Some(OpenAIUsage {
+                prompt_tokens: 42,
+                completion_tokens: 18,
+                total_tokens: 60,
+                prompt_tokens_details: None,
+            }),
+        };
+
+        ensure_usage_populated(&mut resp, &messages);
+
+        let u = resp.usage.unwrap();
+        assert_eq!(u.prompt_tokens, 42);
+        assert_eq!(u.completion_tokens, 18);
+        assert_eq!(u.total_tokens, 60);
+    }
 }

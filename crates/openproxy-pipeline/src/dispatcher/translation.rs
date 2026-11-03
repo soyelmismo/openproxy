@@ -102,3 +102,80 @@ pub(crate) fn translate_non_streaming_body(
         }
     }
 }
+
+/// Populates `usage` in `OpenAIResponse` using BPE tokenizer (tiktoken cl100k_base)
+/// if the upstream omitted it or returned zeros. This guarantees downstream clients
+/// (like Antseed sellers) always receive realistic, non-zero token accounting.
+pub(crate) fn ensure_usage_populated(
+    resp: &mut OpenAIResponse,
+    messages: &[openproxy_types::OpenAIMessage],
+) {
+    let needs_prompt = resp.usage.as_ref().is_none_or(|u| u.prompt_tokens == 0);
+    let needs_completion = resp.usage.as_ref().is_none_or(|u| u.completion_tokens == 0);
+
+    if !needs_prompt && !needs_completion {
+        return;
+    }
+
+    let est_prompt = if needs_prompt {
+        openproxy_compression::token_estimate::estimate_prompt_tokens(messages).max(1)
+    } else {
+        resp.usage.as_ref().map_or(0, |u| u.prompt_tokens)
+    };
+
+    let est_completion = if needs_completion {
+        let mut tokens = 0u32;
+        for c in &resp.choices {
+            if let Some(ref content) = c.message.content {
+                if let Some(s) = content.as_str() {
+                    tokens += openproxy_compression::token_estimate::estimate_completion_tokens(s);
+                } else if let Some(parts) = content.as_array() {
+                    for part in parts {
+                        if let Some(s) = part.get("text").and_then(|t| t.as_str()) {
+                            tokens +=
+                                openproxy_compression::token_estimate::estimate_completion_tokens(
+                                    s,
+                                );
+                        }
+                    }
+                }
+            }
+            if let Some(ref tcs) = c.message.tool_calls {
+                for tc in tcs {
+                    if let Some(args) = tc
+                        .get("function")
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                    {
+                        tokens +=
+                            openproxy_compression::token_estimate::estimate_completion_tokens(args);
+                    }
+                }
+            }
+            if let Some(serde_json::Value::String(reasoning)) =
+                c.message.extra.get("reasoning_content")
+            {
+                tokens +=
+                    openproxy_compression::token_estimate::estimate_completion_tokens(reasoning);
+            }
+        }
+        tokens.max(1)
+    } else {
+        resp.usage.as_ref().map_or(0, |u| u.completion_tokens)
+    };
+
+    let cached = resp
+        .usage
+        .as_ref()
+        .and_then(|u| u.prompt_tokens_details.as_ref())
+        .and_then(|d| d.cached_tokens);
+
+    resp.usage = Some(openproxy_types::OpenAIUsage {
+        prompt_tokens: est_prompt,
+        completion_tokens: est_completion,
+        total_tokens: est_prompt + est_completion,
+        prompt_tokens_details: cached.map(|c| openproxy_types::PromptTokensDetails {
+            cached_tokens: Some(c),
+        }),
+    });
+}
