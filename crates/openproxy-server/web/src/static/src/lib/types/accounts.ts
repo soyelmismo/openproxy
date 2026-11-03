@@ -187,6 +187,9 @@ export interface ApiKey {
   allowed_combos: number[] | null;
   blacklisted_providers: string[] | null;
   blacklisted_models: string[] | null;
+  /** When true, `allowed_models` is a strict gate instead of an additive
+   *  grant: only the listed models are usable. Defaults to false. */
+  only_whitelisted: boolean;
   is_active: boolean;
   revoked_at: string | null;
   expires_at: string | null;

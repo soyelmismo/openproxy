@@ -48,8 +48,8 @@ pub fn create(
         "INSERT INTO api_keys \
             (key_hash, key_prefix, label, scopes_json, allowed_models_json, \
              allowed_combos_json, expires_at, created_by, \
-             blacklisted_providers_json, blacklisted_models_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             blacklisted_providers_json, blacklisted_models_json, only_whitelisted) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             key_hash,
             key_prefix,
@@ -61,6 +61,7 @@ pub fn create(
             created_by,
             blacklisted_providers_json,
             blacklisted_models_json,
+            input.only_whitelisted as i64,
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -78,7 +79,8 @@ pub fn get_by_id(conn: &Connection, id: ApiKeyId) -> Result<Option<ApiKey>> {
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
                     allowed_models_json, allowed_combos_json, is_active, \
                     revoked_at, expires_at, last_used_at, created_at, created_by, \
-                    blacklisted_providers_json, blacklisted_models_json \
+                    blacklisted_providers_json, blacklisted_models_json, \
+                    only_whitelisted \
              FROM api_keys WHERE id = ?1",
             params![id.0],
             row_to_api_key,
@@ -95,7 +97,8 @@ pub fn get_by_hash(conn: &Connection, key_hash: &str) -> Result<Option<ApiKey>> 
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
                     allowed_models_json, allowed_combos_json, is_active, \
                     revoked_at, expires_at, last_used_at, created_at, created_by, \
-                    blacklisted_providers_json, blacklisted_models_json \
+                    blacklisted_providers_json, blacklisted_models_json, \
+                    only_whitelisted \
              FROM api_keys WHERE key_hash = ?1",
             params![key_hash],
             row_to_api_key,
@@ -124,7 +127,8 @@ pub fn list(conn: &Connection) -> Result<Vec<ApiKey>> {
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
                     allowed_models_json, allowed_combos_json, is_active, \
                     revoked_at, expires_at, last_used_at, created_at, created_by, \
-                    blacklisted_providers_json, blacklisted_models_json \
+                    blacklisted_providers_json, blacklisted_models_json, \
+                    only_whitelisted \
              FROM api_keys ORDER BY id DESC",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -261,6 +265,10 @@ fn build_update_scalar_clauses(
     if let Some(label_value) = params.label {
         sets.push("label = ?");
         bound.push(Box::new(label_value.to_string()));
+    }
+    if let Some(only_whitelisted) = params.only_whitelisted {
+        sets.push("only_whitelisted = ?");
+        bound.push(Box::new(only_whitelisted as i64));
     }
     if let Some(active) = params.is_active {
         sets.push("is_active = ?");

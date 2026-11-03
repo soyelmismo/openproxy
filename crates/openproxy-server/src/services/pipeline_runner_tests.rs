@@ -227,6 +227,7 @@ async fn setup_test_env(cut_p1_midstream: bool) -> TestEnv {
                         allowed_combos: None,
                         blacklisted_providers: None,
                         blacklisted_models: None,
+                        only_whitelisted: false,
                         expires_at: None,
                     },
                     "test_setup",

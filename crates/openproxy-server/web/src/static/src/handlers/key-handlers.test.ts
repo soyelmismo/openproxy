@@ -20,6 +20,7 @@ function makeKeyForm(fields: {
   blModels?: string;
   expiresAmount?: string;
   expiresUnit?: string;
+  onlyWhitelisted?: boolean;
 } = {}): HTMLFormElement {
   const form = document.createElement("form");
   const append = (name: string, value: string, tag: "input" | "select" = "input", type = "text"): void => {
@@ -55,6 +56,7 @@ function makeKeyForm(fields: {
   if (fields.blModels !== undefined) append("blacklisted_models", fields.blModels, "input", "hidden");
   if (fields.expiresAmount !== undefined) append("expires_amount", fields.expiresAmount, "input", "number");
   if (fields.expiresUnit !== undefined) append("expires_unit", fields.expiresUnit, "select");
+  if (fields.onlyWhitelisted !== undefined) checkbox("only_whitelisted", "1", fields.onlyWhitelisted);
   document.body.appendChild(form);
   return form;
 }
@@ -107,6 +109,21 @@ describe("buildKeyBodyFromForm", () => {
     const body = buildKeyBodyFromForm(form);
     expect(body?.blacklisted_providers).toEqual(["openai", "groq"]);
     expect(body?.blacklisted_models).toEqual(["gpt-4*", "*-preview"]);
+  });
+
+  it("defaults only_whitelisted to false when the checkbox is absent", () => {
+    const form = track(makeKeyForm({ scopes: ["chat"] }));
+    const body = buildKeyBodyFromForm(form);
+    // Forms rendered before the field existed never send it, which must keep
+    // the additive semantics rather than silently flipping to strict mode.
+    expect(body?.only_whitelisted).toBe(false);
+  });
+
+  it("reads only_whitelisted from the checkbox state", () => {
+    const off = track(makeKeyForm({ scopes: ["chat"], onlyWhitelisted: false }));
+    expect(buildKeyBodyFromForm(off)?.only_whitelisted).toBe(false);
+    const on = track(makeKeyForm({ scopes: ["chat"], onlyWhitelisted: true }));
+    expect(buildKeyBodyFromForm(on)?.only_whitelisted).toBe(true);
   });
 
   it("returns null expires_at when amount is blank even with unit=days", () => {

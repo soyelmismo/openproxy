@@ -527,6 +527,7 @@ mod tests {
             allowed_combos: None,
             blacklisted_providers: Some(vec!["openrouter".into()]),
             blacklisted_models: Some(vec!["gpt-3.5*".into()]),
+            only_whitelisted: false,
             is_active: true,
             revoked_at: None,
             expires_at: None,

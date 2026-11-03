@@ -37,6 +37,7 @@ interface KeyRow {
   allowed_models?: string[];
   blacklisted_providers?: string[] | null;
   blacklisted_models?: string[] | null;
+  only_whitelisted?: boolean;
   expires_at?: string | null;
 }
 
@@ -46,6 +47,7 @@ interface KeyBody {
   allowed_models: string[] | null;
   blacklisted_providers: string[] | null;
   blacklisted_models: string[] | null;
+  only_whitelisted: boolean;
   expires_at: string | null;
 }
 
@@ -110,6 +112,7 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
   if (isEdit && Array.isArray(key!.blacklisted_models)) {
     blModelsVal = key!.blacklisted_models.join(",");
   }
+  const onlyWhitelisted = isEdit && key!.only_whitelisted === true;
   const availableProviders = getAvailableProviders();
   const safeKey: KeyRow = key || { id: 0 };
   const title = isEdit ? `Edit API key #${safeKey.id}` : "Create API key";
@@ -161,6 +164,11 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
                 <span class="muted">Loading...</span>
               </div>
               <input type="hidden" name="allowed_models" .value=${allowedModelsValue}>
+              <label class="scope-card" style="margin-top:8px;">
+                <input type="checkbox" name="only_whitelisted" .checked=${onlyWhitelisted}>
+                <span class="scope-name">Only these models</span>
+                <span class="scope-desc">Restrict this key to the models selected above. Leave off to keep the list additive (the blacklists below still apply).</span>
+              </label>
             </div>
             <div class="field">
               <span class="field-label">Blacklisted providers</span>
@@ -338,12 +346,18 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   const labelEl = form.querySelector<HTMLInputElement>('input[name="label"]');
   const labelRaw = labelEl ? labelEl.value : "";
   const label: string | null = (labelRaw || "").trim() || null;
+  // Absent checkbox → false: forms rendered before this field existed (and the
+  // unit tests that build a minimal form) never send the flag, which keeps the
+  // additive semantics as the default.
+  const onlyWhitelistedEl = form.querySelector<HTMLInputElement>('input[name="only_whitelisted"]');
+  const onlyWhitelisted = onlyWhitelistedEl ? onlyWhitelistedEl.checked : false;
   return {
     label,
     scopes,
     allowed_models: allowedModels,
     blacklisted_providers: blacklistedProviders,
     blacklisted_models: blacklistedModels,
+    only_whitelisted: onlyWhitelisted,
     expires_at: expiresAt,
   };
 }

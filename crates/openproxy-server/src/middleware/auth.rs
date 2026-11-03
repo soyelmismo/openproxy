@@ -59,6 +59,12 @@ impl ValidatedApiToken {
             }
         });
 
+        let is_model_blacklisted = self.key.blacklisted_models.as_ref().is_some_and(|blacklisted| {
+            blacklisted
+                .iter()
+                .any(|b| matches_any_model_pattern(b, model, bare_model, full_id.as_deref()))
+        });
+
         // `allowed_models` is ADDITIVE, not a whitelist: it grants access on
         // top of the default-permit, and an entry overrides BOTH the model and
         // the provider blacklists (that is its purpose — e.g. open
@@ -70,15 +76,20 @@ impl ValidatedApiToken {
                     .iter()
                     .any(|m| matches_any_model_pattern(m, model, bare_model, full_id.as_deref()))
         });
+
+        // Strict mode: the allowlist becomes the outer gate. Only the listed
+        // models are reachable and the model blacklist keeps subtracting from
+        // that set (an empty allowlist denies everything). The provider
+        // blacklist is subsumed — a non-listed model is already denied.
+        if self.key.only_whitelisted {
+            return explicitly_allowed && !is_model_blacklisted;
+        }
+
         if explicitly_allowed {
             return true;
         }
 
-        if let Some(blacklisted) = &self.key.blacklisted_models
-            && blacklisted
-                .iter()
-                .any(|b| matches_any_model_pattern(b, model, bare_model, full_id.as_deref()))
-        {
+        if is_model_blacklisted {
             return false;
         }
 

@@ -1,0 +1,17 @@
+-- 000100_api_key_only_whitelisted.sql
+-- `allowed_models` is ADDITIVE by design: it grants access on top of the
+-- default-permit and overrides both the model and the provider blacklists
+-- (e.g. open `devin/swe-2:free` while `devin` stays provider-blocked).
+--
+-- Some keys need the opposite contract: only the explicitly listed models are
+-- usable, and nothing else. `only_whitelisted` flips that single key into
+-- strict mode, where the allowlist becomes the outer gate and the blacklists
+-- keep subtracting from it:
+--
+--   additive (default):  in_allowlist -> allow; else !model_blacklist && !provider_blacklist
+--   strict:             in_allowlist && !model_blacklist
+--
+-- Default 0 keeps every existing row on the additive path, so the change is
+-- backward compatible. An empty allowlist under strict mode denies everything,
+-- which is the coherent reading of "only the selected models".
+ALTER TABLE api_keys ADD COLUMN only_whitelisted INTEGER NOT NULL DEFAULT 0 CHECK (only_whitelisted IN (0, 1));

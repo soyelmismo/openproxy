@@ -338,6 +338,7 @@
   "keys.list.cell.allowed_models_other": "{{count}} models",
   "keys.list.cell.blacklist_providers": "!prov: {{list}}",
   "keys.list.cell.blacklist_models_one": "!models: {{count}}",
+  "keys.list.cell.only_whitelisted": "only listed",
   "keys.list.cell.blacklist_models_other": "!models: {{count}}",
   "keys.list.cell.last_used_never": "never",
   "keys.list.empty": "No API keys yet. Create one to authenticate clients.",

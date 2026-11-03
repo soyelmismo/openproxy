@@ -110,6 +110,7 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
                         allowed_combos: None,
                         blacklisted_providers: None,
                         blacklisted_models: None,
+                        only_whitelisted: false,
                         expires_at: None,
                     },
                     "bench_setup",

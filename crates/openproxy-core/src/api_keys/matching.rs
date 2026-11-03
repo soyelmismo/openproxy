@@ -66,6 +66,13 @@ impl ApiKey {
             }
         });
 
+        let is_model_blacklisted = is_model_blocked_by_blacklist(
+            self.blacklisted_models.as_deref(),
+            model,
+            bare_model,
+            full_id.as_deref(),
+        );
+
         // `allowed_models` is ADDITIVE, not a whitelist: it grants access on
         // top of the default-permit, and an entry overrides BOTH the model and
         // the provider blacklists (e.g. open `devin/swe-2:free` while `devin`
@@ -77,16 +84,20 @@ impl ApiKey {
                     .iter()
                     .any(|m| model_matches_pattern(m, model, bare_model, full_id.as_deref()))
         });
+
+        // Strict mode flips the allowlist into the outer gate: only the listed
+        // models are reachable, and the model blacklist keeps subtracting from
+        // that set (an empty allowlist denies everything). The provider
+        // blacklist is subsumed — a non-listed model is already denied.
+        if self.only_whitelisted {
+            return explicitly_allowed && !is_model_blacklisted;
+        }
+
         if explicitly_allowed {
             return true;
         }
 
-        if is_model_blocked_by_blacklist(
-            self.blacklisted_models.as_deref(),
-            model,
-            bare_model,
-            full_id.as_deref(),
-        ) {
+        if is_model_blacklisted {
             return false;
         }
 

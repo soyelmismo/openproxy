@@ -448,8 +448,8 @@ pub fn restore_backup(
                 id, key_hash, key_prefix, label, scopes_json, \
                 allowed_models_json, allowed_combos_json, is_active, revoked_at, \
                 expires_at, created_by, blacklisted_providers_json, \
-                blacklisted_models_json \
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                blacklisted_models_json, only_whitelisted \
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         )
         .map_err(map_db_error)?;
 
@@ -469,6 +469,7 @@ pub fn restore_backup(
             k.created_by,
             k.blacklisted_providers_json,
             k.blacklisted_models_json,
+            k.only_whitelisted as i64,
         ])
         .map_err(|e| map_db_error_ctx(format!("restore api key {}", k.id))(e))?;
 

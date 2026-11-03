@@ -100,3 +100,160 @@ fn is_model_allowed_checks_blacklist_providers_and_models() {
     assert!(key.is_model_allowed("anthropic/claude-3-5-sonnet", None));
     assert!(key.is_provider_allowed("anthropic"));
 }
+
+#[test]
+fn only_whitelisted_restricts_the_catalog_to_the_allowlist() {
+    let (conn, _p) = fresh_pool();
+
+    // Additive mode (default) is the documented baseline: the allowlist grants
+    // access on top of the default-permit, it does not restrict anything.
+    let (additive, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("additive".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec!["openai".into()]),
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+    assert!(additive.is_model_allowed("openai/gpt-4o", None));
+    assert!(additive.is_model_allowed("anthropic/claude-3", None));
+
+    // Strict mode: only the listed models are reachable. Note the same
+    // allowlist that permitted `anthropic/claude-3` above now denies it.
+    let (strict, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("strict".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec!["openai".into()]),
+            only_whitelisted: true,
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+    assert!(strict.is_model_allowed("openai/gpt-4o", None));
+    assert!(strict.is_model_allowed("gpt-4o", Some("openai")));
+    assert!(strict.is_model_allowed("openai", None));
+    assert!(!strict.is_model_allowed("anthropic/claude-3", None));
+    assert!(!strict.is_model_allowed("claude-3", Some("anthropic")));
+}
+
+#[test]
+fn only_whitelisted_still_subtracts_the_model_blacklist() {
+    let (conn, _p) = fresh_pool();
+    let (key, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("strict-blacklist".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec!["openai/*".into()]),
+            blacklisted_models: Some(vec!["gpt-3.5*".into()]),
+            only_whitelisted: true,
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+
+    assert!(key.is_model_allowed("openai/gpt-4o", None));
+    assert!(key.is_model_allowed("gpt-4o", Some("openai")));
+    // The blacklist keeps subtracting from the allowlist.
+    assert!(!key.is_model_allowed("openai/gpt-3.5-turbo", None));
+    assert!(!key.is_model_allowed("gpt-3.5-turbo", Some("openai")));
+    // Outside the allowlist, regardless of the blacklist.
+    assert!(!key.is_model_allowed("anthropic/claude-3", None));
+}
+
+#[test]
+fn only_whitelisted_with_empty_allowlist_denies_everything() {
+    let (conn, _p) = fresh_pool();
+
+    // An empty allowlist under additive mode is documented as "no restriction".
+    let (additive, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("additive-empty".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec![]),
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+    assert!(additive.is_model_allowed("openai/gpt-4o", None));
+
+    // Under strict mode it is the coherent reading of "only the selected
+    // models": nothing is selected, so nothing is served.
+    let (strict, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("strict-empty".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec![]),
+            only_whitelisted: true,
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+    assert!(!strict.is_model_allowed("openai/gpt-4o", None));
+    assert!(!strict.is_model_allowed("gpt-4o", Some("openai")));
+
+    // `None` (never configured) behaves the same as empty under strict mode.
+    let (strict_none, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("strict-none".into()),
+            scopes: vec!["chat".into()],
+            only_whitelisted: true,
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+    assert!(!strict_none.is_model_allowed("openai/gpt-4o", None));
+}
+
+#[test]
+fn only_whitelisted_survives_a_round_trip_through_the_db() {
+    let (conn, _p) = fresh_pool();
+    let (created, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("roundtrip".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec!["openai".into()]),
+            only_whitelisted: true,
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+
+    // The flag must be persisted and re-read, not just held in the returned row.
+    let loaded = get_by_id(&conn, created.id)
+        .expect("get_by_id")
+        .expect("row");
+    assert!(loaded.only_whitelisted);
+    assert!(!loaded.is_model_allowed("anthropic/claude-3", None));
+
+    // And it must be flippable through the update path.
+    update(
+        &conn,
+        created.id,
+        UpdateParams {
+            only_whitelisted: Some(false),
+            ..Default::default()
+        },
+    )
+    .expect("update");
+    let reloaded = get_by_id(&conn, created.id)
+        .expect("get_by_id")
+        .expect("row");
+    assert!(!reloaded.only_whitelisted);
+    assert!(reloaded.is_model_allowed("anthropic/claude-3", None));
+}

@@ -49,6 +49,7 @@ pub(crate) fn row_to_api_key(row: &Row<'_>) -> rusqlite::Result<ApiKey> {
     let created_by: Option<String> = row.get(12)?;
     let blacklisted_providers_json: Option<String> = row.get(13)?;
     let blacklisted_models_json: Option<String> = row.get(14)?;
+    let only_whitelisted: i64 = row.get(15)?;
 
     let scopes: Vec<String> = parse_required_json(&scopes_json, 4, "scopes_json")?;
     let allowed_models = parse_optional_json(allowed_models_json, 5, "allowed_models_json")?;
@@ -66,6 +67,7 @@ pub(crate) fn row_to_api_key(row: &Row<'_>) -> rusqlite::Result<ApiKey> {
         allowed_combos,
         blacklisted_providers,
         blacklisted_models,
+        only_whitelisted: only_whitelisted != 0,
         is_active: is_active != 0,
         revoked_at,
         expires_at,

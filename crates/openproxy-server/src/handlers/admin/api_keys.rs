@@ -98,6 +98,8 @@ pub async fn update_api_key(
         });
         let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|v| v.as_slice());
 
+        let only_whitelisted = body.get("only_whitelisted").and_then(serde_json::Value::as_bool);
+
         let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
 
         let expires_field = match body.get("expires_at") {
@@ -118,6 +120,7 @@ pub async fn update_api_key(
                 allowed_combos: allowed_combos_slice,
                 blacklisted_providers: blacklisted_providers_slice,
                 blacklisted_models: blacklisted_models_slice,
+                only_whitelisted,
                 is_active,
                 expires_at: expires_slice,
             },

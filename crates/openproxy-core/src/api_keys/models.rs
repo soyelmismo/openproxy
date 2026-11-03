@@ -36,6 +36,12 @@ pub struct ApiKey {
     pub blacklisted_providers: Option<Vec<String>>,
     /// Decoded `blacklisted_models_json` column. `None` = no restriction.
     pub blacklisted_models: Option<Vec<String>>,
+    /// `only_whitelisted` flag. `false` (the default) keeps `allowed_models`
+    /// ADDITIVE — models outside the list are still permitted unless a
+    /// blacklist matches them. `true` turns the allowlist into a strict gate:
+    /// only the listed models are usable, and the blacklists keep subtracting
+    /// from that set.
+    pub only_whitelisted: bool,
     pub is_active: bool,
     pub revoked_at: Option<String>,
     pub expires_at: Option<String>,
@@ -65,6 +71,10 @@ pub struct CreateApiKeyInput {
     pub allowed_combos: Option<Vec<i64>>,
     pub blacklisted_providers: Option<Vec<String>>,
     pub blacklisted_models: Option<Vec<String>>,
+    /// Opt into strict allowlist mode. Defaults to `false` so existing keys
+    /// keep the additive semantics.
+    #[serde(default)]
+    pub only_whitelisted: bool,
     pub expires_at: Option<String>,
 }
 
@@ -77,6 +87,7 @@ pub struct UpdateParams<'a> {
     pub allowed_combos: UpdateField<&'a [i64]>,
     pub blacklisted_providers: UpdateField<&'a [String]>,
     pub blacklisted_models: UpdateField<&'a [String]>,
+    pub only_whitelisted: Option<bool>,
     pub is_active: Option<bool>,
     pub expires_at: UpdateField<&'a str>,
 }

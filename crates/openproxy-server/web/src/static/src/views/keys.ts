@@ -143,9 +143,12 @@ function formatAllowedModels(k: ApiKeyRow): string {
     blBadges.push(t("keys.list.cell.blacklist_models", { count: k.blacklisted_models.length }));
   }
 
-  return blBadges.length > 0
-    ? `${allowedModels} (${blBadges.join("; ")})`
-    : allowedModels;
+  const suffix = blBadges.length > 0 ? ` (${blBadges.join("; ")})` : "";
+  // Strict mode changes what the cell means: the allowlist is now the outer
+  // gate, so an empty list is "nothing" rather than "all".
+  return k.only_whitelisted
+    ? `${t("keys.list.cell.only_whitelisted")}${suffix}`
+    : `${allowedModels}${suffix}`;
 }
 
 function formatKeyStatus(k: ApiKeyRow) {

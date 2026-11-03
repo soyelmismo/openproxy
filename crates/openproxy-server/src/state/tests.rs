@@ -237,6 +237,7 @@ fn dummy_key(id: i64, hash: &str) -> openproxy_core::api_keys::ApiKey {
         allowed_combos: None,
         blacklisted_providers: None,
         blacklisted_models: None,
+        only_whitelisted: false,
         is_active: true,
         revoked_at: None,
         expires_at: None,

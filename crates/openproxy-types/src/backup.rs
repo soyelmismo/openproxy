@@ -318,6 +318,10 @@ pub struct BackupApiKey {
     pub blacklisted_providers_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blacklisted_models_json: Option<String>,
+    /// Strict allowlist mode. `#[serde(default)]` keeps backups taken before
+    /// migration 000100 readable — they restore onto the additive path.
+    #[serde(default)]
+    pub only_whitelisted: bool,
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra_fields: BTreeMap<String, serde_json::Value>,
 }
