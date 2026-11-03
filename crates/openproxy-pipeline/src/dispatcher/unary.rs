@@ -691,6 +691,8 @@ impl UpstreamDispatcher {
         let recorded_response_body =
             if self.config.pii_config.pii_enabled && !self.config.pii_config.pii_redact_logs {
                 serde_json::to_value(&openai_response).unwrap_or_else(|_| response_body_raw.clone())
+            } else if !self.config.pii_config.pii_enabled {
+                serde_json::to_value(&openai_response).unwrap_or(response_body_raw)
             } else {
                 response_body_raw
             };

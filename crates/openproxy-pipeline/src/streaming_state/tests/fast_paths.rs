@@ -30,6 +30,18 @@ fn tool_fast_path_initializes_state_before_cumulative_arguments() {
 }
 
 #[test]
+fn test_pollinations_raw_chunk_extracts_think() {
+    let raw = r#"{"id":"chatcmpl-6bce028001a9d52fe9c63dec","object":"chat.completion.chunk","created":1793678537,"model":"poe/GLM-5.3-Flash-T","choices":[{"index":0,"delta":{"content":"<think>\nLet me consider\n</think>\n\nHi there!"},"finish_reason":null}]}"#;
+    let mut normalizer = ReasoningNormalizer::new();
+    let act = normalizer.process_chunk(raw);
+    let StreamAction::Mutate(s) = act else {
+        panic!("expected mutate, got {act:?}");
+    };
+    assert!(s.contains("\"reasoning_content\":\"\\nLet me consider\\n\""));
+    assert!(s.contains("\"content\":\"\\n\\nHi there!\""));
+}
+
+#[test]
 fn ordinary_text_keeps_the_passthrough_fast_path() {
     let payload = r#"{"choices":[{"delta":{"content":"hola 🌍"}}]}"#;
     let mut normalizer = ReasoningNormalizer::new();

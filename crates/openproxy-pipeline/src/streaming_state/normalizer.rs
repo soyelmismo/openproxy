@@ -92,18 +92,18 @@ fn normalize_choice_tool_calls(
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
-struct FastChunk<'a> {
+pub(crate) struct FastChunk<'a> {
     #[serde(borrow, skip_serializing_if = "Option::is_none")]
     choices: Option<Vec<FastChoice<'a>>>,
-    #[serde(flatten, borrow)]
-    extra: std::collections::HashMap<&'a str, &'a serde_json::value::RawValue>,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
-struct FastChoice<'a> {
+pub(crate) struct FastChoice<'a> {
     #[serde(borrow, skip_serializing_if = "Option::is_none")]
     delta: Option<FastDelta<'a>>,
-    #[serde(flatten, borrow)]
-    extra: std::collections::HashMap<&'a str, &'a serde_json::value::RawValue>,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 struct FastDelta<'a> {
@@ -113,8 +113,8 @@ struct FastDelta<'a> {
     reasoning_content: Option<std::borrow::Cow<'a, str>>,
     #[serde(borrow, skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<FastToolCall<'a>>>,
-    #[serde(flatten, borrow)]
-    extra: std::collections::HashMap<&'a str, &'a serde_json::value::RawValue>,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 struct FastToolCall<'a> {
@@ -122,15 +122,15 @@ struct FastToolCall<'a> {
     index: Option<u64>,
     #[serde(borrow, skip_serializing_if = "Option::is_none")]
     function: Option<FastFunction<'a>>,
-    #[serde(flatten, borrow)]
-    extra: std::collections::HashMap<&'a str, &'a serde_json::value::RawValue>,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 #[derive(serde::Deserialize, serde::Serialize)]
 struct FastFunction<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     arguments: Option<std::borrow::Cow<'a, str>>,
-    #[serde(flatten, borrow)]
-    extra: std::collections::HashMap<&'a str, &'a serde_json::value::RawValue>,
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, serde_json::Value>,
 }
 
 pub(crate) fn apply_reasoning_normalizations(
