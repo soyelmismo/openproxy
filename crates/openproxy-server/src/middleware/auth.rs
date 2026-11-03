@@ -59,11 +59,15 @@ impl ValidatedApiToken {
             }
         });
 
-        let is_model_blacklisted = self.key.blacklisted_models.as_ref().is_some_and(|blacklisted| {
-            blacklisted
-                .iter()
-                .any(|b| matches_any_model_pattern(b, model, bare_model, full_id.as_deref()))
-        });
+        let is_model_blacklisted =
+            self.key
+                .blacklisted_models
+                .as_ref()
+                .is_some_and(|blacklisted| {
+                    blacklisted.iter().any(|b| {
+                        matches_any_model_pattern(b, model, bare_model, full_id.as_deref())
+                    })
+                });
 
         // `allowed_models` is ADDITIVE, not a whitelist: it grants access on
         // top of the default-permit, and an entry overrides BOTH the model and

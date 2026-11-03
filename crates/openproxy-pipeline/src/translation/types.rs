@@ -37,6 +37,15 @@ pub struct AnthropicMessage {
     pub content: serde_json::Value,
 }
 
+fn deserialize_null_as_empty_vec<'de, D>(
+    deserializer: D,
+) -> Result<Vec<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<Vec<serde_json::Value>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnthropicResponse {
     #[serde(default)]
@@ -45,7 +54,7 @@ pub struct AnthropicResponse {
     pub response_type: String,
     #[serde(default)]
     pub role: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_as_empty_vec")]
     pub content: Vec<serde_json::Value>,
     #[serde(default)]
     pub model: String,

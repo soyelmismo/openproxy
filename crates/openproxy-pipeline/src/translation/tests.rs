@@ -535,6 +535,27 @@ fn anthropic_to_openai_preserves_thinking_as_reasoning_content() {
 }
 
 #[test]
+fn anthropic_response_deserializes_null_content_as_empty_vec() {
+    let raw = json!({
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": null,
+        "model": "MiniMax-M3.1-Flash",
+        "stop_reason": "max_tokens",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 1
+        }
+    });
+    let resp: AnthropicResponse = serde_json::from_value(raw).unwrap();
+    assert!(resp.content.is_empty());
+    let openai = anthropic_to_openai(&resp);
+    assert_eq!(openai.choices[0].message.content, Some(json!("")));
+    assert_eq!(openai.choices[0].finish_reason, Some("length".to_string()));
+}
+
+#[test]
 fn anthropic_to_openai_handles_minimax_thinking_payload() {
     let raw = json!({
         "base_resp": { "status_code": 0, "status_msg": "" },

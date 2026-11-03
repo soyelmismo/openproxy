@@ -161,7 +161,7 @@ fn infer_max_output_tokens_known() {
     assert_eq!(infer_max_output_tokens("openai/gpt-4o"), Some(16_384));
     assert_eq!(
         infer_max_output_tokens("deepseek/deepseek-chat"),
-        Some(8_192)
+        Some(32_768)
     );
 }
 

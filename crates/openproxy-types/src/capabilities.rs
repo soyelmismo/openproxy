@@ -508,7 +508,7 @@ pub fn infer_max_output_tokens(model_id: &str) -> Option<i64> {
         ("o1", 100_000),
         ("o3", 100_000),
         ("gemini-2.5", 65_536),
-        ("deepseek", 8_192),
+        ("deepseek", 32_768),
     ];
 
     let lower = to_lower_cow(model_id);
