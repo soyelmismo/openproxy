@@ -245,6 +245,18 @@
     white-space: nowrap;
   }
 
+  /* On phones the two header actions stack into their own row so the title
+     keeps its ellipsis instead of squeezing the buttons. */
+  .log-detail-modal .modal-header > div:first-child {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .log-detail-copy-bundle-btn,
+  .log-detail-send-playground-btn {
+    font-size: var(--fs-2xs);
+    padding: 3px 6px;
+  }
+
   .log-detail-modal .modal-body {
     padding: 8px 10px;
     flex: 1 1 0%;
@@ -462,6 +474,29 @@
 }
 .log-detail-copy-bundle-btn:hover {
   background: var(--color-surface-3, var(--color-surface-2));
+  color: var(--color-text);
+}
+
+/* "Send to playground" — same header button family as the copy-bundle action,
+   tinted with the primary accent so the replay affordance reads as the primary
+   action of the modal header. */
+.log-detail-send-playground-btn {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--color-surface-2));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 40%, var(--color-border));
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.log-detail-send-playground-btn:hover {
+  background: color-mix(in srgb, var(--color-primary) 24%, var(--color-surface-2));
   color: var(--color-text);
 }
 

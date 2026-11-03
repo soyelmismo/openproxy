@@ -28,6 +28,8 @@ import {
   type LogDetailLog,
 } from "./state.js";
 import { copyDebugBundle, copyRawJson } from "./debug-bundle.js";
+import { storePlaygroundHandoff, type PlaygroundHandoffPayload } from "../../lib/playground-loader.js";
+import { showToast } from "../toast.js";
 import {
   jsonSection,
   readString,
@@ -35,6 +37,67 @@ import {
   renderResponseTab,
   stringStatusPillClass,
 } from "./index.js";
+
+/** Extract a chat-shaped payload from a logged request body. Returns null when
+ *  the row is not a chat request (image / audio / embedding logs have no
+ *  `messages` array to restore). */
+function extractChatHandoffPayload(requestBody: unknown): PlaygroundHandoffPayload | null {
+  if (!requestBody || typeof requestBody !== 'object') return null;
+  const body = requestBody as Record<string, unknown>;
+  const messages = body['messages'];
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  const model = typeof body['model'] === 'string' ? body['model'] : null;
+  if (!model) return null;
+
+  const payload: PlaygroundHandoffPayload = {
+    model,
+    messages: messages
+      .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
+      .map((m) => ({
+        role: typeof m['role'] === 'string' ? m['role'] : 'user',
+        content: typeof m['content'] === 'string' ? m['content'] : '',
+      })),
+  };
+
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  const numOrNull = (v: unknown): number | null => num(v) ?? null;
+
+  payload.temperature = num(body['temperature']);
+  payload.top_p = numOrNull(body['top_p']);
+  payload.max_tokens = numOrNull(body['max_tokens'] ?? body['max_completion_tokens']);
+  payload.frequency_penalty = num(body['frequency_penalty']);
+  payload.presence_penalty = num(body['presence_penalty']);
+  payload.seed = numOrNull(body['seed']);
+  if (typeof body['stop'] === 'string' || Array.isArray(body['stop'])) {
+    payload.stop = body['stop'] as string | string[];
+  }
+  if (body['response_format'] && typeof body['response_format'] === 'object') {
+    payload.response_format = body['response_format'] as { type?: string };
+  }
+  if (typeof body['stream'] === 'boolean') payload.stream = body['stream'];
+
+  return payload;
+}
+
+/** "Send to playground" action: persist the captured request body, close the
+ *  modal, and navigate to the playground, which consumes the payload on mount. */
+function sendPayloadToPlayground(requestBody: unknown, _provider: string, model: string): void {
+  const payload = extractChatHandoffPayload(requestBody);
+  if (!payload) {
+    showToast('This log has no chat request body to replay (image / audio / embedding rows are not supported).', 'error');
+    return;
+  }
+  try {
+    storePlaygroundHandoff(payload);
+  } catch (err) {
+    showToast(String(err instanceof Error ? err.message : err), 'error');
+    return;
+  }
+  const modelId = model && model !== '—' ? model : payload.model;
+  showToast(`Payload loaded — opening playground for ${modelId}`, 'info');
+  location.hash = '#/playground';
+}
 
 export function getAccountDisplay(
   accountId: string | number | null | undefined,
@@ -209,6 +272,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
           <div style="display:flex;align-items:center;gap:var(--space-2);min-width:0;flex:1 1 auto;overflow:hidden;">
             <h2 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
             <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">${icons.copy()} Copy debug bundle</button>
+            <button type="button" class="log-detail-send-playground-btn" @click=${() => sendPayloadToPlayground(requestBody, provider, model)} title="Load this exact request payload into the Playground — messages, model and parameters preserved 1:1, ready to re-run or tweak.">${icons.play()} Send to playground</button>
           </div>
           <button type="button" class="close-btn" @click=${(e: Event) => closeLogDetailModal(e)} aria-label="Close">${icons.close()}</button>
         </div>

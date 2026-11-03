@@ -27,6 +27,10 @@ import {
   renderInspectorSidebar,
   ensureDefaultModel,
 } from './inspector.js';
+import {
+  consumeHandoffIntoState,
+  hasPlaygroundHandoff,
+} from '../../lib/playground-loader.js';
 
 export type { ModalityType } from './shared.js';
 export type { ResponseTab, ChatMessage, RequestMetrics, StreamChunkItem } from './shared.js';
@@ -206,6 +210,14 @@ export async function mountPlayground(): Promise<(() => void) | void> {
   window.addEventListener('keydown', handleGlobalKeydown);
   window.addEventListener('playground:run', handleRunShortcut);
 
+  // Consume a handoff payload from the log-detail modal ("Send to playground")
+  // before the first render, so the restored request paints on the first frame.
+  let handoffApplied = false;
+  if (hasPlaygroundHandoff()) {
+    const providerId = stateInternal.selectedProviderId || undefined;
+    handoffApplied = consumeHandoffIntoState(stateInternal, providerId);
+  }
+
   const cleanup = await createView(
     renderPlayground,
     async () => {
@@ -222,7 +234,16 @@ export async function mountPlayground(): Promise<(() => void) | void> {
       state.combos = combos;
       state.apiKeys = keys;
       state.accounts = accounts;
-      ensureDefaultModel(stateInternal);
+
+      if (handoffApplied) {
+        // The payload's model must survive ensureDefaultModel, which would
+        // otherwise snap the selection to the first entry of the filtered list.
+        const restored = stateInternal.selectedModelId;
+        ensureDefaultModel(stateInternal);
+        if (restored) stateInternal.selectedModelId = restored;
+      } else {
+        ensureDefaultModel(stateInternal);
+      }
     },
     (msg) => {
       stateInternal.loadError = msg;
