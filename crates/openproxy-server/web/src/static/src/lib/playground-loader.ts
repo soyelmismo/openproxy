@@ -16,7 +16,12 @@ const PLAYGROUND_PAYLOAD_KEY = 'openproxy:playground:pendingPayload';
  *  how to edit. Unknown keys are ignored on load. */
 export interface PlaygroundHandoffPayload {
   model: string;
-  messages: Array<{ role: string; content: string; tool_call_id?: string; name?: string }>;
+  messages: Array<{
+    role: string;
+    content: string | unknown;
+    tool_call_id?: string | undefined;
+    name?: string | undefined;
+  }>;
   temperature?: number | undefined;
   top_p?: number | null;
   max_tokens?: number | null;
@@ -92,6 +97,32 @@ function strOr(v: unknown, fallback: string): string {
   return typeof v === 'string' ? v : fallback;
 }
 
+/** Flatten any message content representation (plain string, OpenAI/Anthropic
+ *  multimodal parts array `[{ type: "text", text: "..." }]`, etc.) into a
+ *  clean text string suitable for the playground textarea. */
+export function normalizeMessageContent(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') {
+          const p = part as Record<string, unknown>;
+          if (typeof p['text'] === 'string') return p['text'];
+          if (typeof p['input_text'] === 'string') return p['input_text'];
+          if (typeof p['output_text'] === 'string') return p['output_text'];
+          if (typeof p['content'] === 'string') return p['content'];
+          if (p['type'] === 'image_url' || p['image_url'] || p['type'] === 'image') return '[Image]';
+        }
+        return '';
+      })
+      .filter((s) => s.length > 0)
+      .join('\n\n');
+  }
+  if (raw == null) return '';
+  return String(raw);
+}
+
 /** Apply a captured payload onto the playground state, preserving 1:1 the
  *  request as it went upstream. Only known-editable fields are restored;
  *  everything else keeps the playground default so the user can tweak it.
@@ -104,64 +135,73 @@ export function applyHandoffToPlaygroundState(
   providerId?: string,
 ): void {
   // --- Messages: flatten to the playground's {role, content} shape. ---
-  const messages = payload.messages
-    .filter((m) => m && typeof m === 'object' && typeof m.content === 'string')
+  const validRoles: readonly ChatMessageRole[] = ['system', 'user', 'assistant', 'tool', 'developer'];
+
+  const normalized = (payload.messages || [])
+    .filter((m) => !!m && typeof m === 'object')
     .map((m) => {
-      let content = m.content;
-      // Structured content arrays (vision / tool results): keep only the text
-      // parts so the textarea can render them 1:1.
-      if (!content && Array.isArray((m as unknown as { content?: unknown }).content)) {
-        const parts = (m as unknown as { content: unknown[] }).content;
-        content = parts
-          .map((p) => {
-            if (typeof p === 'string') return p;
-            if (p && typeof p === 'object' && typeof (p as { text?: unknown }).text === 'string') {
-              return (p as { text: string }).text;
-            }
-            return '';
-          })
-          .filter((s) => s.length > 0)
-          .join('\n\n');
-      }
-      const validRoles: readonly ChatMessageRole[] = ['system', 'user', 'assistant', 'tool', 'developer'];
-      const role: ChatMessageRole = validRoles.includes(m.role as ChatMessageRole)
-        ? (m.role as ChatMessageRole)
+      const roleStr = typeof m.role === 'string' ? m.role : 'user';
+      const role: ChatMessageRole = validRoles.includes(roleStr as ChatMessageRole)
+        ? (roleStr as ChatMessageRole)
         : 'user';
+      const content = normalizeMessageContent(m.content);
+      const tool_call_id = typeof m.tool_call_id === 'string' ? m.tool_call_id : undefined;
+      const name = typeof m.name === 'string' ? m.name : undefined;
       return {
         id: `msg-${Math.random().toString(36).slice(2, 9)}`,
         role,
         content,
-        tool_call_id: m.tool_call_id,
-        name: m.name,
+        tool_call_id,
+        name,
       };
     });
 
-  if (messages.length > 0) {
-    st.chatMessages = messages;
+  // Hoist the first system message to the dedicated systemInstruction field so the
+  // collapsible System card renders it cleanly and it is not duplicated in the thread.
+  const firstSystemIdx = normalized.findIndex((m) => m.role === 'system');
+  if (firstSystemIdx !== -1 && normalized[firstSystemIdx]) {
+    st.systemInstruction = normalized[firstSystemIdx].content;
+    st.systemInstructionsExpanded = true;
+    normalized.splice(firstSystemIdx, 1);
+  } else {
+    st.systemInstruction = '';
+    st.systemInstructionsExpanded = false;
   }
-  // The last user message stays in the thread; the composer is cleared so the
-  // user does not accidentally re-send it.
+
+  // If after hoisting system prompt no messages remain, give the user an empty user card
+  if (normalized.length === 0) {
+    normalized.push({
+      id: `msg-${Math.random().toString(36).slice(2, 9)}`,
+      role: 'user',
+      content: '',
+      tool_call_id: undefined,
+      name: undefined,
+    });
+  }
+
+  st.chatMessages = normalized;
+  // The composer is cleared so the user does not accidentally re-send stale text.
   st.composerContent = '';
 
   // --- Model & provider ---
   const model = strOr(payload.model, st.selectedModelId);
-  if (model.includes('/')) {
+  if (model.startsWith('combo:')) {
+    // Combos are global targets: leave provider unselected so the combo is
+    // visible in the selector list and survives ensureDefaultModel.
+    st.selectedProviderId = '';
+    st.selectedModelId = model;
+    st.customModelInput = '';
+  } else if (model.includes('/')) {
     const slashIdx = model.indexOf('/');
     const inferredProvider = model.slice(0, slashIdx);
     st.selectedProviderId = providerId || inferredProvider;
     st.selectedModelId = model;
     st.customModelInput = '';
   } else {
-    st.selectedModelId = providerId ? `${providerId}/${model}` : model;
+    const validProvider = providerId && providerId !== '—' && providerId !== 'combo' ? providerId : '';
+    st.selectedProviderId = validProvider;
+    st.selectedModelId = validProvider ? `${validProvider}/${model}` : model;
     st.customModelInput = model;
-  }
-
-  // --- System prompt: the first `system` message is hoisted to the dedicated
-  //     field so the system card renders it. ---
-  const systemMsg = st.chatMessages.find((m) => m.role === 'system');
-  if (systemMsg) {
-    st.systemInstruction = systemMsg.content;
-    st.systemInstructionsExpanded = true;
   }
 
   // --- Hyperparameters (only when present in the captured body) ---

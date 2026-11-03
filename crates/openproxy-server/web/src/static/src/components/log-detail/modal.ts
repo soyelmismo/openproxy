@@ -28,7 +28,13 @@ import {
   type LogDetailLog,
 } from "./state.js";
 import { copyDebugBundle, copyRawJson } from "./debug-bundle.js";
-import { storePlaygroundHandoff, type PlaygroundHandoffPayload } from "../../lib/playground-loader.js";
+import {
+  storePlaygroundHandoff,
+  consumeHandoffIntoState,
+  normalizeMessageContent,
+  type PlaygroundHandoffPayload,
+} from "../../lib/playground-loader.js";
+import { requestUpdate } from "../../state/reactive.js";
 import { showToast } from "../toast.js";
 import {
   jsonSection,
@@ -41,22 +47,30 @@ import {
 /** Extract a chat-shaped payload from a logged request body. Returns null when
  *  the row is not a chat request (image / audio / embedding logs have no
  *  `messages` array to restore). */
-function extractChatHandoffPayload(requestBody: unknown): PlaygroundHandoffPayload | null {
+function extractChatHandoffPayload(requestBody: unknown, fallbackModel?: string): PlaygroundHandoffPayload | null {
   if (!requestBody || typeof requestBody !== 'object') return null;
   const body = requestBody as Record<string, unknown>;
   const messages = body['messages'];
   if (!Array.isArray(messages) || messages.length === 0) return null;
-  const model = typeof body['model'] === 'string' ? body['model'] : null;
-  if (!model) return null;
+  const rawModel = typeof body['model'] === 'string' ? body['model'] : (fallbackModel && fallbackModel !== '—' ? fallbackModel : null);
+  if (!rawModel) return null;
 
   const payload: PlaygroundHandoffPayload = {
-    model,
+    model: rawModel,
     messages: messages
       .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
-      .map((m) => ({
-        role: typeof m['role'] === 'string' ? m['role'] : 'user',
-        content: typeof m['content'] === 'string' ? m['content'] : '',
-      })),
+      .map((m) => {
+        const role = typeof m['role'] === 'string' ? m['role'] : 'user';
+        const content = normalizeMessageContent(m['content']);
+        const tool_call_id = typeof m['tool_call_id'] === 'string' ? m['tool_call_id'] : undefined;
+        const name = typeof m['name'] === 'string' ? m['name'] : undefined;
+        return {
+          role,
+          content,
+          tool_call_id,
+          name,
+        };
+      }),
   };
 
   const num = (v: unknown): number | undefined =>
@@ -82,8 +96,8 @@ function extractChatHandoffPayload(requestBody: unknown): PlaygroundHandoffPaylo
 
 /** "Send to playground" action: persist the captured request body, close the
  *  modal, and navigate to the playground, which consumes the payload on mount. */
-function sendPayloadToPlayground(requestBody: unknown, _provider: string, model: string): void {
-  const payload = extractChatHandoffPayload(requestBody);
+function sendPayloadToPlayground(requestBody: unknown, provider: string, model: string): void {
+  const payload = extractChatHandoffPayload(requestBody, model);
   if (!payload) {
     showToast('This log has no chat request body to replay (image / audio / embedding rows are not supported).', 'error');
     return;
@@ -94,9 +108,25 @@ function sendPayloadToPlayground(requestBody: unknown, _provider: string, model:
     showToast(String(err instanceof Error ? err.message : err), 'error');
     return;
   }
+
+  // Close the modal cleanly so it does not linger over the playground view
+  const modalEl = document.getElementById('log-detail-modal');
+  if (modalEl) {
+    removeLogDetailModal(modalEl);
+  }
+
   const modelId = model && model !== '—' ? model : payload.model;
   showToast(`Payload loaded — opening playground for ${modelId}`, 'info');
-  location.hash = '#/playground';
+
+  if (location.hash === '#/playground') {
+    // Already on the playground route: hashchange will not fire, so trigger direct consumption
+    void import('../../views/playground/index.js').then(({ playgroundState }) => {
+      consumeHandoffIntoState(playgroundState, provider);
+      requestUpdate();
+    });
+  } else {
+    location.hash = '#/playground';
+  }
 }
 
 export function getAccountDisplay(

@@ -178,4 +178,41 @@ describe('applyHandoffToPlaygroundState', () => {
     // Second call finds nothing
     expect(consumeHandoffIntoState(st)).toBe(false);
   });
+
+  it('normalizes structured content arrays (OpenAI/Anthropic text parts) into plain text', () => {
+    const payload: PlaygroundHandoffPayload = {
+      model: 'combo:sonnet46',
+      messages: [
+        {
+          role: 'system',
+          content: 'respond with a valid json object',
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: 'You are a campaign evaluator responsible for judging influencer submissions...',
+            },
+          ],
+        },
+      ],
+    };
+    applyHandoffToPlaygroundState(st, payload, 'antigravity');
+
+    // System prompt hoisted cleanly
+    expect(st.systemInstruction).toBe('respond with a valid json object');
+    expect(st.systemInstructionsExpanded).toBe(true);
+
+    // Thread contains ONLY the user message with full text unpacked
+    expect(st.chatMessages.length).toBe(1);
+    expect(st.chatMessages[0]?.role).toBe('user');
+    expect(st.chatMessages[0]?.content).toBe(
+      'You are a campaign evaluator responsible for judging influencer submissions...',
+    );
+
+    // Combo model retains combo: name and keeps provider empty for combo discovery
+    expect(st.selectedModelId).toBe('combo:sonnet46');
+    expect(st.selectedProviderId).toBe('');
+  });
 });
