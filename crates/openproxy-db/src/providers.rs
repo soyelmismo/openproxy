@@ -37,6 +37,12 @@ pub fn list_active(conn: &Connection) -> Result<Vec<Provider>> {
 }
 
 pub fn delete(conn: &Connection, id: &ProviderId) -> Result<()> {
+    crate::accounts::bump_epoch();
+    conn.execute(
+        "DELETE FROM combo_targets WHERE provider_id = ?1",
+        params![id.as_str()],
+    )
+    .map_err(crate::error::map_db_error)?;
     crate::db_delete_by_id!(
         conn,
         "providers",
@@ -398,6 +404,59 @@ mod tests {
         assert_eq!(
             get_provider_favicon(&conn, pid.as_str()).expect("get_fav"),
             None
+        );
+    }
+
+    #[test]
+    fn test_delete_provider_cascades_combo_targets() {
+        let conn = test_conn();
+        let pid = ProviderId::new("custom-test-prov");
+        create(
+            &conn,
+            NewProvider {
+                id: &pid,
+                name: "Custom Test Prov",
+                base_url: "https://custom.example.com",
+                auth_type: AuthType::Bearer,
+                format: ProviderFormat::Openai,
+                extra_headers_json: None,
+                auto_activate_keyword: None,
+                rate_limit_scope: RateLimitScope::Account,
+            },
+        )
+        .expect("create provider");
+
+        // Insert a combo and a combo_target referencing this provider
+        conn.execute(
+            "INSERT INTO combos (name, strategy) VALUES ('test-combo', 'round_robin')",
+            [],
+        )
+        .expect("insert combo");
+        let combo_id = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO combo_targets (combo_id, provider_id, priority_order) VALUES (?1, ?2, 1)",
+            rusqlite::params![combo_id, pid.as_str()],
+        )
+        .expect("insert combo_target");
+
+        // Deleting the provider must succeed cleanly without FK error
+        delete(&conn, &pid).expect("delete provider succeeds");
+
+        // Verify provider is gone
+        assert!(get(&conn, &pid).expect("get provider").is_none());
+
+        // Verify combo_targets referencing that provider was also removed
+        let target_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM combo_targets WHERE provider_id = ?1",
+                rusqlite::params![pid.as_str()],
+                |r| r.get(0),
+            )
+            .expect("count targets");
+        assert_eq!(
+            target_count, 0,
+            "combo target must be removed with provider"
         );
     }
 }
