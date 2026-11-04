@@ -408,3 +408,51 @@ fn test_openai_formatter_strips_cache_control_from_messages_tools_and_extra() {
     );
     assert_eq!(val.get("custom_allowed").unwrap(), "ok");
 }
+
+#[test]
+fn test_openai_formatter_normalizes_responses_reasoning_to_reasoning_effort() {
+    let adapter = ProviderAdapterEnum::NvidiaNim(Box::new(NvidiaNimAdapter::new()));
+    let mut req_extra = serde_json::Map::new();
+    req_extra.insert(
+        "reasoning".to_string(),
+        serde_json::json!({
+            "effort": "low",
+            "summary": "auto"
+        }),
+    );
+    req_extra.insert("store".to_string(), serde_json::Value::Bool(false));
+
+    let messages = vec![OpenAIMessage {
+        role: "user".into(),
+        content: Some(Value::String("hi".into())),
+        name: None,
+        tool_call_id: None,
+        tool_calls: None,
+        extra: Default::default(),
+    }];
+    let req = test_req(openproxy_types::OpenAIRequest {
+        extra: req_extra,
+        ..Default::default()
+    });
+
+    let formatted = OpenaiFormatter
+        .format_request(&req, &test_model(), &messages, false, &adapter)
+        .expect("ok");
+    let val: Value = serde_json::from_slice(&formatted).unwrap();
+
+    // 1. "reasoning" object is stripped
+    assert!(
+        val.get("reasoning").is_none(),
+        "responses reasoning object must be stripped from openai chat request"
+    );
+    // 2. "store" is stripped
+    assert!(
+        val.get("store").is_none(),
+        "store must be stripped from openai chat request"
+    );
+    // 3. Normalized to "reasoning_effort": "low"
+    assert_eq!(
+        val.get("reasoning_effort").and_then(Value::as_str),
+        Some("low")
+    );
+}

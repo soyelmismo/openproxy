@@ -71,6 +71,15 @@ impl TargetFormatter for OpenaiFormatter {
                 view.extra.to_mut().remove(*key);
             }
         }
+        if let Some(reasoning_val) = view.extra.to_mut().remove("reasoning")
+            && let Some(effort) = reasoning_val.get("effort").and_then(Value::as_str)
+            && !view.extra.contains_key("reasoning_effort")
+        {
+            view.extra.to_mut().insert(
+                "reasoning_effort".to_string(),
+                Value::String(effort.to_string()),
+            );
+        }
         // If the client omitted max_tokens/max_completion_tokens, raise it to the
         // model's declared output ceiling (or combo's effective ceiling) so backends
         // don't truncate on small 4096 defaults.

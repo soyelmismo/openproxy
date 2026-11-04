@@ -488,6 +488,15 @@ pub(crate) fn translate_responses_to_openai(
     let mut extra = req.extra.clone();
     extra.remove("input");
     extra.remove("max_output_tokens");
+    if let Some(reasoning) = extra.remove("reasoning")
+        && let Some(effort) = reasoning.get("effort").and_then(serde_json::Value::as_str)
+        && !extra.contains_key("reasoning_effort")
+    {
+        extra.insert(
+            "reasoning_effort".to_string(),
+            serde_json::Value::String(effort.to_string()),
+        );
+    }
     if let Some(instructions) = req.instructions.as_deref()
         && !instructions.is_empty()
     {

@@ -196,6 +196,27 @@ mod tests {
         );
         let o5 = crate::middleware::auth::translate_responses_to_openai(&r5);
         assert_eq!(o5.messages[0].role, "assistant");
+
+        // Reasoning object normalized to reasoning_effort
+        let mut r6 = make_req(
+            None,
+            vec![ResponsesInputItem::Message {
+                role: "user".into(),
+                content: ResponsesContent::Plain("hi".into()),
+            }],
+        );
+        r6.extra.insert(
+            "reasoning".to_string(),
+            json!({
+                "effort": "low"
+            }),
+        );
+        let o6 = crate::middleware::auth::translate_responses_to_openai(&r6);
+        assert!(o6.extra.get("reasoning").is_none());
+        assert_eq!(
+            o6.extra.get("reasoning_effort").and_then(|v| v.as_str()),
+            Some("low")
+        );
         let tc = o5.messages[0].tool_calls.as_ref().unwrap();
         assert_eq!(tc[0]["id"], "call_abc");
         assert_eq!(tc[0]["function"]["name"], "get_weather");
