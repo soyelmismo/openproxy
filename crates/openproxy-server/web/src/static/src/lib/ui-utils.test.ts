@@ -28,12 +28,12 @@ describe("ui-utils", () => {
     it("returns existing modal-root if already present", () => {
       const existing = document.createElement("div");
       existing.id = "modal-root";
-      existing.dataset.test = "existing";
+      existing.dataset['test'] = "existing";
       document.body.appendChild(existing);
 
       const root = ensureModalRoot();
       expect(root).toBe(existing);
-      expect(root.dataset.test).toBe("existing");
+      expect(root.dataset['test']).toBe("existing");
       expect(document.querySelectorAll("#modal-root").length).toBe(1);
     });
   });
