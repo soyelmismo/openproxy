@@ -448,6 +448,12 @@
 }
 
 /* Connections (accounts) drag-and-drop: same visual language as combo targets. */
+.account-card-row.account-row-paused {
+  opacity: 0.72;
+}
+.account-card-row.account-row-paused .account-name {
+  color: var(--color-text-muted);
+}
 .account-card-row.dragging,
 .account-card-row.touch-dragging {
   opacity: 0.6;

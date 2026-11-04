@@ -305,3 +305,34 @@ describe("showReauthAccount", () => {
     expect(root?.textContent).toContain("Re-authenticate via Device Code");
   });
 });
+
+describe("account active toggle", () => {
+  it("supports paused/active state on account object", () => {
+    const acc: import("../lib/types/accounts.js").Account = {
+      id: 99,
+      provider_id: "antigravity",
+      label: "Paused Acc",
+      priority: 1,
+      extra_config_json: null,
+      health_status: "healthy",
+      rate_limited_until: null,
+      quota_session_used: null,
+      quota_session_limit: null,
+      quota_session_reset_at: null,
+      quota_weekly_used: null,
+      quota_weekly_limit: null,
+      quota_weekly_reset_at: null,
+      quota_plan_name: null,
+      quota_last_fetched_at: null,
+      quota_fetch_error: null,
+      auth_type: "oauth",
+      email: null,
+      oauth_scope: null,
+      oauth_provider_specific: null,
+      expires_at: null,
+      created_at: "2026-01-01T00:00:00Z",
+      active: false,
+    };
+    expect(acc.active).toBe(false);
+  });
+});

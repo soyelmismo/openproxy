@@ -228,6 +228,7 @@ fn dummy_account(expires_at: Option<&str>) -> Account {
             .to_string()
             .into_boxed_str(),
         current_proxy_id: None,
+        active: true,
     }
 }
 

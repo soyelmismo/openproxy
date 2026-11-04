@@ -100,6 +100,10 @@ impl AccountService {
         self.repo.set_account_health(id, health)
     }
 
+    pub fn set_active(&self, id: AccountId, active: bool) -> Result<(), CoreError> {
+        self.repo.set_account_active(id, active)
+    }
+
     pub fn update_api_key(
         &self,
         master_key: &db::MasterKey,

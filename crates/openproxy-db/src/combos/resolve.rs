@@ -368,11 +368,11 @@ fn query_accounts_by_health(
 ) -> Result<Vec<AccountId>> {
     let sql = if check_rate_limit {
         account_healthy_ids_select!(
-            "WHERE provider_id = ?1 AND health_status = ?2 AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
+            "WHERE provider_id = ?1 AND active = 1 AND health_status = ?2 AND (rate_limited_until IS NULL OR datetime(rate_limited_until) <= datetime('now')) ORDER BY priority ASC, id ASC"
         )
     } else {
         account_healthy_ids_select!(
-            "WHERE provider_id = ?1 AND health_status = ?2 ORDER BY priority ASC, id ASC"
+            "WHERE provider_id = ?1 AND active = 1 AND health_status = ?2 ORDER BY priority ASC, id ASC"
         )
     };
     let mut stmt = conn.prepare(sql).map_err(crate::error::map_db_error)?;
@@ -427,10 +427,18 @@ fn expand_single_target_rotation(
         out.push(target);
         return Ok(());
     }
-    if target.account_id.is_some() {
-        // Explicit single account target: always attempt it regardless of health status
-        // so that non-healthy targets can be attempted as failovers.
-        out.push(target);
+    if let Some(aid) = target.account_id {
+        // Explicit single account target: ignore if deactivated / paused from routing.
+        let is_active: bool = conn
+            .query_row(
+                "SELECT active = 1 FROM accounts WHERE id = ?1",
+                rusqlite::params![aid.0],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        if is_active {
+            out.push(target);
+        }
         return Ok(());
     }
     let prioritized_accounts = fetch_accounts_by_health_priority(conn, &target.provider_id)?;
@@ -453,6 +461,18 @@ fn expand_single_target_rotation(
             // User explicitly restricted accounts and none are eligible
             return Ok(());
         }
+        // If there are accounts for this provider in the database, but all are
+        // inactive / paused from routing, skip this target entirely.
+        let has_any_accounts: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE provider_id = ?1)",
+                rusqlite::params![target.provider_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if has_any_accounts {
+            return Ok(());
+        }
         out.push(target);
     } else {
         for acc_id in candidate_accounts {
@@ -471,9 +491,6 @@ pub fn expand_account_rotation(
     let mut out = Vec::with_capacity(targets.len());
     for t in &targets {
         expand_single_target_rotation(conn, t.clone(), &mut out)?;
-    }
-    if out.is_empty() && !targets.is_empty() {
-        return Ok(targets);
     }
     Ok(out)
 }

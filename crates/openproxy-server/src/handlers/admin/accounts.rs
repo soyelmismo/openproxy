@@ -26,6 +26,10 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}", axum::routing::delete(delete_account))
         .route("/{id}/health", axum::routing::post(set_account_health))
         .route(
+            "/{id}/active",
+            axum::routing::post(set_account_active).patch(set_account_active),
+        )
+        .route(
             "/{id}/api-key",
             axum::routing::get(get_account_api_key).put(update_account_api_key),
         )
@@ -133,6 +137,27 @@ pub async fn set_account_health(
         Ok(Json(serde_json::json!({
             "id": id,
             "health": health_str,
+        })))
+    })
+    .await
+}
+
+pub async fn set_account_active(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::error::run_blocking(move || {
+        let active = body
+            .get("active")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| CoreError::Validation("missing 'active' boolean".into()))?;
+        s.services()
+            .accounts
+            .set_active(AccountId::new(id), active)?;
+        Ok(Json(serde_json::json!({
+            "id": id,
+            "active": active,
         })))
     })
     .await

@@ -595,3 +595,39 @@ fn test_resolve_combo_accounts_prioritizes_health() {
     assert_eq!(resolved[1].account_id.map(|a| a.0), Some(30));
     assert_eq!(resolved[2].account_id.map(|a| a.0), Some(10));
 }
+
+#[test]
+fn test_resolve_combo_ignores_deactivated_paused_accounts() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.writer();
+
+    conn.execute_batch(
+        "INSERT INTO providers (id, name, base_url, auth_type, format, active) VALUES
+            ('p_pause', 'P Pause', 'https://example.com', 'none', 'openai', 1);
+         INSERT INTO models (id, provider_id, model_id, target_format, active) VALUES
+            (600, 'p_pause', 'model-p', 'openai', 1);
+         INSERT INTO accounts (id, provider_id, label, health_status, priority, api_key_encrypted, active) VALUES
+            (201, 'p_pause', 'acc_active_1', 'healthy', 1, X'010203', 1),
+            (202, 'p_pause', 'acc_paused', 'healthy', 2, X'010203', 0),
+            (203, 'p_pause', 'acc_active_2', 'degraded', 3, X'010203', 1);
+         INSERT INTO combos (id, name, strategy) VALUES
+            (200, 'combo_pause_test', 'priority');
+         INSERT INTO combo_targets (id, combo_id, provider_id, model_row_id, upstream_model_id, priority_order, active) VALUES
+            (2000, 200, 'p_pause', 600, 'model-p', 1, 1);"
+    ).unwrap();
+
+    let mut visited = Vec::new();
+    let targets = resolve_combo_to_targets(&conn, ComboId(200), &mut visited, 0).unwrap();
+    let resolved = expand_account_rotation(&conn, targets).unwrap();
+    // acc_paused (202) must be excluded from routing!
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(resolved[0].account_id.map(|a| a.0), Some(201));
+    assert_eq!(resolved[1].account_id.map(|a| a.0), Some(203));
+
+    // Re-activating account 202 brings it back into routing
+    crate::accounts::set_active(&conn, openproxy_types::AccountId(202), true).unwrap();
+    let mut visited2 = Vec::new();
+    let targets2 = resolve_combo_to_targets(&conn, ComboId(200), &mut visited2, 0).unwrap();
+    let resolved2 = expand_account_rotation(&conn, targets2).unwrap();
+    assert_eq!(resolved2.len(), 3);
+}

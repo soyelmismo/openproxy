@@ -244,6 +244,15 @@ impl Client {
         self.put_json_unit(&path, &input).await
     }
 
+    /// `POST /admin/accounts/:id/active`. Sets whether this account is active for request routing.
+    pub async fn set_account_active(&self, id: AccountId, active: bool) -> Result<(), ClientError> {
+        let path = format!("/admin/accounts/{}/active", id.0);
+        let _ = self
+            .post_json(&path, &serde_json::json!({ "active": active }))
+            .await?;
+        Ok(())
+    }
+
     // Combos
 
     /// `POST /admin/combos`. Devuelve el `ComboId` recién creado.

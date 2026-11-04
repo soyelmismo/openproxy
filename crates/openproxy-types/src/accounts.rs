@@ -46,6 +46,12 @@ pub struct Account {
     pub expires_at: Option<Box<str>>,
     pub created_at: Box<str>,
     pub current_proxy_id: Option<Box<str>>,
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Parameters for storing or updating OAuth tokens on an account.
@@ -116,6 +122,7 @@ mod tests {
             expires_at: None,
             created_at: "2026-09-18 12:00:00".into(),
             current_proxy_id: None,
+            active: true,
         };
 
         let json_str = serde_json::to_string(&acc).expect("serialize account");

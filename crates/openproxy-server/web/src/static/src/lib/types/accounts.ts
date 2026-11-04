@@ -151,6 +151,7 @@ export interface Account {
   oauth_provider_specific: string | null;
   expires_at: string | null;
   created_at: string;
+  active?: boolean;
 }
 
 export interface CreateAccountInput {

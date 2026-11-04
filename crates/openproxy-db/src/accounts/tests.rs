@@ -269,6 +269,8 @@ fn test_account_select_canonical_projection() {
     );
     assert_eq!(acc_get.expires_at.as_deref(), Some("2026-10-01T22:00:00Z"));
     assert_eq!(acc_get.created_at, acc_oauth.created_at);
+    assert!(acc_get.active);
+    assert!(acc_oauth.active);
 
     mark_oauth_expiry_due(&conn, acc_id.0).expect("marking due succeeds");
     let acc_due = get(&conn, acc_id, &master).unwrap().unwrap();
@@ -723,4 +725,61 @@ fn clearing_an_unset_rate_limit_writes_nothing() {
         )
         .unwrap();
     assert_eq!(until, None);
+}
+
+#[test]
+fn test_account_set_active_and_oauth_retention() {
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let master = MasterKey::generate().unwrap();
+
+    let provider = openproxy_types::ProviderId::new("antigravity");
+    let acc_id = create(
+        &conn,
+        &provider,
+        Some("sk-test-secret-key"),
+        &master,
+        Some("active-test"),
+        10,
+        None,
+    )
+    .unwrap();
+
+    let acc = get(&conn, acc_id, &master).unwrap().unwrap();
+    assert!(acc.active, "accounts should default to active = true");
+
+    store_oauth_tokens(
+        &conn,
+        acc_id,
+        &master,
+        openproxy_types::accounts::StoreOAuthTokensParams {
+            access_token: "test-token",
+            refresh_token: Some("refresh-token"),
+            token_type: "Bearer",
+            expires_at: Some("2026-12-01T00:00:00Z"),
+            scope: None,
+            provider_specific: None,
+            email: Some("dev@example.com"),
+        },
+    )
+    .unwrap();
+
+    // Pause / deactivate the account
+    set_active(&conn, acc_id, false).unwrap();
+    let acc_paused = get(&conn, acc_id, &master).unwrap().unwrap();
+    assert!(
+        !acc_paused.active,
+        "account should now be paused (active = false)"
+    );
+
+    // Ensure it is STILL picked up by OAuth expiry checks so token refresh continues
+    let expiring = list_expiring_oauth_accounts(&conn, 86400 * 365, &master).unwrap();
+    assert_eq!(expiring.len(), 1);
+    assert_eq!(expiring[0].id, acc_id);
+    assert!(!expiring[0].active);
+
+    // Re-activate
+    set_active(&conn, acc_id, true).unwrap();
+    let acc_active = get(&conn, acc_id, &master).unwrap().unwrap();
+    assert!(acc_active.active);
 }

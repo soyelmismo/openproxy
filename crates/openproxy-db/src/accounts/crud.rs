@@ -198,6 +198,17 @@ pub fn set_health(conn: &Connection, id: AccountId, health: HealthStatus) -> Res
     set_health_with_error(conn, id, health, None)
 }
 
+pub fn set_active(conn: &Connection, id: AccountId, active: bool) -> Result<()> {
+    super::bump_epoch();
+    crate::crud::execute_check_affected(
+        conn,
+        "UPDATE accounts SET active = ?1 WHERE id = ?2",
+        params![i32::from(active), id.0],
+        format!("update active for account {}", id.0),
+        || CoreError::AccountNotFound(id.0),
+    )
+}
+
 pub fn set_health_with_error(
     conn: &Connection,
     id: AccountId,
@@ -441,5 +452,6 @@ pub(crate) fn row_to_account(
         created_at: @box_str(22),
         current_proxy_id: @opt_box_str(23),
         quota_pools: @json(24),
+        active: @opt_default(25, bool, true),
     })
 }

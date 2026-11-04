@@ -33,6 +33,7 @@ fn make_test_account(provider_specific: Option<&str>) -> Account {
         expires_at: None,
         created_at: "2026-09-19".into(),
         current_proxy_id: None,
+        active: true,
     }
 }
 

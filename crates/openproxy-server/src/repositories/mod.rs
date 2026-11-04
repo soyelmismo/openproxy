@@ -82,6 +82,7 @@ pub trait AccountRepository: Send + Sync {
         id: AccountId,
         health: openproxy_core::accounts::HealthStatus,
     ) -> Result<(), CoreError>;
+    fn set_account_active(&self, id: AccountId, active: bool) -> Result<(), CoreError>;
     fn update_account_api_key(
         &self,
         master_key: &db::MasterKey,
@@ -199,6 +200,11 @@ impl AccountRepository for SqliteRepository {
     ) -> Result<(), CoreError> {
         let w = self.writer();
         openproxy_core::accounts::set_health(&w, id, health)
+    }
+
+    fn set_account_active(&self, id: AccountId, active: bool) -> Result<(), CoreError> {
+        let w = self.writer();
+        openproxy_core::accounts::set_active(&w, id, active)
     }
 
     fn update_account_api_key(

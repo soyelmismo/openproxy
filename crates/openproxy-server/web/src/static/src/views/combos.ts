@@ -539,7 +539,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
                              target.selected_accounts = toSend;
                              requestUpdate();
                            }}>
-                    <span>${acc.label ? `${acc.label} (#${acc.id})` : `#${acc.id}`}</span>
+                    <span>${acc.label ? `${acc.label} (#${acc.id})` : `#${acc.id}`}${acc.active === false ? " (paused)" : ""}</span>
                   </label>
                 `;
               })}

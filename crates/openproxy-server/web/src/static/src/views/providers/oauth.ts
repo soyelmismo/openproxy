@@ -112,6 +112,24 @@ async function onSetHealth(id: number, e: Event | null): Promise<void> {
   }
 }
 
+async function onToggleAccountActive(
+  id: number,
+  currentActive: boolean,
+): Promise<void> {
+  const nextActive = !currentActive;
+  try {
+    await api('/accounts/' + id + '/active', {
+      method: 'POST',
+      body: JSON.stringify({ active: nextActive }),
+    });
+    const a = (state.accounts || []).find((x) => x.id === id);
+    if (a) a.active = nextActive;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error toggling account active state');
+  }
+}
+
 async function onRefreshAccountQuota(
   accountId: number,
   e: Event | null,
@@ -248,7 +266,7 @@ export function renderConnectionsSection(
             const quotaCell: TemplateResult = hasQuota
               ? html`<td class="col-account-quota" data-label="Quota">${renderQuotaCell(a)}</td>`
               : html`<td class="col-account-quota" data-label="Quota"><div class="quota-cell muted"><small>not supported by this provider</small></div></td>`;
-            return html`<tr class="account-card-row"
+            return html`<tr class=${"account-card-row" + (a.active === false ? " account-row-paused" : "")}
                 data-drag-id=${String(a.id)}
                 draggable="true"
                 @dragstart=${(e: DragEvent) => { e.dataTransfer?.setData("text/plain", String(a.id)); (e.target as HTMLElement).classList.add("dragging"); }}
@@ -271,6 +289,7 @@ export function renderConnectionsSection(
                   <span class="editable account-name" title="Click to rename label" @click=${() => updateAccountLabel(a.id, a.label || a.email || '')}>
                     ${a.label || a.email || '—'}
                   </span>
+                  ${a.active === false ? html`<span class="chip chip-muted" title="Account is paused from request routing (OAuth/discovery stay active)" style="margin-left:6px;font-size:0.75rem;">paused</span>` : html``}
                   <small class="account-edit-icon" title="Rename label">${icons.pencil()}</small>
                 </div>
               </td>
@@ -291,6 +310,9 @@ export function renderConnectionsSection(
               </td>
               <td class="col-account-actions" data-label="Actions">
                 <div class="account-actions-wrap">
+                  ${a.active !== false
+                    ? html`<button type="button" class="small" title="Pause account (ignore for request routing, keep OAuth/refresh)" @click=${() => void onToggleAccountActive(a.id, true)}>${icons.pause()} Pause</button>`
+                    : html`<button type="button" class="small secondary" title="Resume account for request routing" @click=${() => void onToggleAccountActive(a.id, false)}>${icons.play()} Resume</button>`}
                   ${hasQuota ? html`<button class="small" @click=${(e: Event) => onRefreshAccountQuota(a.id, e)}>${icons.refresh()} Quota</button>` : html``}
                   ${(provider.id === 'antigravity' || provider.id === 'claude-code' || provider.id === 'claude') ? html`<button class="small" @click=${() => onApplyLocalCli(a.id)}>${icons.desktop()} Apply Local</button>` : html``}
                   ${provider.id === 'codex' && isOAuth ? html`<button class="small" title="Inspect & Redeem Codex Banked Reset Credits" @click=${() => showCodexResetsModal(a.id, a.label || a.email || undefined)}>⚡ Reset</button>` : html``}
