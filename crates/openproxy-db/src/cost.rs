@@ -73,87 +73,114 @@ fn insert_usage_record(
 ) -> openproxy_types::Result<i64> {
     let request_id = input.request_id.to_string();
 
-    conn.execute(
-        "INSERT INTO usage (\
-            request_id, trace_id, attempt, provider_id, account_id, combo_id, \
-            model_row_id, upstream_model_id, combo_target_id, prompt_tokens, \
-            completion_tokens, cost_usd, connect_ms, ttft_ms, total_ms, \
-            tokens_per_sec, status_code, error_msg, error_msg_redacted, \
-            race_total, race_attempts, race_lost, api_key_id, created_at, \
-            request_body_json, response_body_json, request_headers, \
-            response_headers, error_message, is_streaming, stream_complete, \
-            stop_reason, compression_savings_pct, compression_techniques, \
-            client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
-            was_winner, audio_ms\
-         ) VALUES (\
-            ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-            ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44\
-         )",
-        params![
-            request_id,
-            input.trace_id.as_str(),
-            i64::from(input.attempt),
-            input.provider_id.as_str(),
-            input.account_id.map(|a| a.0),
-            input.combo_id.map(|c| c.0),
-            input.model_row_id.map(|m| m.0),
-            input.upstream_model_id,
-            input.combo_target_id.map(|c| c.0),
-            input.prompt_tokens.map(i64::from),
-            input.completion_tokens.map(i64::from),
-            cost_usd,
-            input.connect_ms.map(|c| c as i64),
-            input.ttft_ms.map(|t| t as i64),
-            input.total_ms as i64,
-            tps,
-            i64::from(input.status_code),
-            error_msg_for_db,
-            error_msg_redacted_for_db,
-            i64::from(input.race_total),
-            i64::from(input.race_attempts),
-            i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
-            input.api_key_id.map(|k| k.0),
-            input
-                .request_body_json
-                .as_ref()
-                .and_then(|j| std::str::from_utf8(j).ok()),
-            input
-                .response_body_json
-                .as_ref()
-                .and_then(|j| serde_json::to_string(j).ok()),
-            input
-                .request_headers
-                .as_ref()
-                .and_then(|h| { serde_json::to_string(h).ok() }),
-            input
-                .response_headers
-                .as_ref()
-                .and_then(|h| { serde_json::to_string(h).ok() }),
-            input.error_message,
-            i64::from(input.has_flag(USAGE_FLAG_IS_STREAMING)),
-            i64::from(input.has_flag(USAGE_FLAG_STREAM_COMPLETE)),
-            input.stop_reason,
-            input.compression_savings_pct,
-            input.compression_techniques,
-            i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
-            i64::from(input.has_flag(USAGE_FLAG_PROMPT_ESTIMATED)),
-            i64::from(input.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED)),
-            input.endpoint_kind.as_str(),
-            input.proxy_url,
-            input.proxy_status,
-            i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
-            input.cached_tokens.map(i64::from),
-            input.pii_redacted,
-            i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
-            input.audio_ms.map(i64::from),
-        ],
-    )
-    .map_err(crate::error::map_db_error)?;
+    let mut api_key_id = input.api_key_id.map(|k| k.0);
+    if let Some(id) = api_key_id {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = ?1)",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !exists {
+            api_key_id = None;
+        }
+    }
 
-    Ok(conn.last_insert_rowid())
+    let execute_insert = |key_id: Option<i64>| {
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, combo_id, \
+                model_row_id, upstream_model_id, combo_target_id, prompt_tokens, \
+                completion_tokens, cost_usd, connect_ms, ttft_ms, total_ms, \
+                tokens_per_sec, status_code, error_msg, error_msg_redacted, \
+                race_total, race_attempts, race_lost, api_key_id, created_at, \
+                request_body_json, response_body_json, request_headers, \
+                response_headers, error_message, is_streaming, stream_complete, \
+                stop_reason, compression_savings_pct, compression_techniques, \
+                client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
+                was_winner, audio_ms\
+             ) VALUES (\
+                ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
+                ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
+                ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44\
+             )",
+            params![
+                request_id,
+                input.trace_id.as_str(),
+                i64::from(input.attempt),
+                input.provider_id.as_str(),
+                input.account_id.map(|a| a.0),
+                input.combo_id.map(|c| c.0),
+                input.model_row_id.map(|m| m.0),
+                input.upstream_model_id,
+                input.combo_target_id.map(|c| c.0),
+                input.prompt_tokens.map(i64::from),
+                input.completion_tokens.map(i64::from),
+                cost_usd,
+                input.connect_ms.map(|c| c as i64),
+                input.ttft_ms.map(|t| t as i64),
+                input.total_ms as i64,
+                tps,
+                i64::from(input.status_code),
+                error_msg_for_db,
+                error_msg_redacted_for_db,
+                i64::from(input.race_total),
+                i64::from(input.race_attempts),
+                i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
+                key_id,
+                input
+                    .request_body_json
+                    .as_ref()
+                    .and_then(|j| std::str::from_utf8(j).ok()),
+                input
+                    .response_body_json
+                    .as_ref()
+                    .and_then(|j| serde_json::to_string(j).ok()),
+                input
+                    .request_headers
+                    .as_ref()
+                    .and_then(|h| { serde_json::to_string(h).ok() }),
+                input
+                    .response_headers
+                    .as_ref()
+                    .and_then(|h| { serde_json::to_string(h).ok() }),
+                input.error_message,
+                i64::from(input.has_flag(USAGE_FLAG_IS_STREAMING)),
+                i64::from(input.has_flag(USAGE_FLAG_STREAM_COMPLETE)),
+                input.stop_reason,
+                input.compression_savings_pct,
+                input.compression_techniques,
+                i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
+                i64::from(input.has_flag(USAGE_FLAG_PROMPT_ESTIMATED)),
+                i64::from(input.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED)),
+                input.endpoint_kind.as_str(),
+                input.proxy_url,
+                input.proxy_status,
+                i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
+                input.cached_tokens.map(i64::from),
+                input.pii_redacted,
+                i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
+                input.audio_ms.map(i64::from),
+            ],
+        )
+    };
+
+    match execute_insert(api_key_id) {
+        Ok(_) => Ok(conn.last_insert_rowid()),
+        Err(err) if api_key_id.is_some() => {
+            tracing::warn!(
+                api_key_id = ?api_key_id,
+                error = %err,
+                "usage insert foreign key error; retrying with NULL api_key_id"
+            );
+            execute_insert(None).map_err(crate::error::map_db_error)?;
+            Ok(conn.last_insert_rowid())
+        }
+        Err(err) => Err(crate::error::map_db_error(err)),
+    }
 }
 
 static WARNED_MISSING_PRICING: LazyLock<parking_lot::Mutex<std::collections::HashSet<u64>>> =
@@ -739,5 +766,25 @@ mod tests {
         assert_eq!(row.prompt_tokens, Some(50));
         assert_eq!(row.completion_tokens, Some(150));
         assert_eq!(row.ttft_ms, Some(80));
+    }
+
+    #[test]
+    fn test_record_with_deleted_api_key_does_not_fail_foreign_key() {
+        let pool = DbPool::test_pool_with_prefix("openproxy-cost-del-key").expect("open pool");
+        let conn = pool.writer();
+        let mut input = test_input(100, 200, Some(50), 500, USAGE_FLAG_CLIENT_RESPONSE);
+        input.api_key_id = Some(openproxy_types::ids::ApiKeyId(99999999));
+
+        let res = record(&conn, &input);
+        assert!(res.is_ok(), "insert must succeed: {:?}", res.err());
+        let rowid = res.unwrap();
+        let saved_key_id: Option<i64> = conn
+            .query_row(
+                "SELECT api_key_id FROM usage WHERE id = ?1",
+                rusqlite::params![rowid.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(saved_key_id, None, "orphaned api_key_id must be NULL");
     }
 }

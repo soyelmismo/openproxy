@@ -143,7 +143,7 @@ fn build_recent_usage_row(
         total_ms: input.total_ms,
         prompt_tokens: input.prompt_tokens,
         completion_tokens: input.completion_tokens,
-        cached_tokens: None,
+        cached_tokens: input.cached_tokens,
         cost_usd: Some(cost_usd),
         created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         connect_ms: input.connect_ms,
@@ -190,72 +190,99 @@ fn execute_usage_insert(
     let req_headers = serialize_json_field(input.request_headers.as_ref());
     let resp_headers = serialize_json_field(input.response_headers.as_ref());
 
-    conn.execute(
-        "INSERT INTO usage (\
-            request_id, trace_id, attempt, provider_id, account_id, combo_id, \
-            model_row_id, upstream_model_id, combo_target_id, prompt_tokens, \
-            completion_tokens, cost_usd, connect_ms, ttft_ms, total_ms, \
-            tokens_per_sec, status_code, error_msg, error_msg_redacted, \
-            race_total, race_attempts, race_lost, api_key_id, created_at, \
-            request_body_json, response_body_json, request_headers, \
-            response_headers, error_message, is_streaming, stream_complete, \
-            stop_reason, compression_savings_pct, compression_techniques, \
-            client_response, prompt_tokens_estimated, completion_tokens_estimated, \
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, pii_redacted, audio_ms\
-         ) VALUES (\
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
-            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-            ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-            ?37, ?38, ?39, ?40, ?41, ?42\
-         )",
-        params![
-            input.request_id.to_string(),
-            input.trace_id,
-            i64::from(input.attempt),
-            input.provider_id.as_str(),
-            input.account_id.map(|a| a.0),
-            input.combo_id.map(|c| c.0),
-            input.model_row_id.map(|m| m.0),
-            input.upstream_model_id,
-            input.combo_target_id.map(|c| c.0),
-            input.prompt_tokens.map(i64::from),
-            input.completion_tokens.map(i64::from),
-            cost_usd,
-            input.connect_ms.map(|c| c as i64),
-            input.ttft_ms.map(|t| t as i64),
-            input.total_ms as i64,
-            tps,
-            i64::from(input.status_code),
-            err_raw,
-            err_redacted,
-            i64::from(input.race_total),
-            i64::from(input.race_attempts),
-            i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
-            input.api_key_id.map(|k| k.0),
-            req_body,
-            resp_body,
-            req_headers,
-            resp_headers,
-            err_redacted.as_deref(),
-            i64::from(input.has_flag(USAGE_FLAG_IS_STREAMING)),
-            i64::from(input.has_flag(USAGE_FLAG_STREAM_COMPLETE)),
-            input.stop_reason,
-            input.compression_savings_pct,
-            input.compression_techniques,
-            i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
-            i64::from(input.has_flag(USAGE_FLAG_PROMPT_ESTIMATED)),
-            i64::from(input.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED)),
-            input.endpoint_kind.as_str(),
-            input.proxy_url,
-            input.proxy_status,
-            i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
-            input.pii_redacted,
-            input.audio_ms.map(i64::from),
-        ],
-    )
-    .map_err(openproxy_db::error::map_db_error)?;
+    let mut api_key_id = input.api_key_id.map(|k| k.0);
+    if let Some(id) = api_key_id {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = ?1)",
+                rusqlite::params![id],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if !exists {
+            api_key_id = None;
+        }
+    }
 
-    Ok(conn.last_insert_rowid())
+    let execute_insert = |key_id: Option<i64>| {
+        conn.execute(
+            "INSERT INTO usage (\
+                request_id, trace_id, attempt, provider_id, account_id, combo_id, \
+                model_row_id, upstream_model_id, combo_target_id, prompt_tokens, \
+                completion_tokens, cost_usd, connect_ms, ttft_ms, total_ms, \
+                tokens_per_sec, status_code, error_msg, error_msg_redacted, \
+                race_total, race_attempts, race_lost, api_key_id, created_at, \
+                request_body_json, response_body_json, request_headers, \
+                response_headers, error_message, is_streaming, stream_complete, \
+                stop_reason, compression_savings_pct, compression_techniques, \
+                client_response, prompt_tokens_estimated, completion_tokens_estimated, \
+                endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, pii_redacted, audio_ms\
+             ) VALUES (\
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
+                ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
+                ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
+                ?37, ?38, ?39, ?40, ?41, ?42\
+             )",
+            params![
+                input.request_id.to_string(),
+                input.trace_id,
+                i64::from(input.attempt),
+                input.provider_id.as_str(),
+                input.account_id.map(|a| a.0),
+                input.combo_id.map(|c| c.0),
+                input.model_row_id.map(|m| m.0),
+                input.upstream_model_id,
+                input.combo_target_id.map(|c| c.0),
+                input.prompt_tokens.map(i64::from),
+                input.completion_tokens.map(i64::from),
+                cost_usd,
+                input.connect_ms.map(|c| c as i64),
+                input.ttft_ms.map(|t| t as i64),
+                input.total_ms as i64,
+                tps,
+                i64::from(input.status_code),
+                err_raw,
+                err_redacted,
+                i64::from(input.race_total),
+                i64::from(input.race_attempts),
+                i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
+                key_id,
+                req_body,
+                resp_body,
+                req_headers,
+                resp_headers,
+                err_redacted.as_deref(),
+                i64::from(input.has_flag(USAGE_FLAG_IS_STREAMING)),
+                i64::from(input.has_flag(USAGE_FLAG_STREAM_COMPLETE)),
+                input.stop_reason,
+                input.compression_savings_pct,
+                input.compression_techniques,
+                i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
+                i64::from(input.has_flag(USAGE_FLAG_PROMPT_ESTIMATED)),
+                i64::from(input.has_flag(USAGE_FLAG_COMPLETION_ESTIMATED)),
+                input.endpoint_kind.as_str(),
+                input.proxy_url,
+                input.proxy_status,
+                i64::from(input.has_flag(USAGE_FLAG_PROXY_ROTATED)),
+                input.pii_redacted,
+                input.audio_ms.map(i64::from),
+            ],
+        )
+    };
+
+    match execute_insert(api_key_id) {
+        Ok(_) => Ok(conn.last_insert_rowid()),
+        Err(err) if api_key_id.is_some() => {
+            tracing::warn!(
+                api_key_id = ?api_key_id,
+                error = %err,
+                "pricing usage insert foreign key error; retrying with NULL api_key_id"
+            );
+            execute_insert(None).map_err(openproxy_db::error::map_db_error)?;
+            Ok(conn.last_insert_rowid())
+        }
+        Err(err) => Err(openproxy_db::error::map_db_error(err)),
+    }
 }
 
 /// Insert a usage row. Returns the new UsageId.
