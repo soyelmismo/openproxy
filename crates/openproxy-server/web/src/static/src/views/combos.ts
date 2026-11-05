@@ -831,7 +831,7 @@ function renderComboDetail(): TemplateResult {
     ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${(e: Event) => detailComboId && testAllTargets(detailComboId, e)}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>
-      ${targets.length === 0 ? html`<p class="empty">${t("combos.detail.targets_empty")}</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
+      ${targets.length === 0 ? html`<p class="empty">${t("combos.detail.targets_empty")}</p>` : html`<div class="table-wrap"><table class="combo-targets-table">
         <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.thinking")}</th><th>${t("combos.detail.col.client_profile")}</th><th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;

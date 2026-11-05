@@ -121,7 +121,7 @@ test.describe('Combos CRUD', () => {
       });
 
       await page.goto(`/#/combos/${comboId}`);
-      const strategySelect = page.locator('.page-header .actions select').first();
+      const strategySelect = page.locator('.combo-header-controls-card select.combo-strategy-select');
       await expect(strategySelect).toHaveValue(createdStrategy);
       // Wait for the strategy PATCH to round-trip before we trigger the
       // race-size PATCH, so the race-size PATCH is the *next* PATCH we see.
@@ -178,7 +178,7 @@ test.describe('Combos CRUD', () => {
         race_size: newRaceSize,   // PATCH {race_size} is applied.
       });
 
-      await page.locator('.page-header .actions button.danger').click();
+      await page.locator('.combo-header-quick-actions button.danger').click();
       const confirmDialog = page.locator('#show-confirm-dialog');
       await expect(confirmDialog).toBeVisible();
       await expect(confirmDialog).toContainText(name);

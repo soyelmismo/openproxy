@@ -77,6 +77,18 @@
     color: var(--color-text-muted);
   }
 
+  .form-row-2, .form-row-3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Target rows collapse to cards per tile, not per viewport.
+   The ten-column table has a natural minimum of ~840px: below that it either
+   scrolls inside .table-wrap or, if the generic responsive-card-table rules
+   catch it, breaks outright. A workspace tile is far narrower than the window
+   in any split layout, so the viewport media query above never fires there.
+   840px is the measured fit point of the table. */
+@container tile-view (max-width: 840px) {
   .combo-targets-table thead {
     display: none;
   }
@@ -84,15 +96,15 @@
   .combo-targets-table tbody {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: 10px;
     width: 100%;
   }
 
   .combo-target-card-row {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
-    padding: var(--space-3);
+    gap: 5px;
+    padding: 10px 12px;
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -169,7 +181,7 @@
     font-weight: 600;
     color: var(--color-text);
     border-bottom: 1px solid var(--color-border-soft);
-    padding-bottom: var(--space-2);
+    padding-bottom: 6px;
   }
 
   .combo-target-card-row .target-model-title {
@@ -197,12 +209,13 @@
   .combo-target-card-row .col-target-provider,
   .combo-target-card-row .col-target-account,
   .combo-target-card-row .col-target-context,
-  .combo-target-card-row .col-target-test-status {
+  .combo-target-card-row .col-target-test-status,
+  .combo-target-card-row .col-target-profile {
     display: flex;
     align-items: center;
     justify-content: space-between;
     font-size: var(--fs-xs);
-    padding: 3px 0;
+    padding: 2px 0;
     width: 100%;
     border-bottom: 1px dashed var(--color-border-soft);
   }
@@ -210,12 +223,14 @@
   .combo-target-card-row .col-target-provider { order: 3; }
   .combo-target-card-row .col-target-account  { order: 4; }
   .combo-target-card-row .col-target-context  { order: 5; }
-  .combo-target-card-row .col-target-test-status { order: 6; }
+  .combo-target-card-row .col-target-test-status { order: 10; }
+  .combo-target-card-row .col-target-profile { order: 7; }
 
   .combo-target-card-row .col-target-provider::before { content: "Provider"; font-weight: 500; color: var(--color-text-muted); }
   .combo-target-card-row .col-target-account::before  { content: "Account"; font-weight: 500; color: var(--color-text-muted); }
   .combo-target-card-row .col-target-context::before  { content: "Context"; font-weight: 500; color: var(--color-text-muted); }
   .combo-target-card-row .col-target-test-status::before { content: "Test Status"; font-weight: 500; color: var(--color-text-muted); }
+  .combo-target-card-row .col-target-profile::before { content: "Profile"; font-weight: 500; color: var(--color-text-muted); }
 
   .combo-target-card-row .col-target-thinking,
   .combo-target-card-row .col-target-cooldown,
@@ -224,7 +239,7 @@
     align-items: center;
     justify-content: space-between;
     font-size: var(--fs-xs);
-    padding: 3px 0;
+    padding: 2px 0;
     width: 100%;
     border-bottom: 1px dashed var(--color-border-soft);
   }
@@ -239,8 +254,8 @@
 
   .combo-target-card-row .col-target-thinking select,
   .combo-target-card-row .col-target-cooldown select {
-    min-height: 30px;
-    height: 30px;
+    min-height: 26px;
+    height: 26px;
     font-size: var(--fs-xs);
     padding: 2px 8px;
     max-width: 140px;
@@ -248,7 +263,7 @@
   }
 
   .combo-target-card-row .col-target-weight input {
-    height: 30px;
+    height: 26px;
     font-size: var(--fs-xs);
     padding: 2px 8px;
     width: 70px;
@@ -284,14 +299,14 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     width: 100%;
   }
 
   .target-actions-wrap button {
     flex: 1 1 auto;
-    height: 34px;
-    min-height: 34px;
+    height: 30px;
+    min-height: 30px;
     padding: 0 8px;
     font-size: var(--fs-xs);
     font-weight: 600;
@@ -304,14 +319,14 @@
   }
 
   .target-actions-wrap button.reorder-btn {
-    flex: 0 0 36px;
-    width: 36px;
+    flex: 0 0 32px;
+    width: 32px;
     padding: 0;
   }
 
   .target-actions-wrap button.danger {
-    flex: 0 0 36px;
-    width: 36px;
+    flex: 0 0 32px;
+    width: 32px;
     padding: 0;
   }
 
@@ -377,14 +392,10 @@
   }
 
   .sub-actions-wrap button {
-    height: 32px;
-    min-height: 32px;
+    height: 28px;
+    min-height: 28px;
     padding: 0 10px;
     font-size: var(--fs-xs);
     border-radius: var(--radius-sm);
-  }
-
-  .form-row-2, .form-row-3 {
-    grid-template-columns: 1fr;
   }
 }

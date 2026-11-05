@@ -716,8 +716,10 @@
 /* Narrow tiles: the actions column can no longer hold a labelled flex row, so
    drop the last text label (every button keeps its title) and switch to a fixed
    four-column icon grid. The grid bounds the group at two rows no matter how
-   narrow the column gets, which a wrapping flex row cannot guarantee. */
-@container tile-view (max-width: 880px) {
+   narrow the column gets, which a wrapping flex row cannot guarantee. The
+   960px breakpoint is where the ten-column table stops fitting without inner
+   scroll, so labels come off before that happens. */
+@container tile-view (max-width: 960px) {
   .combo-targets-table th { padding: 0.3rem 0.4rem; font-size: var(--fs-2xs); }
   .combo-targets-table td { padding: 0.25rem 0.4rem; }
   .target-action-label { display: none; }
