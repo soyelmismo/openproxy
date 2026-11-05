@@ -218,3 +218,27 @@ fn zai_pick_org_and_project_success() {
     assert_eq!(res.organization_id, "org-857c428203bE4c22be25c082CAc34ecc");
     assert_eq!(res.project_id, "proj_4050cF9b4bDb4fe98ee6f39Dfcef34b5");
 }
+
+#[test]
+fn zai_md5_rfc1321_and_signing_vectors() {
+    use super::md5::md5::{md5_bytes, md5_hex};
+
+    // Empty input vector
+    assert_eq!(md5_hex(""), "d41d8cd98f00b204e9800998ecf8427e");
+
+    // Standard RFC 1321 test string
+    let fox_bytes = md5_bytes(b"The quick brown fox jumps over the lazy dog");
+    let fox_hex = md5_hex("The quick brown fox jumps over the lazy dog");
+    assert_eq!(fox_hex, "9e107d9d372bb6826bd81d3542a419d6");
+    assert_eq!(
+        fox_bytes,
+        [
+            0x9e, 0x10, 0x7d, 0x9d, 0x37, 0x2b, 0xb6, 0x82, 0x6b, 0xd8, 0x1d, 0x35, 0x42, 0xa4,
+            0x19, 0xd6,
+        ]
+    );
+
+    // AutoClaw signature pattern: {app_id}&{timestamp}&{app_key}
+    let signature = md5_hex("app123&1700000000&key456");
+    assert_eq!(signature, "1eea260b977348cbee755f176befd94d");
+}
