@@ -298,14 +298,17 @@ async function finishDrag(cancel = false): Promise<void> {
 function accountDragContext(
   target: EventTarget | null,
 ): { handle: HTMLElement; row: HTMLElement; list: HTMLElement } | null {
-  if (!(target instanceof HTMLElement)) return null;
+  // The pointerdown target is usually the handle's inline `<svg>` icon, which is
+  // an SVGElement and NOT an HTMLElement — match on Element, then narrow.
+  if (!(target instanceof Element)) return null;
   const handle = target.closest<HTMLElement>('.account-drag-handle');
-  if (!handle) return null;
+  if (!(handle instanceof HTMLElement)) return null;
   const row = handle.closest<HTMLElement>(
     '.provider-entry.account-card-row',
   );
-  const list = row?.parentElement;
-  if (!row || !list || !list.classList.contains('accounts-list')) return null;
+  if (!(row instanceof HTMLElement)) return null;
+  const list = row.parentElement;
+  if (!(list instanceof HTMLElement) || !list.classList.contains('accounts-list')) return null;
   return { handle, row, list };
 }
 
@@ -360,15 +363,16 @@ function onKeydown(e: KeyboardEvent): void {
   }
   if (drag || landing) return;
   const target = e.target;
-  if (!(target instanceof HTMLElement)) return;
+  if (!(target instanceof Element)) return;
   const handle = target.closest<HTMLElement>('.account-drag-handle');
-  if (!handle) return;
+  if (!(handle instanceof HTMLElement)) return;
   if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
   const row = handle.closest<HTMLElement>(
     '.provider-entry.account-card-row',
   );
-  const list = row?.parentElement;
-  if (!row || !list) return;
+  if (!(row instanceof HTMLElement)) return;
+  const list = row.parentElement;
+  if (!(list instanceof HTMLElement)) return;
   e.preventDefault();
 
   const positions = capturePositions(list);

@@ -343,7 +343,7 @@ export function renderConnectionsSection(
                         aria-label=${pauseLabel}
                         title=${pauseLabel}
                         @click=${() =>
-                          void onToggleAccountActive(a.id, paused)}>
+                          void onToggleAccountActive(a.id, !paused)}>
                         ${paused ? icons.play() : icons.pause()}
                       </button>
                     </div>
