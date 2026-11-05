@@ -1,6 +1,6 @@
 use super::{
     ADMIN_LOCK_TIMEOUT, AccountId, ApiError, ApiKeyId, AppState, ComboId, CoreError, Deserialize,
-    HeaderMap, ProviderId, Serialize, UsageFilter, analytics, authenticate_admin_ws,
+    ProviderId, Serialize, UsageFilter, analytics,
 };
 use axum::{
     Json,
@@ -74,8 +74,20 @@ macro_rules! analytics_handler {
     ($fn_name:ident, $tag:literal, $core_fn:path, $res_ty:ty) => {
         pub async fn $fn_name(
             State(s): State<AppState>,
-            Query(q): Query<UsageQuery>,
+            identity: Option<axum::Extension<super::auth::AdminIdentity>>,
+            Query(mut q): Query<UsageQuery>,
         ) -> Result<Json<$res_ty>, ApiError> {
+            // Security: Enforce tenant isolation for API keys without full "manage" scope.
+            // If the key has only "analytics" scope, its queries are strictly scoped to its own key id.
+            if let Some(axum::Extension(ref id)) = identity {
+                if !id.has_manage_scope() {
+                    let own_key_id = id.key_id().ok_or_else(|| {
+                        ApiError(CoreError::Auth("unauthenticated key".into()))
+                    })?;
+                    q.api_key_id = Some(own_key_id);
+                }
+            }
+
             crate::error::run_blocking(move || {
                 let f = q.into_filter()?;
                 let result =
@@ -144,8 +156,19 @@ analytics_handler!(
 
 pub async fn usage_errors(
     State(s): State<AppState>,
-    Query(q): Query<UsageQuery>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
+    Query(mut q): Query<UsageQuery>,
 ) -> Result<Json<Vec<core_usage::ErrorRow>>, ApiError> {
+    // Security: Enforce tenant isolation for API keys without full "manage" scope.
+    if let Some(axum::Extension(ref id)) = identity {
+        if !id.has_manage_scope() {
+            let own_key_id = id.key_id().ok_or_else(|| {
+                ApiError(CoreError::Auth("unauthenticated key".into()))
+            })?;
+            q.api_key_id = Some(own_key_id);
+        }
+    }
+
     crate::error::run_blocking(move || {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
@@ -158,7 +181,15 @@ pub async fn usage_errors(
 
 pub async fn recompute_usage_costs(
     State(s): State<AppState>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(axum::Extension(ref id)) = identity {
+        if !id.has_manage_scope() {
+            return Err(ApiError(CoreError::Auth(
+                "forbidden: recomputing costs requires manage scope".into(),
+            )));
+        }
+    }
     let updated = s
         .db_pool()
         .spawn_write(|w| openproxy_core::models_dev_sync::recompute_costs(w))
@@ -171,8 +202,18 @@ pub async fn recompute_usage_costs(
 
 pub async fn usage_recent(
     State(s): State<AppState>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     Query(q): Query<RecentQuery>,
 ) -> Result<Json<Vec<openproxy_types::usage::RecentUsageRow>>, ApiError> {
+    if let Some(axum::Extension(ref id)) = identity {
+        if !id.has_manage_scope() {
+            // Analytics-only users are prohibited from watching the global request stream.
+            return Err(ApiError(CoreError::Auth(
+                "forbidden: global request log stream requires manage scope".into(),
+            )));
+        }
+    }
+
     crate::error::run_blocking(move || {
         let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
@@ -223,11 +264,12 @@ fn fetch_usage_detail(
 
 pub async fn usage_detail(
     State(s): State<AppState>,
-    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    headers: HeaderMap,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     Query(q): Query<DetailQuery>,
 ) -> Result<Json<UsageDetailResponse>, ApiError> {
-    authenticate_admin_ws(&s, &headers, None, Some(&addr)).await?;
+    let identity = identity
+        .ok_or_else(|| ApiError(CoreError::Auth("unauthenticated".into())))?
+        .0;
     crate::error::run_blocking(move || {
         let r = s.db_pool().reader();
 
@@ -237,6 +279,16 @@ pub async fn usage_detail(
                 "usage row not found for query {q:?}"
             ))));
         };
+
+        // Security: If the key lacks manage scope, ensure this usage row belongs to it.
+        if !identity.has_manage_scope() {
+            let caller_key_id = identity.key_id();
+            if r.api_key_id.map(|k| k.0) != caller_key_id {
+                return Err(ApiError(CoreError::Auth(
+                    "forbidden: cannot view usage detail of other keys".into(),
+                )));
+            }
+        }
 
         Ok(Json(UsageDetailResponse { row: r }))
     })

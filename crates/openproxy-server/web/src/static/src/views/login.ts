@@ -9,7 +9,7 @@
 // views/config.ts; the dashboard has no `lit` dependency.
 
 import { html, type TemplateResult } from "lit-html";
-import { setToken, clearToken } from "../state/auth.js";
+import { setToken, clearToken, setProfile, type UserSessionProfile } from "../state/auth.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { t } from "../i18n/index.js";
@@ -54,14 +54,17 @@ async function onSubmit(e: Event): Promise<void> {
   // carries it. Cleared below if validation fails.
   setToken(trimmed);
   try {
-    // Only the 2xx matters. A 5xx means "server down" rather than "bad
-    // key", but the form cannot act on the distinction, so both surface
-    // the same generic error.
-    await api("/notifications/unread-count");
-    // Setting `location.hash` fires `hashchange`, which routes to the home
-    // view now that `isLoggedIn()` is true. Calling `navigate()` directly
-    // would skip the canonical trigger and the URL bar update.
-    location.hash = "#/";
+    // Validate credentials and introspect scope permissions
+    const me = (await api("/auth/me")) as UserSessionProfile;
+    setProfile(me);
+
+    // If the key has full manage scope: navigate to home.
+    // If the key has restricted scope (analytics only): navigate directly to #/analytics.
+    if (me.is_admin) {
+      location.hash = "#/";
+    } else {
+      location.hash = "#/analytics";
+    }
   } catch (err: unknown) {
     clearToken();
     // Log the raw error for operators; the user sees the i18n string.

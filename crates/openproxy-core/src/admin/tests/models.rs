@@ -134,6 +134,7 @@ fn create_custom_model_wraps_validation() {
             target_format: None,
             streaming: Some(Some(false)),
             capabilities_json: None,
+            client_profile: None,
         },
     )
     .expect("update");

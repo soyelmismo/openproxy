@@ -106,6 +106,18 @@ impl ApiKey {
             return explicitly_allowed && !is_model_blacklisted;
         }
 
+        // Combos are virtual routing targets, not raw provider models.
+        // A combo name (e.g. "combo:nemo3" or "nemo3") has no provider prefix
+        // and should not be denied by an allowed_providers whitelist.
+        if model.starts_with("combo:") || effective_prov.is_none() {
+            if is_model_blacklisted {
+                return false;
+            }
+            // If only_whitelisted is false, combo is allowed
+            // (or if only_whitelisted is true, it was already checked above).
+            return true;
+        }
+
         if explicitly_allowed {
             return true;
         }
@@ -114,16 +126,20 @@ impl ApiKey {
             return false;
         }
 
-        let provider_allowed =
-            !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-                && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
-                && (is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
-                    || is_provider_in_allowlist(
-                        self.allowed_providers.as_deref(),
-                        prov_from_model,
-                    ));
+        // Whitelisted providers filter: if allowed_providers is set, only models
+        // from those providers are allowed by default (unless explicitly whitelisted above).
+        // Blacklisted providers filter: if blacklisted_providers is set, models from
+        // those providers are denied.
+        let is_blacklisted = is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+            || is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model);
+        if is_blacklisted {
+            return false;
+        }
 
-        provider_allowed
+        let is_in_allowlist = is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
+            || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model);
+
+        is_in_allowlist
     }
 
     /// Returns whether the specified provider is permitted by this key.

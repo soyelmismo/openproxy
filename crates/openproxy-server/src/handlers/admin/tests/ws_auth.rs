@@ -248,3 +248,123 @@ async fn admin_middleware_rejects_spoofed_real_ip_from_untrusted_peer() {
     );
     assert_eq!(identity.remote_addr, Some(untrusted_addr));
 }
+
+#[tokio::test]
+async fn analytics_scope_can_access_auth_me_and_usage_but_not_config() {
+    let tmp = tempdir();
+    let (state, _admin_key) = make_state_with_key(tmp.path()).await;
+
+    // Create an API key with ONLY "analytics" scope
+    let analytics_raw_key = "op_live_analytics_test_secret_key_123456";
+    let key_hash = openproxy_core::api_keys::hash_key(analytics_raw_key);
+    {
+        let w = state.db_pool().writer();
+        w.execute(
+            "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, allowed_models_json, is_active, created_at)
+             VALUES (?1, 'op_live_analyt', 'Analytics Guest', '[\"analytics\"]', '[]', 1, '2026-11-05 12:00:00')",
+            rusqlite::params![key_hash],
+        )
+        .expect("insert analytics key");
+    }
+
+    let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("authorization", format!("Bearer {analytics_raw_key}").parse().unwrap());
+    let authed = crate::handlers::admin::auth::authenticate_admin(&state, &headers, Some(&addr)).await;
+    println!("Direct authenticate_admin result: {authed:?}");
+
+    let app = app_for(&state);
+
+    // 1. GET /admin/api/auth/me -> 200 OK, reports is_admin: false
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/auth/me")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let me: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(me["is_admin"], false);
+    assert_eq!(me["label"], "Analytics Guest");
+
+    // 2. GET /admin/api/usage/summary -> 200 OK (read-only usage is permitted)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/usage/summary")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 3. POST /admin/api/ws-ticket -> 401/403 Forbidden (WS ticket grants full streaming/logs, blocked for analytics-only keys)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api/ws-ticket")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 4. GET /admin/api/config -> 401/403 Forbidden (no manage scope)
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/config")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 5. GET /admin/api/keys -> 401/403 Forbidden
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/keys")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 6. POST /admin/api/usage/recompute-costs -> Forbidden (mutating call under /usage)
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/api/usage/recompute-costs")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}

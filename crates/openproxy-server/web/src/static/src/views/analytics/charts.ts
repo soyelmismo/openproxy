@@ -6,6 +6,7 @@ import {
   observeResize,
 } from "../../components/uplot-chart/index.js";
 import { t } from "../../i18n/index.js";
+import { isFullAdmin } from "../../state/auth.js";
 import { requestUpdate } from "../../state/reactive.js";
 import {
   byDay,
@@ -96,13 +97,14 @@ export function renderAnalyticsToolbar(
           ${providers.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
         </select>
       </label>
+      ${isFullAdmin() ? html`
       <label class="analytics-filter-field" for="analytics-key-filter">
         <span>${t("analytics.filter.api_key")}</span>
         <select id="analytics-key-filter" class="filter-dropdown" .value=${apiKeyId} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
           <option value="">${t("analytics.filter.all_api_keys")}</option>
           ${apiKeys.map((k) => html`<option value=${String(k.id)}>${k.label || k.key_prefix || "—"}${k.key_prefix ? ` · ${k.key_prefix}` : ""}</option>`)}
         </select>
-      </label>
+      </label>` : html``}
       <div class="analytics-filter-field analytics-model-filter">
         <span>${t("analytics.filter.model")}</span>
         <button type="button" class="filter-dropdown analytics-model-trigger"

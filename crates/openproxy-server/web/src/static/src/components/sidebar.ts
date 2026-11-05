@@ -19,7 +19,7 @@ import {
 } from "../state/debug-logs-store.js";
 // Footer Logout button: `clearToken()` wipes the localStorage key + in-memory cache and
 // navigates to `#/login`, which the router's auth gate admits once `isLoggedIn()` is false.
-import { clearToken, isLoggedIn } from "../state/auth.js";
+import { clearToken, isLoggedIn, isFullAdmin } from "../state/auth.js";
 import { disconnectLogsWebSocket } from "../state/ws.js";
 import { isPanelDocument } from "../state/workspace.js";
 
@@ -139,7 +139,7 @@ let debugLogsStoreBootstrapped: boolean = false;
  *  `ws://…/admin/ws` console error on the login screen. */
 function maybeBootstrapNotifications(): void {
   if (storeBootstrapped) return;
-  if (!isLoggedIn()) return;
+  if (!isLoggedIn() || !isFullAdmin()) return;
   storeBootstrapped = true;
   initNotificationsStore();
   // Re-render on every count change; the notifications view also subscribes, which is fine
@@ -155,7 +155,7 @@ function maybeBootstrapNotifications(): void {
  *  endpoint and would 401 every 30s before login. */
 function maybeBootstrapDebugLogs(): void {
   if (debugLogsStoreBootstrapped) return;
-  if (!isLoggedIn()) return;
+  if (!isLoggedIn() || !isFullAdmin()) return;
   debugLogsStoreBootstrapped = true;
   initDebugLogsStore();
   // Re-render on every unviewed-count change so the badge tracks new WARN+ERROR entries.
@@ -224,11 +224,19 @@ export function renderSidebar(): void {
         <div class="brand">OpenProxy</div>
         <button class="mobile-nav-close" type="button" data-action="toggleMobileNav" aria-label="Close menu">${icons.close()}</button>
       </div>
-      <nav @click=${handleNavClick}>${renderLink(HOME_LINK, collapsed)}${GROUPS.map((g: SidebarGroup) => html`
-        <div class="sidebar-nav-group">
-          <div class="sidebar-nav-group-label" ?hidden=${collapsed}>${g.label}</div>
-          ${g.links.map((l: SidebarLink) => renderLink(l, collapsed))}
-        </div>`)}</nav>
+      <nav @click=${handleNavClick}>${isFullAdmin() ? renderLink(HOME_LINK, collapsed) : html``}${
+        isFullAdmin()
+          ? GROUPS.map((g: SidebarGroup) => html`
+              <div class="sidebar-nav-group">
+                <div class="sidebar-nav-group-label" ?hidden=${collapsed}>${g.label}</div>
+                ${g.links.map((l: SidebarLink) => renderLink(l, collapsed))}
+              </div>`)
+          : html`
+              <div class="sidebar-nav-group">
+                <div class="sidebar-nav-group-label" ?hidden=${collapsed}>Insights</div>
+                ${renderLink({ href: "#/analytics", icon: "analytics", label: "Analytics" }, collapsed)}
+              </div>`
+      }</nav>
       <div class="health">
         ${collapsed
           ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}"><span class="health-dot ${dotClass}"></span></span>`

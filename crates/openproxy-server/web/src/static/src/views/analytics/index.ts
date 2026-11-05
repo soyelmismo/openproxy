@@ -5,6 +5,7 @@ import { state } from "../../state/index.js";
 import { api } from "../../state/api.js";
 import { mountView, requestUpdate } from "../../state/reactive.js";
 import { t } from "../../i18n/index.js";
+import { isFullAdmin, getProfile } from "../../state/auth.js";
 import {
   buildUsageQuery,
   byModel,
@@ -306,12 +307,25 @@ export async function mountAnalytics(
       api(`/usage/by-status${usageQ}`) as Promise<ByStatusRow[]>,
       api(`/usage/errors${errorsQ}`) as Promise<ErrorRow[]>,
       // Prefer the bg-poll's cache; fall back to a direct fetch on a cold paint.
-      (state.providers && state.providers.length)
-        ? Promise.resolve(state.providers)
-        : api("/providers") as Promise<Provider[]>,
-      (state.apiKeys && state.apiKeys.length)
-        ? Promise.resolve(state.apiKeys as ApiKeyFilterRow[])
-        : api("/keys") as Promise<ApiKeyFilterRow[]>,
+      // Non-admin keys cannot access /providers or /keys (they are strictly forbidden).
+      isFullAdmin()
+        ? ((state.providers && state.providers.length)
+            ? Promise.resolve(state.providers)
+            : api("/providers") as Promise<Provider[]>)
+        : Promise.resolve([] as Provider[]),
+      isFullAdmin()
+        ? ((state.apiKeys && state.apiKeys.length)
+            ? Promise.resolve(state.apiKeys as ApiKeyFilterRow[])
+            : api("/keys") as Promise<ApiKeyFilterRow[]>)
+        : Promise.resolve(
+            getProfile()?.key_id != null
+              ? ([{
+                  id: getProfile()!.key_id!,
+                  key_prefix: getProfile()!.key_prefix,
+                  label: getProfile()!.label,
+                }] as ApiKeyFilterRow[])
+              : ([] as ApiKeyFilterRow[])
+          ),
     ]);
 
     if (!el.isConnected) {

@@ -24,12 +24,66 @@ impl AdminIdentity {
     pub fn client_ip(&self) -> Option<IpAddr> {
         self.client_ip.or_else(|| self.remote_addr.map(|a| a.ip()))
     }
+
+    /// Whether this identity has full management privileges ("manage" scope or dev bypass).
+    pub fn has_manage_scope(&self) -> bool {
+        match &self.key {
+            None => true, // dev bypass has full rights
+            Some(key) => key.scopes.iter().any(|s| s == "manage"),
+        }
+    }
+
+    /// Whether this identity has a specific scope.
+    pub fn has_scope(&self, scope: &str) -> bool {
+        match &self.key {
+            None => true, // dev bypass
+            Some(key) => key.scopes.iter().any(|s| s == scope),
+        }
+    }
 }
 
 /// Extractor alias for handlers: the identity resolved by
 /// [`admin_auth_middleware`]. `Option` because a handler may be mounted outside
 /// the middleware in tests; production admin routes always have it.
 pub(crate) type Identity = Option<axum::Extension<AdminIdentity>>;
+
+/// Profile metadata of the authenticated caller returned by `GET /admin/api/auth/me`.
+#[derive(Debug, serde::Serialize)]
+pub struct AuthMeResponse {
+    pub key_id: Option<i64>,
+    pub key_prefix: Option<String>,
+    pub label: Option<String>,
+    pub scopes: Vec<String>,
+    pub is_admin: bool,
+}
+
+pub async fn auth_me(
+    identity: Option<axum::Extension<AdminIdentity>>,
+) -> Result<axum::Json<AuthMeResponse>, ApiError> {
+    let id = identity
+        .as_ref()
+        .map(|axum::Extension(i)| i);
+
+    match id {
+        Some(identity) => match &identity.key {
+            Some(key) => Ok(axum::Json(AuthMeResponse {
+                key_id: Some(key.id.0),
+                key_prefix: key.key_prefix.clone(),
+                label: key.label.clone(),
+                scopes: key.scopes.clone(),
+                is_admin: identity.has_manage_scope(),
+            })),
+            None => Ok(axum::Json(AuthMeResponse {
+                key_id: None,
+                key_prefix: None,
+                label: Some("dev_bypass".into()),
+                scopes: vec!["manage".into(), "analytics".into(), "chat".into()],
+                is_admin: true,
+            })),
+        },
+        None => Err(ApiError(CoreError::Auth("unauthenticated".into()))),
+    }
+}
 
 /// Audit record written whenever an admin endpoint hands out (or writes to disk) a
 /// decrypted secret. WARN on the dedicated `openproxy::security::audit` target so
@@ -159,7 +213,13 @@ pub(crate) async fn authenticate_admin(
 
     let token = extract_bearer_token(headers)?
         .ok_or_else(|| ApiError(CoreError::Auth("missing authorization header".into())))?;
-    let key = crate::middleware::auth::verify_key_credentials(state, token, "manage").await?;
+    // Allowed scopes for admin endpoints: full "manage", or read-only "analytics"
+    let key = crate::middleware::auth::verify_key_credentials_any_scope(
+        state,
+        token,
+        &["manage", "analytics", "read"],
+    )
+    .await?;
     Ok(AdminIdentity {
         key: Some(key),
         remote_addr: effective_remote_addr,
@@ -222,7 +282,12 @@ pub(crate) async fn authenticate_admin_ws(
 
     let key = match (extract_bearer_token(headers)?, ticket) {
         (Some(token), _) => {
-            crate::middleware::auth::verify_key_credentials(state, token, "manage").await?
+            crate::middleware::auth::verify_key_credentials(
+                state,
+                token,
+                "manage",
+            )
+            .await?
         }
         (None, Some(t)) if !t.is_empty() => authenticate_ws_ticket(state, t).await?,
         _ => {
@@ -265,6 +330,45 @@ pub async fn admin_auth_middleware(
     match authenticate_admin(&state, req.headers(), Some(&addr)).await {
         Ok(identity) => {
             state.admin_limiter().record_success(client_ip_for_throttle);
+
+            // Scope-based endpoint authorization guard:
+            // Keys with "manage" (or dev bypass) can access every endpoint.
+            // Keys with only "analytics" (or "read") are restricted strictly to:
+            //   - GET /auth/me (or /admin/api/auth/me) (introspect own key & scopes)
+            //   - GET /formats (or /admin/api/formats) (read-only wire format metadata)
+            //   - GET /usage/* (or /admin/api/usage/*) (read-only usage analytics)
+            // Every other endpoint (config, keys, proxies, providers, combos, debug, logs,
+            // notifications, backup, etc.) or mutating method is rejected with 403 Forbidden.
+            if !identity.has_manage_scope() {
+                let path = req.uri().path();
+                let method = req.method();
+                let stripped_path = path
+                    .strip_prefix("/admin/api")
+                    .or_else(|| path.strip_prefix("/api"))
+                    .unwrap_or(path);
+
+                let is_allowed_analytics_call = method == axum::http::Method::GET
+                    && (stripped_path == "/auth/me"
+                        || stripped_path == "/formats"
+                        || stripped_path.starts_with("/usage/"));
+
+                if !is_allowed_analytics_call {
+                    tracing::warn!(
+                        target: "openproxy::security::audit",
+                        key_id = identity.key_id(),
+                        ip = identity.client_ip().map(|a| a.to_string()),
+                        path = %path,
+                        stripped_path = %stripped_path,
+                        method = %method,
+                        "forbidden admin access: key lacks manage scope"
+                    );
+                    return crate::error::ApiError(openproxy_types::CoreError::Auth(
+                        "forbidden: api key lacks manage scope".into(),
+                    ))
+                    .into_response();
+                }
+            }
+
             req.extensions_mut().insert(identity);
         }
         Err(e) => {

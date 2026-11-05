@@ -225,9 +225,16 @@ fn filter_combo_targets_by_auth(
             .map(|m| auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str())));
         // An explicitly allowlisted model survives its provider's blacklist;
         // otherwise a blacklisted provider drops the target outright.
+        // If the key explicitly whitelists this combo, its targets survive key's provider whitelist
+        // unless explicitly blacklisted.
         match model_allowed {
             Some(allowed) => allowed,
-            None => auth.is_provider_allowed(target.provider_id.as_str()),
+            None => {
+                let prov_blacklisted = auth.key.blacklisted_providers.as_deref().is_some_and(|bp| {
+                    bp.iter().any(|p| p == target.provider_id.as_str() || p == "*")
+                });
+                !prov_blacklisted
+            }
         }
     });
 

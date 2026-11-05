@@ -7,7 +7,7 @@ import { startBgPoll } from "./bg-poll.js";
 import { isPanelDocument } from "./workspace.js";
 import { mountWorkspace, unmountWorkspace } from "../components/workspace.js";
 
-import { isLoggedIn } from "./auth.js";
+import { isLoggedIn, isFullAdmin } from "./auth.js";
 import { renderSidebar } from "../components/sidebar.js";
 import { mountHome } from "../views/home/index.js";
 import { mountCombos } from "../views/combos.js";
@@ -182,7 +182,13 @@ export function navigate(): void {
     return;
   }
   if (loggedIn && r.name === "login") {
-    location.hash = "#/";
+    location.hash = isFullAdmin() ? "#/" : "#/analytics";
+    return;
+  }
+  // Restricted tenant enforcement: non-admin keys can ONLY access the analytics view.
+  // Any attempt to navigate to #/keys, #/config, #/logs, #/debug-logs, etc. routes directly to #/analytics.
+  if (loggedIn && !isFullAdmin() && r.name !== "analytics") {
+    location.hash = "#/analytics";
     return;
   }
   if (r.name === "login") {

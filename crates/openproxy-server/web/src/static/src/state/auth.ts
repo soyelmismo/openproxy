@@ -49,6 +49,7 @@ export function setToken(token: string): void {
  *  server answers 401, and the router's auth gate redirects to the login view. */
 export function clearToken(): void {
   currentToken = null;
+  clearProfile();
   try {
     localStorage.removeItem(STORAGE_KEY);
   } catch {
@@ -63,6 +64,58 @@ export function getToken(): string | null {
     currentToken = load();
   }
   return currentToken;
+}
+
+export interface UserSessionProfile {
+  key_id: number | null;
+  key_prefix: string | null;
+  label: string | null;
+  scopes: string[];
+  is_admin: boolean;
+}
+
+const PROFILE_KEY = "openproxy_user_profile";
+let currentProfile: UserSessionProfile | null = null;
+
+function loadProfile(): UserSessionProfile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as UserSessionProfile;
+  } catch {
+    return null;
+  }
+}
+
+export function setProfile(profile: UserSessionProfile): void {
+  currentProfile = profile;
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch (e: unknown) {
+    console.warn("Could not persist user profile to localStorage:", e);
+  }
+}
+
+export function getProfile(): UserSessionProfile | null {
+  if (currentProfile === null) {
+    currentProfile = loadProfile();
+  }
+  return currentProfile;
+}
+
+export function clearProfile(): void {
+  currentProfile = null;
+  try {
+    localStorage.removeItem(PROFILE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function isFullAdmin(): boolean {
+  const profile = getProfile();
+  if (!profile) return true; // optimistic fallback
+  return profile.is_admin;
 }
 
 /** Whether a token is present. Drives the router's auth gate. */

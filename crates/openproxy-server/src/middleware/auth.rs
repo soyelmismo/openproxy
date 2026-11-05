@@ -28,100 +28,15 @@ pub struct ValidatedApiToken {
 
 impl ValidatedApiToken {
     pub fn is_combo_allowed(&self, combo_id: i64) -> bool {
-        match &self.key.allowed_combos {
-            Some(allowed) if !allowed.is_empty() => allowed.contains(&combo_id),
-            _ => true,
-        }
+        self.key.is_combo_allowed(combo_id)
     }
 
     pub fn is_provider_allowed(&self, provider_id: &str) -> bool {
-        if let Some(blacklisted) = &self.key.blacklisted_providers
-            && blacklisted.iter().any(|p| p == provider_id || p == "*")
-        {
-            return false;
-        }
-        if let Some(allowed) = &self.key.allowed_providers
-            && !allowed.is_empty()
-            && !allowed.iter().any(|p| p == provider_id || p == "*")
-        {
-            return false;
-        }
-        true
+        self.key.is_provider_allowed(provider_id)
     }
 
     pub fn is_model_allowed(&self, model: &str, provider_id: Option<&str>) -> bool {
-        let (prov_from_model, bare_model) = model
-            .split_once('/')
-            .map_or((None, model), |(p, rest)| (Some(p), rest));
-
-        let full_id = provider_id.and_then(|p| {
-            if model
-                .strip_prefix(p)
-                .is_some_and(|rest| rest.starts_with('/'))
-            {
-                None
-            } else {
-                Some(format!("{p}/{model}"))
-            }
-        });
-
-        let is_model_blacklisted =
-            self.key
-                .blacklisted_models
-                .as_ref()
-                .is_some_and(|blacklisted| {
-                    blacklisted.iter().any(|b| {
-                        matches_any_model_pattern(b, model, bare_model, full_id.as_deref())
-                    })
-                });
-
-        // `allowed_models` is ADDITIVE, not a whitelist: it grants access on
-        // top of the default-permit, and an entry overrides BOTH the model and
-        // the provider blacklists (that is its purpose — e.g. open
-        // `devin/swe-2:free` while `devin` stays provider-blocked). Models not
-        // in the list are still allowed unless a blacklist matches them.
-        let explicitly_allowed = self.key.allowed_models.as_ref().is_some_and(|allowed| {
-            !allowed.is_empty()
-                && allowed
-                    .iter()
-                    .any(|m| matches_any_model_pattern(m, model, bare_model, full_id.as_deref()))
-        });
-
-        // Strict mode: the allowlist becomes the outer gate. Only the listed
-        // models are reachable and the model blacklist keeps subtracting from
-        // that set (an empty allowlist denies everything). The provider
-        // blacklist is subsumed — a non-listed model is already denied.
-        if self.key.only_whitelisted {
-            return explicitly_allowed && !is_model_blacklisted;
-        }
-
-        if explicitly_allowed {
-            return true;
-        }
-
-        if is_model_blacklisted {
-            return false;
-        }
-
-        if let Some(blacklisted_provs) = &self.key.blacklisted_providers
-            && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
-        {
-            return false;
-        }
-
-        if let Some(allowed_provs) = &self.key.allowed_providers
-            && !allowed_provs.is_empty()
-        {
-            let prov_ok = provider_id
-                .is_some_and(|p| allowed_provs.iter().any(|a| a == p || a == "*"))
-                || prov_from_model
-                    .is_some_and(|p| allowed_provs.iter().any(|a| a == p || a == "*"));
-            if !prov_ok {
-                return false;
-            }
-        }
-
-        true
+        self.key.is_model_allowed(model, provider_id)
     }
 }
 
@@ -266,7 +181,10 @@ pub(crate) async fn authenticate(
     }))
 }
 
-pub(crate) fn validate_key_record(key: &ApiKey, required_scope: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_key_record_any_scope(
+    key: &ApiKey,
+    allowed_scopes: &[&str],
+) -> Result<(), ApiError> {
     if !key.is_active {
         return Err(ApiError(CoreError::Auth(
             "api key revoked or inactive".into(),
@@ -280,7 +198,12 @@ pub(crate) fn validate_key_record(key: &ApiKey, required_scope: &str) -> Result<
         return Err(ApiError(CoreError::Auth("api key expired".into())));
     }
 
-    if !key.scopes.iter().any(|s| s == required_scope) {
+    if !allowed_scopes.is_empty()
+        && !key
+            .scopes
+            .iter()
+            .any(|s| allowed_scopes.contains(&s.as_str()))
+    {
         return Err(ApiError(CoreError::Auth(
             "api key lacks required scope".into(),
         )));
@@ -288,11 +211,15 @@ pub(crate) fn validate_key_record(key: &ApiKey, required_scope: &str) -> Result<
     Ok(())
 }
 
-/// Validate an API key credential against active keys
-pub(crate) async fn verify_key_credentials(
+pub(crate) fn validate_key_record(key: &ApiKey, required_scope: &str) -> Result<(), ApiError> {
+    validate_key_record_any_scope(key, &[required_scope])
+}
+
+/// Validate an API key credential against active keys for any of the given scopes
+pub(crate) async fn verify_key_credentials_any_scope(
     state: &AppState,
     token: &str,
-    required_scope: &str,
+    allowed_scopes: &[&str],
 ) -> Result<Arc<core_api_keys::ApiKey>, ApiError> {
     let key_hash = core_api_keys::hash_key(token);
     let key = if let Some(cached) = state.get_cached_api_key(&key_hash) {
@@ -313,7 +240,7 @@ pub(crate) async fn verify_key_credentials(
         arc_key
     };
 
-    validate_key_record(&key, required_scope)?;
+    validate_key_record_any_scope(&key, allowed_scopes)?;
 
     // Security (OP-15): `touch_last_used` is throttled in SQL to one write per
     // LAST_USED_THROTTLE_SECS, but the old code contended for the pool's
@@ -339,6 +266,15 @@ pub(crate) async fn verify_key_credentials(
     }
 
     Ok(key)
+}
+
+/// Validate an API key credential against active keys
+pub(crate) async fn verify_key_credentials(
+    state: &AppState,
+    token: &str,
+    required_scope: &str,
+) -> Result<Arc<core_api_keys::ApiKey>, ApiError> {
+    verify_key_credentials_any_scope(state, token, &[required_scope]).await
 }
 
 /// `true` when the row's `last_used_at` is older than the DB-side throttle
