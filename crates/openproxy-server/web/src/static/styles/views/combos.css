@@ -660,6 +660,74 @@
 }
 
 .combo-targets-table { width: 100%; }
+
+/* ---- Dense target rows --------------------------------------------------
+   The action group is what sets the row height: six controls stacked
+   vertically pushed every row to ~160px while the text columns stayed one or
+   two lines. Lay the group out horizontally and shrink the controls so the
+   row hugs its content. Cell padding drops from 0.45rem/0.6rem to
+   0.3rem/0.5rem and every cell is vertically centred. */
+.combo-targets-table th { white-space: nowrap; padding: 0.35rem 0.5rem; }
+.combo-targets-table td { padding: 0.3rem 0.5rem; vertical-align: middle; }
+.combo-targets-table .drag-handle { width: 1.4rem; font-size: 1rem; }
+
+.combo-targets-table .combo-table-select,
+.combo-targets-table .combo-table-select-sm {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  font-size: var(--fs-2xs);
+  line-height: 22px;
+}
+.combo-targets-table .weight-input { height: 24px; padding: 0 4px; font-size: var(--fs-2xs); }
+
+.combo-targets-table .target-model-title { line-height: 1.35; }
+.combo-targets-table .badge { padding: 0 4px; font-size: var(--fs-2xs); }
+
+/* Guarantee the actions column enough width for two rows of controls, so the
+   group never needs a third line to fit the labelled buttons. */
+.combo-targets-table .col-target-actions { width: 150px; }
+
+.target-actions-wrap {
+  display: grid;
+  grid-template-columns: 22px auto 22px 22px;
+  gap: 4px;
+}
+.target-actions-wrap button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 6px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+.target-actions-wrap button.reorder-btn,
+.target-actions-wrap button.danger {
+  width: 22px;
+  padding: 0;
+}
+
+/* Narrow tiles: the actions column can no longer hold a labelled flex row, so
+   drop the last text label (every button keeps its title) and switch to a fixed
+   four-column icon grid. The grid bounds the group at two rows no matter how
+   narrow the column gets, which a wrapping flex row cannot guarantee. */
+@container tile-view (max-width: 880px) {
+  .combo-targets-table th { padding: 0.3rem 0.4rem; font-size: var(--fs-2xs); }
+  .combo-targets-table td { padding: 0.25rem 0.4rem; }
+  .target-action-label { display: none; }
+  .target-actions-wrap {
+    grid-template-columns: repeat(4, 22px);
+    gap: 3px;
+  }
+  .combo-targets-table .combo-table-select,
+  .combo-targets-table .combo-table-select-sm { max-width: 92px; }
+}
 .col-target-weight, .col-target-thinking, .col-target-cooldown { font-size: var(--fs-xs); }
 
 .subcombo-group-row {

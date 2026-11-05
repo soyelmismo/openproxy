@@ -410,13 +410,13 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
             });
           }
         }}>
-          ${icons.tag()} Prefixes ${target.system_prefixes_count ? html`<span class="badge" style="margin-left:2px;font-size:0.7rem;padding:1px 4px;">${target.system_prefixes_count}</span>` : html``}
+          ${icons.tag()} ${target.system_prefixes_count ? html`<span class="badge" style="margin-left:2px;font-size:0.7rem;padding:1px 4px;">${target.system_prefixes_count}</span>` : html``}
         </button>
         <button
           class="small primary"
           title="Configure sub-combo settings"
           @click=${() => void showEditSubComboModal(target.sub_combo_id!, () => requestUpdate())}>
-          ${icons.pencil()} Edit
+          ${icons.pencil()}
         </button>
         <button
           class="small"
@@ -721,9 +721,9 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
             });
           }
         }}>
-          ${icons.tag()} Prefixes ${target.system_prefixes_count ? html`<span class="badge" style="margin-left:2px;font-size:0.7rem;padding:1px 4px;">${target.system_prefixes_count}</span>` : html``}
+          ${icons.tag()} ${target.system_prefixes_count ? html`<span class="badge" style="margin-left:2px;font-size:0.7rem;padding:1px 4px;">${target.system_prefixes_count}</span>` : html``}
         </button>
-        <button class="small primary" title=${t("combos.target.test_title")} @click=${(e: Event) => onTestTarget(target.id, target.model_row_id, e)}>${icons.flask()} ${t("combos.target.test_btn")}</button>
+        <button class="small primary" title=${t("combos.target.test_title")} @click=${(e: Event) => onTestTarget(target.id, target.model_row_id, e)}>${icons.flask()}<span class="target-action-label">${t("combos.target.test_btn")}</span></button>
         <button class="small" title=${target.active !== false ? t("combos.target.deactivate_title") : t("combos.target.activate_title")} @click=${() => onToggleTargetActive(target.id, target.active !== false)}>${target.active !== false ? html`${icons.pause()}` : html`${icons.play()}`}</button>
         <button class="small reorder-btn" title=${t("combos.target.move_up_title")} @click=${() => onChangePriority(target.id, -1)}>${icons.caretUp()}</button>
         <button class="small reorder-btn" title=${t("combos.target.move_down_title")} @click=${() => onChangePriority(target.id, 1)}>${icons.caretDown()}</button>
