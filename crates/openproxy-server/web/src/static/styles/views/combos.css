@@ -994,6 +994,246 @@
   background: var(--color-border, #444);
   margin: 4px 0;
 }
+
+/* =============================================================================
+   Sophisticated Combo Detail Header Card
+   ============================================================================= */
+.combo-detail-header-card {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  box-sizing: border-box;
+}
+
+.combo-header-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.combo-header-quick-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.combo-header-quick-actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.combo-header-quick-actions .button.secondary {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+
+.combo-header-quick-actions .button.secondary:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-hover);
+}
+
+.combo-header-main-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.combo-header-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.combo-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.combo-header-title {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-text);
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.combo-title-edit-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.combo-title-edit-btn:hover {
+  opacity: 1;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+.combo-header-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.combo-header-controls-card {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 6px 12px;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+  box-sizing: border-box;
+}
+
+.combo-control-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.combo-control-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.combo-header-controls-card .combo-strategy-select {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  cursor: pointer;
+}
+
+.combo-header-controls-card .race-input {
+  width: 52px;
+  padding: 3px 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+
+.combo-control-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border-soft);
+}
+
+.combo-toggle-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.combo-toggle-control input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.combo-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #eab308;
+}
+
+.combo-toggle-label {
+  white-space: nowrap;
+}
+
+/* Container query hardening for narrow tiles */
+@container tile-view (max-width: 680px) {
+  .combo-header-main-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-3);
+  }
+  .combo-header-controls-card {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+@container tile-view (max-width: 480px) {
+  .combo-detail-header-card {
+    padding: var(--space-3);
+  }
+  .combo-header-nav-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+  .combo-header-quick-actions {
+    width: 100%;
+  }
+  .combo-header-quick-actions .button {
+    flex: 1;
+    justify-content: center;
+  }
+  .combo-control-divider {
+    display: none;
+  }
+  .combo-header-controls-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  .combo-control-group {
+    justify-content: space-between;
+    width: 100%;
+  }
+}
+
 /* Responsive mobile rules live in combos_mobile.css. */
 
 

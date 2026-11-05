@@ -161,6 +161,12 @@ fn apply_combo_general_updates(
     id: ComboId,
     body: &serde_json::Value,
 ) -> Result<(), ApiError> {
+    if let Some(v) = body.get("name") {
+        let name = v.as_str().ok_or_else(|| {
+            ApiError(CoreError::Validation("name must be a string when present".into()))
+        })?;
+        core_combos::update_name(w, id, name)?;
+    }
     if let Some(n) = body.get("race_size").and_then(serde_json::Value::as_u64) {
         let rs = u8::try_from(n).unwrap_or(0);
         core_combos::update_combo(w, id, Some(rs))?;

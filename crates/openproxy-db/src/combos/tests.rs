@@ -89,6 +89,34 @@ fn test_update_strategy() {
 }
 
 #[test]
+fn test_update_name() {
+    let (pool, _path) = fresh_pool();
+    let conn = pool.writer();
+    let id1 = create_combo(&conn, "combo_alpha", Strategy::Priority, 1).unwrap();
+    let _id2 = create_combo(&conn, "combo_beta", Strategy::Priority, 1).unwrap();
+
+    update_name(&conn, id1, "combo_alpha_renamed").unwrap();
+    assert_eq!(
+        get_combo(&conn, id1).unwrap().unwrap().name,
+        "combo_alpha_renamed"
+    );
+
+    // Empty name error
+    let err = update_name(&conn, id1, "   ").unwrap_err();
+    assert!(matches!(err, CoreError::Validation(ref msg) if msg.contains("cannot be empty")));
+
+    // Duplicate name error
+    let err = update_name(&conn, id1, "combo_beta").unwrap_err();
+    assert!(matches!(err, CoreError::Validation(ref msg) if msg.contains("already exists")));
+
+    // Not found error
+    assert!(matches!(
+        update_name(&conn, ComboId(9999), "unique").unwrap_err(),
+        CoreError::ComboNotFound(9999)
+    ));
+}
+
+#[test]
 fn test_combo_in_chain_scenarios() {
     let (pool, _path) = fresh_pool();
     let conn = pool.writer();

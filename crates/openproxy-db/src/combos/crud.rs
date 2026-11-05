@@ -104,6 +104,28 @@ pub fn update_combo(conn: &Connection, id: ComboId, race_size: Option<u8>) -> Re
 /// Update the routing `strategy` of a combo. The string is parsed via
 /// [`Strategy::parse`] — the same validation the create path applies —
 /// so an unknown value surfaces as [`CoreError::Validation`].
+pub fn update_name(conn: &Connection, id: ComboId, name: &str) -> Result<()> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::Validation("combo name cannot be empty".into()));
+    }
+    let res = conn.execute(
+        "UPDATE combos SET name = ?1 WHERE id = ?2",
+        params![trimmed, id.0],
+    );
+    match res {
+        Ok(0) => Err(CoreError::ComboNotFound(id.0)),
+        Ok(_) => Ok(()),
+        Err(e) => {
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation {
+                Err(CoreError::Validation(format!("combo name already exists: {trimmed}")))
+            } else {
+                Err(crate::error::map_db_error_ctx(format!("update name for combo {}", id.0))(e))
+            }
+        }
+    }
+}
+
 pub fn update_strategy(conn: &Connection, id: ComboId, strategy: &str) -> Result<()> {
     let parsed = Strategy::parse(strategy).map_err(CoreError::Validation)?;
     crate::crud::execute_check_affected(

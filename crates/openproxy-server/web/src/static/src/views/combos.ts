@@ -5,7 +5,7 @@ import { requestUpdate } from "../state/reactive.js";
 import { createView } from "../lib/view-utils.js";
 import { showToast } from "../components/toast.js";
 import { flashButton } from "../lib/ui-utils.js";
-import { showConfirm } from "../lib/show-confirm.js";
+import { showConfirm, showPrompt } from "../lib/show-confirm.js";
 import { testAllTargets } from "../handlers/combo-handlers.js";
 import { showAddTarget } from "../handlers/combo-target-handlers/index.js";
 import { icons } from "../lib/icons.js";
@@ -75,6 +75,30 @@ async function onFloatInput(field: string, e: Event): Promise<void> {
   if (raw !== "" && !Number.isFinite(val)) return;
   if (field === "lkgp_exploration_rate" && val != null && (val < 0 || val > 1)) return;
   await patchCombo(detailComboId!, { [field]: val });
+}
+
+async function onRenameCombo(): Promise<void> {
+  if (!detailCombo || !detailComboId) return;
+  const currentName = detailCombo.name;
+  const newName = await showPrompt(
+    t("combos.detail.rename_title", { defaultValue: "Rename combo" }),
+    t("combos.detail.rename_prompt", { defaultValue: "New combo name:" }),
+    currentName
+  );
+  if (!newName || newName === currentName) return;
+  try {
+    await api("/combos/" + detailComboId, {
+      method: "PATCH",
+      body: JSON.stringify({ name: newName }),
+    });
+    detailCombo.name = newName;
+    const item = (state.combos || []).find((c) => c.id === detailComboId);
+    if (item) item.name = newName;
+    showToast(t("combos.detail.renamed_toast", { name: newName, defaultValue: `Combo renamed to "${newName}"` }), "success");
+    requestUpdate();
+  } catch (err: unknown) {
+    showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error");
+  }
 }
 
 async function onDeleteCombo(): Promise<void> {
@@ -738,25 +762,65 @@ function renderComboDetail(): TemplateResult {
   const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>${t("combos.detail.col.weight")}</abbr></th>` : html``;
 
   return html`
-    <div class="page-header"><a href="#/combos" class="back-link">${icons.arrowLeft()} ${t("combos.detail.back")}</a><h2>${combo.name}</h2>
-      <div class="actions">
-        <label style="display:inline-flex;align-items:center;gap:5px;font-size:0.85rem;">
-          ${t("combos.detail.strategy")}
-          <select class="combo-strategy-select" .value=${combo.strategy} @change=${(e: Event) => patchCombo(detailComboId!, { strategy: (e.target as HTMLSelectElement).value })}>
-            ${["priority", "round_robin", "shuffle"].map((s) => html`<option value=${s} ?selected=${combo.strategy === s}>${s}</option>`)}
-          </select>
-        </label>
-        <span class="chip">${PRIORITY_MODE_LABELS[pm]}</span>
-        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:0.85rem;" title=${t("combos.detail.predictive_rl_hint")}>
-          <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${(e: Event) => patchCombo(detailComboId!, { preventive_rate_limit: (e.target as HTMLInputElement).checked })}>
-          ${icons.lightning()} ${t("combos.detail.predictive_rl")}
-        </label>
-        <label>${t("combos.detail.race_size")} <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${(e: Event) => {
-          const val = parseInt((e.target as HTMLInputElement).value, 10);
-          if (Number.isFinite(val) && val >= 1 && val <= 8) patchCombo(detailComboId!, { race_size: val });
-        }} class="race-input"></label>
-        <button type="button" @click=${onCloneCombo}>${icons.copy()} Clone</button>
-        <button class="danger" @click=${onDeleteCombo}>${t("combos.detail.delete")}</button></div></div>
+    <div class="combo-detail-header-card">
+      <div class="combo-header-nav-row">
+        <a href="#/combos" class="back-link">${icons.arrowLeft()} ${t("combos.detail.back")}</a>
+        <div class="combo-header-quick-actions">
+          <button type="button" class="button small secondary combo-rename-btn" @click=${onRenameCombo} title="${t("combos.detail.rename_tooltip", { defaultValue: "Rename combo" })}">
+            ${icons.pencil()} <span>${t("combos.detail.rename", { defaultValue: "Rename" })}</span>
+          </button>
+          <button type="button" class="button small secondary" @click=${onCloneCombo} title="${t("combos.detail.clone_tooltip", { defaultValue: "Clone combo" })}">
+            ${icons.copy()} <span>Clone</span>
+          </button>
+          <button type="button" class="button small danger" @click=${onDeleteCombo} title="${t("combos.detail.delete_tooltip", { defaultValue: "Delete combo" })}">
+            ${icons.trash()} <span>${t("combos.detail.delete")}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="combo-header-main-row">
+        <div class="combo-header-identity">
+          <div class="combo-title-wrap">
+            <h2 class="combo-header-title">${combo.name}</h2>
+            <button type="button" class="combo-title-edit-btn" @click=${onRenameCombo} title="${t("combos.detail.rename_tooltip", { defaultValue: "Rename combo" })}" aria-label="${t("combos.detail.rename", { defaultValue: "Rename" })}">
+              ${icons.pencil()}
+            </button>
+          </div>
+          <div class="combo-header-pills">
+            <span class="subcombo-meta-pill" title="Combo ID">#${combo.id}</span>
+            <span class="subcombo-meta-pill mode" title="Priority Mode: ${PRIORITY_MODE_LABELS[pm]}">${PRIORITY_MODE_LABELS[pm]}</span>
+            <span class="subcombo-meta-pill info" title="Targets configured">${targets.length} ${targets.length === 1 ? "target" : "targets"}</span>
+          </div>
+        </div>
+
+        <div class="combo-header-controls-card">
+          <div class="combo-control-group">
+            <span class="combo-control-label">${t("combos.detail.strategy")}</span>
+            <select class="combo-strategy-select" .value=${combo.strategy} @change=${(e: Event) => patchCombo(detailComboId!, { strategy: (e.target as HTMLSelectElement).value })}>
+              ${["priority", "round_robin", "shuffle"].map((s) => html`<option value=${s} ?selected=${combo.strategy === s}>${s}</option>`)}
+            </select>
+          </div>
+
+          <div class="combo-control-divider"></div>
+
+          <div class="combo-control-group">
+            <span class="combo-control-label">${t("combos.detail.race_size")}</span>
+            <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${(e: Event) => {
+              const val = parseInt((e.target as HTMLInputElement).value, 10);
+              if (Number.isFinite(val) && val >= 1 && val <= 8) patchCombo(detailComboId!, { race_size: val });
+            }} class="race-input" title="Parallel race attempts (1-8)">
+          </div>
+
+          <div class="combo-control-divider"></div>
+
+          <label class="combo-toggle-control" title=${t("combos.detail.predictive_rl_hint")}>
+            <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${(e: Event) => patchCombo(detailComboId!, { preventive_rate_limit: (e.target as HTMLInputElement).checked })}>
+            <span class="combo-toggle-icon">${icons.lightning()}</span>
+            <span class="combo-toggle-label">${t("combos.detail.predictive_rl")}</span>
+          </label>
+        </div>
+      </div>
+    </div>
     <div class="combo-context-window-bar"><label>${t("combos.detail.context_window")}
       <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
       <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })} · ${t("combos.detail.effective", { value: effectiveCwLabel })}</span></div>
