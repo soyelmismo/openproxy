@@ -76,7 +76,7 @@ export interface ModelQuotaDetail {
 
 /** Origin of a Z.ai quota pool. `zcode_starter` is the free one-time grant,
  *  `coding_plan` is the paid subscription bucket. */
-export type QuotaPoolSource = "zcode_starter" | "coding_plan";
+export type QuotaPoolSource = "autoclaw_starter" | "zcode_starter" | "coding_plan";
 
 /** Lifecycle of a single quota pool, independent of the others. */
 export type QuotaPoolStatus =
@@ -187,6 +187,7 @@ export interface ApiKey {
   allowed_models: string[] | null;
   allowed_combos: number[] | null;
   blacklisted_providers: string[] | null;
+  allowed_providers: string[] | null;
   blacklisted_models: string[] | null;
   /** When true, `allowed_models` is a strict gate instead of an additive
    *  grant: only the listed models are usable. Defaults to false. */

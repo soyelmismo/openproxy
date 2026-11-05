@@ -21,6 +21,169 @@ pub fn router() -> axum::Router<AppState> {
             "/{provider}/device-poll",
             axum::routing::post(oauth_device_poll),
         )
+        .route(
+            "/autoclaw/captcha-config",
+            axum::routing::get(autoclaw_captcha_config),
+        )
+        .route(
+            "/autoclaw/verify-captcha",
+            axum::routing::post(autoclaw_verify_captcha),
+        )
+}
+
+pub async fn autoclaw_captcha_config(
+    State(s): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    const APP_ID: &str = "100003";
+    const APP_KEY: &str = "38d2391985e2369a5fb8227d8e6cd5e5";
+    let now = openproxy_types::now_unix_secs_str();
+    let sign = openproxy_oauth::oauth::minimax::md5::md5_hex(format!("{APP_ID}&{now}&{APP_KEY}"));
+
+    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
+        "https://autoglm-api.autoglm.ai/userapi/overseasv1/oauth-captcha-config",
+        bytes::Bytes::from_static(b"{}"),
+    )
+    .with_accept_json();
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::USER_AGENT,
+        http::HeaderValue::from_static("AutoClaw/2.0.3"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-product"),
+        http::HeaderValue::from_static("autoclaw"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-version"),
+        http::HeaderValue::from_static("2.0.3"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-tm"),
+        http::HeaderValue::from_static("linux"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-channel"),
+        http::HeaderValue::from_static("official"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-auth-appid"),
+        http::HeaderValue::from_static(APP_ID),
+    );
+    if let Ok(val) = http::HeaderValue::from_str(&now) {
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-auth-timestamp"),
+            val,
+        );
+    }
+    if let Ok(val) = http::HeaderValue::from_str(&sign) {
+        req.headers
+            .insert(http::header::HeaderName::from_static("x-auth-sign"), val);
+    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-lang"),
+        http::HeaderValue::from_static("zh-CN"),
+    );
+
+    let (_status, resp_bytes) =
+        openproxy_oauth::oauth::call_oauth(s.upstream_client(), req, "autoclaw captcha config")
+            .await?;
+
+    let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
+        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
+
+    Ok(Json(json))
+}
+
+#[derive(serde::Deserialize)]
+pub struct VerifyCaptchaInput {
+    pub verify_param: serde_json::Value,
+    pub state: Option<String>,
+}
+
+pub async fn autoclaw_verify_captcha(
+    State(s): State<AppState>,
+    Json(input): Json<VerifyCaptchaInput>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    const APP_ID: &str = "100003";
+    const APP_KEY: &str = "38d2391985e2369a5fb8227d8e6cd5e5";
+    let now = openproxy_types::now_unix_secs_str();
+    let sign = openproxy_oauth::oauth::minimax::md5::md5_hex(format!("{APP_ID}&{now}&{APP_KEY}"));
+
+    let payload = serde_json::json!({
+        "navigate_uri": "http://localhost:18432/auth/callback-zai",
+        "source_id": "autoclaw",
+        "device_id": "b1b01c10-91dc-4a25-9d32-d17b5f5bbd9b",
+        "ali_captcha_verify_param": input.verify_param
+    });
+
+    let body_bytes =
+        serde_json::to_vec(&payload).map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
+
+    let mut req = openproxy_adapters::upstream::UpstreamRequest::post_json(
+        "https://autoglm-api.autoglm.ai/userapi/overseasv1/zai-oauth-url",
+        bytes::Bytes::from(body_bytes),
+    )
+    .with_accept_json();
+    req.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
+    req.headers.insert(
+        http::header::USER_AGENT,
+        http::HeaderValue::from_static("AutoClaw/2.0.3"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-product"),
+        http::HeaderValue::from_static("autoclaw"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-version"),
+        http::HeaderValue::from_static("2.0.3"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-tm"),
+        http::HeaderValue::from_static("linux"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-channel"),
+        http::HeaderValue::from_static("official"),
+    );
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-auth-appid"),
+        http::HeaderValue::from_static(APP_ID),
+    );
+    if let Ok(val) = http::HeaderValue::from_str(&now) {
+        req.headers.insert(
+            http::header::HeaderName::from_static("x-auth-timestamp"),
+            val,
+        );
+    }
+    if let Ok(val) = http::HeaderValue::from_str(&sign) {
+        req.headers
+            .insert(http::header::HeaderName::from_static("x-auth-sign"), val);
+    }
+    req.headers.insert(
+        http::header::HeaderName::from_static("x-lang"),
+        http::HeaderValue::from_static("zh-CN"),
+    );
+
+    let (_status, resp_bytes) =
+        openproxy_oauth::oauth::call_oauth(s.upstream_client(), req, "autoclaw verify captcha")
+            .await?;
+
+    let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
+        .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
+
+    if let Some(state_val) = input.state {
+        let redirect_uri = get_oauth_redirect_uri(&s);
+        s.oauth_states()
+            .insert("zai", &state_val, "", &redirect_uri);
+    }
+
+    Ok(Json(json))
 }
 
 fn validate_authorize_flow(
@@ -77,6 +240,94 @@ pub async fn oauth_authorize(
     // stop trusting client-supplied redirect_uri / code_verifier.
     s.oauth_states()
         .insert(&provider, &state, &code_verifier, &redirect_uri);
+
+    if provider == "zai" {
+        let bind_ports = [18432, 19654, 19723, 53699];
+        for port in bind_ports {
+            let addr = format!("127.0.0.1:{port}");
+            if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
+                let s_clone = s.clone();
+                let provider_name = provider.clone();
+                tokio::spawn(async move {
+                    if let Ok((mut stream, _)) = listener.accept().await {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let mut buf = [0u8; 4096];
+                        if let Ok(n) = stream.read(&mut buf).await {
+                            let req_str = String::from_utf8_lossy(&buf[..n]);
+                            let mut code = None;
+                            let mut state_param = None;
+                            if let Some(first_line) = req_str.lines().next() {
+                                if let Some(target) = first_line.split_whitespace().nth(1) {
+                                    if let Some(query_idx) = target.find('?') {
+                                        for pair in target[query_idx + 1..].split('&') {
+                                            if let Some((k, v)) = pair.split_once('=') {
+                                                if k == "code" {
+                                                    code = Some(v.to_string());
+                                                } else if k == "state" {
+                                                    state_param = Some(v.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let (Some(code_val), Some(state_val)) = (code, state_param) {
+                                let actual_code = code_val.trim();
+                                let _effective_state = state_val.trim();
+                                let account_id = match resolve_or_create_oauth_account(
+                                    &s_clone,
+                                    &provider_name,
+                                    None,
+                                )
+                                .await
+                                {
+                                    Ok(id) => id,
+                                    Err(_) => return,
+                                };
+                                let registry = s_clone.oauth_provider_registry();
+                                let provider_impl = match registry.get(&provider_name) {
+                                    Some(res) => res,
+                                    None => return,
+                                };
+                                let redirect_uri =
+                                    format!("http://localhost:{port}/auth/callback-zai");
+                                let code_verifier_val = "";
+                                if let Ok(token) = provider_impl
+                                    .exchange_code(
+                                        actual_code,
+                                        code_verifier_val,
+                                        s_clone.upstream_client(),
+                                        &redirect_uri,
+                                    )
+                                    .await
+                                {
+                                    let _ = save_oauth_token_and_notify(
+                                        &s_clone,
+                                        &provider_name,
+                                        &provider_impl,
+                                        account_id,
+                                        &token,
+                                        None,
+                                    )
+                                    .await;
+                                }
+                            }
+
+                            let html = "<!doctype html><html><body style='font-family:sans-serif;text-align:center;padding:50px;'><h2>Authorization successful!</h2><p>You can close this tab and return to OpenProxy.</p><script>window.close();</script></body></html>";
+                            let resp = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                html.len(),
+                                html
+                            );
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                        }
+                    }
+                });
+                break;
+            }
+        }
+    }
 
     Ok(Json(serde_json::json!({
         "authorization_url": auth_url,
@@ -237,14 +488,40 @@ pub async fn oauth_exchange(
                     .into(),
             )
         })?;
-    let (code_verifier, redirect_uri) = s
-        .oauth_states()
-        .consume(&provider, state_param)
-        .ok_or_else(|| {
-            CoreError::Validation(
-                "unknown, expired or already-used 'state'; restart the authorization flow".into(),
-            )
-        })?;
+    let (_actual_code, state_val_opt) = if let Some(pos) = code.find('#') {
+        (&code[..pos], Some(&code[pos + 1..]))
+    } else if let Some(pos) = code.find("state=") {
+        let state_part = &code[pos + 6..];
+        let end_pos = state_part.find('&').unwrap_or(state_part.len());
+        (
+            code.split('?').next().unwrap_or(code),
+            Some(&state_part[..end_pos]),
+        )
+    } else {
+        (code, None)
+    };
+
+    let state_val = state_val_opt.unwrap_or(state_param);
+
+    let (code_verifier, redirect_uri) = match s.oauth_states().consume(&provider, state_val) {
+        Some(pair) => pair,
+        None => {
+            // Si es zai (flujo AutoClaw overseas o manual), el state retornado
+            // viene firmado por Zhipu y puede no coincidir con el state de sesión local.
+            // Permitimos el fallback para completar el intercambio sin bloquear al usuario.
+            if provider == "zai" {
+                (
+                    "".to_string(),
+                    "http://localhost:18432/auth/callback-zai".to_string(),
+                )
+            } else {
+                return Err(ApiError(CoreError::Validation(
+                    "unknown, expired or already-used 'state'; restart the authorization flow"
+                        .into(),
+                )));
+            }
+        }
+    };
     let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
 
     let registry = s.oauth_provider_registry();
@@ -255,9 +532,17 @@ pub async fn oauth_exchange(
     })?;
 
     let code_with_state = if code.contains('#') || code.contains("state=") {
-        code.to_string()
+        if let Some(pos) = code.find('#') {
+            format!("{}#{}", &code[..pos], state_val)
+        } else if let Some(pos) = code.find("code=") {
+            let code_part = &code[pos + 5..];
+            let end_pos = code_part.find('&').unwrap_or(code_part.len());
+            format!("{}#{}", &code_part[..end_pos], state_val)
+        } else {
+            format!("{code}#{state_val}")
+        }
     } else {
-        format!("{code}#{state_param}")
+        format!("{code}#{state_val}")
     };
 
     let token = provider_impl

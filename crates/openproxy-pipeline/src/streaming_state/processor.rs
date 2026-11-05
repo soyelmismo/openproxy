@@ -160,16 +160,43 @@ impl ChunkProcessor<'_> {
     /// Sincroniza metadatos de chunk (usage y stop_reason) con el StreamingState
     /// y el acumulador si está presente.
     pub(super) fn sync_chunk_metadata_to_accumulator(
+        ctx: &StreamContext<'_>,
         state: &mut StreamingState,
         usage: Option<crate::translation::OpenAIUsage>,
         stop_reason: Option<String>,
         overwrite_stop_reason: bool,
     ) {
         if let Some(new_usage) = usage {
-            state.usage = Some(match state.usage.take() {
+            let mut merged = match state.usage.take() {
                 Some(existing) => crate::sse::merge_usage(existing, new_usage),
                 None => new_usage,
-            });
+            };
+
+            // Discount prefix tokens if a system prefix was dynamically injected
+            if let Some(ref prefix) = *ctx.req.active_system_prefix.lock() {
+                let prefix_msg = [openproxy_types::OpenAIMessage {
+                    role: "system".to_string(),
+                    content: Some(serde_json::Value::String(prefix.clone())),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: Default::default(),
+                }];
+                let prefix_tokens =
+                    openproxy_compression::token_estimate::estimate_prompt_tokens(&prefix_msg);
+                let client_est = openproxy_compression::token_estimate::estimate_prompt_tokens(
+                    &ctx.req.openai_request.messages,
+                )
+                .max(1);
+
+                merged.prompt_tokens = merged
+                    .prompt_tokens
+                    .saturating_sub(prefix_tokens)
+                    .max(client_est);
+                merged.total_tokens = merged.prompt_tokens + merged.completion_tokens;
+            }
+
+            state.usage = Some(merged);
         }
         if (overwrite_stop_reason && stop_reason.is_some())
             || (stop_reason.is_some() && state.stop_reason.is_none())
@@ -211,7 +238,24 @@ impl ChunkProcessor<'_> {
             _ => payload_str,
         };
 
-        let sse_bytes = crate::sse::build_sse_frame(final_payload);
+        let sanitized_storage: Option<String>;
+        let payload_to_send = if ctx.combo.sanitize_response.unwrap_or(false) {
+            let model_override = ctx
+                .combo
+                .real_model_id
+                .as_deref()
+                .unwrap_or(&ctx.req.openai_request.model);
+            sanitized_storage =
+                crate::response_sanitizer::sanitize_streaming_chunk(final_payload, model_override);
+            match &sanitized_storage {
+                Some(s) => s.as_str(),
+                None => return Ok(crate::streaming::ChunkEvent::Skip),
+            }
+        } else {
+            final_payload
+        };
+
+        let sse_bytes = crate::sse::build_sse_frame(payload_to_send);
 
         if let Err(e) = self.send_to_sink(ctx, sse_bytes).await {
             self.emit_reasoning_summary_if_needed(ctx);

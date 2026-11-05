@@ -36,6 +36,19 @@ fn is_provider_blacklisted(blacklisted: Option<&[String]>, provider: Option<&str
     }
 }
 
+fn is_provider_in_allowlist(allowed: Option<&[String]>, provider: Option<&str>) -> bool {
+    let Some(ap) = allowed else {
+        return true;
+    };
+    if ap.is_empty() {
+        return true;
+    }
+    match provider {
+        Some(p) => ap.iter().any(|a| a == p || a == "*"),
+        None => false,
+    }
+}
+
 fn is_model_blocked_by_blacklist(
     blacklisted_models: Option<&[String]>,
     model: &str,
@@ -101,14 +114,28 @@ impl ApiKey {
             return false;
         }
 
-        !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-            && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
+        let provider_allowed =
+            !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+                && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
+                && (is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
+                    || is_provider_in_allowlist(
+                        self.allowed_providers.as_deref(),
+                        prov_from_model,
+                    ));
+
+        provider_allowed
     }
 
     /// Returns whether the specified provider is permitted by this key.
     pub fn is_provider_allowed(&self, provider_id: &str) -> bool {
         if let Some(blacklisted) = &self.blacklisted_providers
             && blacklisted.iter().any(|p| p == provider_id || p == "*")
+        {
+            return false;
+        }
+        if let Some(allowed) = &self.allowed_providers
+            && !allowed.is_empty()
+            && !allowed.iter().any(|p| p == provider_id || p == "*")
         {
             return false;
         }

@@ -1,4 +1,5 @@
 //! Independent source fetches and sanitized failures. Never swap credentials.
+use super::autoclaw::parse_autoclaw_pools;
 use super::coding_plan::parse_coding_plan_pools;
 use super::envelope::envelope_is_success;
 use super::zcode::parse_zcode_pools;
@@ -8,11 +9,13 @@ use openproxy_types::quota::{AccountQuota, QuotaPool, QuotaPoolStatus, QuotaSour
 use serde_json::Value;
 
 pub(super) struct QuotaEndpoints<'a> {
+    pub(super) autoclaw_wallets: &'a str,
     pub(super) starter: &'a str,
     pub(super) subscriptions: &'a str,
     pub(super) limits: &'a str,
 }
 const ENDPOINTS: QuotaEndpoints<'static> = QuotaEndpoints {
+    autoclaw_wallets: "https://autoglm-api.autoglm.ai/agent-assetmgr/api/v2/wallets?biz_app_id=autoclaw",
     starter: "https://zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=3.14.0",
     subscriptions: super::super::ZAI_SUBSCRIPTION_LIST_URL,
     limits: super::super::ZAI_QUOTA_LIMIT_URL,
@@ -26,6 +29,7 @@ pub(crate) fn status_pool(
 ) -> QuotaPool {
     QuotaPool {
         id: match source {
+            QuotaSource::AutoclawStarter => "autoclaw-starter",
             QuotaSource::ZcodeStarter => "zcode-starter",
             QuotaSource::CodingPlan => "coding-plan",
         }
@@ -34,6 +38,7 @@ pub(crate) fn status_pool(
         plan_name: None,
         status,
         unit: match source {
+            QuotaSource::AutoclawStarter => "points",
             QuotaSource::ZcodeStarter => "token",
             QuotaSource::CodingPlan => "percentage",
         }
@@ -167,7 +172,7 @@ pub(super) async fn fetch_dual_at(
             None => vec![status_pool(
                 QuotaSource::ZcodeStarter,
                 QuotaPoolStatus::Absent,
-                Some("ZCode OAuth credential is missing; Starter balance is unknown".into()),
+                Some("ZCode OAuth credential is not configured for this account".into()),
                 now,
             )],
         }
@@ -193,8 +198,47 @@ pub(super) async fn fetch_dual_at(
             )],
         }
     };
-    let (mut pools, paid) = tokio::join!(starter, paid);
-    pools.extend(paid);
+    let autoclaw = async {
+        match tokens
+            .autoclaw_access_token
+            .as_deref()
+            .or(tokens.zai_access_token.as_deref())
+        {
+            Some(token) => {
+                // Auto-claim daily checkin & inspiration center bonuses before fetching balance
+                super::autoclaw::perform_autoclaw_checkin(upstream, token, proxy).await;
+                let fetch_res =
+                    fetch_json(upstream, endpoints.autoclaw_wallets, token, proxy).await;
+                match fetch_res {
+                    Ok(json) => source_result(
+                        parse_autoclaw_pools(&json, now),
+                        QuotaSource::AutoclawStarter,
+                        now,
+                    ),
+                    Err(e) => {
+                        let err_msg = format!("AutoClaw wallets API error: {e}");
+                        vec![status_pool(
+                            QuotaSource::AutoclawStarter,
+                            QuotaPoolStatus::Unavailable,
+                            Some(err_msg),
+                            now,
+                        )]
+                    }
+                }
+            }
+            None => vec![status_pool(
+                QuotaSource::AutoclawStarter,
+                QuotaPoolStatus::Absent,
+                Some("AutoClaw OAuth credential is missing; balance is unknown".into()),
+                now,
+            )],
+        }
+    };
+    let (ac_pools, pools, paid) = tokio::join!(autoclaw, starter, paid);
+    let mut all_pools = ac_pools;
+    all_pools.extend(pools);
+    all_pools.extend(paid);
+    let pools = all_pools;
     Ok(AccountQuota {
         session_used: None,
         session_limit: None,

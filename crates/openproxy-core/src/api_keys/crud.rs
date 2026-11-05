@@ -39,6 +39,10 @@ pub fn create(
         Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize blacklisted_providers")?),
         None => None,
     };
+    let allowed_providers_json = match &input.allowed_providers {
+        Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize allowed_providers")?),
+        None => None,
+    };
     let blacklisted_models_json = match &input.blacklisted_models {
         Some(v) => Some(serde_json::to_string(v).ctx_parse("serialize blacklisted_models")?),
         None => None,
@@ -48,8 +52,9 @@ pub fn create(
         "INSERT INTO api_keys \
             (key_hash, key_prefix, label, scopes_json, allowed_models_json, \
              allowed_combos_json, expires_at, created_by, \
-             blacklisted_providers_json, blacklisted_models_json, only_whitelisted) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             blacklisted_providers_json, blacklisted_models_json, only_whitelisted, \
+             allowed_providers_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             key_hash,
             key_prefix,
@@ -62,6 +67,7 @@ pub fn create(
             blacklisted_providers_json,
             blacklisted_models_json,
             input.only_whitelisted as i64,
+            allowed_providers_json,
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -80,7 +86,7 @@ pub fn get_by_id(conn: &Connection, id: ApiKeyId) -> Result<Option<ApiKey>> {
                     allowed_models_json, allowed_combos_json, is_active, \
                     revoked_at, expires_at, last_used_at, created_at, created_by, \
                     blacklisted_providers_json, blacklisted_models_json, \
-                    only_whitelisted \
+                    only_whitelisted, allowed_providers_json \
              FROM api_keys WHERE id = ?1",
             params![id.0],
             row_to_api_key,
@@ -98,7 +104,7 @@ pub fn get_by_hash(conn: &Connection, key_hash: &str) -> Result<Option<ApiKey>> 
                     allowed_models_json, allowed_combos_json, is_active, \
                     revoked_at, expires_at, last_used_at, created_at, created_by, \
                     blacklisted_providers_json, blacklisted_models_json, \
-                    only_whitelisted \
+                    only_whitelisted, allowed_providers_json \
              FROM api_keys WHERE key_hash = ?1",
             params![key_hash],
             row_to_api_key,
@@ -128,7 +134,7 @@ pub fn list(conn: &Connection) -> Result<Vec<ApiKey>> {
                     allowed_models_json, allowed_combos_json, is_active, \
                     revoked_at, expires_at, last_used_at, created_at, created_by, \
                     blacklisted_providers_json, blacklisted_models_json, \
-                    only_whitelisted \
+                    only_whitelisted, allowed_providers_json \
              FROM api_keys ORDER BY id DESC",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -231,6 +237,7 @@ fn build_update_json_clauses(
     allowed_models_json: UpdateField<String>,
     allowed_combos_json: UpdateField<String>,
     blacklisted_providers_json: UpdateField<String>,
+    allowed_providers_json: UpdateField<String>,
     blacklisted_models_json: UpdateField<String>,
     sets: &mut Vec<&'static str>,
     bound: &mut Vec<Box<dyn rusqlite::ToSql>>,
@@ -250,6 +257,10 @@ fn build_update_json_clauses(
     if let Some(bp) = blacklisted_providers_json.into_option() {
         sets.push("blacklisted_providers_json = ?");
         bound.push(Box::new(bp));
+    }
+    if let Some(ap) = allowed_providers_json.into_option() {
+        sets.push("allowed_providers_json = ?");
+        bound.push(Box::new(ap));
     }
     if let Some(bm) = blacklisted_models_json.into_option() {
         sets.push("blacklisted_models_json = ?");
@@ -322,6 +333,8 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
     let allowed_combos_json = serialize_update_field(params.allowed_combos, "allowed_combos")?;
     let blacklisted_providers_json =
         serialize_update_field(params.blacklisted_providers, "blacklisted_providers")?;
+    let allowed_providers_json =
+        serialize_update_field(params.allowed_providers, "allowed_providers")?;
     let blacklisted_models_json =
         serialize_update_field(params.blacklisted_models, "blacklisted_models")?;
 
@@ -333,6 +346,7 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
         allowed_models_json,
         allowed_combos_json,
         blacklisted_providers_json,
+        allowed_providers_json,
         blacklisted_models_json,
         &mut sets,
         &mut bound,

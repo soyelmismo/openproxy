@@ -70,10 +70,12 @@ impl ChunkProcessor<'_> {
 
     pub(super) fn update_state_and_acc_from_metadata_chunk(
         &mut self,
+        ctx: &StreamContext<'_>,
         mut chunk: crate::sse::UpstreamSseChunk,
         json_payload: &str,
     ) -> (Option<String>, bool) {
         Self::sync_chunk_metadata_to_accumulator(
+            ctx,
             self.state,
             chunk.usage.take(),
             chunk.stop_reason.take(),
@@ -116,7 +118,7 @@ impl ChunkProcessor<'_> {
 
         let has_content = chunk.has_content;
         let (effective_payload, is_skip) =
-            self.update_state_and_acc_from_metadata_chunk(chunk, json_payload);
+            self.update_state_and_acc_from_metadata_chunk(ctx, chunk, json_payload);
 
         if let Some(event) = self.check_race_cancelled(ctx).await {
             return Ok(event);
@@ -224,7 +226,9 @@ impl ChunkProcessor<'_> {
             return Ok(ret);
         }
 
-        if crate::sse::sse_payload_needs_parse(json_payload) {
+        if crate::sse::sse_payload_needs_parse(json_payload)
+            || ctx.combo.sanitize_response.unwrap_or(false)
+        {
             self.process_openai_metadata_chunk(ctx, stream, line, json_payload)
                 .await
         } else {

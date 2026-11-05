@@ -17,10 +17,12 @@ function makeKeyForm(fields: {
   scopes?: string[];
   allowedModels?: string;
   blProviders?: string;
+  allowedProviders?: string;
   blModels?: string;
   expiresAmount?: string;
   expiresUnit?: string;
   onlyWhitelisted?: boolean;
+  allowedCombos?: string;
 } = {}): HTMLFormElement {
   const form = document.createElement("form");
   const append = (name: string, value: string, tag: "input" | "select" = "input", type = "text"): void => {
@@ -52,7 +54,9 @@ function makeKeyForm(fields: {
   if (fields.label !== undefined) append("label", fields.label);
   for (const scope of fields.scopes ?? []) checkbox("scopes", scope, true);
   if (fields.allowedModels !== undefined) append("allowed_models", fields.allowedModels, "input", "hidden");
+  if (fields.allowedCombos !== undefined) append("allowed_combos", fields.allowedCombos, "input", "hidden");
   if (fields.blProviders !== undefined) append("blacklisted_providers", fields.blProviders);
+  if (fields.allowedProviders !== undefined) append("allowed_providers", fields.allowedProviders);
   if (fields.blModels !== undefined) append("blacklisted_models", fields.blModels, "input", "hidden");
   if (fields.expiresAmount !== undefined) append("expires_amount", fields.expiresAmount, "input", "number");
   if (fields.expiresUnit !== undefined) append("expires_unit", fields.expiresUnit, "select");
@@ -89,7 +93,9 @@ describe("buildKeyBodyFromForm", () => {
     expect(body?.label).toBeNull();          // empty label → null
     expect(body?.scopes).toEqual(["chat"]);
     expect(body?.allowed_models).toBeNull(); // "" → null (no touch)
+    expect(body?.allowed_combos).toBeNull();
     expect(body?.blacklisted_providers).toBeNull();
+    expect(body?.allowed_providers).toBeNull();
     expect(body?.blacklisted_models).toBeNull();
     expect(body?.expires_at).toBeNull();     // "never" default
   });
@@ -100,14 +106,24 @@ describe("buildKeyBodyFromForm", () => {
     expect(body?.allowed_models).toEqual([]);
   });
 
+  it("parses allowed_combos correctly from comma-separated string or ' '", () => {
+    const formWithCombos = track(makeKeyForm({ scopes: ["chat"], allowedCombos: "1, 2, 3" }));
+    expect(buildKeyBodyFromForm(formWithCombos)?.allowed_combos).toEqual([1, 2, 3]);
+
+    const formEmptyCombos = track(makeKeyForm({ scopes: ["chat"], allowedCombos: " " }));
+    expect(buildKeyBodyFromForm(formEmptyCombos)?.allowed_combos).toEqual([]);
+  });
+
   it("splits and trims a comma-separated blacklist, dropping empty items", () => {
     const form = track(makeKeyForm({
       scopes: ["chat"],
       blProviders: " openai , groq , ,  ",
+      allowedProviders: " xkiro , antseed , , ",
       blModels: "gpt-4*,*-preview",
     }));
     const body = buildKeyBodyFromForm(form);
     expect(body?.blacklisted_providers).toEqual(["openai", "groq"]);
+    expect(body?.allowed_providers).toEqual(["xkiro", "antseed"]);
     expect(body?.blacklisted_models).toEqual(["gpt-4*", "*-preview"]);
   });
 

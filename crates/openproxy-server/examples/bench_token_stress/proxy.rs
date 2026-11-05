@@ -109,6 +109,7 @@ pub async fn run(config: WorkerConfig) -> anyhow::Result<()> {
                         allowed_models: None,
                         allowed_combos: None,
                         blacklisted_providers: None,
+                        allowed_providers: None,
                         blacklisted_models: None,
                         only_whitelisted: false,
                         expires_at: None,

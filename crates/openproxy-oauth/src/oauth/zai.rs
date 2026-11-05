@@ -24,6 +24,8 @@ pub const ZAI_REDIRECT_URI: &str =
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ZaiAccountMeta {
+    pub autoclaw_access_token: Option<String>,
+    pub autoclaw_refresh_token: Option<String>,
     pub zcode_jwt_token: Option<String>,
     pub zai_access_token: Option<String>,
     pub business_access_token: Option<String>,
@@ -107,6 +109,17 @@ impl OAuthProvider for ZaiOAuthProvider {
 
         let effective_redirect = ZAI_REDIRECT_URI;
 
+        let mut zcode_jwt = None;
+        let mut zai_access_token = None;
+        let mut expires_in = Some(86400 * 30);
+        let mut user_id = None;
+        let mut name = None;
+        let mut email = None;
+        let mut avatar = None;
+        let mut business_access_token = None;
+        let mut api_key = None;
+
+        // 1. Intentar intercambio tradicional con ZCode token URL
         let body = serde_json::json!({
             "provider": "zai",
             "code": actual_code.trim(),
@@ -114,106 +127,211 @@ impl OAuthProvider for ZaiOAuthProvider {
             "state": effective_state.trim()
         });
 
-        let body_bytes =
-            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
+        if let Ok(body_bytes) = serde_json::to_vec(&body) {
+            let mut req =
+                UpstreamRequest::post_json(ZAI_DEFAULT_TOKEN_URL, bytes::Bytes::from(body_bytes))
+                    .with_accept_json();
+            req.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            req.headers.insert(
+                http::header::USER_AGENT,
+                http::HeaderValue::from_static("ZCode/3.14.0"),
+            );
 
-        let mut req =
-            UpstreamRequest::post_json(ZAI_DEFAULT_TOKEN_URL, bytes::Bytes::from(body_bytes))
-                .with_accept_json();
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-        req.headers.insert(
-            http::header::USER_AGENT,
-            http::HeaderValue::from_static("ZCode/3.14.0"),
-        );
+            if let Ok(json) = crate::oauth::call_oauth_json::<serde_json::Value>(
+                upstream_client,
+                req,
+                "zai",
+                "zai exchange",
+            )
+            .await
+            {
+                let code_num = json
+                    .get("code")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(-1);
+                if code_num == 0 {
+                    if let Some(data) = json.get("data") {
+                        zcode_jwt = data
+                            .get("token")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|s| s.trim().to_string());
 
-        let json: serde_json::Value =
-            crate::oauth::call_oauth_json(upstream_client, req, "zai", "zai exchange").await?;
+                        zai_access_token = data
+                            .get("zai")
+                            .and_then(|z| z.get("access_token"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(|s| s.trim().to_string());
 
-        let code_num = json
-            .get("code")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(-1);
-        if code_num != 0 {
-            let msg = json
-                .get("msg")
-                .or_else(|| json.get("message"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("Z.ai backend token exchange failed");
-            return Err(CoreError::Validation(format!(
-                "Z.ai token exchange error (code {code_num}): {msg}"
-            )));
-        }
+                        let raw_expires_in = data
+                            .get("expires_in")
+                            .or_else(|| data.get("expiresIn"))
+                            .and_then(serde_json::Value::as_u64);
+                        let raw_expires_at = data
+                            .get("expires_at")
+                            .or_else(|| data.get("expiresAt"))
+                            .and_then(serde_json::Value::as_str);
+                        expires_in =
+                            crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
+                                .or(Some(86400 * 30));
 
-        let data = json
-            .get("data")
-            .ok_or_else(|| CoreError::Parse("zai token response missing data object".into()))?;
+                        let user_val = data.get("user");
+                        user_id = user_val
+                            .and_then(|u| u.get("id").or_else(|| u.get("user_id")))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string);
+                        name = user_val
+                            .and_then(|u| u.get("name").or_else(|| u.get("username")))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string);
+                        email = user_val
+                            .and_then(|u| u.get("email"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string);
+                        avatar = user_val
+                            .and_then(|u| u.get("avatar"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string);
 
-        let zcode_jwt = data
-            .get("token")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CoreError::Parse("zai token response missing data.token".into()))?
-            .trim()
-            .to_string();
+                        business_access_token = match zai_access_token.as_deref() {
+                            Some(tok) => Self::exchange_business_token(upstream_client, tok)
+                                .await
+                                .ok(),
+                            None => None,
+                        };
 
-        let zai_access_token = data
-            .get("zai")
-            .and_then(|z| z.get("access_token"))
-            .and_then(serde_json::Value::as_str)
-            .map(|s| s.trim().to_string());
-
-        let raw_expires_in = data
-            .get("expires_in")
-            .or_else(|| data.get("expiresIn"))
-            .and_then(serde_json::Value::as_u64);
-        let raw_expires_at = data
-            .get("expires_at")
-            .or_else(|| data.get("expiresAt"))
-            .and_then(serde_json::Value::as_str);
-        let expires_in = crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
-            .or(Some(86400 * 30));
-
-        let user_val = data.get("user");
-        let user_id = user_val
-            .and_then(|u| u.get("id").or_else(|| u.get("user_id")))
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
-        let name = user_val
-            .and_then(|u| u.get("name").or_else(|| u.get("username")))
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
-        let email = user_val
-            .and_then(|u| u.get("email"))
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
-        let avatar = user_val
-            .and_then(|u| u.get("avatar"))
-            .and_then(serde_json::Value::as_str)
-            .map(ToString::to_string);
-
-        let business_access_token = match zai_access_token.as_deref() {
-            Some(tok) => Self::exchange_business_token(upstream_client, tok)
-                .await
-                .ok(),
-            None => None,
-        };
-
-        let api_key = match business_access_token.as_deref() {
-            Some(tok) => {
-                openproxy_adapters::adapters::zai::resolve_zai_api_key(upstream_client, tok).await
+                        api_key = match business_access_token.as_deref() {
+                            Some(tok) => {
+                                openproxy_adapters::adapters::zai::resolve_zai_api_key(
+                                    upstream_client,
+                                    tok,
+                                )
+                                .await
+                            }
+                            None => None,
+                        };
+                    }
+                }
             }
-            None => None,
-        };
+        }
 
         let effective_access_token = api_key
             .clone()
             .or_else(|| business_access_token.clone())
-            .unwrap_or_else(|| zcode_jwt.clone());
+            .or_else(|| zcode_jwt.clone())
+            .unwrap_or_default();
+
+        let mut autoclaw_access_token = None;
+        let mut autoclaw_refresh_token = None;
+
+        let (actual_code_str, state_val_str) = (actual_code.trim(), effective_state.trim());
+        let autoclaw_payload = serde_json::json!({
+            "code": actual_code_str,
+            "state": state_val_str,
+            "navigate_uri": "http://localhost:18432/auth/callback-zai",
+            "source_id": "autoclaw",
+            "device_id": "b1b01c10-91dc-4a25-9d32-d17b5f5bbd9b"
+        });
+
+        const APP_ID: &str = "100003";
+        const APP_KEY: &str = "38d2391985e2369a5fb8227d8e6cd5e5";
+        let now_ts = openproxy_types::now_unix_secs_str();
+        let sign_md5 = crate::oauth::minimax::md5::md5_hex(format!("{APP_ID}&{now_ts}&{APP_KEY}"));
+
+        if let Ok(body_bytes) = serde_json::to_vec(&autoclaw_payload) {
+            let mut req_ac = UpstreamRequest::post_json(
+                "https://autoglm-api.autoglm.ai/userapi/overseasv1/zai-oauth-login",
+                bytes::Bytes::from(body_bytes),
+            )
+            .with_accept_json();
+            req_ac.headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            req_ac.headers.insert(
+                http::header::USER_AGENT,
+                http::HeaderValue::from_static("AutoClaw/2.0.3"),
+            );
+            req_ac.headers.insert(
+                http::header::HeaderName::from_static("x-product"),
+                http::HeaderValue::from_static("autoclaw"),
+            );
+            req_ac.headers.insert(
+                http::header::HeaderName::from_static("x-version"),
+                http::HeaderValue::from_static("2.0.3"),
+            );
+            req_ac.headers.insert(
+                http::header::HeaderName::from_static("x-tm"),
+                http::HeaderValue::from_static("linux"),
+            );
+            req_ac.headers.insert(
+                http::header::HeaderName::from_static("x-channel"),
+                http::HeaderValue::from_static("official"),
+            );
+            req_ac.headers.insert(
+                http::header::HeaderName::from_static("x-auth-appid"),
+                http::HeaderValue::from_static(APP_ID),
+            );
+            if let Ok(val) = http::HeaderValue::from_str(&now_ts) {
+                req_ac.headers.insert(
+                    http::header::HeaderName::from_static("x-auth-timestamp"),
+                    val,
+                );
+            }
+            if let Ok(val) = http::HeaderValue::from_str(&sign_md5) {
+                req_ac
+                    .headers
+                    .insert(http::header::HeaderName::from_static("x-auth-sign"), val);
+            }
+            req_ac.headers.insert(
+                http::header::HeaderName::from_static("x-lang"),
+                http::HeaderValue::from_static("zh-CN"),
+            );
+
+            if let Ok((_status, ac_bytes)) =
+                crate::oauth::call_oauth(upstream_client, req_ac, "autoclaw oauth login").await
+            {
+                if let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes) {
+                    if ac_json.get("code").and_then(serde_json::Value::as_i64) == Some(0) {
+                        if let Some(ac_data) = ac_json.get("data") {
+                            autoclaw_access_token = ac_data
+                                .get("access_token")
+                                .and_then(serde_json::Value::as_str)
+                                .map(|s| s.trim().to_string());
+                            autoclaw_refresh_token = ac_data
+                                .get("refresh_token")
+                                .and_then(serde_json::Value::as_str)
+                                .map(|s| s.trim().to_string());
+                            if user_id.is_none() {
+                                user_id = ac_data
+                                    .get("user_id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(ToString::to_string);
+                            }
+                            if name.is_none() {
+                                name = ac_data
+                                    .get("user_name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(ToString::to_string);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if effective_access_token.is_empty() && autoclaw_access_token.is_none() {
+            return Err(CoreError::Validation(
+                "Failed to exchange OAuth token with both ZCode and AutoClaw".into(),
+            ));
+        }
 
         let meta = ZaiAccountMeta {
-            zcode_jwt_token: Some(zcode_jwt.clone()),
+            autoclaw_access_token: autoclaw_access_token.clone(),
+            autoclaw_refresh_token: autoclaw_refresh_token.clone(),
+            zcode_jwt_token: zcode_jwt.clone(),
             zai_access_token,
             business_access_token,
             api_key,
@@ -223,13 +341,19 @@ impl OAuthProvider for ZaiOAuthProvider {
             avatar,
         };
 
+        let final_access_token = if effective_access_token.is_empty() {
+            autoclaw_access_token.unwrap_or_default()
+        } else {
+            effective_access_token
+        };
+
         let id_token = serde_json::to_string(&meta).ok();
 
         Ok(TokenResponse {
-            access_token: effective_access_token,
+            access_token: final_access_token,
             token_type: "Bearer".into(),
             expires_in,
-            refresh_token: None,
+            refresh_token: autoclaw_refresh_token,
             scope: None,
             id_token,
         })
@@ -407,6 +531,8 @@ mod tests {
     fn test_zai_metadata_and_email_extraction() {
         let provider = ZaiOAuthProvider::new();
         let meta = ZaiAccountMeta {
+            autoclaw_access_token: None,
+            autoclaw_refresh_token: None,
             zcode_jwt_token: Some("zcode.jwt.mock".into()),
             zai_access_token: Some("zai.at.mock".into()),
             business_access_token: Some("biz.mock".into()),

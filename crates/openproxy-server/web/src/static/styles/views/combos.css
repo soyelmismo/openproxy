@@ -193,6 +193,19 @@
   border-radius: var(--radius-sm);
 }
 
+.chip-sanitize {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  border: 1px solid var(--color-success);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+}
+
 .combo-table-actions {
   display: flex;
   align-items: center;

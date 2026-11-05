@@ -40,6 +40,8 @@ define_column_updaters! {
     pub fn update_decision_model(model: Option<&str>) => "decision_model";
     pub fn update_decision_timeout(timeout_ms: Option<u64> => timeout_ms.map(|v| v as i64)) => "decision_timeout_ms";
     pub fn update_modality_gate(gate: Option<bool> => gate.map(i64::from)) => "modality_gate";
+    pub fn update_sanitize_response(enabled: Option<bool> => enabled.map(i64::from)) => "sanitize_response";
+    pub fn update_real_model_id(model_id: Option<&str>) => "real_model_id";
 }
 
 pub fn update_target_weight(

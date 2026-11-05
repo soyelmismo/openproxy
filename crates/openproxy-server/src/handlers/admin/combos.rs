@@ -4,13 +4,20 @@ use axum::{
     extract::{Path, State},
 };
 use openproxy_types::UpdateField;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CloneComboInput {
+    pub name: Option<String>,
+}
 
 use openproxy_core::admin as core_admin;
 
 pub use super::combo_targets::{
     ComboTargetUpdates, ReorderComboTargetsInput, add_target, clear_combo_target_cooldown,
-    delete_combo_target, list_combo_targets, list_valid_sub_combos, reorder_combo_targets,
-    test_combo_targets, update_combo_target,
+    create_target_system_prefix, delete_combo_target, delete_target_system_prefix,
+    list_combo_targets, list_target_system_prefixes, list_valid_sub_combos, reorder_combo_targets,
+    test_combo_targets, update_combo_target, update_target_system_prefix,
 };
 
 pub fn router() -> axum::Router<AppState> {
@@ -22,6 +29,7 @@ pub fn router() -> axum::Router<AppState> {
                 .delete(delete_combo)
                 .patch(update_combo),
         )
+        .route("/{id}/clone", axum::routing::post(clone_combo))
         .route(
             "/{id}/test-all",
             axum::routing::post(test_combo_targets).route_layer(axum::middleware::from_fn(
@@ -47,6 +55,14 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/{id}/targets/{target_id}",
             axum::routing::patch(update_combo_target).delete(delete_combo_target),
+        )
+        .route(
+            "/{id}/targets/{target_id}/prefixes",
+            axum::routing::get(list_target_system_prefixes).post(create_target_system_prefix),
+        )
+        .route(
+            "/{id}/targets/{target_id}/prefixes/{prefix_id}",
+            axum::routing::patch(update_target_system_prefix).delete(delete_target_system_prefix),
         )
 }
 
@@ -92,6 +108,20 @@ crate::admin_entity_action_handler! {
         core_admin::delete_combo(&w, id)?;
         Ok(Json(serde_json::json!({ "deleted": id.0 })))
     }
+}
+
+pub async fn clone_combo(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    body: Option<Json<CloneComboInput>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = ComboId(id);
+    let override_name = body.and_then(|Json(b)| b.name);
+    let new_id = s
+        .db_pool()
+        .spawn_write(move |w| core_admin::clone_combo(w, id, override_name.as_deref()))
+        .await?;
+    Ok(Json(serde_json::json!({ "id": new_id.0 })))
 }
 
 pub(crate) use super::helpers::{
@@ -194,6 +224,35 @@ fn apply_combo_general_updates(
         Some(other) => {
             return Err(ApiError(CoreError::Validation(format!(
                 "modality_gate must be a boolean or null, got {other}"
+            ))));
+        }
+    }
+    match body.get("sanitize_response") {
+        None => {}
+        Some(serde_json::Value::Null) => core_combos::update_sanitize_response(w, id, None)?,
+        Some(serde_json::Value::Bool(enabled)) => {
+            core_combos::update_sanitize_response(w, id, Some(*enabled))?;
+        }
+        Some(other) => {
+            return Err(ApiError(CoreError::Validation(format!(
+                "sanitize_response must be a boolean or null, got {other}"
+            ))));
+        }
+    }
+    match body.get("real_model_id") {
+        None => {}
+        Some(serde_json::Value::Null) => core_combos::update_real_model_id(w, id, None)?,
+        Some(serde_json::Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                core_combos::update_real_model_id(w, id, None)?;
+            } else {
+                core_combos::update_real_model_id(w, id, Some(trimmed))?;
+            }
+        }
+        Some(other) => {
+            return Err(ApiError(CoreError::Validation(format!(
+                "real_model_id must be a string or null, got {other}"
             ))));
         }
     }

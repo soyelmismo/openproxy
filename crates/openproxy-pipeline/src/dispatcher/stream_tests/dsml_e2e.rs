@@ -122,6 +122,7 @@ async fn run_case(upstream_frames: String) -> (Vec<String>, String) {
         race_cancel: None,
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
+        active_system_prefix: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,

@@ -297,6 +297,12 @@ macro_rules! map_row_fields {
     (@get $row:expr, @expr($val:expr)) => {
         $val
     };
+    (@get $row:expr, @opt_usize($idx:expr)) => {
+        $row.get::<_, Option<i64>>($idx)?.unwrap_or(0) as usize
+    };
+    (@get $row:expr, @none($($dummy:tt)*)) => {
+        None
+    };
     (@get $row:expr, @opt_default($idx:expr, $ty:ty, $default:expr)) => {
         $row.get::<_, Option<$ty>>($idx)?.unwrap_or($default)
     };

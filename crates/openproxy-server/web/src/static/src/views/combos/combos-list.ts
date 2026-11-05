@@ -6,7 +6,7 @@ import { state } from "../../state/index.js";
 import { icons } from "../../lib/icons.js";
 import { t } from "../../i18n/index.js";
 import { PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS } from "../../lib/constants.js";
-import { showCreateCombo } from "../../handlers/combo-handlers.js";
+import { showCreateCombo, cloneCombo } from "../../handlers/combo-handlers.js";
 import type { Combo, PriorityMode } from "../../lib/types/api.js";
 import { renderResponsiveCardTable, type ResponsiveColumn } from "../../components/render-responsive-card-table.js";
 import { requestUpdate } from "../../state/reactive.js";
@@ -46,6 +46,9 @@ function getCombosColumns(): ResponsiveColumn<Combo>[] {
             ${c.preventive_rate_limit ? html`
               <span class="chip chip-rl" title="Predictive Rate Limiting enabled">${icons.lightning()} RL</span>
             ` : ""}
+            ${c.sanitize_response ? html`
+              <span class="chip chip-sanitize" title="Sanitize Responses: rewrites model and purges reasoning metadata">${icons.check()} Sanitize</span>
+            ` : ""}
           </div>
         `;
       },
@@ -81,6 +84,9 @@ function getCombosColumns(): ResponsiveColumn<Combo>[] {
           <a class="button small primary" href="#/combos/${c.id}" title="View details and targets">
             ${icons.pencil()} Details
           </a>
+          <button type="button" class="small" title="Clone combo" @click=${() => cloneCombo(c.id, c.name)}>
+            ${icons.copy()} Clone
+          </button>
         </div>
       `,
     },

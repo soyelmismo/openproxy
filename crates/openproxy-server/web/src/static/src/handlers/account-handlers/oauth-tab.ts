@@ -205,7 +205,161 @@ export function createOAuthTabHandler(ctx: OAuthTabContext): OAuthTabHandler {
     }
   };
 
+  const startZaiCaptchaFlow = async (): Promise<void> => {
+    stop();
+    error = null;
+    status = "submitting";
+    requestRender();
+    try {
+      const configResp = (await api("/oauth/autoclaw/captcha-config")) as {
+        code?: number;
+        data?: {
+          enabled?: boolean;
+          region?: string;
+          prefix?: string;
+          scene_id?: string;
+        };
+      };
+
+      const captchaData = configResp?.data;
+      if (!captchaData?.enabled) {
+        throw new Error("Captcha is not enabled or configuration failed to load");
+      }
+
+      status = "captcha_waiting";
+      requestRender();
+
+      // Ensure AliyunCaptcha script is loaded
+      if (typeof (window as unknown as { initAliyunCaptcha?: unknown }).initAliyunCaptcha !== "function") {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js";
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error("Failed to load Aliyun Captcha SDK"));
+          document.head.appendChild(script);
+        });
+      }
+
+      (window as unknown as { AliyunCaptchaConfig?: { region: string; prefix: string } }).AliyunCaptchaConfig = {
+        region: captchaData.region || "ga",
+        prefix: captchaData.prefix || "sq51tr",
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        let initialized = false;
+        const initFn = (window as unknown as {
+          initAliyunCaptcha: (opts: Record<string, unknown>) => void;
+        }).initAliyunCaptcha;
+
+        if (typeof initFn !== "function") {
+          reject(new Error("initAliyunCaptcha is not available"));
+          return;
+        }
+
+        initFn({
+          SceneId: captchaData.scene_id || "18vhnjxl",
+          mode: "popup",
+          element: "#captcha-element",
+          button: "#captcha-trigger",
+          slideStyle: { width: 320, height: 40 },
+          language: "cn",
+          captchaVerifyCallback: (verifyValue: unknown) => {
+            return new Promise((resolveCaptcha) => {
+              (async () => {
+                try {
+                  status = "submitting";
+                  requestRender();
+                  const authState = Math.random().toString(36).substring(2);
+                  const verifyResp = (await api("/oauth/autoclaw/verify-captcha", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      verify_param: verifyValue,
+                      state: authState,
+                    }),
+                  })) as {
+                    code?: number;
+                    msg?: string;
+                    data?: { oauth_url?: string };
+                  };
+
+                  if (verifyResp?.code !== 0 || !verifyResp?.data?.oauth_url) {
+                    resolveCaptcha({ captchaResult: false, bizResult: false });
+                    throw new Error(verifyResp?.msg || "Captcha verification failed on server");
+                  }
+
+                  resolveCaptcha({ captchaResult: true, bizResult: true });
+
+                  const oauthUrl = verifyResp.data.oauth_url;
+                  currentAuthUrl = oauthUrl;
+                  const forceManual =
+                    (window as Window & typeof globalThis & { force_manual?: boolean })
+                      .force_manual === true;
+                  const isLocal =
+                    !forceManual &&
+                    (window.location.hostname === "localhost" ||
+                      window.location.hostname === "127.0.0.1");
+
+                  if (isLocal) {
+                    status = "authorizing_popup";
+                    requestRender();
+                    await runPkcePopup(
+                      oauthUrl,
+                      "http://localhost:18432/auth/callback-zai",
+                      "",
+                      authState,
+                    );
+                  } else {
+                    manualAuthData = {
+                      authorizationUrl: oauthUrl,
+                      redirectUri: "http://localhost:18432/auth/callback-zai",
+                      codeVerifier: "",
+                      state: authState,
+                    };
+                    status = "manual_paste";
+                    window.open(oauthUrl, "_blank");
+                    setupAutoCallbackDetection();
+                    requestRender();
+                  }
+                  resolve();
+                } catch (err: unknown) {
+                  resolveCaptcha({ captchaResult: false, bizResult: false });
+                  const msg = err instanceof Error ? err.message : String(err);
+                  error = msg;
+                  status = "idle";
+                  requestRender();
+                  reject(err);
+                }
+              })();
+            });
+          },
+          getInstance: (_instance: unknown) => {
+            initialized = true;
+            // En modo popup de Aliyun, el disparador se activa programáticamente
+            setTimeout(() => {
+              const trigger = document.getElementById("captcha-trigger");
+              if (trigger) {
+                trigger.click();
+              }
+            }, 50);
+          },
+          onError: () => {
+            if (!initialized) reject(new Error("Aliyun Captcha SDK initialization error"));
+          },
+        });
+      });
+    } catch (err: unknown) {
+      if (isClosed()) return;
+      status = "idle";
+      error = err instanceof Error ? err.message : String(err);
+      requestRender();
+    }
+  };
+
   const startPkceFlow = async (): Promise<void> => {
+    if (providerId === "zai") {
+      await startZaiCaptchaFlow();
+      return;
+    }
     stop();
     error = null;
     status = "submitting";

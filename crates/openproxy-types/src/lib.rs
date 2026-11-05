@@ -81,8 +81,9 @@ pub use capabilities::{
     resolve_effective_model_type,
 };
 pub use combos::{
-    AddTargetInput, Combo, ComboTarget, ComboTargetWithModel, MAX_SUB_COMBO_DEPTH, PriorityMode,
-    Strategy, TargetExecutionId,
+    AddTargetInput, Combo, ComboTarget, ComboTargetSystemPrefix, ComboTargetWithModel,
+    CreateSystemPrefixInput, MAX_SUB_COMBO_DEPTH, PriorityMode, Strategy, TargetExecutionId,
+    UpdateSystemPrefixInput,
 };
 pub use config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,

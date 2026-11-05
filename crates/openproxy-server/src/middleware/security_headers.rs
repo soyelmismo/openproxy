@@ -41,17 +41,16 @@ use axum::{
 use crate::state::AppState;
 
 /// Policy directives that do not depend on the request.
-const CSP_STATIC: &str = "default-src 'self'; \
-script-src 'self'; \
+const CSP_STATIC_PREFIX: &str = "default-src 'self'; \
+script-src 'self' 'unsafe-eval' https://o.alicdn.com https://g.alicdn.com; \
 object-src 'none'; \
 base-uri 'self'; \
 frame-ancestors 'none'; \
-img-src 'self' data: blob: https://www.google.com https://*.gstatic.com https://icons.duckduckgo.com; \
-style-src 'self' 'unsafe-inline'; \
-style-src-elem 'self'; \
+img-src 'self' data: blob: https://www.google.com https://*.gstatic.com https://icons.duckduckgo.com https://*.alicdn.com https://*.aliyuncs.com; \
+style-src 'self' 'unsafe-inline' https://*.alicdn.com; \
+style-src-elem 'self' 'unsafe-inline' https://*.alicdn.com; \
 style-src-attr 'unsafe-inline'; \
-media-src 'self' blob:; \
-connect-src 'self'";
+media-src 'self' blob:";
 
 /// Accept only `host[:port]` made of characters that are valid in a CSP
 /// host-source. Anything else (spaces, `;`, quotes, …) is dropped so a
@@ -69,8 +68,12 @@ fn sanitized_host(req: &Request) -> Option<&str> {
 /// Build the full CSP string for a request.
 pub(crate) fn build_csp(host: Option<&str>) -> String {
     match host {
-        Some(h) => format!("{CSP_STATIC} ws://{h} wss://{h};"),
-        None => format!("{CSP_STATIC};"),
+        Some(h) => format!(
+            "{CSP_STATIC_PREFIX}; connect-src 'self' https://*.alicdn.com https://*.alibaba.com https://*.aliyuncs.com ws://{h} wss://{h};"
+        ),
+        None => format!(
+            "{CSP_STATIC_PREFIX}; connect-src 'self' https://*.alicdn.com https://*.alibaba.com https://*.aliyuncs.com;"
+        ),
     }
 }
 
@@ -133,9 +136,9 @@ mod tests {
     #[test]
     fn csp_pins_websocket_origin_to_request_host() {
         let csp = build_csp(sanitized_host(&req_with_host(Some("listo.click"))));
-        assert!(csp.ends_with("connect-src 'self' ws://listo.click wss://listo.click;"));
-        assert!(csp.contains("script-src 'self';"));
-        assert!(csp.contains("style-src-elem 'self';"));
+        assert!(csp.contains("ws://listo.click wss://listo.click;"));
+        assert!(csp.contains("script-src 'self'"));
+        assert!(csp.contains("style-src-elem 'self'"));
         assert!(csp.contains("style-src-attr 'unsafe-inline';"));
         assert!(csp.contains("object-src 'none';"));
         assert!(csp.contains("frame-ancestors 'none';"));
@@ -165,11 +168,11 @@ mod tests {
         ] {
             let csp = build_csp(sanitized_host(&req_with_host(Some(bad))));
             assert!(
-                csp.ends_with("connect-src 'self';"),
+                !csp.contains("evil.com"),
                 "host {bad:?} must be dropped, got {csp}"
             );
         }
-        assert!(build_csp(sanitized_host(&req_with_host(None))).ends_with("connect-src 'self';"));
+        assert!(build_csp(sanitized_host(&req_with_host(None))).contains("connect-src 'self'"));
     }
 
     #[tokio::test]

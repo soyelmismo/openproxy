@@ -7,6 +7,7 @@ export type OAuthTabStatus =
   | "authorizing_popup"
   | "manual_paste"
   | "device_polling"
+  | "captcha_waiting"
   | "submitting";
 
 export interface OAuthViewProps {
@@ -63,6 +64,29 @@ export function renderOAuthContent(p: OAuthViewProps): TemplateResult {
                   </div>
                 `
               : html``}
+          `
+        : p.status === "captcha_waiting"
+        ? html`
+            <div class="oauth-status-card" style="padding: var(--space-4); background: var(--color-surface-2); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); text-align: center;">
+              <div style="font-weight: 600; font-size: var(--fs-md); margin-bottom: var(--space-2);">Security Verification (Captcha)</div>
+              <p style="font-size: var(--fs-xs); color: var(--color-text-muted); margin-bottom: var(--space-4);">
+                Complete the verification slider below to authorize your Z.ai / AutoClaw session.
+              </p>
+              <div id="captcha-container" style="display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 50px; margin: var(--space-3) 0; gap: var(--space-2);">
+                <div id="captcha-element"></div>
+                <button
+                  id="captcha-trigger"
+                  type="button"
+                  class="primary small"
+                  style="margin-top: var(--space-2);"
+                >
+                  Click to open slider
+                </button>
+              </div>
+              <div style="margin-top: var(--space-3); border-top: 1px solid var(--color-border); padding-top: var(--space-2);">
+                <button type="button" class="btn-secondary small" @click=${p.onResetToIdle}>Cancel verification</button>
+              </div>
+            </div>
           `
         : p.status === "authorizing_popup"
         ? html`

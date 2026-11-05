@@ -73,6 +73,7 @@ pub struct PipelineRequest {
     pub pii_session: Arc<parking_lot::Mutex<Option<crate::pii::PiiSession>>>,
     pub compression_stats: Arc<parking_lot::Mutex<Option<CompressionStats>>>,
     pub proxy_override: Option<(String, String)>,
+    pub active_system_prefix: Arc<parking_lot::Mutex<Option<String>>>,
 
     /// Adapter pins captured for this request, keyed by provider id.
     ///
@@ -551,6 +552,7 @@ mod tests {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            inherited_target_id: None,
         };
 
         // 429 on RateLimitScope::Account must NOT be considered model-wide

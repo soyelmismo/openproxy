@@ -40,6 +40,12 @@ impl ValidatedApiToken {
         {
             return false;
         }
+        if let Some(allowed) = &self.key.allowed_providers
+            && !allowed.is_empty()
+            && !allowed.iter().any(|p| p == provider_id || p == "*")
+        {
+            return false;
+        }
         true
     }
 
@@ -101,6 +107,18 @@ impl ValidatedApiToken {
             && is_provider_blacklisted(blacklisted_provs, provider_id, prov_from_model)
         {
             return false;
+        }
+
+        if let Some(allowed_provs) = &self.key.allowed_providers
+            && !allowed_provs.is_empty()
+        {
+            let prov_ok = provider_id
+                .is_some_and(|p| allowed_provs.iter().any(|a| a == p || a == "*"))
+                || prov_from_model
+                    .is_some_and(|p| allowed_provs.iter().any(|a| a == p || a == "*"));
+            if !prov_ok {
+                return false;
+            }
         }
 
         true

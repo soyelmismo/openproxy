@@ -75,6 +75,7 @@ async fn independent_fetches_run_concurrently_with_separate_credentials() {
     )
     .await;
     let endpoints = QuotaEndpoints {
+        autoclaw_wallets: "http://unused.invalid",
         starter: &starter,
         subscriptions: &subscriptions,
         limits: "http://unused.invalid",
@@ -89,11 +90,12 @@ async fn independent_fetches_run_concurrently_with_separate_credentials() {
     first.await.unwrap();
     second.await.unwrap();
     let pools = quota.pools.unwrap();
-    assert_eq!(pools.len(), 2);
-    assert_eq!(pools[0].source, QuotaSource::ZcodeStarter);
-    assert_eq!(pools[0].status, QuotaPoolStatus::Active);
-    assert_eq!(pools[0].remaining, Some(990));
-    assert_eq!(pools[1].status, QuotaPoolStatus::Absent);
+    assert_eq!(pools.len(), 3);
+    assert_eq!(pools[0].source, QuotaSource::AutoclawStarter);
+    assert_eq!(pools[1].source, QuotaSource::ZcodeStarter);
+    assert_eq!(pools[1].status, QuotaPoolStatus::Active);
+    assert_eq!(pools[1].remaining, Some(990));
+    assert_eq!(pools[2].status, QuotaPoolStatus::Absent);
     assert!(quota.session_used.is_none());
 }
 
@@ -119,6 +121,7 @@ async fn failed_starter_http_and_envelopes_do_not_hide_paid_verdict_or_authorize
         )
         .await;
         let endpoints = QuotaEndpoints {
+            autoclaw_wallets: "http://unused.invalid",
             starter: &starter,
             subscriptions: &subscriptions,
             limits: "http://unused.invalid",
@@ -129,16 +132,16 @@ async fn failed_starter_http_and_envelopes_do_not_hide_paid_verdict_or_authorize
         first.await.unwrap();
         second.await.unwrap();
         let pools = quota.pools.unwrap();
-        assert_eq!(pools[0].status, QuotaPoolStatus::Unavailable);
-        assert!(pools[0].remaining.is_none());
+        assert_eq!(pools[1].status, QuotaPoolStatus::Unavailable);
+        assert!(pools[1].remaining.is_none());
         assert!(
-            !pools[0]
+            !pools[1]
                 .fetch_error
                 .as_deref()
                 .unwrap()
                 .contains("private value")
         );
-        assert_eq!(pools[1].status, QuotaPoolStatus::Absent);
+        assert_eq!(pools[2].status, QuotaPoolStatus::Absent);
         assert!(super::super::select_zai_inference_source(&pools, "glm-5.3-flash", 2000).is_err());
     }
 }
@@ -163,6 +166,7 @@ async fn independent_paid_failure_preserves_active_starter() {
     // Limits are deliberately unreachable: a failed subscription envelope must
     // not be interpreted as permission to use an independent paid credential.
     let endpoints = QuotaEndpoints {
+        autoclaw_wallets: "http://unused.invalid",
         starter: &starter,
         subscriptions: &subscriptions,
         limits: "http://unused.invalid",
@@ -173,8 +177,8 @@ async fn independent_paid_failure_preserves_active_starter() {
     first.await.unwrap();
     second.await.unwrap();
     let pools = quota.pools.unwrap();
-    assert_eq!(pools[0].status, QuotaPoolStatus::Active);
-    assert_eq!(pools[1].status, QuotaPoolStatus::Unavailable);
+    assert_eq!(pools[1].status, QuotaPoolStatus::Active);
+    assert_eq!(pools[2].status, QuotaPoolStatus::Unavailable);
     assert_eq!(
         super::super::select_zai_inference_source(&pools, "glm-5.3-flash", 2000).unwrap(),
         QuotaSource::ZcodeStarter
@@ -188,6 +192,7 @@ async fn missing_starter_credential_is_absent_while_unverified_paid_is_unknown()
         &Default::default(),
         None,
         &QuotaEndpoints {
+            autoclaw_wallets: "http://unused.invalid",
             starter: "http://unused.invalid",
             subscriptions: "http://unused.invalid",
             limits: "http://unused.invalid",

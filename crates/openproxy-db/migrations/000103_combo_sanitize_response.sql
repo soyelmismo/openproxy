@@ -1,0 +1,11 @@
+-- Per-combo response sanitization (minimalist payload delivery).
+--
+-- 0/1 → when enabled, OpenProxy rewrites the `model` field in both the
+-- unary body and every SSE chunk to the model the CLIENT requested, and
+-- strips proprietary/reasoning metadata (`reasoning_details`,
+-- `reasoning_content`, `thought`, `system_fingerprint`, ...) so the
+-- downstream client receives a clean, spec-compliant OpenAI payload.
+--
+-- Stored as an integer (not TEXT) so the read path stays a plain
+-- `Option<bool>` with no enum parsing.
+ALTER TABLE combos ADD COLUMN sanitize_response INTEGER;

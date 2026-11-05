@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaSource {
+    AutoclawStarter,
     ZcodeStarter,
     CodingPlan,
 }
@@ -23,6 +24,7 @@ impl QuotaSource {
     #[inline]
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::AutoclawStarter => "autoclaw_starter",
             Self::ZcodeStarter => "zcode_starter",
             Self::CodingPlan => "coding_plan",
         }
@@ -30,6 +32,7 @@ impl QuotaSource {
 
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
+            "autoclaw_starter" => Ok(Self::AutoclawStarter),
             "zcode_starter" => Ok(Self::ZcodeStarter),
             "coding_plan" => Ok(Self::CodingPlan),
             other => Err(format!("invalid quota source: {other}")),
@@ -250,7 +253,7 @@ impl QuotaPool {
         if self.fetch_error.is_some() || self.status == QuotaPoolStatus::Unavailable {
             return false;
         }
-        if self.source == QuotaSource::ZcodeStarter && self.model_ids.is_empty() {
+        if self.source != QuotaSource::CodingPlan && self.model_ids.is_empty() {
             return false;
         }
         if !self.matches_model(model) {
@@ -361,11 +364,19 @@ fn usable_fraction(pool: &QuotaPool) -> f64 {
 /// * `None` — nothing usable or known: only unavailable pools, or pools that
 ///   never mention `model`.
 pub fn zai_remaining_fraction(pools: &[QuotaPool], model: &str, now_secs: u64) -> Option<f64> {
-    for source in [QuotaSource::ZcodeStarter, QuotaSource::CodingPlan] {
+    for source in [
+        QuotaSource::AutoclawStarter,
+        QuotaSource::ZcodeStarter,
+        QuotaSource::CodingPlan,
+    ] {
         if source == QuotaSource::CodingPlan
-            && (!pools.iter().any(|p| p.source == QuotaSource::ZcodeStarter)
+            && ((!pools
+                .iter()
+                .any(|p| p.source == QuotaSource::AutoclawStarter)
+                && !pools.iter().any(|p| p.source == QuotaSource::ZcodeStarter))
                 || pools.iter().any(|p| {
-                    p.source == QuotaSource::ZcodeStarter
+                    (p.source == QuotaSource::AutoclawStarter
+                        || p.source == QuotaSource::ZcodeStarter)
                         && !p.is_known_ineligible_for_model(now_secs, model)
                 }))
         {
@@ -382,14 +393,17 @@ pub fn zai_remaining_fraction(pools: &[QuotaPool], model: &str, now_secs: u64) -
     // Any unreadable verdict on `model` makes the whole account uncertain:
     // report unknown instead of collapsing to the exhausted reading.
     if pools.iter().any(|p| {
-        (p.matches_model(model)
-            || (p.source == QuotaSource::ZcodeStarter && p.model_ids.is_empty()))
+        (p.matches_model(model) || (p.source != QuotaSource::CodingPlan && p.model_ids.is_empty()))
             && (p.fetch_error.is_some() || p.status == QuotaPoolStatus::Unavailable)
     }) {
         return None;
     }
 
-    for source in [QuotaSource::ZcodeStarter, QuotaSource::CodingPlan] {
+    for source in [
+        QuotaSource::AutoclawStarter,
+        QuotaSource::ZcodeStarter,
+        QuotaSource::CodingPlan,
+    ] {
         if pools
             .iter()
             .any(|p| p.source == source && p.reports_exhaustion_for_model(now_secs, model))

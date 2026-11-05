@@ -156,6 +156,7 @@ impl ChunkProcessor<'_> {
         mut chunk: crate::sse::UpstreamSseChunk,
     ) -> Result<crate::streaming::ChunkEvent, CoreError> {
         Self::sync_chunk_metadata_to_accumulator(
+            ctx,
             self.state,
             chunk.usage.take(),
             chunk.stop_reason.take(),
@@ -223,6 +224,7 @@ impl ChunkProcessor<'_> {
             return Ok(crate::streaming::ChunkEvent::Skip);
         }
         Self::sync_chunk_metadata_to_accumulator(
+            ctx,
             self.state,
             chunk.usage.take(),
             chunk.stop_reason.take(),

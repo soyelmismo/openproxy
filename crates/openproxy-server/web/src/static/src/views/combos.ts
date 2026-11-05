@@ -23,6 +23,7 @@ import {
   clearSubComboCache,
 } from "./combos/subcombo-group.js";
 import { renderCombosList } from "./combos/combos-list.js";
+import { showTargetPrefixesModal } from "./combos/target-prefixes-modal.js";
 
 const PARAM_TOOLTIPS = {
   exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo are more likely to be explored. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
@@ -78,6 +79,20 @@ async function onDeleteCombo(): Promise<void> {
   if (!detailComboId || !(await showConfirm({ title: t("combos.confirm.delete_title"), message: t("combos.confirm.delete_message", { name: detailCombo?.name ?? String(detailComboId) }), danger: true, confirmLabel: t("combos.confirm.delete_btn") }))) return;
   try { await api(`/combos/${detailComboId}`, { method: "DELETE" }); location.hash = "#/combos"; }
   catch (err: unknown) { showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error"); }
+}
+
+async function onCloneCombo(): Promise<void> {
+  if (!detailComboId) return;
+  try {
+    const res = await api(`/combos/${detailComboId}/clone`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }) as { id: number };
+    showToast(`Cloned combo "${detailCombo?.name || detailComboId}"`, "success");
+    location.hash = `#/combos/${res.id}`;
+  } catch (err: unknown) {
+    showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error");
+  }
 }
 
 async function onToggleTargetActive(targetId: number, currentActive: boolean): Promise<void> {
@@ -193,6 +208,45 @@ function renderModalityGateBar(combo: Combo): TemplateResult {
     <option value="on" ?selected=${value === "on"}>${t("combos.detail.modality_gate_on")}</option>
     <option value="off" ?selected=${value === "off"}>${t("combos.detail.modality_gate_off")}</option>
   </select></label></div>`;
+}
+
+function renderSanitizeResponseBar(combo: Combo): TemplateResult {
+  const isSanitizeOn = combo.sanitize_response === true;
+  const value = isSanitizeOn ? "on" : combo.sanitize_response === false ? "off" : "";
+  const onSelect = (e: Event): void => {
+    const raw = (e.target as HTMLSelectElement).value;
+    const next = raw === "on" ? true : raw === "off" ? false : null;
+    void patchCombo(detailComboId!, { sanitize_response: next });
+  };
+  const onRealModelBlur = (e: Event): void => {
+    const val = (e.target as HTMLInputElement).value.trim();
+    void patchCombo(detailComboId!, { real_model_id: val.length > 0 ? val : null });
+  };
+  const onRealModelKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === "Enter") {
+      (e.target as HTMLInputElement).blur();
+    }
+  };
+  return html`<div class="combo-settings-bar" style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;">
+    <label><abbr title=${t("combos.detail.sanitize_response_hint")}>${t("combos.detail.sanitize_response")}</abbr><select @change=${onSelect}>
+      <option value="" ?selected=${value === "" || value === "off"}>${t("combos.detail.sanitize_response_off")}</option>
+      <option value="on" ?selected=${value === "on"}>${t("combos.detail.sanitize_response_on")}</option>
+    </select></label>
+    ${isSanitizeOn ? html`
+      <label style="display:flex;align-items:center;gap:0.4rem;">
+        <abbr title=${t("combos.detail.real_model_id_hint")}>${t("combos.detail.real_model_id")}</abbr>
+        <input
+          type="text"
+          class="input"
+          style="width: 220px; padding: 0.2rem 0.5rem; font-size: 0.85rem;"
+          placeholder=${t("combos.detail.real_model_id_placeholder")}
+          .value=${combo.real_model_id ?? ""}
+          @blur=${onRealModelBlur}
+          @keydown=${onRealModelKeyDown}
+        />
+      </label>
+    ` : ""}
+  </div>`;
 }
 
 let touchDragState: { draggedId: number; rowEl: HTMLElement; currentOverEl: HTMLElement | null } | null = null;
@@ -323,6 +377,15 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
 
     const actionsCell = html`
       <div class="target-actions-wrap">
+        <button class="small" title="Manage dynamic System Prefixes inherited by this sub-combo" @click=${() => {
+          if (detailComboId != null) {
+            void showTargetPrefixesModal(detailComboId, target.id, target.sub_combo_name ?? `Sub-Combo #${target.sub_combo_id}`, () => {
+              void refreshComboDetail();
+            });
+          }
+        }}>
+          ${icons.tag()} Prefixes ${target.system_prefixes_count ? html`<span class="badge" style="margin-left:2px;font-size:0.7rem;padding:1px 4px;">${target.system_prefixes_count}</span>` : html``}
+        </button>
         <button
           class="small primary"
           title="Configure sub-combo settings"
@@ -606,6 +669,15 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     <td class="last-test-cell col-target-test-status">${lastTestCell}</td>
     <td class="col-target-actions">
       <div class="target-actions-wrap">
+        <button class="small" title="Manage dynamic System Prefixes" @click=${() => {
+          if (detailComboId != null) {
+            void showTargetPrefixesModal(detailComboId, target.id, target.model_display_name || target.model_id, () => {
+              void refreshComboDetail();
+            });
+          }
+        }}>
+          ${icons.tag()} Prefixes ${target.system_prefixes_count ? html`<span class="badge" style="margin-left:2px;font-size:0.7rem;padding:1px 4px;">${target.system_prefixes_count}</span>` : html``}
+        </button>
         <button class="small primary" title=${t("combos.target.test_title")} @click=${(e: Event) => onTestTarget(target.id, target.model_row_id, e)}>${icons.flask()} ${t("combos.target.test_btn")}</button>
         <button class="small" title=${target.active !== false ? t("combos.target.deactivate_title") : t("combos.target.activate_title")} @click=${() => onToggleTargetActive(target.id, target.active !== false)}>${target.active !== false ? html`${icons.pause()}` : html`${icons.play()}`}</button>
         <button class="small reorder-btn" title=${t("combos.target.move_up_title")} @click=${() => onChangePriority(target.id, -1)}>${icons.caretUp()}</button>
@@ -662,6 +734,7 @@ function renderComboDetail(): TemplateResult {
           const val = parseInt((e.target as HTMLInputElement).value, 10);
           if (Number.isFinite(val) && val >= 1 && val <= 8) patchCombo(detailComboId!, { race_size: val });
         }} class="race-input"></label>
+        <button type="button" @click=${onCloneCombo}>${icons.copy()} Clone</button>
         <button class="danger" @click=${onDeleteCombo}>${t("combos.detail.delete")}</button></div></div>
     <div class="combo-context-window-bar"><label>${t("combos.detail.context_window")}
       <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
@@ -669,7 +742,7 @@ function renderComboDetail(): TemplateResult {
     <div class="combo-context-window-bar"><label>${t("combos.detail.max_output_tokens")}
       <input type="number" min="1" placeholder="auto (${autoMotLabel})" .value=${overrideMot != null ? String(overrideMot) : ""} @change=${(e: Event) => onNumInput("max_output_tokens", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
       <span class="cw-hint">${t("combos.detail.auto", { value: autoMotLabel })} · ${t("combos.detail.effective", { value: effectiveMotLabel })}</span></div>
-    ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}${renderModalityGateBar(combo)}
+    ${renderPriorityModeBar(combo)}${renderCooldownBar(combo)}${renderModalityGateBar(combo)}${renderSanitizeResponseBar(combo)}
     ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${(e: Event) => detailComboId && testAllTargets(detailComboId, e)}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>

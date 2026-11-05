@@ -346,9 +346,13 @@ pub fn resolve_combo_to_targets(
     for t in targets {
         if let Some(sub_id) = t.sub_combo_id {
             let mut sub = resolve_combo_to_targets(conn, sub_id, visited, depth + 1)?;
-            if let Some(ref effort) = t.thinking_effort {
-                for st in &mut sub {
+            let parent_target_id = t.inherited_target_id.unwrap_or(t.id);
+            for st in &mut sub {
+                if let Some(ref effort) = t.thinking_effort {
                     st.thinking_effort = Some(effort.clone());
+                }
+                if st.inherited_target_id.is_none() {
+                    st.inherited_target_id = Some(parent_target_id);
                 }
             }
             flat.extend(sub);

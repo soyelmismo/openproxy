@@ -214,6 +214,7 @@ pub fn make_request(
         race_cancel: None,
         endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
         compressed_messages: Arc::new(std::sync::OnceLock::new()),
+        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
         pii_session: Arc::new(parking_lot::Mutex::new(None)),
         compression_stats: Arc::new(parking_lot::Mutex::new(None)),
         proxy_override: None,

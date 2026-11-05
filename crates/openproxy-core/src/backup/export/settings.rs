@@ -69,6 +69,7 @@ pub(super) fn export_api_keys(conn: &Connection) -> Result<Vec<BackupApiKey>> {
             "expires_at",
             "created_by",
             "blacklisted_providers_json",
+            "allowed_providers_json",
             "blacklisted_models_json",
             "only_whitelisted",
             "created_at",
@@ -81,7 +82,7 @@ pub(super) fn export_api_keys(conn: &Connection) -> Result<Vec<BackupApiKey>> {
             "SELECT id, key_hash, key_prefix, label, scopes_json, \
              allowed_models_json, allowed_combos_json, is_active, revoked_at, \
              expires_at, created_by, blacklisted_providers_json, \
-             blacklisted_models_json, only_whitelisted FROM api_keys ORDER BY id",
+             allowed_providers_json, blacklisted_models_json, only_whitelisted FROM api_keys ORDER BY id",
         )
         .map_err(map_db_error)?;
 
@@ -103,8 +104,9 @@ pub(super) fn export_api_keys(conn: &Connection) -> Result<Vec<BackupApiKey>> {
                 expires_at: row.get(9)?,
                 created_by: row.get(10)?,
                 blacklisted_providers_json: row.get(11)?,
-                blacklisted_models_json: row.get(12)?,
-                only_whitelisted: row.get::<_, i64>(13)? != 0,
+                allowed_providers_json: row.get(12)?,
+                blacklisted_models_json: row.get(13)?,
+                only_whitelisted: row.get::<_, i64>(14)? != 0,
                 extra_fields,
             })
         })

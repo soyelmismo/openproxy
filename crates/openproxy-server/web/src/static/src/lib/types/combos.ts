@@ -28,6 +28,8 @@ export interface Combo {
   decision_model?: string | null;
   decision_timeout_ms?: number | null;
   modality_gate?: boolean | null;
+  sanitize_response?: boolean | null;
+  real_model_id?: string | null;
 }
 
 export interface ComboTarget {
@@ -45,6 +47,34 @@ export interface ComboTarget {
   thinking_effort?: string | null;
   description?: string | null;
   selected_accounts?: number[] | null;
+  system_prefixes_count?: number;
+}
+
+export interface ComboTargetSystemPrefix {
+  id: number;
+  target_id: ComboTargetId;
+  name: string;
+  criteria: string;
+  system_text: string;
+  active: boolean;
+  priority_order: number;
+  created_at: string;
+}
+
+export interface CreateSystemPrefixInput {
+  name: string;
+  criteria: string;
+  system_text: string;
+  active?: boolean;
+  priority_order?: number;
+}
+
+export interface UpdateSystemPrefixInput {
+  name?: string;
+  criteria?: string;
+  system_text?: string;
+  active?: boolean;
+  priority_order?: number;
 }
 
 export interface ComboTargetWithModel extends ComboTarget {
@@ -79,6 +109,8 @@ export interface CreateComboInput {
   preventive_rate_limit?: boolean;
   decision_model?: string;
   decision_timeout_ms?: number;
+  sanitize_response?: boolean;
+  real_model_id?: string | null;
 }
 
 export interface AddTargetInput {

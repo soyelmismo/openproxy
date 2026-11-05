@@ -73,6 +73,12 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
               </label>
             </div>
             <div class="field">
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                <input id="combo-sanitize-response" name="sanitize_response" type="checkbox">
+                <span>Sanitize Responses (Rewrite model & purge reasoning)</span>
+              </label>
+            </div>
+            <div class="field">
               <label for="combo-priority-mode"><abbr title=${PRIORITY_MODE_TOOLTIPS.strict}>Priority mode</abbr></label>
               <select id="combo-priority-mode" name="priority_mode" @change=${() => onCreatePriorityModeChange()}>
                 ${priorityModeOptions("strict")}
@@ -185,6 +191,7 @@ export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput 
     strategy: String(f.get("strategy") || "priority"),
     race_size: parseInt(String(f.get("race_size") || "1"), 10),
     preventive_rate_limit: f.get("preventive_rate_limit") === "on",
+    sanitize_response: f.get("sanitize_response") === "on",
     priority_mode: priorityMode,
     cooldown_mode: cooldownMode,
   };
@@ -259,6 +266,22 @@ export async function deleteCombo(id: number): Promise<void> {
   await mutateAndRefresh({
     apiCall: () => api("/combos/" + id, { method: "DELETE" }),
   });
+}
+
+export async function cloneCombo(id: number, currentName?: string): Promise<void> {
+  try {
+    const res = await api(`/combos/${id}/clone`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }) as { id: number };
+    showToast(`Cloned combo "${currentName || id}"`, "success");
+    await mutateAndRefresh({
+      apiCall: async () => res,
+    });
+    location.hash = `#/combos/${res.id}`;
+  } catch (e: unknown) {
+    showApiError(e, "Error cloning combo");
+  }
 }
 
 export async function updateRaceSize(id: number, e: Event | null): Promise<void> {

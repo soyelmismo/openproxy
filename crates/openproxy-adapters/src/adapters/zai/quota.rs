@@ -4,6 +4,7 @@ use crate::adapters::{
 };
 use openproxy_types::{AccountQuota, ModelQuotaDetail};
 
+mod autoclaw;
 mod coding_plan;
 mod dual;
 #[cfg(test)]
@@ -15,6 +16,8 @@ use dual::fetch_dual_quota;
 
 #[derive(Default, Clone)]
 pub struct ZaiTokens {
+    pub autoclaw_access_token: Option<String>,
+    pub autoclaw_refresh_token: Option<String>,
     pub zcode_jwt_token: Option<String>,
     pub business_access_token: Option<String>,
     pub zai_access_token: Option<String>,
@@ -32,6 +35,20 @@ impl ZaiTokens {
         if let Some(raw) = provider_specific
             && let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
         {
+            tokens.autoclaw_access_token = v
+                .get("autoclaw_access_token")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+
+            tokens.autoclaw_refresh_token = v
+                .get("autoclaw_refresh_token")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+
             tokens.zcode_jwt_token = v
                 .get("zcode_jwt_token")
                 .and_then(serde_json::Value::as_str)
@@ -67,6 +84,7 @@ impl ZaiTokens {
             let credential = credential.trim();
             if credential.is_empty()
                 || [
+                    tokens.autoclaw_access_token.as_deref(),
                     tokens.zcode_jwt_token.as_deref(),
                     tokens.business_access_token.as_deref(),
                     tokens.zai_access_token.as_deref(),
@@ -90,15 +108,39 @@ impl ZaiTokens {
     }
 }
 
-fn build_zai_get_request(url: &str, token: &str, proxy_url: Option<&str>) -> UpstreamRequest {
+pub(crate) fn build_zai_get_request(
+    url: &str,
+    token: &str,
+    proxy_url: Option<&str>,
+) -> UpstreamRequest {
     let mut req = UpstreamRequest::get_json(url);
     req.proxy = proxy_url.map(ToString::to_string);
-    if let Ok(val) = crate::antigravity_headers::build_bearer_header(token) {
-        req.headers.insert(http::header::AUTHORIZATION, val);
+    let clean_token = token.trim();
+    let raw_token = clean_token.strip_prefix("Bearer ").unwrap_or(clean_token);
+    if let Ok(val) = crate::antigravity_headers::build_bearer_header(raw_token) {
+        req.headers.insert(http::header::AUTHORIZATION, val.clone());
+        req.headers
+            .insert(http::HeaderName::from_static("x-authorization"), val);
     }
     req.headers.insert(
         http::header::USER_AGENT,
-        http::HeaderValue::from_static("ZCode/3.14.0"),
+        http::HeaderValue::from_static("AutoClaw/2.0.3"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-product"),
+        http::HeaderValue::from_static("autoclaw"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-version"),
+        http::HeaderValue::from_static("2.0.3"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-tm"),
+        http::HeaderValue::from_static("linux"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-channel"),
+        http::HeaderValue::from_static("official"),
     );
     req.headers.insert(
         http::HeaderName::from_static("x-zcode-app-version"),

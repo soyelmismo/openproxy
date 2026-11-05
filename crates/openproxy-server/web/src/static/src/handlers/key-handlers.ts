@@ -21,9 +21,11 @@ import { showPlaintextKey } from "../components/key-display.js";
 import {
   renderAllowedModelsChips,
   renderBlacklistedModelsChips,
+  renderAllowedCombosChips,
   getAvailableProviders,
 } from "../components/model-picker.js";
 import type { Model, Provider, ApiKeyId } from "../lib/types/api.js";
+import { ensureCombosLoaded } from "../state/models-sync.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
@@ -35,7 +37,9 @@ interface KeyRow {
   label?: string | null;
   scopes?: string[];
   allowed_models?: string[];
+  allowed_combos?: number[] | null;
   blacklisted_providers?: string[] | null;
+  allowed_providers?: string[] | null;
   blacklisted_models?: string[] | null;
   only_whitelisted?: boolean;
   expires_at?: string | null;
@@ -45,7 +49,9 @@ interface KeyBody {
   label: string | null;
   scopes: string[];
   allowed_models: string[] | null;
+  allowed_combos: number[] | null;
   blacklisted_providers: string[] | null;
+  allowed_providers: string[] | null;
   blacklisted_models: string[] | null;
   only_whitelisted: boolean;
   expires_at: string | null;
@@ -81,6 +87,21 @@ function onAddBlacklistProvider(e: Event): void {
   select.value = "";
 }
 
+function onAddWhitelistProvider(e: Event): void {
+  const select = e.target as HTMLSelectElement | null;
+  if (!select || !select.value) return;
+  const prov = select.value;
+  const input = document.querySelector<HTMLInputElement>('input[name="allowed_providers"]');
+  if (input) {
+    const current = input.value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (!current.includes(prov)) {
+      current.push(prov);
+      input.value = current.join(", ");
+    }
+  }
+  select.value = "";
+}
+
 function addCustomBlacklistedModel(): void {
   const customInput = document.getElementById("key-bl-models-custom") as HTMLInputElement | null;
   if (!customInput || !customInput.value.trim()) return;
@@ -105,8 +126,15 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
   if (isEdit && Array.isArray(key!.allowed_models)) {
     allowedModelsValue = key!.allowed_models.length === 0 ? " " : key!.allowed_models.join(",");
   }
+  let allowedCombosValue = "";
+  if (isEdit && Array.isArray(key!.allowed_combos)) {
+    allowedCombosValue = key!.allowed_combos.length === 0 ? " " : key!.allowed_combos.join(",");
+  }
   const blProvidersVal = isEdit && Array.isArray(key!.blacklisted_providers)
     ? key!.blacklisted_providers.join(", ")
+    : "";
+  const allowedProvidersVal = isEdit && Array.isArray(key!.allowed_providers)
+    ? key!.allowed_providers.join(", ")
     : "";
   let blModelsVal = "";
   if (isEdit && Array.isArray(key!.blacklisted_models)) {
@@ -171,6 +199,23 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
               </label>
             </div>
             <div class="field">
+              <span class="field-label">Allowed combos (empty = all)</span>
+              <div class="model-picker-display" id="allowed-combos-display">
+                <span class="muted">Loading...</span>
+              </div>
+              <input type="hidden" name="allowed_combos" .value=${allowedCombosValue}>
+            </div>
+            <div class="field">
+              <span class="field-label">Whitelisted providers (empty = all)</span>
+              <div style="display:flex;gap:8px;margin-bottom:6px;">
+                <select id="quick-wl-provider-select" style="flex:1;" @change=${onAddWhitelistProvider}>
+                  <option value="">-- Add provider to whitelist --</option>
+                  ${availableProviders.map((p) => html`<option value="${p}">${p}</option>`)}
+                </select>
+              </div>
+              <input id="key-allowed-providers" name="allowed_providers" type="text" placeholder="e.g. xkiro, openai (comma-separated)" .value=${allowedProvidersVal}>
+            </div>
+            <div class="field">
               <span class="field-label">Blacklisted providers</span>
               <div style="display:flex;gap:8px;margin-bottom:6px;">
                 <select id="quick-bl-provider-select" style="flex:1;" @change=${onAddBlacklistProvider}>
@@ -224,11 +269,13 @@ export async function showCreateKey(): Promise<void> {
   if (!state.providers || state.providers.length === 0) {
     state.providers = await api("/providers") as Provider[];
   }
+  await ensureCombosLoaded();
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
   render(keyFormTemplate({ mode: "create", wrapper }), wrapper);
   renderAllowedModelsChips();
   renderBlacklistedModelsChips();
+  renderAllowedCombosChips();
 }
 
 export async function showEditKey(id: number): Promise<void> {
@@ -239,6 +286,7 @@ export async function showEditKey(id: number): Promise<void> {
   if (!state.providers || state.providers.length === 0) {
     state.providers = await api("/providers") as Provider[];
   }
+  await ensureCombosLoaded();
   let key: KeyRow;
   try { key = await api("/keys/" + id) as KeyRow; }
   catch (e: unknown) {
@@ -250,6 +298,7 @@ export async function showEditKey(id: number): Promise<void> {
   render(keyFormTemplate({ mode: "edit", key, wrapper }), wrapper);
   renderAllowedModelsChips();
   renderBlacklistedModelsChips();
+  renderAllowedCombosChips();
 }
 
 // Closes the key form modal. The optional first arg is the legacy
@@ -326,11 +375,23 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   if (allowedModelsStr === "") allowedModels = null;
   else if (allowedModelsStr === " ") allowedModels = [];
   else allowedModels = allowedModelsStr.split(",").map((s) => s.trim()).filter(Boolean);
+  const allowedCombosEl = form.querySelector<HTMLInputElement>('input[name="allowed_combos"]');
+  const allowedCombosStr = allowedCombosEl ? allowedCombosEl.value : "";
+  let allowedCombos: number[] | null;
+  if (allowedCombosStr === "") allowedCombos = null;
+  else if (allowedCombosStr === " ") allowedCombos = [];
+  else allowedCombos = allowedCombosStr.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n));
   const blProvidersEl = form.querySelector<HTMLInputElement>('input[name="blacklisted_providers"]');
   const blProvidersStr = blProvidersEl ? blProvidersEl.value.trim() : "";
   let blacklistedProviders: string[] | null = null;
   if (blProvidersStr) {
     blacklistedProviders = blProvidersStr.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  const allowedProvidersEl = form.querySelector<HTMLInputElement>('input[name="allowed_providers"]');
+  const allowedProvidersStr = allowedProvidersEl ? allowedProvidersEl.value.trim() : "";
+  let allowedProviders: string[] | null = null;
+  if (allowedProvidersStr) {
+    allowedProviders = allowedProvidersStr.split(",").map((s) => s.trim()).filter(Boolean);
   }
   const blModelsEl = form.querySelector<HTMLInputElement>('input[name="blacklisted_models"]');
   const blModelsStr = blModelsEl ? blModelsEl.value.trim() : "";
@@ -355,7 +416,9 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
     label,
     scopes,
     allowed_models: allowedModels,
+    allowed_combos: allowedCombos,
     blacklisted_providers: blacklistedProviders,
+    allowed_providers: allowedProviders,
     blacklisted_models: blacklistedModels,
     only_whitelisted: onlyWhitelisted,
     expires_at: expiresAt,

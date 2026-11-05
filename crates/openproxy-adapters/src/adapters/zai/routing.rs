@@ -8,6 +8,8 @@ use openproxy_types::{CoreError, Result};
 use super::{ZAI_DEFAULT_BASE_URL, ZaiTokens};
 
 pub const ZCODE_STARTER_BASE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/anthropic";
+pub const AUTOCLAW_MANAGED_BASE_URL: &str =
+    "https://autoglm-api.autoglm.ai/autoclaw-proxy/proxy/autoclaw";
 
 pub struct ZaiInferenceRoute {
     pub source: QuotaSource,
@@ -15,10 +17,13 @@ pub struct ZaiInferenceRoute {
     pub credential: String,
 }
 
-fn messages_url(base: &str) -> String {
+fn messages_url(base: &str, source: QuotaSource) -> String {
     let base = base.trim_end_matches('/');
+    if source == QuotaSource::AutoclawStarter {
+        return format!("{base}/chat/completions");
+    }
     if base.ends_with("/messages") {
-        base.to_owned()
+        base.to_string()
     } else if base.ends_with("/v1") {
         format!("{base}/messages")
     } else {
@@ -36,18 +41,25 @@ pub fn select_zai_inference_source(
 ) -> Result<QuotaSource> {
     if pools
         .iter()
+        .any(|p| p.source == QuotaSource::AutoclawStarter && p.is_usable_for_model(now_secs, model))
+    {
+        return Ok(QuotaSource::AutoclawStarter);
+    }
+    if pools
+        .iter()
         .any(|p| p.source == QuotaSource::ZcodeStarter && p.is_usable_for_model(now_secs, model))
     {
         return Ok(QuotaSource::ZcodeStarter);
     }
-    if !pools.iter().any(|p| p.source == QuotaSource::ZcodeStarter)
+    let free_sources = [QuotaSource::AutoclawStarter, QuotaSource::ZcodeStarter];
+    let has_any_free = pools.iter().any(|p| free_sources.contains(&p.source));
+    if !has_any_free
         || pools.iter().any(|p| {
-            p.source == QuotaSource::ZcodeStarter
-                && !p.is_known_ineligible_for_model(now_secs, model)
+            free_sources.contains(&p.source) && !p.is_known_ineligible_for_model(now_secs, model)
         })
     {
         return Err(CoreError::ServiceUnavailable(
-            "ZCode Starter quota could not be verified; paid fallback was not attempted".into(),
+            "Free promotional quota (AutoClaw / ZCode Starter) could not be verified; paid fallback was not attempted".into(),
         ));
     }
     if pools
@@ -65,7 +77,7 @@ pub fn select_zai_inference_source(
         ));
     }
     Err(CoreError::Validation(format!(
-        "no active ZCode Starter or Coding Plan quota authorizes model {model}"
+        "no active AutoClaw, ZCode Starter, or Coding Plan quota authorizes model {model}"
     )))
 }
 
@@ -86,6 +98,14 @@ pub fn resolve_zai_inference_route(
     })?;
     let source = select_zai_inference_source(pools, model, now_secs)?;
     let (base, credential) = match source {
+        QuotaSource::AutoclawStarter => (
+            AUTOCLAW_MANAGED_BASE_URL,
+            tokens
+                .autoclaw_access_token
+                .as_deref()
+                .or(tokens.zai_access_token.as_deref())
+                .filter(|v| !v.trim().is_empty()),
+        ),
         QuotaSource::ZcodeStarter => (
             ZCODE_STARTER_BASE_URL,
             tokens
@@ -108,13 +128,16 @@ pub fn resolve_zai_inference_route(
     };
     let credential = credential.ok_or_else(|| {
         CoreError::Auth(match source {
+            QuotaSource::AutoclawStarter => {
+                "AutoClaw Starter requires an AutoClaw OAuth token".into()
+            }
             QuotaSource::ZcodeStarter => "ZCode Starter requires a ZCode OAuth token".into(),
             QuotaSource::CodingPlan => "Z.ai Coding Plan requires its API key".into(),
         })
     })?;
     Ok(ZaiInferenceRoute {
         source,
-        url: messages_url(base),
+        url: messages_url(base, source),
         credential: credential.to_owned(),
     })
 }
@@ -147,20 +170,27 @@ pub fn is_zcode_entitlement_exhaustion(error: &CoreError) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return false;
     };
-    let code = value
+    let code_str = value
         .get("error")
         .and_then(|v| v.get("code"))
         .or_else(|| value.get("code"))
         .and_then(serde_json::Value::as_str);
+    let code_num = value.get("code").and_then(serde_json::Value::as_i64);
+    // Note: AutoClaw code 810001 is a high-demand temporary rate limit ("We're experiencing high demand right now..."),
+    // NOT permanent quota exhaustion. Marking it exhausted causes false 503 cascades.
     matches!(
-        code,
+        code_str,
         Some(
             "insufficient_quota"
                 | "quota_exhausted"
                 | "entitlement_exhausted"
                 | "entitlement_expired"
+                | "managed_model_quota_exhausted"
+                | "managed_model_points_insufficient"
+                | "810000"
+                | "810002"
         )
-    )
+    ) || matches!(code_num, Some(1005 | 810000 | 810002))
 }
 
 #[cfg(test)]
@@ -285,7 +315,7 @@ mod tests {
         let pools = [
             QuotaPool {
                 fetch_error: Some(
-                    "ZCode OAuth credential is missing; Starter balance is unknown".into(),
+                    "ZCode OAuth credential is not configured for this account".into(),
                 ),
                 ..pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Absent, &[])
             },

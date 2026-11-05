@@ -594,3 +594,165 @@ pub fn get_active_cooldown_target_ids(
     }
     Ok(set)
 }
+
+// ---------------------------------------------------------------------------
+// System Prefixes CRUD
+// ---------------------------------------------------------------------------
+
+pub fn list_target_system_prefixes(
+    conn: &Connection,
+    target_id: ComboTargetId,
+) -> Result<Vec<openproxy_types::combos::ComboTargetSystemPrefix>> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, target_id, name, criteria, system_text, active, priority_order, created_at \
+             FROM combo_target_system_prefixes \
+             WHERE target_id = ?1 \
+             ORDER BY priority_order ASC, id ASC",
+        )
+        .map_err(crate::error::map_db_error)?;
+
+    let rows = stmt
+        .query_map(params![target_id.0], |r| {
+            Ok(openproxy_types::combos::ComboTargetSystemPrefix {
+                id: r.get(0)?,
+                target_id: ComboTargetId(r.get(1)?),
+                name: r.get(2)?,
+                criteria: r.get(3)?,
+                system_text: r.get(4)?,
+                active: r.get::<_, i64>(5)? == 1,
+                priority_order: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })
+        .map_err(crate::error::map_db_error)?;
+
+    let mut list = Vec::new();
+    for item in rows {
+        list.push(item.map_err(crate::error::map_db_error)?);
+    }
+    Ok(list)
+}
+
+pub fn list_active_target_system_prefixes(
+    conn: &Connection,
+    target_id: ComboTargetId,
+) -> Result<Vec<openproxy_types::combos::ComboTargetSystemPrefix>> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, target_id, name, criteria, system_text, active, priority_order, created_at \
+             FROM combo_target_system_prefixes \
+             WHERE target_id = ?1 AND active = 1 \
+             ORDER BY priority_order ASC, id ASC",
+        )
+        .map_err(crate::error::map_db_error)?;
+
+    let rows = stmt
+        .query_map(params![target_id.0], |r| {
+            Ok(openproxy_types::combos::ComboTargetSystemPrefix {
+                id: r.get(0)?,
+                target_id: ComboTargetId(r.get(1)?),
+                name: r.get(2)?,
+                criteria: r.get(3)?,
+                system_text: r.get(4)?,
+                active: true,
+                priority_order: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })
+        .map_err(crate::error::map_db_error)?;
+
+    let mut list = Vec::new();
+    for item in rows {
+        list.push(item.map_err(crate::error::map_db_error)?);
+    }
+    Ok(list)
+}
+
+pub fn create_target_system_prefix(
+    conn: &Connection,
+    target_id: ComboTargetId,
+    input: &openproxy_types::combos::CreateSystemPrefixInput,
+) -> Result<i64> {
+    if input.name.trim().is_empty() {
+        return Err(CoreError::Validation("prefix name cannot be empty".into()));
+    }
+    if input.criteria.trim().is_empty() {
+        return Err(CoreError::Validation(
+            "prefix criteria cannot be empty".into(),
+        ));
+    }
+    if input.system_text.trim().is_empty() {
+        return Err(CoreError::Validation(
+            "prefix system_text cannot be empty".into(),
+        ));
+    }
+
+    conn.execute(
+        "INSERT INTO combo_target_system_prefixes (target_id, name, criteria, system_text, active, priority_order) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            target_id.0,
+            input.name.trim(),
+            input.criteria.trim(),
+            input.system_text.trim(),
+            if input.active { 1 } else { 0 },
+            input.priority_order
+        ],
+    )
+    .map_err(crate::error::map_db_error)?;
+
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn update_target_system_prefix(
+    conn: &Connection,
+    prefix_id: i64,
+    input: &openproxy_types::combos::UpdateSystemPrefixInput,
+) -> Result<()> {
+    if let Some(ref name) = input.name {
+        conn.execute(
+            "UPDATE combo_target_system_prefixes SET name = ?1 WHERE id = ?2",
+            params![name.trim(), prefix_id],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    if let Some(ref crit) = input.criteria {
+        conn.execute(
+            "UPDATE combo_target_system_prefixes SET criteria = ?1 WHERE id = ?2",
+            params![crit.trim(), prefix_id],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    if let Some(ref text) = input.system_text {
+        conn.execute(
+            "UPDATE combo_target_system_prefixes SET system_text = ?1 WHERE id = ?2",
+            params![text.trim(), prefix_id],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    if let Some(active) = input.active {
+        conn.execute(
+            "UPDATE combo_target_system_prefixes SET active = ?1 WHERE id = ?2",
+            params![if active { 1 } else { 0 }, prefix_id],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    if let Some(order) = input.priority_order {
+        conn.execute(
+            "UPDATE combo_target_system_prefixes SET priority_order = ?1 WHERE id = ?2",
+            params![order, prefix_id],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    Ok(())
+}
+
+pub fn delete_target_system_prefix(conn: &Connection, prefix_id: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM combo_target_system_prefixes WHERE id = ?1",
+        params![prefix_id],
+    )
+    .map_err(crate::error::map_db_error)?;
+    Ok(())
+}

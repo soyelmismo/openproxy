@@ -39,6 +39,7 @@ pub use pii::{PiiEngine, PiiRestorationStage, PiiSession, StreamingWindowReplace
 pub use policy::EffectiveTargetPolicy;
 pub mod message_threads;
 pub mod redact;
+pub mod response_sanitizer;
 pub mod schema_sanitizer;
 pub use message_threads::MessageThreadRegistry;
 pub mod session_affinity;

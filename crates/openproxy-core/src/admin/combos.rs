@@ -214,6 +214,15 @@ pub fn delete_combo(conn: &Connection, id: ComboId) -> Result<()> {
     combos::delete_combo(conn, id)
 }
 
+/// Clone an existing combo and all its targets/prefixes.
+pub fn clone_combo(
+    conn: &mut Connection,
+    source_combo_id: ComboId,
+    override_name: Option<&str>,
+) -> Result<ComboId> {
+    combos::clone_combo(conn, source_combo_id, override_name)
+}
+
 /// Reject a `DELETE /admin/combos/9999/targets/1` whose target exists in another
 /// combo. The target id alone is unique, so this is a URL-shape check.
 ///

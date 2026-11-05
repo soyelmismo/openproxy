@@ -631,3 +631,51 @@ fn test_resolve_combo_ignores_deactivated_paused_accounts() {
     let resolved2 = expand_account_rotation(&conn, targets2).unwrap();
     assert_eq!(resolved2.len(), 3);
 }
+
+#[test]
+fn test_clone_combo() {
+    let (pool, _path) = fresh_pool();
+    let mut conn = pool.writer();
+
+    conn.execute_batch(
+        "INSERT INTO providers (id, name, base_url, auth_type, format, active) VALUES
+            ('p_clone', 'P Clone', 'https://example.com', 'none', 'openai', 1);
+         INSERT INTO models (id, provider_id, model_id, target_format, active) VALUES
+            (700, 'p_clone', 'model-clone', 'openai', 1);
+         INSERT INTO combos (id, name, strategy, race_size, context_window) VALUES
+            (300, 'my-combo', 'priority', 3, 4096);
+         INSERT INTO combo_targets (id, combo_id, provider_id, model_row_id, upstream_model_id, priority_order, active) VALUES
+            (3000, 300, 'p_clone', 700, 'model-clone', 1, 1);
+         INSERT INTO combo_target_system_prefixes (id, target_id, name, criteria, system_text, active, priority_order) VALUES
+            (4000, 3000, 'prefix-1', 'prefix', 'You are helpful', 1, 1);"
+    ).unwrap();
+
+    let cloned_id = clone_combo(&mut conn, ComboId(300), None).expect("clone");
+    let cloned_combo = get_combo(&conn, cloned_id).unwrap().unwrap();
+    assert_eq!(cloned_combo.name, "my-combo-copy");
+    assert_eq!(cloned_combo.strategy, Strategy::Priority);
+    assert_eq!(cloned_combo.race_size, 3);
+    assert_eq!(cloned_combo.context_window, Some(4096));
+
+    let targets = list_targets(&conn, cloned_id).unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].provider_id.as_str(), "p_clone");
+    assert_eq!(targets[0].model_row_id.map(|m| m.0), Some(700));
+
+    let prefixes = list_target_system_prefixes(&conn, targets[0].id).unwrap();
+    assert_eq!(prefixes.len(), 1);
+    assert_eq!(prefixes[0].name, "prefix-1");
+    assert_eq!(prefixes[0].system_text, "You are helpful");
+
+    // Cloning again without override should fail due to unique constraint on name
+    let dup_err = clone_combo(&mut conn, ComboId(300), None).unwrap_err();
+    assert!(
+        matches!(dup_err, CoreError::Validation(ref msg) if msg.contains("combo name already exists"))
+    );
+
+    // Cloning with custom override name succeeds
+    let custom_id =
+        clone_combo(&mut conn, ComboId(300), Some("custom-clone")).expect("clone custom");
+    let custom_combo = get_combo(&conn, custom_id).unwrap().unwrap();
+    assert_eq!(custom_combo.name, "custom-clone");
+}

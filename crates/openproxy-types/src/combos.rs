@@ -65,6 +65,17 @@ pub struct Combo {
     /// global `[modality_routing] enabled` setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modality_gate: Option<bool>,
+    /// Per-combo response sanitization. When enabled, the `model` field is
+    /// rewritten to the model the CLIENT requested (or `real_model_id` if set)
+    /// and proprietary/reasoning metadata is stripped so the client receives a
+    /// clean OpenAI payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sanitize_response: Option<bool>,
+    /// Optional override for the `model` field returned to the client when
+    /// response sanitization is enabled. When set, this string takes precedence
+    /// over the client-requested model name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub real_model_id: Option<String>,
 }
 
 fn default_target_weight() -> i32 {
@@ -73,6 +84,46 @@ fn default_target_weight() -> i32 {
 
 fn default_true() -> bool {
     true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComboTargetSystemPrefix {
+    pub id: i64,
+    pub target_id: ComboTargetId,
+    pub name: String,
+    pub criteria: String,
+    pub system_text: String,
+    #[serde(default = "default_true")]
+    pub active: bool,
+    #[serde(default)]
+    pub priority_order: i32,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSystemPrefixInput {
+    pub name: String,
+    pub criteria: String,
+    pub system_text: String,
+    #[serde(default = "default_true")]
+    pub active: bool,
+    #[serde(default)]
+    pub priority_order: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSystemPrefixInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority_order: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +155,8 @@ pub struct ComboTarget {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_accounts: Option<Vec<AccountId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_target_id: Option<ComboTargetId>,
 }
 
 impl Default for ComboTarget {
@@ -126,6 +179,7 @@ impl Default for ComboTarget {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            inherited_target_id: None,
         }
     }
 }
@@ -151,6 +205,8 @@ impl Default for Combo {
             decision_model: None,
             decision_timeout_ms: None,
             modality_gate: None,
+            sanitize_response: None,
+            real_model_id: None,
         }
     }
 }
@@ -246,6 +302,8 @@ pub struct ComboTargetWithModel {
     pub description: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_accounts: Option<Vec<AccountId>>,
+    #[serde(default)]
+    pub system_prefixes_count: usize,
 }
 
 /// Input for adding a target to a combo.
@@ -365,6 +423,7 @@ mod tests {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            inherited_target_id: None,
         };
 
         let mut combo = Combo {
@@ -386,6 +445,8 @@ mod tests {
             decision_model: None,
             decision_timeout_ms: None,
             modality_gate: None,
+            sanitize_response: None,
+            real_model_id: None,
         };
 
         // Default: inherits combo (Flat 60s) -> not disabled

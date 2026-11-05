@@ -171,7 +171,7 @@ fn zai_builtin_models_contract() {
     assert!(has_model("GLM-4.6"));
 
     for m in &models {
-        assert_eq!(m.target_format, TargetFormat::Anthropic);
+        assert_eq!(m.target_format, TargetFormat::Openai);
         assert!(m.context_length.is_some_and(|l| l >= 128_000));
     }
 }

@@ -400,6 +400,8 @@ impl Pipeline {
             decision_model: None,
             decision_timeout_ms: None,
             modality_gate: None,
+            sanitize_response: None,
+            real_model_id: None,
         };
 
         let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();

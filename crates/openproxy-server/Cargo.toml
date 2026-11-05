@@ -46,7 +46,9 @@ openproxy-pipeline = { path = "../openproxy-pipeline" }
 openproxy-adapters = { path = "../openproxy-adapters" }
 openproxy-types = { path = "../openproxy-types" }
 openproxy-db = { path = "../openproxy-db" }
+openproxy-oauth = { path = "../openproxy-oauth" }
 openproxy-compression = { path = "../openproxy-compression" }
+http = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 base64 = { workspace = true }

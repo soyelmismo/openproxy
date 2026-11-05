@@ -299,6 +299,7 @@ export async function showEditSubComboModal(
       const strategy = String(data.get("strategy") || "priority");
       const raceSize = parseInt(String(data.get("race_size") || "1"), 10);
       const prevRl = data.get("preventive_rate_limit") === "on";
+      const sanitizeResp = data.get("sanitize_response") === "on";
       const priorityMode = String(data.get("priority_mode") || "strict");
       const cooldownMode = String(data.get("cooldown_mode") || "flat");
 
@@ -329,6 +330,7 @@ export async function showEditSubComboModal(
         strategy,
         race_size: Number.isFinite(raceSize) && raceSize >= 1 ? raceSize : 1,
         preventive_rate_limit: prevRl,
+        sanitize_response: sanitizeResp,
         priority_mode: priorityMode,
         context_window: contextWindow,
         decision_model: decisionModel,
@@ -388,6 +390,12 @@ export async function showEditSubComboModal(
                   <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                     <input id="subcombo-preventive-rl" name="preventive_rate_limit" type="checkbox" ?checked=${combo.preventive_rate_limit ?? false}>
                     <span>${icons.lightning()} Preventive Rate Limit (Predict 429s)</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input id="subcombo-sanitize-response" name="sanitize_response" type="checkbox" ?checked=${combo.sanitize_response ?? false}>
+                    <span>${icons.check()} Sanitize Responses (Rewrite model & purge reasoning)</span>
                   </label>
                 </div>
                 <div class="field">

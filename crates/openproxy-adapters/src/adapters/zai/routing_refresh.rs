@@ -35,8 +35,11 @@ pub async fn refresh_zai_account_quota(
         .parse::<u64>()
         .unwrap_or(0);
     let fresh = account.quota_pools.as_deref().is_some_and(|pools| {
-        pools.iter().any(|p| p.source == QuotaSource::ZcodeStarter)
-            && pools.iter().any(|p| p.source == QuotaSource::CodingPlan)
+        (pools
+            .iter()
+            .any(|p| p.source == QuotaSource::AutoclawStarter)
+            || pools.iter().any(|p| p.source == QuotaSource::ZcodeStarter)
+            || pools.iter().any(|p| p.source == QuotaSource::CodingPlan))
             && pools.iter().all(|pool| {
                 pool.last_fetched_at.parse::<u64>().is_ok_and(|fetched| {
                     fetched <= now && now.saturating_sub(fetched) <= SNAPSHOT_MAX_AGE_SECS
@@ -66,10 +69,11 @@ pub async fn refresh_zai_account_quota(
 /// Other models and the independent paid pool remain untouched.
 pub fn exhaust_zcode_model(account: &mut Account, model: &str) {
     if let Some(pools) = account.quota_pools.as_deref_mut() {
-        for pool in pools
-            .iter_mut()
-            .filter(|pool| pool.source == QuotaSource::ZcodeStarter && pool.matches_model(model))
-        {
+        for pool in pools.iter_mut().filter(|pool| {
+            (pool.source == QuotaSource::AutoclawStarter
+                || pool.source == QuotaSource::ZcodeStarter)
+                && pool.matches_model(model)
+        }) {
             pool.status = QuotaPoolStatus::Exhausted;
             pool.remaining = Some(0);
         }

@@ -93,6 +93,10 @@ pub async fn update_api_key(
         let blacklisted_providers_slice =
             blacklisted_providers_owned.as_ref().map(|v| v.as_slice());
 
+        let allowed_providers_owned =
+            extract_tristate_array(&body, "allowed_providers", |x| x.as_str().map(String::from));
+        let allowed_providers_slice = allowed_providers_owned.as_ref().map(|v| v.as_slice());
+
         let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
             x.as_str().map(String::from)
         });
@@ -121,6 +125,7 @@ pub async fn update_api_key(
                 allowed_models: allowed_models_slice,
                 allowed_combos: allowed_combos_slice,
                 blacklisted_providers: blacklisted_providers_slice,
+                allowed_providers: allowed_providers_slice,
                 blacklisted_models: blacklisted_models_slice,
                 only_whitelisted,
                 is_active,

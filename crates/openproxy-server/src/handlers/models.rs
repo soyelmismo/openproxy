@@ -526,6 +526,7 @@ mod tests {
             allowed_models: None,
             allowed_combos: None,
             blacklisted_providers: Some(vec!["openrouter".into()]),
+            allowed_providers: None,
             blacklisted_models: Some(vec!["gpt-3.5*".into()]),
             only_whitelisted: false,
             is_active: true,
@@ -629,6 +630,8 @@ mod tests {
             decision_model: None,
             decision_timeout_ms: None,
             modality_gate: None,
+            sanitize_response: None,
+            real_model_id: None,
         };
         let mut caps = capabilities::ModelCapabilities::empty();
         caps.thinking = Some(true);

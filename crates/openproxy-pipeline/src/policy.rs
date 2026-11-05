@@ -146,6 +146,7 @@ mod tests {
             thinking_effort: effort.map(String::from),
             description: None,
             selected_accounts: None,
+            inherited_target_id: None,
         }
     }
 

@@ -8,6 +8,7 @@
 //! - Coding Plan Usage / Limits: `https://api.z.ai/api/monitor/usage/quota/limit`
 
 pub mod api_key;
+pub mod md5;
 pub mod models;
 pub mod quota;
 pub mod routing;
@@ -92,6 +93,172 @@ impl ProviderAdapter for ZaiAdapter {
         }
     }
 
+    fn wrap_request_body(
+        &self,
+        body: bytes::Bytes,
+        target_format: TargetFormat,
+        model: &ModelId,
+        resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> std::result::Result<bytes::Bytes, openproxy_types::error::CoreError> {
+        let account = resolved_target.target.account_id.map(|id| id.0);
+        if target_format == TargetFormat::Anthropic {
+            return Ok(body);
+        }
+        let _ = (target_format, model, account);
+        // If the body is being sent as an OpenAI completions request to AutoClaw:
+        crate::adapters::traits::patch_json_request_body(body, |obj| {
+            if let Some(m) = obj.get("model").and_then(|v| v.as_str()) {
+                let m_lower = m.to_ascii_lowercase();
+                if m_lower.contains("flash") {
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::Value::String("zai_glm-5.3-flash".into()),
+                    );
+                } else if m_lower.contains("5.3") {
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::Value::String("zaicoding_glm-5.3".into()),
+                    );
+                } else {
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::Value::String("zai_auto".into()),
+                    );
+                }
+            }
+        })
+    }
+
+    fn finalize_request(
+        &self,
+        body: bytes::Bytes,
+        headers: &mut Vec<(String, String)>,
+        _target_format: TargetFormat,
+        model: &ModelId,
+        _resolved_target: &openproxy_types::context::ResolvedTarget,
+    ) -> Result<bytes::Bytes> {
+        let is_autoclaw = headers.iter().any(|(k, v)| {
+            (k.eq_ignore_ascii_case("authorization") || k.eq_ignore_ascii_case("x-authorization"))
+                && (v.contains("eyJ") || v.starts_with("Bearer eyJ"))
+        });
+        if is_autoclaw {
+            let m_lower = model.as_str().to_ascii_lowercase();
+            let req_model = if m_lower.contains("flash") {
+                "zai_glm-5.3-flash"
+            } else if m_lower.contains("5.3") {
+                "zaicoding_glm-5.3"
+            } else {
+                "zai_auto"
+            };
+            headers.push(("X-Request-Model".into(), req_model.into()));
+            headers.push(("X-Product".into(), "autoclaw".into()));
+            headers.push(("X-Version".into(), "2.0.3".into()));
+            headers.push(("X-Tm".into(), "linux".into()));
+            headers.push(("X-Channel".into(), "official".into()));
+            headers.push(("X-Lang".into(), "zh-CN".into()));
+            headers.push(("X-Client-Type".into(), "pc".into()));
+            headers.push(("x_trace_id".into(), "autoclaw-desktop".into()));
+            let req_id = uuid::Uuid::new_v4().to_string();
+            headers.push(("X-Trace-Id".into(), req_id.clone()));
+            headers.push(("X-Request-Id".into(), req_id));
+            let session_id = uuid::Uuid::new_v4().to_string();
+            headers.push(("X-Session-Id".into(), session_id));
+
+            let app_id = "100003";
+            let app_key = "6c79a4059ae078650bc7886b627cf9f9";
+            let now = openproxy_types::now_unix_secs_str();
+            let sign = md5::md5::md5_hex(format!("{app_id}&{now}&{app_key}"));
+            headers.push(("X-Auth-Appid".into(), app_id.into()));
+            headers.push(("x-auth-appid".into(), app_id.into()));
+            headers.push(("X-Auth-TimeStamp".into(), now.clone()));
+            headers.push(("x-auth-timestamp".into(), now));
+            headers.push(("X-Auth-Sign".into(), sign.clone()));
+            headers.push(("x-auth-sign".into(), sign));
+
+            if let Some(pos) = headers
+                .iter()
+                .position(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+            {
+                let token = headers[pos].1.clone();
+                headers.push(("X-Authorization".into(), token));
+            }
+            headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+
+            // Fix body for AutoClaw Stainless/OpenAI schema:
+            // 1. Convert max_tokens -> max_completion_tokens (AutoClaw returns 406 if max_tokens is present)
+            // 2. Clean double-Bearer in headers
+            // 3. Inject AutoClaw required system prefix
+            const REQUIRED_PREFIX: &str =
+                "You are AutoClaw. Answer the user directly and concisely.";
+            let patched_body = crate::adapters::traits::patch_json_request_body(body, |obj| {
+                if let Some(max_tok) = obj.remove("max_tokens") {
+                    obj.insert("max_completion_tokens".to_string(), max_tok);
+                }
+                if let Some(m) = obj.get("model").and_then(|v| v.as_str()) {
+                    let m_lower = m.to_ascii_lowercase();
+                    if m_lower.contains("flash") {
+                        obj.insert(
+                            "model".to_string(),
+                            serde_json::Value::String("zai_glm-5.3-flash".into()),
+                        );
+                    } else if m_lower.contains("5.3") {
+                        obj.insert(
+                            "model".to_string(),
+                            serde_json::Value::String("zaicoding_glm-5.3".into()),
+                        );
+                    } else {
+                        obj.insert(
+                            "model".to_string(),
+                            serde_json::Value::String("zai_auto".into()),
+                        );
+                    }
+                }
+                if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
+                    let has_autoclaw_prefix = messages.iter().any(|m| {
+                        m.get("role").and_then(|r| r.as_str()) == Some("system")
+                            && m.get("content")
+                                .and_then(|c| c.as_str())
+                                .map_or(false, |c| c.starts_with("You are AutoClaw."))
+                    });
+                    if !has_autoclaw_prefix {
+                        if let Some(first_sys) = messages
+                            .iter_mut()
+                            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+                        {
+                            if let Some(content) = first_sys.get_mut("content") {
+                                let orig = content.as_str().unwrap_or("");
+                                *content = serde_json::Value::String(format!(
+                                    "{REQUIRED_PREFIX}\n\n{orig}"
+                                ));
+                            }
+                        } else {
+                            messages.insert(
+                                0,
+                                serde_json::json!({
+                                    "role": "system",
+                                    "content": REQUIRED_PREFIX
+                                }),
+                            );
+                        }
+                    }
+                }
+            })?;
+
+            // Fix double-Bearer in X-Authorization if present
+            for (k, v) in headers.iter_mut() {
+                if k.eq_ignore_ascii_case("x-authorization") || k.eq_ignore_ascii_case("x-api-key")
+                {
+                    while v.starts_with("Bearer Bearer ") {
+                        *v = v.strip_prefix("Bearer ").unwrap().to_string();
+                    }
+                }
+            }
+
+            return Ok(patched_body);
+        }
+        Ok(body)
+    }
+
     fn build_headers(
         &self,
         api_key: &str,
@@ -103,10 +270,21 @@ impl ProviderAdapter for ZaiAdapter {
         if !token.is_empty() {
             headers.push(("x-api-key".into(), token.to_string()));
             headers.push(crate::upstream::bearer_auth_header(token));
+            let bearer = if token.starts_with("Bearer ") {
+                token.to_string()
+            } else {
+                format!("Bearer {token}")
+            };
+            headers.push(("X-Authorization".into(), bearer));
         }
         headers.push(("anthropic-version".into(), ZAI_ANTHROPIC_VERSION.into()));
         headers.push(("Content-Type".into(), "application/json".into()));
-        headers.push(("User-Agent".into(), format!("ZCode/{ZAI_APP_VERSION}")));
+        let ua = if api_key.contains("eyJ") {
+            "AutoClaw/2.0.3"
+        } else {
+            "ZCode/1.0.0"
+        };
+        headers.push(("User-Agent".into(), ua.into()));
         for (k, v) in &self.config.extra_headers {
             headers.push((k.clone(), v.clone()));
         }

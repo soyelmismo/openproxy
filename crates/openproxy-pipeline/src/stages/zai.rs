@@ -117,7 +117,11 @@ pub(crate) async fn record_zai_route_failure(
                 pool.status = openproxy_types::quota::QuotaPoolStatus::Exhausted;
                 pool.remaining = Some(0);
                 pool.fetch_error = None;
-            } else {
+            } else if pool.source != openproxy_types::quota::QuotaSource::AutoclawStarter {
+                // For ZCode Starter or Coding Plan, mark unavailable on transient errors.
+                // For AutoClaw Starter, transient HTTP errors (e.g. 403 demand spikes, timeouts)
+                // must NOT invalidate the local points balance or set status to Unavailable,
+                // because doing so causes subsequent requests to fail with 503 instead of rotating.
                 pool.status = openproxy_types::quota::QuotaPoolStatus::Unavailable;
                 pool.fetch_error = Some(format!(
                     "Selected quota inference failed (HTTP {}); balance requires refresh",

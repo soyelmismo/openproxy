@@ -32,6 +32,7 @@ pub struct PipelineContext {
     pub target_format: Option<openproxy_types::TargetFormat>,
     pub body_bytes: Option<bytes::Bytes>,
     pub is_streaming: Option<bool>,
+    pub injected_system_prefix: Option<String>,
 }
 
 impl PipelineContext {
@@ -55,6 +56,7 @@ impl PipelineContext {
             target_format: None,
             body_bytes: None,
             is_streaming: None,
+            injected_system_prefix: None,
         }
     }
 }

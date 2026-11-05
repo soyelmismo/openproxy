@@ -97,6 +97,7 @@ pub async fn routing_middleware(
         match auth_token.as_ref() {
             Some(auth) => {
                 let has_restrictions = auth.key.blacklisted_providers.is_some()
+                    || auth.key.allowed_providers.is_some()
                     || auth.key.blacklisted_models.is_some()
                     || auth
                         .key
@@ -257,6 +258,7 @@ fn apply_auth_restrictions_to_plan(
     }
 
     let has_restrictions = auth.key.blacklisted_providers.is_some()
+        || auth.key.allowed_providers.is_some()
         || auth.key.blacklisted_models.is_some()
         || auth
             .key
@@ -346,6 +348,8 @@ async fn translate_plan_to_targets(
                     decision_model: None,
                     decision_timeout_ms: None,
                     modality_gate: None,
+                    sanitize_response: None,
+                    real_model_id: None,
                 };
                 Ok((combo_id, Some(synthetic_combo), Some(targets)))
             } else if has_key_restrictions {

@@ -126,6 +126,9 @@ function figureSuffix(p: QuotaPool): string {
 /** Source heading. Both pools surface the backend plan name when present. */
 export function poolHeading(p: QuotaPool): string {
   const plan = (p.plan_name ?? "").trim();
+  if (p.source === "autoclaw_starter") {
+    return plan.length > 0 ? `AutoClaw · Daily · ${plan}` : "AutoClaw · Daily";
+  }
   if (p.source === "zcode_starter") {
     return plan.length > 0 ? `Starter · Free · ${plan}` : "Starter · Free";
   }
@@ -354,6 +357,7 @@ function poolMissingNote(p: QuotaPool): string {
   if (p.status === "absent") {
     // "No active Coding Plan" is paid-only wording; a missing free Starter
     // grant must not be described as a missing subscription.
+    if (p.source === "autoclaw_starter") return "No AutoClaw points";
     return p.source === "zcode_starter" ? "No Starter grant" : "No active Coding Plan";
   }
   if (p.fetch_error) return "usage data unavailable for this source";
@@ -371,6 +375,9 @@ function poolStatusBadge(p: QuotaPool): TemplateResult | null {
     case "absent":
       // "No active plan" wording is for the paid pool; Starter absence reads
       // differently so the user knows which source is missing.
+      if (p.source === "autoclaw_starter") {
+        return html`<span class="status-pill warn" title="No AutoClaw credits on this account">No AutoClaw</span>`;
+      }
       return p.source === "zcode_starter"
         ? html`<span class="status-pill warn" title="No Starter free grant on this account">No Starter</span>`
         : html`<span class="status-pill warn" title="No active Coding Plan">No active plan</span>`;

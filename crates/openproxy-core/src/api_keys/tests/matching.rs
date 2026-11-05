@@ -257,3 +257,31 @@ fn only_whitelisted_survives_a_round_trip_through_the_db() {
     assert!(!reloaded.only_whitelisted);
     assert!(reloaded.is_model_allowed("anthropic/claude-3", None));
 }
+
+#[test]
+fn allowed_providers_whitelists_only_selected_providers() {
+    let (conn, _p) = fresh_pool();
+    let (key, _) = create(
+        &conn,
+        CreateApiKeyInput {
+            label: Some("allowed-prov-test".into()),
+            scopes: vec!["chat".into()],
+            allowed_providers: Some(vec!["xkiro".into()]),
+            ..Default::default()
+        },
+        "admin",
+    )
+    .expect("create");
+
+    assert!(key.is_provider_allowed("xkiro"));
+    assert!(!key.is_provider_allowed("anyrouter"));
+    assert!(!key.is_provider_allowed("openai"));
+
+    // When provider is passed explicitly
+    assert!(key.is_model_allowed("gpt-4o", Some("xkiro")));
+    assert!(!key.is_model_allowed("gpt-4o", Some("anyrouter")));
+
+    // When model has provider prefix
+    assert!(key.is_model_allowed("xkiro/openai/gpt-4o", None));
+    assert!(!key.is_model_allowed("anyrouter/openai/gpt-4o", None));
+}

@@ -2,7 +2,7 @@
 
 use openproxy_types::combos::{Combo, Strategy};
 use openproxy_types::error::{CoreError, Result};
-use openproxy_types::ids::ComboId;
+use openproxy_types::ids::{ComboId, ComboTargetId};
 use rusqlite::{Connection, params};
 
 use super::mapping::{combo_select, row_to_combo};
@@ -124,4 +124,133 @@ pub fn clear_targets(conn: &Connection, combo_id: ComboId) -> Result<()> {
         crate::error::map_db_error_ctx(format!("clear combo_targets for combo {}", combo_id.0))(e)
     })?;
     Ok(())
+}
+
+/// Clone an existing combo with all its settings, targets and system prefixes.
+/// Appends `-copy` to the combo name (or uses the provided new name).
+pub fn clone_combo(
+    conn: &mut Connection,
+    source_combo_id: ComboId,
+    override_name: Option<&str>,
+) -> Result<ComboId> {
+    let source_combo = get_combo(conn, source_combo_id)?
+        .ok_or_else(|| CoreError::ComboNotFound(source_combo_id.0))?;
+
+    let new_name = match override_name {
+        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+        _ => format!("{}-copy", source_combo.name),
+    };
+
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(crate::error::map_db_error)?;
+
+    let result = tx.execute(
+        "INSERT INTO combos(
+            name, strategy, race_size, context_window, max_output_tokens,
+            priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs,
+            cooldown_factor, lkgp_exploration_rate, selection_window_secs,
+            preventive_rate_limit, decision_model, decision_timeout_ms,
+            modality_gate, sanitize_response, real_model_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+        params![
+            new_name,
+            source_combo.strategy.as_str(),
+            i64::from(source_combo.race_size),
+            source_combo.context_window,
+            source_combo.max_output_tokens,
+            source_combo.priority_mode.as_str(),
+            source_combo.cooldown_mode.as_str(),
+            source_combo.cooldown_base_secs.map(|v| v as i64),
+            source_combo.cooldown_max_secs.map(|v| v as i64),
+            source_combo.cooldown_factor.map(i64::from),
+            source_combo.lkgp_exploration_rate,
+            source_combo.selection_window_secs.map(|v| v as i64),
+            i64::from(source_combo.preventive_rate_limit),
+            source_combo.decision_model,
+            source_combo.decision_timeout_ms.map(|v| v as i64),
+            source_combo.modality_gate.map(i64::from),
+            source_combo.sanitize_response.map(i64::from),
+            source_combo.real_model_id,
+        ],
+    );
+
+    match result {
+        Ok(_) => {}
+        Err(e) => {
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation
+            {
+                return Err(CoreError::Validation(format!(
+                    "combo name already exists: {new_name}"
+                )));
+            }
+            return Err(crate::error::map_db_error_ctx(format!(
+                "insert cloned combo {new_name}"
+            ))(e));
+        }
+    }
+
+    let new_combo_id = ComboId(tx.last_insert_rowid());
+
+    // Copy targets
+    let targets = super::targets::list_targets(&tx, source_combo_id)?;
+    for t in targets {
+        let old_target_id = t.id;
+        let selected_accounts_json = t
+            .selected_accounts
+            .as_ref()
+            .and_then(|a| serde_json::to_string(a).ok());
+
+        tx.execute(
+            "INSERT INTO combo_targets(
+                combo_id, provider_id, account_id, model_row_id, sub_combo_id,
+                priority_order, weight, active, cooldown_mode, cooldown_base_secs,
+                cooldown_max_secs, cooldown_factor, thinking_effort, description, selected_accounts
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                new_combo_id.0,
+                t.provider_id.as_str(),
+                t.account_id.map(|a| a.0),
+                t.model_row_id.map(|m| m.0),
+                t.sub_combo_id.map(|c| c.0),
+                t.priority_order,
+                t.weight,
+                if t.active { 1 } else { 0 },
+                t.cooldown_mode.map(|c| c.as_str().to_string()),
+                t.cooldown_base_secs.map(|v| v as i64),
+                t.cooldown_max_secs.map(|v| v as i64),
+                t.cooldown_factor.map(i64::from),
+                t.thinking_effort,
+                t.description,
+                selected_accounts_json,
+            ],
+        )
+        .map_err(crate::error::map_db_error_ctx("clone combo_target"))?;
+
+        let new_target_id = ComboTargetId(tx.last_insert_rowid());
+
+        // Copy prefixes for this target
+        let prefixes = super::targets::list_target_system_prefixes(&tx, old_target_id)?;
+        for p in prefixes {
+            tx.execute(
+                "INSERT INTO combo_target_system_prefixes (
+                    target_id, name, criteria, system_text, active, priority_order
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    new_target_id.0,
+                    p.name,
+                    p.criteria,
+                    p.system_text,
+                    if p.active { 1 } else { 0 },
+                    p.priority_order,
+                ],
+            )
+            .map_err(crate::error::map_db_error_ctx(
+                "clone combo_target_system_prefix",
+            ))?;
+        }
+    }
+
+    tx.commit().map_err(crate::error::map_db_error)?;
+    Ok(new_combo_id)
 }

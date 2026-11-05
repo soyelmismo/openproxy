@@ -423,6 +423,7 @@ pub fn build_synthetic_combo(
         thinking_effort: None,
         description: None,
         selected_accounts: None,
+        inherited_target_id: None,
     };
     let combo = Combo {
         id: ComboId(SYNTHETIC_COMBO_ID),
@@ -445,6 +446,8 @@ pub fn build_synthetic_combo(
         decision_model: None,
         decision_timeout_ms: None,
         modality_gate: None,
+        sanitize_response: None,
+        real_model_id: None,
     };
     (combo, vec![target])
 }

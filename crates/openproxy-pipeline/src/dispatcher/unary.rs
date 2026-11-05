@@ -623,6 +623,45 @@ impl UpstreamDispatcher {
         // Guarantee robust BPE token estimation if upstream omitted usage or returned 0
         ensure_usage_populated(&mut openai_response, &params.req.openai_request.messages);
 
+        // If a system prefix was injected dynamically into this target, discount its tokens
+        // from usage.prompt_tokens so the downstream client observes exact, untampered billing.
+        if let Some(ref prefix) = *params.req.active_system_prefix.lock() {
+            let prefix_msg = [openproxy_types::OpenAIMessage {
+                role: "system".to_string(),
+                content: Some(serde_json::Value::String(prefix.clone())),
+                name: None,
+                tool_call_id: None,
+                tool_calls: None,
+                extra: Default::default(),
+            }];
+            let prefix_tokens =
+                openproxy_compression::token_estimate::estimate_prompt_tokens(&prefix_msg);
+            let client_est = openproxy_compression::token_estimate::estimate_prompt_tokens(
+                &params.req.openai_request.messages,
+            )
+            .max(1);
+
+            if let Some(ref mut u) = openai_response.usage {
+                u.prompt_tokens = u
+                    .prompt_tokens
+                    .saturating_sub(prefix_tokens)
+                    .max(client_est);
+                u.total_tokens = u.prompt_tokens + u.completion_tokens;
+            }
+        }
+
+        if params.combo.sanitize_response.unwrap_or(false) {
+            let model_override = params
+                .combo
+                .real_model_id
+                .as_deref()
+                .unwrap_or(&params.req.openai_request.model);
+            crate::response_sanitizer::sanitize_unary_response(
+                &mut openai_response,
+                model_override,
+            );
+        }
+
         let recorded_response_body =
             if self.config.pii_config.pii_enabled && !self.config.pii_config.pii_redact_logs {
                 serde_json::to_value(&openai_response).unwrap_or_else(|_| response_body_raw.clone())

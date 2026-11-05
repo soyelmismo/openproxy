@@ -136,6 +136,14 @@ function formatAllowedModels(k: ApiKeyRow): string {
   }
 
   const blBadges: string[] = [];
+  if (Array.isArray(k.allowed_combos) && k.allowed_combos.length > 0) {
+    blBadges.push(t("keys.list.cell.allowed_combos", { count: k.allowed_combos.length }));
+  } else if (Array.isArray(k.allowed_combos) && k.allowed_combos.length === 0) {
+    blBadges.push("combos: 0");
+  }
+  if (Array.isArray(k.allowed_providers) && k.allowed_providers.length > 0) {
+    blBadges.push(t("keys.list.cell.whitelist_providers", { list: k.allowed_providers.join(",") }));
+  }
   if (Array.isArray(k.blacklisted_providers) && k.blacklisted_providers.length > 0) {
     blBadges.push(t("keys.list.cell.blacklist_providers", { list: k.blacklisted_providers.join(",") }));
   }

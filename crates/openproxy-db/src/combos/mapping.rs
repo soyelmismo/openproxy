@@ -13,7 +13,7 @@ crate::def_table_select!(
      priority_mode, cooldown_mode, cooldown_base_secs, cooldown_max_secs, \
      cooldown_factor, lkgp_exploration_rate, selection_window_secs, \
      COALESCE(preventive_rate_limit, 0), decision_model, decision_timeout_ms, \
-     max_output_tokens, modality_gate"
+     max_output_tokens, modality_gate, sanitize_response, real_model_id"
 );
 pub(crate) use combo_select;
 
@@ -61,7 +61,8 @@ crate::def_table_select!(
      ct.cooldown_factor, \
      ct.thinking_effort, \
      ct.description, \
-     ct.selected_accounts"
+     ct.selected_accounts, \
+     (SELECT COUNT(*) FROM combo_target_system_prefixes ctsp WHERE ctsp.target_id = ct.id AND ctsp.active = 1) as system_prefixes_count"
 );
 pub(crate) use combo_target_with_model_select;
 
@@ -125,6 +126,8 @@ pub(crate) fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         decision_timeout_ms: @opt_u64(15),
         max_output_tokens: 16,
         modality_gate: @opt_bool(17),
+        sanitize_response: @opt_bool(18),
+        real_model_id: 19,
     })
 }
 
@@ -147,6 +150,7 @@ pub fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         thinking_effort: 14,
         description: 15,
         selected_accounts: @opt_json(16, Vec<AccountId>),
+        inherited_target_id: @none(),
     })
 }
 
@@ -182,6 +186,7 @@ pub(crate) fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboT
         thinking_effort: @opt_box_str(22),
         description: @opt_box_str(23),
         selected_accounts: @opt_json(24, Vec<AccountId>),
+        system_prefixes_count: @opt_usize(25),
     })
 }
 

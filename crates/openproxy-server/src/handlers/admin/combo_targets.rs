@@ -327,6 +327,64 @@ pub async fn reorder_combo_targets(
     .await
 }
 
+// ---------------------------------------------------------------------------
+// System Prefixes Admin Handlers
+// ---------------------------------------------------------------------------
+
+pub async fn list_target_system_prefixes(
+    State(s): State<AppState>,
+    Path((_combo_id, target_id)): Path<(i64, i64)>,
+) -> Result<Json<Vec<openproxy_types::combos::ComboTargetSystemPrefix>>, ApiError> {
+    let list = s
+        .db_pool()
+        .spawn_read(move |conn| {
+            openproxy_db::combos::list_target_system_prefixes(conn, ComboTargetId(target_id))
+        })
+        .await?;
+    Ok(Json(list))
+}
+
+pub async fn create_target_system_prefix(
+    State(s): State<AppState>,
+    Path((_combo_id, target_id)): Path<(i64, i64)>,
+    Json(input): Json<openproxy_types::combos::CreateSystemPrefixInput>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let id = s
+        .db_pool()
+        .spawn_write(move |w| {
+            openproxy_db::combos::create_target_system_prefix(w, ComboTargetId(target_id), &input)
+        })
+        .await?;
+    Ok(Json(serde_json::json!({ "id": id })))
+}
+
+pub async fn update_target_system_prefix(
+    State(s): State<AppState>,
+    Path((_combo_id, _target_id, prefix_id)): Path<(i64, i64, i64)>,
+    Json(input): Json<openproxy_types::combos::UpdateSystemPrefixInput>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    s.db_pool()
+        .spawn_write(move |w| {
+            openproxy_db::combos::update_target_system_prefix(w, prefix_id, &input)
+        })
+        .await?;
+    Ok(Json(
+        serde_json::json!({ "id": prefix_id, "updated": true }),
+    ))
+}
+
+pub async fn delete_target_system_prefix(
+    State(s): State<AppState>,
+    Path((_combo_id, _target_id, prefix_id)): Path<(i64, i64, i64)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    s.db_pool()
+        .spawn_write(move |w| openproxy_db::combos::delete_target_system_prefix(w, prefix_id))
+        .await?;
+    Ok(Json(
+        serde_json::json!({ "id": prefix_id, "deleted": true }),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +493,7 @@ mod tests {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            system_prefixes_count: 0,
         }
     }
 

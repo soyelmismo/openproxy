@@ -471,7 +471,7 @@ pub async fn apply_decision_routing(
     }
 }
 
-async fn execute_system_one_decision(
+pub(crate) async fn execute_system_one_decision(
     ctx: &PipelineContext,
     decision_model: &str,
     req: &SystemOneRequest,
@@ -614,7 +614,11 @@ async fn execute_system_one_decision(
         openproxy_types::error::CoreError::Validation(format!("invalid systemone response: {e}"))
     })?;
 
-    let answer = parsed.answers.remove("target_selection");
+    let answer = parsed
+        .answers
+        .remove("target_selection")
+        .or_else(|| parsed.answers.remove("prefix_selection"))
+        .or_else(|| parsed.answers.into_values().next());
     Ok(answer)
 }
 
