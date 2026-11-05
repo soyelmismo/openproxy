@@ -4,7 +4,7 @@ import { repeat } from "lit-html/directives/repeat.js";
 import { icons } from "../lib/icons.js";
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
-import { clearToken, isLoggedIn } from "../state/auth.js";
+import { clearToken, isLoggedIn, isFullAdmin } from "../state/auth.js";
 import { renderSidebar } from "./sidebar.js";
 import { bootstrapTheme } from "../state/theme.js";
 import { t } from "../i18n/index.js";
@@ -285,6 +285,12 @@ function paint(): void {
 }
 async function loadResources(): Promise<void> {
   if (resourcesLoading) return;
+  if (!isFullAdmin()) {
+    // Non-admin keys cannot read combos, providers or keys.
+    resourcesLoading = false;
+    resourcesError = false;
+    return;
+  }
   resourcesLoading = true;
   resourcesError = false;
   paintContext();

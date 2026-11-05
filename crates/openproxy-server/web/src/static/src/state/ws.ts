@@ -7,7 +7,7 @@ import type { StageEvent } from "../lib/types/api.js";
 import { dispatchWs } from "./ws-bus.js";
 import { liveLogsStore } from "./live-logs-store.js";
 import type { WsEnvelope } from "../views/logs.js";
-import { getToken } from "./auth.js";
+import { getToken, isFullAdmin } from "./auth.js";
 import { api } from "../lib/api.js";
 
 /** Connection status for the live-logs view. */
@@ -114,7 +114,7 @@ let connectGeneration = 0;
 
 export function connectLogsWebSocket(): void {
   clearLogsReconnectTimer();
-  if (!getToken()) {
+  if (!getToken() || !isFullAdmin()) {
     setLogsStatus("disconnected");
     return;
   }

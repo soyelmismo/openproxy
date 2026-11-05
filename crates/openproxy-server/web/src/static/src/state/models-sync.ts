@@ -8,8 +8,12 @@ import { api } from "./api.js";
 import { requestUpdate } from "./reactive.js";
 import { showToast } from "../components/toast.js";
 import { detailProviderId } from "../views/providers/shared.js";
+import { isFullAdmin } from "./auth.js";
 
 export async function ensureCombosLoaded(): Promise<Combo[]> {
+  if (!isFullAdmin()) {
+    return [];
+  }
   if (Array.isArray(state.combos) && state.combos.length > 0) {
     return state.combos;
   }
@@ -28,6 +32,7 @@ let initialized = false;
 
 export function initModelsSync(): void {
   if (initialized) return;
+  if (!isFullAdmin()) return;
   initialized = true;
 
   // Priming fetch of combos and providers so modals and log rows have names immediately
