@@ -126,7 +126,14 @@ pub(crate) fn parse_openai_models_array(
     arr.iter()
         .filter_map(|raw| {
             let entry: OpenAIModelEntry = serde::Deserialize::deserialize(raw).ok()?;
-            Some(build_discovered_model_with(entry.id, target_format))
+            let eff_format = if target_format == TargetFormat::Openai
+                && (entry.id.starts_with("anthropic/") || entry.id.starts_with("claude-"))
+            {
+                TargetFormat::Anthropic
+            } else {
+                target_format
+            };
+            Some(build_discovered_model_with(entry.id, eff_format))
         })
         .collect()
 }

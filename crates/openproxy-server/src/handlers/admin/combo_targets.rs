@@ -257,6 +257,17 @@ pub fn apply_target_db_updates(
         UpdateField::Reset => core_combos::update_target_selected_accounts(w, target_id, None)?,
         UpdateField::Ignore => {}
     }
+    match updates.client_profile {
+        UpdateField::Set(v) => {
+            // Validate client profile
+            let profile: openproxy_types::ClientProfile = v
+                .parse()
+                .map_err(|e: String| ApiError(openproxy_types::CoreError::Validation(e)))?;
+            core_combos::update_target_client_profile(w, target_id, Some(profile.as_str()))?;
+        }
+        UpdateField::Reset => core_combos::update_target_client_profile(w, target_id, None)?,
+        UpdateField::Ignore => {}
+    }
     Ok(())
 }
 
@@ -279,6 +290,7 @@ pub async fn update_combo_target(
             "cooldown_mode": body.get("cooldown_mode"),
             "cooldown_base_secs": body.get("cooldown_base_secs"),
             "description": body.get("description"),
+            "client_profile": body.get("client_profile"),
         })))
     })
     .await
@@ -493,6 +505,8 @@ mod tests {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
+            model_client_profile: None,
             system_prefixes_count: 0,
         }
     }

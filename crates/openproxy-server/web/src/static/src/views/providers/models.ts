@@ -2,6 +2,7 @@
 // pagination, UI-state setters, and the auto-activate / proxy handlers.
 
 import { html, type TemplateResult } from 'lit-html';
+import { repeat } from 'lit-html/directives/repeat.js';
 import { state } from '../../state/index.js';
 import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
@@ -12,7 +13,6 @@ import {
   applySort,
   SORTABLE_COLUMNS,
   type ModelSort,
-  type SortableColumn,
 } from '../../components/model-table.js';
 import type { Model, Provider } from '../../lib/types/api.js';
 import {
@@ -294,20 +294,112 @@ async function onResetToDirectIp(providerId: string): Promise<void> {
 }
 
 
-function renderSortableTh(
-  col: SortableColumn,
-  sort: ModelSort | null,
-  providerId: string,
-): TemplateResult {
-  const isActive = !!(sort && sort.key === col.key);
-  const indicator: string = isActive
-    ? sort && sort.dir === 'desc'
-      ? ' ▼'
-      : ' ▲'
-    : '';
-  return html`<th class=${'sortable' + (isActive ? ' sorted' : '')} @click=${() => onCycleProviderSort(providerId, col.key)}>${col.label}<span class="sort-indicator">${indicator}</span></th>`;
+function onChooseProviderSort(providerId: string, event: Event): void {
+  const value = (event.currentTarget as HTMLSelectElement).value;
+  const [key, dir] = value.split(':');
+  const ui = getProviderUi(providerId);
+  ui.sort = key && (dir === 'asc' || dir === 'desc') ? { key, dir } : null;
+  ui.page = 1;
+  setProviderUi(providerId, ui);
+  requestUpdate();
 }
 
+
+export function renderProviderModelSettings(
+  provider: Provider,
+): TemplateResult {
+  return html`
+    <div class="auto-activate-bar">
+      <label>
+        Auto-activate on refresh:
+        <input type="text"
+               placeholder="(empty = enable all)"
+               .value=${provider.auto_activate_keyword || ''}
+               @change=${(e: Event) => onUpdateAutoActivate(provider.id, e)}
+               @input=${(e: Event) => onUpdateAutoActivate(provider.id, e)}>
+      </label>
+      <small>Models whose ID contains this string are auto-enabled on refresh. Empty = enable all new models.</small>
+    </div>
+
+    ${provider.auto_activate_keyword && provider.auto_activate_keyword.trim()
+      ? html`<div class="auto-activate-bar" style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
+            <button type="button" role="switch" aria-checked=${provider.notif_keyword_only ? 'true' : 'false'}
+                    class="toggle-btn ${provider.notif_keyword_only ? 'on' : 'off'}"
+                    @click=${() => { void onToggleNotifKeywordOnly(provider.id, !provider.notif_keyword_only); }}>
+              <span class="toggle-thumb"></span>
+            </button>
+            ${t('providers.detail.notif_keyword_only')}
+          </label>
+          <small>${provider.notif_keyword_only
+            ? t('providers.detail.notif_keyword_only_help_on')
+            : t('providers.detail.notif_keyword_only_help_off')}</small>
+        </div>`
+      : html``}
+
+    <div class="auto-activate-bar" style="margin-top: 1rem; display: flex; gap: 2rem; align-items: center; flex-wrap: wrap;">
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="When enabled (default), models omitted from upstream /models are deleted (unless pinned in combos). Disable for volatile/P2P providers like antseed to retain all discovered models.">
+        <input type="checkbox"
+               .checked=${provider.prune_models !== false}
+               @change=${(e: Event) => onTogglePruneModels(provider.id, e)}>
+        Prune missing models on refresh
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
+        <input type="checkbox"
+               .checked=${!!provider.use_proxies}
+               @change=${(e: Event) => onUpdateUseProxies(provider.id, e)}>
+        Use proxies for this provider
+      </label>
+      ${provider.use_proxies ? html`
+        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="Send requests directly using server real IP first; rotate to proxy pool only when proxy rotation errors appear">
+          <input type="checkbox"
+                 .checked=${!!provider.direct_first}
+                 @change=${(e: Event) => onToggleDirectFirst(provider.id, e)}>
+          Use real IP first (rotate to proxy on error)
+        </label>
+        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; flex: 1;">
+          Rotate proxy on errors:
+          <input type="text"
+                 style="flex: 1; max-width: 300px; padding: 0.25rem 0.5rem; font-size: var(--fs-sm); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
+                 placeholder="429,connect_error,timeout"
+                 .value=${provider.proxy_rotation_errors || '429,connect_error,timeout'}
+                 @change=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}
+                 @input=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}>
+        </label>
+        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
+          <input type="checkbox"
+                 .checked=${provider.proxy_rotation_mode === 'incremental_race'}
+                 @change=${(e: Event) => onToggleIncrementalRace(provider.id, e)}>
+          Incremental race (2 &rarr; 4 &rarr; 8 &rarr; 16)
+        </label>
+        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal;">
+          Rotation mode:
+          <select class="provider-rotation-select"
+                  @change=${(e: Event) => onUpdateProxyRotationMode(provider.id, e)}>
+            <option value="global" ?selected=${provider.proxy_rotation_mode === 'global'}>Global (shared)</option>
+            <option value="account" ?selected=${provider.proxy_rotation_mode === 'account'}>Per Account (unique)</option>
+            <option value="incremental_race" ?selected=${provider.proxy_rotation_mode === 'incremental_race'}>Incremental Race</option>
+            <option value="none" ?selected=${provider.proxy_rotation_mode === 'none'}>None (disabled)</option>
+          </select>
+        </label>
+        ${provider.current_proxy_id ? html`
+          <span style="display: inline-flex; align-items: center; gap: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted); background: var(--color-surface-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+            <span>Bound Proxy: <code>${provider.current_proxy_id}</code></span>
+            ${provider.direct_first ? html`
+              <button type="button" class="btn btn-xs" style="padding: 0.1rem 0.4rem; font-size: 0.75rem;" title="Clear bound proxy and return to direct real IP" @click=${() => onResetToDirectIp(provider.id)}>
+                Reset to real IP
+              </button>
+            ` : html``}
+          </span>
+        ` : html`
+          <span style="font-size: var(--fs-sm); color: ${provider.direct_first ? 'var(--color-primary, #38bdf8)' : 'var(--color-warn)'}; background: ${provider.direct_first ? 'var(--color-primary-soft, rgba(56, 189, 248, 0.1))' : 'var(--color-warn-soft)'}; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+            ${provider.direct_first ? 'Using real IP (direct first)' : 'No active proxy bound'}
+          </span>
+        `}
+      ` : html``}
+    </div>
+  `;
+}
 
 export function renderModelsSection(
   provider: Provider,
@@ -358,9 +450,9 @@ export function renderModelsSection(
   const paginationBar: TemplateResult =
     totalFiltered > pageSize
       ? html`
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.5rem; margin-top: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted);">
+        <div class="provider-model-pagination" style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.5rem; margin-top: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted);">
           <div>Showing ${startIdx + 1}–${Math.min(startIdx + pageSize, totalFiltered)} of ${totalFiltered} models</div>
-          <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <div class="provider-model-pagination-controls" style="display: flex; gap: 0.5rem; align-items: center;">
             <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, 1)} title="First page">${icons.chevronsLeft()} First</button>
             <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, currentPage - 1)} title="Previous page">${icons.chevronLeft()} Prev</button>
             <span style="padding: 0 0.5rem; font-weight: bold; color: var(--color-text);">Page ${currentPage} / ${totalPages}</span>
@@ -381,96 +473,6 @@ export function renderModelsSection(
         </div>
       </div>
 
-      <div class="auto-activate-bar">
-        <label>
-          Auto-activate on refresh:
-          <input type="text"
-                 placeholder="(empty = enable all)"
-                 .value=${provider.auto_activate_keyword || ''}
-                 @change=${(e: Event) => onUpdateAutoActivate(provider.id, e)}
-                 @input=${(e: Event) => onUpdateAutoActivate(provider.id, e)}>
-        </label>
-        <small>Models whose ID contains this string are auto-enabled on refresh. Empty = enable all new models.</small>
-      </div>
-
-      ${provider.auto_activate_keyword && provider.auto_activate_keyword.trim()
-        ? html`<div class="auto-activate-bar" style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-            <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
-              <button type="button" role="switch" aria-checked=${provider.notif_keyword_only ? 'true' : 'false'}
-                      class="toggle-btn ${provider.notif_keyword_only ? 'on' : 'off'}"
-                      @click=${() => { void onToggleNotifKeywordOnly(provider.id, !provider.notif_keyword_only); }}>
-                <span class="toggle-thumb"></span>
-              </button>
-              ${t('providers.detail.notif_keyword_only')}
-            </label>
-            <small>${provider.notif_keyword_only
-              ? t('providers.detail.notif_keyword_only_help_on')
-              : t('providers.detail.notif_keyword_only_help_off')}</small>
-          </div>`
-        : html``}
-
-      <div class="auto-activate-bar" style="margin-top: 1rem; display: flex; gap: 2rem; align-items: center; flex-wrap: wrap;">
-        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="When enabled (default), models omitted from upstream /models are deleted (unless pinned in combos). Disable for volatile/P2P providers like antseed to retain all discovered models.">
-          <input type="checkbox"
-                 .checked=${provider.prune_models !== false}
-                 @change=${(e: Event) => onTogglePruneModels(provider.id, e)}>
-          Prune missing models on refresh
-        </label>
-        <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
-          <input type="checkbox"
-                 .checked=${!!provider.use_proxies}
-                 @change=${(e: Event) => onUpdateUseProxies(provider.id, e)}>
-          Use proxies for this provider
-        </label>
-        ${provider.use_proxies ? html`
-          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="Send requests directly using server real IP first; rotate to proxy pool only when proxy rotation errors appear">
-            <input type="checkbox"
-                   .checked=${!!provider.direct_first}
-                   @change=${(e: Event) => onToggleDirectFirst(provider.id, e)}>
-            Use real IP first (rotate to proxy on error)
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; flex: 1;">
-            Rotate proxy on errors:
-            <input type="text"
-                   style="flex: 1; max-width: 300px; padding: 0.25rem 0.5rem; font-size: var(--fs-sm); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
-                   placeholder="429,connect_error,timeout"
-                   .value=${provider.proxy_rotation_errors || '429,connect_error,timeout'}
-                   @change=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}
-                   @input=${(e: Event) => onUpdateProxyRotationErrors(provider.id, e)}>
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;">
-            <input type="checkbox"
-                   .checked=${provider.proxy_rotation_mode === 'incremental_race'}
-                   @change=${(e: Event) => onToggleIncrementalRace(provider.id, e)}>
-            Incremental race (2 &rarr; 4 &rarr; 8 &rarr; 16)
-          </label>
-          <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal;">
-            Rotation mode:
-            <select style="padding: 0.25rem 0.5rem; font-size: var(--fs-sm); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text);"
-                    @change=${(e: Event) => onUpdateProxyRotationMode(provider.id, e)}>
-              <option value="global" ?selected=${provider.proxy_rotation_mode === 'global'}>Global (shared)</option>
-              <option value="account" ?selected=${provider.proxy_rotation_mode === 'account'}>Per Account (unique)</option>
-              <option value="incremental_race" ?selected=${provider.proxy_rotation_mode === 'incremental_race'}>Incremental Race</option>
-              <option value="none" ?selected=${provider.proxy_rotation_mode === 'none'}>None (disabled)</option>
-            </select>
-          </label>
-          ${provider.current_proxy_id ? html`
-            <span style="display: inline-flex; align-items: center; gap: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted); background: var(--color-surface-soft); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
-              <span>Bound Proxy: <code>${provider.current_proxy_id}</code></span>
-              ${provider.direct_first ? html`
-                <button type="button" class="btn btn-xs" style="padding: 0.1rem 0.4rem; font-size: 0.75rem;" title="Clear bound proxy and return to direct real IP" @click=${() => onResetToDirectIp(provider.id)}>
-                  Reset to real IP
-                </button>
-              ` : html``}
-            </span>
-          ` : html`
-            <span style="font-size: var(--fs-sm); color: ${provider.direct_first ? 'var(--color-primary, #38bdf8)' : 'var(--color-warn)'}; background: ${provider.direct_first ? 'var(--color-primary-soft, rgba(56, 189, 248, 0.1))' : 'var(--color-warn-soft)'}; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
-              ${provider.direct_first ? 'Using real IP (direct first)' : 'No active proxy bound'}
-            </span>
-          `}
-        ` : html``}
-      </div>
-
       <div class="filter-bar">
         <input type="text" placeholder="Search models..." .value=${ui.search || ''}
                @input=${(e: Event) => onUpdateProviderSearch(provider.id, e)}>
@@ -483,19 +485,21 @@ export function renderModelsSection(
 
       ${bulkBar}
 
-      <div class="table-wrap">
-        <table class="models-table responsive-card-table">
-          <thead><tr>
-            <th><input type="checkbox" .checked=${allSelected} .indeterminate=${indeterminate} @change=${(e: Event) => onToggleSelectAllModels(e)}></th>
-            ${SORTABLE_COLUMNS.map((c: SortableColumn) => renderSortableTh(c, ui.sort, provider.id))}
-            <th>Capabilities</th><th>Status</th><th>Last test</th><th>Actions</th>
-          </tr></thead>
-          <tbody id="models-tbody">
-            ${paginatedModels.length === 0
-              ? html`<tr><td colspan="10" class="empty-row">No models match the filter.</td></tr>`
-              : html`${paginatedModels.map((m: Model) => renderModelRow(m))}`}
-          </tbody>
-        </table>
+      <div class="provider-model-list-tools">
+        <label class="provider-select-all"><input type="checkbox" aria-label=${t('providers.detail.entry.select_all')} .checked=${allSelected} .indeterminate=${indeterminate} @change=${(e: Event) => onToggleSelectAllModels(e)}> ${t('providers.detail.entry.select_all')}</label>
+        <label class="provider-sort">${t('providers.detail.entry.sort')}
+          <select .value=${ui.sort ? `${ui.sort.key}:${ui.sort.dir}` : ''} @change=${(e: Event) => onChooseProviderSort(provider.id, e)}>
+            <option value="">${t('providers.detail.entry.default_order')}</option>
+            ${SORTABLE_COLUMNS.map(col => html`
+              <option value=${`${col.key}:asc`}>${col.label} ↑</option>
+              <option value=${`${col.key}:desc`}>${col.label} ↓</option>`)}
+          </select>
+        </label>
+      </div>
+      <div class="models-list" id="models-tbody" role="list">
+        ${paginatedModels.length === 0
+          ? html`<p class="empty-row">No models match the filter.</p>`
+          : repeat(paginatedModels, m => m.row_id, m => renderModelRow(m))}
       </div>
       ${paginationBar}
     </section>

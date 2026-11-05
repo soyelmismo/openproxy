@@ -423,6 +423,7 @@ pub fn build_synthetic_combo(
         thinking_effort: None,
         description: None,
         selected_accounts: None,
+        client_profile: None,
         inherited_target_id: None,
     };
     let combo = Combo {

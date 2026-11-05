@@ -188,7 +188,7 @@ impl QuotaPool {
     /// disqualifies the pool instead of being ignored, because an unreadable
     /// expiry is uncertainty about the window, and uncertainty must not
     /// authorize inference.
-    fn within_validity_window(&self, now_secs: u64) -> bool {
+    pub fn within_validity_window(&self, now_secs: u64) -> bool {
         if let Some(starts) = self.starts_at.as_deref() {
             match Self::parse_epoch(starts) {
                 Some(s) if s > now_secs => return false,
@@ -206,7 +206,7 @@ impl QuotaPool {
         true
     }
 
-    fn has_known_exhaustion(&self) -> bool {
+    pub fn has_known_exhaustion(&self) -> bool {
         if let Some(limit) = self.limit
             && let Some(used) = self.used
             && limit > 0

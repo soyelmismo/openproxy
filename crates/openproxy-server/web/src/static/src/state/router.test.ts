@@ -55,7 +55,7 @@ const VALID_CASES: readonly (readonly [string, RouteName, string])[] = [
   ["#/login", "login", ""], ["#/login/", "login", ""],
   ["#/providers", "providers", ""], ["#/providers/abc-123", "provider-detail", "abc-123"],
   ["#/combos/42", "combo-detail", "42"], ["#/combos/0", "combo-detail", "0"], ["#/combos/007", "combo-detail", "007"],
-  ["#/keys", "keys", ""], ["#/keys/42/usage", "key-usage", "42"], ["#/keys/0/usage", "key-usage", "0"],
+  ["#/keys", "keys", ""], ["#/keys/42", "key-detail", "42"], ["#/keys/42/usage", "key-usage", "42"], ["#/keys/0/usage", "key-usage", "0"],
   ["#/analytics", "analytics", ""], ["#/analytics?range=this_month", "analytics", ""],
   ["#/logs", "logs", ""], ["#/logs?foo=bar", "logs", ""],
   ["#/debug-logs", "debug-logs", ""], ["#/config", "config", ""],

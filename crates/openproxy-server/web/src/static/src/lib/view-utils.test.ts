@@ -5,7 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { html } from "lit-html";
-import { createView } from "./view-utils.js";
+import { createView, resolveAccountTier } from "./view-utils.js";
 
 let container: HTMLElement;
 
@@ -202,5 +202,186 @@ describe("createView (generic overload)", () => {
     // Non-array data is not empty by default (the Array.isArray check fails).
     expect(renderFn).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("rendered");
+  });
+
+  it("legacy positional overload accepts an explicit container and renders into it", async () => {
+    let loaded = false;
+    const cleanup = await createView(
+      () => html`<span>${loaded ? "legacy-loaded" : "legacy-loading"}</span>`,
+      async () => {
+        loaded = true;
+      },
+      undefined,
+      container,
+    );
+    await flushMicrotasks();
+
+    expect(container.textContent).toContain("legacy-loaded");
+    cleanup?.();
+  });
+
+  it("legacy positional overload skips execution if container is already disconnected", async () => {
+    container.remove();
+    const loadFn = vi.fn().mockResolvedValue(undefined);
+    const cleanup = await createView(
+      () => html`<span>test</span>`,
+      loadFn,
+      undefined,
+      container,
+    );
+    await flushMicrotasks();
+
+    expect(loadFn).not.toHaveBeenCalled();
+    expect(typeof cleanup).toBe("function");
+    cleanup?.();
+  });
+});
+
+describe("resolveAccountTier (centralized, deduplicated, global)", () => {
+  it("resolves clean tiers for Minimax (Free, Pro)", () => {
+    expect(
+      resolveAccountTier(
+        { provider_id: "minimax", quota_plan_name: "Free" },
+        { id: "minimax", name: "MiniMax" },
+      ),
+    ).toBe("Free");
+
+    expect(
+      resolveAccountTier(
+        { provider_id: "minimax", quota_plan_name: "Pro" },
+        { id: "minimax", name: "MiniMax" },
+      ),
+    ).toBe("Pro");
+  });
+
+  it("resolves Plus or Free for Codex, discarding generic 'Codex / ChatGPT'", () => {
+    // Codex with reset credits -> Plus
+    expect(
+      resolveAccountTier(
+        {
+          provider_id: "codex",
+          quota_plan_name: "Codex / ChatGPT",
+          oauth_provider_specific: JSON.stringify({ reset_credits: 5 }),
+        },
+        { id: "codex", name: "OpenAI Codex" },
+      ),
+    ).toBe("Plus");
+
+    // Codex with weekly limit -> Plus
+    expect(
+      resolveAccountTier(
+        {
+          provider_id: "codex",
+          quota_plan_name: "Codex / ChatGPT",
+          quota_weekly_used: 15,
+        },
+        { id: "codex", name: "OpenAI Codex" },
+      ),
+    ).toBe("Plus");
+
+    // Codex with session limit and reset_credits 0 (bigdataligma@gmail.com real case) -> Free
+    expect(
+      resolveAccountTier(
+        {
+          provider_id: "codex",
+          quota_plan_name: "Codex / ChatGPT",
+          oauth_provider_specific: JSON.stringify({ reset_credits: 0 }),
+          quota_session_used: 10,
+          quota_session_limit: 100,
+        },
+        { id: "codex", name: "OpenAI Codex" },
+      ),
+    ).toBe("Free");
+
+    // Codex without quotas or credits -> Free
+    expect(
+      resolveAccountTier(
+        {
+          provider_id: "codex",
+          quota_plan_name: "Codex / ChatGPT",
+        },
+        { id: "codex", name: "OpenAI Codex" },
+      ),
+    ).toBe("Free");
+
+    // Codex with null quota_plan_name -> defaults intelligently
+    expect(
+      resolveAccountTier(
+        {
+          provider_id: "codex",
+          quota_plan_name: null,
+          oauth_provider_specific: JSON.stringify({ reset_credits: 2 }),
+        },
+        { id: "codex", name: "OpenAI Codex" },
+      ),
+    ).toBe("Plus");
+  });
+
+  it("strips provider placeholders and extracts real tiers", () => {
+    // Antigravity placeholder matching provider name -> null
+    expect(
+      resolveAccountTier(
+        { provider_id: "antigravity", quota_plan_name: "Antigravity" },
+        { id: "antigravity", name: "Antigravity" },
+      ),
+    ).toBeNull();
+
+    // Antigravity Pro -> Pro
+    expect(
+      resolveAccountTier(
+        { provider_id: "antigravity", quota_plan_name: "Pro" },
+        { id: "antigravity", name: "Antigravity" },
+      ),
+    ).toBe("Pro");
+
+    // OpenCode Go -> Go
+    expect(
+      resolveAccountTier(
+        { provider_id: "opencode", quota_plan_name: "OpenCode Go" },
+        { id: "opencode", name: "OpenCode" },
+      ),
+    ).toBe("Go");
+
+    // Devin Teams -> Teams
+    expect(
+      resolveAccountTier(
+        { provider_id: "devin", quota_plan_name: "Devin Teams" },
+        { id: "devin", name: "Devin" },
+      ),
+    ).toBe("Teams");
+
+    // CodeBuddy Enterprise -> Enterprise
+    expect(
+      resolveAccountTier(
+        { provider_id: "codebuddy", quota_plan_name: "CodeBuddy Enterprise" },
+        { id: "codebuddy", name: "CodeBuddy" },
+      ),
+    ).toBe("Enterprise");
+
+    // CodeBuddy Account placeholder -> null
+    expect(
+      resolveAccountTier(
+        { provider_id: "codebuddy", quota_plan_name: "CodeBuddy Account" },
+        { id: "codebuddy", name: "CodeBuddy" },
+      ),
+    ).toBeNull();
+
+    // Z.ai coding_plan -> Coding Plan
+    expect(
+      resolveAccountTier(
+        { provider_id: "zai", quota_plan_name: "coding_plan" },
+        { id: "zai", name: "Z.ai" },
+      ),
+    ).toBe("Coding Plan");
+  });
+
+  it("reads explicit tier from oauth_provider_specific meta", () => {
+    expect(
+      resolveAccountTier({
+        provider_id: "custom",
+        quota_plan_name: null,
+        oauth_provider_specific: JSON.stringify({ tier: "Enterprise" }),
+      }),
+    ).toBe("Enterprise");
   });
 });

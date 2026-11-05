@@ -74,15 +74,17 @@ export async function refreshAllProviders(): Promise<void> {
 
 // ── Create provider ────────────────────────────────────────────────────────
 
-function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
+let providerModal: { wrapper: HTMLElement; close: () => void } | null = null;
+
+function createProviderTemplate(wrapper: HTMLElement, close: () => void): TemplateResult {
   const providerFormats = state.formats?.provider_formats ?? FALLBACK_PROVIDER_FORMATS;
   return html`
-    <div class="modal-bg" id="create-provider-modal"
-         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
+    <div class="modal-bg" id="create-provider-modal" role="dialog" aria-modal="true" aria-labelledby="create-provider-title"
+         @click=${(e: Event) => { if (e.target === e.currentTarget) close(); }}>
       <div class="modal">
         <div class="modal-header">
-          <h2>New provider</h2>
-          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
+          <h2 id="create-provider-title">New provider</h2>
+          <button type="button" class="close-btn" @click=${() => close()} aria-label="Close">&times;</button>
         </div>
         <form @submit=${(e: Event) => { e.preventDefault(); void createProvider(e, wrapper); }}>
           <div class="modal-body">
@@ -140,7 +142,7 @@ function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
             </div>
           </div>
           <div class="modal-footer">
-            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
+            <button type="button" @click=${() => close()}>Cancel</button>
             <button type="submit" class="primary">Create</button>
           </div>
         </form>
@@ -150,28 +152,40 @@ function createProviderTemplate(wrapper: HTMLElement): TemplateResult {
 }
 
 export function showCreateProvider(): void {
+  providerModal?.close();
+  const opener = document.activeElement as HTMLElement | null;
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
-  render(createProviderTemplate(wrapper), wrapper);
+  const app = document.getElementById("app");
+  const wasInert = app?.inert ?? false;
+  if (app) app.inert = true;
+  const close = (): void => {
+    document.removeEventListener("keydown", keydown, true);
+    document.removeEventListener("openproxy:close-modals", close);
+    wrapper.remove();
+    if (app) app.inert = wasInert;
+    if (providerModal?.wrapper === wrapper) providerModal = null;
+    if (opener?.isConnected) opener.focus();
+  };
+  const keydown = (event: KeyboardEvent): void => {
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
+    if (event.key !== "Tab") return;
+    const fields = [...wrapper.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled)')];
+    const first = fields[0]; const last = fields[fields.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  };
+  providerModal = { wrapper, close };
+  render(createProviderTemplate(wrapper, close), wrapper);
+  document.addEventListener("keydown", keydown, true);
+  document.addEventListener("openproxy:close-modals", close);
+  wrapper.querySelector<HTMLInputElement>('input')?.focus();
   if (!state.formats) {
-    void fetchFormats().then(() => {
-      if (wrapper.parentElement) {
-        render(createProviderTemplate(wrapper), wrapper);
-      }
-    });
+    void fetchFormats().then(() => { if (wrapper.isConnected) render(createProviderTemplate(wrapper, close), wrapper); });
   }
 }
 
-export function closeCreateProvider(): void {
-  const m = document.getElementById("create-provider-modal");
-  if (m) {
-    const wrapper = m.parentElement;
-    m.remove();
-    if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
-      wrapper.remove();
-    }
-  }
-}
+export function closeCreateProvider(): void { providerModal?.close(); }
 
 export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
@@ -187,7 +201,7 @@ export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<v
       method: "POST",
       body: JSON.stringify(entries),
     });
-    if (wrapper) wrapper.remove(); else closeCreateProvider();
+    if (providerModal?.wrapper === wrapper || !wrapper) closeCreateProvider(); else wrapper.remove();
     state.providers = await api("/providers") as typeof state.providers;
     navigate();
   } catch (err: unknown) {

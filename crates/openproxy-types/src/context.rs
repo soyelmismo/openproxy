@@ -28,6 +28,15 @@ pub struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
+    /// Returns the effective client profile for this target/model pair.
+    ///
+    /// ComboTarget's explicit `client_profile` takes precedence over the Model's
+    /// catalog `client_profile`.
+    #[inline]
+    pub fn client_profile(&self) -> Option<crate::ClientProfile> {
+        self.target.client_profile.or(self.model.client_profile)
+    }
+
     pub fn test(
         provider: impl Into<crate::ids::ProviderId>,
         model: impl Into<crate::ids::ModelId>,

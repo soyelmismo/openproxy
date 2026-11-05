@@ -32,6 +32,7 @@ export interface Model {
   model_type: string;
   input_modalities_json: string | null;
   output_modalities_json: string | null;
+  client_profile?: string | null;
 }
 
 export interface DiscoveredModel {
@@ -62,6 +63,7 @@ export interface UpdateModelInput {
   target_format?: string | null;
   streaming?: boolean | null;
   capabilities_json?: string | null;
+  client_profile?: string | null;
 }
 
 export interface BulkToggleInput {

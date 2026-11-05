@@ -3,5 +3,6 @@ node_modules/
 
 # TypeScript output
 src/static/dist/
+.dev-dist/
 tests/e2e/.tsbuild/
 data-test.db*

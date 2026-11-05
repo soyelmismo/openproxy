@@ -42,21 +42,10 @@ function makeProvider(overrides: Partial<Provider> = {}): Provider {
   };
 }
 
-// `renderModelsSection` is the exported template entry point. It is
-// pulled in lazily inside an `it` because the module imports the global
-// `state` singleton (side-effectful) — importing it at file scope would
-// run that for every test file in the same worker.
+// Provider settings now render in Config, separate from the models list.
 async function modelsSectionHtml(provider: Provider): Promise<string> {
   const mod = await import("./models.js");
-  return toString(
-    mod.renderModelsSection(provider, [], {
-      filter: "all",
-      search: "",
-      sort: null,
-      page: 1,
-      pageSize: 50,
-    }),
-  );
+  return toString(mod.renderProviderModelSettings(provider));
 }
 
 beforeEach(() => {

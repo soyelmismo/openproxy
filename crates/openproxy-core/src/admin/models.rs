@@ -44,6 +44,8 @@ pub struct UpdateModelInput {
     pub streaming: Option<Option<bool>>,
     #[serde(default)]
     pub capabilities_json: Option<Option<String>>,
+    #[serde(default)]
+    pub client_profile: Option<Option<String>>,
 }
 
 /// Create a hand-picked model row, returning the id of the new (or upserted) row.
@@ -93,6 +95,19 @@ pub fn update_model(conn: &Connection, id: ModelRowId, input: UpdateModelInput) 
             serde_json::to_string(&caps).ok()
         };
         models::update_model_capabilities_json(conn, id, new_caps_json.as_deref())?;
+    }
+
+    if let Some(opt_profile_str) = input.client_profile {
+        let profile_enum = match opt_profile_str {
+            Some(s) => {
+                let parsed: openproxy_types::ClientProfile = s
+                    .parse()
+                    .map_err(|e: String| openproxy_types::CoreError::Validation(e))?;
+                Some(parsed)
+            }
+            None => None,
+        };
+        models::update_model_client_profile(conn, id, Some(profile_enum))?;
     }
 
     Ok(())

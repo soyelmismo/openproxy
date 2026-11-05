@@ -41,11 +41,23 @@ use axum::{
 use crate::state::AppState;
 
 /// Policy directives that do not depend on the request.
-const CSP_STATIC_PREFIX: &str = "default-src 'self'; \
+const CSP_STATIC_PREFIX_FRAME_DENY: &str = "default-src 'self'; \
 script-src 'self' 'unsafe-eval' https://o.alicdn.com https://g.alicdn.com; \
 object-src 'none'; \
 base-uri 'self'; \
 frame-ancestors 'none'; \
+img-src 'self' data: blob: https://www.google.com https://*.gstatic.com https://icons.duckduckgo.com https://*.alicdn.com https://*.aliyuncs.com; \
+style-src 'self' 'unsafe-inline' https://*.alicdn.com; \
+style-src-elem 'self' 'unsafe-inline' https://*.alicdn.com; \
+style-src-attr 'unsafe-inline'; \
+media-src 'self' blob:";
+
+/// Policy directives for embedded same-origin framing (used exclusively by `/admin/panel`).
+const CSP_STATIC_PREFIX_FRAME_SELF: &str = "default-src 'self'; \
+script-src 'self' 'unsafe-eval' https://o.alicdn.com https://g.alicdn.com; \
+object-src 'none'; \
+base-uri 'self'; \
+frame-ancestors 'self'; \
 img-src 'self' data: blob: https://www.google.com https://*.gstatic.com https://icons.duckduckgo.com https://*.alicdn.com https://*.aliyuncs.com; \
 style-src 'self' 'unsafe-inline' https://*.alicdn.com; \
 style-src-elem 'self' 'unsafe-inline' https://*.alicdn.com; \
@@ -67,19 +79,42 @@ fn sanitized_host(req: &Request) -> Option<&str> {
 
 /// Build the full CSP string for a request.
 pub(crate) fn build_csp(host: Option<&str>) -> String {
+    build_csp_internal(host, false)
+}
+
+/// Build the full CSP string with same-origin frame ancestors allowed (`frame-ancestors 'self'`).
+pub(crate) fn build_csp_with_frame_ancestors_self(host: Option<&str>) -> String {
+    build_csp_internal(host, true)
+}
+
+fn build_csp_internal(host: Option<&str>, allow_same_origin_framing: bool) -> String {
+    let prefix = if allow_same_origin_framing {
+        CSP_STATIC_PREFIX_FRAME_SELF
+    } else {
+        CSP_STATIC_PREFIX_FRAME_DENY
+    };
     match host {
         Some(h) => format!(
-            "{CSP_STATIC_PREFIX}; connect-src 'self' https://*.alicdn.com https://*.alibaba.com https://*.aliyuncs.com ws://{h} wss://{h};"
+            "{prefix}; connect-src 'self' https://*.alicdn.com https://*.alibaba.com https://*.aliyuncs.com ws://{h} wss://{h};"
         ),
         None => format!(
-            "{CSP_STATIC_PREFIX}; connect-src 'self' https://*.alicdn.com https://*.alibaba.com https://*.aliyuncs.com;"
+            "{prefix}; connect-src 'self' https://*.alicdn.com https://*.alibaba.com https://*.aliyuncs.com;"
         ),
     }
 }
 
+fn is_panel_path(path: &str) -> bool {
+    path == "/admin/panel" || path == "/admin/panel/"
+}
+
 /// Axum middleware fn: see module docs.
 pub async fn security_headers(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let csp = build_csp(sanitized_host(&req));
+    let allow_frame_self = is_panel_path(req.uri().path());
+    let csp = if allow_frame_self {
+        build_csp_with_frame_ancestors_self(sanitized_host(&req))
+    } else {
+        build_csp(sanitized_host(&req))
+    };
     // Security (OP-21): HSTS is only meaningful when the deployment actually
     // serves TLS. The binary itself is plain HTTP, so emit the header only
     // when the request demonstrably arrived over HTTPS through a TRUSTED
@@ -109,12 +144,24 @@ pub async fn security_headers(State(state): State<AppState>, req: Request, next:
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if allow_frame_self {
+        headers.insert(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("SAMEORIGIN"),
+        );
+    } else {
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     // `build_csp` only interpolates a host that passed `sanitized_host`,
     // so the value is always visible ASCII; fall back to the static
     // policy rather than emitting no CSP at all.
+    let fallback_prefix = if allow_frame_self {
+        build_csp_with_frame_ancestors_self(None)
+    } else {
+        build_csp(None)
+    };
     let csp_value = HeaderValue::from_str(&csp).unwrap_or_else(|_| {
-        HeaderValue::from_str(&build_csp(None))
+        HeaderValue::from_str(&fallback_prefix)
             .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'"))
     });
     headers.insert(header::CONTENT_SECURITY_POLICY, csp_value);
@@ -143,6 +190,12 @@ mod tests {
         assert!(csp.contains("object-src 'none';"));
         assert!(csp.contains("frame-ancestors 'none';"));
         assert!(!csp.contains(" ws: "), "bare scheme sources must be gone");
+
+        let csp_panel = build_csp_with_frame_ancestors_self(sanitized_host(&req_with_host(Some(
+            "listo.click",
+        ))));
+        assert!(csp_panel.contains("frame-ancestors 'self';"));
+        assert!(!csp_panel.contains("frame-ancestors 'none';"));
     }
 
     #[test]

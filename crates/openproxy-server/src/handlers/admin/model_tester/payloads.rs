@@ -468,6 +468,7 @@ mod tests {
             output_modalities_json: None,
             last_test_status: None,
             target_format: openproxy_core::models::TargetFormat::Openai,
+            client_profile: None,
             active: true,
             custom: false,
             manually_disabled_at: None,
@@ -518,5 +519,156 @@ mod tests {
         assert!(url.ends_with("/embeddings"), "url was {url}");
         assert_eq!(body["model"], "nvidia/nemotron-3.5-embed-8b:free");
         assert_eq!(body["input"], "hello");
+    }
+
+    #[test]
+    fn test_has_usable_tokens_detects_empty_and_dummy_completions() {
+        use super::super::has_usable_tokens;
+        use openproxy_types::{OpenAIChoice, OpenAIMessage, OpenAIResponse, OpenAIUsage};
+
+        // None response
+        assert!(!has_usable_tokens(None));
+
+        // Empty choices
+        let empty_choices = OpenAIResponse {
+            id: "id1".into(),
+            object: "chat.completion".into(),
+            created: 100,
+            model: "m".into(),
+            choices: vec![],
+            usage: Some(OpenAIUsage {
+                prompt_tokens: 5,
+                completion_tokens: 1,
+                total_tokens: 6,
+                prompt_tokens_details: None,
+            }),
+        };
+        assert!(!has_usable_tokens(Some(&empty_choices)));
+
+        // Choice with content=null (as seen in dummy xkiro response)
+        let dummy_null_content = OpenAIResponse {
+            id: "chatcmpl_unary".into(),
+            object: "chat.completion".into(),
+            created: 1793873771,
+            model: "qwen/qwen3.8-max:free".into(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: Some(OpenAIUsage {
+                prompt_tokens: 5,
+                completion_tokens: 1,
+                total_tokens: 6,
+                prompt_tokens_details: None,
+            }),
+        };
+        assert!(!has_usable_tokens(Some(&dummy_null_content)));
+
+        // Choice with whitespace-only content
+        let whitespace_content = OpenAIResponse {
+            id: "id2".into(),
+            object: "chat.completion".into(),
+            created: 100,
+            model: "m".into(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".into(),
+                    content: Some(serde_json::Value::String("   \n\t  ".into())),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: None,
+        };
+        assert!(!has_usable_tokens(Some(&whitespace_content)));
+
+        // Real text content
+        let real_text = OpenAIResponse {
+            id: "id3".into(),
+            object: "chat.completion".into(),
+            created: 100,
+            model: "m".into(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".into(),
+                    content: Some(serde_json::Value::String("Hello! How can I help?".into())),
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra: serde_json::Map::new(),
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: Some(OpenAIUsage {
+                prompt_tokens: 5,
+                completion_tokens: 7,
+                total_tokens: 12,
+                prompt_tokens_details: None,
+            }),
+        };
+        assert!(has_usable_tokens(Some(&real_text)));
+
+        // Tool calls response
+        let tool_call_resp = OpenAIResponse {
+            id: "id4".into(),
+            object: "chat.completion".into(),
+            created: 100,
+            model: "m".into(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: Some(vec![serde_json::json!({
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": "{}"}
+                    })]),
+                    extra: serde_json::Map::new(),
+                },
+                finish_reason: Some("tool_calls".into()),
+            }],
+            usage: None,
+        };
+        assert!(has_usable_tokens(Some(&tool_call_resp)));
+
+        // Reasoning content in extra
+        let mut extra = serde_json::Map::new();
+        extra.insert("reasoning_content".into(), serde_json::json!("Thinking..."));
+        let reasoning_resp = OpenAIResponse {
+            id: "id5".into(),
+            object: "chat.completion".into(),
+            created: 100,
+            model: "m".into(),
+            choices: vec![OpenAIChoice {
+                index: 0,
+                message: OpenAIMessage {
+                    role: "assistant".into(),
+                    content: None,
+                    name: None,
+                    tool_call_id: None,
+                    tool_calls: None,
+                    extra,
+                },
+                finish_reason: Some("stop".into()),
+            }],
+            usage: None,
+        };
+        assert!(has_usable_tokens(Some(&reasoning_resp)));
     }
 }

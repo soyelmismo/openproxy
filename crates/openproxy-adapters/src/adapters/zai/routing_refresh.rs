@@ -56,7 +56,29 @@ pub async fn refresh_zai_account_quota(
         )
         .await?;
         let previous = zai_snapshot_from_account(account);
-        let quota = quota.merge_over_previous(Some(&previous));
+        let mut quota = quota.merge_over_previous(Some(&previous));
+        // Preserve exhausted models on AutoClaw starter pool across background refreshes.
+        // AutoClaw wallets endpoint reports total reward balance, but individual models
+        // (like GLM-5.3 free tier) can be exhausted upstream (810000). If a model was
+        // previously removed from model_ids due to exhaustion, retain that exclusion so
+        // the background refresh doesn't resurrect the exhausted model and cause retry loops.
+        if let Some(fresh_pools) = quota.pools.as_mut() {
+            for fresh_pool in fresh_pools
+                .iter_mut()
+                .filter(|p| p.source == QuotaSource::AutoclawStarter)
+            {
+                if let Some(prev_pools) = previous.pools.as_deref() {
+                    if let Some(prev_pool) = prev_pools
+                        .iter()
+                        .find(|p| p.source == QuotaSource::AutoclawStarter)
+                    {
+                        if !prev_pool.model_ids.is_empty() {
+                            fresh_pool.model_ids.retain(|m| prev_pool.matches_model(m));
+                        }
+                    }
+                }
+            }
+        }
         apply_zai_quota_snapshot(account, &quota);
         Ok(Some(quota))
     } else {
@@ -74,8 +96,16 @@ pub fn exhaust_zcode_model(account: &mut Account, model: &str) {
                 || pool.source == QuotaSource::ZcodeStarter)
                 && pool.matches_model(model)
         }) {
-            pool.status = QuotaPoolStatus::Exhausted;
-            pool.remaining = Some(0);
+            if pool.source == QuotaSource::AutoclawStarter {
+                pool.model_ids.retain(|m| !m.eq_ignore_ascii_case(model));
+                if pool.model_ids.is_empty() {
+                    pool.status = QuotaPoolStatus::Exhausted;
+                    pool.remaining = Some(0);
+                }
+            } else {
+                pool.status = QuotaPoolStatus::Exhausted;
+                pool.remaining = Some(0);
+            }
         }
     }
 }

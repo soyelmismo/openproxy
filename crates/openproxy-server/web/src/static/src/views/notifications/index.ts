@@ -16,16 +16,18 @@ import { closeOverlay, resetDndState, setDndOnMarkAsRead } from "./dnd-overlay.j
 let unsubCount: (() => void) | null = null;
 let unsubEvents: (() => void) | null = null;
 
-export async function mountNotifications(): Promise<(() => void) | void> {
-  const main: HTMLElement | null = document.getElementById("main");
-  if (!main) return;
+export async function mountNotifications(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
+  if (!container || !container.isConnected) return;
 
   resetListState();
   resetDndState();
 
   setDndOnMarkAsRead((id) => { void markAsRead(id); });
 
-  const cleanupReactive: () => void = mountView(main, renderView);
+  const cleanupReactive: () => void = mountView(container, renderView);
 
   unsubEvents = subscribeNotificationEvents();
   unsubCount = onUnreadCountChange(() => {

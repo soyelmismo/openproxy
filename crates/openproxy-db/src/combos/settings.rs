@@ -20,6 +20,7 @@ define_column_updaters! {
     pub fn update_target_cooldown_factor(factor: Option<u32> => factor.map(i64::from)) => "cooldown_factor";
     pub fn update_target_description(description: Option<&str>) => "description";
     pub fn update_target_selected_accounts(accounts: Option<&str>) => "selected_accounts";
+    pub fn update_target_client_profile(client_profile: Option<&str>) => "client_profile";
 }
 
 define_column_updaters! {

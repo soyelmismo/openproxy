@@ -48,6 +48,7 @@ export interface ComboTarget {
   description?: string | null;
   selected_accounts?: number[] | null;
   system_prefixes_count?: number;
+  client_profile?: string | null;
 }
 
 export interface ComboTargetSystemPrefix {
@@ -88,6 +89,7 @@ export interface ComboTargetWithModel extends ComboTarget {
   max_output_tokens: number | null;
   provider_active: boolean;
   is_missing?: boolean;
+  model_client_profile?: string | null;
 }
 
 export interface ComboSummary {

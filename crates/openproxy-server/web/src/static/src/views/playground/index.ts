@@ -205,7 +205,10 @@ function handleRunShortcut(): void {
 }
 
 
-export async function mountPlayground(): Promise<(() => void) | void> {
+export async function mountPlayground(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
   stateInternal.loadError = null;
   window.addEventListener('keydown', handleGlobalKeydown);
   window.addEventListener('playground:run', handleRunShortcut);
@@ -248,6 +251,7 @@ export async function mountPlayground(): Promise<(() => void) | void> {
     (msg) => {
       stateInternal.loadError = msg;
     },
+    container,
   );
 
   return () => {

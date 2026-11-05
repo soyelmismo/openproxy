@@ -224,6 +224,7 @@ async fn test_combo_decision_routing_simple_vs_complex() {
                 priority_order: 1,
                 description: Some("Fast simple questions and casual conversation".into()),
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .expect("add fast target");
@@ -239,6 +240,7 @@ async fn test_combo_decision_routing_simple_vs_complex() {
                 priority_order: 2,
                 description: Some("Complex deep coding in Rust and advanced architecture".into()),
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .expect("add deep target");
@@ -355,6 +357,7 @@ async fn test_combo_decision_fallback_on_timeout() {
                 priority_order: 1,
                 description: Some("Default target".into()),
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .expect("add target");
@@ -425,6 +428,73 @@ async fn test_admin_model_tester_decision_model() {
 }
 
 #[tokio::test]
+async fn test_admin_model_tester_rejects_empty_dummy_completion() {
+    let harness = TestHarness::new().await;
+
+    // Create a chat model
+    let model_row_id = {
+        let w = harness.db_pool.writer();
+        admin::create_custom_model(
+            &w,
+            CreateCustomModelInput {
+                provider_id: harness.provider_id.as_str().into(),
+                model_id: "dummy-chat-model".into(),
+                display_name: Some("Dummy Chat Model".into()),
+                target_format: "openai".into(),
+                ttl_seconds: 3600,
+                model_type: Some("chat".into()),
+            },
+        )
+        .expect("create dummy chat model")
+    };
+
+    // Configure mock to return 200 with content=null (exact dummy payload from xkiro/upstream)
+    let dummy_response = json!({
+        "id": "chatcmpl_dummy",
+        "object": "chat.completion",
+        "created": 1793873771,
+        "model": "dummy-chat-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null
+                },
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 5,
+            "completion_tokens": 1,
+            "total_tokens": 6
+        }
+    });
+
+    let dummy_str = dummy_response.to_string();
+    harness
+        .mock_handle
+        .set_custom_chat_response(Some(&dummy_str));
+
+    let (status, resp) = harness
+        .admin_post(&format!("/admin/api/models/{model_row_id}/test"), json!({}))
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "HTTP call itself returns 200 JSON wrapper");
+    assert_eq!(
+        resp["status"], 502,
+        "test result status must be 502 due to dummy empty tokens: {resp}"
+    );
+    assert!(
+        resp["error_msg"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no real tokens"),
+        "error_msg should explain that no real tokens were received: {resp}"
+    );
+}
+
+#[tokio::test]
 async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
     let harness = TestHarness::new().await;
 
@@ -473,6 +543,7 @@ async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .expect("add target to combo");

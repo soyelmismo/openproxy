@@ -14,7 +14,7 @@ const srcDir = join(__dirname, 'src', 'static', 'src');
 const outDir = join(__dirname, 'src', 'static', 'dist');
 
 const options = {
-  entryPoints: [join(srcDir, 'app.ts')],
+  entryPoints: [join(srcDir, 'app.ts'), join(srcDir, 'theme-init.ts')],
   bundle: true,
   format: 'esm',
   target: 'es2022',

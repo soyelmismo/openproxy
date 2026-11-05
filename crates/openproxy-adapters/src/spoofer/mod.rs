@@ -160,6 +160,7 @@ pub mod kilocode;
 pub mod kiro;
 pub mod minimax;
 pub mod opencode;
+pub mod profile_dispatch;
 
 pub use antigravity::*;
 pub use claude_code::*;
@@ -171,6 +172,7 @@ pub use kilocode::*;
 pub use kiro::*;
 pub use minimax::*;
 pub use opencode::*;
+pub use profile_dispatch::*;
 
 #[cfg(test)]
 mod tests;

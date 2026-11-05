@@ -15,6 +15,7 @@
 @import url("./views/notifications.css");
 @import url("./views/proxies.css");
 @import url("./views/keys.css");
+@import url("./views/provider-detail.css");
 @import url("./views/responsive_tables.css");
 
 @keyframes logs-recording-pulse {
@@ -45,13 +46,14 @@ input[type="text"], input[type="number"], input[type="password"],
 input[type="email"], input[type="url"], input[type="search"], select, textarea {
   font-size: var(--fs-sm);
   border-radius: var(--radius-sm);
-  border-color: var(--color-border);
+  border: var(--border-w) var(--border-style) var(--color-border);
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
 input:focus, select:focus, textarea:focus {
-  outline: none;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-soft);
+  box-shadow: none;
 }
 
 button, .btn {

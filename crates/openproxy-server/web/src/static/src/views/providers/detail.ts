@@ -24,9 +24,11 @@ import {
   getProviderUi,
   setProviderUi,
   type ProviderDetailUiState,
+  type ProviderDetailTab,
 } from './shared.js';
 import { renderConnectionsSection } from './oauth.js';
-import { renderModelsSection } from './models.js';
+import { renderModelsSection, renderProviderModelSettings } from './models.js';
+import { t } from '../../i18n/index.js';
 
 let openTtlMenuProviderId: string | null = null;
 let openTtlMenuPos: { top: number; left: number } | null = null;
@@ -446,6 +448,30 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
 }
 
 
+function selectDetailTab(providerId: string, tab: ProviderDetailTab): void {
+  setProviderUi(providerId, { ...getProviderUi(providerId), tab });
+  openTtlMenuProviderId = null;
+  openTtlMenuPos = null;
+  requestUpdate();
+}
+
+function onTabKeydown(event: KeyboardEvent, providerId: string): void {
+  const tabs = ['accounts', 'models', 'config'] as const;
+  const current = tabs.indexOf(getProviderUi(providerId).tab ?? 'accounts');
+  let next: number;
+  switch (event.key) {
+    case 'ArrowRight': next = (current + 1) % tabs.length; break;
+    case 'ArrowLeft': next = (current + tabs.length - 1) % tabs.length; break;
+    case 'Home': next = 0; break;
+    case 'End': next = tabs.length - 1; break;
+    default: return;
+  }
+  event.preventDefault();
+  selectDetailTab(providerId, tabs[next]!);
+  const tablist = (event.currentTarget as HTMLElement).parentElement;
+  tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+}
+
 export function renderProviderDetail(): TemplateResult {
   if (loadError) {
     return html`<div class="banner banner-error">${loadError}</div>`;
@@ -481,6 +507,7 @@ export function renderProviderDetail(): TemplateResult {
     const existing = state.providerDetail[detailProviderId] as Partial<ProviderDetailUiState>;
     setProviderUi(detailProviderId, {
       filter: existing.filter ?? 'all',
+      tab: existing.tab ?? 'accounts',
       search: existing.search ?? '',
       sort: null,
       page: existing.page ?? 1,
@@ -488,10 +515,40 @@ export function renderProviderDetail(): TemplateResult {
     });
   }
   const ui = getProviderUi(detailProviderId);
+  const tab = ui.tab ?? 'accounts';
+  const tabs: Array<{ id: ProviderDetailTab; label: string; count?: number }> = [
+    { id: 'accounts', label: t('providers.detail.tabs.accounts'), count: accounts.length },
+    { id: 'models', label: t('providers.detail.tabs.models'), count: providerModels.length },
+    { id: 'config', label: t('providers.detail.tabs.config') },
+  ];
   return html`
-    <div class="page-header"><a href="#/providers" class="back-link">← All providers</a><h2>${provider.name}</h2></div>
-    ${renderDetailHeader(provider)}
-    ${renderConnectionsSection(provider, accounts)}
-    ${renderModelsSection(provider, providerModels, ui)}
+    <div class="provider-detail-view">
+      <a href="#/providers" class="back-link">← ${t('providers.detail.back')}</a>
+      <header class="provider-summary">
+        <div class="provider-icon" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
+        <div class="provider-summary-info">
+          <h2>${provider.name}</h2>
+          <div class="provider-summary-meta"><code>${provider.id}</code><span>${provider.format}</span><span>${provider.auth_type}</span>
+            ${provider.active ? html`` : html`<span class="chip inactive-chip">${t('providers.list.card.inactive_suffix')}</span>`}
+          </div>
+        </div>
+      </header>
+      <div class="provider-detail-tabs" role="tablist" aria-label=${provider.name}>
+        ${tabs.map(item => html`<button type="button" role="tab"
+          id=${`provider-${provider.id}-tab-${item.id}`}
+          aria-controls=${`provider-${provider.id}-panel-${item.id}`}
+          aria-selected=${tab === item.id} tabindex=${tab === item.id ? 0 : -1}
+          @click=${() => selectDetailTab(provider.id, item.id)}
+          @keydown=${(e: KeyboardEvent) => onTabKeydown(e, provider.id)}
+        >${item.label}${item.count !== undefined ? html` <span class="tab-count">${item.count}</span>` : html``}</button>`)}
+      </div>
+      ${tabs.map(item => html`<div class="provider-detail-panel" role="tabpanel" tabindex="0"
+        id=${`provider-${provider.id}-panel-${item.id}`}
+        aria-labelledby=${`provider-${provider.id}-tab-${item.id}`} ?hidden=${tab !== item.id}>
+        ${item.id === 'accounts' ? renderConnectionsSection(provider, accounts)
+          : item.id === 'models' ? renderModelsSection(provider, providerModels, ui)
+          : html`<div class="provider-config">${renderDetailHeader(provider)}${renderProviderModelSettings(provider)}</div>`}
+      </div>`)}
+    </div>
   `;
 }

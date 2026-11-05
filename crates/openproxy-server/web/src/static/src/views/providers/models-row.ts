@@ -1,6 +1,6 @@
 // views/providers/models-row.ts — per-row handlers keyed on `row_id` (the
-// server-side primary key) plus `renderModelRow`, which emits the full <tr>
-// (desktop + mobile card) and wires the per-row @click callbacks.
+// server-side primary key) plus `renderModelRow`, which emits the coherent dense
+// entry (`<article class="provider-entry model-card-row">`) and wires the per-row callbacks.
 
 import { html, type TemplateResult } from 'lit-html';
 import { state } from '../../state/index.js';
@@ -16,6 +16,9 @@ import { formatContextBadge } from '../../lib/format.js';
 import { renderCapabilityBadges } from './shared.js';
 import type { Model } from '../../lib/types/api.js';
 import { FALLBACK_TARGET_FORMATS } from '../../lib/types/common.js';
+import { renderClientProfileSelect } from '../../components/client-profile-select.js';
+import type { ClientProfile } from '../../lib/types/client-profile.js';
+import { t } from '../../i18n/index.js';
 
 
 export async function onChangeModelFormat(rowId: number, e: Event): Promise<void> {
@@ -33,6 +36,21 @@ export async function onChangeModelFormat(rowId: number, e: Event): Promise<void
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, 'Error');
+  }
+}
+
+export async function onChangeModelClientProfile(rowId: number, newProfile: ClientProfile | null): Promise<void> {
+  try {
+    await api(`/models/${rowId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ client_profile: newProfile }),
+    });
+    const m = (state.models || []).find((x) => x.row_id === rowId);
+    if (m) m.client_profile = newProfile;
+    showToast(newProfile ? `Client profile set to ${newProfile}` : 'Client profile cleared', 'success');
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating client profile');
   }
 }
 
@@ -191,10 +209,10 @@ export function renderModelRow(m: Model): TemplateResult {
   const isSelected: boolean = (state.selectedModels as Set<number>).has(
     m.row_id,
   );
-  const lastTest: TemplateResult =
+  const lastTestStatusBadge: TemplateResult =
     m.last_test_status != null
-      ? html`<span class=${'status-pill ' + statusPillClass(m.last_test_status)}>${String(m.last_test_status)}</span> <small class="last-test-time">${m.last_test_at || ''}</small>`
-      : html`<span class="muted">never</span>`;
+      ? html`<span class=${'status-pill ' + statusPillClass(m.last_test_status)} title=${m.last_test_at || ''}>${String(m.last_test_status)}</span>`
+      : html`<span class="muted" title="never">never</span>`;
 
   const providerAccounts = (state.accounts || []).filter(
     (a) => a.provider_id === m.provider_id,
@@ -213,185 +231,180 @@ export function renderModelRow(m: Model): TemplateResult {
     } catch {}
   }
 
-  return html`<tr id=${`model-row-${m.row_id}`} class=${'model-card-row ' + (m.active ? '' : 'inactive') + (isSelected ? ' selected' : '')}>
-    <td class="col-model-select"><input type="checkbox" ?checked=${isSelected} @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}></td>
-    <td class="col-model-name" data-label="Model">
-      <div class="model-name-wrapper">
-        <code class="model-usage-code" title="Click to copy usage model" @click=${(e: Event) => onCopyUsageModel(usageModel, e)}>${usageModel}</code>
-        ${m.custom ? html`<span class="badge custom">custom</span>` : html``}
-      </div>
-    </td>
-    <td class="col-model-format" data-label="Format">
-      <select
-        class="model-format-select"
-        title="Model target format / wire protocol"
-        .value=${m.target_format || 'openai'}
-        @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
-      >
-        ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
-          (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
-        )}
-      </select>
-    </td>
-    <td class="col-model-context" data-label="Context"><span class="model-spec-val">${formatContextBadge(m.context_length)}</span></td>
-    <td class="col-model-max-output" data-label="Max Output"><span class="model-spec-val">${formatContextBadge(m.max_output_tokens)}</span></td>
-    <td class="col-model-modality" data-label="Modality & Capabilities">
-      <div class="model-modality-block">
-        <div class="model-type-row" style="display:flex;gap:4px;align-items:center;">
-          <select
-            class="model-type-select"
-            title="Model modality / type (Chat, Image, Embedding, Audio, Rerank, Decision)"
-            .value=${m.model_type || 'chat'}
-            @change=${(e: Event) => onChangeModelType(m.row_id, e)}
-          >
-            <option value="chat" ?selected=${!m.model_type || m.model_type === 'chat'}>Chat</option>
-            <option value="image" ?selected=${m.model_type === 'image'}>Image</option>
-            <option value="embedding" ?selected=${m.model_type === 'embedding'}>Embedding</option>
-            <option value="audio" ?selected=${m.model_type === 'audio'}>Audio</option>
-            <option value="rerank" ?selected=${m.model_type === 'rerank'}>Rerank</option>
-            <option value="decision" ?selected=${m.model_type === 'decision'}>Decision</option>
-          </select>
-          <select
-            class="model-type-select"
-            title="Stream override: auto (provider default), unary (forced non-streaming), stream (forced SSE)"
-            @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
-          >
-            <option value="auto" ?selected=${modelStreaming === undefined}>auto stream</option>
-            <option value="unary" ?selected=${modelStreaming === false}>unary</option>
-            <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
-          </select>
-        </div>
-        <div class="model-caps-row">
-          ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
-          ${m.family ? html` <small class="muted model-family-tag">${m.family}</small>` : html``}
-        </div>
-      </div>
-    </td>
-    <td class="col-model-status" data-label="Status"><span class=${'status-pill ' + (m.active ? 'on' : 'off')}>${m.active ? 'active' : 'inactive'}</span></td>
-    <td class="col-model-test-status last-test-cell" data-label="Last test">${lastTest}</td>
-    <td class="col-model-actions" data-label="Actions">
-      <div class="model-actions-block">
-        <div class="model-test-selectors">
-          <select id=${`test-account-${m.row_id}`} class="model-account-select">
-            <option value="">(Default Account)</option>
-            ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
-          </select>
-          <select id=${`test-proxy-${m.row_id}`} class="model-proxy-select">
-            <option value="">(No Proxy)</option>
-            ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
-          </select>
-        </div>
-        <div class="model-btn-group">
-          <button class="small primary" id=${`test-btn-${m.row_id}`} @click=${(e: Event) => onTestModel(m.row_id, e)}>${icons.flask()} Test</button>
-          <button class="small" @click=${() => onToggleModel(m.row_id, !m.active)}>${m.active ? 'Disable' : 'Enable'}</button>
-          <button class="small danger" @click=${() => onDeleteModel(m.row_id)} title="Delete model">${icons.close()}</button>
-        </div>
-      </div>
-    </td>
+  const selectAria = `${t('providers.detail.entry.select')} ${usageModel}`;
 
-    <!-- Mobile Card Structure -->
-    <td class="mobile-model-card-cell">
-      <div class="card-top-header">
-        <div class="card-title-area">
+  return html`<article
+    class=${'provider-entry model-card-row ' + (m.active ? '' : 'inactive') + (isSelected ? ' selected' : '')}
+    id=${`model-row-${m.row_id}`}
+    role="listitem"
+  >
+    <details class="model-entry-card" id=${`model-details-${m.row_id}`}>
+      <summary class="model-entry-row" title="Click to view & configure model details">
+        <div class="model-entry-select" @click=${(e: Event) => e.stopPropagation()}>
           <input
             type="checkbox"
+            aria-label=${selectAria}
             .checked=${isSelected}
             @change=${(e: Event) => onToggleModelSelection(m.row_id, e)}
           />
-          <span
-            class="card-model-title"
-            title="Click to copy usage model name"
-            @click=${(e: Event) => onCopyUsageModel(usageModel, e)}
-          >
-            ${usageModel}
-          </span>
-          ${m.custom ? html`<span class="badge custom" style="font-size:0.62rem;padding:0 3px;">custom</span>` : html``}
         </div>
-        <span class="card-status-pill ${m.active ? 'active' : 'inactive'}">
-          ${m.active ? 'active' : 'inactive'}
-        </span>
-      </div>
-      <div class="card-meta-row">
-        <span class="meta-chip accent">${m.target_format || 'openai'}</span>
-        <span class="meta-chip">${formatContextBadge(m.context_length)} ctx</span>
-        <span class="meta-chip">${formatContextBadge(m.max_output_tokens)} out</span>
-        ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
-        ${m.family ? html`<span class="meta-chip">${m.family}</span>` : html``}
-      </div>
 
-      <div class="card-config-box">
-        <div class="config-item">
-          <span class="config-val-upstream" title="${m.model_id}">
-            ${m.model_id}
-          </span>
-        </div>
-        <div class="config-item">
-          <span class="config-label">Format</span>
-          <select
-            class="custom-mobile-select"
-            style="font-size:0.75rem;padding:1px 3px;"
-            title="Model format override"
-            .value=${m.target_format || 'openai'}
-            @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
-          >
-            ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
-              (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
-            )}
-          </select>
-        </div>
-        <div class="config-item">
-          <span class="config-label">Stream</span>
-          <select
-            class="custom-mobile-select"
-            style="font-size:0.75rem;padding:1px 3px;"
-            title="Stream override"
-            @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
-          >
-            <option value="auto" ?selected=${modelStreaming === undefined}>auto</option>
-            <option value="unary" ?selected=${modelStreaming === false}>unary</option>
-            <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
-          </select>
-        </div>
-        <div class="config-item">
-          <span class="config-label">Test</span>
-          <span class="config-val">${lastTest}</span>
-        </div>
-      </div>
+        <div class="model-entry-main">
+          <div class="model-entry-title-line">
+            <code
+              class="model-usage-code"
+              title="Click to copy usage model"
+              @click=${(e: Event) => {
+                e.stopPropagation();
+                void onCopyUsageModel(usageModel, e);
+              }}
+            >${usageModel}</code>
+            ${m.custom ? html`<span class="badge custom">custom</span>` : html``}
+            ${m.client_profile ? html`<span class="model-profile-badge" title="Spoofed Client Profile">${m.client_profile}</span>` : html``}
+          </div>
 
-      <div class="card-routes-grid">
-        <select class="custom-mobile-select" id=${`test-account-m-${m.row_id}`} @change=${(e: Event) => {
-          const el = document.getElementById(`test-account-${m.row_id}`) as HTMLSelectElement;
-          if (el) el.value = (e.target as HTMLSelectElement).value;
-        }}>
-          <option value="">(Default Account)</option>
-          ${providerAccounts.map((acc) => html`<option value="${acc.id}">${acc.label || `Account #${acc.id}`}</option>`)}
-        </select>
-        <select class="custom-mobile-select" id=${`test-proxy-m-${m.row_id}`} @change=${(e: Event) => {
-          const el = document.getElementById(`test-proxy-${m.row_id}`) as HTMLSelectElement;
-          if (el) el.value = (e.target as HTMLSelectElement).value;
-        }}>
-          <option value="">(No Proxy)</option>
-          ${aliveProxies.map((prx) => html`<option value="${prx.id}">${prx.host}:${prx.port} (${prx.latency_ms || '?'}ms)</option>`)}
-        </select>
-      </div>
+          <div class="model-entry-sub-line">
+            <code>${m.target_format || 'openai'}</code>
+            <span class="dot">·</span>
+            <span>${formatContextBadge(m.context_length)} ctx</span>
+            <span class="dot">·</span>
+            <span>${formatContextBadge(m.max_output_tokens)} out</span>
+            <span class="dot">·</span>
+            <span>${lastTestStatusBadge}</span>
+            ${m.capabilities_json || m.model_type ? html`
+              <span class="dot">·</span>
+              <span class="model-entry-caps">
+                ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
+              </span>
+            ` : html``}
+          </div>
+        </div>
 
-      <div class="card-actions-bar">
-        <button class="btn-card primary" @click=${(e: Event) => {
-          const accM = document.getElementById(`test-account-m-${m.row_id}`) as HTMLSelectElement;
-          const prxM = document.getElementById(`test-proxy-m-${m.row_id}`) as HTMLSelectElement;
-          const accD = document.getElementById(`test-account-${m.row_id}`) as HTMLSelectElement;
-          const prxD = document.getElementById(`test-proxy-${m.row_id}`) as HTMLSelectElement;
-          if (accM && accD) accD.value = accM.value;
-          if (prxM && prxD) prxD.value = prxM.value;
-          onTestModel(m.row_id, e);
-        }}>⚡ Test</button>
-        <button class="btn-card" @click=${() => onToggleModel(m.row_id, !m.active)}>
-          ${m.active ? 'Disable' : 'Enable'}
-        </button>
-        <button class="btn-card danger" @click=${() => onDeleteModel(m.row_id)} title="Delete">✕</button>
+        <div class="model-entry-controls" @click=${(e: Event) => e.stopPropagation()}>
+          <button
+            type="button"
+            class="small primary"
+            id=${`test-btn-${m.row_id}`}
+            title="Execute live test request"
+            @click=${(e: Event) => onTestModel(m.row_id, e)}
+          >${icons.flask()} Test</button>
+
+          <button
+            type="button"
+            role="switch"
+            aria-checked=${m.active ? 'true' : 'false'}
+            aria-label=${m.active ? 'Disable model' : 'Enable model'}
+            class="toggle-btn ${m.active ? 'on' : 'off'}"
+            title=${m.active ? 'Active (click to disable)' : 'Inactive (click to enable)'}
+            @click=${() => onToggleModel(m.row_id, !m.active)}
+          >
+            <span class="toggle-thumb"></span>
+          </button>
+        </div>
+
+        <span class="model-entry-chevron" aria-hidden="true">${icons.chevronRight()}</span>
+      </summary>
+
+      <div class="model-entry-drawer">
+        <!-- Panel 1: Protocol & Routing Config (Structure D) -->
+        <div class="model-config-panel">
+          <div class="model-config-title">Protocol & Routing Config</div>
+          <div class="model-config-grid">
+            <label>
+              <span>${t('providers.detail.entry.format')}</span>
+              <select
+                class="model-format-select"
+                title="Model target format / wire protocol"
+                .value=${m.target_format || 'openai'}
+                @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
+              >
+                ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
+                  (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
+                )}
+              </select>
+            </label>
+
+            <label>
+              <span>Client Profile</span>
+              ${renderClientProfileSelect({
+                className: 'model-format-select',
+                value: m.client_profile,
+                allowInherit: false,
+                noneLabel: 'None (direct / default)',
+                onChange: (newProfile) => onChangeModelClientProfile(m.row_id, newProfile),
+              })}
+            </label>
+
+            <label>
+              <span>${t('providers.detail.entry.modality')}</span>
+              <select
+                class="model-type-select"
+                title="Model modality / type (Chat, Image, Embedding, Audio, Rerank, Decision)"
+                .value=${m.model_type || 'chat'}
+                @change=${(e: Event) => onChangeModelType(m.row_id, e)}
+              >
+                <option value="chat" ?selected=${!m.model_type || m.model_type === 'chat'}>Chat</option>
+                <option value="image" ?selected=${m.model_type === 'image'}>Image</option>
+                <option value="embedding" ?selected=${m.model_type === 'embedding'}>Embedding</option>
+                <option value="audio" ?selected=${m.model_type === 'audio'}>Audio</option>
+                <option value="rerank" ?selected=${m.model_type === 'rerank'}>Rerank</option>
+                <option value="decision" ?selected=${m.model_type === 'decision'}>Decision</option>
+              </select>
+            </label>
+
+            <label>
+              <span>${t('providers.detail.entry.stream')}</span>
+              <select
+                class="model-type-select"
+                title="Stream override: auto (provider default), unary (forced non-streaming), stream (forced SSE)"
+                @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
+              >
+                <option value="auto" ?selected=${modelStreaming === undefined}>auto stream</option>
+                <option value="unary" ?selected=${modelStreaming === false}>unary</option>
+                <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- Panel 2: Live Test Harness Target (Structure D) -->
+        <div class="model-config-panel">
+          <div class="model-config-title">Test Harness Target</div>
+          <div class="model-config-grid">
+            <label>
+              <span>${t('providers.detail.entry.account')}</span>
+              <select id=${`test-account-${m.row_id}`} class="model-account-select">
+                <option value="">(Default Account)</option>
+                ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
+              </select>
+            </label>
+
+            <label>
+              <span>${t('providers.detail.entry.proxy')}</span>
+              <select id=${`test-proxy-${m.row_id}`} class="model-proxy-select">
+                <option value="">(No Proxy)</option>
+                ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- Footer Actions (Structure D) -->
+        <div class="model-config-footer">
+          <div class="model-config-footer-left">
+            ${m.family ? html`<span>Family: <code>${m.family}</code></span>` : html``}
+          </div>
+          <div class="model-config-footer-right">
+            <button
+              class="small danger"
+              @click=${() => onDeleteModel(m.row_id)}
+              title="Delete model"
+            >${icons.close()} Delete</button>
+          </div>
+        </div>
       </div>
-    </td>
-  </tr>`;
+    </details>
+  </article>`;
 }
 
 

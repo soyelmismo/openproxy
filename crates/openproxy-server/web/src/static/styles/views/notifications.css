@@ -185,7 +185,12 @@
 }
 .notification-filter {
   font-size: var(--fs-sm);
-  padding: 0.2rem 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
 }
 
 /* Title row, so the badge sits next to the H2. */
@@ -361,5 +366,68 @@
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
+  }
+}
+
+/* Container query support for Notifications in narrow workspace tiles */
+@container tile-view (max-width: 600px) {
+  .notification-card {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 8px 10px;
+    gap: var(--space-2);
+  }
+
+  .notification-card-body {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: var(--space-1);
+  }
+
+  .notification-card-text {
+    width: 100%;
+  }
+
+  .notification-card-meta {
+    white-space: normal;
+    flex-wrap: wrap;
+    font-size: 11px;
+    gap: 4px;
+  }
+
+  .notification-card-actions {
+    flex-wrap: wrap;
+    width: 100%;
+    border-top: 1px dashed var(--color-border-soft);
+    padding-top: 6px;
+    margin-top: 4px;
+    gap: 4px;
+  }
+
+  .notification-card-actions button {
+    flex: 1 1 auto;
+    justify-content: center;
+    height: 26px;
+    font-size: 11px;
+    padding: 0 6px;
+  }
+}
+
+@container tile-view (max-width: 280px) {
+  .notification-card {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .notification-card-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .notification-card-actions button {
+    width: 100%;
+    height: 24px;
+    font-size: 10px;
   }
 }

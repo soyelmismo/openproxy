@@ -41,6 +41,7 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
     }
     throw new Error(`${r.status}: ${txt}`);
   }
+  if (init.method !== "GET") document.dispatchEvent(new Event("openproxy:mutated"));
   // 204 No Content (e.g. DELETE success with an empty body)
   if (r.status === 204) return null;
   const ct: string = r.headers.get("content-type") || "";

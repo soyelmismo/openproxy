@@ -132,7 +132,10 @@ function renderConfig(): TemplateResult {
 
 // ── Mount ───────────────────────────────────────────────────────────
 
-export async function mountConfig(): Promise<(() => void) | void> {
+export async function mountConfig(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
   loading = true;
   errorMsg = null;
   setConfig(null);
@@ -152,6 +155,7 @@ export async function mountConfig(): Promise<(() => void) | void> {
       requestUpdate();
     },
     (msg) => { errorMsg = msg; loading = false; },
+    container,
   );
   return () => {
     if (vacuumPollHandle) {

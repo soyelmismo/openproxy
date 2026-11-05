@@ -156,6 +156,8 @@ pub struct ComboTarget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_accounts: Option<Vec<AccountId>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_profile: Option<crate::ClientProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_target_id: Option<ComboTargetId>,
 }
 
@@ -179,6 +181,7 @@ impl Default for ComboTarget {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
             inherited_target_id: None,
         }
     }
@@ -302,6 +305,10 @@ pub struct ComboTargetWithModel {
     pub description: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_accounts: Option<Vec<AccountId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_profile: Option<crate::ClientProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_client_profile: Option<crate::ClientProfile>,
     #[serde(default)]
     pub system_prefixes_count: usize,
 }
@@ -322,6 +329,8 @@ pub struct AddTargetInput {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_accounts: Option<Vec<AccountId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_profile: Option<crate::ClientProfile>,
 }
 
 impl Combo {
@@ -423,6 +432,7 @@ mod tests {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
             inherited_target_id: None,
         };
 

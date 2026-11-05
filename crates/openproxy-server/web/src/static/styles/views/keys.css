@@ -83,6 +83,161 @@
   font-family: var(--font-mono);
 }
 
+.keys-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+.keys-table th {
+  padding: 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  white-space: nowrap;
+}
+
+.keys-table th:last-child {
+  text-align: right;
+  padding-right: 8px;
+}
+
+.keys-table td {
+  padding: 8px 6px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.keys-table td[data-label="Label"] {
+  min-width: 100px;
+}
+
+.keys-table td[data-label="Prefix"] {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.keys-table td[data-label="Scopes"] {
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 1%;
+}
+
+.keys-table td[data-label="Allowed models"] {
+  max-width: 130px;
+}
+
+.keys-table td[data-label="Allowed models"] .chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.keys-table td[data-label="Status"] {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.keys-table td[data-label="Last used"],
+.keys-table td[data-label="Created"] {
+  white-space: nowrap;
+  width: 1%;
+  font-size: 10.5px;
+}
+
+.keys-table td[data-label="Actions"] {
+  white-space: nowrap;
+  text-align: right;
+  padding-right: 8px;
+  width: 1%;
+}
+
+.keys-table .key-actions-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  justify-content: flex-end;
+}
+
+.keys-table .key-actions-wrap button {
+  height: 24px;
+  padding: 0 4px;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.keys-table .key-actions-wrap button svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* Intermediate density for medium-large tiles (701px to 1180px) — keeps table mode fitting without clipping */
+@container tile-view (min-width: 701px) and (max-width: 1180px) {
+  .keys-table th,
+  .keys-table td {
+    padding: 6px 3px;
+  }
+
+  .keys-table th {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+
+  .keys-table td[data-label="Label"] {
+    min-width: 80px;
+  }
+
+  .keys-table td[data-label="Scopes"] {
+    max-width: 65px;
+    font-size: 10px;
+  }
+
+  .keys-table td[data-label="Allowed models"] {
+    max-width: 95px;
+  }
+
+  .keys-table td[data-label="Allowed models"] .chip {
+    font-size: 9.5px;
+    padding: 1px 4px;
+  }
+
+  .keys-table td[data-label="Last used"],
+  .keys-table td[data-label="Created"] {
+    font-size: 10px;
+  }
+
+  .keys-table .key-actions-wrap {
+    gap: 2px;
+  }
+
+  .keys-table .key-actions-wrap button {
+    height: 22px;
+    padding: 0 4px;
+    font-size: 0; /* Hides raw text node while SVG icon & title tooltip remain crisp */
+    width: 24px;
+    justify-content: center;
+  }
+
+  .keys-table .key-actions-wrap button svg {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+  }
+}
+
 .key-actions-wrap {
   display: flex;
   gap: var(--space-1);
@@ -190,4 +345,116 @@
   border: var(--border-w) var(--border-style) var(--color-warn);
   padding: var(--space-3);
   border-radius: var(--radius-md);
+}
+
+/* Container query tuning for Keys in workspace tiles */
+@container tile-view (max-width: 960px) {
+  table.keys-table.responsive-card-table {
+    display: block;
+    width: 100%;
+  }
+
+  .keys-table.responsive-card-table thead {
+    display: none;
+  }
+
+  .keys-table.responsive-card-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    width: 100%;
+  }
+
+  .keys-table .responsive-card-row {
+    display: flex;
+    flex-direction: column;
+    padding: 10px 12px;
+    gap: 6px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-subtle);
+    box-sizing: border-box;
+    width: 100%;
+  }
+
+  .keys-table .responsive-card-row > td[data-label="Label"] {
+    display: block;
+    border-bottom: 1px solid var(--color-border-soft);
+    padding-bottom: 6px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .keys-table .responsive-card-row > td[data-label="Label"]::before {
+    display: none;
+  }
+
+  .keys-table .responsive-card-row > td:not([data-label="Label"]):not([data-label="Actions"]) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 0;
+    border: none;
+    font-size: var(--fs-xs);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .keys-table .responsive-card-row > td[data-label="Actions"] {
+    display: block;
+    border-top: 1px dashed var(--color-border-soft);
+    padding-top: 6px;
+    margin-top: 2px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .keys-table .responsive-card-row > td[data-label="Actions"]::before {
+    display: none;
+  }
+
+  .keys-table .responsive-card-row .key-actions-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .keys-table .responsive-card-row .key-actions-wrap button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    font-size: 11px;
+    padding: 0 8px;
+    width: auto;
+    min-width: 0;
+    gap: 4px;
+    border-radius: var(--radius-sm);
+  }
+
+  .keys-table .responsive-card-row .key-actions-wrap button svg {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+@container tile-view (max-width: 280px) {
+  .keys-table .responsive-card-row {
+    padding: 8px 8px;
+    gap: 4px;
+  }
+
+  .keys-table .key-actions-wrap {
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+  }
+
+  .keys-table .key-actions-wrap button {
+    font-size: 10px;
+    height: 24px;
+  }
 }

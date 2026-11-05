@@ -23,7 +23,7 @@ crate::def_table_select!(
     "ct.id, ct.combo_id, ct.provider_id, ct.account_id, ct.model_row_id, \
      ct.sub_combo_id, ct.priority_order, ct.weight, p.rate_limit_scope, ct.active, \
      ct.cooldown_mode, ct.cooldown_base_secs, ct.cooldown_max_secs, ct.cooldown_factor, \
-     ct.thinking_effort, ct.description, ct.selected_accounts"
+     ct.thinking_effort, ct.description, ct.selected_accounts, ct.client_profile"
 );
 pub(crate) use combo_target_select;
 
@@ -62,7 +62,9 @@ crate::def_table_select!(
      ct.thinking_effort, \
      ct.description, \
      ct.selected_accounts, \
-     (SELECT COUNT(*) FROM combo_target_system_prefixes ctsp WHERE ctsp.target_id = ct.id AND ctsp.active = 1) as system_prefixes_count"
+     (SELECT COUNT(*) FROM combo_target_system_prefixes ctsp WHERE ctsp.target_id = ct.id AND ctsp.active = 1) as system_prefixes_count, \
+     ct.client_profile, \
+     m.client_profile as model_client_profile"
 );
 pub(crate) use combo_target_with_model_select;
 
@@ -150,6 +152,7 @@ pub fn row_to_target(row: &Row<'_>) -> rusqlite::Result<ComboTarget> {
         thinking_effort: 14,
         description: 15,
         selected_accounts: @opt_json(16, Vec<AccountId>),
+        client_profile: @opt_enum_parse(17, openproxy_types::ClientProfile),
         inherited_target_id: @none(),
     })
 }
@@ -187,6 +190,8 @@ pub(crate) fn row_to_target_with_model(row: &Row<'_>) -> rusqlite::Result<ComboT
         description: @opt_box_str(23),
         selected_accounts: @opt_json(24, Vec<AccountId>),
         system_prefixes_count: @opt_usize(25),
+        client_profile: @opt_enum_parse(26, openproxy_types::ClientProfile),
+        model_client_profile: @opt_enum_parse(27, openproxy_types::ClientProfile),
     })
 }
 

@@ -148,7 +148,11 @@ function renderKeyUsage(): TemplateResult {
   `;
 }
 
-export async function mountKeyUsage(id: number): Promise<(() => void) | void> {
+export async function mountKeyUsage(
+  id: number,
+  target?: HTMLElement | null,
+): Promise<(() => void) | void> {
+  const container = target ?? document.getElementById("main");
   keyId = id;
   head = null;
   byDay = null;
@@ -164,5 +168,6 @@ export async function mountKeyUsage(id: number): Promise<(() => void) | void> {
       byDay = byDayResp;
     },
     (msg) => { loadError = msg; },
+    container,
   );
 }

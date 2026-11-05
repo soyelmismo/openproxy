@@ -51,27 +51,82 @@ pub fn select_zai_inference_source(
     {
         return Ok(QuotaSource::ZcodeStarter);
     }
-    let free_sources = [QuotaSource::AutoclawStarter, QuotaSource::ZcodeStarter];
-    let has_any_free = pools.iter().any(|p| free_sources.contains(&p.source));
-    if !has_any_free
-        || pools.iter().any(|p| {
-            free_sources.contains(&p.source) && !p.is_known_ineligible_for_model(now_secs, model)
-        })
-    {
-        return Err(CoreError::ServiceUnavailable(
-            "Free promotional quota (AutoClaw / ZCode Starter) could not be verified; paid fallback was not attempted".into(),
-        ));
-    }
-    if pools
+    let has_usable_paid = pools
         .iter()
-        .any(|p| p.source == QuotaSource::CodingPlan && p.is_usable_for_model(now_secs, model))
-    {
+        .any(|p| p.source == QuotaSource::CodingPlan && p.is_usable_for_model(now_secs, model));
+
+    if has_usable_paid {
+        let free_sources = [QuotaSource::AutoclawStarter, QuotaSource::ZcodeStarter];
+        let has_any_free = pools.iter().any(|p| free_sources.contains(&p.source));
+        if !has_any_free
+            || pools.iter().any(|p| {
+                free_sources.contains(&p.source) && !p.is_known_ineligible_for_model(now_secs, model)
+            })
+        {
+            // Last-known-good fallback: AutoClaw promotional balance is prepaid, so a
+            // flaky balance endpoint must not block inference when the last verified
+            // balance was positive. Attempt the AutoClaw route; a genuine depletion
+            // surfaces as a structured upstream error and is recorded by
+            // record_zai_route_failure. ZCode Starter keeps strict fail-closed
+            // behavior to prevent unverified fallback into paid billing.
+            if let Some(source) = pools
+                .iter()
+                .find(|p| {
+                    p.source == QuotaSource::AutoclawStarter
+                        && p.matches_model(model)
+                        && p.within_validity_window(now_secs)
+                        && p.remaining.is_some_and(|r| r > 0)
+                        && !p.has_known_exhaustion()
+                })
+                .map(|p| p.source)
+            {
+                tracing::warn!(
+                    model,
+                    "AutoClaw balance endpoint was ambiguous, but using positive last-known-good balance"
+                );
+                return Ok(source);
+            }
+            return Err(CoreError::ServiceUnavailable(
+                "Free promotional quota (AutoClaw / ZCode Starter) could not be verified; paid fallback was not attempted".into(),
+            ));
+        }
         return Ok(QuotaSource::CodingPlan);
     }
-    if pools
+
+    // Paid fallback is not available/usable. If AutoClaw promotional balance was verified
+    // positive for this model, last-known-good allows inference even if the balance refresh was flaky.
+    if let Some(source) = pools
         .iter()
-        .any(|p| p.status == QuotaPoolStatus::Unavailable)
+        .find(|p| {
+            p.source == QuotaSource::AutoclawStarter
+                && p.matches_model(model)
+                && p.within_validity_window(now_secs)
+                && p.remaining.is_some_and(|r| r > 0)
+                && !p.has_known_exhaustion()
+        })
+        .map(|p| p.source)
     {
+        tracing::warn!(
+            model,
+            "AutoClaw balance endpoint was ambiguous, but using positive last-known-good balance"
+        );
+        return Ok(source);
+    }
+
+    if pools.iter().any(|p| {
+        p.status == QuotaPoolStatus::Unavailable
+            && p.matches_model(model)
+            && !p
+                .fetch_error
+                .as_deref()
+                .unwrap_or("")
+                .contains("credential is missing")
+            && !p
+                .fetch_error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not configured")
+    }) {
         return Err(CoreError::ServiceUnavailable(
             "Z.ai quota could not be verified for the requested model".into(),
         ));
@@ -392,6 +447,39 @@ mod tests {
         let mut invalid_date = starter;
         invalid_date.expires_at = Some("invalid".into());
         assert!(select_zai_inference_source(&[invalid_date, paid], "glm-5.3-flash", 1000).is_err());
+    }
+
+    #[test]
+    fn autoclaw_specific_model_exhaustion_returns_validation_error_not_service_unavailable() {
+        // Account 1576 scenario: AutoClaw promotional credits pool is Active with 12k points,
+        // but GLM-5.3 has been exhausted (removed from model_ids). Zcode and Coding Plan are Absent/Unavailable.
+        let mut autoclaw = pool(
+            QuotaSource::AutoclawStarter,
+            QuotaPoolStatus::Active,
+            &["GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"],
+        );
+        autoclaw.remaining = Some(12365);
+        let mut zcode = pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Absent, &[]);
+        zcode.fetch_error = Some("ZCode OAuth credential is not configured for this account".into());
+        let mut coding = pool(QuotaSource::CodingPlan, QuotaPoolStatus::Unavailable, &[]);
+        coding.fetch_error = Some("Coding Plan credential is missing; subscription could not be verified".into());
+
+        let pools = [autoclaw, zcode, coding];
+
+        // GLM-5.3-Flash should still be authorized and route to AutoClaw
+        assert_eq!(
+            select_zai_inference_source(&pools, "GLM-5.3-Flash", 1000).unwrap(),
+            QuotaSource::AutoclawStarter
+        );
+
+        // GLM-5.3 is exhausted on AutoClaw and neither ZCode nor Coding Plan can authorize it.
+        // It MUST return Validation error so combo routing cleanly rotates to the next target,
+        // NEVER ServiceUnavailable (503).
+        let err = select_zai_inference_source(&pools, "GLM-5.3", 1000).unwrap_err();
+        assert!(
+            matches!(err, CoreError::Validation(ref msg) if msg.contains("no active AutoClaw, ZCode Starter, or Coding Plan quota authorizes model GLM-5.3")),
+            "Expected Validation error for exhausted model, got: {err:?}"
+        );
     }
 
     #[test]

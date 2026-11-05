@@ -114,8 +114,21 @@ pub(crate) async fn record_zai_route_failure(
             .filter(|p| p.source == prepared.route.source && p.matches_model(model))
         {
             if exhausted {
-                pool.status = openproxy_types::quota::QuotaPoolStatus::Exhausted;
-                pool.remaining = Some(0);
+                if pool.source == openproxy_types::quota::QuotaSource::AutoclawStarter {
+                    // AutoClaw Promotional balance is shared across models (GLM-5.3, GLM-5.3-Flash, etc.).
+                    // Upstream error 810000 ("GLM-5.3 free quota used up") means ONLY this specific model's
+                    // free tier allocation is exhausted, NOT the whole promotional points wallet!
+                    // Removing this model from model_ids stops routing this exhausted model to this pool
+                    // without zeroing the actual points or marking the other models (Flash, 5.2, Turbo) dead.
+                    pool.model_ids.retain(|m| !m.eq_ignore_ascii_case(model));
+                    if pool.model_ids.is_empty() {
+                        pool.status = openproxy_types::quota::QuotaPoolStatus::Exhausted;
+                        pool.remaining = Some(0);
+                    }
+                } else {
+                    pool.status = openproxy_types::quota::QuotaPoolStatus::Exhausted;
+                    pool.remaining = Some(0);
+                }
                 pool.fetch_error = None;
             } else if pool.source != openproxy_types::quota::QuotaSource::AutoclawStarter {
                 // For ZCode Starter or Coding Plan, mark unavailable on transient errors.

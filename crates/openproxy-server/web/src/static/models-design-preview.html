@@ -1,0 +1,1620 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenProxy — Explorador de Modelos (4 Opciones de Diseño)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Ubuntu:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root[data-theme="dark"] {
+      --color-bg: #151413;
+      --color-surface: #1c1b1a;
+      --color-surface-2: #262523;
+      --color-surface-hover: rgba(255, 255, 255, 0.04);
+      --color-surface-soft: #262523;
+      --color-text: #f2efe9;
+      --color-text-muted: #a39e95;
+      --color-border: #3c3935;
+      --color-border-soft: #2b2926;
+      --color-primary: #ff4d57;
+      --color-primary-hover: #ff6b73;
+      --color-primary-soft: #2a1717;
+      --color-primary-fg: #151413;
+      --color-success: #88b870;
+      --color-success-soft: #232a1e;
+      --color-warn: #d4a070;
+      --color-warn-soft: #2e2418;
+      --color-error: #e08080;
+      --color-error-soft: #2e1b1b;
+      --color-info: #8ab0c5;
+      --color-info-soft: #1e252a;
+      --font-sans: 'Ubuntu', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 8px;
+    }
+
+    :root[data-theme="light"] {
+      --color-bg: #f5f4ef;
+      --color-surface: #ffffff;
+      --color-surface-2: #eae7df;
+      --color-surface-hover: rgba(0, 0, 0, 0.03);
+      --color-surface-soft: #f0ede5;
+      --color-text: #211f1d;
+      --color-text-muted: #726d66;
+      --color-border: #d4cfc5;
+      --color-border-soft: #e2ddd4;
+      --color-primary: #dc2626;
+      --color-primary-hover: #ef4444;
+      --color-primary-soft: #fee2e2;
+      --color-primary-fg: #ffffff;
+      --color-success: #2e7d32;
+      --color-success-soft: #e8f5e9;
+      --color-warn: #b45309;
+      --color-warn-soft: #fef3c7;
+      --color-error: #c62828;
+      --color-error-soft: #ffebee;
+      --color-info: #0284c7;
+      --color-info-soft: #e0f2fe;
+      --font-sans: 'Ubuntu', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+      --radius-sm: 4px;
+      --radius-md: 6px;
+      --radius-lg: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-family: var(--font-sans);
+      font-size: 13.5px;
+      line-height: 1.5;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    /* Header & Navigation Bar */
+    .catalog-header {
+      max-width: 1300px;
+      margin: 0 auto 24px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .catalog-title h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .catalog-title p {
+      color: var(--color-text-muted);
+      font-size: 12.5px;
+      margin-top: 4px;
+    }
+    .catalog-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .option-tabs {
+      display: inline-flex;
+      background: var(--color-surface-2);
+      padding: 3px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--color-border-soft);
+      gap: 2px;
+    }
+    .option-tab-btn {
+      background: transparent;
+      border: none;
+      color: var(--color-text-muted);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .option-tab-btn:hover {
+      color: var(--color-text);
+    }
+    .option-tab-btn.active {
+      background: var(--color-surface);
+      color: var(--color-text);
+      font-weight: 600;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .theme-toggle {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      color: var(--color-text);
+      padding: 6px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Option Header Card */
+    .option-meta-card {
+      max-width: 1300px;
+      margin: 0 auto 20px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+    }
+    .option-meta-info h2 {
+      font-size: 15px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .option-meta-info p {
+      color: var(--color-text-muted);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+    .badge-tag {
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--color-surface-2);
+      color: var(--color-text-muted);
+      border: 1px solid var(--color-border);
+    }
+    .badge-tag.highlight {
+      background: var(--color-primary-soft);
+      color: var(--color-primary);
+      border-color: rgba(255, 77, 87, 0.3);
+    }
+
+    /* Common Components */
+    .code-chip {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--color-surface-2);
+      border: 1px solid var(--color-border-soft);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--color-text);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      user-select: all;
+    }
+    .code-chip:hover {
+      border-color: var(--color-border);
+      background: var(--color-surface-hover);
+    }
+    .code-chip svg {
+      opacity: 0.5;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      line-height: 1.2;
+    }
+    .status-pill.on {
+      background: var(--color-success-soft);
+      color: var(--color-success);
+    }
+    .status-pill.off {
+      background: var(--color-surface-2);
+      color: var(--color-text-muted);
+    }
+    .status-pill.pill-200 {
+      background: var(--color-success-soft);
+      color: var(--color-success);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+    }
+    .status-pill.pill-429 {
+      background: var(--color-warn-soft);
+      color: var(--color-warn);
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+    }
+    .status-pill.pill-never {
+      background: transparent;
+      color: var(--color-text-muted);
+      border: 1px dashed var(--color-border);
+      font-size: 10px;
+    }
+
+    .cap-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 10.5px;
+      font-weight: 500;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--color-surface-2);
+      color: var(--color-text-muted);
+      border: 1px solid var(--color-border-soft);
+    }
+    .cap-badge.active-cap {
+      color: var(--color-text);
+      border-color: var(--color-border);
+    }
+    .metric-badge {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      font-family: var(--font-mono);
+    }
+    .custom-pill {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      background: var(--color-primary-soft);
+      color: var(--color-primary);
+      padding: 1px 5px;
+      border-radius: 3px;
+      border: 1px solid rgba(255, 77, 87, 0.2);
+    }
+    .profile-pill {
+      font-size: 10.5px;
+      background: var(--color-surface-2);
+      color: var(--color-info);
+      padding: 1px 6px;
+      border-radius: 3px;
+      border: 1px solid var(--color-border);
+    }
+
+    .btn {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--color-border);
+      background: var(--color-surface);
+      color: var(--color-text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s ease;
+    }
+    .btn:hover { background: var(--color-surface-2); }
+    .btn.btn-primary {
+      background: var(--color-primary);
+      color: var(--color-primary-fg);
+      border-color: var(--color-primary);
+      font-weight: 600;
+    }
+    .btn.btn-primary:hover { background: var(--color-primary-hover); }
+    .btn.btn-xs { font-size: 11px; padding: 2px 7px; }
+    .btn.btn-icon { padding: 4px 6px; }
+
+    .native-select {
+      font-family: var(--font-sans);
+      font-size: 11.5px;
+      background: var(--color-surface);
+      color: var(--color-text);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 3px 6px;
+      height: 26px;
+      outline: none;
+      cursor: pointer;
+    }
+    .native-select:focus {
+      border-color: var(--color-primary);
+    }
+    .native-select.mono {
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    /* Switch button */
+    .switch-btn {
+      width: 28px;
+      height: 16px;
+      background: var(--color-surface-2);
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      position: relative;
+      cursor: pointer;
+      display: inline-block;
+      transition: background 0.15s ease;
+      vertical-align: middle;
+    }
+    .switch-btn::after {
+      content: '';
+      position: absolute;
+      top: 1px;
+      left: 1px;
+      width: 12px;
+      height: 12px;
+      background: var(--color-text-muted);
+      border-radius: 50%;
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+    .switch-btn.on {
+      background: var(--color-success);
+      border-color: var(--color-success);
+    }
+    .switch-btn.on::after {
+      transform: translateX(12px);
+      background: #ffffff;
+    }
+
+    /* CONTAINER PRINCIPAL */
+    .view-container {
+      max-width: 1300px;
+      margin: 0 auto;
+      display: none;
+    }
+    .view-container.active {
+      display: block;
+    }
+
+    /* ========================================================
+       OPCIÓN A: MASTER-DETAIL COHERENTE (Igual a Accounts)
+       ======================================================== */
+    .view-a-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      background: var(--color-border-soft);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .a-row {
+      background: var(--color-surface);
+      padding: 12px 16px;
+      display: grid;
+      grid-template-columns: 24px minmax(260px, 1.4fr) minmax(180px, 1fr) auto auto;
+      align-items: center;
+      gap: 16px;
+      transition: background 0.1s ease;
+    }
+    .a-row:hover { background: var(--color-surface-hover); }
+    .a-row.inactive { opacity: 0.65; }
+    .a-row.expanded { background: var(--color-surface-2); }
+    .a-main-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .a-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .a-meta-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 11.5px;
+      color: var(--color-text-muted);
+    }
+    .a-caps-col {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-items: center;
+    }
+    .a-status-col {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 3px;
+    }
+    .a-actions-col {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .a-drawer {
+      background: var(--color-bg);
+      border-top: 1px dashed var(--color-border);
+      padding: 14px 16px 14px 56px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)) auto;
+      gap: 14px 18px;
+      align-items: end;
+    }
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .form-field label {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--color-text-muted);
+    }
+
+    /* ========================================================
+       OPCIÓN B: TABLA DENSE DE INGENIERÍA (Alta densidad)
+       ======================================================== */
+    .view-b-table-wrap {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      overflow-x: auto;
+    }
+    .dense-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      text-align: left;
+    }
+    .dense-table th {
+      background: var(--color-surface-2);
+      color: var(--color-text-muted);
+      font-weight: 600;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--color-border);
+      white-space: nowrap;
+    }
+    .dense-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--color-border-soft);
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+    .dense-table tr:hover td {
+      background: var(--color-surface-hover);
+    }
+    .dense-table tr.inactive td {
+      opacity: 0.55;
+    }
+    .dense-table .td-model {
+      min-width: 240px;
+    }
+    .dense-table select {
+      background: transparent;
+      border: 1px solid transparent;
+      color: var(--color-text);
+      font-size: 11.5px;
+      padding: 2px 4px;
+      border-radius: var(--radius-sm);
+    }
+    .dense-table select:hover, .dense-table select:focus {
+      background: var(--color-surface-2);
+      border-color: var(--color-border);
+    }
+
+    /* ========================================================
+       OPCIÓN C: TARJETAS EN CUADRÍCULA (Cards Grid)
+       ======================================================== */
+    .view-c-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 14px;
+    }
+    .c-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .c-card:hover {
+      border-color: var(--color-border);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    .c-card.inactive {
+      opacity: 0.65;
+    }
+    .c-card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .c-card-specs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      background: var(--color-surface-2);
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 11px;
+    }
+    .c-spec-item {
+      display: flex;
+      justify-content: space-between;
+      color: var(--color-text-muted);
+    }
+    .c-spec-item span:last-child {
+      color: var(--color-text);
+      font-family: var(--font-mono);
+      font-weight: 500;
+    }
+    .c-card-selectors {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .c-card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 8px;
+      border-top: 1px solid var(--color-border-soft);
+    }
+
+    /* ========================================================
+       OPCIÓN D: INSPECTOR SPLIT-PANE (Lista izquierda + Panel de Configuración fija)
+       ======================================================== */
+    .view-d-split {
+      display: grid;
+      grid-template-columns: minmax(340px, 1.4fr) minmax(360px, 1fr);
+      gap: 16px;
+      height: 640px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+    .d-sidebar-list {
+      border-right: 1px solid var(--color-border);
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+    .d-list-item {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--color-border-soft);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      transition: background 0.1s ease;
+    }
+    .d-list-item:hover { background: var(--color-surface-hover); }
+    .d-list-item.selected {
+      background: var(--color-primary-soft);
+      border-left: 3px solid var(--color-primary);
+    }
+    .d-list-item.inactive { opacity: 0.6; }
+    .d-item-title {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .d-item-sub {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      margin-top: 2px;
+      display: flex;
+      gap: 8px;
+    }
+
+    .d-detail-pane {
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      background: var(--color-bg);
+    }
+    .d-pane-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--color-border);
+    }
+    .d-pane-section {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border-soft);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .d-pane-section-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--color-text-muted);
+      margin-bottom: 4px;
+    }
+    .d-field-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    /* Comparison matrix */
+    .comparison-section {
+      max-width: 1300px;
+      margin: 40px auto 0;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-md);
+      padding: 20px;
+    }
+    .comparison-section h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+    .comp-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+    }
+    .comp-table th, .comp-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--color-border-soft);
+      text-align: left;
+    }
+    .comp-table th {
+      color: var(--color-text-muted);
+      font-size: 11.5px;
+      text-transform: uppercase;
+    }
+    .comp-table tr:hover td {
+      background: var(--color-surface-hover);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="catalog-header">
+    <div class="catalog-title">
+      <h1>
+        <svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="var(--color-primary)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="12" height="10" rx="2"></rect>
+          <path d="M5 7h6M5 10h4"></path>
+        </svg>
+        OpenProxy — Diseños de Listado de Modelos
+      </h1>
+      <p>4 propuestas completas con todas las configs actuales (Wire Format, Client Profile, Modality, Streaming, Test Account, Test Proxy, Live Test, Active Toggle).</p>
+    </div>
+
+    <div class="catalog-controls">
+      <div class="option-tabs">
+        <button class="option-tab-btn active" onclick="switchView('a')">
+          <strong>A</strong> Coherente Unificado
+        </button>
+        <button class="option-tab-btn" onclick="switchView('b')">
+          <strong>B</strong> Tabla Dense Inline
+        </button>
+        <button class="option-tab-btn" onclick="switchView('c')">
+          <strong>C</strong> Grid de Tarjetas
+        </button>
+        <button class="option-tab-btn" onclick="switchView('d')">
+          <strong>D</strong> Inspector Split-Pane
+        </button>
+      </div>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Alternar tema">
+        <span id="theme-icon">☀️</span> Tema
+      </button>
+    </div>
+  </header>
+
+  <!-- ========================================================
+       OPCIÓN A: MASTER-DETAIL COHERENTE (Recomendada)
+       ======================================================== -->
+  <div id="view-a" class="view-container active">
+    <div class="option-meta-card">
+      <div class="option-meta-info">
+        <h2>
+          <span>Opción A: Coherente Unificado (Filas Densas + Drawer Acordeón)</span>
+          <span class="badge-tag highlight">Recomendado</span>
+          <span class="badge-tag">Misma Sangría y Estilo que Accounts</span>
+        </h2>
+        <p>Mantiene la identidad visual de la pestaña Accounts: una fila compacta para escanear modelos rápidamente, y un drawer inline limpio al hacer clic en "Edit" o en la fila para configurar Format, Client Profile, Proxy y Test.</p>
+      </div>
+      <div>
+        <span style="font-size: 11.5px; color: var(--color-text-muted);">Filtrado: <strong>3 de 41 activos</strong></span>
+      </div>
+    </div>
+
+    <div class="view-a-list">
+      <!-- Item 1: Activo y Edit abierto -->
+      <article class="a-row expanded">
+        <input type="checkbox" checked title="Select model">
+        <div class="a-main-col">
+          <div class="a-title-row">
+            <span class="code-chip" title="Click to copy usage model">
+              codex/gpt-5.6-luna
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M3.5 10.5H2.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1"></path></svg>
+            </span>
+            <span class="status-pill on">active</span>
+            <span class="profile-pill">Cursor 0.45</span>
+          </div>
+          <div class="a-meta-row">
+            <span>responses</span>
+            <span>·</span>
+            <span>272k ctx</span>
+            <span>·</span>
+            <span>32k out</span>
+            <span>·</span>
+            <span class="status-pill pill-200" title="2026-11-05 08:29:10">200 OK (340ms)</span>
+          </div>
+        </div>
+
+        <div class="a-caps-col">
+          <span class="cap-badge active-cap">👁️ vision</span>
+          <span class="cap-badge active-cap">⚡ tools</span>
+          <span class="cap-badge active-cap">🧠 reasoning</span>
+        </div>
+
+        <div class="a-status-col">
+          <button class="switch-btn on" title="Toggle active status" onclick="this.classList.toggle('on')"></button>
+          <span style="font-size: 10px; color: var(--color-text-muted);">Habilitado</span>
+        </div>
+
+        <div class="a-actions-col">
+          <button class="btn btn-xs" onclick="toggleDrawer('drawer-1')">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 13h10M3 10l5-5 3 3-5 5H3v-3z"></path></svg>
+            Config
+          </button>
+          <button class="btn btn-xs btn-primary">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 2v4l-3 6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l-3-6V2M5 2h6"></path></svg>
+            Test
+          </button>
+        </div>
+      </article>
+
+      <!-- Drawer inline de Item 1 -->
+      <div id="drawer-1" class="a-drawer">
+        <div class="form-field">
+          <label>Target Wire Format</label>
+          <select class="native-select mono">
+            <option value="responses" selected>responses (OpenAI Wham)</option>
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+            <option value="gemini">gemini</option>
+            <option value="commandcodego">commandcodego</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label>Spoofed Client Profile</label>
+          <select class="native-select">
+            <option value="">None (direct / default)</option>
+            <option value="cursor" selected>Cursor 0.45.x</option>
+            <option value="cline">Cline Extension</option>
+            <option value="windsurf">Windsurf</option>
+            <option value="continue">Continue.dev</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label>Modality (Model Type)</label>
+          <select class="native-select">
+            <option value="chat" selected>Chat / Text</option>
+            <option value="image">Image Generation</option>
+            <option value="embedding">Embedding</option>
+            <option value="audio">Audio</option>
+            <option value="decision">Decision</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label>Streaming Mode</label>
+          <select class="native-select">
+            <option value="auto" selected>Auto stream (default)</option>
+            <option value="stream">Force Stream (SSE)</option>
+            <option value="unary">Force Unary (No stream)</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label>Test Account</label>
+          <select class="native-select">
+            <option value="">Account #232 (k)</option>
+            <option value="">Account #1522 (bigdataligma)</option>
+          </select>
+        </div>
+
+        <div class="form-field">
+          <label>Test Proxy</label>
+          <select class="native-select">
+            <option value="" selected>(No Proxy - Real IP)</option>
+            <option value="warp_1">warp_node_1:40001 (35ms)</option>
+            <option value="warp_2">warp_node_2:40002 (23ms)</option>
+          </select>
+        </div>
+
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-xs" style="color: var(--color-error); border-color: rgba(224, 128, 128, 0.3);">Delete</button>
+        </div>
+      </div>
+
+      <!-- Item 2: Activo colapsado -->
+      <article class="a-row">
+        <input type="checkbox" title="Select model">
+        <div class="a-main-col">
+          <div class="a-title-row">
+            <span class="code-chip" title="Click to copy usage model">
+              codex/gpt-6-astra
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M3.5 10.5H2.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1"></path></svg>
+            </span>
+            <span class="status-pill on">active</span>
+          </div>
+          <div class="a-meta-row">
+            <span>responses</span>
+            <span>·</span>
+            <span>272k ctx</span>
+            <span>·</span>
+            <span>32k out</span>
+            <span>·</span>
+            <span class="status-pill pill-200" title="2026-11-05 04:53:53">200 OK (210ms)</span>
+          </div>
+        </div>
+
+        <div class="a-caps-col">
+          <span class="cap-badge active-cap">👁️ vision</span>
+          <span class="cap-badge active-cap">⚡ tools</span>
+          <span class="cap-badge active-cap">🧠 reasoning</span>
+        </div>
+
+        <div class="a-status-col">
+          <button class="switch-btn on" title="Toggle active status" onclick="this.classList.toggle('on')"></button>
+          <span style="font-size: 10px; color: var(--color-text-muted);">Habilitado</span>
+        </div>
+
+        <div class="a-actions-col">
+          <button class="btn btn-xs" onclick="toggleDrawer('drawer-2')">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 13h10M3 10l5-5 3 3-5 5H3v-3z"></path></svg>
+            Config
+          </button>
+          <button class="btn btn-xs btn-primary">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 2v4l-3 6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l-3-6V2M5 2h6"></path></svg>
+            Test
+          </button>
+        </div>
+      </article>
+
+      <!-- Drawer 2 -->
+      <div id="drawer-2" class="a-drawer" style="display: none;">
+        <div class="form-field">
+          <label>Target Wire Format</label>
+          <select class="native-select mono">
+            <option value="responses" selected>responses</option>
+            <option value="openai">openai</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Client Profile</label>
+          <select class="native-select">
+            <option value="" selected>None (direct)</option>
+            <option value="cursor">Cursor</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Test Account</label>
+          <select class="native-select">
+            <option value="">Account #232 (k)</option>
+          </select>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-xs" style="color: var(--color-error);">Delete</button>
+        </div>
+      </div>
+
+      <!-- Item 3: Inactivo / Custom -->
+      <article class="a-row inactive">
+        <input type="checkbox" title="Select model">
+        <div class="a-main-col">
+          <div class="a-title-row">
+            <span class="code-chip">
+              codex/gpt-5.5-preview
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="5.5" y="5.5" width="8" height="8" rx="1"></rect><path d="M3.5 10.5H2.5a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h7a1 1 0 0 1 1 1v1"></path></svg>
+            </span>
+            <span class="status-pill off">inactive</span>
+            <span class="custom-pill">custom</span>
+          </div>
+          <div class="a-meta-row">
+            <span>openai</span>
+            <span>·</span>
+            <span>128k ctx</span>
+            <span>·</span>
+            <span>16k out</span>
+            <span>·</span>
+            <span class="status-pill pill-never">never tested</span>
+          </div>
+        </div>
+
+        <div class="a-caps-col">
+          <span class="cap-badge">chat</span>
+        </div>
+
+        <div class="a-status-col">
+          <button class="switch-btn" title="Toggle active status" onclick="this.classList.toggle('on')"></button>
+          <span style="font-size: 10px; color: var(--color-text-muted);">Deshabilitado</span>
+        </div>
+
+        <div class="a-actions-col">
+          <button class="btn btn-xs" onclick="toggleDrawer('drawer-3')">Config</button>
+          <button class="btn btn-xs btn-primary">Test</button>
+        </div>
+      </article>
+
+      <div id="drawer-3" class="a-drawer" style="display: none;">
+        <div class="form-field">
+          <label>Target Wire Format</label>
+          <select class="native-select mono">
+            <option value="openai" selected>openai</option>
+            <option value="responses">responses</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================
+       OPCIÓN B: TABLA DENSE INLINE (Para administradores hardcore)
+       ======================================================== -->
+  <div id="view-b" class="view-container">
+    <div class="option-meta-card">
+      <div class="option-meta-info">
+        <h2>
+          <span>Opción B: Tabla Dense Inline (Edición Directa por Columna)</span>
+          <span class="badge-tag">Máxima Velocidad</span>
+          <span class="badge-tag">Zero Clics para Configurar</span>
+        </h2>
+        <p>Todas las propiedades (Format, Client Profile, Modality, Streaming, Proxy de prueba) se editan directamente con dropdowns inline dentro de la fila sin necesidad de abrir ningún modal o acordeón.</p>
+      </div>
+    </div>
+
+    <div class="view-b-table-wrap">
+      <table class="dense-table">
+        <thead>
+          <tr>
+            <th style="width: 32px;"><input type="checkbox"></th>
+            <th>Activo</th>
+            <th class="td-model">Modelo (Usage Code)</th>
+            <th>Wire Format</th>
+            <th>Client Profile</th>
+            <th>Modality</th>
+            <th>Stream</th>
+            <th>Contexto</th>
+            <th>Último Test</th>
+            <th>Test Account & Proxy</th>
+            <th style="text-align: right;">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><input type="checkbox" checked></td>
+            <td><button class="switch-btn on" onclick="this.classList.toggle('on')"></button></td>
+            <td class="td-model">
+              <span class="code-chip">codex/gpt-5.6-luna</span>
+            </td>
+            <td>
+              <select class="native-select mono" style="height: 24px;">
+                <option selected>responses</option>
+                <option>openai</option>
+                <option>anthropic</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>Cursor 0.45</option>
+                <option>None</option>
+                <option>Cline</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>Chat</option>
+                <option>Image</option>
+                <option>Embedding</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>auto</option>
+                <option>stream</option>
+                <option>unary</option>
+              </select>
+            </td>
+            <td><span class="metric-badge">272k / 32k</span></td>
+            <td><span class="status-pill pill-200">200 OK</span></td>
+            <td>
+              <div style="display: flex; gap: 4px;">
+                <select class="native-select" style="height: 22px; max-width: 90px; font-size: 10.5px;">
+                  <option>k (#232)</option>
+                  <option>bigdataligma</option>
+                </select>
+                <select class="native-select" style="height: 22px; max-width: 90px; font-size: 10.5px;">
+                  <option>No Proxy</option>
+                  <option>warp_1</option>
+                </select>
+              </div>
+            </td>
+            <td style="text-align: right;">
+              <button class="btn btn-xs btn-primary">Test</button>
+              <button class="btn btn-xs btn-icon" style="color: var(--color-error);" title="Delete">✕</button>
+            </td>
+          </tr>
+
+          <tr>
+            <td><input type="checkbox"></td>
+            <td><button class="switch-btn on" onclick="this.classList.toggle('on')"></button></td>
+            <td class="td-model">
+              <span class="code-chip">codex/gpt-6-astra</span>
+            </td>
+            <td>
+              <select class="native-select mono" style="height: 24px;">
+                <option selected>responses</option>
+                <option>openai</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>None</option>
+                <option>Cursor</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>Chat</option>
+                <option>Image</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>auto</option>
+                <option>stream</option>
+              </select>
+            </td>
+            <td><span class="metric-badge">272k / 32k</span></td>
+            <td><span class="status-pill pill-200">200 OK</span></td>
+            <td>
+              <div style="display: flex; gap: 4px;">
+                <select class="native-select" style="height: 22px; max-width: 90px; font-size: 10.5px;">
+                  <option>k (#232)</option>
+                </select>
+                <select class="native-select" style="height: 22px; max-width: 90px; font-size: 10.5px;">
+                  <option>No Proxy</option>
+                </select>
+              </div>
+            </td>
+            <td style="text-align: right;">
+              <button class="btn btn-xs btn-primary">Test</button>
+              <button class="btn btn-xs btn-icon" style="color: var(--color-error);">✕</button>
+            </td>
+          </tr>
+
+          <tr class="inactive">
+            <td><input type="checkbox"></td>
+            <td><button class="switch-btn" onclick="this.classList.toggle('on')"></button></td>
+            <td class="td-model">
+              <span class="code-chip">codex/gpt-5.5-preview</span>
+              <span class="custom-pill">custom</span>
+            </td>
+            <td>
+              <select class="native-select mono" style="height: 24px;">
+                <option selected>openai</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>None</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>Chat</option>
+              </select>
+            </td>
+            <td>
+              <select class="native-select" style="height: 24px;">
+                <option selected>auto</option>
+              </select>
+            </td>
+            <td><span class="metric-badge">128k / 16k</span></td>
+            <td><span class="status-pill pill-never">never</span></td>
+            <td>
+              <div style="display: flex; gap: 4px;">
+                <select class="native-select" style="height: 22px; max-width: 90px; font-size: 10.5px;">
+                  <option>Default</option>
+                </select>
+                <select class="native-select" style="height: 22px; max-width: 90px; font-size: 10.5px;">
+                  <option>No Proxy</option>
+                </select>
+              </div>
+            </td>
+            <td style="text-align: right;">
+              <button class="btn btn-xs btn-primary">Test</button>
+              <button class="btn btn-xs btn-icon" style="color: var(--color-error);">✕</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ========================================================
+       OPCIÓN C: GRID DE TARJETAS (Cards Grid)
+       ======================================================== -->
+  <div id="view-c" class="view-container">
+    <div class="option-meta-card">
+      <div class="option-meta-info">
+        <h2>
+          <span>Opción C: Grid de Tarjetas Modulares</span>
+          <span class="badge-tag">Visual & Espacioso</span>
+          <span class="badge-tag">Auto-Responsive</span>
+        </h2>
+        <p>Organiza cada modelo como una tarjeta independiente con sus capacidades visuales, badges de tokens y selectores de formato y test agrupados.</p>
+      </div>
+    </div>
+
+    <div class="view-c-grid">
+      <!-- Card 1 -->
+      <div class="c-card">
+        <div class="c-card-top">
+          <div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <span class="code-chip">codex/gpt-5.6-luna</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <span class="status-pill pill-200">200 OK (340ms)</span>
+              <span class="profile-pill">Cursor 0.45</span>
+            </div>
+          </div>
+          <button class="switch-btn on" onclick="this.classList.toggle('on')"></button>
+        </div>
+
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <span class="cap-badge active-cap">👁️ Vision</span>
+          <span class="cap-badge active-cap">⚡ Tool Calling</span>
+          <span class="cap-badge active-cap">🧠 Reasoning</span>
+        </div>
+
+        <div class="c-card-specs">
+          <div class="c-spec-item">
+            <span>Context Length:</span>
+            <span>272,000</span>
+          </div>
+          <div class="c-spec-item">
+            <span>Max Output:</span>
+            <span>32,768</span>
+          </div>
+        </div>
+
+        <div class="c-card-selectors">
+          <div class="form-field">
+            <label>Format</label>
+            <select class="native-select mono">
+              <option selected>responses</option>
+              <option>openai</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Modality</label>
+            <select class="native-select">
+              <option selected>Chat</option>
+              <option>Image</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="c-card-footer">
+          <div style="display: flex; gap: 6px;">
+            <select class="native-select" style="max-width: 110px; font-size: 11px;">
+              <option>k (#232)</option>
+              <option>bigdataligma</option>
+            </select>
+            <select class="native-select" style="max-width: 100px; font-size: 11px;">
+              <option>No Proxy</option>
+              <option>warp_1</option>
+            </select>
+          </div>
+          <button class="btn btn-xs btn-primary">
+            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 2v4l-3 6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l-3-6V2M5 2h6"></path></svg>
+            Test
+          </button>
+        </div>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="c-card">
+        <div class="c-card-top">
+          <div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <span class="code-chip">codex/gpt-6-astra</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <span class="status-pill pill-200">200 OK (210ms)</span>
+            </div>
+          </div>
+          <button class="switch-btn on" onclick="this.classList.toggle('on')"></button>
+        </div>
+
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <span class="cap-badge active-cap">👁️ Vision</span>
+          <span class="cap-badge active-cap">⚡ Tool Calling</span>
+          <span class="cap-badge active-cap">🧠 Reasoning</span>
+        </div>
+
+        <div class="c-card-specs">
+          <div class="c-spec-item">
+            <span>Context Length:</span>
+            <span>272,000</span>
+          </div>
+          <div class="c-spec-item">
+            <span>Max Output:</span>
+            <span>32,768</span>
+          </div>
+        </div>
+
+        <div class="c-card-selectors">
+          <div class="form-field">
+            <label>Format</label>
+            <select class="native-select mono">
+              <option selected>responses</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Modality</label>
+            <select class="native-select">
+              <option selected>Chat</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="c-card-footer">
+          <div style="display: flex; gap: 6px;">
+            <select class="native-select" style="max-width: 110px; font-size: 11px;">
+              <option>k (#232)</option>
+            </select>
+            <select class="native-select" style="max-width: 100px; font-size: 11px;">
+              <option>No Proxy</option>
+            </select>
+          </div>
+          <button class="btn btn-xs btn-primary">Test</button>
+        </div>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="c-card inactive">
+        <div class="c-card-top">
+          <div>
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px;">
+              <span class="code-chip">codex/gpt-5.5-preview</span>
+              <span class="custom-pill">custom</span>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <span class="status-pill pill-never">never tested</span>
+            </div>
+          </div>
+          <button class="switch-btn" onclick="this.classList.toggle('on')"></button>
+        </div>
+
+        <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+          <span class="cap-badge">💬 Chat</span>
+        </div>
+
+        <div class="c-card-specs">
+          <div class="c-spec-item">
+            <span>Context Length:</span>
+            <span>128,000</span>
+          </div>
+          <div class="c-spec-item">
+            <span>Max Output:</span>
+            <span>16,384</span>
+          </div>
+        </div>
+
+        <div class="c-card-selectors">
+          <div class="form-field">
+            <label>Format</label>
+            <select class="native-select mono">
+              <option selected>openai</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label>Modality</label>
+            <select class="native-select">
+              <option selected>Chat</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="c-card-footer">
+          <div style="display: flex; gap: 6px;">
+            <select class="native-select" style="max-width: 110px; font-size: 11px;">
+              <option>Default Account</option>
+            </select>
+            <select class="native-select" style="max-width: 100px; font-size: 11px;">
+              <option>No Proxy</option>
+            </select>
+          </div>
+          <button class="btn btn-xs btn-primary">Test</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================
+       OPCIÓN D: INSPECTOR SPLIT-PANE (Estilo IDE / Postman)
+       ======================================================== -->
+  <div id="view-d" class="view-container">
+    <div class="option-meta-card">
+      <div class="option-meta-info">
+        <h2>
+          <span>Opción D: Inspector Split-Pane (Maestro a la Izquierda + Panel Fijo a la Derecha)</span>
+          <span class="badge-tag">Productividad Extrema</span>
+          <span class="badge-tag">Zero Scroll Jumps</span>
+        </h2>
+        <p>Inspirado en IDEs y herramientas de desarrollo: la columna izquierda muestra la lista rápida de modelos y la derecha mantiene un panel de inspector fijo para afinar o probar el modelo seleccionado sin que la pantalla salte.</p>
+      </div>
+    </div>
+
+    <div class="view-d-split">
+      <!-- Lista Izquierda -->
+      <div class="d-sidebar-list">
+        <div class="d-list-item selected" onclick="selectSplitItem(this)">
+          <div>
+            <div class="d-item-title">codex/gpt-5.6-luna</div>
+            <div class="d-item-sub">
+              <span>responses</span>
+              <span>·</span>
+              <span class="status-pill pill-200">200 OK</span>
+              <span>·</span>
+              <span>272k ctx</span>
+            </div>
+          </div>
+          <button class="switch-btn on" onclick="event.stopPropagation(); this.classList.toggle('on');"></button>
+        </div>
+
+        <div class="d-list-item" onclick="selectSplitItem(this)">
+          <div>
+            <div class="d-item-title">codex/gpt-6-astra</div>
+            <div class="d-item-sub">
+              <span>responses</span>
+              <span>·</span>
+              <span class="status-pill pill-200">200 OK</span>
+              <span>·</span>
+              <span>272k ctx</span>
+            </div>
+          </div>
+          <button class="switch-btn on" onclick="event.stopPropagation(); this.classList.toggle('on');"></button>
+        </div>
+
+        <div class="d-list-item inactive" onclick="selectSplitItem(this)">
+          <div>
+            <div class="d-item-title">codex/gpt-5.5-preview <span class="custom-pill">custom</span></div>
+            <div class="d-item-sub">
+              <span>openai</span>
+              <span>·</span>
+              <span class="status-pill pill-never">never</span>
+              <span>·</span>
+              <span>128k ctx</span>
+            </div>
+          </div>
+          <button class="switch-btn" onclick="event.stopPropagation(); this.classList.toggle('on');"></button>
+        </div>
+      </div>
+
+      <!-- Panel Inspector Derecho -->
+      <div class="d-detail-pane">
+        <div class="d-pane-header">
+          <div>
+            <h3 style="font-size: 16px; font-family: var(--font-mono); margin-bottom: 4px;">codex/gpt-5.6-luna</h3>
+            <p style="font-size: 12px; color: var(--color-text-muted);">Family: <code>gpt</code> · Discovered via upstream /wham/usage</p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-primary">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 2v4l-3 6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l-3-6V2M5 2h6"></path></svg>
+              Run Test
+            </button>
+          </div>
+        </div>
+
+        <!-- Sección de Routing & Wire Protocol -->
+        <div class="d-pane-section">
+          <div class="d-pane-section-title">Protocol & Routing Config</div>
+          <div class="d-field-grid">
+            <div class="form-field">
+              <label>Target Wire Format</label>
+              <select class="native-select mono">
+                <option value="responses" selected>responses (OpenAI Wham)</option>
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Client Profile (User-Agent Spoof)</label>
+              <select class="native-select">
+                <option value="cursor" selected>Cursor 0.45.x</option>
+                <option value="cline">Cline Extension</option>
+                <option value="">None (direct)</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Modality</label>
+              <select class="native-select">
+                <option value="chat" selected>Chat</option>
+                <option value="image">Image</option>
+                <option value="embedding">Embedding</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Streaming Override</label>
+              <select class="native-select">
+                <option value="auto" selected>Auto stream</option>
+                <option value="stream">Force Stream</option>
+                <option value="unary">Force Unary</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sección de Live Test Target -->
+        <div class="d-pane-section">
+          <div class="d-pane-section-title">Live Test Harness</div>
+          <div class="d-field-grid">
+            <div class="form-field">
+              <label>Account to Execute Test</label>
+              <select class="native-select">
+                <option value="232" selected>Account #232 (k)</option>
+                <option value="1522">Account #1522 (bigdataligma@gmail.com)</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Proxy Egress Route</label>
+              <select class="native-select">
+                <option value="" selected>(Direct Real IP - No Proxy)</option>
+                <option value="warp_1">warp_node_1:40001 (35ms)</option>
+                <option value="warp_2">warp_node_2:40002 (23ms)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Capacidades detectadas -->
+        <div class="d-pane-section">
+          <div class="d-pane-section-title">Detected Capabilities & Limits</div>
+          <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px;">
+            <span class="cap-badge active-cap">👁️ Vision</span>
+            <span class="cap-badge active-cap">⚡ Tool Calling</span>
+            <span class="cap-badge active-cap">🧠 Reasoning</span>
+            <span class="cap-badge active-cap">💭 Thinking</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 11.5px; color: var(--color-text-muted); background: var(--color-surface-2); padding: 8px; border-radius: 4px;">
+            <span>Context Window: <strong>272,000 tokens</strong></span>
+            <span>Max Output: <strong>32,768 tokens</strong></span>
+            <span>Last Tested: <strong>2026-11-05 08:29</strong></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Matriz Comparativa -->
+  <section class="comparison-section">
+    <h3>Cuadro Comparativo de los 4 Diseños</h3>
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th>Diseño</th>
+          <th>Ventajas Principales</th>
+          <th>Velocidad de Escaneo</th>
+          <th>Edición Rápida</th>
+          <th>Consistencia con Accounts</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Opción A: Coherente Unificado</strong></td>
+          <td>Mismo ADN visual que la sección de Accounts. Sangría alineada, acordeón expandible sin tapar datos.</td>
+          <td>★★★★★ (Muy alta)</td>
+          <td>★★★★☆ (1 clic en Config)</td>
+          <td>★★★★★ (100% idéntica)</td>
+        </tr>
+        <tr>
+          <td><strong>Opción B: Tabla Dense Inline</strong></td>
+          <td>Todos los dropdowns están visibles en la fila. Puedes cambiar el Format o Profile de 10 modelos sin abrir nada.</td>
+          <td>★★★★☆ (Requiere scroll horizontal en pantallas angostas)</td>
+          <td>★★★★★ (0 clics, todo a la mano)</td>
+          <td>★★★☆☆ (Estilo hoja de cálculo)</td>
+        </tr>
+        <tr>
+          <td><strong>Opción C: Grid de Tarjetas</strong></td>
+          <td>Muy visual, espaciosa, muestra specs y badges como tarjetas modulares. Ideal en pantallas anchas.</td>
+          <td>★★★☆☆ (Más scroll vertical)</td>
+          <td>★★★★☆ (Directa por tarjeta)</td>
+          <td>★★★☆☆ (Más tipo dashboard que lista)</td>
+        </tr>
+        <tr>
+          <td><strong>Opción D: Inspector Split-Pane</strong></td>
+          <td>La pantalla no salta al abrir opciones. Seleccionas el modelo a la izquierda y lo configuras y pruebas a la derecha.</td>
+          <td>★★★★★ (Lista vertical compacta)</td>
+          <td>★★★★★ (Panel fijo permanente)</td>
+          <td>★★★★☆ (Patrón profesional tipo IDE)</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <script>
+    function switchView(opt) {
+      document.querySelectorAll('.view-container').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.option-tab-btn').forEach(btn => btn.classList.remove('active'));
+      
+      const target = document.getElementById('view-' + opt);
+      if (target) target.classList.add('active');
+      
+      const btns = document.querySelectorAll('.option-tab-btn');
+      if (opt === 'a') btns[0].classList.add('active');
+      if (opt === 'b') btns[1].classList.add('active');
+      if (opt === 'c') btns[2].classList.add('active');
+      if (opt === 'd') btns[3].classList.add('active');
+    }
+
+    function toggleDrawer(id) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const isVisible = el.style.display !== 'none';
+      el.style.display = isVisible ? 'none' : 'grid';
+      const row = el.previousElementSibling;
+      if (row && row.classList.contains('a-row')) {
+        row.classList.toggle('expanded', !isVisible);
+      }
+    }
+
+    function selectSplitItem(el) {
+      document.querySelectorAll('.d-list-item').forEach(item => item.classList.remove('selected'));
+      el.classList.add('selected');
+    }
+
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.getElementById('theme-icon').textContent = next === 'dark' ? '☀️' : '🌙';
+    }
+  </script>
+</body>
+</html>

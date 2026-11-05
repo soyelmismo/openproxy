@@ -268,9 +268,11 @@ function renderAnalytics(): TemplateResult {
 
 // ── Mount ───────────────────────────────────────────────────────────
 
-export async function mountAnalytics(): Promise<(() => void) | void> {
-  const el = document.getElementById("main");
-  if (!el) return;
+export async function mountAnalytics(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const el = (target instanceof HTMLElement) ? target : document.getElementById("main");
+  if (!el || !el.isConnected) return;
 
   // Fresh start: the previous mount's charts died with its cleanup fn.
   setViewState({
@@ -312,6 +314,14 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
         : api("/keys") as Promise<ApiKeyFilterRow[]>,
     ]);
 
+    if (!el.isConnected) {
+      cleanupReactive();
+      return () => {
+        destroyAnalyticsCharts();
+        document.removeEventListener("themechange", refreshAnalyticsChartTheme);
+      };
+    }
+
     setViewState({
       summary: summaryResp,
       byModel: byModelResp,
@@ -334,9 +344,17 @@ export async function mountAnalytics(): Promise<(() => void) | void> {
     // rAF runs after the `requestUpdate()` re-render paints, so the chart
     // containers exist. `createAnalyticsCharts` is idempotent.
     requestAnimationFrame(() => {
+      if (!el.isConnected) return;
       createAnalyticsCharts();
     });
   } catch (e: unknown) {
+    if (!el.isConnected) {
+      cleanupReactive();
+      return () => {
+        destroyAnalyticsCharts();
+        document.removeEventListener("themechange", refreshAnalyticsChartTheme);
+      };
+    }
     setViewState({
       errorMsg: e instanceof Error ? e.message : String(e),
       providers: state.providers || [],

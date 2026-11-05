@@ -1,9 +1,8 @@
 // views/keys.ts — API keys list.
 //
-// The create/edit modal HTML is still built by `handlers/key-handlers.ts`
-// (it lives at <body> level so it survives re-renders). Regenerate /
-// revoke / delete are written locally so they can use `showToast()` for
-// errors and call `requestUpdate()` instead of `rerenderCurrentView()`.
+// Creation stays in a modal, while Edit navigates to the integrated key-detail view.
+// Regenerate / revoke / delete are written locally so they can use showToast()
+// and refresh the list through requestUpdate().
 
 import { html, type TemplateResult } from 'lit-html';
 import { state } from "../state/index.js";
@@ -259,7 +258,10 @@ function renderKeys(): TemplateResult {
 }
 
 
-export async function mountKeys(): Promise<(() => void) | void> {
+export async function mountKeys(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
   loadError = null;
   return createView(
     renderKeys,
@@ -272,5 +274,6 @@ export async function mountKeys(): Promise<(() => void) | void> {
       state.models = models;
     },
     (msg) => { loadError = msg; },
+    container,
   );
 }

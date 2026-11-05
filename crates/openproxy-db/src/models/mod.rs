@@ -38,6 +38,7 @@ pub(crate) fn map_row(row: &Row<'_>) -> rusqlite::Result<Model> {
         input_modalities_json: @opt_box_str(17),
         output_modalities_json: @opt_box_str(18),
         manually_disabled_at: @opt_box_str(19),
+        client_profile: @opt_enum_parse(20, openproxy_types::ClientProfile),
     })
 }
 
@@ -50,7 +51,8 @@ crate::def_table_select!(
      context_length, max_output_tokens, capabilities_json, \
      family, model_type, input_modalities_json, \
      output_modalities_json, \
-     manually_disabled_at"
+     manually_disabled_at, \
+     client_profile"
 );
 pub(crate) use model_select;
 

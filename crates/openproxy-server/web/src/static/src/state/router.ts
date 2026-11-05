@@ -4,6 +4,8 @@
 import { html, render } from 'lit-html';
 import { state } from "./index.js";
 import { startBgPoll } from "./bg-poll.js";
+import { isPanelDocument } from "./workspace.js";
+import { mountWorkspace, unmountWorkspace } from "../components/workspace.js";
 
 import { isLoggedIn } from "./auth.js";
 import { renderSidebar } from "../components/sidebar.js";
@@ -11,6 +13,7 @@ import { mountHome } from "../views/home/index.js";
 import { mountCombos } from "../views/combos.js";
 import { mountKeys } from "../views/keys.js";
 import { mountKeyUsage } from "../views/key-usage.js";
+import { mountKeyDetail } from "../views/key-detail.js";
 import { mountLogs } from "../views/logs.js";
 import { mountDebugLogs } from "../views/debug-logs.js";
 import { mountLogin } from "../views/login.js";
@@ -37,6 +40,7 @@ export type RouteName =
   | "combos"
   | "combo-detail"
   | "keys"
+  | "key-detail"
   | "key-usage"
   | "analytics"
   | "logs"
@@ -68,6 +72,7 @@ const ROUTES: readonly Route[] = [
   { name: "combos", pattern: /^#?\/combos$/, mount: mountCombos as ViewMount },
   { name: "combo-detail", pattern: /^#?\/combos\/(\d+)$/, mount: ((ctx: string) => mountCombos({ detailId: parseInt(ctx, 10) })) as ViewMount },
   { name: "keys", pattern: /^#?\/keys$/, mount: mountKeys as ViewMount },
+  { name: "key-detail", pattern: /^#?\/keys\/(\d+)$/, mount: ((ctx: string) => mountKeyDetail(parseInt(ctx, 10))) as ViewMount },
   { name: "key-usage", pattern: /^#?\/keys\/(\d+)\/usage$/, mount: ((ctx: string) => mountKeyUsage(parseInt(ctx, 10))) as ViewMount },
   // `?range=<preset>` in the hash keeps the selected range across a refresh.
   // `mountAnalytics` reads the preset off `location.hash`.
@@ -120,6 +125,50 @@ export function parseHash(hash: string): ParsedHash | null {
   return null;
 }
 
+/** Mount a real SPA view into a native tile, never another document. */
+export async function mountRouteInto(route: string, target: HTMLElement): Promise<(() => void) | void> {
+  const parsed = parseHash(route);
+  if (!parsed || !target.isConnected) return;
+  target.dataset['view'] = parsed.name;
+  switch (parsed.name) {
+    case 'home': return mountHome(target);
+    case 'providers': case 'provider-detail': {
+      const { mountProviders } = await import('../views/providers/index.js');
+      if (!target.isConnected) return;
+      return mountProviders(parsed.name === 'provider-detail' ? { detailId: decodeURIComponent(parsed.context) } : {}, target);
+    }
+    case 'combos': case 'combo-detail': return mountCombos(parsed.name === 'combo-detail' ? { detailId: Number(parsed.context) } : {}, target);
+    case 'keys': return mountKeys(target);
+    case 'key-detail': return mountKeyDetail(Number(parsed.context), target);
+    case 'key-usage': return mountKeyUsage(Number(parsed.context), target);
+    case 'logs': return mountLogs(target, route);
+    case 'debug-logs': return mountDebugLogs(target);
+    case 'proxies': return mountProxies(target);
+    case 'proxy-sources': return mountProxySources(target);
+    case 'analytics': {
+      const { mountAnalytics } = await import('../views/analytics/index.js');
+      if (target.isConnected) return mountAnalytics(target);
+      return;
+    }
+    case 'config': {
+      const { mountConfig } = await import('../views/config/index.js');
+      if (target.isConnected) return mountConfig(target);
+      return;
+    }
+    case 'notifications': {
+      const { mountNotifications } = await import('../views/notifications/index.js');
+      if (target.isConnected) return mountNotifications(target);
+      return;
+    }
+    case 'playground': {
+      const { mountPlayground } = await import('../views/playground/index.js');
+      if (target.isConnected) return mountPlayground(target);
+      return;
+    }
+    case 'login': return;
+  }
+}
+
 export function navigate(): void {
   const r: ParsedHash | null = parseHash(location.hash);
   if (!r) { location.hash = "#/"; return; }
@@ -137,6 +186,7 @@ export function navigate(): void {
     return;
   }
   if (r.name === "login") {
+    document.dispatchEvent(new Event("openproxy:close-modals"));
     document.querySelectorAll(".modal-bg").forEach((el: Element) => {
       const parent: HTMLElement | null = el.parentElement;
       if (parent && parent !== document.body && parent.id !== "modal-root") {
@@ -166,6 +216,18 @@ export function navigate(): void {
     }
     currentCleanup = null;
   }
+  const workspaceRoot = document.getElementById("workspace");
+  const useWorkspace = !isPanelDocument() && r.name !== "login" && workspaceRoot !== null;
+  document.body.classList.toggle("workspace-host", useWorkspace);
+  if (workspaceRoot) workspaceRoot.hidden = !useWorkspace;
+  const mainRoot = document.getElementById("main");
+  if (mainRoot) mainRoot.hidden = useWorkspace;
+  if (useWorkspace) {
+    mountWorkspace(location.hash || "#/");
+    startBgPoll();
+    return;
+  }
+  if (r.name === "login" && !isPanelDocument()) unmountWorkspace();
   // The mount may return a cleanup function or a Promise of one.
   Promise.resolve(r.mount(r.context)).then((ret: unknown) => {
     if (typeof ret === "function") {
@@ -173,6 +235,7 @@ export function navigate(): void {
     } else {
       currentCleanup = null;
     }
+    if (isPanelDocument()) window.parent.postMessage({ type: "openproxy:panel-ready" }, location.origin);
   }).catch((e: unknown) => {
     const main: HTMLElement | null = document.getElementById("main");
     if (main) {
@@ -180,6 +243,7 @@ export function navigate(): void {
       delete (main as { _$litPart$?: unknown })._$litPart$;
       main.innerHTML = '';
       render(html`<div class="banner banner-error">Error: ${msg}</div>`, main);
+      if (isPanelDocument()) window.parent.postMessage({ type: "openproxy:panel-ready" }, location.origin);
     }
   });
   // Idempotent: restarts the interval, so navigation is a natural hook.

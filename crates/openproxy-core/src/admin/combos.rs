@@ -75,6 +75,8 @@ pub struct AddTargetInput {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_accounts: Option<Vec<AccountId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_profile: Option<openproxy_types::ClientProfile>,
 }
 
 fn apply_combo_overrides(
@@ -188,6 +190,7 @@ pub fn add_target_to_combo(
             priority_order: input.priority_order,
             description: input.description,
             selected_accounts: input.selected_accounts,
+            client_profile: input.client_profile,
         },
     )
 }

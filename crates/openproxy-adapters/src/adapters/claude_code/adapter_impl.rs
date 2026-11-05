@@ -500,7 +500,7 @@ pub(crate) fn parse_claude_code_usage_response(json: &serde_json::Value) -> Acco
 /// Overwrite the `session_id` field inside the JSON-encoded
 /// `metadata.user_id` string with the canonical session the pipeline placed in
 /// the `X-Claude-Code-Session-Id` header, so the body and header agree.
-fn sync_claude_session_id(json: &mut serde_json::Value, headers: &[(String, String)]) {
+pub fn sync_claude_session_id(json: &mut serde_json::Value, headers: &[(String, String)]) {
     let Some(session) = headers
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case("x-claude-code-session-id"))
@@ -539,7 +539,7 @@ fn sync_claude_session_id(json: &mut serde_json::Value, headers: &[(String, Stri
 /// identical to what the wrapper produced. Only a mid-request profile reload
 /// (which is exactly the split this guards) rewrites the block, and it rebuilds
 /// the fingerprint from the pinned version so both halves stay consistent.
-fn apply_claude_code_billing_version(json: &mut serde_json::Value, version: &str) {
+pub fn apply_claude_code_billing_version(json: &mut serde_json::Value, version: &str) {
     let (existing_text, entrypoint) = {
         let Some(system) = json.get("system").and_then(|s| s.as_array()) else {
             return;
@@ -607,7 +607,7 @@ fn set_header_if_present(headers: &mut [(String, String)], key: &str, value: &st
 
 /// Merge body-derived betas into the `anthropic-beta` header without dropping
 /// betas the downstream caller requested (case-insensitive de-duplication).
-fn merge_claude_beta_header(headers: &mut Vec<(String, String)>, body_betas: &str) {
+pub fn merge_claude_beta_header(headers: &mut Vec<(String, String)>, body_betas: &str) {
     let mut betas = Vec::<String>::new();
     for value in headers
         .iter()

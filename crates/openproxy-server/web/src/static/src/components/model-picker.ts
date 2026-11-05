@@ -1,5 +1,5 @@
 // components/model-picker.ts — search + multi-select modal for the Keys view's
-// "Allowed models" and "Blacklisted models" fields. Singleton.
+// "Allowed models", "Blacklisted models", and "Allowed combos" fields. Singleton.
 
 import { html, render, type TemplateResult } from "lit-html";
 import { state } from "../state/index.js";
@@ -9,6 +9,8 @@ import type { Combo } from "../lib/types/combos.js";
 // Wrapper hosting the singleton modal.
 let modalWrapper: HTMLDivElement | null = null;
 let activeTarget: "allowed_models" | "blacklisted_models" | "allowed_combos" = "allowed_models";
+const PAGE_SIZE = 50;
+let displayedLimit = PAGE_SIZE;
 
 export function getAvailableProviders(): string[] {
   const provSet = new Set<string>();
@@ -44,15 +46,16 @@ function modelPickerModalTemplate(): TemplateResult {
         </div>
         <div class="picker-search" style="display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--color-border);">
           ${!isCombos ? html`
-            <select id="model-picker-provider" @change=${filterModelPicker} style="max-width:180px;">
+            <select id="model-picker-provider" class="model-picker-provider-select" @change=${onFilterChange}>
               <option value="">All providers</option>
+              <option value="combo">combo (virtual)</option>
               ${providers.map((p) => html`<option value="${p}">${p}</option>`)}
             </select>
           ` : html``}
-          <input type="text" id="model-picker-search" placeholder=${isCombos ? "Search combos by name or strategy..." : "Search models by name or id..."} @input=${filterModelPicker} style="flex:1;">
+          <input type="text" id="model-picker-search" placeholder=${isCombos ? "Search combos by name or strategy..." : "Search models or combos..."} @input=${onFilterChange} style="flex:1;">
         </div>
         <div class="modal-body">
-          <div class="model-picker-list" id="model-picker-list"></div>
+          <div class="model-picker-list" id="model-picker-list" @scroll=${onPickerScroll}></div>
         </div>
         <div class="modal-footer">
           <button type="button" @click=${clearModelPicker}>Clear all</button>
@@ -64,8 +67,8 @@ function modelPickerModalTemplate(): TemplateResult {
 }
 
 function ensureModalNode(): void {
-  if (modalWrapper && document.getElementById("model-picker-modal")) return;
-  if (!modalWrapper) {
+  if (modalWrapper && document.getElementById("model-picker-modal") && modalWrapper.isConnected) return;
+  if (!modalWrapper || !modalWrapper.isConnected) {
     modalWrapper = document.createElement("div");
     ensureModalRoot().appendChild(modalWrapper);
   }
@@ -157,10 +160,14 @@ export function renderAllowedCombosChips(): void {
   render(allowedCombosChipsTemplate(), display);
 }
 
-function modelPickerListTemplate(): TemplateResult {
-  const searchEl: HTMLInputElement | null = document.getElementById("model-picker-search") as HTMLInputElement | null;
-  const search: string = ((searchEl && searchEl.value) || "").toLowerCase();
+interface PickerItem {
+  id: string;
+  name: string;
+  subtitle: string;
+  isCombo?: boolean;
+}
 
+function getFilteredPickerItems(search: string, selectedProv: string): PickerItem[] {
   if (activeTarget === "allowed_combos") {
     const allCombos: Combo[] = state.combos || [];
     const filtered = allCombos.filter((c: Combo) => {
@@ -168,42 +175,94 @@ function modelPickerListTemplate(): TemplateResult {
       const strat = (c.strategy || "").toLowerCase();
       return !search || name.includes(search) || strat.includes(search) || String(c.id).includes(search);
     });
-    if (filtered.length === 0) {
-      return html`<div class="model-picker-row"><span class="muted">No combos match.</span></div>`;
-    }
-    return html`${filtered.map((c: Combo) => {
-      const checked: boolean = state.modelPickerSelection.has(String(c.id));
-      return html`
-        <label class="model-picker-row">
-          <input type="checkbox" ?checked=${checked} @change=${(e: Event) => toggleModelPicker(String(c.id), e)}>
-          <span class="model-id">${c.name}</span>
-          <span class="model-provider">${c.strategy} (#${c.id})</span>
-        </label>
-      `;
-    })}`;
+    return filtered.map((c: Combo) => ({
+      id: String(c.id),
+      name: c.name,
+      subtitle: `${c.strategy} (#${c.id})`,
+      isCombo: true,
+    }));
   }
 
-  const allModels = state.models || [];
+  const items: PickerItem[] = [];
+
+  // In allowed_models or blacklisted_models, include virtual combos unless filtered by another provider
+  if (!selectedProv || selectedProv === "combo") {
+    const allCombos: Combo[] = state.combos || [];
+    for (const c of allCombos) {
+      const comboName = c.name || "";
+      const comboVirtualId = `combo:${comboName}`;
+      const strat = c.strategy || "";
+      const matchesSearch = !search
+        || comboName.toLowerCase().includes(search)
+        || comboVirtualId.toLowerCase().includes(search)
+        || strat.toLowerCase().includes(search)
+        || "combo".includes(search);
+      if (matchesSearch) {
+        items.push({
+          id: comboVirtualId,
+          name: comboVirtualId,
+          subtitle: `combo • ${strat}`,
+          isCombo: true,
+        });
+      }
+    }
+  }
+
+  if (selectedProv !== "combo") {
+    const allModels = state.models || [];
+    for (const m of allModels) {
+      const matchesProv = !selectedProv || m.provider_id === selectedProv;
+      const matchesSearch = !search
+        || m.model_id.toLowerCase().includes(search)
+        || m.provider_id.toLowerCase().includes(search);
+      if (matchesProv && matchesSearch) {
+        items.push({
+          id: m.model_id,
+          name: m.model_id,
+          subtitle: m.provider_id,
+        });
+      }
+    }
+  }
+
+  return items;
+}
+
+function modelPickerListTemplate(): TemplateResult {
+  const searchEl: HTMLInputElement | null = document.getElementById("model-picker-search") as HTMLInputElement | null;
+  const search: string = ((searchEl && searchEl.value) || "").toLowerCase();
   const provEl: HTMLSelectElement | null = document.getElementById("model-picker-provider") as HTMLSelectElement | null;
   const selectedProv: string = (provEl && provEl.value) || "";
-  const filtered = allModels.filter((m) => {
-    const matchesProv = !selectedProv || m.provider_id === selectedProv;
-    const matchesSearch = !search || m.model_id.toLowerCase().includes(search) || m.provider_id.toLowerCase().includes(search);
-    return matchesProv && matchesSearch;
-  });
-  if (filtered.length === 0) {
-    return html`<div class="model-picker-row"><span class="muted">No models match.</span></div>`;
+
+  const items = getFilteredPickerItems(search, selectedProv);
+
+  if (items.length === 0) {
+    const emptyMsg = activeTarget === "allowed_combos" ? "No combos match." : "No models or combos match.";
+    return html`<div class="model-picker-row"><span class="muted">${emptyMsg}</span></div>`;
   }
-  return html`${filtered.map((m) => {
-    const checked: boolean = state.modelPickerSelection.has(m.model_id);
-    return html`
-      <label class="model-picker-row">
-        <input type="checkbox" ?checked=${checked} @change=${(e: Event) => toggleModelPicker(m.model_id, e)}>
-        <span class="model-id">${m.model_id}</span>
-        <span class="model-provider">${m.provider_id}</span>
-      </label>
-    `;
-  })}`;
+
+  const slice = items.slice(0, displayedLimit);
+  const remaining = items.length - slice.length;
+
+  return html`
+    ${slice.map((item: PickerItem) => {
+      const checked: boolean = state.modelPickerSelection.has(item.id);
+      return html`
+        <label class="model-picker-row">
+          <input type="checkbox" ?checked=${checked} @change=${(e: Event) => toggleModelPicker(item.id, e)}>
+          <span class="model-id">${item.name}</span>
+          <span class="model-provider">${item.subtitle}</span>
+        </label>
+      `;
+    })}
+    ${remaining > 0 ? html`
+      <div style="padding:10px;text-align:center;">
+        <button type="button" class="small" @click=${loadMorePickerItems} style="width:100%;">
+          Load more (${remaining} remaining)
+        </button>
+      </div>
+    ` : html``}
+  `;
 }
 
 function renderModelPickerList(): void {
@@ -212,12 +271,40 @@ function renderModelPickerList(): void {
   render(modelPickerListTemplate(), list);
 }
 
+export function onFilterChange(): void {
+  displayedLimit = PAGE_SIZE;
+  renderModelPickerList();
+  const list = document.getElementById("model-picker-list");
+  if (list) list.scrollTop = 0;
+}
+
+export function onPickerScroll(e: Event): void {
+  const target = e.target as HTMLElement | null;
+  if (!target) return;
+  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 60) {
+    const searchEl = document.getElementById("model-picker-search") as HTMLInputElement | null;
+    const search = ((searchEl && searchEl.value) || "").toLowerCase();
+    const provEl = document.getElementById("model-picker-provider") as HTMLSelectElement | null;
+    const selectedProv = (provEl && provEl.value) || "";
+    const total = getFilteredPickerItems(search, selectedProv).length;
+    if (displayedLimit < total) {
+      displayedLimit += PAGE_SIZE;
+      renderModelPickerList();
+    }
+  }
+}
+
+export function loadMorePickerItems(): void {
+  displayedLimit += PAGE_SIZE;
+  renderModelPickerList();
+}
+
 export function openModelPickerModal(target: "allowed_models" | "blacklisted_models" | "allowed_combos" = "allowed_models"): void {
   activeTarget = target;
+  displayedLimit = PAGE_SIZE;
+  ensureModalNode();
   if (modalWrapper) {
     render(modelPickerModalTemplate(), modalWrapper);
-  } else {
-    ensureModalNode();
   }
   let current: string[] | null = null;
   if (target === "blacklisted_models") {
@@ -277,7 +364,7 @@ export function toggleModelPicker(modelId: string, e: Event | null): void {
   else state.modelPickerSelection.delete(modelId);
 }
 
-export function filterModelPicker(): void { renderModelPickerList(); }
+export function filterModelPicker(): void { onFilterChange(); }
 
 export function removeComboFromKey(comboId: number): void {
   const hidden: HTMLInputElement | null = document.querySelector('input[name="allowed_combos"]');

@@ -85,6 +85,7 @@ async fn fixture(input: CreateApiKeyInput) -> Fixture {
                         priority_order: 0,
                         description: None,
                         selected_accounts: None,
+                        client_profile: None,
                     },
                 )?;
                 models.push(model);

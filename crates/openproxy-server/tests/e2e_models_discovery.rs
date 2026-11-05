@@ -397,6 +397,7 @@ async fn e2e_discovery_and_delete_on_disappear() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .expect("add_target c");

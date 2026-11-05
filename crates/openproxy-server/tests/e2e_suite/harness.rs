@@ -44,6 +44,7 @@ pub struct MockState {
     pub error_body: Mutex<Option<String>>,
     pub delay: Mutex<Option<Duration>>,
     pub recorded_requests: Mutex<Vec<RecordedRequest>>,
+    pub custom_chat_response: Mutex<Option<String>>,
 }
 
 impl MockState {
@@ -59,6 +60,9 @@ impl MockState {
 pub struct MockHandle(pub Arc<MockState>);
 
 impl MockHandle {
+    pub fn set_custom_chat_response(&self, body: Option<&str>) {
+        *self.0.custom_chat_response.lock() = body.map(ToString::to_string);
+    }
     pub fn replace_catalog(&self, ids: Vec<String>) {
         *self.0.catalog.lock() = ids;
     }
@@ -111,6 +115,14 @@ async fn mock_chat_handler(
             status,
             [(header::CONTENT_TYPE, "application/json")],
             err_msg,
+        )
+            .into_response();
+    }
+    if let Some(custom_body) = state.custom_chat_response.lock().clone() {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            custom_body,
         )
             .into_response();
     }

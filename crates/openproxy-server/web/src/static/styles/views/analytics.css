@@ -161,9 +161,11 @@ table.monthly-matrix {
   margin-bottom: var(--space-3);
 }
 .filter-dropdown {
-  padding: var(--space-1) var(--space-2);
+  padding: 0.35rem 0.6rem;
   border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
   background: var(--color-surface);
+  color: var(--color-text);
   font-size: var(--fs-sm);
   font-family: var(--font-sans);
   cursor: pointer;
@@ -171,7 +173,8 @@ table.monthly-matrix {
 }
 .filter-dropdown:focus {
   outline: 2px solid var(--color-primary);
-  outline-offset: -1px;
+  outline-offset: 0;
+  border-color: var(--color-primary);
 }
 
 

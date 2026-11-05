@@ -21,6 +21,8 @@ pub struct Model {
     pub output_modalities_json: Option<Box<str>>,
     pub last_test_status: Option<i32>,
     pub target_format: TargetFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_profile: Option<crate::ClientProfile>,
     pub active: bool,
     pub custom: bool,
     /// Timestamp (UTC, ISO-ish) of the most recent operator-driven
@@ -50,6 +52,7 @@ impl Default for Model {
             output_modalities_json: None,
             last_test_status: None,
             target_format: TargetFormat::Openai,
+            client_profile: None,
             active: false,
             custom: false,
             manually_disabled_at: None,
@@ -344,6 +347,7 @@ mod tests {
             output_modalities_json: Some("[\"text\"]".into()),
             last_test_status: Some(200),
             target_format: TargetFormat::Openai,
+            client_profile: None,
             active: true,
             custom: false,
             manually_disabled_at: None,

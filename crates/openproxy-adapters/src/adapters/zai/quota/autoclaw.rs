@@ -9,7 +9,10 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
         return Err(CoreError::Parse("AutoClaw wallets envelope failure".into()));
     }
     let data = match json.get("data") {
-        Some(d) => d,
+        Some(d) if d.is_object() => d,
+        Some(d) if d.is_null() => {
+            return Err(CoreError::Parse("AutoClaw wallets response carried null data".into()));
+        }
         None => {
             return Ok(vec![status_pool(
                 QuotaSource::AutoclawStarter,
@@ -18,12 +21,19 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
                 now,
             )]);
         }
+        Some(_) => {
+            return Err(CoreError::Parse("AutoClaw wallets response data is not an object".into()));
+        }
     };
 
-    let total_balance = data
-        .get("total_balance")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let total_balance = match super::envelope::as_i64(data.get("total_balance")) {
+        Some(v) => v,
+        None => {
+            return Err(CoreError::Parse(
+                "AutoClaw wallets response carried no valid total_balance".into(),
+            ));
+        }
+    };
 
     let default_models = vec![
         "GLM-5.3-Flash".to_string(),
@@ -75,11 +85,38 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
     }])
 }
 
+const CHECKIN_MIN_INTERVAL_SECS: u64 = 6 * 3600;
+
+fn checkin_throttle_allows(token: &str, now_secs: u64) -> bool {
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+    static LAST: std::sync::OnceLock<std::sync::Mutex<HashMap<u64, u64>>> =
+        std::sync::OnceLock::new();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    token.hash(&mut hasher);
+    let key = hasher.finish();
+    let map = LAST.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.get(&key) {
+        Some(last) if now_secs.saturating_sub(*last) < CHECKIN_MIN_INTERVAL_SECS => false,
+        _ => {
+            guard.insert(key, now_secs);
+            true
+        }
+    }
+}
+
 pub(crate) async fn perform_autoclaw_checkin(
     upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
     token: &str,
     proxy: Option<&str>,
 ) {
+    let now_u64 = openproxy_types::now_unix_secs_str()
+        .parse::<u64>()
+        .unwrap_or(0);
+    if !checkin_throttle_allows(token, now_u64) {
+        return;
+    }
     let clean_token = token.trim();
     let raw_token = clean_token.strip_prefix("Bearer ").unwrap_or(clean_token);
 

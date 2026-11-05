@@ -20,6 +20,36 @@ pub struct TestModelInput {
 /// surface back to the dashboard.
 pub const TEST_ERROR_BODY_MAX_CHARS: usize = 512;
 
+/// Checks whether an `OpenAIResponse` from a model test produced real tokens.
+/// Rejects dummy/empty completions (e.g. content=null/"", no tool_calls, no reasoning_content)
+/// even if the upstream returned HTTP 200 or usage dummy tokens.
+pub fn has_usable_tokens(resp: Option<&openproxy_types::OpenAIResponse>) -> bool {
+    let Some(resp) = resp else {
+        return false;
+    };
+    resp.choices.iter().any(|choice| {
+        let msg = &choice.message;
+        let has_content = match msg.content.as_ref() {
+            Some(serde_json::Value::String(s)) => !s.trim().is_empty(),
+            Some(serde_json::Value::Array(arr)) => arr.iter().any(|item| {
+                item.get("text")
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|s| !s.trim().is_empty())
+            }),
+            _ => false,
+        };
+        let has_tool_calls = msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+        let has_reasoning = msg
+            .extra
+            .get("reasoning_content")
+            .or_else(|| msg.extra.get("reasoning"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty());
+
+        has_content || has_tool_calls || has_reasoning
+    })
+}
+
 /// The outcome of a single test ping.
 #[derive(Debug, Clone)]
 pub struct TestResult {
@@ -238,6 +268,7 @@ pub async fn run_test_for_model(
                     thinking_effort: None,
                     description: None,
                     selected_accounts: None,
+                    client_profile: None,
                     inherited_target_id: None,
                 },
                 model: model.clone(),
@@ -415,6 +446,97 @@ pub async fn run_test_for_model(
                 (status, error_msg, elapsed_ms, debug_payload)
             };
 
+            let (status, error_msg, debug_payload) = if is_decision {
+                let has_decision_tokens = debug_payload
+                    .as_ref()
+                    .and_then(|dp| dp.get("response_body"))
+                    .is_some_and(|rb| {
+                        rb.get("answers")
+                            .and_then(|a| a.as_object())
+                            .is_some_and(|m| !m.is_empty())
+                            || rb.get("decision").is_some()
+                    });
+                if status == 200 && !has_decision_tokens {
+                    (
+                        502,
+                        Some(
+                            "upstream returned 200 but produced no decision answers"
+                                .to_string(),
+                        ),
+                        debug_payload,
+                    )
+                } else {
+                    (status, error_msg, debug_payload)
+                }
+            } else if is_embedding {
+                let has_embedding_data = debug_payload
+                    .as_ref()
+                    .and_then(|dp| dp.get("response_body"))
+                    .is_some_and(|rb| {
+                        rb.get("data")
+                            .and_then(|d| d.as_array())
+                            .is_some_and(|arr| !arr.is_empty())
+                            || rb.get("embedding").is_some()
+                    });
+                if status == 200 && !has_embedding_data {
+                    (
+                        502,
+                        Some(
+                            "upstream returned 200 but produced no embedding data"
+                                .to_string(),
+                        ),
+                        debug_payload,
+                    )
+                } else {
+                    (status, error_msg, debug_payload)
+                }
+            } else if is_image {
+                let has_image_data = debug_payload
+                    .as_ref()
+                    .and_then(|dp| dp.get("response_body"))
+                    .is_some_and(|rb| {
+                        rb.get("data")
+                            .and_then(|d| d.as_array())
+                            .is_some_and(|arr| !arr.is_empty())
+                            || rb.get("image").is_some()
+                    });
+                if status == 200 && !has_image_data {
+                    (
+                        502,
+                        Some(
+                            "upstream returned 200 but produced no image data"
+                                .to_string(),
+                        ),
+                        debug_payload,
+                    )
+                } else {
+                    (status, error_msg, debug_payload)
+                }
+            } else if is_stt {
+                let has_stt_text = debug_payload
+                    .as_ref()
+                    .and_then(|dp| dp.get("response_body"))
+                    .is_some_and(|rb| {
+                        rb.get("text")
+                            .and_then(|t| t.as_str())
+                            .is_some_and(|s| !s.trim().is_empty())
+                    });
+                if status == 200 && !has_stt_text {
+                    (
+                        502,
+                        Some(
+                            "upstream returned 200 but produced no transcription text"
+                                .to_string(),
+                        ),
+                        debug_payload,
+                    )
+                } else {
+                    (status, error_msg, debug_payload)
+                }
+            } else {
+                (status, error_msg, debug_payload)
+            };
+
             let error_msg = error_msg.map(|msg| {
                 if let Some(ref purl) = effective_proxy {
                     if !msg.contains(purl) {
@@ -465,6 +587,7 @@ pub async fn run_test_for_model(
                     thinking_effort: None,
                     description: None,
                     selected_accounts: None,
+                    client_profile: None,
                     inherited_target_id: None,
                 },
                 model: model.clone(),
@@ -517,6 +640,14 @@ pub async fn run_test_for_model(
                 let err_str = err.to_string();
                 let truncated: String = err_str.chars().take(TEST_ERROR_BODY_MAX_CHARS).collect();
                 (status, Some(truncated))
+            } else if !has_usable_tokens(pipeline_res.final_response.as_ref()) {
+                (
+                    502,
+                    Some(
+                        "upstream returned 200 but produced no real tokens (empty content, no reasoning, no tool calls)"
+                            .to_string(),
+                    ),
+                )
             } else {
                 (pipeline_res.status_code, None)
             };

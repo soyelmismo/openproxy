@@ -625,7 +625,7 @@ body[data-view="logs"] #main {
   padding: 0 0.65rem;
   font-size: var(--fs-xs);
   font-family: var(--font-sans);
-  background: var(--color-bg);
+  background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm);
   color: var(--color-text);
@@ -633,9 +633,10 @@ body[data-view="logs"] #main {
   max-width: 200px;
 }
 .logs-key-filter:focus {
-  outline: none;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-soft);
+  box-shadow: none;
 }
 
 

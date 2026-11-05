@@ -24,6 +24,7 @@ export type RouteName =
   | "combos"
   | "combo-detail"
   | "keys"
+  | "key-detail"
   | "key-usage"
   | "analytics"
   | "logs"

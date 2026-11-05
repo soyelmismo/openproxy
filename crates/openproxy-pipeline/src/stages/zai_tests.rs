@@ -184,6 +184,7 @@ fn resolved_target(account_id: AccountId, model: &str) -> ResolvedTarget {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
             inherited_target_id: None,
         },
         model: Model {

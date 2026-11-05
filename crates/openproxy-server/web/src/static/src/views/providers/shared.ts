@@ -13,7 +13,10 @@ import type { Provider } from '../../lib/types/api.js';
 /** Per-detail-view UI state, stored on `state.providerDetail[providerId]`
  *  so the filter / search / sort / page choice survives navigation.
  *  index.ts seeds the defaults, detail.ts reads and writes them. */
+export type ProviderDetailTab = 'accounts' | 'models' | 'config';
+
 export interface ProviderDetailUiState {
+  tab?: ProviderDetailTab;
   filter: 'all' | 'active' | 'inactive';
   search: string;
   sort: ModelSort | null;
@@ -33,6 +36,7 @@ export function getProviderUi(providerId: string): ProviderDetailUiState {
     | Partial<ProviderDetailUiState>
     | undefined;
   return {
+    tab: raw?.tab === 'models' || raw?.tab === 'config' ? raw.tab : 'accounts',
     filter: raw?.filter ?? 'all',
     search: raw?.search ?? '',
     sort: raw?.sort ?? null,

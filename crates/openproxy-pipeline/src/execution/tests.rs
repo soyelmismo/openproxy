@@ -51,6 +51,7 @@ fn test_missing_account_records_cooldown_and_resolves_empty() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -128,6 +129,7 @@ fn test_second_healthy_target_same_provider_resolves_without_cooldown() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -142,6 +144,7 @@ fn test_second_healthy_target_same_provider_resolves_without_cooldown() {
                 priority_order: 2,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -199,6 +202,7 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -254,6 +258,7 @@ fn test_anonymous_none_and_fallback_resolve_without_cooldown() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -308,6 +313,7 @@ fn test_cooldown_overrides_none_and_zero_preserved() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -328,6 +334,7 @@ fn test_cooldown_overrides_none_and_zero_preserved() {
                 priority_order: 2,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -391,6 +398,7 @@ fn test_two_calls_with_active_cooldown_do_not_re_increment_nor_prolong() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -462,6 +470,7 @@ fn test_nested_target_uses_owner_sub_combo_info() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -478,6 +487,7 @@ fn test_nested_target_uses_owner_sub_combo_info() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -549,6 +559,7 @@ fn test_nested_subcombo_thinking_effort_override() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -566,6 +577,7 @@ fn test_nested_subcombo_thinking_effort_override() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();
@@ -624,6 +636,7 @@ fn test_mock_repo_load_combo_failure_aborts_cooldown_mutation() {
                 priority_order: 1,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
             },
         )
         .unwrap();

@@ -333,6 +333,15 @@ impl PipelineStage for FormattingStage {
                 adapter.wrap_request_body(body, target_format, &current.model.model_id, current)
             })
             .and_then(|body| {
+                if let Some(profile) = current.client_profile()
+                    && adapter.id().as_str() != "claude-code"
+                {
+                    super::profile_cloaking::wrap_profile_request_body(body, profile, target_format, current)
+                } else {
+                    Ok(body)
+                }
+            })
+            .and_then(|body| {
                 // Devin bodies are protobuf envelopes by this point — JSON
                 // param stripping would fail the parse on binary input.
                 if target_format == openproxy_types::TargetFormat::Devin {
@@ -729,13 +738,14 @@ impl PipelineStage for DispatchStage {
             .custom_meta
             .as_ref()
             .and_then(|m| m.codex_workspace_id.as_deref());
-        propagate_provider_target_headers(
+        super::target_headers::propagate_provider_target_headers_with_profile(
             &mut headers,
             target.provider_id.as_str(),
             adapter.id().as_str(),
             &ctx.req.request_headers,
             &ctx.req.openai_request,
             codex_ws,
+            current.client_profile(),
         );
 
         openproxy_types::emit_stage_event!(
@@ -762,6 +772,25 @@ impl PipelineStage for DispatchStage {
         ) {
             Ok(body) => body,
             Err(error) => return fail_stage!(ctx, target, &error, Some(model)),
+        };
+
+        // If an explicit client profile is active (and provider isn't already the native one),
+        // apply the client profile's finalization rules (e.g. CCH signature, billing headers).
+        let body_bytes = if let Some(profile) = current.client_profile()
+            && adapter.id().as_str() != "claude-code"
+        {
+            match super::profile_cloaking::finalize_profile_request(
+                body_bytes,
+                &mut headers,
+                profile,
+                target_format,
+                current,
+            ) {
+                Ok(body) => body,
+                Err(error) => return fail_stage!(ctx, target, &error, Some(model)),
+            }
+        } else {
+            body_bytes
         };
         let resolved_timeouts = ctx.resolved_timeouts.ok_or_else(|| {
             CoreError::Internal("missing resolved_timeouts in pipeline context".into())
@@ -814,13 +843,14 @@ impl PipelineStage for DispatchStage {
         {
             let mut paid_headers =
                 adapter.build_headers(&prepared.route.credential, target_format, &model.model_id);
-            propagate_provider_target_headers(
+            super::target_headers::propagate_provider_target_headers_with_profile(
                 &mut paid_headers,
                 target.provider_id.as_str(),
                 adapter.id().as_str(),
                 &ctx.req.request_headers,
                 &ctx.req.openai_request,
                 codex_ws,
+                current.client_profile(),
             );
             let body_bytes = match adapter.finalize_request(
                 body_bytes,
@@ -953,8 +983,6 @@ impl PipelineStage for CustomAdapterStage {
         next.execute(ctx).await
     }
 }
-
-use super::target_headers::propagate_provider_target_headers;
 
 #[cfg(test)]
 #[path = "stream_policy_tests.rs"]

@@ -1,6 +1,14 @@
+.providers-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: var(--space-3); container-type: inline-size; }
+.providers-toolbar-filters { flex: 1 1 260px; min-width: 0; max-width: 100%; overflow-x: auto; }
+.providers-toolbar .filter-tabs { gap: 0; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+.providers-toolbar .filter-tab { border: 0; border-bottom: 2px solid transparent; border-radius: 0; box-shadow: none; background: transparent; color: var(--color-text-muted); padding: 8px 7px; }
+.providers-toolbar .filter-tab.active { border-bottom-color: var(--color-text); background: transparent; color: var(--color-text); }
+.providers-toolbar .actions { display: flex; gap: 6px; flex: 0 0 auto; width: auto; margin: 0 0 0 auto; padding: 0; }
+.providers-toolbar .actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+@container (max-width: 540px) { .providers-toolbar .actions button span { display: none; } .providers-toolbar .actions button { width: 32px; padding: 6px; justify-content: center; } }
 .provider-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
   gap: var(--space-3);
 }
 .provider-card {
@@ -229,11 +237,78 @@
 .quota-cell.error { color: var(--color-error); }
 .quota-cell .quota-plan { color: var(--color-text-muted); font-size: var(--fs-xs); }
 .quota-cell .quota-plan-row { display: flex; align-items: center; gap: var(--space-2, 0.5rem); }
-.quota-cell .quota-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin-top: 0.2rem; }
-.quota-cell .quota-tag { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: var(--fs-2xs); font-weight: 500; line-height: 1.3; }
-.quota-cell .quota-tag.credits { background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); }
-.quota-cell .quota-tag.checkin-done { background: rgba(34, 197, 94, 0.12); color: var(--color-success, #22c55e); border: 1px solid rgba(34, 197, 94, 0.25); }
-.quota-cell .quota-tag.checkin-pending { background: rgba(234, 179, 8, 0.12); color: var(--color-warn, #eab308); border: 1px solid rgba(234, 179, 8, 0.25); }
+.quota-cell .quota-meta-row,
+.account-quota-families .quota-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.quota-cell .quota-tag,
+.account-quota-families .quota-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--fs-2xs, 0.7rem);
+  font-weight: 500;
+  line-height: 1.3;
+}
+.quota-cell .quota-tag svg,
+.quota-cell .quota-tag .icon,
+.account-quota-families .quota-tag svg,
+.account-quota-families .quota-tag .icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.quota-cell .quota-tag.credits,
+.account-quota-families .quota-tag.credits {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.quota-cell .quota-tag.credits.clickable,
+.account-quota-families .quota-tag.credits.clickable {
+  cursor: pointer;
+  transition: background var(--t-fast, 120ms), border-color var(--t-fast, 120ms), transform var(--t-fast, 120ms), color var(--t-fast, 120ms);
+  user-select: none;
+}
+.quota-cell .quota-tag.credits.clickable:hover,
+.account-quota-families .quota-tag.credits.clickable:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.55);
+  color: #7dd3fc;
+}
+.quota-cell .quota-tag.credits.clickable:focus-visible,
+.account-quota-families .quota-tag.credits.clickable:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.quota-cell .quota-tag.credits.clickable:active,
+.account-quota-families .quota-tag.credits.clickable:active {
+  transform: scale(0.97);
+}
+.quota-cell .quota-tag.reserve,
+.account-quota-families .quota-tag.reserve {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.28);
+}
+.quota-cell .quota-tag.checkin-done,
+.account-quota-families .quota-tag.checkin-done {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--color-success, #22c55e);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+.quota-cell .quota-tag.checkin-pending,
+.account-quota-families .quota-tag.checkin-pending {
+  background: rgba(234, 179, 8, 0.12);
+  color: var(--color-warn, #eab308);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+}
 
 .quota-bar-header {
   display: flex;
@@ -392,8 +467,8 @@
 .model-name-wrapper { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .model-usage-code { cursor: pointer; padding: 2px 4px; border-radius: 4px; background: rgba(255, 255, 255, 0.08); font-family: var(--font-mono); }
 .model-modality-block { display: flex; flex-direction: column; gap: 4px; }
-.model-type-select { padding: 2px 4px; font-size: var(--fs-xs); font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer; }
-.model-format-select { padding: 2px 4px; font-size: var(--fs-xs); font-weight: 600; border-radius: 4px; border: 1px solid var(--color-border); background: var(--color-surface-2); color: var(--color-text); cursor: pointer; font-family: var(--font-mono); }
+.model-type-select { padding: 2px 4px; font-size: var(--fs-xs); font-weight: 600; border-radius: var(--radius-sm); border: var(--border-w) var(--border-style) var(--color-border); background: var(--color-surface); color: var(--color-text); cursor: pointer; }
+.model-format-select { padding: 2px 4px; font-size: var(--fs-xs); font-weight: 600; border-radius: var(--radius-sm); border: var(--border-w) var(--border-style) var(--color-border); background: var(--color-surface-2); color: var(--color-text); cursor: pointer; font-family: var(--font-mono); }
 .provider-format-select {
   padding: 0.15rem 0.5rem;
   font-size: var(--fs-xs);
@@ -411,7 +486,7 @@
 }
 .model-actions-block { display: flex; flex-direction: column; gap: 4px; }
 .model-test-selectors { display: flex; flex-direction: column; gap: 4px; margin-bottom: 2px; }
-.model-account-select, .model-proxy-select { padding: 2px 4px; font-size: var(--fs-xs); background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; max-width: 140px; }
+.model-account-select, .model-proxy-select { padding: 2px 4px; font-size: var(--fs-xs); background: var(--color-surface); color: var(--color-text); border: var(--border-w) var(--border-style) var(--color-border); border-radius: var(--radius-sm); max-width: 140px; }
 .model-btn-group { display: flex; gap: 4px; align-items: center; }
 
 .cooldown-banner {

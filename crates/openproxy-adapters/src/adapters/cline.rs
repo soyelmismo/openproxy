@@ -243,6 +243,7 @@ mod tests {
                 thinking_effort: None,
                 description: None,
                 selected_accounts: None,
+                client_profile: None,
                 inherited_target_id: None,
             },
             model: openproxy_types::Model {

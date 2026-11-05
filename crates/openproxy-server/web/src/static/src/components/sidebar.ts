@@ -21,6 +21,7 @@ import {
 // navigates to `#/login`, which the router's auth gate admits once `isLoggedIn()` is false.
 import { clearToken, isLoggedIn } from "../state/auth.js";
 import { disconnectLogsWebSocket } from "../state/ws.js";
+import { isPanelDocument } from "../state/workspace.js";
 
 function mutableState() { return state; }
 
@@ -184,6 +185,7 @@ function handleNavClick(): void {
 }
 
 export function renderSidebar(): void {
+  if (isPanelDocument()) return;
   const sb = document.querySelector(".sidebar");
   if (!sb) return;
   maybeBootstrapNotifications();

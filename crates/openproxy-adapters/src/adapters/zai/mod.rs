@@ -114,15 +114,10 @@ impl ProviderAdapter for ZaiAdapter {
                         "model".to_string(),
                         serde_json::Value::String("zai_glm-5.3-flash".into()),
                     );
-                } else if m_lower.contains("5.3") {
-                    obj.insert(
-                        "model".to_string(),
-                        serde_json::Value::String("zaicoding_glm-5.3".into()),
-                    );
                 } else {
                     obj.insert(
                         "model".to_string(),
-                        serde_json::Value::String("zai_auto".into()),
+                        serde_json::Value::String("zai_glm-5.3-flash".into()),
                     );
                 }
             }
@@ -145,10 +140,11 @@ impl ProviderAdapter for ZaiAdapter {
             let m_lower = model.as_str().to_ascii_lowercase();
             let req_model = if m_lower.contains("flash") {
                 "zai_glm-5.3-flash"
-            } else if m_lower.contains("5.3") {
-                "zaicoding_glm-5.3"
             } else {
-                "zai_auto"
+                // Upstream AutoClaw free quota for zaicoding_glm-5.3 is exhausted (810000).
+                // AutoClaw maps both zai_glm-5.3-flash and zai_auto into the active GLM model family
+                // and accepts requests consuming Reward Points without returning 403 / 810000.
+                "zai_glm-5.3-flash"
             };
             headers.push(("X-Request-Model".into(), req_model.into()));
             headers.push(("X-Product".into(), "autoclaw".into()));
@@ -201,15 +197,10 @@ impl ProviderAdapter for ZaiAdapter {
                             "model".to_string(),
                             serde_json::Value::String("zai_glm-5.3-flash".into()),
                         );
-                    } else if m_lower.contains("5.3") {
-                        obj.insert(
-                            "model".to_string(),
-                            serde_json::Value::String("zaicoding_glm-5.3".into()),
-                        );
                     } else {
                         obj.insert(
                             "model".to_string(),
-                            serde_json::Value::String("zai_auto".into()),
+                            serde_json::Value::String("zai_glm-5.3-flash".into()),
                         );
                     }
                 }

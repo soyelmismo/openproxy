@@ -12,11 +12,15 @@ pub const CLAUDE_CODE_BETA_HEADER: &str =
     "oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14";
 pub const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.293 (external, cli)";
 
-mod adapter_impl;
+pub mod adapter_impl;
 mod betas;
 pub mod cloaking;
 pub mod signing;
 mod tool_names;
+
+pub use adapter_impl::{
+    apply_claude_code_billing_version, merge_claude_beta_header, sync_claude_session_id,
+};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ClaudeCodeAdapter {

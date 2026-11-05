@@ -239,8 +239,8 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
         .and_then(|a| serde_json::to_string(a).ok());
 
     conn.execute(
-        "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order, description, selected_accounts) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO combo_targets(combo_id, provider_id, account_id, model_row_id, sub_combo_id, upstream_model_id, priority_order, description, selected_accounts, client_profile) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             input.combo_id.0,
             input.provider_id.as_str(),
@@ -251,6 +251,7 @@ pub fn add_target(conn: &Connection, input: AddTargetInput) -> Result<ComboTarge
             input.priority_order,
             input.description,
             selected_accounts_json,
+            input.client_profile.map(|p| p.as_str()),
         ],
     )
     .map_err(|e| map_add_target_error(&input, e))?;

@@ -364,3 +364,13 @@
   font-size: var(--fs-sm);
   text-align: center;
 }
+
+.model-picker-provider-select {
+  max-width: 180px;
+  padding: 0.25rem 0.5rem;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}

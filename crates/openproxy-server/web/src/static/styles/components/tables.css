@@ -104,3 +104,51 @@ tr.dnd-placeholder td {
   .responsive-card-row > td.hidden-mobile { display: none; }
   .responsive-card-row > td.empty-row { display: block; text-align: center; }
 }
+
+/* Container Query support for narrow workspace tiles (tile-view <= 600px) */
+@container tile-view (max-width: 600px) {
+  table.responsive-card-table {
+    display: block;
+    width: 100%;
+  }
+
+  .responsive-card-table thead { display: none; }
+  .responsive-card-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    width: 100%;
+  }
+  .responsive-card-row {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    gap: var(--space-1);
+    box-shadow: var(--shadow-subtle);
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .responsive-card-row > td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 2px 0;
+    border: none;
+    font-size: var(--fs-xs);
+    width: 100%;
+  }
+  .responsive-card-row > td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+  .responsive-card-row > td.hidden-mobile { display: none; }
+  .responsive-card-row > td.empty-row { display: block; text-align: center; }
+}

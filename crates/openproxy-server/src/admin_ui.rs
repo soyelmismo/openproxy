@@ -9,6 +9,8 @@
 //!
 //! - `GET /admin`            → SPA shell (`index_html`)
 //! - `GET /admin/`           → SPA shell (`index_html`)
+//! - `GET /admin/panel`      → SPA shell (`index_html`)
+//! - `GET /admin/panel/`     → SPA shell (`index_html`)
 //! - `GET /admin/callback.html` → OAuth callback page (`callback_html`)
 //! - `GET /admin/dist/*`     → embedded built bundle
 //! - `GET /admin/styles/*`   → embedded CSS

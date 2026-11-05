@@ -73,6 +73,16 @@
 }
 
 
+.filter-selects {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.filter-selects select {
+  min-width: 140px;
+}
+
 @media (max-width: 768px) {
   /* Free proxies native mobile cards */
 
@@ -161,9 +171,9 @@
     height: 28px;
     font-size: var(--fs-sm);
     padding: 0 6px;
-    border-radius: 0;
+    border-radius: var(--radius-sm);
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
+    border: var(--border-w) var(--border-style) var(--color-border);
     color: var(--color-text);
     width: 100%;
     box-sizing: border-box;
@@ -180,9 +190,9 @@
     height: 28px;
     font-size: var(--fs-sm);
     padding: 0 4px;
-    border-radius: 0;
+    border-radius: var(--radius-sm);
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
+    border: var(--border-w) var(--border-style) var(--color-border);
     color: var(--color-text);
     width: 100%;
     box-sizing: border-box;
@@ -413,4 +423,103 @@
     border-color: rgba(239, 68, 68, 0.3);
   }
 
+}
+
+/* Container query support for Proxies and Proxy Sources in narrow workspace tiles */
+@container tile-view (max-width: 600px) {
+  .actions:has(button) {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 4px;
+  }
+
+  .actions:has(button) button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .kpi-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+
+  .filter-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .filter-selects {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .filter-selects select {
+    width: 100%;
+  }
+
+  table.proxy-sources-table,
+  .proxy-sources-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 4px 0;
+    box-sizing: border-box;
+  }
+
+  .proxy-sources-table thead {
+    display: none;
+  }
+
+  tr.proxy-source-card-row {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-left: 3px solid var(--color-success);
+    border-radius: var(--radius-md);
+    padding: 8px 10px;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  tr.proxy-source-card-row.inactive {
+    border-left-color: var(--color-border);
+    opacity: 0.8;
+  }
+
+  tr.proxy-source-card-row > td:not(.mobile-proxy-source-card-cell) {
+    display: none;
+  }
+
+  tr.proxy-source-card-row > td.mobile-proxy-source-card-cell {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+}
+
+@container tile-view (max-width: 280px) {
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .s-card-line-4 {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .s-card-line-4 button.danger {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
 }

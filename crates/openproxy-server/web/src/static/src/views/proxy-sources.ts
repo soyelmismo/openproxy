@@ -301,7 +301,10 @@ function renderProxySources(): TemplateResult {
   `;
 }
 
-export async function mountProxySources(): Promise<(() => void) | void> {
+export async function mountProxySources(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
   loadError = null;
   return createView(
     renderProxySources,
@@ -310,6 +313,7 @@ export async function mountProxySources(): Promise<(() => void) | void> {
     },
     (msg) => {
       loadError = msg;
-    }
+    },
+    container,
   );
 }

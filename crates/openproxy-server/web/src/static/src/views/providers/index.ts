@@ -1,4 +1,4 @@
-// views/providers/index.ts — `mountProviders({detailId?})`, imported by
+// views/providers/index.ts — `mountProviders({detailId?}, target?)`, imported by
 // state/router.ts for `#/providers` and `#/providers/:id`.
 //
 // Sets the module-local detail/loadError state shared with list.ts and
@@ -20,9 +20,20 @@ export interface MountProvidersOpts {
 
 export async function mountProviders(
   opts: MountProvidersOpts = {},
+  target?: HTMLElement,
 ): Promise<(() => void) | void> {
-  const main = document.getElementById('main');
-  if (!main) return;
+  const container = target ?? document.getElementById('main');
+  if (!container) return;
+
+  let active = true;
+  let viewCleanup: (() => void) | null = null;
+  const cleanup = (): void => {
+    active = false;
+    if (viewCleanup) {
+      viewCleanup();
+      viewCleanup = null;
+    }
+  };
 
   void fetchFormats();
 
@@ -34,7 +45,7 @@ export async function mountProviders(
       state.selectedModels.clear();
       state.selectedModelsProvider = opts.detailId;
     }
-    const cleanup = mountView(main, renderProviderDetail);
+    viewCleanup = mountView(container, renderProviderDetail);
     try {
       // Warm re-render renders from cache first, then refreshes in the background
       // so quotas and statuses don't freeze.
@@ -48,13 +59,16 @@ export async function mountProviders(
           ) as Promise<Model[]>,
           proxiesPromise,
         ]);
+        if (!active || !container.isConnected) return cleanup;
         state.providers = providers;
         state.accounts = accounts;
         state.models = models;
         state.modelsComplete = false;
         state.proxies = proxies;
       } else {
-        state.proxies = await proxiesPromise;
+        const resolvedProxies = await proxiesPromise;
+        if (!active || !container.isConnected) return cleanup;
+        state.proxies = resolvedProxies;
         Promise.all([
           api('/providers') as Promise<Provider[]>,
           api('/accounts') as Promise<Account[]>,
@@ -63,6 +77,7 @@ export async function mountProviders(
           ) as Promise<Model[]>,
         ])
           .then(([p, a, m]) => {
+            if (!active || !container.isConnected) return;
             state.providers = p;
             state.accounts = a;
             state.models = m;
@@ -71,8 +86,10 @@ export async function mountProviders(
           })
           .catch((e) => console.error('Background refresh failed:', e));
       }
+      if (!active || !container.isConnected) return cleanup;
       requestUpdate();
     } catch (e: unknown) {
+      if (!active || !container.isConnected) return cleanup;
       setLoadError(e instanceof Error ? e.message : String(e));
       requestUpdate();
     }
@@ -81,7 +98,7 @@ export async function mountProviders(
 
   setDetailProviderId(null);
   setLoadError(null);
-  const cleanup = mountView(main, renderProvidersGrid);
+  viewCleanup = mountView(container, renderProvidersGrid);
   try {
     const hasCache = state.providers && state.providers.length > 0;
     const [providers, accounts, proxies] = await Promise.all([
@@ -93,6 +110,7 @@ export async function mountProviders(
         : (api('/accounts') as Promise<Account[]>),
       api('/proxies?status=alive') as Promise<FreeProxy[]>,
     ]);
+    if (!active || !container.isConnected) return cleanup;
     state.providers = providers;
     state.accounts = accounts;
     state.proxies = proxies;
@@ -104,6 +122,7 @@ export async function mountProviders(
         api('/accounts') as Promise<Account[]>,
       ])
         .then(([p, a]) => {
+          if (!active || !container.isConnected) return;
           state.providers = p;
           state.accounts = a;
           requestUpdate();
@@ -111,6 +130,7 @@ export async function mountProviders(
         .catch((e) => console.error('Background refresh failed:', e));
     }
   } catch (e: unknown) {
+    if (!active || !container.isConnected) return cleanup;
     setLoadError(e instanceof Error ? e.message : String(e));
     requestUpdate();
   }

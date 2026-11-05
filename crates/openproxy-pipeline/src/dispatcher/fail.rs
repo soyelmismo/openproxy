@@ -317,6 +317,12 @@ impl UpstreamDispatcher {
         }
 
         let body_str = if target.provider_id.as_str() == "zai" {
+            tracing::warn!(
+                status_code,
+                account_id = ?target.account_id,
+                upstream_body = %body_str,
+                "Z.ai upstream non-2xx raw response"
+            );
             let probe = CoreError::upstream_error(
                 status_code,
                 "zai",

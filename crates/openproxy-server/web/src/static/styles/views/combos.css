@@ -5,6 +5,26 @@
 }
 
 
+.combo-strategy-select {
+  padding: 0.2rem 0.45rem;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+}
+
+.combo-table-select {
+  font-size: var(--fs-xs);
+  padding: 2px 4px;
+  max-width: 110px;
+  border-radius: var(--radius-sm);
+}
+
+.combo-table-select-sm {
+  font-size: var(--fs-xs);
+  padding: 2px 4px;
+  max-width: 95px;
+  border-radius: var(--radius-sm);
+}
+
 /* Combo settings bars (priority mode + cooldown), rendered below
    the page-header / context-window-bar. Each bar holds a `<select>`
    for the mode and an optional `<details>` for the mode parameters. */
@@ -144,39 +164,388 @@
   gap: var(--space-2);
 }
 
+.combos-view-container {
+  container: combos-view / inline-size;
+  min-width: 0;
+  width: 100%;
+}
+
+.combos-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.combos-page-header .header-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.combos-count-badge {
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.combos-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.combos-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.combos-filter-select {
+  height: 32px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+/* Container Query for Combos View — activates on narrow workspace tiles regardless of window width */
+@container combos-view (max-width: 580px) {
+  .combos-page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .combos-header-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: var(--space-2);
+  }
+
+  .combos-filter-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: var(--space-2);
+  }
+
+  .combos-search-wrap,
+  .combos-search-input {
+    width: 100% !important;
+  }
+
+  .combos-filter-select {
+    width: 100%;
+  }
+
+  .combo-create-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .combos-table.responsive-card-table {
+    display: block;
+    width: 100%;
+  }
+
+  .combos-table.responsive-card-table thead {
+    display: none;
+  }
+
+  .combos-table.responsive-card-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    width: 100%;
+  }
+
+  .combos-table.responsive-card-table .responsive-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-subtle);
+    box-sizing: border-box;
+    width: 100%;
+    transition: border-color var(--t-fast), box-shadow var(--t-fast);
+  }
+
+  .combos-table.responsive-card-table .responsive-card-row:active {
+    border-color: var(--color-primary);
+  }
+
+  .combos-table .responsive-card-row > td[data-label="Name"] {
+    display: block;
+    padding: 0 0 4px 0;
+    border-bottom: 1px solid var(--color-border-soft);
+    width: 100%;
+  }
+
+  .combos-table .responsive-card-row > td[data-label="Name"]::before {
+    display: none;
+  }
+
+  .combos-table .responsive-card-row > td:not([data-label="Name"]):not([data-label="Actions"]) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 2px 0;
+    border: none;
+    font-size: var(--fs-xs);
+    width: 100%;
+  }
+
+  .combos-table .responsive-card-row > td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-muted);
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .combos-table .responsive-card-row > td[data-label="Actions"] {
+    display: block;
+    padding: 6px 0 0 0;
+    border-top: 1px dashed var(--color-border-soft);
+    width: 100%;
+  }
+
+  .combos-table .responsive-card-row > td[data-label="Actions"]::before {
+    display: none;
+  }
+
+  .combos-table .combo-table-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    width: 100%;
+    gap: 6px;
+  }
+
+  .combos-table .combo-table-actions a.button,
+  .combos-table .combo-table-actions button {
+    width: 100%;
+    min-height: 32px;
+    height: 32px;
+    justify-content: center;
+  }
+}
+
+/* Extra-compact mode for micro-tiles (e.g. 3-panel / triple split <= 280px) */
+@container combos-view (max-width: 280px) {
+  .combos-table.responsive-card-table .responsive-card-row {
+    padding: 8px 10px;
+    gap: 3px;
+  }
+
+  .combos-table .combo-table-actions {
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+
+  .combos-table .combo-table-actions .button,
+  .combos-table .combo-table-actions button {
+    font-size: 10px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0 4px;
+  }
+
+  .combos-table .combo-table-actions button.danger {
+    grid-column: 1 / -1;
+  }
+}
+
 .combos-table {
   width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+.combos-table th {
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  white-space: nowrap;
+}
+
+.combos-table th:last-child {
+  text-align: right;
+  padding-right: 12px;
+}
+
+.combos-table td {
+  padding: 8px 10px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.combos-table td[data-label="Name"] {
+  min-width: 140px;
+}
+
+.combos-table td[data-label="Strategy"],
+.combos-table td[data-label="Priority Mode"],
+.combos-table td[data-label="Race"],
+.combos-table td[data-label="Context"] {
+  white-space: nowrap;
+  width: 1%;
+}
+
+.combos-table td[data-label="Actions"] {
+  white-space: nowrap;
+  text-align: right;
+  padding-right: 12px;
+  width: 1%;
+}
+
+/* Intermediate density for medium tiles (581px to 800px) — keeps table mode fitting without horizontal scrolling */
+@container combos-view (min-width: 581px) and (max-width: 800px) {
+  .combos-table th,
+  .combos-table td {
+    padding: 6px 5px;
+    font-size: var(--fs-xs);
+  }
+
+  .combos-table th {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+
+  .combos-table td[data-label="Name"] {
+    min-width: 110px;
+  }
+
+  .combos-table .combo-name-title {
+    font-size: var(--fs-xs);
+  }
+
+  .combos-table .chip {
+    padding: 1px 5px;
+    font-size: 10px;
+  }
+
+  .combos-table td[data-label="Priority Mode"] .chip-pm {
+    max-width: 90px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .combos-table .combo-table-actions {
+    gap: 3px;
+  }
+
+  .combos-table .combo-table-actions .button,
+  .combos-table .combo-table-actions button {
+    height: 24px;
+    padding: 0 4px;
+    font-size: 10px;
+    gap: 2px;
+  }
+
+  .combos-table .combo-table-actions a.button svg,
+  .combos-table .combo-table-actions button svg {
+    width: 11px;
+    height: 11px;
+  }
+}
+
+.combos-table tbody tr {
+  transition: background-color var(--t-fast);
+}
+
+.combos-table tbody tr:hover {
+  background: var(--color-surface-hover, rgba(0, 0, 0, 0.02));
+}
+
+:root[data-theme="dark"] .combos-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .combo-table-name-wrap {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.combo-table-title-row {
+  display: flex;
   align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
-  gap: var(--space-1);
 }
 
 .combo-table-name-link {
   text-decoration: none;
-  color: var(--color-primary);
+  color: var(--color-text);
   font-size: var(--fs-sm);
+  transition: color var(--t-fast);
 }
 
 .combo-table-name-link:hover {
-  text-decoration: underline;
+  color: var(--color-primary);
+  text-decoration: none;
 }
 
 .combo-name-title {
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .combo-id-badge {
-  font-size: var(--fs-xs);
+  font-size: 10px;
+  font-family: var(--font-mono);
   color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-soft);
+}
+
+.combo-table-badges-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .combo-race-badge {
-  display: inline-block;
-  font-size: var(--fs-xs);
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-soft);
+}
+
+.combo-context-value {
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
   color: var(--color-text-muted);
 }
 
@@ -187,9 +556,9 @@
   background: var(--color-warn-soft);
   color: var(--color-warn);
   border: 1px solid var(--color-warn);
-  font-size: var(--fs-2xs);
+  font-size: 10px;
   font-weight: 600;
-  padding: 0 4px;
+  padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
 
@@ -200,16 +569,29 @@
   background: var(--color-success-soft);
   color: var(--color-success);
   border: 1px solid var(--color-success);
-  font-size: var(--fs-2xs);
+  font-size: 10px;
   font-weight: 600;
-  padding: 0 4px;
+  padding: 1px 5px;
   border-radius: var(--radius-sm);
 }
 
 .combo-table-actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.combo-table-actions .button,
+.combo-table-actions button {
+  height: 26px;
+  padding: 0 6px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
 }
 
 .combos-search-wrap {
@@ -218,9 +600,13 @@
 }
 
 .combos-search-input {
-  width: 220px;
+  width: 200px;
+  height: 32px;
   padding: var(--space-1) var(--space-2);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
 }
 
 .auto-combos-section {

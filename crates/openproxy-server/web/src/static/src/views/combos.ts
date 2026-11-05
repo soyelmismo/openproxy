@@ -24,6 +24,8 @@ import {
 } from "./combos/subcombo-group.js";
 import { renderCombosList } from "./combos/combos-list.js";
 import { showTargetPrefixesModal } from "./combos/target-prefixes-modal.js";
+import { renderClientProfileSelect } from "../components/client-profile-select.js";
+import type { ClientProfile } from "../lib/types/client-profile.js";
 
 const PARAM_TOOLTIPS = {
   exploration_rate: "Probability (0.0–1.0) of trying a different target instead of the best-known one. 0.1 = 10% exploration. The exploration is priority-weighted: targets positioned first in the combo are more likely to be explored. Higher exploration rates discover alternatives faster but may pick suboptimal targets.",
@@ -454,7 +456,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
         })()}</td>
         ${showWeight ? html`<td class="col-target-weight"><em>${t("combos.target.na")}</em></td>` : html``}
         <td class="col-target-thinking">
-          <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:110px" .value=${target.thinking_effort ?? ""} @change=${async (e: Event) => {
+          <select class="combo-table-select" .value=${target.thinking_effort ?? ""} @change=${async (e: Event) => {
             const val = (e.target as HTMLSelectElement).value || null;
             await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ thinking_effort: val }) });
             target.thinking_effort = val; requestUpdate();
@@ -463,6 +465,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
             ${["none", "low", "medium", "high", "max"].map((ef) => html`<option value=${ef} ?selected=${target.thinking_effort === ef}>${ef}</option>`)}
           </select>
         </td>
+        <td class="col-target-profile"><em>${t("combos.target.sub_combo")}</em></td>
         <td class="col-target-cooldown"><em>${t("combos.target.sub_combo")}</em></td>
         <td class="last-test-cell col-target-test-status"><span class="muted">—</span></td>
         <td class="col-target-actions">${actionsCell}</td>
@@ -623,7 +626,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
   }} class="cw-input weight-input" title=${PARAM_TOOLTIPS.weight}></td>` : html``;
 
   const thinkingCell = html`<td class="col-target-thinking">
-    <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:110px" .value=${target.thinking_effort ?? ""} @change=${async (e: Event) => {
+    <select class="combo-table-select" .value=${target.thinking_effort ?? ""} @change=${async (e: Event) => {
       const val = (e.target as HTMLSelectElement).value || null;
       await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ thinking_effort: val }) });
       target.thinking_effort = val; requestUpdate();
@@ -632,9 +635,27 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
       ${["none", "low", "medium", "high", "max"].map((ef) => html`<option value=${ef} ?selected=${target.thinking_effort === ef}>${ef}</option>`)}
     </select></td>`;
 
+  const profileCell = html`<td class="col-target-profile">
+    ${renderClientProfileSelect({
+      className: "combo-table-select-sm",
+      value: target.client_profile,
+      inheritedProfile: target.model_client_profile,
+      allowInherit: true,
+      inheritLabel: "Inherit (none)",
+      onChange: async (newProfile: ClientProfile | null) => {
+        await api(`/combos/${detailComboId}/targets/${target.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ client_profile: newProfile }),
+        });
+        target.client_profile = newProfile;
+        requestUpdate();
+      },
+    })}
+  </td>`;
+
   const cooldownCell = html`<td class="col-target-cooldown">
     <div style="display:flex;align-items:center;gap:4px">
-      <select class="cw-input" style="font-size:0.75rem;padding:2px 4px;max-width:95px" @change=${async (e: Event) => {
+      <select class="combo-table-select-sm" @change=${async (e: Event) => {
         const val = (e.target as HTMLSelectElement).value || null;
         await api(`/combos/${detailComboId}/targets/${target.id}`, { method: "PATCH", body: JSON.stringify({ cooldown_mode: val }) });
         target.cooldown_mode = val as CooldownMode | null; requestUpdate();
@@ -665,7 +686,7 @@ function renderTargetRow(target: ComboTargetWithModel, showWeight: boolean): Tem
     <td class="col-target-account">${accountCell}</td>
     <td class="col-target-model"><div class="target-model-title">${modelCell}</div></td>
     <td class="col-target-context">${contextCell}</td>
-    ${weightCell}${thinkingCell}${cooldownCell}
+    ${weightCell}${thinkingCell}${profileCell}${cooldownCell}
     <td class="last-test-cell col-target-test-status">${lastTestCell}</td>
     <td class="col-target-actions">
       <div class="target-actions-wrap">
@@ -721,7 +742,7 @@ function renderComboDetail(): TemplateResult {
       <div class="actions">
         <label style="display:inline-flex;align-items:center;gap:5px;font-size:0.85rem;">
           ${t("combos.detail.strategy")}
-          <select style="padding:3px 6px;font-size:0.8rem;" .value=${combo.strategy} @change=${(e: Event) => patchCombo(detailComboId!, { strategy: (e.target as HTMLSelectElement).value })}>
+          <select class="combo-strategy-select" .value=${combo.strategy} @change=${(e: Event) => patchCombo(detailComboId!, { strategy: (e.target as HTMLSelectElement).value })}>
             ${["priority", "round_robin", "shuffle"].map((s) => html`<option value=${s} ?selected=${combo.strategy === s}>${s}</option>`)}
           </select>
         </label>
@@ -747,7 +768,7 @@ function renderComboDetail(): TemplateResult {
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${(e: Event) => detailComboId && testAllTargets(detailComboId, e)}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>
       ${targets.length === 0 ? html`<p class="empty">${t("combos.detail.targets_empty")}</p>` : html`<div class="table-wrap"><table class="combo-targets-table responsive-card-table">
-        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.thinking")}</th><th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
+        <thead><tr><th></th><th>${t("combos.detail.col.priority")}</th><th>${t("combos.detail.col.provider")}</th><th>${t("combos.detail.col.account")}</th><th>${t("combos.detail.col.model")}</th><th>${t("combos.detail.col.context")}</th>${weightTh}<th>${t("combos.detail.col.thinking")}</th><th>${t("combos.detail.col.client_profile")}</th><th>${t("combos.detail.col.cooldown")}</th><th>${t("combos.detail.col.last_test")}</th><th>${t("combos.detail.col.actions")}</th></tr></thead>
         <tbody>${targets.map((t) => renderTargetRow(t, showWeight))}</tbody></table></div>`}
     </section>`;
 }
@@ -773,10 +794,17 @@ export async function refreshComboDetail(): Promise<void> {
   }
 }
 
-export async function mountCombos(opts: { detailId?: number } = {}): Promise<(() => void) | void> {
+export async function mountCombos(
+  opts: { detailId?: number } = {},
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
+  if (!container) return;
+
   if (opts.detailId) {
     detailComboId = opts.detailId; detailCombo = null; detailTargets = [];
     return createView<{ combo: Combo | null; targets: ComboTargetWithModel[] }>({
+      container,
       loader: async () => {
         if (!state.accounts || state.accounts.length === 0) {
           try {
@@ -807,6 +835,7 @@ export async function mountCombos(opts: { detailId?: number } = {}): Promise<(()
     });
   }
   return createView<Combo[]>({
+    container,
     loader: () => api("/combos") as Promise<Combo[]>,
     onLoaded: (combos) => { state.combos = combos; },
     render: () => renderCombosList(),

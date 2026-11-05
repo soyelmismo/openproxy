@@ -318,6 +318,22 @@ fn update_model_target_format(
     Ok(())
 }
 
+pub fn update_model_client_profile(
+    conn: &Connection,
+    id: ModelRowId,
+    client_profile: Option<Option<openproxy_types::ClientProfile>>,
+) -> Result<()> {
+    if let Some(cp) = client_profile {
+        let cp_str = cp.map(|p| p.as_str());
+        conn.execute(
+            "UPDATE models SET client_profile = ?1 WHERE id = ?2",
+            params![cp_str, id.0],
+        )
+        .map_err(crate::error::map_db_error)?;
+    }
+    Ok(())
+}
+
 pub fn update_model_details(
     conn: &Connection,
     id: ModelRowId,

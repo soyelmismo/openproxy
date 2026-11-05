@@ -474,3 +474,135 @@
   }
 
 }
+
+/* Container query support for Logs & Debug Logs in workspace tiles */
+@container tile-view (max-width: 520px) {
+  .debug-log-card-row {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+    box-sizing: border-box;
+    width: 100%;
+  }
+
+  .debug-log-card-row td {
+    display: block;
+    padding: 0;
+    border: none;
+    background: transparent;
+    width: 100%;
+  }
+
+  .debug-log-card-row .col-debug-time,
+  .debug-log-card-row .col-debug-level,
+  .debug-log-card-row .col-debug-target {
+    display: inline-flex;
+    width: auto;
+    margin-right: var(--space-2);
+  }
+
+  .debug-log-card-row .col-debug-rid,
+  .debug-log-card-row .col-debug-tid {
+    display: inline-flex;
+    width: auto;
+    margin-right: var(--space-2);
+  }
+
+  .debug-log-card-row .col-debug-rid::before {
+    content: "Req: ";
+    font-weight: 500;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    margin-right: 3px;
+  }
+
+  .debug-log-card-row .col-debug-tid::before {
+    content: "Trace: ";
+    font-weight: 500;
+    font-size: var(--fs-xs);
+    color: var(--color-text-muted);
+    margin-right: 3px;
+  }
+
+  .debug-log-card-row .col-debug-message {
+    padding-top: var(--space-1);
+    font-size: var(--fs-xs);
+    line-height: 1.4;
+  }
+
+  /* Main request logs: switch to compact card view only in narrow micro-tiles <= 520px */
+  .desktop-table-header,
+  .logs-scroll-area > .log-row:first-child:not(button) {
+    display: none;
+  }
+
+  .desktop-cells {
+    display: none;
+  }
+
+  .m-card-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 3px;
+  }
+
+  .logs-scroll-area button.log-row {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg);
+    box-sizing: border-box;
+    text-align: left;
+    border-left: 3px solid transparent;
+    gap: 3px;
+    overflow: hidden;
+  }
+
+  .logs-scroll-area button.log-row.ok { border-left-color: var(--color-success); }
+  .logs-scroll-area button.log-row.error { border-left-color: var(--color-error); background: rgba(178, 31, 31, 0.05); }
+
+  .m-line-1,
+  .m-line-2 {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    gap: 4px;
+  }
+
+  .m-line-left {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+
+  .m-line-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+  }
+
+  .logs-header-actions {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}

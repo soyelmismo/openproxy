@@ -17,6 +17,9 @@ pub mod providers;
 pub mod quota;
 pub mod responses;
 
+pub mod client_profile;
+pub use client_profile::ClientProfile;
+
 pub mod accounts;
 pub mod capabilities;
 pub mod models;

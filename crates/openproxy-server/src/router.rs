@@ -20,6 +20,8 @@
 //! | `POST /v1/audio/transcriptions` | `handlers::audio::transcribe` (Whisper) |
 //! | `GET  /admin`                 | SPA shell (`admin_ui::index_html`)        |
 //! | `GET  /admin/`                | SPA shell (`admin_ui::index_html`)        |
+//! | `GET  /admin/panel`           | embedded tile SPA shell (`admin_ui::index_html`) |
+//! | `GET  /admin/panel/`          | embedded tile SPA shell (`admin_ui::index_html`) |
 //! | `GET  /admin/callback.html`   | OAuth callback page (`admin_ui::callback_html`) |
 //! | `GET  /admin/dist/*`          | embedded bundle (`admin_ui::serve_asset`) |
 //! | `GET  /admin/styles/*`        | embedded CSS (`admin_ui::serve_asset`)    |
@@ -160,6 +162,8 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
         // paths, and the outer `.nest("/admin", admin_routes)` covers the
         // no-trailing-slash form via the SPA fallback.
         .route("/", get(admin_ui::index_html))
+        .route("/panel", get(admin_ui::index_html))
+        .route("/panel/", get(admin_ui::index_html))
         .route(
             "/callback.html",
             get(admin_ui::callback_html).post(admin_ui::callback_html),
@@ -394,6 +398,142 @@ mod tests {
         assert!(csp.contains("ws://listo.click wss://listo.click;"), "{csp}");
         assert!(!csp.contains("connect-src 'self' ws: wss:"), "{csp}");
         assert!(csp.contains("frame-ancestors 'none';"), "{csp}");
+    }
+
+    #[tokio::test]
+    async fn test_admin_panel_framing_security_headers() {
+        let state = make_state().await;
+        let app = build_router(state);
+
+        // 1. Allowed paths: /admin/panel and /admin/panel/ must allow same-origin framing.
+        for path in ["/admin/panel", "/admin/panel/"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::OK, "{path} should be 200 OK");
+            assert_eq!(
+                response.headers().get("x-frame-options").unwrap(),
+                "SAMEORIGIN",
+                "x-frame-options for {path}"
+            );
+            let csp = response
+                .headers()
+                .get("content-security-policy")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(
+                csp.contains("frame-ancestors 'self';"),
+                "CSP frame-ancestors for {path}: {csp}"
+            );
+            assert!(
+                !csp.contains("frame-ancestors 'none';"),
+                "CSP should not contain 'none' for {path}"
+            );
+
+            // Confirm it serves the index.html shell
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let body_str = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body_str.contains("<!doctype html>") || body_str.contains("<html"),
+                "must serve index_html for {path}"
+            );
+        }
+
+        // 2. Denied paths: every other route must strictly enforce DENY and frame-ancestors 'none'
+        for denied_path in [
+            "/admin",
+            "/admin/callback.html",
+            "/v1/health",
+            "/admin/panel?foo=bar", // query string on /admin/panel is tested below too
+            "/admin/panel/sub",
+            "/admin/panel-other",
+            "/admin/panela",
+            "/admin/panel/?foo=1",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(denied_path)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            // Note: /admin redirects to /admin or serves SPA shell, or whatever status;
+            // regardless of status, x-frame-options and frame-ancestors MUST be denied unless
+            // the exact path is /admin/panel or /admin/panel/.
+            let path_only = denied_path.split('?').next().unwrap();
+            if path_only == "/admin/panel" || path_only == "/admin/panel/" {
+                // If it's a query override attempt on /admin/panel, it still allows same-origin framing
+                // for the panel route itself, but we verify no arbitrary query can trick other routes.
+                assert_eq!(
+                    response.headers().get("x-frame-options").unwrap(),
+                    "SAMEORIGIN"
+                );
+            } else {
+                assert_eq!(
+                    response.headers().get("x-frame-options").unwrap(),
+                    "DENY",
+                    "x-frame-options must be DENY for {denied_path}"
+                );
+                let csp = response
+                    .headers()
+                    .get("content-security-policy")
+                    .unwrap()
+                    .to_str()
+                    .unwrap();
+                assert!(
+                    csp.contains("frame-ancestors 'none';"),
+                    "frame-ancestors must be 'none' for {denied_path}"
+                );
+            }
+        }
+
+        // Specifically test other routes with query parameters attempting overrides:
+        for override_attempt in [
+            "/admin?frame=1",
+            "/admin/?frame_ancestors=self",
+            "/admin/callback.html?frame=self",
+            "/v1/health?x-frame-options=SAMEORIGIN",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(override_attempt)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(
+                response.headers().get("x-frame-options").unwrap(),
+                "DENY",
+                "x-frame-options must stay DENY on {override_attempt}"
+            );
+            let csp = response
+                .headers()
+                .get("content-security-policy")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(
+                csp.contains("frame-ancestors 'none';"),
+                "frame-ancestors must stay 'none' on {override_attempt}"
+            );
+        }
     }
 
     #[tokio::test]

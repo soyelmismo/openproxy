@@ -358,13 +358,18 @@ function renderProxies(): TemplateResult {
   `;
 }
 
-export async function mountProxies(): Promise<(() => void) | void> {
+export async function mountProxies(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
   loadError = null;
   currentPage = 1;
   proxyTestUrl = await getProxyTestUrl();
+  if (container && !container.isConnected) return;
   return createView(
     renderProxies,
     async () => { fetchFilteredProxies(); },
     (msg) => { loadError = msg; },
+    container,
   );
 }

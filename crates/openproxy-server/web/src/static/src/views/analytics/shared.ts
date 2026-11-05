@@ -154,7 +154,7 @@ export function fmtDateTime(v: string): string {
 
 /** Parse `location.hash` into structured analytics parameters. */
 export function parseHashParams(): AnalyticsHashParams {
-  const hash = location.hash || "#/analytics";
+  const hash = document.querySelector<HTMLElement>('.tile-view[data-view="analytics"]')?.dataset['route'] || location.hash || "#/analytics";
   const qIdx = hash.indexOf("?");
   const query = qIdx >= 0 ? hash.slice(qIdx + 1) : "";
   const params = new URLSearchParams(query);
@@ -179,7 +179,7 @@ export function parseRank(raw: string | null): RankMetric {
 }
 
 export function setHashParams(updates: Partial<AnalyticsHashParams>): void {
-  const hash = location.hash || "#/analytics";
+  const hash = document.querySelector<HTMLElement>('.tile-view[data-view="analytics"]')?.dataset['route'] || location.hash || "#/analytics";
   const qIdx = hash.indexOf("?");
   const path = qIdx >= 0 ? hash.slice(0, qIdx) : hash;
   const query = qIdx >= 0 ? hash.slice(qIdx + 1) : "";

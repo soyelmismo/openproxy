@@ -283,6 +283,7 @@ mod tests {
             thinking_effort: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
             inherited_target_id: None,
         };
         assert!(cb.is_target_healthy(&target_no_acc));

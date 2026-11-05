@@ -398,3 +398,129 @@ describe("quota-pools helpers", () => {
     expect(html).toContain("100 requests available");
   });
 });
+
+describe("renderQuotaCell — Quota Families & Tabs (Design D)", () => {
+  it("renders tabs when an account has multiple quota families (Antigravity with Gemini + Claude)", () => {
+    const account = makeAccount({
+      id: 42,
+      provider_id: "antigravity",
+      quota_session_used: 0,
+      quota_session_limit: 1000,
+      quota_weekly_used: 1000,
+      quota_weekly_limit: 1000,
+      quota_model_details: [
+        { model_id: "Claude (5h)", session_used: 0, session_limit: 1000, session_reset_at: null, remaining_fraction: 1 },
+        { model_id: "Claude (Weekly)", session_used: 1000, session_limit: 1000, session_reset_at: null, remaining_fraction: 0 },
+      ],
+    });
+    const dom = toDom(renderQuotaCell(account));
+    const tabs = dom.querySelectorAll(".family-tab");
+    expect(tabs.length).toBe(2);
+    expect(tabs[0]?.textContent).toContain("Gemini");
+    expect(tabs[0]?.textContent).toContain("Semanal agotada");
+    expect(tabs[1]?.textContent).toContain("Claude");
+    expect(tabs[1]?.textContent).toContain("Semanal agotada");
+
+    const geminiPanel = dom.querySelector("#panel-42-gemini") as HTMLElement;
+    const claudePanel = dom.querySelector("#panel-42-claude") as HTMLElement;
+    expect(geminiPanel).not.toBeNull();
+    expect(claudePanel).not.toBeNull();
+    expect(geminiPanel.hidden).toBe(false);
+    expect(claudePanel.hidden).toBe(true);
+
+    // Clicking Claude tab shows Claude panel and hides Gemini panel
+    const claudeTab = tabs[1] as HTMLElement;
+    claudeTab.click();
+    expect(geminiPanel.hidden).toBe(true);
+    expect(claudePanel.hidden).toBe(false);
+    expect(claudeTab.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("renders a single grid without redundant tabs when only one family is present", () => {
+    const account = makeAccount({
+      id: 7,
+      provider_id: "antigravity",
+      quota_session_used: 200,
+      quota_session_limit: 1000,
+      quota_weekly_used: 500,
+      quota_weekly_limit: 1000,
+      quota_model_details: null,
+    });
+    const dom = toDom(renderQuotaCell(account));
+    expect(dom.querySelector(".family-tabs")).toBeNull();
+    const panel = dom.querySelector(".family-panel");
+    expect(panel).not.toBeNull();
+    const windows = dom.querySelectorAll(".quota-window");
+    expect(windows.length).toBe(2);
+  });
+
+  it("renders quota window hint with reset time and without confusing 'disponibles' text", () => {
+    const account = makeAccount({
+      id: 8,
+      provider_id: "antigravity",
+      quota_session_used: 19,
+      quota_session_limit: 100,
+      quota_session_reset_at: new Date(Date.now() + 3600000 * 3 + 60000 * 15).toISOString(),
+      quota_weekly_used: 50,
+      quota_weekly_limit: 100,
+      quota_weekly_reset_at: new Date(Date.now() + 86400000 * 3 + 3600000 * 4).toISOString(),
+    });
+    const dom = toDom(renderQuotaCell(account));
+    const hints = dom.querySelectorAll(".quota-window-hint");
+    expect(hints.length).toBe(2);
+    for (const h of hints) {
+      expect(h.textContent).not.toContain("disponibles");
+      expect(h.textContent).toMatch(/resets in/);
+    }
+  });
+
+  it("renders Banked Resets badge with SVG icon and clickable role for Codex", () => {
+    const account = makeAccount({
+      provider_id: "codex",
+      oauth_provider_specific: JSON.stringify({
+        reset_credits: 3,
+      }),
+    });
+    const dom = toDom(renderQuotaCell(account));
+    const badge = dom.querySelector(".quota-tag.credits");
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain("3 Banked Resets");
+    expect(badge?.textContent).not.toContain("⚡");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+    expect(badge?.getAttribute("role")).toBe("button");
+    expect(badge?.classList.contains("clickable")).toBe(true);
+  });
+
+  it("renders gpt-reserve Standby badge with SVG icon without emoji", () => {
+    const account = makeAccount({
+      provider_id: "codex",
+      quota_session_used: 10,
+      quota_session_limit: 100,
+    });
+    const dom = toDom(renderQuotaCell(account));
+    const reserveTag = dom.querySelector(".quota-tag.reserve");
+    expect(reserveTag).not.toBeNull();
+    expect(reserveTag?.textContent).toContain("gpt-reserve: Standby");
+    expect(reserveTag?.textContent).not.toContain("🛡️");
+    expect(reserveTag?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("does not render model-details accordion or isolate gpt-5.6-luna for CodeBuddy", () => {
+    const account = makeAccount({
+      provider_id: "codebuddy",
+      quota_session_used: 199,
+      quota_session_limit: 180,
+      quota_model_details: [
+        { model_id: "gpt-5.6-luna", session_used: 1421, session_limit: 1285, session_reset_at: null, remaining_fraction: 0 },
+        { model_id: "gpt-5.5", session_used: 30, session_limit: 30, session_reset_at: null, remaining_fraction: 0 },
+      ],
+    });
+    const dom = toDom(renderQuotaCell(account));
+    // No accordion
+    expect(dom.querySelector(".quota-model-details")).toBeNull();
+    // No isolated reserve bar with gpt-5.6-luna
+    expect(dom.textContent).not.toContain("gpt-5.6-luna");
+    // Main quota window is still intact
+    expect(dom.querySelector(".quota-window")).not.toBeNull();
+  });
+});

@@ -2,103 +2,155 @@
 // `rerenderCurrentView()`. A diff touches only the nodes that changed, so
 // <select> dropdowns stay open, inputs keep focus, and scroll survives.
 //
-// A view mounts via `mountView(container, renderFn)`; the router captures the
-// returned cleanup.
+// A view mounts via `mountView(container, renderFn)`; the router or panel host
+// captures the returned cleanup. Multiple concurrent containers can be mounted
+// (e.g. workspace tiles), and updates coalesce into a single microtask broadcast.
 
 import { render, type TemplateResult } from 'lit-html';
 
-let currentContainer: HTMLElement | null = null;
-let currentRenderFn: (() => TemplateResult) | null = null;
-let updateScheduled = false;
-let renderBroken = false;
+interface MountEntry {
+  renderFn: () => TemplateResult;
+  renderBroken: boolean;
+  generation: number;
+}
 
-/** Mount a view into `container`. Returns a cleanup function. */
+const mounts = new Map<HTMLElement, MountEntry>();
+const retiredTargets = new WeakSet<HTMLElement>();
+
+let updateScheduled = false;
+let nextGeneration = 0;
+
+/** Mount a view into `container`. Returns a cleanup function.
+ *
+ * If `container` was retired via `unmountView`, registration is rejected
+ * and an empty cleanup function is returned.
+ */
 export function mountView(
   container: HTMLElement,
   renderFn: () => TemplateResult,
 ): () => void {
-  currentContainer = container;
-  currentRenderFn = renderFn;
-  renderBroken = false;
-  render(renderFn(), container);
+  if (retiredTargets.has(container)) {
+    return () => {};
+  }
+
+  const generation = ++nextGeneration;
+  mounts.set(container, {
+    renderFn,
+    renderBroken: false,
+    generation,
+  });
+
+  try {
+    render(renderFn(), container);
+  } catch (e) {
+    console.error("[openproxy] mountView initial render() threw:", e);
+    const entry = mounts.get(container);
+    if (entry && entry.generation === generation) {
+      entry.renderBroken = true;
+    }
+  }
+
   return () => {
-    if (currentContainer === container) {
-      currentContainer = null;
-      currentRenderFn = null;
+    const entry = mounts.get(container);
+    if (entry && entry.generation === generation) {
+      mounts.delete(container);
     }
   };
 }
 
-/** Schedule a re-render on the next microtask. Coalesces calls.
+/** Synchronously deregisters and retires a mount target.
  *
- *  Recovery: a throw out of `render()` (lit-html's repeat directive on an
- *  inconsistent DOM) leaves lit-html's internal state corrupted, so later
- *  renders throw too. Clearing the container drops those refs and the next
- *  render starts fresh, equivalent to an unmount plus remount. */
+ * Marks `container` in `retiredTargets` so late async mount calls targeting
+ * this detached element cannot re-register. Drops its render entry and resets
+ * lit-html internal parts if present.
+ */
+export function unmountView(container: HTMLElement): void {
+  retiredTargets.add(container);
+  mounts.delete(container);
+  try {
+    delete (container as { _$litPart$?: unknown })._$litPart$;
+  } catch {
+    // Ignore in non-extensible objects
+  }
+}
+
+function renderEntry(container: HTMLElement, entry: MountEntry): void {
+  if (!container.isConnected) {
+    return;
+  }
+  // If not broken and has no children, wait for initial render or broken recovery
+  if (!entry.renderBroken && container.childNodes.length === 0) {
+    return;
+  }
+  const gen = entry.generation;
+  try {
+    if (entry.renderBroken) {
+      // Reset lit-html's internal refs before re-rendering.
+      delete (container as { _$litPart$?: unknown })._$litPart$;
+      container.innerHTML = '';
+      entry.renderBroken = false;
+    }
+    render(entry.renderFn(), container);
+  } catch (e) {
+    console.error("[openproxy] requestUpdate render() threw:", e);
+    entry.renderBroken = true;
+    // Retry on the next microtask for this container
+    queueMicrotask(() => {
+      const current = mounts.get(container);
+      if (current && current.generation === gen && container.isConnected) {
+        try {
+          delete (container as { _$litPart$?: unknown })._$litPart$;
+          container.innerHTML = '';
+          render(current.renderFn(), container);
+          current.renderBroken = false;
+        } catch (e2) {
+          console.error("[openproxy] recovery render also failed:", e2);
+          current.renderBroken = true;
+        }
+      }
+    });
+  }
+}
+
+/** Schedule a re-render on the next microtask. Coalesces calls across all mounted containers. */
 export function requestUpdate(): void {
   if (updateScheduled) return;
   updateScheduled = true;
   queueMicrotask(() => {
     updateScheduled = false;
-    if (
-      !currentContainer ||
-      !currentRenderFn ||
-      !currentContainer.isConnected ||
-      currentContainer.childNodes.length === 0
-    ) {
-      return;
-    }
-    try {
-      if (renderBroken) {
-        // Reset lit-html's internal refs before re-rendering.
-        delete (currentContainer as { _$litPart$?: unknown })._$litPart$;
-        currentContainer.innerHTML = '';
-        renderBroken = false;
+    // Snapshot the entries in case rendering modifies mounts
+    const entries = Array.from(mounts.entries());
+    for (const [container, entry] of entries) {
+      if (mounts.get(container) === entry) {
+        renderEntry(container, entry);
       }
-      render(currentRenderFn(), currentContainer);
-    } catch (e) {
-      console.error("[openproxy] requestUpdate render() threw:", e);
-      renderBroken = true;
-        // Retry on the next microtask.
-      updateScheduled = true;
-      queueMicrotask(() => {
-        updateScheduled = false;
-        if (currentContainer && currentRenderFn && currentContainer.isConnected) {
-          try {
-            delete (currentContainer as { _$litPart$?: unknown })._$litPart$;
-            currentContainer.innerHTML = '';
-            render(currentRenderFn(), currentContainer);
-            renderBroken = false;
-          } catch (e2) {
-            console.error("[openproxy] recovery render also failed:", e2);
-            renderBroken = true;
-          }
-        }
-      });
     }
   });
 }
 
-/** Force an immediate synchronous re-render. */
+/** Force an immediate synchronous re-render across all mounted containers. */
 export function forceUpdate(): void {
   updateScheduled = false;
-  if (
-    !currentContainer ||
-    !currentRenderFn ||
-    !currentContainer.isConnected ||
-    currentContainer.childNodes.length === 0
-  ) {
-    return;
-  }
-  try {
-    if (renderBroken) {
-      delete (currentContainer as { _$litPart$?: unknown })._$litPart$;
-      currentContainer.innerHTML = '';
-      renderBroken = false;
+  const entries = Array.from(mounts.entries());
+  for (const [container, entry] of entries) {
+    if (mounts.get(container) === entry) {
+      if (!container.isConnected) {
+        continue;
+      }
+      if (!entry.renderBroken && container.childNodes.length === 0) {
+        continue;
+      }
+      try {
+        if (entry.renderBroken) {
+          delete (container as { _$litPart$?: unknown })._$litPart$;
+          container.innerHTML = '';
+          entry.renderBroken = false;
+        }
+        render(entry.renderFn(), container);
+      } catch (e) {
+        console.error("[openproxy] forceUpdate render() threw:", e);
+        entry.renderBroken = true;
+      }
     }
-    render(currentRenderFn(), currentContainer);
-  } catch (e) {
-    console.error("[openproxy] forceUpdate render() threw:", e);
-    renderBroken = true;
   }
 }

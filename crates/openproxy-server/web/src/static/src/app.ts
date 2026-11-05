@@ -18,6 +18,8 @@ import { logsGoPage } from "./views/logs.js";
 import { loadLang } from "./i18n/index.js";
 import { liveLogsStore } from "./state/live-logs-store.js";
 import { initModelsSync } from "./state/models-sync.js";
+import { isPanelDocument } from "./state/workspace.js";
+import { installPanelBridge } from "./components/workspace.js";
 
 // Expose the global `state` for the e2e suite (and operator console debugging). The dashboard is an
 // internal admin tool, so exposing the in-memory state object crosses no public auth boundary.
@@ -113,7 +115,12 @@ async function boot(): Promise<void> {
   bootstrapTheme();
   // Hydrate the sidebar collapse flag from localStorage before the shell mounts, so the first
   // renderSidebar() call already reflects the persisted choice.
-  loadSidebarCollapsedFromStorage();
+  if (isPanelDocument()) installPanelBridge();
+  else {
+    loadSidebarCollapsedFromStorage();
+    // The navigation rail is compact by default beside the contextual sidebar.
+    try { if (localStorage.getItem("openproxy:sidebarCollapsed") === null) state.ui = { ...state.ui, sidebarCollapsed: true }; } catch { /* session preference only */ }
+  }
   mountShell();
   installRouter();
   startBgPoll();

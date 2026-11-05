@@ -160,9 +160,11 @@ function createAllCharts(): void {
 
 // Mount
 
-export async function mountHome(): Promise<(() => void) | void> {
-  const main: HTMLElement | null = document.getElementById("main");
-  if (!main) return;
+export async function mountHome(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
+  if (!container || !container.isConnected) return;
 
   // Reset view-local state on every mount.
   currentSnapshot = null;
@@ -179,12 +181,13 @@ export async function mountHome(): Promise<(() => void) | void> {
   // Subscribers fire on a throttled cadence (max 4 Hz).
   unsubLive = subscribe(onLiveUpdate);
 
-  cleanupReactive = mountView(main, renderHome);
+  cleanupReactive = mountView(container, renderHome);
   document.addEventListener("themechange", refreshChartTheme);
   onLiveUpdate();
 
   // rAF, not queueMicrotask: clientWidth/clientHeight are only valid after layout.
   requestAnimationFrame(() => {
+    if (!container.isConnected) return;
     createAllCharts();
     pushSnapshotToCharts();
   });

@@ -277,8 +277,8 @@ pub fn propagate_commandcode_headers(
     CommandCodeSessionTranslator.apply_session(headers, &session_id);
 }
 
-/// Dispatches header propagation to the provider adapter, so callers do not
-/// duplicate the provider-specific translation and session affinity mapping.
+/// Dispatches header propagation to the provider adapter or explicit client profile,
+/// so callers do not duplicate the provider-specific translation and session affinity mapping.
 pub fn propagate_provider_target_headers(
     headers: &mut Vec<(String, String)>,
     provider_id: &str,
@@ -287,11 +287,49 @@ pub fn propagate_provider_target_headers(
     openai_req: &openproxy_types::OpenAIRequest,
     codex_workspace_id: Option<&str>,
 ) {
-    let matches = |prefix: &str| provider_id.starts_with(prefix) || adapter_id.starts_with(prefix);
+    propagate_provider_target_headers_with_profile(
+        headers,
+        provider_id,
+        adapter_id,
+        req_headers,
+        openai_req,
+        codex_workspace_id,
+        None,
+    );
+}
+
+/// Extended dispatch supporting an optional explicit [`openproxy_types::ClientProfile`].
+pub fn propagate_provider_target_headers_with_profile(
+    headers: &mut Vec<(String, String)>,
+    provider_id: &str,
+    adapter_id: &str,
+    req_headers: &std::collections::BTreeMap<String, String>,
+    openai_req: &openproxy_types::OpenAIRequest,
+    codex_workspace_id: Option<&str>,
+    client_profile: Option<openproxy_types::ClientProfile>,
+) {
+    let profile_str = client_profile.map(|p| p.as_str()).unwrap_or("");
+    let matches = |prefix: &str| {
+        profile_str.starts_with(prefix)
+            || provider_id.starts_with(prefix)
+            || adapter_id.starts_with(prefix)
+    };
+
+    // If an explicit client profile is requested, inject the baseline spoofer headers
+    // for that client profile first (e.g. User-Agent, betas, etc.).
+    if let Some(profile) = client_profile {
+        let baseline = openproxy_adapters::spoofer::headers_for_client_profile(
+            profile,
+            Some(&openai_req.model),
+        );
+        for (k, v) in baseline {
+            upsert_header(headers, &k, v);
+        }
+    }
 
     if matches("opencode") {
         propagate_opencode_headers(headers, req_headers, openai_req);
-    } else if matches("antigravity") || provider_id == "agy" || adapter_id == "agy" {
+    } else if matches("antigravity") || provider_id == "agy" || adapter_id == "agy" || profile_str == "antigravity" {
         propagate_antigravity_headers(headers, req_headers);
     } else if matches("minimax") {
         propagate_minimax_headers(headers, req_headers);
@@ -310,7 +348,7 @@ pub fn propagate_provider_target_headers(
         }
     } else if matches("kiro") {
         propagate_kiro_headers(headers, req_headers);
-    } else if matches("commandcode") || provider_id == "cmd" || adapter_id == "cmd" {
+    } else if matches("commandcode") || provider_id == "cmd" || adapter_id == "cmd" || profile_str == "commandcode" {
         propagate_commandcode_headers(headers, req_headers);
     } else if matches("codebuddy") {
         propagate_codebuddy_headers(headers, req_headers, openai_req);
@@ -318,7 +356,12 @@ pub fn propagate_provider_target_headers(
         propagate_claude_headers(headers, req_headers);
     }
 
-    apply_provider_session_affinity(headers, provider_id, adapter_id, req_headers, openai_req);
+    let effective_provider = if let Some(profile) = client_profile {
+        profile.as_str()
+    } else {
+        provider_id
+    };
+    apply_provider_session_affinity(headers, effective_provider, adapter_id, req_headers, openai_req);
 }
 
 /// Forwards `x-codebuddy-*`, `codebuddy-*` and client identity headers

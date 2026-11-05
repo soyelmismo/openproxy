@@ -592,6 +592,7 @@
 .decision-question-type {
   width: 96px;
   flex-shrink: 0;
+  border-radius: var(--radius-sm);
 }
 .decision-question-instructions {
   width: 100%;

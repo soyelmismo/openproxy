@@ -305,6 +305,7 @@ pub fn seed_solo_combo_at_url(
             sub_combo_id: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
         },
     )
     .expect("add target");
@@ -387,6 +388,7 @@ pub fn seed_target_with_account(
             sub_combo_id: None,
             description: None,
             selected_accounts: None,
+            client_profile: None,
         },
     )
     .expect("add target");

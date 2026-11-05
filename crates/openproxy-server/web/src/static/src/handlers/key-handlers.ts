@@ -36,7 +36,7 @@ interface KeyRow {
   id: ApiKeyId;
   label?: string | null;
   scopes?: string[];
-  allowed_models?: string[];
+  allowed_models?: string[] | null;
   allowed_combos?: number[] | null;
   blacklisted_providers?: string[] | null;
   allowed_providers?: string[] | null;
@@ -118,7 +118,14 @@ function addCustomBlacklistedModel(): void {
   renderBlacklistedModelsChips();
 }
 
-function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?: KeyRow; wrapper: HTMLElement }): TemplateResult {
+export function keyFormTemplate({ mode, key, wrapper, inline = false, onSubmit, onCancel }: {
+  mode: "create" | "edit";
+  key?: KeyRow;
+  wrapper: HTMLElement;
+  inline?: boolean;
+  onSubmit?: (e: Event) => void;
+  onCancel?: () => void;
+}): TemplateResult {
   const isEdit = mode === "edit" && key;
   const labelVal = isEdit ? (key!.label || "") : "";
   const scopes: string[] = isEdit ? (key!.scopes || []) : ["chat"];
@@ -149,19 +156,21 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
   const expiryAmountVal = (isEdit && expiresAt) ? formatExpiryAmount(expiresAt) : "";
   const submitHandler = (e: Event): void => {
     e.preventDefault();
+    if (onSubmit) { onSubmit(e); return; }
     if (isEdit) void updateKey(safeKey.id as number, e, wrapper);
     else void createKey(e, wrapper);
   };
+  const cancel = (): void => { if (onCancel) onCancel(); else wrapper.remove(); };
   return html`
-    <div class="modal-bg"
-         @click=${(e: Event) => { if (e.target === e.currentTarget) wrapper.remove(); }}>
-      <div class="modal">
-        <div class="modal-header">
+    <div class=${inline ? "key-properties-form" : "modal-bg"}
+         @click=${(e: Event) => { if (!inline && e.target === e.currentTarget) cancel(); }}>
+      <div class=${inline ? "key-properties-content" : "modal"}>
+        ${inline ? html`` : html`<div class="modal-header">
           <h2>${title}</h2>
-          <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
-        </div>
+          <button type="button" class="close-btn" @click=${cancel} aria-label="Close">&times;</button>
+        </div>`}
         <form @submit=${submitHandler}>
-          <div class="modal-body">
+          <div class=${inline ? "key-properties-fields" : "modal-body"}>
             <div class="field">
               <label for="key-label">Label</label>
               <input id="key-label" name="label" type="text" placeholder="my-app" .value=${labelVal} required>
@@ -251,8 +260,8 @@ function keyFormTemplate({ mode, key, wrapper }: { mode: "create" | "edit"; key?
               </div>
             </div>
           </div>
-          <div class="modal-footer">
-            <button type="button" @click=${() => wrapper.remove()}>Cancel</button>
+          <div class=${inline ? "key-properties-footer" : "modal-footer"}>
+            <button type="button" @click=${cancel}>Cancel</button>
             <button type="submit" class="primary">${submitLabel}</button>
           </div>
         </form>
@@ -279,26 +288,7 @@ export async function showCreateKey(): Promise<void> {
 }
 
 export async function showEditKey(id: number): Promise<void> {
-  if (!state.modelsComplete) {
-    state.models = await api("/models") as Model[];
-    state.modelsComplete = true;
-  }
-  if (!state.providers || state.providers.length === 0) {
-    state.providers = await api("/providers") as Provider[];
-  }
-  await ensureCombosLoaded();
-  let key: KeyRow;
-  try { key = await api("/keys/" + id) as KeyRow; }
-  catch (e: unknown) {
-    showApiError(e, "Error");
-    return;
-  }
-  const wrapper = document.createElement("div");
-  ensureModalRoot().appendChild(wrapper);
-  render(keyFormTemplate({ mode: "edit", key, wrapper }), wrapper);
-  renderAllowedModelsChips();
-  renderBlacklistedModelsChips();
-  renderAllowedCombosChips();
+  location.hash = `#/keys/${id}`;
 }
 
 // Closes the key form modal. The optional first arg is the legacy

@@ -226,7 +226,7 @@
 
 .config-select {
   height: 32px;
-  background: var(--color-surface-2);
+  background: var(--color-surface);
   color: var(--color-text);
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm);
@@ -238,7 +238,8 @@
 }
 
 .config-select:focus {
-  outline: none;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
   border-color: var(--color-primary);
 }
 
@@ -623,4 +624,107 @@ details[open] > .config-details-summary .summary-chevron {
   border-radius: var(--radius-sm, 4px);
   font-size: 0.85rem;
   color: #fbbf24;
+}
+
+/* Container query support for Config view in workspace tiles */
+@container tile-view (max-width: 650px) {
+  .config-card.card-timeouts-full {
+    grid-column: 1;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-card {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .config-editable-region,
+  .config-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .config-timeouts-grid {
+    grid-template-columns: 1fr;
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .config-field {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-input-group {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-field input,
+  .config-field select,
+  .config-field button {
+    width: 100%;
+    max-width: 100%;
+    min-height: 34px;
+    font-size: var(--fs-xs);
+    box-sizing: border-box;
+  }
+
+  .config-inline-setting {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .config-inline-action {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .config-inline-action .config-input-group {
+    flex: 1;
+    width: 100%;
+  }
+
+  .config-inline-action button {
+    min-height: 34px;
+    padding: 0 var(--space-2);
+  }
+
+  .config-card {
+    padding: 10px 12px;
+  }
+
+  .config-header-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: var(--space-2);
+  }
+
+  .config-header-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@container tile-view (max-width: 280px) {
+  .config-timeouts-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-card {
+    padding: 8px 8px;
+  }
 }

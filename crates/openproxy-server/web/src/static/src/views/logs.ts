@@ -259,19 +259,22 @@ export function toggleColumn(key: string): void {
   saveVisibleColumns(); requestUpdate();
 }
 
-export async function mountLogs(): Promise<(() => void) | void> {
-  const main = document.getElementById("main"); if (!main) return;
+export async function mountLogs(
+  target?: HTMLElement | null | string,
+  route?: string,
+): Promise<(() => void) | void> {
+  const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
+  if (!container) return;
   columnsMenuOpen = false;
   if (!state.logs.visibleColumns) state.logs.visibleColumns = loadVisibleColumns();
   state.logs.page = 1; state.logs.followTail = true; frozenLogsSnapshot = null;
-  const cleanupReactive = mountView(main, renderLogsView);
+  const cleanupReactive = mountView(container, renderLogsView);
 
   const onDocClickForMenu = (ev: Event): void => {
     if (!columnsMenuOpen || !(ev.target instanceof Element) || ev.target.closest(".columns-menu-wrapper")) return;
     columnsMenuOpen = false; requestUpdate();
   };
-  const w = window as Window & typeof globalThis & { __logsColumnsDocClickBound?: boolean };
-  if (!w.__logsColumnsDocClickBound) { document.addEventListener("click", onDocClickForMenu); w.__logsColumnsDocClickBound = true; }
+  document.addEventListener("click", onDocClickForMenu);
 
   fetchRecordingState();
   if (!state.apiKeys || state.apiKeys.length === 0) {
@@ -289,14 +292,20 @@ export async function mountLogs(): Promise<(() => void) | void> {
   // E2E test helper: tests can trigger a view update after injecting rows directly into liveLogsStore
   (window as unknown as { __openproxyRequestUpdate?: () => void }).__openproxyRequestUpdate = requestUpdate;
 
-  const hash = location.hash || ""; const qIdx = hash.indexOf("?");
+  const rawRoute = route ?? location.hash ?? "";
+  const qIdx = rawRoute.indexOf("?");
   if (qIdx >= 0) {
-    const params = new URLSearchParams(hash.slice(qIdx + 1));
+    const params = new URLSearchParams(rawRoute.slice(qIdx + 1));
     const traceId = params.get("trace_id") || ""; const requestId = params.get("request_id") || "";
     if (traceId || requestId) void openLogDetail("", requestId, traceId);
   }
 
-  return () => { disconnectLogsWebSocket(); clockStore.unsubscribe(onClockTick); cleanupReactive(); };
+  return () => {
+    document.removeEventListener("click", onDocClickForMenu);
+    disconnectLogsWebSocket();
+    clockStore.unsubscribe(onClockTick);
+    cleanupReactive();
+  };
 }
 
 setMessageHandler(handleLogsMessage);

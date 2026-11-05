@@ -31,6 +31,8 @@ function detectInitial(): Theme {
 export function applyTheme(theme: Theme): void {
   current = theme === "dark" ? "dark" : "light";
   document.documentElement.setAttribute("data-theme", current);
+  document.documentElement.style.colorScheme = current;
+  document.documentElement.style.backgroundColor = current === "dark" ? "#151413" : "#f5f7fa";
   writeStored(current);
 }
 

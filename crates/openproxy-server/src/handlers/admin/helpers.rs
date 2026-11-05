@@ -142,6 +142,7 @@ pub struct ComboTargetUpdates<'a> {
     pub thinking_effort: UpdateField<&'a str>,
     pub description: UpdateField<&'a str>,
     pub selected_accounts: UpdateField<Option<String>>,
+    pub client_profile: UpdateField<&'a str>,
 }
 
 impl ComboTargetUpdates<'_> {
@@ -156,6 +157,7 @@ impl ComboTargetUpdates<'_> {
             && self.thinking_effort.is_ignore()
             && self.description.is_ignore()
             && self.selected_accounts.is_ignore()
+            && self.client_profile.is_ignore()
     }
 }
 
@@ -199,6 +201,8 @@ pub fn parse_combo_target_updates(body: &Value) -> Result<ComboTargetUpdates<'_>
         }
     };
 
+    let client_profile = parse_nullable_str(body, "client_profile")?;
+
     let updates = ComboTargetUpdates {
         priority_order,
         weight,
@@ -210,6 +214,7 @@ pub fn parse_combo_target_updates(body: &Value) -> Result<ComboTargetUpdates<'_>
         thinking_effort,
         description,
         selected_accounts,
+        client_profile,
     };
 
     if updates.is_empty() {

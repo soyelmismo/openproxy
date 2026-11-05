@@ -109,12 +109,21 @@ input, select, textarea {
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm);
   padding: 0.4rem 0.6rem;
+  box-sizing: border-box;
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+select {
+  cursor: pointer;
 }
 input:focus, select:focus, textarea:focus {
   outline: 2px solid var(--color-primary);
   outline-offset: 0;
   border-color: var(--color-primary);
+}
+input:disabled, select:disabled, textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  background: var(--color-surface-2);
 }
 
 ::selection {

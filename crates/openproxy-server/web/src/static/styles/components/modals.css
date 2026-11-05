@@ -87,11 +87,16 @@
     justify-content: center;
   }
   .modal-picker { max-width: calc(100vw - 1rem); }
+  .modal-picker .model-picker-list { max-height: 50vh; }
+  .modal-picker .picker-search { flex-wrap: wrap; }
+  .modal-picker .picker-search select,
+  .modal-picker .picker-search input { width: 100%; flex: 1 1 100%; }
 
   .modal input:not([type="checkbox"]):not([type="radio"]),
   .modal select,
   .modal textarea {
     font-size: var(--fs-sm);
+    border-radius: var(--radius-sm);
   }
 
   .modal button.small {
@@ -227,11 +232,76 @@
 }
 
 /* Codex Banked Reset Credits Modal */
+.codex-modal-loading {
+  text-align: center;
+  padding: var(--space-6) var(--space-4);
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
+.codex-modal-spinner svg {
+  width: 24px;
+  height: 24px;
+  animation: spin 1s linear infinite;
+  color: var(--color-primary);
+}
+.codex-modal-error {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.codex-modal-empty {
+  text-align: center;
+  padding: var(--space-5) var(--space-4);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+  margin: var(--space-2) 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.codex-empty-icon svg {
+  width: 36px;
+  height: 36px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  margin-bottom: var(--space-2);
+}
+.codex-empty-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  margin: 0 0 var(--space-1) 0;
+  color: var(--color-text);
+}
+.codex-empty-desc {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  max-width: 460px;
+  margin: 0 auto;
+  line-height: 1.45;
+}
+
+.codex-resets-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-2);
+  gap: var(--space-2);
+}
+.codex-resets-toolbar-label {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+}
+
 .codex-credits-list {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  margin: var(--space-3) 0;
+  margin: var(--space-2) 0;
   max-height: 380px;
   overflow-y: auto;
 }
@@ -239,15 +309,20 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: var(--space-3);
+  padding: 10px 14px;
   background: var(--color-surface-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: border-color var(--t-fast), background var(--t-fast);
+  transition: border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+  user-select: none;
 }
 .codex-credit-item:hover {
   border-color: var(--color-primary);
+}
+.codex-credit-item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }
 .codex-credit-item.selected {
   border-color: var(--color-primary);
@@ -275,8 +350,12 @@
 }
 .codex-credit-id {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  font-size: 11px;
   color: var(--color-text-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 3px);
 }
 .codex-credit-desc {
   font-size: var(--fs-xs);
@@ -288,7 +367,12 @@
   color: var(--color-text-muted);
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: 5px;
+}
+.codex-credit-exp svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 .codex-credit-exp.urgent {
   color: var(--color-warn, #f59e0b);
@@ -302,6 +386,33 @@
   border-radius: var(--radius-sm);
   border-left: 3px solid var(--color-primary);
   margin-top: var(--space-3);
-  line-height: 1.4;
+  line-height: 1.45;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.codex-resets-hint-icon {
+  display: inline-flex;
+  color: var(--color-primary);
+  margin-top: 1px;
+}
+.codex-resets-hint-icon svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.codex-resets-hint-text {
+  flex: 1;
+}
+
+.modal-footer button.primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.modal-footer button.primary svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
 }
 

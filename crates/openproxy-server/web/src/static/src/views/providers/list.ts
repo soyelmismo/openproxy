@@ -143,13 +143,13 @@ export function renderProvidersGrid(): TemplateResult {
             return renderProviderCard(p, accounts);
           })}</div>`;
   return html`
-    <div class="page-header">
-      <div class="page-header-title">
-        <h2>${t("providers.list.heading")}</h2>
-        <div class="filter-tabs" role="tablist" aria-label="Provider status filter">
+    <div class="providers-toolbar" role="toolbar" aria-label=${t("providers.list.heading")}>
+      <div class="providers-toolbar-filters">
+        <div class="filter-tabs" role="group" aria-label="Provider status filter">
           <button
             type="button"
             class=${'filter-tab ' + (currentFilter === 'all' ? 'active' : '')}
+            aria-pressed=${currentFilter === 'all'}
             @click=${() => onUpdateListFilter('all')}
           >
             ${t("providers.list.filter.all")} (${list.length})
@@ -157,6 +157,7 @@ export function renderProvidersGrid(): TemplateResult {
           <button
             type="button"
             class=${'filter-tab ' + (currentFilter === 'active' ? 'active' : '')}
+            aria-pressed=${currentFilter === 'active'}
             @click=${() => onUpdateListFilter('active')}
           >
             ${t("providers.list.filter.active")} (${activeCount})
@@ -164,6 +165,7 @@ export function renderProvidersGrid(): TemplateResult {
           <button
             type="button"
             class=${'filter-tab ' + (currentFilter === 'inactive' ? 'active' : '')}
+            aria-pressed=${currentFilter === 'inactive'}
             @click=${() => onUpdateListFilter('inactive')}
           >
             ${t("providers.list.filter.inactive")} (${inactiveCount})
@@ -171,8 +173,8 @@ export function renderProvidersGrid(): TemplateResult {
         </div>
       </div>
       <div class="actions">
-        <button @click=${onRefreshAllProviders}>${icons.refresh()} ${t("providers.list.btn.refresh_all")}</button>
-        <button class="primary" @click=${onShowCreateProvider}>${icons.plus()} ${t("providers.list.btn.add")}</button>
+        <button aria-label=${t("providers.list.btn.refresh_all")} title=${t("providers.list.btn.refresh_all")} @click=${onRefreshAllProviders}>${icons.refresh()}<span>${t("providers.list.btn.refresh_all")}</span></button>
+        <button class="primary" aria-label=${t("providers.list.btn.add")} title=${t("providers.list.btn.add")} @click=${onShowCreateProvider}>${icons.plus()}<span>${t("providers.list.btn.add")}</span></button>
       </div>
     </div>
     ${cards}
