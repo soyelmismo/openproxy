@@ -305,6 +305,7 @@ async fn verify_combo_authorization(
         .ok();
 
     if let Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) = &plan
+        && combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
         && let Some(auth) = auth
         && !auth.is_combo_allowed(combo_id.0)
     {

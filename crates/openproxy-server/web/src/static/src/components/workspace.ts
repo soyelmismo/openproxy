@@ -131,7 +131,11 @@ function layoutTitle(index: number): string {
 }
 
 function viewMenu(id: string): TemplateResult {
-  return html`<div class="workspace-menu view-menu" role="menu" aria-label=${t("workspace.panel_view")}>${VIEWS.map(v => html`
+  const allowedViews = isFullAdmin()
+    ? VIEWS
+    : VIEWS.filter(v => v.route === "#/analytics");
+
+  return html`<div class="workspace-menu view-menu" role="menu" aria-label=${t("workspace.panel_view")}>${allowedViews.map(v => html`
     <button role="menuitem" @click=${() => {
       if (!workspace) return;
       workspace.focused = id;
@@ -206,6 +210,9 @@ function divider(axis: "column" | "row"): TemplateResult {
     }}></div>`;
 }
 function contextualResources(): TemplateResult {
+  if (!isFullAdmin()) {
+    return html`<div class="context-resources"></div>`;
+  }
   const route = routeMeta(activeTile(workspace!).route).route;
   const needle = search.toLowerCase();
   const combos = route === "#/combos";
@@ -257,6 +264,7 @@ function paint(): void {
       <header class="workspace-toolbar">
         <div class="workspace-toolbar-title">${s.contextCollapsed ? html`<button class="workspace-icon-button" aria-label=${t("workspace.show_context")} title=${t("workspace.show_context")}
           @click=${() => { s.contextCollapsed = false; changed(); }}>${icons.chevronsRight()}</button>` : ""}<strong>${groupLabel(routeMeta(activeTile(s).route).group)}</strong><span class="workspace-desktop-hint">${t("workspace.desktop_hint")}</span></div>
+        ${isFullAdmin() ? html`
         <div class="workspace-toolbar-controls">
           <div class="workspace-layouts" role="group" aria-label=${t("workspace.panel_layout")}>${(["single", "split", "triple", "grid"] as Layout[]).map((mode, i) => html`
             <button class=${s.layout === mode ? "active" : ""} aria-pressed=${s.layout === mode} aria-label=${t(i === 0 ? "workspace.layout_panels_one" : "workspace.layout_panels_other", { count: i + 1 })}
@@ -264,7 +272,7 @@ function paint(): void {
               @click=${() => { changeLayout(s, mode); changed(); }}>${layoutIcon(i + 1)}<span>${i + 1}</span></button>`)}</div>
           <div class="workspace-presets"><button class="workspace-preset-trigger" aria-haspopup="menu" aria-expanded=${menu === "presets"} @click=${() => toggleMenu("presets")}>${t("workspace.layouts_trigger")} ${icons.caretDown()}</button>
             ${menu === "presets" ? html`<div class="workspace-menu" role="menu" aria-label=${t("workspace.presets_label")}>${PRESETS.map(p => html`<button role="menuitem" @click=${() => { applyPreset(s, p); menu = null; changed(); }}>${layoutIcon(p.routes.length)} ${presetLabel(p.label)}</button>`)}</div>` : ""}</div>
-        </div>
+        </div>` : ""}
       </header>
       <div class="workspace-mobile-panels" role="group" aria-label=${t("workspace.switch_panel")}>${s.tiles.map((t, i) => html`<button class=${t.id === s.focused ? "active" : ""} aria-pressed=${t.id === s.focused}
         @click=${() => { s.maximized = null; focus(t.id); paint(); }}>${i + 1}. ${viewLabel(t.route, routeMeta(t.route).label)}</button>`)}</div>
@@ -305,14 +313,33 @@ async function loadResources(): Promise<void> {
 }
 export function mountWorkspace(route: string): void {
   if (!workspace) {
-    let raw: string | null = null;
-    try { raw = localStorage.getItem(WORKSPACE_KEY); } catch { /* no persistence */ }
-    workspace = restoreWorkspace(raw, route);
-    if (safeRoute(route) && route !== "#/") {
-      const existing = workspace.tiles.find(tile => routeMeta(tile.route).route === routeMeta(route).route);
-      if (existing) workspace.focused = existing.id;
-      activeTile(workspace).route = route;
+    if (!isFullAdmin()) {
+      // Force clean single-panel workspace strictly containing analytics
+      workspace = {
+        version: 1,
+        layout: "single",
+        tiles: [{ id: "tile-1", route: "#/analytics" }],
+        focused: "tile-1",
+        maximized: null,
+        column: 50,
+        row: 50,
+        contextCollapsed: true,
+      };
+    } else {
+      let raw: string | null = null;
+      try { raw = localStorage.getItem(WORKSPACE_KEY); } catch { /* no persistence */ }
+      workspace = restoreWorkspace(raw, route);
+      if (safeRoute(route) && route !== "#/") {
+        const existing = workspace.tiles.find(tile => routeMeta(tile.route).route === routeMeta(route).route);
+        if (existing) workspace.focused = existing.id;
+        activeTile(workspace).route = route;
+      }
     }
+  } else if (!isFullAdmin()) {
+    workspace.tiles = [{ id: "tile-1", route: "#/analytics" }];
+    workspace.focused = "tile-1";
+    workspace.layout = "single";
+    workspace.contextCollapsed = true;
   } else if (safeRoute(route) && activeTile(workspace).route !== route) {
     navigateWorkspace(route);
   }

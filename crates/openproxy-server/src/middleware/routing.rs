@@ -210,9 +210,15 @@ fn resolve_raw_routing_plan(
 
 fn filter_combo_targets_by_auth(
     state: &AppState,
+    combo_id: openproxy_types::ComboId,
     targets: &mut Vec<ComboTarget>,
     auth: &ValidatedApiToken,
 ) -> Result<(), ApiError> {
+    let is_synthetic_direct = combo_id.0 == openproxy_core::routing::SYNTHETIC_COMBO_ID;
+    let is_whitelisted_combo = auth.key.allowed_combos.as_deref().is_some_and(|ac| {
+        !ac.is_empty() && ac.contains(&combo_id.0)
+    });
+
     let r = state.db_pool().reader();
     targets.retain(|target| {
         let model_allowed = target
@@ -223,18 +229,24 @@ fn filter_combo_targets_by_auth(
                     .flatten()
             })
             .map(|m| auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str())));
-        // An explicitly allowlisted model survives its provider's blacklist;
-        // otherwise a blacklisted provider drops the target outright.
-        // If the key explicitly whitelists this combo, its targets survive key's provider whitelist
-        // unless explicitly blacklisted.
+
+        let prov_blacklisted = auth.key.blacklisted_providers.as_deref().is_some_and(|bp| {
+            bp.iter().any(|p| p == target.provider_id.as_str() || p == "*")
+        });
+        if prov_blacklisted {
+            return false;
+        }
+
+        // If the combo itself was explicitly whitelisted on this key, its member targets
+        // are allowed to route to their respective providers even if allowed_providers
+        // restricts direct model calls.
+        if is_whitelisted_combo {
+            return true;
+        }
+
         match model_allowed {
             Some(allowed) => allowed,
-            None => {
-                let prov_blacklisted = auth.key.blacklisted_providers.as_deref().is_some_and(|bp| {
-                    bp.iter().any(|p| p == target.provider_id.as_str() || p == "*")
-                });
-                !prov_blacklisted
-            }
+            None => auth.is_provider_allowed(target.provider_id.as_str()),
         }
     });
 
@@ -258,7 +270,7 @@ fn apply_auth_restrictions_to_plan(
         return Ok(false);
     };
 
-    if !auth.is_combo_allowed(combo_id.0) {
+    if combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID && !auth.is_combo_allowed(combo_id.0) {
         return Err(ApiError(CoreError::Auth(
             "combo not allowed for this key".to_string(),
         )));
@@ -274,7 +286,7 @@ fn apply_auth_restrictions_to_plan(
             .is_some_and(|a| !a.is_empty());
 
     if has_restrictions {
-        filter_combo_targets_by_auth(state, targets, auth)?;
+        filter_combo_targets_by_auth(state, *combo_id, targets, auth)?;
     }
 
     Ok(has_restrictions)
