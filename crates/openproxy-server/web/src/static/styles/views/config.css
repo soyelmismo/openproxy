@@ -204,6 +204,14 @@
   border-bottom: none;
 }
 
+/* Cards in a shared row have different description lengths, which left
+   their controls floating at unrelated heights. Pin each card's control
+   row to the bottom edge of its body so sibling cards share one baseline. */
+.config-card .card-body > .config-toggle-row:last-child,
+.config-card .card-body > .config-inline-setting:last-child {
+  margin-top: auto;
+}
+
 .config-toggle-info,
 .config-inline-info {
   display: flex;
