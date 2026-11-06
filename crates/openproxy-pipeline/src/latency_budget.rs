@@ -110,7 +110,6 @@ pub(crate) const BUCKET_COUNT: usize = 6;
 
 #[derive(Debug, Clone, Copy)]
 struct BucketStats {
-    n: usize,
     mean: f64,
     sd: f64,
     p99: f64,
@@ -129,7 +128,7 @@ impl BucketStats {
 
 /// Learned statistics for one (provider, model_row) target.
 #[derive(Debug)]
-struct TargetStats {
+pub(crate) struct TargetStats {
     loaded_at: Instant,
     /// Per token-bucket statistics; `None` = too few samples.
     buckets: [Option<BucketStats>; BUCKET_COUNT],
@@ -140,7 +139,7 @@ struct TargetStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct BudgetKey {
+pub(crate) struct BudgetKey {
     provider: String,
     model_row_id: i64,
 }
@@ -351,6 +350,7 @@ impl LatencyBudget {
 
     /// Warms the cache for one target from the given connection. Test and
     /// embedding helper; production relies on the background refresh.
+    #[cfg(test)]
     pub(crate) fn warm_target(&self, conn: &Connection, provider: &str, model_row_id: i64) {
         let key = BudgetKey {
             provider: provider.to_string(),
@@ -517,7 +517,7 @@ fn build_buckets(rows: &[SuccessRow]) -> [Option<BucketStats>; BUCKET_COUNT] {
                 break;
             }
         }
-        buckets[b] = Some(BucketStats { n, mean, sd, p99 });
+        buckets[b] = Some(BucketStats { mean, sd, p99 });
     }
     buckets
 }
