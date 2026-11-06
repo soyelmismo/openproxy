@@ -149,6 +149,65 @@ async fn try_proactive_oauth_refresh(
 #[derive(Clone, Copy)]
 pub struct TimeoutResolutionStage;
 
+/// Adaptive TTFT budget for one target (see `crate::latency_budget`):
+/// shortens the resolved TTFT to `mean + 3σ + 1s` learned from recent
+/// successful requests of the same (provider, model_row), bucketed by
+/// prompt size. The predictor only shortens: antigravity keeps its thinking
+/// floor and model overrides act as a hard ceiling.
+pub(crate) fn apply_predictive_ttft_budget(
+    pipeline: &crate::Pipeline,
+    req: &crate::PipelineRequest,
+    provider_str: &str,
+    target: &openproxy_types::combos::ComboTarget,
+    model: &openproxy_types::models::Model,
+    mut resolved: crate::timeouts::Timeouts,
+) -> crate::timeouts::Timeouts {
+    if provider_str == "antigravity" || provider_str == "agy" {
+        return resolved;
+    }
+    let effective_messages = req
+        .compressed_messages
+        .get()
+        .cloned()
+        .flatten()
+        .unwrap_or_else(|| req.openai_request.messages.clone());
+    let est_prompt_tokens =
+        openproxy_compression::token_estimate::estimate_prompt_tokens(&effective_messages).max(1);
+    let budget_ms = {
+        let conn = pipeline.conn.lock();
+        pipeline.latency_budget.ttft_budget_ms(
+            &conn,
+            provider_str,
+            model.row_id,
+            est_prompt_tokens,
+            resolved.ttft.as_millis() as u64,
+        )
+    };
+    if let Some(budget_ms) = budget_ms {
+        if (budget_ms as u128) < resolved.ttft.as_millis() {
+            openproxy_types::emit_stage_event!(
+                request_id: req.request_id,
+                trace_id: req.trace_id,
+                stage: "predictive_ttft_budget",
+                elapsed_ms: budget_ms,
+                provider_id: provider_str.to_string(),
+                upstream_model_id: model.model_id.as_str().to_string(),
+            );
+            tracing::debug!(
+                target_id = target.id.0,
+                provider = %provider_str,
+                model_row_id = model.row_id.0,
+                est_prompt_tokens,
+                budget_ms,
+                resolved_ms = resolved.ttft.as_millis() as u64,
+                "adaptive ttft budget applied"
+            );
+            resolved.ttft = std::time::Duration::from_millis(budget_ms);
+        }
+    }
+    resolved
+}
+
 impl PipelineStage for TimeoutResolutionStage {
     async fn execute(
         &self,
@@ -174,6 +233,15 @@ impl PipelineStage for TimeoutResolutionStage {
         if provider_str == "antigravity" || provider_str == "agy" {
             resolved_timeouts = timeouts::apply_antigravity_floor(resolved_timeouts);
         }
+
+        resolved_timeouts = apply_predictive_ttft_budget(
+            &ctx.pipeline,
+            &ctx.req,
+            provider_str,
+            &current.target,
+            model,
+            resolved_timeouts,
+        );
 
         tracing::debug!(
             target_id = current.target.id.0,
@@ -995,3 +1063,7 @@ mod pin_tests;
 #[cfg(test)]
 #[path = "target_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "latency_budget_stage_tests.rs"]
+mod latency_budget_tests;

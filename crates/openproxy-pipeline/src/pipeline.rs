@@ -150,6 +150,10 @@ pub struct Pipeline {
     pub predictive_limiter: Arc<crate::predictive_rate_limit::PredictiveRateLimiter>,
     pub session_affinity: Arc<crate::session_affinity::SessionAffinityRegistry>,
     pub message_threads: Arc<crate::message_threads::MessageThreadRegistry>,
+    /// Adaptive TTFT budgets learned from the usage table (see
+    /// `latency_budget`): shortens the wait on targets known to be fast when
+    /// they hang, without ever extending the resolved timeout.
+    pub latency_budget: Arc<crate::latency_budget::LatencyBudget>,
     pub tracker: crate::usage_tracker::UsageTracker,
     pub dispatcher: crate::upstream_dispatcher::UpstreamDispatcher,
     pub(crate) repo: Arc<dyn crate::repository::PipelineRepository>,
@@ -291,6 +295,7 @@ impl Pipeline {
             predictive_limiter,
             session_affinity,
             message_threads,
+            latency_budget: crate::latency_budget::LatencyBudget::new(),
             tracker,
             dispatcher,
             repo,
