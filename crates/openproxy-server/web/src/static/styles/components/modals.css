@@ -12,6 +12,9 @@
   padding: var(--space-6);
   overflow-y: auto;
 }
+/* Taller-than-viewport modals cap at the viewport and scroll their body:
+   the 8-field create-key form rendered 1010px on a 900px screen and its
+   footer went unreachable. */
 .modal {
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border-strong);
@@ -20,8 +23,14 @@
   min-width: 400px;
   max-width: 640px;
   width: 100%;
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
+.modal > .modal-body { overflow-y: auto; min-height: 0; flex: 1; }
+.modal > .modal-header,
+.modal > .modal-footer { flex: none; }
 .modal-header {
   display: flex;
   align-items: center;
