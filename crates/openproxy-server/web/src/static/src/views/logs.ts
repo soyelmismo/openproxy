@@ -164,13 +164,13 @@ function renderLogsView(): TemplateResult {
         </button>
       </div>
       <div class="logs-header-actions m-header-actions-row">
-        <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" @click=${() => { isPaused = !isPaused; requestUpdate(); }}>
-          ${isPaused ? html`${icons.play()} Resume` : html`${icons.pause()} Pause`}
+        <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" title=${isPaused ? "Resume live updates" : "Pause live updates"} @click=${() => { isPaused = !isPaused; requestUpdate(); }}>
+          ${isPaused ? icons.play() : icons.pause()}<span class="logs-action-label">${isPaused ? "Resume" : "Pause"}</span>
         </button>
-        <button type="button" class="btn btn-sm" @click=${exportLogsCSV}>${icons.export()} Export CSV</button>
+        <button type="button" class="btn btn-sm" title="Export the visible rows as CSV" @click=${exportLogsCSV}>${icons.export()}<span class="logs-action-label">Export CSV</span></button>
         <div class="columns-menu-wrapper">
-          <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} @click=${() => { columnsMenuOpen = !columnsMenuOpen; requestUpdate(); }}>
-            <span>Columns</span><span class="logs-columns-caret">${icons.caretDown()}</span>
+          <button id="logs-columns-toggle" type="button" class="logs-columns-toggle" title="Choose which columns to show" aria-haspopup="true" aria-expanded=${columnsMenuOpen ? "true" : "false"} @click=${() => toggleColumnsMenu()}>
+            <span class="logs-action-label">Columns</span><span class="logs-columns-caret">${icons.caretDown()}</span>
           </button>
           <div class="columns-menu ${columnsMenuOpen ? "open" : ""}" role="menu">${LOG_COLUMNS.map((c) => html`<label class="columns-menu-item"><input type="checkbox" data-arg1="${c.key}" .checked=${live(visibleColKeys.has(c.key))} @change=${(e: Event) => { e.stopPropagation(); toggleColumn(c.key); }}><span>${c.label}</span></label>`)}</div>
         </div>
@@ -239,7 +239,50 @@ export function logsSetFollow(e: Event): void {
   const enabled = !!((e.target as HTMLInputElement)?.checked);
   state.logs.followTail = enabled; if (enabled) { frozenLogsSnapshot = null; state.logs.page = 1; requestUpdate(); }
 }
-export function toggleColumnsMenu(): void { columnsMenuOpen = !columnsMenuOpen; requestUpdate(); }
+export function toggleColumnsMenu(): void {
+  columnsMenuOpen = !columnsMenuOpen;
+  requestUpdate();
+  // The menu only exists in the DOM once lit-html has rendered the .open class,
+  // which happens on the microtask requestUpdate just queued.
+  if (columnsMenuOpen) requestAnimationFrame(clampColumnsMenu);
+}
+
+/**
+ * The columns menu is anchored to the right edge of its button. That is correct
+ * while the button sits at the right end of the header, but the menu is 160px
+ * wide and a narrow tile has less room than that to the button's left, so it
+ * crosses the tile edge and .tile-view clips it. Re-anchor it by hand once it is
+ * laid out, and again on resize, so it always stays inside whatever actually
+ * clips it.
+ */
+function clampColumnsMenu(): void {
+  const menu = document.querySelector<HTMLElement>(".columns-menu.open");
+  const wrap = menu?.parentElement;
+  if (!menu || !wrap) return;
+  menu.style.left = "";
+  menu.style.right = "";
+  // The first ancestor that clips is the binding boundary, not the viewport.
+  let clipLeft = 0;
+  let clipRight = window.innerWidth;
+  for (let el = wrap.parentElement; el && el !== document.body; el = el.parentElement) {
+    if (getComputedStyle(el).overflowX !== "visible") {
+      const r = el.getBoundingClientRect();
+      clipLeft = Math.max(clipLeft, r.left);
+      clipRight = Math.min(clipRight, r.right);
+      break;
+    }
+  }
+  const wrapRect = wrap.getBoundingClientRect();
+  const menuW = menu.offsetWidth;
+  const margin = 8;
+  // Preferred: flush with the button's right edge.
+  let left = wrapRect.width - menuW;
+  const absLeft = wrapRect.left + left;
+  if (absLeft < clipLeft + margin) left += clipLeft + margin - absLeft;
+  if (wrapRect.left + left + menuW > clipRight - margin) left -= wrapRect.left + left + menuW - (clipRight - margin);
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.right = "auto";
+}
 export function toggleColumn(key: string): void {
   if (!state.logs.visibleColumns) state.logs.visibleColumns = new Set(LOG_COLUMNS.map((c) => c.key));
   const set = state.logs.visibleColumns;
@@ -272,6 +315,8 @@ export async function mountLogs(
     columnsMenuOpen = false; requestUpdate();
   };
   document.addEventListener("click", onDocClickForMenu);
+  const onResizeForMenu = (): void => { if (columnsMenuOpen) clampColumnsMenu(); };
+  window.addEventListener("resize", onResizeForMenu);
 
   fetchRecordingState();
   if (!state.apiKeys || state.apiKeys.length === 0) {
@@ -299,6 +344,7 @@ export async function mountLogs(
 
   return () => {
     document.removeEventListener("click", onDocClickForMenu);
+    window.removeEventListener("resize", onResizeForMenu);
     disconnectLogsWebSocket();
     clockStore.unsubscribe(onClockTick);
     cleanupReactive();

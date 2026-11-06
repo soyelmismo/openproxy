@@ -12,26 +12,6 @@ body[data-view="logs"] #main {
   padding-bottom: 0.5rem;
 }
 
-.logs-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
-  flex-shrink: 0;
-}
-.m-header-status-badges {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.logs-header-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .logs-filter-toolbar {
   flex-shrink: 0;
 }
@@ -407,7 +387,9 @@ body[data-view="logs"] #main {
  * popover with one checkbox per column. The wrapper establishes the
  * positioning context for the absolutely positioned menu, which stays
  * hidden until `.open` (toggled by the toggleColumnsMenu handler in
- * views/logs.js). */
+ * views/logs.js). The menu is anchored to the wrapper's right edge, not
+ * its left: the button is the last control in the header, so opening
+ * rightward pushes the menu past the tile, and .tile-view clips it. */
 .columns-menu-wrapper {
   position: relative;
   display: inline-block;
@@ -449,10 +431,14 @@ body[data-view="logs"] #main {
 .columns-menu {
   position: absolute;
   top: calc(100% + 4px);
-  left: 0;
+  right: 0;
+  left: auto;
   z-index: 1000;
   display: none;
   min-width: 160px;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
   padding: var(--space-2);
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
@@ -477,6 +463,68 @@ body[data-view="logs"] #main {
 }
 .log-phase--idle         { background: var(--color-surface-2); color: var(--color-text-muted); }
 
+/* Live logs header: status + actions.
+   Merged with the filter toolbar below into a single card, so the top of the
+   view reads as one control deck instead of three stacked bands. */
+.logs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: 0;
+  padding: 5px 6px;
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-bottom: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  flex-shrink: 0;
+}
+.m-header-status-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.logs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.logs-header-actions .btn,
+.logs-header-actions .logs-columns-toggle {
+  height: 26px;
+  box-sizing: border-box;
+}
+.logs-action-label {
+  white-space: nowrap;
+}
+/* The status row holds two badges and three buttons. Below this tile width the
+   labels leave the layout and the buttons become icon-only, which keeps the row
+   on a single line instead of spilling the buttons onto a second one. The label
+   is clipped rather than display:none, so it still feeds the accessible name
+   and the button keeps reading "Pause" / "Export CSV" / "Columns" at any width. */
+@container tile-view (max-width: 460px) {
+  .logs-header .logs-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .logs-header-actions .btn,
+  .logs-header-actions .logs-columns-toggle {
+    position: relative;
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
+  }
+}
+
 /* Live logs filter toolbar */
 .logs-filter-toolbar {
   display: flex;
@@ -487,7 +535,7 @@ body[data-view="logs"] #main {
   padding: 6px;
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border-soft);
-  border-radius: var(--radius-md);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
   position: sticky;
   top: 0;
   z-index: var(--z-header, 10);
@@ -664,6 +712,8 @@ body[data-view="logs"] #main {
 
   .logs-status-filters .logs-filter-btn {
     flex-shrink: 0;
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
   }
 }
 
