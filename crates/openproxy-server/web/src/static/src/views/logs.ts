@@ -156,15 +156,12 @@ function renderLogsView(): TemplateResult {
 
   return html`
     <div class="logs-header">
-      <div class="m-header-top-row">
-        <h2>Live Logs</h2>
-        <div class="m-header-status-badges">
-          <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
-          <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${() => void toggleRecording()}>
-            <span class="logs-recording-dot" aria-hidden="true"></span>
-            <span class="logs-recording-label">Record: <strong>OFF</strong></span>
-          </button>
-        </div>
+      <div class="m-header-status-badges">
+        <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
+        <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${() => void toggleRecording()}>
+          <span class="logs-recording-dot" aria-hidden="true"></span>
+          <span class="logs-recording-label">Record: <strong>OFF</strong></span>
+        </button>
       </div>
       <div class="logs-header-actions m-header-actions-row">
         <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" @click=${() => { isPaused = !isPaused; requestUpdate(); }}>

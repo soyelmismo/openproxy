@@ -21,13 +21,6 @@ body[data-view="logs"] #main {
   margin-bottom: var(--space-3);
   flex-shrink: 0;
 }
-.logs-header h2 { margin: 0; }
-.m-header-top-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
 .m-header-status-badges {
   display: inline-flex;
   align-items: center;

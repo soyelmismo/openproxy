@@ -130,7 +130,6 @@ table.sticky-header thead th {
 .page-header h2 { margin: 0; font-size: var(--fs-xl); font-weight: 700; }
 @media (max-width: 768px) {
   .page-header h2,
-  .logs-header h2,
   .analytics-header h2,
   .home-title,
   .playground-studio-title {
