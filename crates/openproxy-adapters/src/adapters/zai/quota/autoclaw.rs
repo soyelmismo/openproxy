@@ -8,16 +8,13 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
     if !envelope_is_success(json) {
         return Err(CoreError::Parse("AutoClaw wallets envelope failure".into()));
     }
-    let data = match json.get("data") {
-        Some(d) => d,
-        None => {
-            return Ok(vec![status_pool(
-                QuotaSource::AutoclawStarter,
-                QuotaPoolStatus::Absent,
-                None,
-                now,
-            )]);
-        }
+    let Some(data) = json.get("data") else {
+        return Ok(vec![status_pool(
+            QuotaSource::AutoclawStarter,
+            QuotaPoolStatus::Absent,
+            None,
+            now,
+        )]);
     };
 
     let total_balance = data

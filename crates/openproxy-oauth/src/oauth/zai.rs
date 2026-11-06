@@ -152,6 +152,7 @@ impl OAuthProvider for ZaiOAuthProvider {
                     .get("code")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(-1);
+                #[allow(clippy::collapsible_if)]
                 if code_num == 0 {
                     if let Some(data) = json.get("data") {
                         zcode_jwt = data
@@ -290,10 +291,13 @@ impl OAuthProvider for ZaiOAuthProvider {
                 http::HeaderValue::from_static("zh-CN"),
             );
 
+            #[allow(clippy::collapsible_if)]
             if let Ok((_status, ac_bytes)) =
                 crate::oauth::call_oauth(upstream_client, req_ac, "autoclaw oauth login").await
             {
+                #[allow(clippy::collapsible_if)]
                 if let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes) {
+                    #[allow(clippy::collapsible_if)]
                     if ac_json.get("code").and_then(serde_json::Value::as_i64) == Some(0) {
                         if let Some(ac_data) = ac_json.get("data") {
                             autoclaw_access_token = ac_data

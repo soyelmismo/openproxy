@@ -256,6 +256,7 @@ pub async fn oauth_authorize(
                             let req_str = String::from_utf8_lossy(&buf[..n]);
                             let mut code = None;
                             let mut state_param = None;
+                            #[allow(clippy::collapsible_if)]
                             if let Some(first_line) = req_str.lines().next() {
                                 if let Some(target) = first_line.split_whitespace().nth(1) {
                                     if let Some(query_idx) = target.find('?') {
@@ -275,20 +276,15 @@ pub async fn oauth_authorize(
                             if let (Some(code_val), Some(state_val)) = (code, state_param) {
                                 let actual_code = code_val.trim();
                                 let _effective_state = state_val.trim();
-                                let account_id = match resolve_or_create_oauth_account(
-                                    &s_clone,
-                                    &provider_name,
-                                    None,
-                                )
-                                .await
-                                {
-                                    Ok(id) => id,
-                                    Err(_) => return,
+                                let Ok(account_id) =
+                                    resolve_or_create_oauth_account(&s_clone, &provider_name, None)
+                                        .await
+                                else {
+                                    return;
                                 };
                                 let registry = s_clone.oauth_provider_registry();
-                                let provider_impl = match registry.get(&provider_name) {
-                                    Some(res) => res,
-                                    None => return,
+                                let Some(provider_impl) = registry.get(&provider_name) else {
+                                    return;
                                 };
                                 let redirect_uri =
                                     format!("http://localhost:{port}/auth/callback-zai");
@@ -511,7 +507,7 @@ pub async fn oauth_exchange(
             // Permitimos el fallback para completar el intercambio sin bloquear al usuario.
             if provider == "zai" {
                 (
-                    "".to_string(),
+                    String::new(),
                     "http://localhost:18432/auth/callback-zai".to_string(),
                 )
             } else {

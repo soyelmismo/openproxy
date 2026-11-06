@@ -1,5 +1,6 @@
 //! RFC 1321 MD5 implementation in pure Rust.
 
+#[allow(clippy::module_inception)]
 pub mod md5 {
     const S: [u32; 64] = [
         7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, // Round 1

@@ -210,6 +210,7 @@ impl PipelineStage for FormattingStage {
         };
 
         let mut target_format = resolve_target_format(&adapter, current.model.target_format);
+        #[allow(clippy::collapsible_if)]
         if current.target.provider_id.as_str() == "zai" {
             if let Some(acc_id) = current.target.account_id {
                 let key = std::sync::Arc::clone(&ctx.pipeline.config.master_key);
@@ -226,6 +227,7 @@ impl PipelineStage for FormattingStage {
                         .custom_meta
                         .as_ref()
                         .map_or(current.api_key.as_str(), |m| m.access_token.as_str());
+                    #[allow(clippy::collapsible_if)]
                     if let Ok(route) =
                         openproxy_adapters::adapters::zai::resolve_zai_inference_route(
                             &acc,
@@ -431,8 +433,7 @@ fn resolve_target_format(
 /// - Checks `target_id` first; if empty and `inherited_parent_id` is present, checks the parent target.
 /// - 0 active prefixes: returns None (no prefix injected).
 /// - 1 active prefix: returns Some(system_text) directly.
-/// - >=2 active prefixes: runs System One decision router (Laya/Jev) evaluating
-///   each prefix's `criteria` against the user's prompt to select the best persona.
+/// - >=2 active prefixes: runs System One decision router (Laya/Jev) evaluating each prefix's `criteria` against the user's prompt to select the best persona.
 async fn resolve_system_prefix_for_target(
     ctx: &PipelineContext,
     target_id: openproxy_types::ids::ComboTargetId,
