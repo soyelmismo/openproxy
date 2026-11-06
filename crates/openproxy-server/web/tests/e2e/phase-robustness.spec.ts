@@ -68,6 +68,8 @@ test.describe('Phase robustness', () => {
   });
 
   test('Live Logs: stale streaming stage freezes the latency ticker', async ({ page }: { page: Page }) => {
+    // The column table only renders above a 1400px tile.
+    await page.setViewportSize({ width: 1920, height: 1080 });
     await page.goto('http://localhost:8790/#/logs');
     await expect(page.locator('#logs')).toBeVisible();
     await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });
@@ -117,6 +119,8 @@ test.describe('Phase robustness', () => {
   });
 
   test('Live Logs: finalized row freezes ticker at the row total_ms', async ({ page }: { page: Page }) => {
+    // The column table only renders above a 1400px tile.
+    await page.setViewportSize({ width: 1920, height: 1080 });
     await page.goto('http://localhost:8790/#/logs');
     await expect(page.locator('#logs')).toBeVisible();
     await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });

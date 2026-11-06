@@ -232,7 +232,12 @@ test('native desktop panels expose individual elements and provider modal spans 
   await expect(logs.locator('.logs-search-input')).toBeVisible();
   await expect(page.locator('iframe')).toHaveCount(0);
   await expect(page.locator('#main')).toHaveCount(1);
-  expect(await logs.locator('.desktop-table-header').first().evaluate(el => getComputedStyle(el).display)).not.toBe('none');
+  // The logs panel really mounted its own view rather than an embedded
+  // frame. Above a 1400px tile the rows render as a column table, below it
+  // as cards, and a two-panel layout at this viewport is well under that,
+  // so pin the section chrome that both layouts share instead of the table
+  // header, and leave the row rendering to the specs that seed rows.
+  await expect(logs.locator('.logs-section-header').first()).toBeVisible();
   const search = logs.locator('.logs-search-input');
   await search.fill('keep-this-filter');
   // Unrelated providers updates must not replace or reset logs controls.

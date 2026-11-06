@@ -197,6 +197,9 @@ async function snapshotAfterRetry(
 }
 
 test('Live Logs retry: previous attempt keeps its own stage (no cross-attempt bleed)', async ({ page }: { page: Page }) => {
+  // The column table only renders above a 1400px tile; a narrow viewport
+  // gets the card rows instead and these assertions do not apply.
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
   // Wait for the view to fully render: the "Phase" header is

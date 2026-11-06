@@ -39,6 +39,9 @@ function makeStageEvent(overrides: Partial<StageEvent> = {}): StageEvent {
 }
 
 async function setupLogsView(page: Page): Promise<void> {
+  // The column table only renders above a 1400px tile; a narrow viewport
+  // gets the card rows instead and these assertions do not apply.
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('http://localhost:8790/#/logs');
   await expect(page.locator('#logs')).toBeVisible();
   await expect(page.locator('#logs >> text=Phase').first()).toBeVisible({ timeout: 5000 });

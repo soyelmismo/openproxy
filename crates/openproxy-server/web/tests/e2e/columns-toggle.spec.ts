@@ -12,6 +12,9 @@ const ALL_COLUMNS: readonly string[] = ['time', 'phase', 'type', 'client', 'stat
 const HEADER_LABELS: readonly string[] = ['Time', 'Phase', 'Endpoint', 'Client', 'Status', 'Provider', 'Model', 'Tokens', 'Latency', 'Cost', 'API Cache', 'Compress'];
 
 async function gotoLogs(page: Page): Promise<void> {
+  // The column table only renders above a 1400px tile; a narrow viewport
+  // gets the card rows instead and these assertions do not apply.
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('http://localhost:8790/#/logs');
   // Wait for the logs view to render the header row. Once a header
   // span with `data-col` exists, the view has fully mounted.
