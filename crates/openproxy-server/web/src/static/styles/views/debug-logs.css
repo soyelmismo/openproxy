@@ -1,0 +1,75 @@
+/* Debug logs data-grid styles */
+
+.debug-logs-table .debug-level-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.debug-logs-table .debug-level-pill.level-error {
+  color: var(--color-error);
+  background: var(--color-error-soft);
+}
+
+.debug-logs-table .debug-level-pill.level-warn {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+}
+
+.debug-logs-table .debug-level-pill.level-info {
+  color: var(--color-info);
+  background: var(--color-info-soft);
+}
+
+.debug-logs-table .debug-level-pill.level-debug {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+}
+
+.debug-logs-table .debug-time-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.debug-logs-table .debug-target-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text);
+}
+
+.debug-logs-table .debug-id-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  color: var(--color-text-muted);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-logs-table .debug-id-btn:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.debug-logs-table .debug-msg-text {
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-logs-table .debug-span-path {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  margin-left: 6px;
+}

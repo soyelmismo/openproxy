@@ -63,6 +63,201 @@
 .providers-table .provider-quota-badge.quota-danger {
   color: var(--color-error);
 }
+
+/* Provider Detail Models DataGrid table styling */
+.provider-models-table .model-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.provider-models-table .model-usage-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: copy;
+}
+.provider-models-table .model-usage-code:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+.provider-models-table .model-profile-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-info);
+  border: 1px solid var(--color-border-soft);
+}
+.provider-models-table .model-caps-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.provider-models-table .dg-row.inactive {
+  opacity: 0.6;
+}
+
+/* Provider Detail Accounts dense row styling (32-40px compact row) */
+.provider-detail-view .accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.provider-detail-view .provider-entry.account-card-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  min-height: 36px;
+  padding: 2px 10px;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-soft);
+  box-sizing: border-box;
+  background: var(--color-surface);
+}
+.provider-detail-view .provider-entry.account-card-row:last-child {
+  border-bottom: 0;
+}
+.provider-detail-view .provider-entry.account-card-row:hover {
+  background: color-mix(in oklab, var(--color-primary) 5%, transparent);
+}
+.provider-detail-view .account-heading {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.provider-detail-view .account-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+.provider-detail-view .account-drag-handle:hover {
+  color: var(--color-primary);
+}
+.provider-detail-view .account-identity {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.provider-detail-view .account-name-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.provider-detail-view .account-name-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: text;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+}
+.provider-detail-view .account-name-button:hover {
+  background: var(--color-surface-2);
+}
+.provider-detail-view .account-pause {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+}
+.provider-detail-view .account-pause:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+.provider-detail-view .account-pause[aria-pressed="true"] {
+  color: var(--color-warning, #f9e2af);
+  border-color: currentColor;
+}
+.provider-detail-view .provider-entry-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.provider-detail-view .account-health-select {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+.provider-detail-view .provider-entry-quota {
+  flex: 0 1 auto;
+  margin: 0;
+  min-width: 0;
+}
+.provider-detail-view .provider-entry-quota .quota-cell {
+  min-width: 0;
+}
+.provider-detail-view .provider-entry-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 0;
+}
+.provider-detail-view .provider-entry-actions button {
+  height: 26px;
+  min-height: 26px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* Config Tab & Provider Detail Header alignment */
+.provider-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.provider-config .provider-detail-header {
+  margin-bottom: 0;
+}
+.provider-config .auto-activate-bar {
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+}
 .provider-card {
   display: block;
   padding: var(--space-3);

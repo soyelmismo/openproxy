@@ -96,13 +96,13 @@ export function renderActivityFeed(snapshot: Snapshot | null): TemplateResult {
   return html`<section class="card home-activity-card">
     <div class="home-card-heading"><div><h3>${t("home.activity_feed")}</h3><p>${t("home.activity_feed.subtitle")}</p></div><a href="#/logs">${t("home.activity_feed.view_all")} →</a></div>
     <div class="home-activity-header">
-      <span>${t("home.activity_feed.col_time") || "Time"}</span>
-      <span>${t("home.activity_feed.col_model") || "Model"}</span>
-      <span>${t("home.activity_feed.col_provider") || "Provider"}</span>
-      <span>${t("home.activity_feed.col_status") || "Status"}</span>
-      <span>${t("home.activity_feed.col_latency") || "Latency"}</span>
-      <span>${t("home.activity_feed.col_tokens") || "Tokens (in/out)"}</span>
-      <span>${t("home.activity_feed.col_cost") || "Cost"}</span>
+      <span class="col-act-time">${t("home.activity_feed.col_time") || "Time"}</span>
+      <span class="col-act-model">${t("home.activity_feed.col_model") || "Model"}</span>
+      <span class="col-act-provider">${t("home.activity_feed.col_provider") || "Provider"}</span>
+      <span class="col-act-status">${t("home.activity_feed.col_status") || "Status"}</span>
+      <span class="col-act-latency num">${t("home.activity_feed.col_latency") || "Latency"}</span>
+      <span class="col-act-tokens num">${t("home.activity_feed.col_tokens") || "Tokens (in/out)"}</span>
+      <span class="col-act-cost num">${t("home.activity_feed.col_cost") || "Cost"}</span>
     </div>
     ${body}
   </section>`;

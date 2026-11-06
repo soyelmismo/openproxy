@@ -364,7 +364,7 @@ export async function showEditSubComboModal(
           <div class="modal subcombo-modal">
             <div class="modal-header">
               <h2>${icons.navCombos()} Edit Sub-Combo: ${combo.name} (#${combo.id})</h2>
-              <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">&times;</button>
+              <button type="button" class="close-btn" @click=${() => wrapper.remove()} aria-label="Close">${icons.close()}</button>
             </div>
             <form @submit=${onSubmit}>
               <div class="modal-body">

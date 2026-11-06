@@ -2,63 +2,38 @@
 // pagination, UI-state setters, and the auto-activate / proxy handlers.
 
 import { html, type TemplateResult } from 'lit-html';
-import { repeat } from 'lit-html/directives/repeat.js';
 import { state } from '../../state/index.js';
 import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { showApiError } from '../../lib/ui-utils.js';
+import { showToast } from '../../components/toast.js';
 import { icons } from '../../lib/icons.js';
 import { t } from '../../i18n/index.js';
-import {
-  applySort,
-  SORTABLE_COLUMNS,
-  type ModelSort,
-} from '../../components/model-table.js';
+import { statusPillClass } from '../../lib/constants.js';
+import { formatContextBadge } from '../../lib/format.js';
+import { renderCapabilityBadges } from './shared.js';
+import { renderDataGrid, type GridColumn } from '../../components/data-grid.js';
 import type { Model, Provider } from '../../lib/types/api.js';
 import {
-  detailProviderId,
   getProviderUi,
   setProviderUi,
   type ProviderDetailUiState,
 } from './shared.js';
 import { onShowCustomModelForm } from './custom-model.js';
 import {
-  renderModelRow,
+  onToggleModel,
+  onTestModel,
+  onDeleteModel,
+  onCopyUsageModel,
+  onChangeModelType,
 } from './models-row.js';
 import {
   onBulkToggleModels,
   onBulkEnableSelected,
   onBulkDisableSelected,
-  onBulkSetModalitySelected,
   onBulkTestSelected,
   onBulkDeleteSelected,
 } from './models-bulk.js';
-
-
-export function onToggleSelectAllModels(e: Event | null): void {
-  const target =
-    e && e.target && e.target instanceof HTMLInputElement ? e.target : null;
-  const checked = target ? target.checked : false;
-  if (!detailProviderId) return;
-  const ui = getProviderUi(detailProviderId);
-  const searchLower = (ui.search || '').toLowerCase();
-  const visible = (state.models || [])
-    .filter((m) => m.provider_id === detailProviderId)
-    .filter((m) => {
-      if (ui.filter === 'active' && !m.active) return false;
-      if (ui.filter === 'inactive' && m.active) return false;
-      if (searchLower && !m.model_id.toLowerCase().includes(searchLower))
-        return false;
-      return true;
-    })
-    .map((m) => m.row_id);
-  if (checked) {
-    for (const id of visible) state.selectedModels.add(id);
-  } else {
-    for (const id of visible) state.selectedModels.delete(id);
-  }
-  requestUpdate();
-}
 
 export function onClearModelSelection(): void {
   state.selectedModels.clear();
@@ -81,23 +56,6 @@ export function onUpdateProviderFilter(
 ): void {
   const ui = getProviderUi(providerId);
   ui.filter = filter;
-  ui.page = 1;
-  setProviderUi(providerId, ui);
-  requestUpdate();
-}
-
-export function onCycleProviderSort(providerId: string, sortKey: string): void {
-  const ui = getProviderUi(providerId);
-  const current = ui.sort;
-  let next: ModelSort | null = null;
-  if (!current || current.key !== sortKey) {
-    next = { key: sortKey, dir: 'asc' };
-  } else if (current.dir === 'asc') {
-    next = { key: sortKey, dir: 'desc' };
-  } else {
-    next = null;
-  }
-  ui.sort = next;
   ui.page = 1;
   setProviderUi(providerId, ui);
   requestUpdate();
@@ -294,17 +252,6 @@ async function onResetToDirectIp(providerId: string): Promise<void> {
 }
 
 
-function onChooseProviderSort(providerId: string, event: Event): void {
-  const value = (event.currentTarget as HTMLSelectElement).value;
-  const [key, dir] = value.split(':');
-  const ui = getProviderUi(providerId);
-  ui.sort = key && (dir === 'asc' || dir === 'desc') ? { key, dir } : null;
-  ui.page = 1;
-  setProviderUi(providerId, ui);
-  requestUpdate();
-}
-
-
 export function renderProviderModelSettings(
   provider: Provider,
 ): TemplateResult {
@@ -415,52 +362,89 @@ export function renderModelsSection(
       return false;
     return true;
   });
-  const sorted = applySort(filtered, ui.sort);
-  const totalFiltered = sorted.length;
-  const pageSize = ui.pageSize || 50;
-  const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
-  const currentPage = Math.min(Math.max(1, ui.page || 1), totalPages);
-  const startIdx = (currentPage - 1) * pageSize;
-  const paginatedModels = sorted.slice(startIdx, startIdx + pageSize);
 
-  const visibleRowIds: number[] = paginatedModels.map((m) => m.row_id);
-  const selectedVisible: number = visibleRowIds.filter(
-    (id) => (state.selectedModels as Set<number>).has(id),
-  ).length;
-  const allSelected: boolean =
-    visibleRowIds.length > 0 && selectedVisible === visibleRowIds.length;
-  const indeterminate: boolean = selectedVisible > 0 && !allSelected;
-  const bulkBar: TemplateResult =
-    state.selectedModels.size > 0
-      ? html`<div class="bulk-actions-bar">
-          <span><strong>${state.selectedModels.size}</strong> selected</span>
-          <button @click=${() => onBulkEnableSelected(provider.id)}>Enable selected</button>
-          <button @click=${() => onBulkDisableSelected(provider.id)}>Disable selected</button>
-          <button @click=${() => onBulkSetModalitySelected('chat')}>${icons.chat()} Tag Chat</button>
-          <button @click=${() => onBulkSetModalitySelected('image')}>${icons.image()} Tag Image</button>
-          <button @click=${() => onBulkSetModalitySelected('embedding')}>${icons.embedding()} Tag Embedding</button>
-          <button @click=${() => onBulkSetModalitySelected('audio')}>${icons.audio()} Tag Audio</button>
-          <button @click=${() => onBulkSetModalitySelected('decision')}>${icons.decision()} Tag Decision</button>
-          <button @click=${() => onBulkTestSelected(provider.id)}>Test selected</button>
-          <button class="danger" @click=${() => onBulkDeleteSelected(provider.id)}>Delete selected</button>
-          <button class="link" @click=${onClearModelSelection}>Clear selection</button>
-        </div>`
-      : html``;
-
-  const paginationBar: TemplateResult =
-    totalFiltered > pageSize
-      ? html`
-        <div class="provider-model-pagination" style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0.5rem; margin-top: 0.5rem; font-size: var(--fs-sm); color: var(--color-text-muted);">
-          <div>Showing ${startIdx + 1}–${Math.min(startIdx + pageSize, totalFiltered)} of ${totalFiltered} models</div>
-          <div class="provider-model-pagination-controls" style="display: flex; gap: 0.5rem; align-items: center;">
-            <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, 1)} title="First page">${icons.chevronsLeft()} First</button>
-            <button class="small" ?disabled=${currentPage <= 1} @click=${() => onSetProviderPage(provider.id, currentPage - 1)} title="Previous page">${icons.chevronLeft()} Prev</button>
-            <span style="padding: 0 0.5rem; font-weight: bold; color: var(--color-text);">Page ${currentPage} / ${totalPages}</span>
-            <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, currentPage + 1)} title="Next page">Next ${icons.chevronRight()}</button>
-            <button class="small" ?disabled=${currentPage >= totalPages} @click=${() => onSetProviderPage(provider.id, totalPages)} title="Last page">Last ${icons.chevronsRight()}</button>
+  const columns: GridColumn<Model>[] = [
+    {
+      key: 'model_id',
+      label: t('common.filter') || 'Model',
+      min: 150,
+      elastic: true,
+      render: (m) => {
+        const usageModel = `${m.provider_id}/${m.model_id}`;
+        return html`
+          <div class="model-name-cell">
+            <code
+              class="model-usage-code"
+              title="Click to copy usage model"
+              @click=${(e: Event) => {
+                e.stopPropagation();
+                void onCopyUsageModel(usageModel, e);
+              }}
+            >${usageModel}</code>
+            ${m.custom ? html`<span class="badge custom">custom</span>` : html``}
+            ${m.client_profile ? html`<span class="model-profile-badge" title="Spoofed Client Profile">${m.client_profile}</span>` : html``}
           </div>
-        </div>`
-      : html``;
+        `;
+      },
+    },
+    {
+      key: 'modality',
+      label: t('providers.detail.entry.modality') || 'Modality',
+      max: 95,
+      fold: 4,
+      render: (m) => html`<span class="chip">${(m.model_type || 'chat').toUpperCase()}</span>`,
+    },
+    {
+      key: 'format',
+      label: t('providers.detail.entry.format') || 'Format',
+      max: 95,
+      fold: 5,
+      render: (m) => html`<code class="dg-mono">${m.target_format || 'openai'}</code>`,
+    },
+    {
+      key: 'context',
+      label: 'Context',
+      max: 90,
+      fold: 2,
+      render: (m) => html`<span class="dg-mono">${formatContextBadge(m.context_length)}</span>`,
+    },
+    {
+      key: 'output',
+      label: 'Output',
+      max: 85,
+      fold: 3,
+      render: (m) => html`<span class="dg-mono">${formatContextBadge(m.max_output_tokens)}</span>`,
+    },
+    {
+      key: 'capabilities',
+      label: 'Caps',
+      max: 130,
+      fold: 6,
+      render: (m) => html`
+        <span class="model-caps-wrap">
+          ${renderCapabilityBadges(m.capabilities_json, m.model_type)}
+        </span>
+      `,
+    },
+    {
+      key: 'last_test',
+      label: 'Test',
+      max: 80,
+      fold: 1,
+      render: (m) => {
+        if (m.last_test_status == null) return html`<span class="dg-dim">never</span>`;
+        return html`<span class=${'status-pill ' + statusPillClass(m.last_test_status)} title=${m.last_test_at || ''}>${String(m.last_test_status)}</span>`;
+      },
+    },
+    {
+      key: 'status',
+      label: t('keys.list.col.status') || 'Status',
+      render: (m) => {
+        const text = m.active ? 'Active' : 'Inactive';
+        return html`<span class="dg-dot ${m.active ? 'on' : 'off'}" title=${text} aria-label=${text}></span>`;
+      },
+    },
+  ];
 
   return html`
     <section class="detail-section">
@@ -483,25 +467,96 @@ export function renderModelsSection(
         </div>
       </div>
 
-      ${bulkBar}
-
-      <div class="provider-model-list-tools">
-        <label class="provider-select-all"><input type="checkbox" aria-label=${t('providers.detail.entry.select_all')} .checked=${allSelected} .indeterminate=${indeterminate} @change=${(e: Event) => onToggleSelectAllModels(e)}> ${t('providers.detail.entry.select_all')}</label>
-        <label class="provider-sort">${t('providers.detail.entry.sort')}
-          <select .value=${ui.sort ? `${ui.sort.key}:${ui.sort.dir}` : ''} @change=${(e: Event) => onChooseProviderSort(provider.id, e)}>
-            <option value="">${t('providers.detail.entry.default_order')}</option>
-            ${SORTABLE_COLUMNS.map(col => html`
-              <option value=${`${col.key}:asc`}>${col.label} ↑</option>
-              <option value=${`${col.key}:desc`}>${col.label} ↓</option>`)}
-          </select>
-        </label>
-      </div>
-      <div class="models-list" id="models-tbody" role="list">
-        ${paginatedModels.length === 0
+      <div class="models-list" id="models-tbody">
+        ${filtered.length === 0
           ? html`<p class="empty-row">No models match the filter.</p>`
-          : repeat(paginatedModels, m => m.row_id, m => renderModelRow(m))}
+          : renderDataGrid<Model>({
+              id: `provider-models-${provider.id}`,
+              className: 'provider-models-table models-table',
+              columns,
+              rows: filtered,
+              rowKey: (m) => m.row_id,
+              rowClass: (m) => (m.active ? 'active' : 'inactive'),
+              emptyMessage: 'No models match the filter.',
+              quickActions: () => [
+                { action: 'test', title: 'Test model', icon: icons.flask() },
+                { action: 'toggle', title: 'Toggle active', icon: icons.lightning() },
+                { action: 'delete', title: t('common.delete'), icon: icons.trash(), danger: true },
+              ],
+              menuItems: (m) => [
+                { action: 'copy_usage', label: 'Copy usage model', shortcut: 'C' },
+                { action: 'test', label: 'Test model', shortcut: 'T' },
+                { action: 'toggle', label: m.active ? 'Disable model' : 'Enable model' },
+                { separator: true },
+                { action: 'tag_chat', label: 'Tag Chat' },
+                { action: 'tag_image', label: 'Tag Image' },
+                { action: 'tag_embedding', label: 'Tag Embedding' },
+                { separator: true },
+                { action: 'delete', label: t('common.delete'), shortcut: 'Supr', danger: true },
+              ],
+              onAction: (m, action) => {
+                switch (action) {
+                  case 'copy_usage': {
+                    void navigator.clipboard?.writeText(`${m.provider_id}/${m.model_id}`);
+                    showToast(t('grid.toast.copied'));
+                    return;
+                  }
+                  case 'test': return void onTestModel(m.row_id, null);
+                  case 'toggle': return void onToggleModel(m.row_id, !m.active);
+                  case 'tag_chat': {
+                    const mockEvt = { target: { value: 'chat' } } as unknown as Event;
+                    return void onChangeModelType(m.row_id, mockEvt);
+                  }
+                  case 'tag_image': {
+                    const mockEvt = { target: { value: 'image' } } as unknown as Event;
+                    return void onChangeModelType(m.row_id, mockEvt);
+                  }
+                  case 'tag_embedding': {
+                    const mockEvt = { target: { value: 'embedding' } } as unknown as Event;
+                    return void onChangeModelType(m.row_id, mockEvt);
+                  }
+                  case 'delete': return void onDeleteModel(m.row_id);
+                }
+              },
+              bulkActions: [
+                {
+                  key: 'enable',
+                  label: 'Enable',
+                  run: (picked) => {
+                    state.selectedModels = new Set(picked.map((x) => x.row_id));
+                    void onBulkEnableSelected(provider.id);
+                  },
+                },
+                {
+                  key: 'disable',
+                  label: 'Disable',
+                  run: (picked) => {
+                    state.selectedModels = new Set(picked.map((x) => x.row_id));
+                    void onBulkDisableSelected(provider.id);
+                  },
+                },
+                {
+                  key: 'test',
+                  label: 'Test',
+                  run: (picked) => {
+                    state.selectedModels = new Set(picked.map((x) => x.row_id));
+                    void onBulkTestSelected(provider.id);
+                  },
+                },
+                {
+                  key: 'delete',
+                  label: t('common.delete'),
+                  danger: true,
+                  run: (picked) => {
+                    state.selectedModels = new Set(picked.map((x) => x.row_id));
+                    void onBulkDeleteSelected(provider.id);
+                  },
+                },
+              ],
+              bulkCountLabel: (n) => t('grid.bulk.selected', { n }),
+              __refresh: () => requestUpdate(),
+            })}
       </div>
-      ${paginationBar}
     </section>
   `;
 }

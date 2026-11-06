@@ -1,0 +1,400 @@
+{
+  "jerouter": {
+    "step-3.7-flash": {
+      "status": "VERIFIED",
+      "prediction": "qwen3.8-27b",
+      "family": "qwen",
+      "score": 2.694,
+      "numbers_parsed": 304,
+      "ttft_s": 129.75,
+      "tps": 224.8,
+      "duration_s": 135.74,
+      "sample_numbers": "187, 42, 299, 15, 310, 78, 223, 5, 341, 19, 156, 92, 267, 33, 118, 254, 67, 329, 21, 143, 298, 44, 191, 76, 312, 9, 245, 138, 327, 52, 173, 89, 259, 1...",
+      "id": 14903434
+    },
+    "north-mini-code": {
+      "status": "VERIFIED",
+      "prediction": "deepseek-v4-flash",
+      "family": "deepseek",
+      "score": 2.366,
+      "numbers_parsed": 186,
+      "ttft_s": 95.75,
+      "tps": 240.3,
+      "duration_s": 98.56,
+      "sample_numbers": "173 48 219 92 304 158 7 263 119 332 15 210 84 267 42 219 96 351 28 203 77 254 119 342 13 215 89 298 64 221 102 340 17 195 73 310 6 279 138 44 226 101 ...",
+      "id": 14903435
+    },
+    "qwen3.8-27b": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14903447
+    },
+    "step-5-preview": {
+      "status": "VERIFIED",
+      "prediction": "step-5-preview",
+      "family": "step",
+      "score": 2.223,
+      "numbers_parsed": 326,
+      "ttft_s": 43.86,
+      "tps": 73.1,
+      "duration_s": 58.48,
+      "sample_numbers": "187, 24, 331, 58, 276, 113, 9, 294, 146, 65, 238, 17, 355, 102, 281, 39, 190, 253, 74, 312, 5, 168, 329, 47, 221, 134, 88, 305, 156, 23, 268, 79, 141,...",
+      "id": 14903448
+    },
+    "step-3.7-unrestricted": {
+      "status": "VERIFIED",
+      "prediction": "openpangu-2.0-pro",
+      "family": "openpangu",
+      "score": 2.526,
+      "numbers_parsed": 320,
+      "ttft_s": 77.19,
+      "tps": 227.7,
+      "duration_s": 82.71,
+      "sample_numbers": "142, 287, 351, 198, 23, 339, 267, 87, 312, 176, 45, 298, 134, 255, 19, 301, 168, 82, 245, 317, 56, 199, 333, 121, 278, 37, 294, 163, 241, 69, 315, 108...",
+      "id": 14903453
+    },
+    "jerouter": {
+      "status": "VERIFIED",
+      "prediction": "openpangu-2.0-pro",
+      "family": "openpangu",
+      "score": 1.876,
+      "numbers_parsed": 275,
+      "ttft_s": 129.18,
+      "tps": 234.8,
+      "duration_s": 134.85,
+      "sample_numbers": "142, 317, 89, 245, 16, 333, 201, 72, 298, 154, 19, 341, 113, 276, 47, 322, 188, 95, 259, 31, 354, 167, 83, 231, 12, 309, 196, 68, 284, 141, 325, 102, ...",
+      "id": 14903454
+    },
+    "step-3.5-flash-2603": {
+      "status": "VERIFIED",
+      "prediction": "mimo-v2.5",
+      "family": "mimo",
+      "score": 2.776,
+      "numbers_parsed": 297,
+      "ttft_s": 64.78,
+      "tps": 199.1,
+      "duration_s": 74.53,
+      "sample_numbers": "23, 187, 42, 299, 8, 145, 267, 33, 198, 76, 311, 19, 152, 89, 245, 67, 334, 12, 278, 45, 190, 103, 298, 56, 134, 211, 87, 312, 25, 169, 234, 71, 345, ...",
+      "id": 14903458
+    },
+    "step-3.5-flash": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14903459
+    },
+    "solar-mini4": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14903468
+    },
+    "solar-pro4": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14903469
+    }
+  },
+  "tiprouter": {
+    "atria-dawn": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14394923
+    },
+    "auto": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 0,
+      "duration_s": 70.23,
+      "error": "Upstream error: upstream error: status=504 provider=tiprouter model=auto body=upstream phase `headers` timed out after 20165ms (config: ttft_ms)",
+      "preview": "",
+      "id": 14394924
+    },
+    "beam": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14394925
+    },
+    "deepseek-v-4.1-flash-1017": {
+      "status": "VERIFIED",
+      "prediction": "deepseek-v4-pro-0813",
+      "family": "deepseek",
+      "score": 1.851,
+      "numbers_parsed": 294,
+      "ttft_s": 108.78,
+      "tps": 91.1,
+      "duration_s": 122.03,
+      "sample_numbers": "217, 44, 312, 89, 155, 3, 278, 191, 66, 340, 122, 257, 14, 305, 73, 198, 286, 51, 332, 168, 92, 231, 17, 354, 144, 269, 38, 201, 111, 318, 25, 176, 24...",
+      "id": 14394926
+    },
+    "deepseek-v4.1-flash-1017": {
+      "status": "VERIFIED",
+      "prediction": "deepseek-v4-pro",
+      "family": "deepseek",
+      "score": 2.215,
+      "numbers_parsed": 327,
+      "ttft_s": 135.7,
+      "tps": 102.7,
+      "duration_s": 146.57,
+      "sample_numbers": "187, 42, 311, 98, 255, 7, 143, 329, 61, 274, 19, 236, 115, 348, 82, 201, 53, 290, 164, 31, 220, 76, 333, 14, 268, 121, 355, 47, 192, 304, 88, 241, 157...",
+      "id": 14394928
+    },
+    "glm-5-3-flash": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 0,
+      "duration_s": 39.82,
+      "error": "Upstream error: upstream error: status=502 provider=tiprouter model=glm-5-3-flash body=The AI provider is temporarily unavailable. Please try again.",
+      "preview": "",
+      "id": 14394930
+    },
+    "mercury-3": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 0,
+      "duration_s": 60.12,
+      "error": "Upstream error: upstream error: status=401 provider=tiprouter model=mercury-3 body={\"error\":{\"origin\":\"upstream\",\"code\":\"authentication_failed\",\"requestId\":\"dd27e518-f1c6-4782-afc3-110bfdfc1554\",\"message\":\"TipRouter could not authenticate with the AI provider. Please try again. (request dd27e518-f1c6-4782-afc3-110bfdfc1554)\",\"details\":{\"providerStatus\":401,\"upstreamRequestId\":\"994e2564-aa7f-418f-aaaf-fc1a55ea401d\",\"credentialEvidence\":true}}}",
+      "preview": "",
+      "id": 14394937
+    },
+    "nemotron-3.5-super": {
+      "status": "VERIFIED",
+      "prediction": "mimo-v2.5-pro",
+      "family": "mimo",
+      "score": 2.139,
+      "numbers_parsed": 316,
+      "ttft_s": 53.47,
+      "tps": 106.7,
+      "duration_s": 67.14,
+      "sample_numbers": "7, 142, 33, 290, 18, 255, 91, 4, 201, 117, 63, 330, 12, 278, 55, 199, 8, 344, 71, 156, 203, 44, 310, 27, 183, 99, 5, 261, 134, 37, 298, 16, 217, 82, 3...",
+      "id": 14394942
+    },
+    "solar-mini4": {
+      "status": "VERIFIED",
+      "prediction": "openpangu-2.0-pro",
+      "family": "openpangu",
+      "score": 1.684,
+      "numbers_parsed": 321,
+      "ttft_s": 26.86,
+      "tps": 64.1,
+      "duration_s": 46.57,
+      "sample_numbers": "128, 319, 47, 220, 93, 52, 294, 118, 251, 337, 61, 192, 275, 86, 150, 233, 355, 41, 167, 288, 73, 331, 205, 134, 257, 34, 189, 96, 292, 210, 79, 324, ...",
+      "id": 14394945
+    },
+    "qwen3.8-flash": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14401706
+    },
+    "qwen3.8-flash-uncen": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 14821356
+    }
+  },
+  "xkiro": {
+    "mistralai/mistral-large-2512": {
+      "status": "VERIFIED",
+      "prediction": "qwen3.8-27b",
+      "family": "qwen",
+      "score": 2.207,
+      "numbers_parsed": 188,
+      "ttft_s": 0.76,
+      "tps": 147.4,
+      "duration_s": 8.44,
+      "sample_numbers": "247, 123, 89, 342, 56, 201, 178, 35, 299, 144,\n67, 312, 18, 255, 93, 330, 42, 167, 284, 71,\n196, 32, 221, 150, 8, 273, 119, 355, 51, 182,\n23, 308, 134...",
+      "id": 6218482
+    },
+    "mistralai/mistral-medium-3.5": {
+      "status": "VERIFIED",
+      "prediction": "qwen3.8-27b",
+      "family": "qwen",
+      "score": 2.633,
+      "numbers_parsed": 241,
+      "ttft_s": 0.72,
+      "tps": 148.8,
+      "duration_s": 9.24,
+      "sample_numbers": "247, 12, 355, 89, 201, 43, 178, 312, 56, 289, 74, 199, 34, 276, 153, 8, 222, 145, 300, 67, 184, 29, 333, 111, 256, 98, 16, 321, 79, 242, 5, 190, 344, ...",
+      "id": 6218483
+    },
+    "mistralai/mistral-small-2603": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 56,
+      "duration_s": 3.81,
+      "error": "Too few valid numbers: 56; need at least 163.",
+      "preview": "297, 312, 289, 341, 278, 305, 333, 264, 320, 291, 348, 283, 315, 300, 337, 272, 326, 299, 344, 268, 309, 331, 275, 318, 286, 347, 261, 323, 294, 339, ",
+      "id": 6218484
+    },
+    "mistralai/codestral-2508": {
+      "status": "VERIFIED",
+      "prediction": "openpangu-2.0-flash",
+      "family": "openpangu",
+      "score": 2.323,
+      "numbers_parsed": 302,
+      "ttft_s": 0.7,
+      "tps": 80.7,
+      "duration_s": 15.76,
+      "sample_numbers": "12, 45, 78, 23, 56, 89, 34, 67, 90, 11, 44, 77, 22, 55, 88, 33, 66, 99, 10, 43, 76, 25, 58, 81, 32, 65, 98, 13, 46, 79, 26, 59, 82, 35, 68, 91, 14, 47...",
+      "id": 6218485
+    },
+    "mistralai/devstral-medium": {
+      "status": "VERIFIED",
+      "prediction": "openpangu-2.0-flash",
+      "family": "openpangu",
+      "score": 3.418,
+      "numbers_parsed": 328,
+      "ttft_s": 0.7,
+      "tps": 115.6,
+      "duration_s": 12.3,
+      "sample_numbers": "23, 174, 56, 301, 89, 210, 143, 72, 285, 128, 339, 196, 67, 244, 115, 298, 169, 40, 207, 94, 251, 138, 22, 185, 78, 232, 125, 345, 202, 89, 266, 153, ...",
+      "id": 6218486
+    },
+    "mistralai/ministral-14b": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 45,
+      "duration_s": 5.8,
+      "error": "Too few valid numbers: 45; need at least 172.",
+      "preview": "237, 142, 319, 78, 294, 115, 341, 56, 273, 99, 326, 43, 259, 86, 302, 129, 285, 61, 248, 104, 335, 30, 262, 111, 348, 53, 279, 96, 322, 37, 255, 83, 3",
+      "id": 6218487
+    },
+    "mistralai/ministral-8b": {
+      "status": "VERIFIED",
+      "prediction": "seed-2.0-mini",
+      "family": "seed",
+      "score": 2.116,
+      "numbers_parsed": 247,
+      "ttft_s": 0.73,
+      "tps": 89.6,
+      "duration_s": 17.11,
+      "sample_numbers": "123, 289, 156, 301, 78, 245, 332, 190, 67, 214, 348, 89, 257, 319, 134, 271, 350, 92, 226, 187, 53, 298, 110, 335, 75, 262, 304, 141, 237, 343, 86, 21...",
+      "id": 6218488
+    },
+    "mistralai/ministral-3b": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 1,
+      "duration_s": 2.02,
+      "error": "Too few valid numbers: 1; need at least 167.",
+      "preview": "129",
+      "id": 6218489
+    },
+    "sensenova/sensenova-6.8-flash-lite": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 6218532
+    },
+    "nvidia/nemotron-3-nano-omni": {
+      "status": "GLOBAL_TIMEOUT",
+      "duration_s": 210,
+      "error": "Timeout 210s exceeded",
+      "id": 6218560
+    },
+    "qwen/qwen3.8-max:free": {
+      "status": "VERIFIED",
+      "prediction": "gemini-4-argon",
+      "family": "gemini",
+      "score": 2.325,
+      "numbers_parsed": 305,
+      "ttft_s": 6.28,
+      "tps": 31.2,
+      "duration_s": 42.47,
+      "sample_numbers": "217, 43, 301, 88, 156, 29, 342, 119, 7, 264, 198, 51, 310, 137, 22, 285, 74, 193, 350, 16, 108, 241, 63, 329, 175, 9, 256, 92, 348, 131, 47, 210, 305,...",
+      "id": 9020310
+    },
+    "qwen/qwen3.6-plus:free": {
+      "status": "VERIFIED",
+      "prediction": "gemini-3.7-flash",
+      "family": "gemini",
+      "score": 1.897,
+      "numbers_parsed": 310,
+      "ttft_s": 7.23,
+      "tps": 37.1,
+      "duration_s": 36.61,
+      "sample_numbers": "127, 342, 89, 215, 4, 298, 156, 331, 72, 189, 264, 11, 305, 148, 227, 63, 349, 95, 201, 178, 33, 286, 112, 355, 47, 239, 164, 318, 81, 253, 19, 301, 1...",
+      "id": 9020389
+    },
+    "qwen/qwen3.5-omni-flash:free": {
+      "status": "VERIFIED",
+      "prediction": "openpangu-2.0-pro",
+      "family": "openpangu",
+      "score": 2.23,
+      "numbers_parsed": 328,
+      "ttft_s": 6.82,
+      "tps": 96.9,
+      "duration_s": 20.57,
+      "sample_numbers": "142, 89, 301, 57, 214, 333, 12, 278, 95, 166, 243, 71, 329, 18, 205, 134, 290, 46, 227, 311, 83, 159, 274, 101, 348, 62, 197, 235, 118, 286, 39, 175, ...",
+      "id": 9020395
+    },
+    "qwen/qwen3-omni-flash:free": {
+      "status": "VERIFIED",
+      "prediction": "deepseek-v4-pro",
+      "family": "deepseek",
+      "score": 2.265,
+      "numbers_parsed": 324,
+      "ttft_s": 3.72,
+      "tps": 66.1,
+      "duration_s": 16.9,
+      "sample_numbers": "142, 89, 301, 55, 217, 334, 12, 268, 99, 185, 341, 73, 229, 16, 310, 244, 58, 199, 327, 41, 276, 113, 352, 20, 167, 295, 84, 339, 10, 253, 178, 321, 6...",
+      "id": 9020400
+    },
+    "qwen/qwen3-coder-plus:free": {
+      "status": "VERIFIED",
+      "prediction": "mimo-v2.6-flash",
+      "family": "mimo",
+      "score": 2.073,
+      "numbers_parsed": 302,
+      "ttft_s": 6.24,
+      "tps": 36.2,
+      "duration_s": 34.96,
+      "sample_numbers": "217, 43, 301, 89, 156, 274, 12, 198, 332, 67, 241, 115, 350, 28, 179, 293, 54, 211, 138, 307, 82, 265, 19, 147, 321, 96, 234, 171, 345, 61, 288, 124, ...",
+      "id": 9020405
+    },
+    "openai/gpt-6-luna": {
+      "status": "VERIFIED",
+      "prediction": "gpt-5.6-luna",
+      "family": "gpt",
+      "score": 3.799,
+      "numbers_parsed": 326,
+      "ttft_s": 21.14,
+      "tps": 30.0,
+      "duration_s": 48.15,
+      "sample_numbers": "247, 18, 329, 74, 156, 3, 281, 119, 344, 62, 205, 331, 47, 172, 296, 88, 14, 263, 350, 137, 91, 224, 7, 315, 184, 269, 53, 346, 128, 238, 34, 302, 165...",
+      "id": 10465638
+    },
+    "cohere/command-r-plus-08-2024": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 316,
+      "duration_s": 208.25,
+      "error": "Upstream error: upstream timeout in phase idle_chunk after 120000ms",
+      "preview": "198, 12, 291, 177, 22, 159, 342, 104, 24, 307, 216, 31, 138, 11, 260, 321, 14, 337, 273, 161, 30, 187, 239, 312, 258, 18, 101, 317, 28, 127, 15, 210, ",
+      "id": 10666002
+    },
+    "cohere/command-r7b-12-2024": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 1,
+      "duration_s": 14.29,
+      "error": "Too few valid numbers: 1; need at least 175.",
+      "preview": "123 456 789 1011 1213 1415 1617 1819 2021 2223 2425 2627 2829 3031 3233 3435",
+      "id": 10666004
+    },
+    "cohere/aya-vision-32b": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 18,
+      "duration_s": 10.79,
+      "error": "Too few valid numbers: 18; need at least 165.",
+      "preview": "123, 45, 789, 321, 54, 987, 654, 345, 12, 34, 567, 89, 102, 35, 678, 901, 234, 56, 789, 123, 456, 78, 90, 12, 345, 67, 890, 1234, 5678, 9012, 3456, 78",
+      "id": 10666005
+    },
+    "cohere/tiny-aya-global": {
+      "status": "REJECTED_OR_INSUFFICIENT",
+      "numbers_parsed": 1,
+      "duration_s": 69.57,
+      "error": "The response did not complete (length).",
+      "preview": "**Task:** Complete the following integer-choice task, which carries no semantic meaning. Decide only the current item each time, giving a total of 297",
+      "id": 10666006
+    }
+  }
+}

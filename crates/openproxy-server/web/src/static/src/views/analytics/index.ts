@@ -1,6 +1,6 @@
 // views/analytics/index.ts — layout, KPI/status/latency/race blocks, mount sequence.
 
-import { html, type TemplateResult } from "lit-html";
+import { html, nothing, type TemplateResult } from "lit-html";
 import { state } from "../../state/index.js";
 import { api } from "../../state/api.js";
 import { mountView, requestUpdate } from "../../state/reactive.js";
@@ -196,6 +196,18 @@ function renderRaceBlock(): TemplateResult {
 
 // ── Body composition ────────────────────────────────────────────────
 
+// The details section holds ~4k nodes (two dense grids + the monthly
+// matrix). Rendering it while collapsed paid a full template diff on every
+// live-update tick, so the body mounts only when first expanded and stays.
+let detailsExpanded = false;
+
+function onDetailsToggle(e: Event): void {
+  const el = e.target as HTMLElement;
+  if (!el.classList.contains("analytics-details") || detailsExpanded) return;
+  detailsExpanded = true;
+  requestUpdate();
+}
+
 function renderBody(): TemplateResult {
   if (loading) return html`<div class="loading">${t("common.loading")}</div>`;
   if (errorMsg) return html`<div class="banner banner-error">${errorMsg}</div>`;
@@ -244,14 +256,14 @@ function renderBody(): TemplateResult {
       ${renderLatencyBlock()}
       ${renderRaceBlock()}
     </div>
-    <details class="analytics-details">
+    <details class="analytics-details" .open=${detailsExpanded} @toggle=${onDetailsToggle}>
       <summary><span>${t("analytics.details.title")}</span><small>${t("analytics.details.subtitle")}</small></summary>
+      ${detailsExpanded ? html`
       <div class="analytics-details-body">
         ${renderByModelTable()}
         ${renderByProviderTable()}
         ${renderMonthlyMatrix()}
-      </div>
-    </details>
+      </div>` : nothing}
     ${renderRecentErrors()}`;
 }
 

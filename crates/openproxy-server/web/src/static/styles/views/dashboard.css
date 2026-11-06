@@ -179,7 +179,7 @@
 }
 .home-kpi-tile {
   position: relative;
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-md);
@@ -202,24 +202,35 @@
   letter-spacing: 0.05em;
   color: var(--color-text-muted);
   font-family: var(--font-display);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .home-kpi-value {
   font-size: var(--fs-2xl);
   font-weight: bold;
   font-family: var(--font-mono);
-  line-height: var(--lh-tight);
+  line-height: 1.15;
   font-variant-numeric: tabular-nums;
+  margin: 2px 0 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .home-kpi-meta {
   min-height: 1.2em;
+  line-height: 1.2;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .home-kpi-spark {
   height: 34px;
   width: 100%;
   min-width: 0;
-  margin-top: var(--space-1);
+  margin-top: auto;
   /* `width: 100%` + `min-width: 0` give the global `.uplot` rule a
      real reference width, so the div fills the container instead of
      feeding back off its canvas size (uPlot sizes `.uplot` to
@@ -229,7 +240,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  height: 30px;
+  height: 34px;
+  margin-top: auto;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
 }
@@ -304,14 +316,21 @@
   display: grid;
   grid-template-columns: 80px 1fr 120px 70px 80px 100px 80px;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-top: var(--border-w) var(--border-style) var(--color-border-soft);
-  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
-  font-size: var(--fs-xs);
+  height: 28px;
+  box-sizing: border-box;
+  align-items: center;
+  padding: 0 var(--space-3);
+  background: var(--color-surface-2);
+  border-top: var(--border-w) var(--border-style) var(--color-border);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   color: var(--color-text-muted);
   font-family: var(--font-display);
+}
+.home-activity-header .num {
+  text-align: right;
 }
 .home-activity-list {
   max-height: 320px;
@@ -320,10 +339,13 @@
   scroll-behavior: smooth;
 }
 .home-activity-row {
-  display: block;
-  padding: 0.45rem var(--space-3);
-  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
-  font-size: var(--fs-sm);
+  display: flex;
+  align-items: center;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border-soft);
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   transition: background var(--t-fast);
   color: var(--color-text);
@@ -343,7 +365,7 @@
   display: none;
 }
 .home-activity-row:hover {
-  background: var(--color-surface-2);
+  background: var(--color-surface-hover);
   color: var(--color-text);
   border-bottom-color: var(--color-border-soft);
 }
@@ -352,31 +374,44 @@
 }
 .home-activity-time {
   color: var(--color-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .home-activity-model {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text);
 }
 .home-activity-provider {
   color: var(--color-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11px;
 }
 .home-activity-status {
   display: flex;
   align-items: center;
+}
+.home-activity-status .status-pill {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
 }
 .home-activity-latency,
 .home-activity-tokens,
 .home-activity-cost {
   text-align: right;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
 }
 .home-activity-cost {
-  color: var(--color-text-muted);
+  color: var(--color-text);
+  font-weight: 600;
 }
 .home-activity-empty {
   padding: var(--space-6) var(--space-3);

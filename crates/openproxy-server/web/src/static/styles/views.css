@@ -14,8 +14,11 @@
 @import url("./views/playground_markdown.css");
 @import url("./views/config.css");
 @import url("./views/notifications.css");
+@import url("./views/key-usage.css");
 @import url("./views/proxies.css");
+@import url("./views/proxy-sources-grid.css");
 @import url("./views/proxies-grid.css");
+@import url("./views/debug-logs.css");
 @import url("./views/keys.css");
 @import url("./views/provider-detail.css");
 @import url("./views/responsive_tables.css");

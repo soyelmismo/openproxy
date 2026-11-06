@@ -950,8 +950,34 @@
   border-bottom: 1px solid var(--color-border-soft);
   vertical-align: middle;
 }
-.subcombo-child-row:hover {
-  background: var(--color-surface-2);
+.combo-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.combo-settings-grid .combo-settings-bar,
+.combo-settings-grid .combo-context-window-bar {
+  margin: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.subcombo-nested-table th,
+.subcombo-nested-table td {
+  padding: 4px 8px;
+}
+
+.subcombo-child-row {
+  height: 32px;
+}
+
+.sub-actions-wrap button,
+.sub-actions-wrap a.button-link {
+  height: 24px;
+  min-height: 24px;
+  padding: 0 5px;
 }
 .sub-col-model { font-weight: 600; }
 .sub-actions-wrap {

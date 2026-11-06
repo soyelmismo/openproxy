@@ -1,8 +1,8 @@
-// Per-key usage recap over /keys/:id/usage and
+// views/key-usage.ts — Per-key usage recap over /keys/:id/usage and
 // /usage/by-day?api_key_id=... . Shows a KPI summary row (requests /
 // cost / error rate / avg latency / last used), a daily-usage chart
-// reusing the analytics dailyUsageChart, and a metrics table. No
-// `innerHTML` is assigned: metrics live in module-local state and
+// reusing the analytics dailyUsageChart, and a compact dense metrics grid.
+// No `innerHTML` is assigned: metrics live in module-local state and
 // `requestUpdate()` drives lit-html's diffing.
 
 import { html, type TemplateResult } from 'lit-html';
@@ -27,9 +27,6 @@ interface KeyUsageHead {
   summary?: UsageSummary | null;
 }
 
-// `loadError` swaps the loading view for an inline banner when the
-// headline fetch fails. `byDay` stays null until its fetch resolves so the
-// chart shows its own placeholder independently of the headline metrics.
 let keyId: number = 0;
 let head: KeyUsageHead | null = null;
 let byDay: ByDayRow[] | null = null;
@@ -51,7 +48,6 @@ function fmtPct(num: number, denom: number): string {
   return `${((num / denom) * 100).toFixed(1)}%`;
 }
 
-// `valueClass` colours a high error rate red, like the home dashboard.
 function renderKpiTile(label: string, value: string, valueClass = ""): TemplateResult {
   return html`<div class="kpi-tile">
     <div class="kpi-label">${label}</div>
@@ -59,9 +55,6 @@ function renderKpiTile(label: string, value: string, valueClass = ""): TemplateR
   </div>`;
 }
 
-// The chart renders only once `byDay` resolves (even if empty); before
-// that a `Loading...` placeholder shows. An empty array lets
-// `dailyUsageChart` render its own "No data for the selected range." message.
 function renderChartBlock(): TemplateResult {
   if (byDay === null) {
     return html`<section class="card chart-card">
@@ -89,10 +82,6 @@ function renderKeyUsage(): TemplateResult {
     `;
   }
 
-  // `key` is the per-key headline row; `summary` is the full roll-up with
-  // avg_ttft_ms / avg_total_ms / winners / losers / token counts. Both fall
-  // back to 0 so the tiles render "0" instead of calling `.toFixed()` on
-  // `undefined`.
   const k = head.key ?? {};
   const s: Partial<UsageSummary> = head.summary ?? {};
   const unique: number = k.unique_requests ?? s.unique_requests ?? 0;
@@ -107,12 +96,8 @@ function renderKeyUsage(): TemplateResult {
   const winners: number = s.winners ?? 0;
   const losers: number = s.losers ?? 0;
 
-  // Error rate — used both for the KPI tile and for the table row.
   const errorRatePct = total > 0 ? (errors / total) * 100 : 0;
 
-  // KPI row: requests / cost / error rate / avg latency. The error
-  // rate tile turns red when it exceeds 5%, matching the home
-  // dashboard's threshold.
   const kpiRow = html`<div class="home-kpi-row">
     ${renderKpiTile("Total requests", String(unique))}
     ${renderKpiTile("Total cost", fmtCost(cost))}
@@ -124,24 +109,53 @@ function renderKeyUsage(): TemplateResult {
     <div class="page-header"><a href="#/keys" class="back-link">← All keys</a><h2>API key #${keyId} usage</h2></div>
     ${kpiRow}
     ${renderChartBlock()}
-    <section class="detail-section">
+    <section class="detail-section key-usage-dense-card">
       <div class="section-header"><h3>Headline metrics</h3></div>
-      <div class="table-wrap">
-        <table class="key-usage-table responsive-kv-table">
-          <tbody>
-            <tr><th>Total rows</th><td>${total}</td></tr>
-            <tr><th>Unique requests</th><td>${unique}</td></tr>
-            <tr><th>Winners</th><td>${winners}</td></tr>
-            <tr><th>Losers</th><td>${losers}</td></tr>
-            <tr><th>Errors (4xx/5xx)</th><td>${errors} (${fmtPct(errors, total)})</td></tr>
-            <tr><th>Total cost (USD)</th><td>${fmtCost(cost)}</td></tr>
-            <tr><th>Prompt tokens</th><td>${promptTok}</td></tr>
-            <tr><th>Completion tokens</th><td>${completionTok}</td></tr>
-            <tr><th>Avg TTFT</th><td>${fmtMs(avgTtft)}</td></tr>
-            <tr><th>Avg total latency</th><td>${fmtMs(avgLatency)}</td></tr>
-            <tr><th>Last used</th><td>${last}</td></tr>
-          </tbody>
-        </table>
+      <div class="key-usage-dense-grid">
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Total rows</span>
+          <span class="dense-value">${total}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Unique requests</span>
+          <span class="dense-value">${unique}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Winners</span>
+          <span class="dense-value">${winners}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Losers</span>
+          <span class="dense-value">${losers}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Errors (4xx/5xx)</span>
+          <span class="dense-value">${errors} (${fmtPct(errors, total)})</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Total cost (USD)</span>
+          <span class="dense-value">${fmtCost(cost)}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Prompt tokens</span>
+          <span class="dense-value">${promptTok}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Completion tokens</span>
+          <span class="dense-value">${completionTok}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Avg TTFT</span>
+          <span class="dense-value">${fmtMs(avgTtft)}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Avg total latency</span>
+          <span class="dense-value">${fmtMs(avgLatency)}</span>
+        </div>
+        <div class="key-usage-dense-item">
+          <span class="dense-label">Last used</span>
+          <span class="dense-value">${last}</span>
+        </div>
       </div>
     </section>
     <p style="margin-top:1.5rem;text-align:center;"><a href="#/analytics?api_key_id=${keyId}" class="btn secondary">📊 View detailed breakdowns in Analytics →</a></p>

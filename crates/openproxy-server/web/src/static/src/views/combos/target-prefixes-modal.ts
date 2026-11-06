@@ -302,37 +302,35 @@ export async function showTargetPrefixesModal(
       `;
 
     const template = html`
-      <div class="modal-backdrop" @click=${closeModal} style="position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:999;display:flex;align-items:center;justify-content:center;">
-        <div class="modal-content" @click=${(e: Event) => e.stopPropagation()}
-          style="background:var(--bg-card, #1e1e24);border:1px solid var(--border, #3a3a44);border-radius:8px;width:100%;max-width:640px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 12px 36px rgba(0,0,0,0.5);overflow:hidden;">
-          
-          <div style="padding:14px 18px;border-bottom:1px solid var(--border, #333);display:flex;align-items:center;justify-content:space-between;">
-            <div>
-              <h3 style="margin:0;font-size:1.1rem;display:flex;align-items:center;gap:8px;">
-                <span>System Prefixes</span>
-                <span class="chip" style="font-size:0.75rem;font-weight:normal;">${modelName}</span>
-              </h3>
-              <p style="margin:3px 0 0;font-size:0.78rem;color:var(--text-muted, #888);">
-                Dynamic persona routing: Laya selects the best prefix based on query criteria. Injected tokens are discounted from client billing.
-              </p>
+          <div class="modal-backdrop modal-bg" @click=${closeModal}>
+            <div class="modal-content modal" @click=${(e: Event) => e.stopPropagation()}>
+              <div class="modal-header">
+                <div>
+                  <h3 style="margin:0;font-size:1.1rem;display:flex;align-items:center;gap:8px;">
+                    <span>System Prefixes</span>
+                    <span class="chip" style="font-size:0.75rem;font-weight:normal;">${modelName}</span>
+                  </h3>
+                  <p style="margin:3px 0 0;font-size:0.78rem;color:var(--color-text-muted, #888);">
+                    Dynamic persona routing: Laya selects the best prefix based on query criteria. Injected tokens are discounted from client billing.
+                  </p>
+                </div>
+                <button type="button" class="small close-btn" @click=${closeModal} aria-label="Close">
+                  ${icons.close()}
+                </button>
+              </div>
+
+              <div class="modal-body" style="padding:16px 18px;overflow-y:auto;flex:1;">
+                ${listHtml}
+                ${createFormHtml}
+              </div>
+
+              <div class="modal-footer">
+                <button type="button" class="primary" @click=${closeModal}>
+                  Done
+                </button>
+              </div>
             </div>
-            <button type="button" class="small close-btn" @click=${closeModal} style="background:none;border:none;cursor:pointer;color:var(--text-muted, #888);">
-              ${icons.close()}
-            </button>
           </div>
-
-          <div style="padding:16px 18px;overflow-y:auto;flex:1;">
-            ${listHtml}
-            ${createFormHtml}
-          </div>
-
-          <div style="padding:12px 18px;border-top:1px solid var(--border, #333);display:flex;justify-content:flex-end;">
-            <button type="button" class="primary" @click=${closeModal}>
-              Done
-            </button>
-          </div>
-        </div>
-      </div>
     `;
 
     render(template, wrapper);

@@ -888,5 +888,8 @@
   "grid.menu.copy_endpoint": "Copy host:port",
   "proxies.bulk.delete_confirm_title": "Delete {{n}} proxies?",
   "proxies.bulk.delete_confirm_message": "Proxies: {{list}}",
-  "proxies.bulk.partial_error": "Failed to delete: {{list}}"
+  "proxies.bulk.partial_error": "Failed to delete: {{list}}",
+  "debug_logs.grid.copy_selected": "Copy selected Markdown",
+  "proxy_sources.grid.title": "Proxy Sources",
+  "proxy_sources.grid.empty": "No proxy sources configured yet."
 }

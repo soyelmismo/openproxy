@@ -107,6 +107,12 @@ export function areaFill(
     const g = (n >> 8) & 255;
     const b = n & 255;
     const { top, height } = u.bbox;
+    // Empty charts (no data yet, or a zero-size plot) carry a non-finite or
+    // degenerate bbox; createLinearGradient throws on NaN, so fall back to a
+    // flat fill until the chart has a real plotting area.
+    if (!Number.isFinite(top) || !Number.isFinite(height) || height <= 0) {
+      return "rgba(" + r + ", " + g + ", " + b + ", " + topAlpha + ")";
+    }
     const grad = u.ctx.createLinearGradient(0, top, 0, top + height);
     grad.addColorStop(0, "rgba(" + r + ", " + g + ", " + b + ", " + topAlpha + ")");
     grad.addColorStop(1, "rgba(" + r + ", " + g + ", " + b + ", 0)");

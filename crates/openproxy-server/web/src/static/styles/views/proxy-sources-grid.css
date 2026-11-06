@@ -1,0 +1,61 @@
+/* Free proxy sources data-grid styles */
+
+.proxy-sources-table .source-name-text {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.proxy-sources-table .source-url-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.proxy-sources-table .source-url-text:hover {
+  text-decoration: underline;
+}
+
+.proxy-sources-table .source-priority-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.proxy-sources-table .source-pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-soft);
+  color: var(--color-text-muted);
+}
+
+.proxy-sources-table .source-pill.success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.proxy-sources-table .source-pill.danger {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.proxy-sources-table .source-reorder-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+.proxy-sources-table .source-reorder-btn:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}

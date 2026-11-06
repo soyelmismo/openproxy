@@ -71,9 +71,18 @@ function onSetApiKeyFilter(keyId: string): void {
   filterApiKeyId = keyId; frozenLogsSnapshot = null; state.logs.page = 1; state.logs.followTail = true; requestUpdate();
 }
 
+// One render per frame no matter how fast the WS bursts: dispatches are
+// cheap, but a full view re-render per message during traffic bursts janks
+// scrolling. Messages land immediately (order preserved), the view paints
+// at most once per animation frame.
+let logsFrameQueued = false;
+
 function handleLogsMessage(event: MessageEvent): void {
   if (isPaused) return;
-  try { liveLogsStore.dispatch(JSON.parse(event.data) as WsEnvelope); requestUpdate(); } catch { /* ignore */ }
+  try { liveLogsStore.dispatch(JSON.parse(event.data) as WsEnvelope); } catch { /* ignore */ }
+  if (logsFrameQueued) return;
+  logsFrameQueued = true;
+  requestAnimationFrame(() => { logsFrameQueued = false; requestUpdate(); });
 }
 
 function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; requestId?: string; traceId?: string; error?: string | null; statusCode?: number | null; terminalKind?: string | null; apiKeyId?: number | null }): boolean {

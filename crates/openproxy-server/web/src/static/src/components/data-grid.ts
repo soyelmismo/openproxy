@@ -98,6 +98,10 @@ interface GridState {
 }
 
 const states = new Map<string, GridState>();
+/** Last post-render refresh per grid root: rows reference + box. A render
+ *  that did not replace the rows array (most live-update re-renders) cannot
+ *  have changed any cell width, so the refresh is skipped entirely. */
+const lastRefresh = new WeakMap<HTMLElement, { rows: unknown; w: number; h: number }>();
 const observed = new WeakMap<HTMLElement, ResizeObserver>();
 
 /** Re-run layout whenever the grid's box changes — tile resizes land here. */
@@ -148,6 +152,22 @@ function cellContent<T>(col: GridColumn<T>, row: T): TemplateResult {
  *
  *  The pass is idempotent: every run rebuilds the active set from scratch,
  *  unfolding as the tile grows and refolding as it narrows. */
+/**
+ * Read-only column sizing.
+ *
+ * The engine never invalidates layout to measure: scrollWidth of a
+ * nowrap, overflow-hidden cell is the FULL content width even when the
+ * cell is visually clipped by its track or folded into a 0px column, so
+ * every width comes from one batched read pass over the cells that are
+ * already on screen. Folding is then pure arithmetic over those numbers,
+ * and the resulting pixel template is written once, and only when it
+ * actually differs from the one applied.
+ *
+ * (The previous two-pass design laid out an all-max-content template to
+ * measure, then re-laid-out per fold step: the forward feedback with the
+ * ResizeObserver on top of analytics' periodic re-renders spent 4.1
+ * seconds of a 5-second idle window in this function on a single grid.)
+ */
 function measureAndSize(root: HTMLElement): void {
   const headEl = root.querySelector<HTMLElement>(".dg-head");
   const rowEls = Array.from(root.querySelectorAll<HTMLElement>(".dg-row"));
@@ -162,42 +182,22 @@ function measureAndSize(root: HTMLElement): void {
     Array.from(scope.querySelectorAll<HTMLElement>(":scope > .dg-col"))
   );
 
-  const wrap = root.querySelector<HTMLElement>(".dg-wrap");
-  if (!wrap) return;
-
-  // Every .dg-row is its own grid container, so tracks must be FIXED pixels
-  // for the whole grid: native max-content tracks resolve per container and
-  // headers drift away from body cells. Pass 1 lays everything out with an
-  // all-max-content template purely to let the browser compute each column's
-  // natural width; pass 2 freezes the survivors to px (identical on every
-  // row) and folds the rest to 0px tracks with visibility:hidden - folded
-  // cells keep their auto-placement slot, so the column mapping survives any
-  // re-render without bookkeeping.
-  const applyTracks = (tpl: string[], hidden: number[]): void => {
-    root.style.setProperty("--dg-cols", tpl.join(" "));
-    for (let i = 0; i < n; i++) {
-      const on = !hidden.includes(i);
-      for (const cells of slides) {
-        if (!cells[i]) continue;
-        cells[i]!.style.visibility = on ? "" : "hidden";
-      }
-    }
-  };
-
-  // Pass 1: everything visible at max-content.
-  applyTracks(Array.from({ length: n }, () => "max-content"), []);
-  void wrap.offsetWidth; // force layout before measuring
-
+  // One batched read: the natural width of every column is the widest
+  // cell content. Read from the .dg-inner box, never the cell: the cell
+  // fills its track, so ITS scrollWidth would report the track width and
+  // tracks would never shrink; the inner shrink-to-fit box reports the
+  // true content width regardless of the track it sits in.
   const natural: number[] = new Array(n).fill(0);
   for (const cells of slides) {
     for (let i = 0; i < n && i < cells.length; i++) {
-      const w = cells[i]!.getBoundingClientRect().width;
+      const inner = (cells[i]!.firstElementChild as HTMLElement) ?? cells[i]!;
+      const w = inner.scrollWidth;
       if (w > natural[i]!) natural[i] = w;
     }
   }
 
-  // The quick-actions column is intrinsic: its buttons cannot shrink, so its
-  // floor is its own natural width, and it never folds.
+  // The quick-actions column is intrinsic: its buttons cannot shrink, so
+  // its floor is its own natural width, and it never folds.
   const floor: number[] = natural.map((_, i) => Math.max(mins[i] ?? 0, 24));
   const foldRank: number[] = natural.map((_, i) => folds[i] ?? 0);
   if (root.querySelector(".dg-row .dg-actions")) {
@@ -205,9 +205,8 @@ function measureAndSize(root: HTMLElement): void {
     foldRank[n - 1] = 0;
   }
 
-  // Fold rank 1 first, 2 next, ... until what remains fits the tile with the
-  // elastic column at its floor. Folding is driven by one real number - does
-  // the wrap overflow - never by breakpoints.
+  // Fold rank 1 first, 2 next, ... until what remains fits the tile with
+  // the elastic column at its floor. Pure arithmetic - no DOM inside.
   const active: number[] = Array.from({ length: n }, (_, i) => i);
   const needed = (list: number[]): number =>
     list.reduce((a, i) => a + (i === elastic ? floor[i]! : natural[i]!), 0);
@@ -224,29 +223,26 @@ function measureAndSize(root: HTMLElement): void {
     active.splice(active.indexOf(victim), 1);
   }
 
-  // Pass 2: freeze survivors to px, fold the rest to 0px tracks. The
-  // needed() estimate rounds, so after applying the template the wrap is
-  // re-checked for REAL overflow and another column folds if the rounded
-  // tracks actually spill - the layout is self-correcting.
-  let hidden: number[] = [];
-  for (let i = 0; i < n; i++) if (!active.includes(i)) hidden.push(i);
-  const buildTpl = (): string[] => Array.from({ length: n }, (_, i) =>
-    hidden.includes(i) ? "0px"
-      : i === elastic ? `minmax(${Math.ceil(floor[i]!)}px, 1fr)`
-      : `${Math.ceil(natural[i]!)}px`
-  );
-  for (let guard = 0; guard < n; guard++) {
-    applyTracks(buildTpl(), hidden);
-    void wrap.offsetWidth;
-    if (wrap.scrollWidth <= wrap.clientWidth) break;
-    let victim = -1, victimRank = Number.POSITIVE_INFINITY;
-    for (const i of active) {
-      if (i === elastic || hidden.includes(i)) continue;
-      const r = foldRank[i]!;
-      if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
+  // Survivors to px (identical on every row, so headers and body share one
+  // grid mapping), the elastic column to minmax(floor, 1fr), folded columns
+  // to 0px tracks with visibility:hidden (auto-placement keeps the column
+  // mapping stable across re-renders). Written only when it differs.
+  const tpl = Array.from({ length: n }, (_, i) => {
+    if (!active.includes(i)) return "0px";
+    return i === elastic
+      ? `minmax(${Math.ceil(floor[i]!)}px, 1fr)`
+      : `${Math.ceil(natural[i]!)}px`;
+  });
+  const tplStr = tpl.join(" ");
+  if (root.style.getPropertyValue("--dg-cols") === tplStr) return;
+
+  root.style.setProperty("--dg-cols", tplStr);
+  for (let i = 0; i < n; i++) {
+    const on = active.includes(i);
+    for (const cells of slides) {
+      if (!cells[i]) continue;
+      cells[i]!.style.visibility = on ? "" : "hidden";
     }
-    if (victim === -1) break;
-    hidden.push(victim);
   }
 }
 
@@ -303,7 +299,18 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
   const findRow = (key: string): T | undefined => rows.find((r) => String(props.rowKey(r)) === key);
   // The template function runs before lit commits the DOM; the microtask
   // render lands first, so a zero-delay timeout measures the committed tree.
-  setTimeout(() => refreshDataGridLayout(props.id), 0);
+  {
+    const rowsRef: unknown = props.rows;
+    setTimeout(() => {
+      const root = document.querySelector<HTMLElement>(`[data-grid-id="${props.id}"]`);
+      if (!root || !root.isConnected) return;
+      const w = root.clientWidth, h = root.clientHeight;
+      const last = lastRefresh.get(root);
+      if (last && last.rows === rowsRef && last.w === w && last.h === h) return;
+      lastRefresh.set(root, { rows: rowsRef, w, h });
+      requestAnimationFrame(() => measureAndSize(root));
+    }, 0);
+  }
 
   const rowsTpl = rows.map((row, idx) => {
     const key = String(props.rowKey(row));
