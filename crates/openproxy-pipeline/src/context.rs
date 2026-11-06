@@ -29,6 +29,9 @@ pub struct PipelineContext {
 
     // State passed between inner stages
     pub resolved_timeouts: Option<crate::timeouts::Timeouts>,
+    /// Resolved TTFT ceiling BEFORE the predictive budget shortened it.
+    /// The executor retry loop uses it to cap the anti-flapping bump.
+    pub ttft_ceiling_ms: Option<u64>,
     pub target_format: Option<openproxy_types::TargetFormat>,
     pub body_bytes: Option<bytes::Bytes>,
     pub is_streaming: Option<bool>,
@@ -53,6 +56,7 @@ impl PipelineContext {
             trace_id,
             started: None,
             resolved_timeouts: None,
+            ttft_ceiling_ms: None,
             target_format: None,
             body_bytes: None,
             is_streaming: None,

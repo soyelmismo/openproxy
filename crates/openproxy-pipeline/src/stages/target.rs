@@ -150,10 +150,15 @@ async fn try_proactive_oauth_refresh(
 pub struct TimeoutResolutionStage;
 
 /// Adaptive TTFT budget for one target (see `crate::latency_budget`):
-/// shortens the resolved TTFT to `mean + 3σ + 1s` learned from recent
-/// successful requests of the same (provider, model_row), bucketed by
-/// prompt size. The predictor only shortens: antigravity keeps its thinking
-/// floor and model overrides act as a hard ceiling.
+/// shortens the resolved TTFT to the learned per-bucket budget (`max(mean +
+/// 3σ, p99) + 1s`) of recent successful requests of the same (provider,
+/// model_row). No provider is excluded: antigravity's resolved timeout
+/// already carries the 120s thinking floor, which acts as the natural
+/// ceiling - a thinking target whose learned budget reaches it is simply
+/// not predicted, while fast non-thinking targets get cut promptly when
+/// they hang. The predictor only shortens: model overrides and provider
+/// floors act as hard ceilings, and cuts relax the next budget by 1.5x
+/// (anti-starvation, see the executor retry loop).
 pub(crate) fn apply_predictive_ttft_budget(
     pipeline: &crate::Pipeline,
     req: &crate::PipelineRequest,
@@ -162,9 +167,6 @@ pub(crate) fn apply_predictive_ttft_budget(
     model: &openproxy_types::models::Model,
     mut resolved: crate::timeouts::Timeouts,
 ) -> crate::timeouts::Timeouts {
-    if provider_str == "antigravity" || provider_str == "agy" {
-        return resolved;
-    }
     let effective_messages = req
         .compressed_messages
         .get()
@@ -173,16 +175,16 @@ pub(crate) fn apply_predictive_ttft_budget(
         .unwrap_or_else(|| req.openai_request.messages.clone());
     let est_prompt_tokens =
         openproxy_compression::token_estimate::estimate_prompt_tokens(&effective_messages).max(1);
-    let budget_ms = {
-        let conn = pipeline.conn.lock();
-        pipeline.latency_budget.ttft_budget_ms(
-            &conn,
-            provider_str,
-            model.row_id,
-            est_prompt_tokens,
-            resolved.ttft.as_millis() as u64,
-        )
-    };
+    let budget_ms = pipeline.latency_budget.ttft_budget_ms(
+        provider_str,
+        model.row_id,
+        est_prompt_tokens,
+        resolved.ttft.as_millis() as u64,
+        // The shared connection is only locked in sync mode (no DB pool,
+        // i.e. tests); in production the hot path never touches it
+        // (correction 4).
+        Some(&pipeline.conn),
+    );
     if let Some(budget_ms) = budget_ms {
         if (budget_ms as u128) < resolved.ttft.as_millis() {
             openproxy_types::emit_stage_event!(
@@ -233,6 +235,10 @@ impl PipelineStage for TimeoutResolutionStage {
         if provider_str == "antigravity" || provider_str == "agy" {
             resolved_timeouts = timeouts::apply_antigravity_floor(resolved_timeouts);
         }
+
+        // Remember the resolved ceiling (pre-predictor) so the executor
+        // retry bump (anti-flapping, correction 8) can cap itself.
+        ctx.ttft_ceiling_ms = Some(resolved_timeouts.ttft.as_millis() as u64);
 
         resolved_timeouts = apply_predictive_ttft_budget(
             &ctx.pipeline,

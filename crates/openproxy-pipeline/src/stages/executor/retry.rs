@@ -280,6 +280,37 @@ pub(super) async fn run_target_with_retries(
         if ctx.req.has_stream_output() {
             break;
         }
+        // Predictive TTFT cut (anti-flapping, correction 8): before rotating,
+        // give this same target a genuinely larger budget (x 1.5, capped at
+        // the resolved ceiling) and note the cut so the very next budget of
+        // this target relaxes geometrically (correction 1). Global timeouts
+        // (ms == ceiling) keep the stock retry behaviour untouched.
+        if let CoreError::UpstreamTimeout { phase, ms } = e {
+            if phase == "headers" {
+                if let Some(ceiling_ms) = ctx.ttft_ceiling_ms {
+                    if (*ms as u64) < ceiling_ms {
+                        ctx.pipeline.latency_budget.note_censored(
+                            target.target.provider_id.as_str(),
+                            target.model.row_id,
+                            *ms,
+                        );
+                        if let Some(to) = ctx.resolved_timeouts.as_mut() {
+                            let relaxed = ((*ms as f64) * 1.5) as u64;
+                            let next = relaxed.max(to.ttft.as_millis() as u64).min(ceiling_ms);
+                            to.ttft = std::time::Duration::from_millis(next);
+                            tracing::debug!(
+                                target_id = target.target.id.0,
+                                provider = %target.target.provider_id,
+                                cut_ms = ms,
+                                next_ttft_ms = next,
+                                ceiling_ms,
+                                "predictive ttft cut: retrying same target with relaxed budget"
+                            );
+                        }
+                    }
+                }
+            }
+        }
         match perform_retry_iteration(ctx, combo, target, &mut state, e, overall_attempt).await {
             RetryStep::Done(r) => {
                 result = r;

@@ -41,8 +41,8 @@ fn seed_usage(conn: &rusqlite::Connection, provider: &str, model_row: i64, ttfts
     for ttft in ttfts {
         conn.execute(
             "INSERT INTO usage (request_id, trace_id, attempt, provider_id, upstream_model_id, \
-                 status_code, ttft_ms, prompt_tokens, created_at) \
-             VALUES ('r', 't', 1, ?1, 'm', 200, ?2, 2000, datetime('now'))",
+                 status_code, ttft_ms, prompt_tokens, prompt_tokens_estimated, created_at) \
+             VALUES ('r', 't', 1, ?1, 'm', 200, ?2, 2000, 1, datetime('now'))",
             rusqlite::params![provider, ttft],
         )
         .unwrap();
@@ -56,20 +56,39 @@ fn seed_usage(conn: &rusqlite::Connection, provider: &str, model_row: i64, ttfts
     .unwrap();
 }
 
-fn setup(pool_tag: &str, provider: &str, row_id: i64, ttfts: &[i64]) -> (Pipeline, PipelineRequest) {
+/// Builds the pipeline with its own test DB. The rows are seeded directly
+/// through the pipeline's predictor (`warm_target`-style) so the sync test
+/// path is deterministic: the pipeline runs in pool mode, whose hot path
+/// refreshes in the background.
+fn setup(
+    pool_tag: &str,
+    provider: &str,
+    row_id: i64,
+    ttfts: &[i64],
+) -> (Pipeline, PipelineRequest) {
     let pool = openproxy_db::DbPool::test_pool_with_prefix(&format!("openproxy-{pool_tag}"))
         .expect("pool");
-    let conn = Arc::new(parking_lot::Mutex::new(
-        pool.open_connection().expect("conn"),
-    ));
-    if !ttfts.is_empty() {
-        let c = conn.lock();
-        seed_usage(&c, provider, row_id, ttfts);
+    {
+        let conn = pool.open_connection().expect("conn");
+        if !ttfts.is_empty() {
+            seed_usage(&conn, provider, row_id, ttfts);
+        }
     }
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().expect("master key"));
     let mut config = test_utils::test_config(master_key);
     config.defaults = stage_with_defaults();
     let pipeline = test_utils::test_pipeline_with_pool(pool, config);
+    // Warm the predictor's snapshot from the seeded rows (test helper; the
+    // production hot path uses the background refresh instead).
+    if !ttfts.is_empty() {
+        let conn = pipeline
+            .db_pool
+            .as_ref()
+            .expect("pipeline carries its pool")
+            .open_connection()
+            .expect("conn");
+        pipeline.latency_budget.warm_target(&conn, provider, row_id);
+    }
     let (req, _tx) = test_utils::make_request(ComboId(1));
     (pipeline, req)
 }
@@ -119,10 +138,19 @@ fn never_extends_below_resolved_timeout() {
     assert_eq!(out.ttft, Duration::from_secs(8), "override is the ceiling");
 }
 
+/// Correction 7: antigravity is no longer excluded. Its resolved timeout
+/// already carries the 120s thinking floor, which acts as the natural
+/// ceiling - a fast non-thinking antigravity target gets its learned budget
+/// applied inside it.
 #[test]
-fn antigravity_is_never_predicted() {
+fn antigravity_fast_targets_get_predicted_inside_the_floor() {
     let (pipeline, req) = setup("lb-agy", "antigravity", 5, &[2_000i64; 20]);
-    let mut resolved = crate::timeouts::apply_antigravity_floor(stage_with_defaults());
+    let resolved = crate::timeouts::apply_antigravity_floor(stage_with_defaults());
+    assert_eq!(
+        resolved.ttft,
+        Duration::from_millis(crate::timeouts::ANTIGRAVITY_MIN_TIMEOUT_MS),
+        "floor applied before the predictor"
+    );
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
@@ -131,17 +159,46 @@ fn antigravity_is_never_predicted() {
         &make_model("antigravity", 5),
         resolved,
     );
-    resolved.ttft = out.ttft;
+    // mean 2s, sigma 0 -> 3s, floored to 5s: cut from 120s to 5s. A hung
+    // non-thinking antigravity attempt no longer waits the whole floor.
+    assert_eq!(
+        out.ttft,
+        Duration::from_secs(5),
+        "fast antigravity target predicted inside its floor"
+    );
+}
+
+/// A target whose learned budget would reach the ceiling is not predicted
+/// (thinking antigravity): same behaviour as today.
+#[test]
+fn antigravity_thinking_budget_reaching_floor_is_not_predicted() {
+    let (pipeline, req) = setup("lb-agy-think2", "antigravity", 7, &[125_000i64; 20]);
+    let resolved = crate::timeouts::apply_antigravity_floor(stage_with_defaults());
+    let out = apply_predictive_ttft_budget(
+        &pipeline,
+        &req,
+        "antigravity",
+        &make_target("antigravity", 7),
+        &make_model("antigravity", 7),
+        resolved,
+    );
+    // 125s norm + 1s margin > 120s ceiling -> the budget would extend the
+    // timeout, so the predictor stays silent and the floor stands.
     assert_eq!(
         out.ttft,
         Duration::from_millis(crate::timeouts::ANTIGRAVITY_MIN_TIMEOUT_MS),
-        "antigravity floor untouched"
+        "a 125s norm reaches the ceiling: predictor silent, floor intact"
     );
 }
 
 #[test]
 fn jittery_target_gets_more_headroom_than_steady() {
-    let (pipeline, req) = setup("lb-jit", "jit", 3, &[500i64, 1_000, 1_500, 2_000, 2_500, 3_000, 4_000, 5_500]);
+    let (pipeline, req) = setup(
+        "lb-jit",
+        "jit",
+        3,
+        &[500i64, 1_000, 1_500, 2_000, 2_500, 3_000, 4_000, 5_500],
+    );
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
@@ -152,4 +209,19 @@ fn jittery_target_gets_more_headroom_than_steady() {
     );
     // mean 2500, sigma ~1591 -> 2500 + 4774 + 1000 = 8274ms.
     assert!(out.ttft >= Duration::from_millis(8_000) && out.ttft <= Duration::from_millis(9_000));
+}
+
+/// An empty database (fresh boot) must not panic and must not predict.
+#[test]
+fn empty_database_never_panics() {
+    let (pipeline, req) = setup("lb-empty", "ghost", 1, &[]);
+    let out = apply_predictive_ttft_budget(
+        &pipeline,
+        &req,
+        "ghost",
+        &make_target("ghost", 1),
+        &make_model("ghost", 1),
+        stage_with_defaults(),
+    );
+    assert_eq!(out.ttft, Duration::from_secs(60));
 }

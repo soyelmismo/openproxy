@@ -284,6 +284,8 @@ impl Pipeline {
             Arc::clone(&record_bodies_and_headers),
         );
         dispatcher.message_threads = Some(Arc::clone(&message_threads));
+        let latency_budget =
+            crate::latency_budget::LatencyBudget::with_pool_if_present(&db_pool);
         Self {
             conn,
             db_pool,
@@ -295,7 +297,7 @@ impl Pipeline {
             predictive_limiter,
             session_affinity,
             message_threads,
-            latency_budget: crate::latency_budget::LatencyBudget::new(),
+            latency_budget,
             tracker,
             dispatcher,
             repo,
