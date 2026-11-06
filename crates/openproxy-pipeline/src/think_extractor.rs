@@ -84,6 +84,7 @@ fn process_choice_think(choice: &mut crate::translation::Choice) {
     }
     // Mitigate upstream AutoClaw false positive safety filter where content is "DANGEROUS_ACTIVITY_BLOCKED"
     // but the model reasoned normally.
+    #[allow(clippy::collapsible_if)]
     if let Some(serde_json::Value::String(content_str)) = &choice.message.content {
         if content_str.trim() == "DANGEROUS_ACTIVITY_BLOCKED" {
             let reasoning = choice
@@ -148,6 +149,7 @@ pub fn extract_think_from_response_value(mut val: serde_json::Value) -> serde_js
         if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
             continue;
         }
+        #[allow(clippy::collapsible_if)]
         if let Some(content) = message.get("content").and_then(serde_json::Value::as_str) {
             if content.trim() == "DANGEROUS_ACTIVITY_BLOCKED" {
                 let reasoning = message

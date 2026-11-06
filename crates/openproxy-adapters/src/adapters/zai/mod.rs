@@ -218,7 +218,7 @@ impl ProviderAdapter for ZaiAdapter {
                         m.get("role").and_then(|r| r.as_str()) == Some("system")
                             && m.get("content")
                                 .and_then(|c| c.as_str())
-                                .map_or(false, |c| c.starts_with("You are AutoClaw."))
+                                .is_some_and(|c| c.starts_with("You are AutoClaw."))
                     });
                     if !has_autoclaw_prefix {
                         if let Some(first_sys) = messages
@@ -249,7 +249,11 @@ impl ProviderAdapter for ZaiAdapter {
                 if k.eq_ignore_ascii_case("x-authorization") || k.eq_ignore_ascii_case("x-api-key")
                 {
                     while v.starts_with("Bearer Bearer ") {
-                        *v = v.strip_prefix("Bearer ").unwrap().to_string();
+                        if let Some(stripped) = v.strip_prefix("Bearer ") {
+                            *v = stripped.to_string();
+                        } else {
+                            break;
+                        }
                     }
                 }
             }

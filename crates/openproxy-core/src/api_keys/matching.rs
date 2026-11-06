@@ -114,6 +114,7 @@ impl ApiKey {
             return false;
         }
 
+        #[allow(clippy::let_and_return)]
         let provider_allowed =
             !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
                 && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
