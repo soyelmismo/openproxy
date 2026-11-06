@@ -481,10 +481,10 @@ body[data-view="logs"] #main {
 .logs-filter-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
   flex-wrap: wrap;
   margin-bottom: var(--space-2);
-  padding: var(--space-2);
+  padding: 6px;
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border-soft);
   border-radius: var(--radius-md);
@@ -498,7 +498,7 @@ body[data-view="logs"] #main {
   align-items: center;
   flex: 1 1 240px;
   min-width: 200px;
-  height: 28px;
+  height: 26px;
   box-sizing: border-box;
 }
 .logs-search-icon {
@@ -582,7 +582,7 @@ body[data-view="logs"] #main {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  height: 28px;
+  height: 26px;
   box-sizing: border-box;
   padding: 0 0.65rem;
   font-size: var(--fs-xs);
@@ -613,7 +613,7 @@ body[data-view="logs"] #main {
   font-weight: 600;
 }
 .logs-key-filter {
-  height: 28px;
+  height: 26px;
   box-sizing: border-box;
   padding: 0 0.65rem;
   font-size: var(--fs-xs);
@@ -630,6 +630,41 @@ body[data-view="logs"] #main {
   outline-offset: 0;
   border-color: var(--color-primary);
   box-shadow: none;
+}
+
+/* Narrow tiles: one row cannot hold search + pills + the API-key selector, and
+   the natural wrap puts each on its own line. Give the search box and the key
+   selector the first row and force the status pills onto the second, so the
+   toolbar is two rows instead of three. The pills scroll rather than wrap, so
+   the row count never grows on its own. */
+@container tile-view (max-width: 840px) {
+  .logs-search-box {
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .logs-key-filter {
+    order: 2;
+    flex: 0 0 auto;
+  }
+
+  .logs-status-filters {
+    order: 3;
+    flex: 1 1 100%;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .logs-status-filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .logs-status-filters .logs-filter-btn {
+    flex-shrink: 0;
+  }
 }
 
 
