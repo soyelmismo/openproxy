@@ -68,7 +68,7 @@ test.describe('API keys CRUD', () => {
       expect(prefix).not.toBe(plaintext);
 
       await page.getByRole('button', { name: "I've saved it" }).click();
-      const row = page.locator('tr[data-row-key]').filter({ hasText: label });
+      const row = page.locator('[data-row-key]').filter({ hasText: label });
       await expect(row).toHaveCount(1);
       await expect(page.locator('.keys-table')).toContainText(prefix);
       await expect(page.locator('.keys-table')).not.toContainText(plaintext);
@@ -102,7 +102,7 @@ test.describe('API keys CRUD', () => {
       });
       expect(persistedBody).not.toHaveProperty('plaintext');
 
-      const editedRow = page.locator('tr[data-row-key]').filter({ hasText: editedLabel });
+      const editedRow = page.locator('[data-row-key]').filter({ hasText: editedLabel });
       await expect(editedRow).toHaveCount(1);
       await editedRow.getByRole('button', { name: 'Delete' }).click();
       const confirmDialog = page.locator('#show-confirm-dialog');

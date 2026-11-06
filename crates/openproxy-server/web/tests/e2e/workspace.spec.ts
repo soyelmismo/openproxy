@@ -138,7 +138,7 @@ test('API keys appear in context and edit in an integrated properties view with 
     await expect(frame.getByLabel('Label', { exact: true })).toHaveValue(`${label}-edited`);
     await frame.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(page).toHaveURL(/#\/keys$/);
-    const row = frame.locator('tr').filter({ hasText: `${label}-edited` });
+    const row = frame.locator('[data-row-key]').filter({ hasText: `${label}-edited` });
     await row.getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`#/keys/${id}$`));
     await expect(frame.locator('.key-detail')).toBeVisible();

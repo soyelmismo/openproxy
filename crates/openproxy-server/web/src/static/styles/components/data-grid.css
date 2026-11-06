@@ -1,0 +1,304 @@
+/* Data grid — dense one-line rows with measured columns and hover actions.
+   No width breakpoints: the grid template is computed from content in
+   data-grid.ts and applied through --dg-cols. */
+
+.dg {
+  outline: none;
+}
+
+.dg-wrap {
+  position: relative;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.dg-head,
+.dg-row {
+  display: grid;
+  grid-template-columns: var(--dg-cols, none);
+  align-items: center;
+  column-gap: 10px;
+  padding: 0 10px;
+}
+
+.dg-head {
+  height: 26px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  position: sticky;
+  top: 0;
+  background: var(--color-surface);
+}
+
+.dg-row {
+  height: 32px;
+  border-bottom: 1px solid var(--color-border-soft);
+  cursor: default;
+}
+
+.dg-row:last-of-type {
+  border-bottom: 0;
+}
+
+.dg-row:hover {
+  background: color-mix(in oklab, var(--color-primary) 7%, transparent);
+}
+
+.dg-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--color-primary);
+}
+
+.dg-row.sel {
+  background: color-mix(in oklab, var(--color-primary) 18%, transparent);
+}
+
+.dg-row.sel:hover {
+  background: color-mix(in oklab, var(--color-primary) 24%, transparent);
+}
+
+.dg-row.editing {
+  background: color-mix(in oklab, var(--color-primary) 12%, transparent);
+}
+
+.dg-col {
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* scrollWidth of this inner div is the content's natural width — the whole
+   measurement scheme depends on it staying nowrap and overflow-hidden. */
+.dg-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+}
+
+.dg-head .dg-inner {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-weight: 600;
+}
+
+.dg-inner code,
+.dg-inner .dg-mono {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* Bare state dot — the word lives in title/aria-label, consistent with the
+   connection badge in the logs view. */
+.dg-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+
+.dg-dot.on {
+  background: var(--color-success);
+}
+
+.dg-dot.off {
+  background: var(--color-error);
+}
+
+.dg-inner .chip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dg-inner .dg-dim {
+  color: var(--color-text-muted);
+}
+
+.dg-rename {
+  width: 100%;
+  min-width: 80px;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+
+/* Quick actions: hidden until the row is hovered, focused or selected. */
+.dg-actions {
+  text-align: right;
+}
+
+.dg-actions .dg-inner {
+  justify-content: flex-end;
+}
+
+.dg-qa {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+
+.dg-qa svg {
+  width: 13px;
+  height: 13px;
+}
+
+.dg-row:hover .dg-qa,
+.dg-row:focus-within .dg-qa,
+.dg-row.sel .dg-qa {
+  opacity: 1;
+}
+
+.dg-qa:hover {
+  background: color-mix(in oklab, var(--color-text) 12%, transparent);
+  color: var(--color-text);
+}
+
+.dg-qa.danger:hover {
+  color: var(--color-error);
+  background: color-mix(in oklab, var(--color-error) 14%, transparent);
+}
+
+.dg-empty {
+  padding: 18px 12px;
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  text-align: left;
+}
+
+/* Selection bulk bar — floats over the top-right of the list so it is
+   reachable without scrolling to the bottom. */
+.dg-bulk {
+  position: absolute;
+  top: 34px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
+  z-index: 30;
+}
+
+.dg-bulk-n {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.dg-bulk button {
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 3px 10px;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dg-bulk button:hover {
+  background: color-mix(in oklab, var(--color-primary) 16%, transparent);
+}
+
+.dg-bulk button.danger {
+  color: var(--color-error);
+  border-color: color-mix(in oklab, var(--color-error) 45%, transparent);
+}
+
+.dg-bulk button.danger:hover {
+  background: color-mix(in oklab, var(--color-error) 16%, transparent);
+}
+
+.dg-bulk button.ghost {
+  border-style: dashed;
+  color: var(--color-text-muted);
+}
+
+/* Context menu — shared by every surface that calls openContextMenu(). */
+.ctx-menu {
+  position: fixed;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  z-index: var(--z-modal, 900);
+}
+
+.ctx-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx-menu button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-primary) 16%, transparent);
+}
+
+.ctx-menu button.danger {
+  color: var(--color-error);
+}
+
+.ctx-menu button.danger:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-error) 16%, transparent);
+}
+
+.ctx-menu button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.ctx-menu button kbd {
+  margin-left: auto;
+  font: 400 10.5px/1 var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.ctx-menu hr {
+  margin: 4px 2px;
+  border: 0;
+  border-top: var(--border-w) var(--border-style) var(--color-border);
+}

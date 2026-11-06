@@ -875,5 +875,14 @@
   "workspace.preset.routing_desk": "Routing desk",
   "workspace.preset.observe_inspect": "Observe & inspect",
   "workspace.preset.operations": "Operations",
-  "workspace.preset.overview_grid": "Overview grid"
+  "workspace.preset.overview_grid": "Overview grid",
+  "grid.menu.rename": "Rename",
+  "grid.menu.copy_prefix": "Copy prefix",
+  "grid.menu.properties": "Properties",
+  "grid.toast.copied": "Copied to clipboard",
+  "grid.bulk.selected": "{{n}} selected",
+  "keys.list.bulk.only_session": "Every selected key is the current session key; nothing was deleted.",
+  "keys.list.bulk.confirm_delete.title": "Delete {count} keys?",
+  "keys.list.bulk.confirm_delete.message": "This permanently deletes: {list}",
+  "keys.list.bulk.partial_error": "Could not delete: {list}"
 }
