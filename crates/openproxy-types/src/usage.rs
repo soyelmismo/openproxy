@@ -52,6 +52,11 @@ pub struct UsageInput {
     /// the quantity the per-hour audio rate multiplies.
     #[serde(default)]
     pub audio_ms: Option<u32>,
+    /// 64-bit session fingerprint (see `SessionAffinityRegistry::extract_session_hash`).
+    /// Lets the adaptive TTFT predictor learn a per-session regime alongside the
+    /// per-target global one. NULL when the request carries no session identity.
+    #[serde(default)]
+    pub session_hash: Option<u64>,
 }
 
 mod optional_bytes {
@@ -577,6 +582,7 @@ mod tests {
             proxy_status: None,
             flags: 0,
             audio_ms: None,
+            session_hash: None,
         };
 
         assert!(!input.has_flag(USAGE_FLAG_IS_STREAMING));

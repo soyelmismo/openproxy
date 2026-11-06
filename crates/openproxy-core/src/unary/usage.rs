@@ -245,6 +245,7 @@ fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
         flags: openproxy_types::usage::USAGE_FLAG_CLIENT_RESPONSE,
         endpoint_kind: args.endpoint_kind,
         audio_ms: args.audio_ms,
+        session_hash: None,
     }
 }
 

@@ -431,6 +431,7 @@ async fn record_model_not_found_usage_row(
         endpoint_kind: openproxy_types::EndpointKind::Chat,
         flags: USAGE_FLAG_CLIENT_RESPONSE,
         audio_ms: None,
+        session_hash: None,
     };
     if let Err(error) = state
         .enqueue_usage(openproxy_pipeline::worker::BackgroundJob::RecordUsage(

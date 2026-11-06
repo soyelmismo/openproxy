@@ -129,6 +129,7 @@ impl UsageTracker {
             flags: USAGE_FLAG_CLIENT_RESPONSE,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             audio_ms: None,
+            session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(req),
         };
         if let Err(error) = self
             .enqueue(crate::worker::BackgroundJob::RecordUsage(Box::new(input)))
@@ -183,6 +184,7 @@ impl UsageTracker {
             flags: 0,
             endpoint_kind: req.endpoint_kind,
             audio_ms: None,
+            session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(req),
         };
         if let Err(error) = self
             .enqueue(crate::worker::BackgroundJob::RecordUsage(Box::new(input)))
@@ -694,6 +696,7 @@ impl<'a> UsageRecordBuilder<'a> {
             flags,
             endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
             audio_ms: None,
+            session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&self.req),
             proxy_url: self.proxy_url.clone(),
             proxy_status: self.proxy_status.clone(),
         }

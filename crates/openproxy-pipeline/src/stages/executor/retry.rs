@@ -289,9 +289,14 @@ pub(super) async fn run_target_with_retries(
             if phase == "headers" {
                 if let Some(ceiling_ms) = ctx.ttft_ceiling_ms {
                     if (*ms as u64) < ceiling_ms {
+                        let session_hash =
+                            crate::session_affinity::SessionAffinityRegistry::extract_session_hash(
+                                &ctx.req,
+                            );
                         ctx.pipeline.latency_budget.note_censored(
                             target.target.provider_id.as_str(),
                             target.model.row_id,
+                            session_hash,
                             *ms,
                         );
                         if let Some(to) = ctx.resolved_timeouts.as_mut() {

@@ -55,6 +55,27 @@
 //!    re-cutting at the same budget. See `note_censored` and the executor
 //!    retry loop.
 
+//!
+//! ## Hierarchical budgets: target-wide and per session
+//!
+//! One target-wide norm is blind to the regime a *session* is in: an agent
+//! with a warm prompt cache answers in 2s, and after five idle minutes the
+//! same conversation cold-starts in 20s. Two levels solve that:
+//!
+//! - **Global** (`provider`, `model_row`), TTL [`GLOBAL_TTL`] = 1h: the
+//!   general norm of the target, built from every row (sessioned or not).
+//! - **Session** (`provider`, `model_row`, `session_hash`), TTL
+//!   [`SESSION_TTL`] = 5min: learns the regime of one conversation over its
+//!   last hour and forgets it after five idle minutes, exactly when the
+//!   provider cache is likely gone. The next request of that session then
+//!   starts from the global norm instead of inheriting a warm-cache budget
+//!   that would cut every cold start.
+//!
+//! Resolution order: session snapshot, then global, then `None`. Both levels
+//! keep their own `censored_max`; the executor notes a cut on the session
+//! entry and on the target entry (a headers stall is a symptom of the
+//! target), while the learned statistics of each level stay isolated.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -77,11 +98,22 @@ const SIGMA_MULT: f64 = 3.0;
 const MARGIN_MS: u64 = 1_000;
 /// Never cut a request earlier than this, no matter how fast the target is.
 const FLOOR_MS: u64 = 5_000;
-/// Snapshot lifetime per target.
-const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
-/// Serve-stale horizon: an expired snapshot keeps answering while its
-/// background refresh is in flight (correction 4).
-const STALE_SERVE_TTL: Duration = Duration::from_secs(4 * 300);
+/// Global (target-wide) snapshot lifetime: 1 hour.
+const GLOBAL_TTL: Duration = Duration::from_secs(3_600);
+/// Session snapshot lifetime: 5 minutes. After five idle minutes the
+/// provider cache is likely cold again, so the learned session regime is
+/// dropped and the next request re-learns (or falls back to the global norm).
+const SESSION_TTL: Duration = Duration::from_secs(300);
+/// Serve-stale horizon as a multiple of the level TTL: an expired snapshot
+/// keeps answering while its background refresh is in flight (correction 4).
+const STALE_SERVE_MULT: u32 = 4;
+/// Session history window: only the last ten minutes of that session feed
+/// it, so a cache that expired six minutes ago stops paying for the warm
+/// regime it had before.
+const SESSION_WINDOW_MINUTES: i64 = 10;
+/// Session recency half-life (5 minutes): inside the window the last couple
+/// of minutes dominate the statistics.
+const SESSION_HALF_LIFE_H: f64 = 5.0 / 60.0;
 /// Cut rows (`headers`-phase timeouts) considered for the relax.
 const CENSORED_LIMIT: i64 = 100;
 /// A cut relaxes the next budget by this factor (corrections 1 and 8).
@@ -126,7 +158,8 @@ impl BucketStats {
     }
 }
 
-/// Learned statistics for one (provider, model_row) target.
+/// Learned statistics for one cache key: the target (global level) or one
+/// session of that target.
 #[derive(Debug)]
 pub(crate) struct TargetStats {
     loaded_at: Instant,
@@ -138,10 +171,35 @@ pub(crate) struct TargetStats {
     censored_max_ms: AtomicU64,
 }
 
+/// Cache key of a learned snapshot. `session_hash == None` is the global
+/// level (the target norm); `Some(_)` is one session of that target.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BudgetKey {
     provider: String,
     model_row_id: i64,
+    session_hash: Option<u64>,
+}
+
+impl BudgetKey {
+    fn global(provider: &str, model_row_id: i64) -> Self {
+        Self {
+            provider: provider.to_string(),
+            model_row_id,
+            session_hash: None,
+        }
+    }
+
+    fn session(provider: &str, model_row_id: i64, session_hash: u64) -> Self {
+        Self {
+            provider: provider.to_string(),
+            model_row_id,
+            session_hash: Some(session_hash),
+        }
+    }
+
+    fn is_session(&self) -> bool {
+        self.session_hash.is_some()
+    }
 }
 
 struct SuccessRow {
@@ -165,6 +223,10 @@ pub struct LatencyBudget {
     cache_cap: usize,
     /// How many oldest snapshots to evict when the cap is exceeded.
     cache_evict: usize,
+    /// Global-level snapshot lifetime (1h in production).
+    global_ttl: Duration,
+    /// Session-level snapshot lifetime (5min in production).
+    session_ttl: Duration,
 }
 
 impl Default for LatencyBudget {
@@ -183,6 +245,8 @@ impl LatencyBudget {
             pool: None,
             cache_cap: 10_000,
             cache_evict: 1_000,
+            global_ttl: GLOBAL_TTL,
+            session_ttl: SESSION_TTL,
         }
     }
 
@@ -194,6 +258,8 @@ impl LatencyBudget {
             pool: Some(pool),
             cache_cap: 10_000,
             cache_evict: 1_000,
+            global_ttl: GLOBAL_TTL,
+            session_ttl: SESSION_TTL,
         }
     }
 
@@ -216,10 +282,14 @@ impl LatencyBudget {
     /// task tied to this instance's cache. `sync_conn` is only locked in sync
     /// mode (no DB pool): in production the hot path never touches the shared
     /// pipeline connection (correction 4).
+    /// `session_hash` selects the session level first; `None` (no session
+    /// identity) or a session without fresh data falls back to the global
+    /// level of the target.
     pub fn ttft_budget_ms(
         self: &Arc<Self>,
         provider: &str,
         model_row_id: ModelRowId,
+        session_hash: Option<u64>,
         est_prompt_tokens: u32,
         ceiling_ms: u64,
         sync_conn: Option<&parking_lot::Mutex<Connection>>,
@@ -228,45 +298,48 @@ impl LatencyBudget {
             // Nothing to shorten; a zero ceiling is not a prediction.
             return None;
         }
-        let key = BudgetKey {
-            provider: provider.to_string(),
-            model_row_id: model_row_id.0,
-        };
-        let stats = self.snapshot(&key, sync_conn)?;
-        // Widen upward: exact bucket first, then next populated ones.
-        let start = tokens_bucket(est_prompt_tokens);
-        let mut budget_ms: Option<u64> = None;
-        for b in start..BUCKET_COUNT {
-            if let Some(bs) = stats.buckets[b] {
-                budget_ms = Some(bs.budget_ms());
-                break;
+        // Session level first: it knows the regime this conversation is in
+        // right now (warm cache vs cold start). The global level answers
+        // when the session has no fresh data of its own.
+        if let Some(hash) = session_hash {
+            let key = BudgetKey::session(provider, model_row_id.0, hash);
+            if let Some(stats) = self.snapshot(&key, sync_conn) {
+                if let Some(budget) = budget_from_stats(&stats, est_prompt_tokens, ceiling_ms) {
+                    return Some(budget);
+                }
             }
         }
-        let mut budget_ms = budget_ms?;
-        // Anti-starvation relax (correction 1): every cut raises the floor
-        // of the next budget. When the relax reaches the resolved timeout
-        // the predictor turns itself off for this target.
-        let censored = stats.censored_max_ms.load(Ordering::Relaxed);
-        if censored > 0 {
-            let relaxed = (censored as f64 * CENSORED_RELAX_MULT) as u64;
-            budget_ms = budget_ms.max(relaxed);
-        }
-        if budget_ms >= ceiling_ms {
-            return None;
-        }
-        Some(budget_ms)
+        let key = BudgetKey::global(provider, model_row_id.0);
+        let stats = self.snapshot(&key, sync_conn)?;
+        budget_from_stats(&stats, est_prompt_tokens, ceiling_ms)
     }
 
     /// Record a TTFT cut seen by the executor so the very next budget for
     /// this target is relaxed without waiting for the DB row or a refresh
     /// (corrections 1 and 8).
-    pub(crate) fn note_censored(&self, provider: &str, model_row_id: ModelRowId, waited_ms: u64) {
-        let key = BudgetKey {
-            provider: provider.to_string(),
-            model_row_id: model_row_id.0,
-        };
-        if let Some(stats) = self.cache.lock().get(&key) {
+    pub(crate) fn note_censored(
+        &self,
+        provider: &str,
+        model_row_id: ModelRowId,
+        session_hash: Option<u64>,
+        waited_ms: u64,
+    ) {
+        let cache = self.cache.lock();
+        if let Some(hash) = session_hash {
+            if let Some(stats) = cache.get(&BudgetKey::session(provider, model_row_id.0, hash)) {
+                stats.censored_max_ms.fetch_max(waited_ms, Ordering::Relaxed);
+            }
+        }
+        if let Some(stats) = cache.get(&BudgetKey::global(provider, model_row_id.0)) {
             stats.censored_max_ms.fetch_max(waited_ms, Ordering::Relaxed);
+        }
+    }
+
+    fn ttl_for(&self, key: &BudgetKey) -> Duration {
+        if key.is_session() {
+            self.session_ttl
+        } else {
+            self.global_ttl
         }
     }
 
@@ -276,9 +349,10 @@ impl LatencyBudget {
         key: &BudgetKey,
         sync_conn: Option<&parking_lot::Mutex<Connection>>,
     ) -> Option<Arc<TargetStats>> {
+        let ttl = self.ttl_for(key);
         let existing = self.cache.lock().get(key).cloned();
         if let Some(stats) = &existing {
-            if stats.loaded_at.elapsed() < SNAPSHOT_TTL {
+            if stats.loaded_at.elapsed() < ttl {
                 return Some(Arc::clone(stats));
             }
         }
@@ -286,7 +360,8 @@ impl LatencyBudget {
             self.kick_background_refresh(key.clone());
             // Serve stale while the refresh lands; past the stale horizon
             // answer without prediction (the refresh will repopulate soon).
-            return existing.filter(|s| s.loaded_at.elapsed() < STALE_SERVE_TTL);
+            let stale_horizon = ttl * STALE_SERVE_MULT;
+            return existing.filter(|s| s.loaded_at.elapsed() < stale_horizon);
         }
         // Sync mode (no pool): refresh inline on the caller's connection.
         let guard = sync_conn?.lock();
@@ -338,7 +413,12 @@ impl LatencyBudget {
     pub(crate) fn load_sync(&self, conn: &Connection, key: BudgetKey) -> Option<Arc<TargetStats>> {
         let successes = load_success_rows(conn, &key)?;
         let censored_max_ms = load_censored_max(conn, &key);
-        let buckets = build_buckets(&successes);
+        let half_life_h = if key.is_session() {
+            SESSION_HALF_LIFE_H
+        } else {
+            RECENCY_HALF_LIFE_H
+        };
+        let buckets = build_buckets(&successes, half_life_h);
         let stats = Arc::new(TargetStats {
             loaded_at: Instant::now(),
             buckets,
@@ -352,15 +432,27 @@ impl LatencyBudget {
     /// embedding helper; production relies on the background refresh.
     #[cfg(test)]
     pub(crate) fn warm_target(&self, conn: &Connection, provider: &str, model_row_id: i64) {
-        let key = BudgetKey {
-            provider: provider.to_string(),
-            model_row_id,
-        };
-        self.load_sync(conn, key);
+        self.load_sync(conn, BudgetKey::global(provider, model_row_id));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn warm_session(
+        &self,
+        conn: &Connection,
+        provider: &str,
+        model_row_id: i64,
+        session_hash: u64,
+    ) {
+        self.load_sync(conn, BudgetKey::session(provider, model_row_id, session_hash));
     }
 
     fn insert_and_purge(&self, key: BudgetKey, stats: Arc<TargetStats>) {
         let mut cache = self.cache.lock();
+        // Session snapshots are ephemeral by design: drop the ones past
+        // their stale horizon so conversations never accumulate until the
+        // LRU cap and evict a live target norm.
+        let stale_horizon = self.session_ttl * STALE_SERVE_MULT;
+        cache.retain(|k, v| !k.is_session() || v.loaded_at.elapsed() < stale_horizon);
         if cache.len() >= self.cache_cap && !cache.contains_key(&key) {
             let mut oldest: Vec<(BudgetKey, Instant)> = cache
                 .iter()
@@ -375,35 +467,52 @@ impl LatencyBudget {
     }
 }
 
-/// Pull recent successful TTFT samples for one target from `usage`.
+/// Pull recent successful TTFT samples for one key from `usage`. The global
+/// level aggregates every row of the target (sessioned or not); a session
+/// level reads only its own rows, over the shorter session window.
 fn load_success_rows(conn: &Connection, key: &BudgetKey) -> Option<Vec<SuccessRow>> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT ttft_ms, prompt_tokens, prompt_tokens_estimated, \
-                    (julianday('now') - julianday(created_at)) * 24.0 \
-             FROM usage \
-             WHERE provider_id = ?1 AND model_row_id = ?2 \
-               AND status_code >= 200 AND status_code < 400 \
-               AND ttft_ms IS NOT NULL AND ttft_ms > 0 \
-               AND created_at >= datetime('now', ?3) \
-             ORDER BY id DESC LIMIT ?4",
-        )
-        .ok()?;
-    let window = format!("-{HISTORY_WINDOW_DAYS} days");
-    let rows = stmt
-        .query_map(
-            rusqlite::params![key.provider, key.model_row_id, window, SAMPLE_LIMIT],
-            |row| {
-                Ok(SuccessRow {
-                    ttft_ms: (row.get::<_, Option<f64>>(0)?.unwrap_or(0.0) as u64).max(1),
-                    prompt_tokens: row.get::<_, Option<i64>>(1)?.unwrap_or(0).max(0) as u64,
-                    estimated: row.get::<_, Option<i64>>(2)?.unwrap_or(0) != 0,
-                    age_hours: row.get::<_, Option<f64>>(3)?.unwrap_or(0.0).max(0.0),
-                })
-            },
-        )
-        .ok()?;
-    let out: Vec<SuccessRow> = rows.filter_map(|r| r.ok()).collect();
+    let (window, session_filter) = match key.session_hash {
+        Some(_) => (format!("-{SESSION_WINDOW_MINUTES} minutes"), "AND session_hash = ?5"),
+        None => (format!("-{HISTORY_WINDOW_DAYS} days"), ""),
+    };
+    let sql = format!(
+        "SELECT ttft_ms, prompt_tokens, prompt_tokens_estimated, \
+                (julianday('now') - julianday(created_at)) * 24.0 \
+         FROM usage \
+         WHERE provider_id = ?1 AND model_row_id = ?2 \
+           AND status_code >= 200 AND status_code < 400 \
+           AND ttft_ms IS NOT NULL AND ttft_ms > 0 \
+           AND created_at >= datetime('now', ?3) \
+           {session_filter} \
+         ORDER BY id DESC LIMIT ?4"
+    );
+    let mut stmt = conn.prepare(&sql).ok()?;
+    let out: Vec<SuccessRow> = match key.session_hash {
+        Some(hash) => {
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![
+                        key.provider,
+                        key.model_row_id,
+                        window,
+                        SAMPLE_LIMIT,
+                        hash as i64
+                    ],
+                    map_success_row,
+                )
+                .ok()?;
+            rows.filter_map(|r| r.ok()).collect()
+        }
+        None => {
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![key.provider, key.model_row_id, window, SAMPLE_LIMIT],
+                    map_success_row,
+                )
+                .ok()?;
+            rows.filter_map(|r| r.ok()).collect()
+        }
+    };
     if out.is_empty() {
         None
     } else {
@@ -411,32 +520,101 @@ fn load_success_rows(conn: &Connection, key: &BudgetKey) -> Option<Vec<SuccessRo
     }
 }
 
+fn map_success_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SuccessRow> {
+    Ok(SuccessRow {
+        ttft_ms: (row.get::<_, Option<f64>>(0)?.unwrap_or(0.0) as u64).max(1),
+        prompt_tokens: row.get::<_, Option<i64>>(1)?.unwrap_or(0).max(0) as u64,
+        estimated: row.get::<_, Option<i64>>(2)?.unwrap_or(0) != 0,
+        age_hours: row.get::<_, Option<f64>>(3)?.unwrap_or(0.0).max(0.0),
+    })
+}
+
 /// Largest `headers`-phase timeout for this target within the window. Rows
 /// look like `upstream timeout in phase headers after 8274ms` (correction 1).
 fn load_censored_max(conn: &Connection, key: &BudgetKey) -> u64 {
-    let Ok(mut stmt) = conn.prepare(
+    let (window, session_filter) = match key.session_hash {
+        Some(_) => (format!("-{SESSION_WINDOW_MINUTES} minutes"), "AND session_hash = ?5"),
+        None => (format!("-{HISTORY_WINDOW_DAYS} days"), ""),
+    };
+    let sql = format!(
         "SELECT error_msg FROM usage \
          WHERE provider_id = ?1 AND model_row_id = ?2 \
            AND error_msg LIKE '%in phase headers after %ms%' \
            AND created_at >= datetime('now', ?3) \
-         ORDER BY id DESC LIMIT ?4",
-    ) else {
-        return 0;
-    };
-    let window = format!("-{HISTORY_WINDOW_DAYS} days");
-    let Ok(rows) = stmt.query_map(
-        rusqlite::params![key.provider, key.model_row_id, window, CENSORED_LIMIT],
-        |r| r.get::<_, Option<String>>(0),
-    ) else {
+           {session_filter} \
+         ORDER BY id DESC LIMIT ?4"
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
         return 0;
     };
     let mut max_ms: u64 = 0;
-    for msg in rows.filter_map(|r| r.ok()).flatten() {
-        if let Some(ms) = parse_headers_timeout_ms(&msg) {
-            max_ms = max_ms.max(ms);
+    match key.session_hash {
+        Some(hash) => {
+            let Ok(rows) = stmt.query_map(
+                rusqlite::params![
+                    key.provider,
+                    key.model_row_id,
+                    window,
+                    CENSORED_LIMIT,
+                    hash as i64
+                ],
+                |r| r.get::<_, Option<String>>(0),
+            ) else {
+                return 0;
+            };
+            for msg in rows.filter_map(|r| r.ok()).flatten() {
+                if let Some(ms) = parse_headers_timeout_ms(&msg) {
+                    max_ms = max_ms.max(ms);
+                }
+            }
+        }
+        None => {
+            let Ok(rows) = stmt.query_map(
+                rusqlite::params![key.provider, key.model_row_id, window, CENSORED_LIMIT],
+                |r| r.get::<_, Option<String>>(0),
+            ) else {
+                return 0;
+            };
+            for msg in rows.filter_map(|r| r.ok()).flatten() {
+                if let Some(ms) = parse_headers_timeout_ms(&msg) {
+                    max_ms = max_ms.max(ms);
+                }
+            }
         }
     }
     max_ms
+}
+
+/// Resolves the learned budget of one level for the request's token bucket,
+/// or `None` when the level has no trustworthy data or its budget already
+/// reaches the caller's ceiling (nothing left to shorten).
+fn budget_from_stats(
+    stats: &TargetStats,
+    est_prompt_tokens: u32,
+    ceiling_ms: u64,
+) -> Option<u64> {
+    // Widen upward: exact bucket first, then the next populated ones.
+    let start = tokens_bucket(est_prompt_tokens);
+    let mut budget_ms: Option<u64> = None;
+    for b in start..BUCKET_COUNT {
+        if let Some(bs) = stats.buckets[b] {
+            budget_ms = Some(bs.budget_ms());
+            break;
+        }
+    }
+    let mut budget_ms = budget_ms?;
+    // Anti-starvation relax (correction 1): every cut raises the floor of
+    // the next budget. When the relax reaches the resolved timeout the
+    // predictor turns itself off for this level.
+    let censored = stats.censored_max_ms.load(Ordering::Relaxed);
+    if censored > 0 {
+        let relaxed = (censored as f64 * CENSORED_RELAX_MULT) as u64;
+        budget_ms = budget_ms.max(relaxed);
+    }
+    if budget_ms >= ceiling_ms {
+        return None;
+    }
+    Some(budget_ms)
 }
 
 fn parse_headers_timeout_ms(error_msg: &str) -> Option<u64> {
@@ -449,7 +627,7 @@ fn parse_headers_timeout_ms(error_msg: &str) -> Option<u64> {
 
 /// Builds per-bucket statistics with recency weighting (correction 6) and
 /// the estimated-token preference (correction 5).
-fn build_buckets(rows: &[SuccessRow]) -> [Option<BucketStats>; BUCKET_COUNT] {
+fn build_buckets(rows: &[SuccessRow], half_life_h: f64) -> [Option<BucketStats>; BUCKET_COUNT] {
     // Prefer rows whose prompt tokens were estimated the same way dispatch
     // estimates them (comparable buckets). Fall back to all rows only when
     // the estimated population is too thin to trust a bucket.
@@ -472,10 +650,11 @@ fn build_buckets(rows: &[SuccessRow]) -> [Option<BucketStats>; BUCKET_COUNT] {
         if n < MIN_BUCKET_SAMPLES {
             continue;
         }
-        // Recency weights (correction 6): 48h half-life.
+        // Recency weights (correction 6): 48h half-life for the target
+        // norm, 30min for a session (its regime must dominate fast).
         let weights: Vec<f64> = members
             .iter()
-            .map(|r| 0.5f64.powf(r.age_hours / RECENCY_HALF_LIFE_H))
+            .map(|r| 0.5f64.powf(r.age_hours / half_life_h))
             .collect();
         let wsum: f64 = weights.iter().sum();
         if wsum <= 0.0 {
@@ -539,6 +718,7 @@ mod tests {
                 combo_id INTEGER, model_row_id INTEGER,
                 upstream_model_id TEXT NOT NULL DEFAULT '', combo_target_id INTEGER,
                 prompt_tokens INTEGER, prompt_tokens_estimated INTEGER,
+                session_hash INTEGER,
                 completion_tokens INTEGER, cached_tokens INTEGER,
                 cost_usd REAL, status_code INTEGER NOT NULL,
                 error_msg TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -592,6 +772,45 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_sess(
+        c: &Connection,
+        provider: &str,
+        model_row: i64,
+        session_hash: i64,
+        ttft: i64,
+        prompt: i64,
+    ) {
+        insert_sess_at(
+            c,
+            provider,
+            model_row,
+            session_hash,
+            ttft,
+            prompt,
+            "datetime('now')",
+        );
+    }
+
+    fn insert_sess_at(
+        c: &Connection,
+        provider: &str,
+        model_row: i64,
+        session_hash: i64,
+        ttft: i64,
+        prompt: i64,
+        created_at: &str,
+    ) {
+        c.execute(
+            &format!(
+                "INSERT INTO usage (provider_id, model_row_id, upstream_model_id, status_code, \
+                                    ttft_ms, prompt_tokens, session_hash, created_at) \
+                 VALUES (?1, ?2, 'm', 200, ?3, ?4, ?5, {created_at})"
+            ),
+            rusqlite::params![provider, model_row, ttft, prompt, session_hash],
+        )
+        .unwrap();
+    }
+
     /// Inserts a headers-phase timeout row exactly as the usage tracker
     /// records it (correction 1): status 0, NULL ttft, parseable error_msg.
     fn insert_cut(c: &Connection, provider: &str, model_row: i64, waited_ms: u64) {
@@ -615,7 +834,19 @@ mod tests {
         est: u32,
         ceiling: u64,
     ) -> Option<u64> {
-        b.ttft_budget_ms(provider, ModelRowId(row), est, ceiling, Some(c))
+        budget_of_sess(b, c, provider, row, None, est, ceiling)
+    }
+
+    fn budget_of_sess(
+        b: &Arc<LatencyBudget>,
+        c: &parking_lot::Mutex<Connection>,
+        provider: &str,
+        row: i64,
+        session_hash: Option<u64>,
+        est: u32,
+        ceiling: u64,
+    ) -> Option<u64> {
+        b.ttft_budget_ms(provider, ModelRowId(row), session_hash, est, ceiling, Some(c))
     }
 
     #[test]
@@ -1058,7 +1289,7 @@ mod tests {
         }
         let budget = Arc::new(LatencyBudget::new());
         let before = budget_of(&budget, &mconn, "instant", 9, 5_000, 60_000).unwrap();
-        budget.note_censored("instant", ModelRowId(9), 9_000);
+        budget.note_censored("instant", ModelRowId(9), None, 9_000);
         let after = budget_of(&budget, &mconn, "instant", 9, 5_000, 60_000).unwrap();
         assert_eq!(before, 5_000);
         assert_eq!(after, 13_500, "9s cut * 1.5 relaxes immediately: {after}");
@@ -1251,7 +1482,7 @@ mod tests {
         // scheduled (no shared-conn lock, no panic outside tests).
         assert!(
             budget
-                .ttft_budget_ms("poolprov", ModelRowId(7), 5_000, 60_000, None)
+                .ttft_budget_ms("poolprov", ModelRowId(7), None, 5_000, 60_000, None)
                 .is_none(),
             "cold cache without sync conn answers None"
         );
@@ -1259,7 +1490,7 @@ mod tests {
         for _ in 0..50 {
             tokio::time::sleep(Duration::from_millis(20)).await;
             if budget
-                .ttft_budget_ms("poolprov", ModelRowId(7), 5_000, 60_000, None)
+                .ttft_budget_ms("poolprov", ModelRowId(7), None, 5_000, 60_000, None)
                 .is_some()
             {
                 return;
@@ -1297,4 +1528,170 @@ mod tests {
         // mean ~1937, sigma ~269 -> 1937 + 807 + 1000 = ~3744 -> floor 5000.
         assert_eq!(b, 5_000, "production schema: {b}");
     }
+
+    // ----------
+    // Hierarchical predictor: global (1h) + session (5min)
+    // ----------
+
+    #[test]
+    fn session_level_overrides_global_when_fresher() {
+        // Warm global first (20 samples at 2s -> 5s floor, cached), then a
+        // session whose own regime is a 20s cold start. The session level
+        // answers with ITS population, not the inherited global norm.
+        let mconn = shared_conn(test_conn());
+        let budget = Arc::new(LatencyBudget::new());
+        {
+            let c = mconn.lock();
+            for _ in 0..20 {
+                insert(&c, "mix", 1, 2_000, 5_000);
+            }
+        }
+        let global = budget_of(&budget, &mconn, "mix", 1, 5_000, 60_000).unwrap();
+        assert_eq!(global, 5_000);
+        {
+            let c = mconn.lock();
+            for _ in 0..10 {
+                insert_sess(&c, "mix", 1, 12345, 20_000, 5_000);
+            }
+        }
+        let sess =
+            budget_of_sess(&budget, &mconn, "mix", 1, Some(12345), 5_000, 60_000).unwrap();
+        assert_eq!(sess, 21_000, "session budget reflects its cold regime: {sess}");
+        assert!(
+            sess != global,
+            "the session level answers with its own statistics: {sess} vs {global}"
+        );
+    }
+
+    #[test]
+    fn session_without_data_falls_back_to_global() {
+        // Global: 20 samples at 2s.
+        // Session: no rows -> must fall back to global.
+        let mconn = shared_conn(test_conn());
+        {
+            let c = mconn.lock();
+            for _ in 0..20 {
+                insert(&c, "fb", 2, 2_000, 5_000);
+            }
+        }
+        let budget = Arc::new(LatencyBudget::new());
+        let global = budget_of(&budget, &mconn, "fb", 2, 5_000, 60_000).unwrap();
+        let sess = budget_of_sess(&budget, &mconn, "fb", 2, Some(999), 5_000, 60_000);
+        assert_eq!(global, 5_000);
+        assert_eq!(sess, Some(global), "empty session falls back to global");
+    }
+
+    #[test]
+    fn session_forgets_after_ttl_and_falls_back() {
+        // Session: 10 samples at 20s, loaded long ago.
+        // Global: 20 samples at 2s, fresh.
+        // After the session TTL expires, the session falls back to global.
+        let mconn = shared_conn(test_conn());
+        let mut budget = LatencyBudget::new();
+        budget.session_ttl = Duration::from_millis(50); // short TTL for the test
+        budget.global_ttl = Duration::from_secs(300);
+        let budget = Arc::new(budget);
+        {
+            let c = mconn.lock();
+            for _ in 0..20 {
+                insert(&c, "ttl", 3, 2_000, 5_000);
+            }
+        }
+        // Warm the global level first: its 5s floor is the fallback value.
+        assert_eq!(
+            budget_of(&budget, &mconn, "ttl", 3, 5_000, 60_000),
+            Some(5_000)
+        );
+        {
+            let c = mconn.lock();
+            for _ in 0..10 {
+                insert_sess(&c, "ttl", 3, 54321, 20_000, 5_000);
+            }
+            budget.warm_session(&c, "ttl", 3, 54321);
+        }
+        // Immediate: session answers from its own rows.
+        let sess_now =
+            budget_of_sess(&budget, &mconn, "ttl", 3, Some(54321), 5_000, 60_000).unwrap();
+        assert_eq!(sess_now, 21_000, "session fresh: {sess_now}");
+        // Rows vanish (the conversation moved on): within the TTL the
+        // snapshot still answers, past it the level reloads and falls back.
+        {
+            let c = mconn.lock();
+            c.execute("DELETE FROM usage WHERE session_hash IS NOT NULL", [])
+                .unwrap();
+        }
+        let sess_cached =
+            budget_of_sess(&budget, &mconn, "ttl", 3, Some(54321), 5_000, 60_000).unwrap();
+        assert_eq!(sess_cached, 21_000, "TTL holds the session snapshot");
+        std::thread::sleep(Duration::from_millis(80));
+        let sess_later =
+            budget_of_sess(&budget, &mconn, "ttl", 3, Some(54321), 5_000, 60_000).unwrap();
+        assert_eq!(sess_later, 5_000, "expired session falls back to global");
+    }
+
+    #[test]
+    fn session_censored_max_is_isolated() {
+        // Global: 20 samples at 2s, no cuts.
+        // Session A: 10 samples at 2s, one cut at 9s -> relax to 13.5s.
+        // Session B: 10 samples at 2s, no cuts -> floor.
+        let mconn = shared_conn(test_conn());
+        {
+            let c = mconn.lock();
+            for _ in 0..20 {
+                insert(&c, "iso", 4, 2_000, 5_000);
+            }
+            let hash_a: u64 = 111;
+            let hash_b: u64 = 222;
+            for _ in 0..10 {
+                insert_sess(&c, "iso", 4, hash_a as i64, 2_000, 5_000);
+                insert_sess(&c, "iso", 4, hash_b as i64, 2_000, 5_000);
+            }
+            insert_sess(&c, "iso", 4, hash_a as i64, 0, 5_000); // dummy for cut note
+        }
+        let budget = Arc::new(LatencyBudget::new());
+        {
+            let c = mconn.lock();
+            budget.warm_session(&c, "iso", 4, 111);
+            budget.warm_session(&c, "iso", 4, 222);
+        }
+        // Note a cut on session A only.
+        budget.note_censored("iso", ModelRowId(4), Some(111), 9_000);
+        let sess_a =
+            budget_of_sess(&budget, &mconn, "iso", 4, Some(111), 5_000, 60_000).unwrap();
+        let sess_b =
+            budget_of_sess(&budget, &mconn, "iso", 4, Some(222), 5_000, 60_000).unwrap();
+        let global = budget_of(&budget, &mconn, "iso", 4, 5_000, 60_000).unwrap();
+        assert_eq!(sess_a, 13_500, "session A relaxed by its own cut: {sess_a}");
+        assert_eq!(sess_b, 5_000, "session B untouched: {sess_b}");
+        assert_eq!(global, 5_000, "global untouched: {global}");
+    }
+
+    #[test]
+    fn session_window_forgets_the_previous_regime() {
+        // The session ran a cold regime 20 minutes ago (20s) and is warm
+        // now (2s). The window only keeps the last ten minutes, so the old
+        // regime is forgotten and the budget drops back to the floor.
+        let mconn = shared_conn(test_conn());
+        {
+            let c = mconn.lock();
+            for _ in 0..20 {
+                insert_sess_at(
+                    &c,
+                    "win",
+                    5,
+                    777,
+                    20_000,
+                    5_000,
+                    "datetime('now', '-20 minutes')",
+                );
+            }
+            for _ in 0..10 {
+                insert_sess(&c, "win", 5, 777, 2_000, 5_000);
+            }
+        }
+        let budget = Arc::new(LatencyBudget::new());
+        let sess = budget_of_sess(&budget, &mconn, "win", 5, Some(777), 5_000, 60_000).unwrap();
+        assert_eq!(sess, 5_000, "stale regime outside the window is forgotten: {sess}");
+    }
+
 }

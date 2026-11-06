@@ -175,9 +175,12 @@ pub(crate) fn apply_predictive_ttft_budget(
         .unwrap_or_else(|| req.openai_request.messages.clone());
     let est_prompt_tokens =
         openproxy_compression::token_estimate::estimate_prompt_tokens(&effective_messages).max(1);
+    let session_hash =
+        crate::session_affinity::SessionAffinityRegistry::extract_session_hash(req);
     let budget_ms = pipeline.latency_budget.ttft_budget_ms(
         provider_str,
         model.row_id,
+        session_hash,
         est_prompt_tokens,
         resolved.ttft.as_millis() as u64,
         // The shared connection is only locked in sync mode (no DB pool,

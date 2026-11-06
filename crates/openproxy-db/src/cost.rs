@@ -100,12 +100,12 @@ fn insert_usage_record(
                 stop_reason, compression_savings_pct, compression_techniques, \
                 client_response, prompt_tokens_estimated, completion_tokens_estimated, \
                 endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
-                was_winner, audio_ms\
+                was_winner, audio_ms, session_hash\
              ) VALUES (\
                 ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
                 ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-                ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44\
+                ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45\
              )",
             params![
                 request_id,
@@ -164,6 +164,7 @@ fn insert_usage_record(
                 input.pii_redacted,
                 i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
                 input.audio_ms.map(i64::from),
+                input.session_hash.map(|h| h as i64),
             ],
         )
     };
@@ -600,6 +601,7 @@ mod tests {
             cached_tokens: None,
             flags,
             audio_ms: None,
+            session_hash: None,
         }
     }
 
