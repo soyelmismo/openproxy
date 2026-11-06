@@ -275,7 +275,9 @@ function renderBody(): TemplateResult {
         ${renderRankMetricSwitch()}
       </div>
       ${renderRanking(t("analytics.chart.by_model"), rankSubtitle, modelItems, "models")}
-      ${renderRanking(t("analytics.chart.by_provider"), rankSubtitle, providerItems, "providers")}
+      ${isFullAdmin()
+        ? renderRanking(t("analytics.chart.by_provider"), rankSubtitle, providerItems, "providers")
+        : nothing}
     </div>
     <div class="analytics-insight-grid">
       ${renderLatencyBlock()}
@@ -366,7 +368,11 @@ async function fetchAndApply(
     ] = await Promise.all([
       api(`/usage/summary${usageQ}`) as Promise<UsageSummary>,
       api(`/usage/by-model${usageQ}`) as Promise<ByModelRow[]>,
-      api(`/usage/by-provider${usageQ}`) as Promise<ByProviderRow[]>,
+      // Analytics-scope keys: by-provider collapses onto the same public
+      // names as by-model, so the redundant list (and its fetch) is skipped.
+      isFullAdmin()
+        ? (api(`/usage/by-provider${usageQ}`) as Promise<ByProviderRow[]>)
+        : Promise.resolve([] as ByProviderRow[]),
       api(`/usage/monthly-by-provider${usageQ}`) as Promise<MonthlyByProviderRow[]>,
       api(`/usage/latency${usageQ}`) as Promise<LatencyPayload>,
       api(`/usage/races${usageQ}`) as Promise<RaceStatsPayload>,
