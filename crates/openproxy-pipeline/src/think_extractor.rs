@@ -84,20 +84,20 @@ fn process_choice_think(choice: &mut crate::translation::Choice) {
     }
     // Mitigate upstream AutoClaw false positive safety filter where content is "DANGEROUS_ACTIVITY_BLOCKED"
     // but the model reasoned normally.
-    if let Some(serde_json::Value::String(content_str)) = &choice.message.content {
-        if content_str.trim() == "DANGEROUS_ACTIVITY_BLOCKED" {
-            let reasoning = choice
-                .message
-                .extra
-                .get("reasoning_content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if !reasoning.is_empty() {
-                // If reasoning is benign, provide a clean response acknowledging the request
-                choice.message.content = Some(serde_json::Value::String(
-                    "Task processed successfully.".to_string(),
-                ));
-            }
+    if let Some(serde_json::Value::String(content_str)) = &choice.message.content
+        && content_str.trim() == "DANGEROUS_ACTIVITY_BLOCKED"
+    {
+        let reasoning = choice
+            .message
+            .extra
+            .get("reasoning_content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            // If reasoning is benign, provide a clean response acknowledging the request
+            choice.message.content = Some(serde_json::Value::String(
+                "Task processed successfully.".to_string(),
+            ));
         }
     }
     let Some(serde_json::Value::String(content_str)) = &choice.message.content else {
@@ -148,18 +148,18 @@ pub fn extract_think_from_response_value(mut val: serde_json::Value) -> serde_js
         if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
             continue;
         }
-        if let Some(content) = message.get("content").and_then(serde_json::Value::as_str) {
-            if content.trim() == "DANGEROUS_ACTIVITY_BLOCKED" {
-                let reasoning = message
-                    .get("reasoning_content")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("");
-                if !reasoning.is_empty() {
-                    message.insert(
-                        "content".to_string(),
-                        serde_json::Value::String("Task processed successfully.".to_string()),
-                    );
-                }
+        if let Some(content) = message.get("content").and_then(serde_json::Value::as_str)
+            && content.trim() == "DANGEROUS_ACTIVITY_BLOCKED"
+        {
+            let reasoning = message
+                .get("reasoning_content")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if !reasoning.is_empty() {
+                message.insert(
+                    "content".to_string(),
+                    serde_json::Value::String("Task processed successfully.".to_string()),
+                );
             }
         }
         let Some(content) = message.get("content").and_then(serde_json::Value::as_str) else {

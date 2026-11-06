@@ -696,7 +696,7 @@ pub fn create_target_system_prefix(
             input.name.trim(),
             input.criteria.trim(),
             input.system_text.trim(),
-            if input.active { 1 } else { 0 },
+            i32::from(input.active),
             input.priority_order
         ],
     )
@@ -734,7 +734,7 @@ pub fn update_target_system_prefix(
     if let Some(active) = input.active {
         conn.execute(
             "UPDATE combo_target_system_prefixes SET active = ?1 WHERE id = ?2",
-            params![if active { 1 } else { 0 }, prefix_id],
+            params![i32::from(active), prefix_id],
         )
         .map_err(crate::error::map_db_error)?;
     }

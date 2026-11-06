@@ -114,16 +114,10 @@ impl ApiKey {
             return false;
         }
 
-        let provider_allowed =
-            !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-                && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
-                && (is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
-                    || is_provider_in_allowlist(
-                        self.allowed_providers.as_deref(),
-                        prov_from_model,
-                    ));
-
-        provider_allowed
+        !is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+            && !is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model)
+            && (is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
+                || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model))
     }
 
     /// Returns whether the specified provider is permitted by this key.
