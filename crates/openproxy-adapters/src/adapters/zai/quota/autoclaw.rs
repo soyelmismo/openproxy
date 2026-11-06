@@ -125,8 +125,28 @@ pub async fn perform_autoclaw_checkin(
     let clean_token = token.trim();
     let raw_token = clean_token.strip_prefix("Bearer ").unwrap_or(clean_token);
 
-    // Attempt daily_signin and daily_inspiration_center
-    for task_id in ["daily_signin", "daily_inspiration_center"] {
+    // Attempt all client-triggerable promotional & daily tasks:
+    // - daily_signin: 400 pts daily
+    // - daily_inspiration_center: 200 pts daily
+    // - newbie_cloud_lobster: 500 pts once
+    // - newbie_local_lobster: 500 pts once
+    // - download_pc_app: 100 pts once
+    //
+    // Also trigger user-info daily credits claim (AutoClaw Weekly Perks 4000 pts / daily credits claim)
+    claim_autoclaw_user_info_credits(upstream, raw_token, proxy).await;
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    let tasks = [
+        "daily_signin",
+        "daily_inspiration_center",
+        "newbie_cloud_lobster",
+        "newbie_local_lobster",
+        "download_pc_app",
+    ];
+    for (idx, task_id) in tasks.iter().enumerate() {
+        if idx > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        }
         let app_id = "100003";
         let app_key = "6c79a4059ae078650bc7886b627cf9f9";
         let now_sec = openproxy_types::now_unix_secs_str();
@@ -194,6 +214,8 @@ pub async fn perform_autoclaw_checkin(
             )
             .await;
     }
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
     // Query task list to retrieve current streak and checkin status
     let app_id = "100003";
@@ -283,4 +305,107 @@ pub async fn perform_autoclaw_checkin(
     }
 
     None
+}
+
+/// Invokes `/userapi/v1/user-info` with the desktop signing profile (`identity_gateway`).
+/// In official AutoClaw desktop client (`DAILY_CREDITS_CLAIM_PATH`), this endpoint
+/// triggers the daily / weekly credits grants (such as `AutoClaw Weekly Perks +4000 credits`).
+async fn claim_autoclaw_user_info_credits(
+    upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
+    raw_token: &str,
+    proxy: Option<&str>,
+) {
+    let device_id = extract_device_id_from_jwt(raw_token);
+    let app_id = "100003";
+    let app_key = "38d2391985e2369a5fb8227d8e6cd5e5";
+    let now_ms = (chrono::Utc::now().timestamp_millis()).to_string();
+    let sign = crate::adapters::zai::md5::md5::md5_hex(format!("{app_id}&{now_ms}&{app_key}"));
+
+    let body_bytes = bytes::Bytes::from(
+        serde_json::to_vec(&serde_json::json!({
+            "source_id": "autoclaw",
+            "device_id": device_id
+        }))
+        .unwrap_or_default(),
+    );
+
+    let mut req = crate::upstream::UpstreamRequest::post_json(
+        "https://autoglm-api.autoglm.ai/userapi/v1/user-info",
+        body_bytes,
+    );
+    req.proxy = proxy.map(ToString::to_string);
+    if let Ok(val) = crate::antigravity_headers::build_bearer_header(raw_token) {
+        req.headers.insert(http::header::AUTHORIZATION, val);
+    }
+    req.headers.insert(http::header::USER_AGENT, http::HeaderValue::from_static("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"));
+    req.headers.insert(
+        http::HeaderName::from_static("x-auth-appid"),
+        http::HeaderValue::from_static("100003"),
+    );
+    if let Ok(ts_val) = http::HeaderValue::from_str(&now_ms) {
+        req.headers
+            .insert(http::HeaderName::from_static("x-auth-timestamp"), ts_val);
+    }
+    if let Ok(sign_val) = http::HeaderValue::from_str(&sign) {
+        req.headers
+            .insert(http::HeaderName::from_static("x-auth-sign"), sign_val);
+    }
+    req.headers.insert(
+        http::HeaderName::from_static("x-channel"),
+        http::HeaderValue::from_static("official"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-client-type"),
+        http::HeaderValue::from_static("pc"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-lang"),
+        http::HeaderValue::from_static("zh-CN"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-product"),
+        http::HeaderValue::from_static("autoclaw"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-tm"),
+        http::HeaderValue::from_static("linux"),
+    );
+    req.headers.insert(
+        http::HeaderName::from_static("x-version"),
+        http::HeaderValue::from_static("2.0.3"),
+    );
+
+    let _ = upstream
+        .call(
+            req,
+            crate::upstream::TimeoutProfile::Quota,
+            crate::upstream::CancellationToken::new(),
+        )
+        .await;
+}
+
+fn extract_device_id_from_jwt(token: &str) -> String {
+    let clean = token.trim();
+    let parts: Vec<&str> = clean.split('.').collect();
+    if parts.len() >= 2 {
+        let payload_b64 = parts[1];
+        let rem = payload_b64.len() % 4;
+        let mut padded = payload_b64.to_string();
+        if rem > 0 {
+            padded.push_str(&"=".repeat(4 - rem));
+        }
+        if let Ok(bytes) = base64::Engine::decode(
+            &base64::engine::general_purpose::URL_SAFE,
+            &padded,
+        ) {
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(dev) = val.get("device_id").and_then(|d| d.as_str()) {
+                    if !dev.is_empty() {
+                        return dev.to_string();
+                    }
+                }
+            }
+        }
+    }
+    "b1b01c10-91dc-4af5-9d32-d17b5f5bbd9b".to_string()
 }

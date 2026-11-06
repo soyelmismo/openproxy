@@ -392,8 +392,17 @@ pub fn zai_remaining_fraction(pools: &[QuotaPool], model: &str, now_secs: u64) -
 
     // Any unreadable verdict on `model` makes the whole account uncertain:
     // report unknown instead of collapsing to the exhausted reading.
+    // Notice: pools where the credential is not configured or missing are NOT unreadable;
+    // they are absent/unconfigured by design and should not block recognizing exhaustion.
     if pools.iter().any(|p| {
-        (p.matches_model(model) || (p.source != QuotaSource::CodingPlan && p.model_ids.is_empty()))
+        let is_missing_credential = p.fetch_error.as_deref().is_some_and(|err| {
+            err.contains("not configured")
+                || err.contains("credential is missing")
+                || err.contains("credential is not configured")
+        });
+        !is_missing_credential
+            && (p.matches_model(model)
+                || (p.source != QuotaSource::CodingPlan && p.model_ids.is_empty()))
             && (p.fetch_error.is_some() || p.status == QuotaPoolStatus::Unavailable)
     }) {
         return None;

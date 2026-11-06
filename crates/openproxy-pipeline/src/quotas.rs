@@ -190,6 +190,24 @@ pub(crate) fn evaluate_account_quota(
         // Stale counters must reach route preparation, which refreshes both
         // sources. Otherwise a depleted cached pool permanently retires a
         // newly renewed entitlement before its balance can ever be read.
+        // However, if all sources for this model are definitively known to be
+        // exhausted or absent (with no unreadable/unavailable active sources),
+        // we can safely report Exhausted so that empty accounts are skipped.
+        let remaining = openproxy_types::quota::zai_remaining_fraction(
+            pools,
+            candidates.first().copied().unwrap_or_default(),
+            now,
+        );
+        if let Some(value) = remaining {
+            if value <= 0.0 {
+                return QuotaStatus::Exhausted;
+            }
+            if quota_protection_enabled && value <= f64::from(threshold_percentage) / 100.0 {
+                return QuotaStatus::Protected;
+            }
+            return QuotaStatus::Available;
+        }
+
         if !pools
             .iter()
             .any(|p| p.source == openproxy_types::QuotaSource::ZcodeStarter)
@@ -204,20 +222,8 @@ pub(crate) fn evaluate_account_quota(
         {
             return QuotaStatus::Available;
         }
-        let remaining = openproxy_types::quota::zai_remaining_fraction(
-            pools,
-            candidates.first().copied().unwrap_or_default(),
-            now,
-        );
-        return match remaining {
-            Some(value) if value <= 0.0 => QuotaStatus::Exhausted,
-            Some(value)
-                if quota_protection_enabled && value <= f64::from(threshold_percentage) / 100.0 =>
-            {
-                QuotaStatus::Protected
-            }
-            _ => QuotaStatus::Available,
-        };
+
+        return QuotaStatus::Available;
     }
     if check_quota_windows_exhausted(account, candidates) {
         return QuotaStatus::Exhausted;
