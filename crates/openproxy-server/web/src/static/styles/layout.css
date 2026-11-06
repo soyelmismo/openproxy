@@ -447,8 +447,21 @@ body.on-login-page .sidebar { display: none; }
   justify-content: center;
   min-height: calc(100vh - 2 * var(--space-6));
 }
+/* The heading lives inside the card so it shares the card's content edge,
+   and the submit button owns the field's width instead of floating small
+   beside dead space. */
+.login-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-lg);
+}
 .login-card { padding: var(--space-6); }
-.login-subtitle { margin-top: 0; margin-bottom: var(--space-4); }
+.login-subtitle { margin-top: 0; margin-bottom: var(--space-4); font-size: var(--fs-sm); }
+.login-form button[type="submit"],
+.login-form button {
+  width: 100%;
+  padding: 0.55rem 1rem;
+  font-size: var(--fs-md);
+}
 .login-form {
   display: flex;
   flex-direction: column;

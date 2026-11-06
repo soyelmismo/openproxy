@@ -99,8 +99,8 @@ function renderLogin(): TemplateResult {
     : html`<div class="login-error-slot"></div>`;
   return html`
     <div class="login-page">
-      <div class="page-header"><h2>${t("login.title")}</h2></div>
       <section class="card login-card">
+        <h2 class="login-title">${t("login.title")}</h2>
         <p class="muted login-subtitle">${subtitle}</p>
         <form class="login-form" @submit=${onSubmit}>
           <label class="config-field login-field">
