@@ -46,15 +46,22 @@ export interface GridColumn<T> {
   key: string;
   label: string;
   render?: (row: T) => TemplateResult | string;
-  /** Minimum px this column keeps. Default 0. */
+  /** Minimum px this column keeps. For the elastic column this is the floor
+   *  it compresses to; ignored for the others, which are always their natural
+   *  width. Default 0. */
   min?: number;
-  /** Extra weight for the spare space; 1 = proportional to content width.
-   *  Also slows this column's compression when the tile is narrow. */
-  grow?: number;
+  /** Mark ONE column as elastic: it absorbs all spare space and compresses,
+   *  with ellipsis, down to its min. Every other column renders at its
+   *  natural width or folds — nothing is ever squeezed into illegibility. */
+  elastic?: boolean;
+  /** Upper bound in px for this column's track: content beyond it
+   *  ellipsizes instead of demanding more room. A property of the data
+   *  type (a model-chip cluster never deserves 400px), not a breakpoint. */
+  max?: number;
   /** Fold order when space runs out: 0 or undefined = essential (never
    *  folds), 1 folds first, 2 next, ... Purely space-driven — no pixel
    *  breakpoint is involved; a column folds the moment the tile is too
-   *  narrow to keep every column above its legibility floor. */
+   *  narrow to keep the rest above their floors. */
   fold?: number;
 }
 
@@ -93,6 +100,14 @@ interface GridState {
 const states = new Map<string, GridState>();
 const observed = new WeakMap<HTMLElement, ResizeObserver>();
 
+/** Re-run layout whenever the grid's box changes — tile resizes land here. */
+function observeGrid(root: HTMLElement): void {
+  if (observed.has(root)) return;
+  const ro = new ResizeObserver(() => requestAnimationFrame(() => measureAndSize(root)));
+  ro.observe(root);
+  observed.set(root, ro);
+}
+
 function stateFor(id: string): GridState {
   let s = states.get(id);
   if (!s) {
@@ -111,133 +126,79 @@ function cellContent<T>(col: GridColumn<T>, row: T): TemplateResult {
   return html`${value == null ? "" : String(value)}`;
 }
 
-/* ---------------------------------------------------------------- measuring */
+/* ---------------------------------------------------------------- layout */
 
-/** Measure every column's natural width and turn it into a CSS grid template.
- *  Cells are overflow-hidden wrappers around a nowrap inner div, so
- *  scrollWidth reports the content's full width even while the column is
- *  squeezed — measurement never depends on the current layout. */
+/** Lay the grid out with the browser's own track sizing and fold columns
+ *  only when the row truly overflows.
+ *
+ *  The column template is native CSS grid sizing, no measured pixels:
+ *    - the one elastic column is minmax(min, 1fr): it absorbs every spare
+ *      pixel and compresses, with ellipsis, down to its floor;
+ *    - every other column is a max-content track: exactly as wide as its
+ *      widest cell, header included - it is never squeezed into
+ *      illegibility, it either fits at full width or folds away whole;
+ *    - the quick-actions column is max-content too, so the hover buttons
+ *      always have their space.
+ *
+ *  Folding is driven by a single real number - does the wrap overflow after
+ *  this layout - never by hand-tuned widths or breakpoints: fold the next
+ *  column by the caller's priority and re-check. Folded cells are hidden
+ *  with display:none; because their siblings carry explicit grid-column
+ *  placements, the survivors never slide into the wrong track.
+ *
+ *  The pass is idempotent: every run rebuilds the active set from scratch,
+ *  unfolding as the tile grows and refolding as it narrows. */
 function measureAndSize(root: HTMLElement): void {
-  const headCells = Array.from(root.querySelectorAll<HTMLElement>(".dg-head .dg-inner"));
-  const rowInners = Array.from(root.querySelectorAll<HTMLElement>(".dg-row"));
-  if (!headCells.length || !rowInners.length) return;
-  const n = headCells.length;
-  const conf = (root as HTMLElement & { __dgConf?: { mins: number[]; grows: number[]; folds: number[] } }).__dgConf;
+  const headEl = root.querySelector<HTMLElement>(".dg-head");
+  const rowEls = Array.from(root.querySelectorAll<HTMLElement>(".dg-row"));
+  if (!headEl || !rowEls.length) return;
+  const n = headEl.querySelectorAll(":scope > .dg-col").length;
+  const conf = (root as HTMLElement & { __dgConf?: { mins: number[]; folds: number[]; elastic: number } }).__dgConf;
   const mins = conf?.mins ?? [];
-  const grows = conf?.grows ?? [];
   const folds = conf?.folds ?? [];
-  const natural: number[] = new Array(n).fill(0);
-  for (const row of rowInners) {
-    const cells = row.querySelectorAll<HTMLElement>(".dg-inner");
-    for (let i = 0; i < n && i < cells.length; i++) {
-      const w = cells[i]!.scrollWidth;
-      if (w > natural[i]!) natural[i] = w;
-    }
-  }
-  for (let i = 0; i < n; i++) {
-    natural[i] = Math.max(natural[i]!, headCells[i]!.scrollWidth, mins[i] ?? 0, 24);
-  }
-  // The quick-actions column is intrinsic: its buttons cannot shrink, so its
-  // floor is its own natural width, and it never folds.
-  const floor: number[] = natural.map((_, i) => Math.max(mins[i] ?? 0, 24));
-  const foldRank: number[] = natural.map((_, i) => folds[i] ?? 0);
-  if (root.querySelector(".dg-row .dg-actions")) {
-    floor[n - 1] = natural[n - 1]!;
-    foldRank[n - 1] = 0;
-  }
-  const avail = root.clientWidth;
+  const elastic = typeof conf?.elastic === "number" ? conf.elastic : -1;
 
-  const layout = (active: number[]): { sum: number; sumFloor: number } => {
-    let sum = 0, sumFloor = 0;
-    for (const i of active) { sum += natural[i]!; sumFloor += floor[i]!; }
-    return { sum, sumFloor };
+  const slides: HTMLElement[][] = [headEl, ...rowEls].map((scope) =>
+    Array.from(scope.querySelectorAll<HTMLElement>(":scope > .dg-col"))
+  );
+
+  /** Apply an active set: template tracks, explicit placement, hides. */
+  const apply = (active: number[]): void => {
+    const tracks = active.map((i) =>
+      i === elastic ? `minmax(${Math.max(mins[i] ?? 0, 24)}px, 1fr)` : "max-content"
+    );
+    root.style.setProperty("--dg-cols", tracks.join(" "));
+    let track = 1;
+    for (let i = 0; i < n; i++) {
+      const on = active.includes(i);
+      for (const cells of slides) {
+        if (!cells[i]) continue;
+        cells[i]!.style.display = on ? "" : "none";
+        if (on) cells[i]!.style.gridColumn = String(track);
+      }
+      if (on) track++;
+    }
   };
 
-  // Fold columns, highest rank first, until the survivors fit. Essential
-  // columns (rank 0) are never folded away.
-  const active: number[] = [];
-  for (let i = 0; i < n; i++) active.push(i);
-  for (let guard = 0; guard < n; guard++) {
-    const { sum, sumFloor } = layout(active);
-    if (sum <= avail || sumFloor <= avail) break;
-    // Rank 1 folds first, 2 next, ... — so among the survivors pick the
-    // smallest positive rank; 0 means essential and is never chosen.
+  const wrap = root.querySelector<HTMLElement>(".dg-wrap");
+  if (!wrap) return;
+
+  // Start with everything visible; fold while the row genuinely overflows.
+  const active: number[] = Array.from({ length: n }, (_, i) => i);
+  for (let guard = 0; guard <= n; guard++) {
+    apply(active);
+    void wrap.offsetWidth; // force layout before the overflow check
+    if (wrap.scrollWidth <= wrap.clientWidth) break;
+    // Rank 1 folds first, 2 next, ...; the elastic column and rank 0 never.
     let victim = -1, victimRank = Number.POSITIVE_INFINITY;
     for (const i of active) {
-      const r = foldRank[i]!;
+      if (i === elastic) continue;
+      const r = folds[i] ?? 0;
       if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
     }
     if (victim === -1) break;
     active.splice(active.indexOf(victim), 1);
   }
-
-  let template: string;
-  const { sum, sumFloor } = layout(active);
-  if (sum <= avail) {
-    const weights = active.map((i) => natural[i]! * (grows[i] ?? 1));
-    const wTotal = weights.reduce((a, b) => a + b, 0) || 1;
-    template = active.map((i) => `minmax(${Math.round(natural[i]!)}px, ${(weights[i]! / wTotal).toFixed(4)}fr)`).join(" ");
-  } else if (sumFloor <= avail) {
-    // Water-filling: squeeze columns proportionally to the slack between
-    // their natural width and their floor, slowed by the grow weight,
-    // clamping anything that reaches its floor and redistributing until the
-    // row fits the tile exactly. Content that no longer fits ellipsises.
-    const widths = new Map<number, number>(active.map((i) => [i, natural[i]!]));
-    const clamped = new Set<number>();
-    for (let guard = 0; guard < n + 1; guard++) {
-      let sumW = 0;
-      for (const i of active) sumW += widths.get(i)!;
-      if (sumW <= avail) break;
-      let slackSum = 0;
-      const slack = new Map<number, number>();
-      for (const i of active) {
-        const sl = clamped.has(i) ? 0 : Math.max(0, widths.get(i)! - floor[i]!) / (grows[i] ?? 1);
-        slack.set(i, sl);
-        slackSum += sl;
-      }
-      if (slackSum <= 0) break;
-      const deficit = sumW - avail;
-      let moved = 0;
-      for (const i of active) {
-        if (clamped.has(i)) continue;
-        const cut = deficit * (slack.get(i)! / slackSum);
-        if (widths.get(i)! - cut <= floor[i]! + 0.5) {
-          moved += widths.get(i)! - floor[i]!;
-          widths.set(i, floor[i]!);
-          clamped.add(i);
-        } else {
-          widths.set(i, widths.get(i)! - cut);
-          moved += cut;
-        }
-      }
-      if (moved <= 0.5) break;
-    }
-    template = active.map((i) => `${Math.round(widths.get(i)!)}px`).join(" ");
-  } else {
-    // Even the survivors' floors do not fit: fixed columns and the wrap
-    // scrolls horizontally. Nothing is truncated beyond its floor.
-    template = active.map((i) => `${Math.round(natural[i]!)}px`).join(" ");
-  }
-  root.style.setProperty("--dg-cols", template);
-  // Columns folded away are hidden in place; a re-render restores them and
-  // the next measurement pass re-applies, so the DOM never disagrees for
-  // longer than one frame.
-  const hide = new Set<number>();
-  for (let i = 0; i < n; i++) if (!active.includes(i)) hide.add(i);
-  const applyVis = (scope: HTMLElement): void => {
-    const cells = scope.querySelectorAll<HTMLElement>(":scope > .dg-col");
-    cells.forEach((cell, i) => { cell.style.display = hide.has(i) ? "none" : ""; });
-  };
-  const headEl = root.querySelector<HTMLElement>(".dg-head");
-  if (headEl) applyVis(headEl);
-  for (const row of rowInners) applyVis(row);
-}
-
-function observeGrid(root: HTMLElement): void {
-  if (observed.has(root)) return;
-  const ro = new ResizeObserver(() => requestAnimationFrame(() => measureAndSize(root)));
-  ro.observe(root);
-  observed.set(root, ro);
 }
 
 /* ------------------------------------------------------------------ editing */
@@ -313,7 +274,7 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
         ${props.columns.map((col, ci) => {
           const isName = editing && renameText != null && ci === 0;
           return html`
-            <div class="dg-col">
+            <div class="dg-col" style=${col.max != null ? `max-width:${col.max}px` : nothing}>
               <div class="dg-inner">
                 ${isName
                   ? html`<input
@@ -374,7 +335,7 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
       class=${cls}
       data-grid-id=${props.id}
       tabindex="0"
-      .__dgConf=${{ mins: props.columns.map((c) => c.min ?? 0), grows: props.columns.map((c) => c.grow ?? 1), folds: props.columns.map((c) => c.fold ?? 0) }}
+      .__dgConf=${{ mins: props.columns.map((c) => c.min ?? 0), folds: props.columns.map((c) => c.fold ?? 0), elastic: props.columns.findIndex((c) => c.elastic) }}
       @click=${(e: MouseEvent) => {
         const rowEl = (e.target as HTMLElement).closest(".dg-row") as HTMLElement | null;
         if (!rowEl || (e.target as HTMLElement).closest(".dg-actions")) return;
@@ -410,7 +371,7 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
     >
       <div class="dg-wrap">
         <div class="dg-head" aria-hidden="true">
-          ${props.columns.map((c) => html`<div class="dg-col"><div class="dg-inner">${c.label}</div></div>`)}
+          ${props.columns.map((c) => html`<div class="dg-col" style=${c.max != null ? `max-width:${c.max}px` : nothing}><div class="dg-inner">${c.label}</div></div>`)}
           ${props.quickActions ? html`<div class="dg-col dg-actions"><div class="dg-inner"></div></div>` : nothing}
         </div>
         ${rows.length === 0 ? html`<div class="dg-empty">${empty}</div>` : rowsTpl}

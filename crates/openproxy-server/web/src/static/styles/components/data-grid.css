@@ -74,11 +74,14 @@
 
 /* scrollWidth of this inner div is the content's natural width — the whole
    measurement scheme depends on it staying nowrap and overflow-hidden. */
+/* No max-width here: a percentage max-width on the cell content collapses
+   the intrinsic sizing of max-content tracks to zero, which is what made
+   columns fold into 8px slivers. Width control belongs to the track and to
+   the .dg-col wrapper, never to this inner box. */
 .dg-inner {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
