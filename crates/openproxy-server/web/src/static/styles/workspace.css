@@ -66,8 +66,25 @@ body.workspace-host #main, #workspace[hidden], #workspace [hidden] { display: no
 .tile-actions .workspace-icon-button .icon { width: 16px; height: 16px; stroke-width: 1.7; }
 .tile-actions .workspace-icon-button:hover { background: var(--color-primary-soft); color: var(--color-primary); border-color: var(--color-primary); }
 .tile-position { color: var(--color-text-muted); font-size: 10px; margin-right: 4px; font-variant-numeric: tabular-nums; }
-.tile-content { min-width: 0; min-height: 0; overflow: auto; border-radius: 0 0 var(--radius-md) var(--radius-md); }
-.tile-view { padding: 18px; min-width: 0; min-height: 100%; box-sizing: border-box; container: tile-view / inline-size; }
+.tile-content { min-width: 0; min-height: 0; overflow: auto; border-radius: 0 0 var(--radius-md) var(--radius-md); container-type: inline-size; }
+/* Density scales with the tile's real width, continuously: every spacing
+   token inside a tile is clamped between a narrow-tile floor and its normal
+   value, driven by cqw (1% of the tile width). Wide tiles resolve to the
+   exact same paddings as before; as the tile narrows the paddings compress
+   toward the floors with no breakpoint anywhere. cqw inside .tile-view's
+   own padding resolves against .tile-content (a container cannot query
+   itself), the tokens apply to everything below. */
+.tile-view {
+  padding: clamp(6px, 2.2cqw, 18px);
+  min-width: 0;
+  min-height: 100%;
+  box-sizing: border-box;
+  container: tile-view / inline-size;
+  --space-1: clamp(2px, 0.35cqw, 0.25rem);
+  --space-2: clamp(3px, 0.55cqw, 0.5rem);
+  --space-3: clamp(4px, 0.8cqw, 0.75rem);
+  --space-4: clamp(5px, 1cqw, 1rem);
+}
 .tile-view[data-view="logs"] { height: 100%; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .tile-view .table-wrap { max-width: 100%; overflow-x: auto; }
 #create-provider-modal { align-items: center; }

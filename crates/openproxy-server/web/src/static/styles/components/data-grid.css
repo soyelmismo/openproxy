@@ -4,6 +4,7 @@
 
 .dg {
   outline: none;
+  container-type: inline-size;
 }
 
 .dg-wrap {
@@ -77,9 +78,12 @@
   min-width: 0;
 }
 
+/* Cell spacing compresses continuously with the grid's own width (cqw
+   against the .dg container): wide tiles keep the airy 9px, ultra-narrow
+   tiles tighten to a 2px floor instead of wasting rows on padding. */
 .dg-head .dg-inner,
 .dg-row .dg-inner {
-  padding: 0 9px;
+  padding: 0 max(2px, 0.9cqw);
 }
 
 /* scrollWidth of this inner div is the content's natural width — the whole
