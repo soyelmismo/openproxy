@@ -243,9 +243,13 @@ fn build_combo_entry(
         || format!("combo:{}", c.name),
         std::string::ToString::to_string,
     );
-    let combo_type = capabilities::infer_model_type(&c.name);
     let empty_caps = capabilities::ModelCapabilities::empty();
     let caps_ref = effective_caps.unwrap_or(&empty_caps);
+    let combo_type = if caps_ref.image == Some(true) {
+        "image"
+    } else {
+        capabilities::infer_model_type(&c.name)
+    };
 
     let input_modalities: Vec<String> =
         capabilities::infer_input_modalities_for_model(&c.name, caps_ref)

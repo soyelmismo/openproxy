@@ -109,6 +109,12 @@ pub struct ModelCapabilities {
         deserialize_with = "deserialize_flex_bool"
     )]
     pub video: Option<bool>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_flex_bool"
+    )]
+    pub image: Option<bool>,
 }
 
 impl ModelCapabilities {
@@ -173,6 +179,9 @@ impl ModelCapabilities {
         }
         if other.video == Some(true) {
             self.video = Some(true);
+        }
+        if other.image == Some(true) {
+            self.image = Some(true);
         }
     }
 }

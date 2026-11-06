@@ -293,7 +293,7 @@ pub fn compute_effective_capabilities(
 
     let mut merged = openproxy_types::capabilities::ModelCapabilities::empty();
     let mut stmt = conn
-        .prepare("SELECT model_id, capabilities_json FROM models WHERE id = ?1")
+        .prepare("SELECT model_id, capabilities_json, model_type FROM models WHERE id = ?1")
         .map_err(crate::error::map_db_error)?;
 
     for t in targets {
@@ -304,17 +304,24 @@ pub fn compute_effective_capabilities(
         let mut target_caps = openproxy_types::capabilities::ModelCapabilities::empty();
 
         if let Some(row_id) = t.model_row_id {
-            let model_info: Option<(String, Option<String>)> = stmt
+            let model_info: Option<(String, Option<String>, String)> = stmt
                 .query_row(rusqlite::params![row_id.0], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
                 })
                 .ok();
 
-            if let Some((model_id, caps_json)) = model_info {
+            if let Some((model_id, caps_json, model_type)) = model_info {
                 target_caps = caps_json.as_deref().map_or_else(
                     || openproxy_types::capabilities::infer_capabilities(&model_id),
                     |json| openproxy_types::capabilities::ModelCapabilities::from_json(Some(json)),
                 );
+                if model_type == "image" || model_type == "text-to-image" {
+                    target_caps.image = Some(true);
+                }
             }
         }
 
