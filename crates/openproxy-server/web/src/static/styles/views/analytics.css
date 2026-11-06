@@ -871,3 +871,21 @@ table.monthly-matrix {
   .analytics-details > summary { align-items: flex-start; flex-direction: column; }
   .analytics-details > summary::after { position: absolute; right: var(--space-4); }
 }
+
+/* Tile-width variants. The media queries above answer the viewport (mobile
+   panel); these answer the TILE: the workspace can shrink the analytics tile
+   to a phone-width pane on any screen, and at that width it must stack like
+   the mobile layout does. Same thresholds as the media block. */
+@container (max-width: 1024px) {
+  .analytics-primary-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 768px) {
+  .analytics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-insight-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 640px) {
+  .analytics-metrics { grid-template-columns: 1fr; gap: var(--space-2); }
+  .analytics-metric-card { padding: var(--space-2); }
+  .analytics-status-legend { display: flex; }
+  .analytics-chart-container { height: 250px; }
+}

@@ -78,12 +78,14 @@
   min-width: 0;
 }
 
-/* Cell spacing compresses continuously with the grid's own width (cqw
-   against the .dg container): wide tiles keep the airy 9px, ultra-narrow
-   tiles tighten to a 2px floor instead of wasting rows on padding. */
+/* Cell spacing compresses continuously with the grid's own width. The value
+   is written once per grid (--dg-pad in flushMeasures), not evaluated as cqw
+   per cell: on a 600-row grid that was 3600 container-unit resolutions per
+   resize frame. Wide grids keep the airy 9px, ultra-narrow ones tighten to
+   the 2px floor. */
 .dg-head .dg-inner,
 .dg-row .dg-inner {
-  padding: 0 max(2px, 0.9cqw);
+  padding: 0 var(--dg-pad, 9px);
 }
 
 /* scrollWidth of this inner div is the content's natural width — the whole

@@ -265,11 +265,27 @@ export function observeResize(u: uPlot, container: HTMLElement): () => void {
     return () => window.removeEventListener("resize", handler);
   }
   let rafId: number | null = null;
+  let timerId: number | null = null;
+  let lastRun = 0;
+  const run = (): void => {
+    lastRun = performance.now();
+    resizeChart(u, container);
+  };
   const scheduleResize = (): void => {
     if (rafId !== null) return;
     rafId = requestAnimationFrame(() => {
       rafId = null;
-      resizeChart(u, container);
+      const since = performance.now() - lastRun;
+      // A tile drag fires this every frame; resizing + redrawing a uPlot per
+      // frame janks the drag. Throttle to ~8 updates/s and always flush a
+      // trailing one so the chart ends at its true size when resizing stops.
+      if (since < 120) {
+        if (timerId === null) {
+          timerId = window.setTimeout(() => { timerId = null; scheduleResize(); }, 120 - since);
+        }
+        return;
+      }
+      run();
     });
   };
   const ro: ResizeObserver = new ResizeObserver(scheduleResize);
@@ -281,6 +297,10 @@ export function observeResize(u: uPlot, container: HTMLElement): () => void {
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
       rafId = null;
+    }
+    if (timerId !== null) {
+      clearTimeout(timerId);
+      timerId = null;
     }
     ro.disconnect();
   };

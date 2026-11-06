@@ -175,11 +175,24 @@ function resize(axis: "column" | "row", e: PointerEvent): void {
   const target = e.currentTarget as HTMLElement;
   target.setPointerCapture(e.pointerId);
   document.body.classList.add("workspace-resizing");
+  // Pointermove can fire far faster than frames; each CSS-var write
+  // invalidates the whole workspace layout, so coalesce to one write per
+  // animation frame - the write-read-write-read ping-pong between this and
+  // the tile observers' reads was forcing 3-4 full layouts per frame.
+  let pendingRatio: number | null = null;
+  let dragRaf = 0;
+  const apply = (): void => {
+    dragRaf = 0;
+    if (pendingRatio === null) return;
+    workspace![axis] = clampSplit(pendingRatio);
+    grid.style.setProperty(axis === "column" ? "--workspace-column" : "--workspace-row", `${workspace![axis]}%`);
+    pendingRatio = null;
+  };
   const move = (ev: PointerEvent): void => {
     const start = axis === "column" ? rect.left : rect.top;
     const size = axis === "column" ? rect.width : rect.height;
-    workspace![axis] = clampSplit(((axis === "column" ? ev.clientX : ev.clientY) - start) / Math.max(1, size) * 100);
-    grid.style.setProperty(axis === "column" ? "--workspace-column" : "--workspace-row", `${workspace![axis]}%`);
+    pendingRatio = ((axis === "column" ? ev.clientX : ev.clientY) - start) / Math.max(1, size) * 100;
+    if (!dragRaf) dragRaf = requestAnimationFrame(apply);
   };
   const stop = (): void => {
     target.removeEventListener("pointermove", move);
@@ -187,6 +200,8 @@ function resize(axis: "column" | "row", e: PointerEvent): void {
     target.removeEventListener("pointercancel", stop);
     target.removeEventListener("lostpointercapture", stop);
     document.body.classList.remove("workspace-resizing");
+    if (dragRaf) { cancelAnimationFrame(dragRaf); dragRaf = 0; }
+    apply();
     changed();
   };
   target.addEventListener("pointermove", move);
@@ -254,7 +269,31 @@ function paintContext(): void {
   if (!root || !workspace) return;
   render(contextTemplate(), root);
 }
+/** Tile density tokens: recomputed per tile per resize, quantized to 0.5px
+ *  steps so most drag frames write nothing. Mirrors the old cqw clamps. */
+function writeTileTokens(el: HTMLElement): void {
+  const w = el.clientWidth;
+  if (w <= 0) return;
+  const q = (v: number): string => `${Math.round(v * 2) / 2}px`;
+  const s = el.style;
+  s.setProperty("--tile-pad", q(Math.min(18, Math.max(6, w * 0.022))));
+  s.setProperty("--space-1", q(Math.min(4, Math.max(2, w * 0.0035))));
+  s.setProperty("--space-2", q(Math.min(8, Math.max(3, w * 0.0055))));
+  s.setProperty("--space-3", q(Math.min(12, Math.max(4, w * 0.008))));
+  s.setProperty("--space-4", q(Math.min(16, Math.max(5, w * 0.01))));
+}
+
+let tilesRaf = 0;
+function scheduleTileTokens(): void {
+  if (tilesRaf) return;
+  tilesRaf = requestAnimationFrame(() => {
+    tilesRaf = 0;
+    for (const el of document.querySelectorAll<HTMLElement>(".tile-content")) writeTileTokens(el);
+  });
+}
+
 function paint(): void {
+  scheduleTileTokens();
   const root = document.getElementById("workspace");
   if (!root || !workspace) return;
   const s = workspace;
@@ -348,6 +387,13 @@ export function mountWorkspace(route: string): void {
   requestUpdate();
   if (initialized) return;
   initialized = true;
+  // Tile density tokens. The clamped cqw values moved out of CSS: resolving
+  // container units per element per resize frame (every descendant that
+  // touches a spacing token) made tile dragging cost ~75ms of layout per
+  // frame. The workspace now writes plain pixel tokens once per tile per
+  // resize, and the whole subtree inherits ordinary lengths.
+  const gridEl = document.querySelector<HTMLElement>(".workspace-grid");
+  if (gridEl) new ResizeObserver(scheduleTileTokens).observe(gridEl);
   document.addEventListener("click", (e: MouseEvent) => {
     const target = e.target;
     if (!(target instanceof Element)) return;

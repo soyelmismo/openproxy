@@ -102,12 +102,19 @@ const states = new Map<string, GridState>();
  *  that did not replace the rows array (most live-update re-renders) cannot
  *  have changed any cell width, so the refresh is skipped entirely. */
 const lastRefresh = new WeakMap<HTMLElement, { rows: unknown; w: number; h: number }>();
+/** Last per-column natural widths. Tile resizes reuse them (see scheduleMeasure/flushMeasures). */
+const naturalsCache = new WeakMap<HTMLElement, number[]>();
+/** Last applied fold state per column - lets the apply diff instead of
+ *  rewriting every cell's visibility on each resize frame. */
+const lastActiveCols = new WeakMap<HTMLElement, boolean[]>();
+/** Last written cell-padding step (see flushMeasures). */
+const lastPadCache = new WeakMap<HTMLElement, string>();
 const observed = new WeakMap<HTMLElement, ResizeObserver>();
 
 /** Re-run layout whenever the grid's box changes — tile resizes land here. */
 function observeGrid(root: HTMLElement): void {
   if (observed.has(root)) return;
-  const ro = new ResizeObserver(() => requestAnimationFrame(() => measureAndSize(root)));
+  const ro = new ResizeObserver(() => scheduleMeasure(root, { reuseNaturals: true }));
   ro.observe(root);
   observed.set(root, ro);
 }
@@ -168,81 +175,146 @@ function cellContent<T>(col: GridColumn<T>, row: T): TemplateResult {
  * ResizeObserver on top of analytics' periodic re-renders spent 4.1
  * seconds of a 5-second idle window in this function on a single grid.)
  */
-function measureAndSize(root: HTMLElement): void {
+
+interface MeasureEntry {
+  root: HTMLElement;
+  reuseNaturals: boolean;
+  headEl: HTMLElement;
+  rowEls: HTMLElement[];
+  n: number;
+  mins: number[];
+  folds: number[];
+  elastic: number;
+  slides: HTMLElement[][];
+  natural: number[] | undefined;
+  avail: number;
+}
+
+/** All pending grid relayouts. Every layout READ for every grid happens in
+ *  one batch, then every WRITE: interleaving reads and writes across N grids
+ *  (each grid's RO callback reading after another's write) forced 3-4 full
+ *  workspace relayouts per drag frame. */
+const measureQueue = new Map<HTMLElement, MeasureEntry>();
+let measureFlushRaf = 0;
+
+function scheduleMeasure(root: HTMLElement, opts: { reuseNaturals?: boolean } = {}): void {
   const headEl = root.querySelector<HTMLElement>(".dg-head");
   const rowEls = Array.from(root.querySelectorAll<HTMLElement>(".dg-row"));
   if (!headEl || !rowEls.length) return;
   const n = headEl.querySelectorAll(":scope > .dg-col").length;
   const conf = (root as HTMLElement & { __dgConf?: { mins: number[]; folds: number[]; elastic: number } }).__dgConf;
-  const mins = conf?.mins ?? [];
-  const folds = conf?.folds ?? [];
-  const elastic = typeof conf?.elastic === "number" ? conf.elastic : -1;
-
-  const slides: HTMLElement[][] = [headEl, ...rowEls].map((scope) =>
-    Array.from(scope.querySelectorAll<HTMLElement>(":scope > .dg-col"))
-  );
-
-  // One batched read: the natural width of every column is the widest
-  // cell content. Read from the .dg-inner box, never the cell: the cell
-  // fills its track, so ITS scrollWidth would report the track width and
-  // tracks would never shrink; the inner shrink-to-fit box reports the
-  // true content width regardless of the track it sits in.
-  const natural: number[] = new Array(n).fill(0);
-  for (const cells of slides) {
-    for (let i = 0; i < n && i < cells.length; i++) {
-      const inner = (cells[i]!.firstElementChild as HTMLElement) ?? cells[i]!;
-      const w = inner.scrollWidth;
-      if (w > natural[i]!) natural[i] = w;
-    }
-  }
-
-  // The quick-actions column is intrinsic: its buttons cannot shrink, so
-  // its floor is its own natural width, and it never folds.
-  const floor: number[] = natural.map((_, i) => Math.max(mins[i] ?? 0, 24));
-  const foldRank: number[] = natural.map((_, i) => folds[i] ?? 0);
-  if (root.querySelector(".dg-row .dg-actions")) {
-    floor[n - 1] = natural[n - 1]!;
-    foldRank[n - 1] = 0;
-  }
-
-  // Fold rank 1 first, 2 next, ... until what remains fits the tile with
-  // the elastic column at its floor. Pure arithmetic - no DOM inside.
-  const active: number[] = Array.from({ length: n }, (_, i) => i);
-  const needed = (list: number[]): number =>
-    list.reduce((a, i) => a + (i === elastic ? floor[i]! : natural[i]!), 0);
-  const avail = root.clientWidth;
-  for (let guard = 0; guard < n; guard++) {
-    if (needed(active) <= avail) break;
-    let victim = -1, victimRank = Number.POSITIVE_INFINITY;
-    for (const i of active) {
-      if (i === elastic) continue;
-      const r = foldRank[i]!;
-      if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
-    }
-    if (victim === -1) break;
-    active.splice(active.indexOf(victim), 1);
-  }
-
-  // Survivors to px (identical on every row, so headers and body share one
-  // grid mapping), the elastic column to minmax(floor, 1fr), folded columns
-  // to 0px tracks with visibility:hidden (auto-placement keeps the column
-  // mapping stable across re-renders). Written only when it differs.
-  const tpl = Array.from({ length: n }, (_, i) => {
-    if (!active.includes(i)) return "0px";
-    return i === elastic
-      ? `minmax(${Math.ceil(floor[i]!)}px, 1fr)`
-      : `${Math.ceil(natural[i]!)}px`;
+  measureQueue.set(root, {
+    root,
+    reuseNaturals: opts.reuseNaturals === true,
+    headEl,
+    rowEls,
+    n,
+    mins: conf?.mins ?? [],
+    folds: conf?.folds ?? [],
+    elastic: typeof conf?.elastic === "number" ? conf.elastic : -1,
+    slides: [headEl, ...rowEls].map((scope) =>
+      Array.from(scope.querySelectorAll<HTMLElement>(":scope > .dg-col"))
+    ),
+    natural: undefined,
+    avail: 0,
   });
-  const tplStr = tpl.join(" ");
-  if (root.style.getPropertyValue("--dg-cols") === tplStr) return;
+  if (!measureFlushRaf) {
+    measureFlushRaf = requestAnimationFrame(flushMeasures);
+  }
+}
 
-  root.style.setProperty("--dg-cols", tplStr);
-  for (let i = 0; i < n; i++) {
-    const on = active.includes(i);
-    for (const cells of slides) {
-      if (!cells[i]) continue;
-      cells[i]!.style.visibility = on ? "" : "hidden";
+function flushMeasures(): void {
+  measureFlushRaf = 0;
+  const items = Array.from(measureQueue.values());
+  measureQueue.clear();
+
+  // READ phase: naturals (only when not reusable) + available width, with
+  // no writes in between, so a single relayout serves the whole batch.
+  for (const it of items) {
+    let natural = it.reuseNaturals ? naturalsCache.get(it.root) : undefined;
+    if (!natural || natural.length !== it.n) {
+      // The natural width of every column is the widest cell content. Read
+      // from the .dg-inner box, never the cell: the cell fills its track, so
+      // ITS scrollWidth would report the track width and tracks would never
+      // shrink; the inner shrink-to-fit box reports the true content width
+      // regardless of the track it sits in.
+      natural = new Array(it.n).fill(0);
+      for (const cells of it.slides) {
+        for (let i = 0; i < it.n && i < cells.length; i++) {
+          const inner = (cells[i]!.firstElementChild as HTMLElement) ?? cells[i]!;
+          const w = inner.scrollWidth;
+          if (w > natural[i]!) natural[i] = w;
+        }
+      }
+      naturalsCache.set(it.root, natural);
     }
+    it.natural = natural;
+    it.avail = it.root.clientWidth;
+  }
+
+  // WRITE phase: templates + visibility diffs, no reads.
+  for (const it of items) {
+    const natural = it.natural!;
+    const n = it.n;
+    // The quick-actions column is intrinsic: its buttons cannot shrink, so
+    // its floor is its own natural width, and it never folds.
+    const floor: number[] = natural.map((_, i) => Math.max(it.mins[i] ?? 0, 24));
+    const foldRank: number[] = natural.map((_, i) => it.folds[i] ?? 0);
+    if (it.root.querySelector(".dg-row .dg-actions")) {
+      floor[n - 1] = natural[n - 1]!;
+      foldRank[n - 1] = 0;
+    }
+
+    // Fold rank 1 first, 2 next, ... until what remains fits the tile with
+    // the elastic column at its floor. Pure arithmetic - no DOM inside.
+    const active: number[] = Array.from({ length: n }, (_, i) => i);
+    const needed = (list: number[]): number =>
+      list.reduce((a, i) => a + (i === it.elastic ? floor[i]! : natural[i]!), 0);
+    for (let guard = 0; guard < n; guard++) {
+      if (needed(active) <= it.avail) break;
+      let victim = -1, victimRank = Number.POSITIVE_INFINITY;
+      for (const i of active) {
+        if (i === it.elastic) continue;
+        const r = foldRank[i]!;
+        if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
+      }
+      if (victim === -1) break;
+      active.splice(active.indexOf(victim), 1);
+    }
+
+    // Survivors to px (identical on every row, so headers and body share one
+    // grid mapping), the elastic column to minmax(floor, 1fr), folded columns
+    // to 0px tracks with visibility:hidden (auto-placement keeps the column
+    // mapping stable across re-renders). Written only when it differs.
+    const tpl = Array.from({ length: n }, (_, i) => {
+      if (!active.includes(i)) return "0px";
+      return i === it.elastic
+        ? `minmax(${Math.ceil(floor[i]!)}px, 1fr)`
+        : `${Math.ceil(natural[i]!)}px`;
+    });
+    // Cell padding, quantized to steps so a pure width change does not
+    // restyle every .dg-inner of a large grid on every drag frame.
+    const pad = it.avail > 1000 ? "9px" : it.avail > 700 ? "7px" : it.avail > 450 ? "5px" : it.avail > 280 ? "3px" : "2px";
+    const lastPad = lastPadCache.get(it.root);
+    if (lastPad !== pad) {
+      it.root.style.setProperty("--dg-pad", pad);
+      lastPadCache.set(it.root, pad);
+    }
+    const tplStr = tpl.join(" ");
+    if (it.root.style.getPropertyValue("--dg-cols") === tplStr) continue;
+
+    it.root.style.setProperty("--dg-cols", tplStr);
+    // Only cells whose column actually folded or unfolded get a write.
+    const prev = lastActiveCols.get(it.root);
+    for (let i = 0; i < n; i++) {
+      const on = active.includes(i);
+      if (prev && prev[i] === on) continue;
+      for (const cells of it.slides) {
+        if (!cells[i]) continue;
+        cells[i]!.style.visibility = on ? "" : "hidden";
+      }
+    }
+    lastActiveCols.set(it.root, Array.from({ length: n }, (_, i) => active.includes(i)));
   }
 }
 
@@ -308,7 +380,7 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
       const last = lastRefresh.get(root);
       if (last && last.rows === rowsRef && last.w === w && last.h === h) return;
       lastRefresh.set(root, { rows: rowsRef, w, h });
-      requestAnimationFrame(() => measureAndSize(root));
+      scheduleMeasure(root);
     }, 0);
   }
 
@@ -447,7 +519,7 @@ export function refreshDataGridLayout(gridId: string): void {
   const root = document.querySelector<HTMLElement>(`[data-grid-id="${gridId}"]`);
   if (!root) return;
   observeGrid(root);
-  requestAnimationFrame(() => measureAndSize(root));
+  scheduleMeasure(root);
 }
 
 function onGridKeydown<T>(e: KeyboardEvent, props: DataGridProps<T>): void {
