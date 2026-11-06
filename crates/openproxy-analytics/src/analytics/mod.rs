@@ -70,6 +70,11 @@ fn push_exclusions<'a>(
     params: &mut Vec<&'a dyn ToSql>,
     f: &'a UsageFilter,
 ) {
+    // Public-scope queries must never match internal provider/model columns:
+    // the exclusions live in the visibility clause (public names only).
+    if f.scope_public.is_some() {
+        return;
+    }
     for (col, values) in [
         ("upstream_model_id", &f.exclude_models),
         ("provider_id", &f.exclude_providers),
@@ -88,36 +93,119 @@ fn push_exclusions<'a>(
     }
 }
 
+/// Public-sandbox visibility clause (same semantics as
+/// `usage::analytics::filter::push_public_visibility`, but bound to this
+/// module's borrowed-param builder): combo rows are public via the combo
+/// alias, direct rows via the key's whitelisted catalog entries.
+fn push_public_visibility<'a>(
+    clauses: &mut Vec<String>,
+    params: &mut Vec<&'a dyn ToSql>,
+    scope: &'a crate::usage::analytics::filter::PublicScope,
+) {
+    let mut push_list = |sql: &mut String, col: &str, values: &'a [String], negated: bool| {
+        if values.is_empty() {
+            return;
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(values.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(
+            " AND {col} {} ({placeholders})",
+            if negated { "NOT IN" } else { "IN" }
+        ));
+        for v in values {
+            params.push(v);
+        }
+    };
+    let excluded = &scope.excluded_public;
+
+    let mut combo_sub = String::from(
+        "(combo_id IS NOT NULL AND combo_id > 0 AND combo_id IN \
+         (SELECT c.id FROM combos c WHERE 1=1",
+    );
+    push_list(&mut combo_sub, "c.name", excluded, true);
+    combo_sub.push_str("))");
+
+    let mut direct_sub = String::from(
+        "((combo_id IS NULL OR combo_id <= 0) AND model_row_id IS NOT NULL \
+         AND model_row_id IN (SELECT m.id FROM models m WHERE 1=1",
+    );
+    push_list(&mut direct_sub, "m.model_id", excluded, true);
+    if let Some(providers) = &scope.allowed_providers {
+        push_list(&mut direct_sub, "m.provider_id", providers, false);
+    }
+    if let Some(models) = &scope.allowed_models {
+        push_list(&mut direct_sub, "m.model_id", models, false);
+    }
+    direct_sub.push_str("))");
+
+    clauses.push(format!("({combo_sub} OR {direct_sub})"));
+}
+
 impl<'a> BuiltWhere<'a> {
     fn from_filter(f: &'a UsageFilter) -> Self {
         let mut clauses: Vec<String> = Vec::new();
         let mut params: Vec<&'a dyn ToSql> = Vec::new();
 
         if let Some(from) = &f.from {
-            clauses.push("created_at >= datetime(?)".into());
+            // Qualified: public-scope queries JOIN tables that also carry a
+            // `created_at` column.
+            clauses.push("usage.created_at >= datetime(?)".into());
             params.push(from);
         }
         if let Some(to) = &f.to {
-            clauses.push("created_at < datetime(?)".into());
+            clauses.push("usage.created_at < datetime(?)".into());
             params.push(to);
         }
-        if let Some(pid) = &f.provider_id {
-            clauses.push("provider_id = ?".into());
-            params.push(&pid.0);
+        // Tenant isolation is enforced here as well: latency/race queries
+        // were previously ignoring api_key_id, which leaked cross-key stats.
+        if let Some(kid) = &f.api_key_id {
+            clauses.push("api_key_id = ?".into());
+            params.push(&kid.0);
         }
-        if let Some(mid) = &f.model_id {
-            clauses.push("upstream_model_id = ?".into());
-            params.push(mid);
+        if let Some(scope) = &f.scope_public {
+            // Public sandbox: internal provider/model columns are never
+            // matched (they are not even filterable) and the visibility
+            // clause restricts rows to the public projection space.
+            if let Some(mid) = &f.model_id {
+                clauses.push(
+                    "(combo_id IN (SELECT c.id FROM combos c WHERE c.name = ?) OR \
+                     (model_row_id IS NOT NULL AND model_row_id IN \
+                     (SELECT m.id FROM models m WHERE m.model_id = ?)))"
+                        .into(),
+                );
+                params.push(mid);
+                params.push(mid);
+            }
+            if let Some(aid) = &f.account_id {
+                clauses.push("account_id = ?".into());
+                params.push(&aid.0);
+            }
+            if let Some(cid) = &f.combo_id {
+                clauses.push("combo_id = ?".into());
+                params.push(&cid.0);
+            }
+            push_public_visibility(&mut clauses, &mut params, scope);
+        } else {
+            if let Some(pid) = &f.provider_id {
+                clauses.push("provider_id = ?".into());
+                params.push(&pid.0);
+            }
+            if let Some(mid) = &f.model_id {
+                clauses.push("upstream_model_id = ?".into());
+                params.push(mid);
+            }
+            if let Some(aid) = &f.account_id {
+                clauses.push("account_id = ?".into());
+                params.push(&aid.0);
+            }
+            if let Some(cid) = &f.combo_id {
+                clauses.push("combo_id = ?".into());
+                params.push(&cid.0);
+            }
+            push_exclusions(&mut clauses, &mut params, f);
         }
-        if let Some(aid) = &f.account_id {
-            clauses.push("account_id = ?".into());
-            params.push(&aid.0);
-        }
-        if let Some(cid) = &f.combo_id {
-            clauses.push("combo_id = ?".into());
-            params.push(&cid.0);
-        }
-        push_exclusions(&mut clauses, &mut params, f);
 
         if clauses.is_empty() {
             return Self {
@@ -259,15 +347,23 @@ fn build_race_where_clause(where_sql: &str) -> String {
     let mut clauses: Vec<String> = Vec::new();
     if !where_sql.is_empty() {
         let bare = where_sql.trim_start_matches("WHERE ");
+        // Qualify bare columns for the race join. Already-qualified tokens
+        // (usage.created_at from the builder, m.provider_id from the public
+        // sandbox subqueries) are masked out so the replace stays idempotent.
         let qualified = bare
+            .replace("usage.created_at", "\u{1}A\u{1}")
+            .replace("m.provider_id", "\u{1}B\u{1}")
             .replace("created_at", "usage.created_at")
+            .replace("model_row_id", "usage.model_row_id")
             .replace("provider_id", "usage.provider_id")
             .replace("upstream_model_id", "usage.upstream_model_id")
             .replace("account_id", "usage.account_id")
             .replace("combo_id", "usage.combo_id")
             .replace("api_key_id", "usage.api_key_id")
             .replace("race_total", "usage.race_total")
-            .replace("race_lost", "usage.race_lost");
+            .replace("race_lost", "usage.race_lost")
+            .replace("\u{1}A\u{1}", "usage.created_at")
+            .replace("\u{1}B\u{1}", "m.provider_id");
         clauses.push(format!("({qualified})"));
     }
     clauses.push("usage.race_total > 1".to_string());

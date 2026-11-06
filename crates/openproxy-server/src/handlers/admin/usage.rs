@@ -50,6 +50,9 @@ pub struct UsageQuery {
     pub exclude_models: Option<String>,
     /// Comma-separated providers excluded from every aggregate.
     pub exclude_providers: Option<String>,
+    /// Set by the tenant/public-scope guard, not by the query string.
+    #[serde(skip)]
+    pub public_scope: Option<core_usage::analytics::filter::PublicScope>,
 }
 
 /// Comma-separated query value -> trimmed, deduped, non-empty list.
@@ -98,14 +101,10 @@ macro_rules! analytics_handler {
             Query(mut q): Query<UsageQuery>,
         ) -> Result<Json<$res_ty>, ApiError> {
             // Security: Enforce tenant isolation for API keys without full "manage" scope.
-            // If the key has only "analytics" scope, its queries are strictly scoped to its own key id.
+            // If the key has only "analytics" scope, its queries are strictly scoped to its own key id
+            // and projected onto the public space (combo aliases / whitelisted catalog entries).
             if let Some(axum::Extension(ref id)) = identity {
-                if !id.has_manage_scope() {
-                    let own_key_id = id.key_id().ok_or_else(|| {
-                        ApiError(CoreError::Auth("unauthenticated key".into()))
-                    })?;
-                    q.api_key_id = Some(own_key_id);
-                }
+                apply_tenant_and_public_scope(id, &mut q)?;
             }
 
             crate::error::run_blocking(move || {
@@ -117,6 +116,43 @@ macro_rules! analytics_handler {
             .await
         }
     };
+}
+
+/// Tenant isolation + public-scope sandbox for non-manage keys.
+/// - `api_key_id` is forced to the calling key (own data only).
+/// - Ranking exclusions move to the public space: they exclude combo aliases
+///   and whitelisted catalog entries, never upstream internals.
+/// - The projection the query sees is `{combo alias, whitelisted catalog}`;
+///   upstream model ids and internal providers never leave the server.
+fn apply_tenant_and_public_scope(
+    id: &super::auth::AdminIdentity,
+    q: &mut UsageQuery,
+) -> Result<(), ApiError> {
+    if id.has_manage_scope() {
+        return Ok(());
+    }
+    let own_key_id = id
+        .key_id()
+        .ok_or_else(|| ApiError(CoreError::Auth("unauthenticated key".into())))?;
+    q.api_key_id = Some(own_key_id);
+
+    let mut excluded = parse_exclude_list(q.exclude_models.as_deref());
+    excluded.extend(parse_exclude_list(q.exclude_providers.as_deref()));
+    excluded.sort();
+    excluded.dedup();
+    q.exclude_models = None;
+    q.exclude_providers = None;
+
+    let (allowed_providers, allowed_models) = match &id.key {
+        Some(k) => (k.allowed_providers.clone(), k.allowed_models.clone()),
+        None => (None, None),
+    };
+    q.public_scope = Some(core_usage::analytics::filter::PublicScope {
+        excluded_public: excluded,
+        allowed_providers,
+        allowed_models,
+    });
+    Ok(())
 }
 
 analytics_handler!(
@@ -179,14 +215,10 @@ pub async fn usage_errors(
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     Query(mut q): Query<UsageQuery>,
 ) -> Result<Json<Vec<core_usage::ErrorRow>>, ApiError> {
-    // Security: Enforce tenant isolation for API keys without full "manage" scope.
+    // Security: Enforce tenant isolation + public projection for API keys
+    // without full "manage" scope.
     if let Some(axum::Extension(ref id)) = identity {
-        if !id.has_manage_scope() {
-            let own_key_id = id.key_id().ok_or_else(|| {
-                ApiError(CoreError::Auth("unauthenticated key".into()))
-            })?;
-            q.api_key_id = Some(own_key_id);
-        }
+        apply_tenant_and_public_scope(id, &mut q)?;
     }
 
     crate::error::run_blocking(move || {
@@ -290,6 +322,14 @@ pub async fn usage_detail(
     let identity = identity
         .ok_or_else(|| ApiError(CoreError::Auth("unauthenticated".into())))?
         .0;
+    // Analytics-only keys cannot read row detail at all: the response carries
+    // upstream internals (target model/provider of the combo) that the public
+    // projection deliberately hides.
+    if !identity.has_manage_scope() {
+        return Err(ApiError(CoreError::Auth(
+            "forbidden: usage detail requires manage scope".into(),
+        )));
+    }
     crate::error::run_blocking(move || {
         let r = s.db_pool().reader();
 
@@ -299,16 +339,6 @@ pub async fn usage_detail(
                 "usage row not found for query {q:?}"
             ))));
         };
-
-        // Security: If the key lacks manage scope, ensure this usage row belongs to it.
-        if !identity.has_manage_scope() {
-            let caller_key_id = identity.key_id();
-            if r.api_key_id.map(|k| k.0) != caller_key_id {
-                return Err(ApiError(CoreError::Auth(
-                    "forbidden: cannot view usage detail of other keys".into(),
-                )));
-            }
-        }
 
         Ok(Json(UsageDetailResponse { row: r }))
     })
@@ -551,6 +581,7 @@ impl UsageQuery {
             api_key_id: self.api_key_id.map(ApiKeyId),
             exclude_models: parse_exclude_list(self.exclude_models.as_deref()),
             exclude_providers: parse_exclude_list(self.exclude_providers.as_deref()),
+            scope_public: self.public_scope,
         })
     }
 }

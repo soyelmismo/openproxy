@@ -297,3 +297,127 @@ fn by_model_success_only_and_exclusions() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].upstream_model_id, "m1");
 }
+
+/// Public-scope sandbox (analytics-only keys): rows must project to the
+/// public space - combo rows show the combo alias, direct rows the
+/// whitelisted catalog entry. Upstream internals (internal provider of the
+/// combo targets, non-whitelisted catalog providers) must never appear.
+#[test]
+fn public_scope_projects_combo_alias_and_whitelisted_catalog() {
+    use crate::usage::analytics::aggregates::{by_model, by_provider, errors, summary};
+    use crate::usage::analytics::filter::{PublicScope, UsageFilter};
+    use openproxy_types::ids::ProviderId;
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(TEST_USAGE_SCHEMA).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE usage ADD COLUMN combo_id INTEGER;
+         ALTER TABLE usage ADD COLUMN model_row_id INTEGER;
+         CREATE TABLE combos (id INTEGER PRIMARY KEY, name TEXT NOT NULL, created_at TEXT);
+         CREATE TABLE models (id INTEGER PRIMARY KEY, provider_id TEXT NOT NULL, model_id TEXT NOT NULL, created_at TEXT);
+         INSERT INTO combos (id, name) VALUES (569, 'minmax');
+         INSERT INTO models (id, provider_id, model_id) VALUES
+             (10, 'secret-upstream', 'minimax/minimax-m3.1-flash'),
+             (11, 'xkiro', 'xkiro/qwen/qwen3.8-max:free'),
+             (12, 'not-allowed-prov', 'notallowed/model');
+         INSERT INTO usage (request_id, trace_id, provider_id, upstream_model_id, status_code, total_ms, created_at, combo_id, model_row_id, api_key_id) VALUES
+             ('c1', 't1', 'vercel-gateway', 'minimax/minimax-m3.1-flash', 200, 100, '2026-01-01 10:00:00', 569, 10, 42),
+             ('c2', 't2', 'vercel-gateway', 'minimax/minimax-m3.1-flash', 500, 100, '2026-01-01 10:01:00', 569, 10, 42),
+             ('d1', 't3', 'xkiro', 'xkiro/qwen/qwen3.8-max:free', 200, 100, '2026-01-01 10:02:00', -1, 11, 42),
+             ('d2', 't4', 'not-allowed-prov', 'notallowed/model', 200, 100, '2026-01-01 10:03:00', -1, 12, 42);",
+    )
+    .unwrap();
+
+    let scope = || PublicScope {
+        excluded_public: vec![],
+        allowed_providers: Some(vec!["xkiro".into()]),
+        allowed_models: None,
+    };
+
+    // Summary: only c1, c2 (combo) and d1 (whitelisted direct) are visible.
+    let s = summary(
+        &conn,
+        &UsageFilter {
+            api_key_id: Some(openproxy_types::ids::ApiKeyId(42)),
+            scope_public: Some(scope()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(s.all_requests, 3);
+    assert_eq!(s.unique_requests, 2); // c1 + d1 (c2 failed)
+    assert_eq!(s.failed_requests, 1);
+
+    // by_model: combo rows collapse under the alias, direct rows under the
+    // catalog model_id. Internal provider names never surface.
+    let rows = by_model(
+        &conn,
+        &UsageFilter {
+            api_key_id: Some(openproxy_types::ids::ApiKeyId(42)),
+            scope_public: Some(scope()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    let combo = rows.iter().find(|r| r.upstream_model_id == "minmax").unwrap();
+    assert_eq!(combo.total_rows, 2);
+    assert_eq!(combo.unique_requests, 1);
+    assert_eq!(combo.provider_id, ProviderId::new("")); // combos hide the target provider
+    let direct = rows
+        .iter()
+        .find(|r| r.upstream_model_id == "xkiro/qwen/qwen3.8-max:free")
+        .unwrap();
+    assert_eq!(direct.provider_id, ProviderId::new("xkiro")); // whitelisted catalog provider
+    assert!(!rows.iter().any(|r| r.upstream_model_id.contains("minimax")));
+    assert!(!rows.iter().any(|r| r.provider_id == ProviderId::new("vercel-gateway")));
+    assert!(!rows.iter().any(|r| r.provider_id == ProviderId::new("secret-upstream")));
+    assert!(!rows.iter().any(|r| r.provider_id == ProviderId::new("not-allowed-prov")));
+
+    // by_provider: grouped by public name - no internal providers leak.
+    let rows = by_provider(
+        &conn,
+        &UsageFilter {
+            api_key_id: Some(openproxy_types::ids::ApiKeyId(42)),
+            scope_public: Some(scope()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().any(|r| r.provider_id == "minmax"));
+    assert!(rows
+        .iter()
+        .any(|r| r.provider_id == "xkiro/qwen/qwen3.8-max:free"));
+
+    // Errors: row-level projection keeps the same masking.
+    let rows = errors(
+        &conn,
+        &UsageFilter {
+            api_key_id: Some(openproxy_types::ids::ApiKeyId(42)),
+            scope_public: Some(scope()),
+            ..Default::default()
+        },
+        50,
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].upstream_model_id, "minmax");
+    assert_eq!(rows[0].provider_id, ProviderId::new(""));
+
+    // Public exclusions (ranking toggles) work on public names only.
+    let rows = by_model(
+        &conn,
+        &UsageFilter {
+            api_key_id: Some(openproxy_types::ids::ApiKeyId(42)),
+            scope_public: Some(PublicScope {
+                excluded_public: vec!["minmax".into()],
+                ..scope()
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].upstream_model_id, "xkiro/qwen/qwen3.8-max:free");
+}

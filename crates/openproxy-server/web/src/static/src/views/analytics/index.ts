@@ -130,7 +130,7 @@ function renderRanking(
               <div class="analytics-ranking-copy">
                 <span class="analytics-ranking-name" title=${item.name}>${item.name}</span>
                 ${excluded ? html`<span class="analytics-rank-excluded-badge">${t("analytics.rank.excluded_badge")}</span>` : nothing}
-                <span class="analytics-ranking-context">${item.context} · ${fmtNumber(item.requests)} req</span>
+                <span class="analytics-ranking-context">${item.context ? `${item.context} · ` : ""}${fmtNumber(item.requests)} req</span>
               </div>
               <div class="analytics-ranking-value"><strong>${formatRankValue(rankMetric, value)}</strong><span>${fmtPercent(share)}</span></div>
               <div class="analytics-ranking-track" aria-hidden="true"><span style=${`width:${width}%`}></span></div>

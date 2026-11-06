@@ -13,6 +13,7 @@
 import { state, setPollHandle } from "./index.js";
 import { renderSidebar } from "../components/sidebar.js";
 import { triggerServerReconnect } from "./server-reconnect.js";
+import { isFullAdmin } from "./auth.js";
 
 const POLL_MS = 3000;
 
@@ -70,6 +71,9 @@ function isHealthPayload(x: unknown): x is HealthPayload {
 }
 
 export function startBgPoll(): void {
+  // Analytics-only tenants get no system-health polling: the sidebar pill
+  // reflects service-wide status, which is outside their read-only view.
+  if (!isFullAdmin()) return;
   state.__healthPollActive = true;
   if (state.__healthPollHandle != null) {
     clearTimeout(state.__healthPollHandle);

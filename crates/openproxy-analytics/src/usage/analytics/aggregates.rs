@@ -192,12 +192,10 @@ fn row_to_by_model(row: &Row<'_>) -> rusqlite::Result<ByModelRow> {
     })
 }
 
-pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
-    let w = BuiltWhere::from_filter(f);
-    let sql = format!(
-        "SELECT \
-             provider_id, \
-             upstream_model_id, \
+/// Shared aggregate expressions for the per-entity rankings (by model,
+/// by provider, monthly). Public and internal variants both emit the same
+/// column order so the row parsers read by index stay valid.
+const AGG_COLS: &str = "\
              COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
@@ -205,12 +203,43 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd, \
-             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct \
-         FROM usage {} \
-         GROUP BY provider_id, upstream_model_id \
-         ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC",
-        w.sql,
-    );
+             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct";
+
+/// FROM clause + joins for the public projection: combo rows resolve to the
+/// combo alias, direct rows to the whitelisted catalog `model_id`.
+const PUBLIC_FROM: &str = "\
+         FROM usage \
+         LEFT JOIN combos c ON c.id = usage.combo_id AND usage.combo_id > 0 \
+         LEFT JOIN models m ON m.id = usage.model_row_id";
+
+pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let (select, from, group, order) = if f.scope_public.is_some() {
+        (
+            format!(
+                "SELECT \
+             CASE WHEN usage.combo_id IS NOT NULL AND usage.combo_id > 0 THEN '' ELSE COALESCE(m.provider_id, '') END AS provider_id, \
+             COALESCE(c.name, m.model_id) AS public_model, \
+             {AGG_COLS}"
+            ),
+            PUBLIC_FROM.to_owned(),
+            "GROUP BY 1, 2".to_owned(),
+            "ORDER BY total_cost_usd DESC, 1 ASC, 2 ASC".to_owned(),
+        )
+    } else {
+        (
+            format!(
+                "SELECT \
+             provider_id, \
+             upstream_model_id, \
+             {AGG_COLS}"
+            ),
+            "FROM usage".to_owned(),
+            "GROUP BY provider_id, upstream_model_id".to_owned(),
+            "ORDER BY total_cost_usd DESC, provider_id ASC, upstream_model_id ASC".to_owned(),
+        )
+    };
+    let sql = format!("{select} {from} {} {group} {order}", w.sql);
 
     let mut stmt = conn
         .prepare(&sql)
@@ -240,22 +269,30 @@ fn row_to_by_provider(row: &Row<'_>) -> rusqlite::Result<ByProviderRow> {
 
 pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderRow>> {
     let w = BuiltWhere::from_filter(f);
-    let sql = format!(
-        "SELECT \
+    // Public projection: the "provider" is the public name (combo alias for
+    // combo rows, whitelisted catalog model_id for direct rows). Internal
+    // upstream providers never leave the server.
+    let sql = if f.scope_public.is_some() {
+        format!(
+            "SELECT \
+             COALESCE(c.name, m.model_id) AS provider_id, \
+             {AGG_COLS} \
+         {PUBLIC_FROM} {} \
+         GROUP BY 1 \
+         ORDER BY total_cost_usd DESC, 1 ASC",
+            w.sql,
+        )
+    } else {
+        format!(
+            "SELECT \
              provider_id, \
-             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
-             COUNT(*) AS total_rows, \
-             SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
-             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
-             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
-             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cached_tokens ELSE 0 END), 0) AS total_cached_tokens, \
-             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd, \
-             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct \
+             {AGG_COLS} \
          FROM usage {} \
          GROUP BY provider_id \
          ORDER BY total_cost_usd DESC, provider_id ASC",
-        w.sql,
-    );
+            w.sql,
+        )
+    };
 
     let mut stmt = conn
         .prepare(&sql)
@@ -274,8 +311,24 @@ pub fn monthly_by_provider(
     f: &UsageFilter,
 ) -> Result<Vec<MonthlyByProviderRow>> {
     let w = BuiltWhere::from_filter(f);
-    let sql = format!(
-        "SELECT \
+    let sql = if f.scope_public.is_some() {
+        format!(
+            "SELECT \
+             COALESCE(c.name, m.model_id) AS provider_id, \
+             strftime('%Y-%m', usage.created_at) AS month, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
+             COUNT(*) AS total_rows, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
+             COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd \
+         {PUBLIC_FROM} {} \
+         GROUP BY 1, 2 \
+         ORDER BY month ASC, total_cost_usd DESC, 1 ASC",
+            w.sql,
+        )
+    } else {
+        format!(
+            "SELECT \
              provider_id, \
              strftime('%Y-%m', created_at) AS month, \
              COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
@@ -286,8 +339,9 @@ pub fn monthly_by_provider(
          FROM usage {} \
          GROUP BY provider_id, strftime('%Y-%m', created_at) \
          ORDER BY month ASC, total_cost_usd DESC, provider_id ASC",
-        w.sql,
-    );
+            w.sql,
+        )
+    };
 
     let mut stmt = conn
         .prepare(&sql)
@@ -442,13 +496,27 @@ pub fn errors(conn: &Connection, f: &UsageFilter, limit: u32) -> Result<Vec<Erro
     };
 
     let limit_param: i64 = i64::from(limit);
-    let sql = format!(
-        "SELECT request_id, trace_id, provider_id, upstream_model_id, status_code, \
+    let sql = if f.scope_public.is_some() {
+        // Row-level public projection: same index layout, internals replaced
+        // by the public name (combo alias / whitelisted catalog entry).
+        format!(
+            "SELECT request_id, trace_id, \
+                CASE WHEN usage.combo_id IS NOT NULL AND usage.combo_id > 0 THEN '' ELSE COALESCE(m.provider_id, '') END AS provider_id, \
+                COALESCE(c.name, m.model_id) AS upstream_model_id, status_code, \
+                error_msg_redacted, usage.created_at \
+         {PUBLIC_FROM} {where_clause} \
+         ORDER BY usage.created_at DESC, usage.id DESC \
+         LIMIT ?"
+        )
+    } else {
+        format!(
+            "SELECT request_id, trace_id, provider_id, upstream_model_id, status_code, \
                 error_msg_redacted, created_at \
          FROM usage {where_clause} \
          ORDER BY created_at DESC, id DESC \
          LIMIT ?"
-    );
+        )
+    };
 
     let mut all_params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(w.params.len() + 1);
     for p in w.params {

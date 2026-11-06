@@ -184,6 +184,11 @@ export function keyFormTemplate({ mode, key, wrapper, inline = false, onSubmit, 
                   <span class="scope-desc">Can use /v1/chat/completions</span>
                 </label>
                 <label class="scope-card">
+                  <input type="checkbox" name="scopes" value="analytics" .checked=${scopes.includes("analytics")}>
+                  <span class="scope-name">analytics</span>
+                  <span class="scope-desc">Can open the dashboard: analytics of this key's own data, read-only (no manage, no logs)</span>
+                </label>
+                <label class="scope-card">
                   <input type="checkbox" name="scopes" value="manage" .checked=${scopes.includes("manage")}>
                   <span class="scope-name">manage</span>
                   <span class="scope-desc">Can use /admin/* (CRUD providers, accounts, etc.)</span>
@@ -191,7 +196,7 @@ export function keyFormTemplate({ mode, key, wrapper, inline = false, onSubmit, 
                 <label class="scope-card">
                   <input type="checkbox" name="scopes" value="read" .checked=${scopes.includes("read")}>
                   <span class="scope-name">read</span>
-                  <span class="scope-desc">Can use analytics endpoints (GET only)</span>
+                  <span class="scope-desc">Legacy alias of analytics: read-only usage endpoints (GET only)</span>
                 </label>
               </div>
             </div>

@@ -11,6 +11,9 @@ fn q(from: Option<&str>, to: Option<&str>, preset: Option<&str>) -> UsageQuery {
         account_id: None,
         combo_id: None,
         api_key_id: None,
+        exclude_models: None,
+        exclude_providers: None,
+        public_scope: None,
     }
 }
 
