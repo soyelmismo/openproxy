@@ -614,6 +614,16 @@ table.monthly-matrix {
 .analytics-ranking-track { grid-column: 1 / -1; height: 5px; overflow: hidden; border-radius: var(--radius-pill); background: var(--color-surface-2); }
 .analytics-ranking-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--chart-blue), var(--chart-violet)); }
 
+/* Ranking rows are exclusions toggles: hover hints the click, the excluded
+   state dims the entry and shows its badge without removing it from the list. */
+.analytics-ranking-row { cursor: pointer; border-radius: var(--radius-md); }
+.analytics-ranking-row:hover { background: var(--color-surface-2); }
+.analytics-ranking-row:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+.analytics-ranking-row.is-excluded { opacity: 0.45; }
+.analytics-ranking-row.is-excluded .analytics-ranking-name { text-decoration: line-through; }
+.analytics-rank-excluded-badge { align-self: flex-start; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--color-surface-2); color: var(--color-text-muted); font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em; }
+.analytics-rank-clear { height: 24px; }
+
 .analytics-latency-key { display: flex; justify-content: flex-end; gap: var(--space-3); padding: 0 var(--space-4); color: var(--color-text-muted); font-size: var(--fs-xs); }
 .analytics-latency-key span::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: var(--space-1); border-radius: 50%; }
 .analytics-latency-key .p50::before { background: var(--chart-blue-mid); }

@@ -225,6 +225,44 @@ export function buildUsageQuery(
   return qs ? `?${qs}` : "";
 }
 
+// ── Stats exclusions ────────────────────────────────────────────────
+
+// The analytics ranking entries toggle themselves in and out of every
+// aggregate: excluded ids travel to every /usage/* endpoint as
+// `exclude_models` / `exclude_providers` and the backend drops those rows
+// before computing anything (requests, tokens, cost, errors, latency).
+// Deliberately session-persistent so exploring one provider's noise does
+// not reset when the hash changes.
+export const excludedModels = new Set<string>();
+export const excludedProviders = new Set<string>();
+
+export function toggleRankExclusion(kind: "models" | "providers", id: string): boolean {
+  const set = kind === "models" ? excludedModels : excludedProviders;
+  if (set.has(id)) {
+    set.delete(id);
+    return false;
+  }
+  set.add(id);
+  return true;
+}
+
+export function countRankExclusions(): number {
+  return excludedModels.size + excludedProviders.size;
+}
+
+export function clearRankExclusions(): void {
+  excludedModels.clear();
+  excludedProviders.clear();
+}
+
+/** `extra` map for `buildUsageQuery` carrying the current exclusions. */
+export function exclusionsExtra(): Record<string, string> {
+  const extra: Record<string, string> = {};
+  if (excludedModels.size > 0) extra["exclude_models"] = [...excludedModels].join(",");
+  if (excludedProviders.size > 0) extra["exclude_providers"] = [...excludedProviders].join(",");
+  return extra;
+}
+
 // ── Data transforms ─────────────────────────────────────────────────
 
 /** Pivot `MonthlyByProviderRow[]` into a providers × months matrix
@@ -343,20 +381,18 @@ export function dateToSeconds(date: string): number {
   return ms / 1000;
 }
 
-/** Convert daily usage rows into uPlot `AlignedData`: [xs, reqs, errors, cost]. */
+/** Convert daily usage rows into uPlot `AlignedData`: [xs, cost, tokens]. */
 export function dailyUsageData(rows: ByDayRow[]): uPlot.AlignedData {
   const xs: number[] = Array.from({ length: rows.length });
-  const reqs: number[] = Array.from({ length: rows.length });
-  const errors: number[] = Array.from({ length: rows.length });
   const cost: number[] = Array.from({ length: rows.length });
+  const tokens: number[] = Array.from({ length: rows.length });
   for (let i = 0; i < rows.length; i++) {
     const r: ByDayRow = rows[i]!;
     xs[i] = dateToSeconds(r.date);
-    reqs[i] = r.unique_requests;
-    errors[i] = r.errors;
     cost[i] = r.total_cost_usd;
+    tokens[i] = r.total_prompt_tokens + r.total_completion_tokens;
   }
-  return [xs, reqs, errors, cost];
+  return [xs, cost, tokens];
 }
 
 // ── View-local mutable state ────────────────────────────────────────

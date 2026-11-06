@@ -131,6 +131,8 @@ def main():
     parser.add_argument("--all", action="store_true", help="Auditar todos los modelos sin importar su estado active")
     parser.add_argument("--deactivate-failed", action="store_true", help="Desactivar vía API admin los modelos que fallen la extracción")
     parser.add_argument("--timeout", type=int, default=180, help="Timeout por llamada lmfpd en segundos (default 180)")
+    parser.add_argument("--delay", type=int, default=0, help="Pausa en segundos entre modelos para respetar rate limits")
+    parser.add_argument("--max-retries", type=int, default=3, help="Reintentos si upstream devuelve 429 rate limit")
     args = parser.parse_args()
 
     providers = get_available_providers()
@@ -138,7 +140,7 @@ def main():
         print("\n=== PROVEEDORES DISPONIBLES EN OPENPROXY ===")
         for p in providers:
             print(f" - {p}")
-        print("\nUso: python3 audit_provider.py <nombre_proveedor> [--deactivate-failed] [--timeout 180]")
+        print("\nUso: python3 audit_provider.py <nombre_proveedor> [--deactivate-failed] [--timeout 180] [--delay 10]")
         sys.exit(0)
 
     provider = args.provider
@@ -156,15 +158,31 @@ def main():
     print(f" INICIANDO AUDITORÍA LMFPD: PROVEEDOR '{provider}'")
     print(f" Total modelos a auditar: {len(models)}")
     print(f" Desactivación automática: {'ACTIVADA' if args.deactivate_failed else 'DESACTIVADA'}")
+    print(f" Pausa entre modelos: {args.delay}s | Reintentos por 429: {args.max_retries}")
     print(f"=======================================================\n")
 
     results = []
     for idx, m in enumerate(models, 1):
         mid = m["model_id"]
         db_id = m["id"]
-        print(f"[{idx}/{len(models)}] Probando {provider}/{mid} ...", end=" ", flush=True)
         
-        res = run_lmfpd(provider, mid, admin_key, timeout_s=args.timeout)
+        attempt = 0
+        res = None
+        while attempt <= args.max_retries:
+            print(f"[{idx}/{len(models)}] Probando {provider}/{mid}{f' (intento {attempt+1})' if attempt > 0 else ''} ...", end=" ", flush=True)
+            res = run_lmfpd(provider, mid, admin_key, timeout_s=args.timeout)
+            
+            # Verificar si fue 429 rate limit
+            err = res.get("error") or ""
+            if "rate limited" in err.lower() or "retry_after" in err.lower() or "429" in err:
+                wait_time = 15 + (attempt * 10)
+                print(f"⚠ Rate limit detectado. Pausando {wait_time}s antes de reintentar...")
+                time.sleep(wait_time)
+                attempt += 1
+                continue
+            else:
+                break
+
         res["id"] = db_id
         res["model_id"] = mid
         results.append(res)
@@ -184,6 +202,9 @@ def main():
             if args.deactivate_failed:
                 ok = toggle_model_api(db_id, admin_key)
                 print(f"    -> Desactivado vía API: {'OK' if ok else 'ERROR'}")
+
+        if args.delay > 0 and idx < len(models):
+            time.sleep(args.delay)
 
     out_file = f"/root/proyectos/openproxy/scripts/audit_{provider}_report.json"
     with open(out_file, "w") as f:

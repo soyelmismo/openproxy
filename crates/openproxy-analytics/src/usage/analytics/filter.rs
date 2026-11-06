@@ -17,6 +17,12 @@ pub struct UsageFilter {
     pub combo_id: Option<ComboId>,
     /// Restrict to rows produced under a specific API key.
     pub api_key_id: Option<ApiKeyId>,
+    /// Upstream models excluded from every aggregate (stats-view toggles).
+    #[serde(default)]
+    pub exclude_models: Vec<String>,
+    /// Providers excluded from every aggregate (stats-view toggles).
+    #[serde(default)]
+    pub exclude_providers: Vec<String>,
 }
 
 impl UsageFilter {
@@ -30,6 +36,8 @@ impl UsageFilter {
             self.account_id.is_some(),
             self.combo_id.is_some(),
             self.api_key_id.is_some(),
+            !self.exclude_models.is_empty(),
+            !self.exclude_providers.is_empty(),
         ];
         !filters.into_iter().any(|active| active)
     }
@@ -43,46 +51,67 @@ pub(crate) struct BuiltWhere {
 fn push_date_filters(
     from: Option<&str>,
     to: Option<&str>,
-    clauses: &mut Vec<&'static str>,
+    clauses: &mut Vec<String>,
     params: &mut Vec<Box<dyn ToSql>>,
 ) {
     if let Some(from) = from {
         // Column bare so SQLite can use `idx_usage_created(_provider)`; the
         // bound is normalized on the parameter side because callers pass
         // RFC-3339 strings while rows store SQLite's `YYYY-MM-DD HH:MM:SS`.
-        clauses.push("created_at >= datetime(?)");
+        clauses.push("created_at >= datetime(?)".into());
         params.push(Box::new(from.to_owned()));
     }
     if let Some(to) = to {
-        clauses.push("created_at < datetime(?)");
+        clauses.push("created_at < datetime(?)".into());
         params.push(Box::new(to.to_owned()));
     }
 }
 
 fn push_entity_filters(
     f: &UsageFilter,
-    clauses: &mut Vec<&'static str>,
+    clauses: &mut Vec<String>,
     params: &mut Vec<Box<dyn ToSql>>,
 ) {
     if let Some(pid) = &f.provider_id {
-        clauses.push("provider_id = ?");
+        clauses.push("provider_id = ?".into());
         params.push(Box::new(pid.0.clone()));
     }
     if let Some(mid) = &f.model_id {
-        clauses.push("upstream_model_id = ?");
+        clauses.push("upstream_model_id = ?".into());
         params.push(Box::new(mid.to_owned()));
     }
     if let Some(aid) = f.account_id {
-        clauses.push("account_id = ?");
+        clauses.push("account_id = ?".into());
         params.push(Box::new(aid.0));
     }
     if let Some(cid) = f.combo_id {
-        clauses.push("combo_id = ?");
+        clauses.push("combo_id = ?".into());
         params.push(Box::new(cid.0));
     }
     if let Some(kid) = f.api_key_id {
-        clauses.push("api_key_id = ?");
+        clauses.push("api_key_id = ?".into());
         params.push(Box::new(kid.0));
+    }
+    push_not_in(clauses, params, "upstream_model_id", &f.exclude_models);
+    push_not_in(clauses, params, "provider_id", &f.exclude_providers);
+}
+
+fn push_not_in(
+    clauses: &mut Vec<String>,
+    params: &mut Vec<Box<dyn ToSql>>,
+    col: &str,
+    values: &[String],
+) {
+    if values.is_empty() {
+        return;
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(values.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    clauses.push(format!("{col} NOT IN ({placeholders})"));
+    for v in values {
+        params.push(Box::new(v.clone()));
     }
 }
 
@@ -95,7 +124,7 @@ impl BuiltWhere {
             };
         }
 
-        let mut clauses: Vec<&'static str> = Vec::new();
+        let mut clauses: Vec<String> = Vec::new();
         let mut params: Vec<Box<dyn ToSql>> = Vec::new();
 
         push_date_filters(

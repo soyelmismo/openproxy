@@ -274,41 +274,34 @@ function costAxisFormatter(_u: uPlot, vals: number[]): string[] {
   });
 }
 
-/** Daily requests, errors and cost on two Y axes. */
+/** Daily spend (left axis) and token volume (right axis) per day. */
 export function buildDailyUsageChart(container: HTMLElement): uPlot {
   return createLiveChart(container, {
     series: [
       { label: "Date" },
       {
-        label: "Requests",
-        stroke: CHART_COLORS.blue,
-        width: 2,
-        points: { show: true, size: 5, width: 2 },
-        fill: areaFill(CHART_COLORS.blue, 0.14),
-        scale: "reqs",
-        value: formatCount,
-      },
-      {
-        label: "Errors",
-        stroke: CHART_COLORS.red,
-        width: 2,
-        points: { show: true, size: 5, width: 2 },
-        scale: "reqs",
-        value: formatCount,
-      },
-      {
         label: "Cost",
         stroke: CHART_COLORS.orange,
         width: 2,
         points: { show: true, size: 5, width: 2 },
+        fill: areaFill(CHART_COLORS.orange, 0.14),
         scale: "cost",
         value: (_u: uPlot, raw: number): string => Number.isFinite(raw) ? "$" + raw.toFixed(4) : "",
+      },
+      {
+        label: "Tokens",
+        stroke: CHART_COLORS.green,
+        width: 2,
+        points: { show: true, size: 5, width: 2 },
+        fill: areaFill(CHART_COLORS.green, 0.12),
+        scale: "tokens",
+        value: formatCount,
       },
     ],
     scales: {
       x: { time: true },
-      reqs: { auto: true, range: positiveRange },
       cost: { auto: true, range: positiveRange },
+      tokens: { auto: true, range: positiveRange },
     },
     axes: [
       {
@@ -319,22 +312,22 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         values: dateFormatter,
       },
       {
-        scale: "reqs",
-        side: 3, // left
-        grid: { show: false },
-        stroke: CHART_COLORS.blue,
-        font: AXIS_FONT,
-        values: compactNumber,
-        size: 40,
-      },
-      {
         scale: "cost",
-        side: 1, // right
+        side: 3, // left
         grid: { show: false },
         stroke: CHART_COLORS.orange,
         font: AXIS_FONT,
         values: costAxisFormatter,
         size: 44,
+      },
+      {
+        scale: "tokens",
+        side: 1, // right
+        grid: { show: false },
+        stroke: CHART_COLORS.green,
+        font: AXIS_FONT,
+        values: compactNumber,
+        size: 52,
       },
     ],
   });

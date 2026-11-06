@@ -10,7 +10,12 @@ use super::filter::{BuiltWhere, UsageFilter, as_u64, collect_rows, get_u64_col, 
 /// Aggregate roll-up of a filtered set of usage rows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageSummary {
+    /// Requests with at least one successful row (the KPI "requests").
     pub unique_requests: u64,
+    /// All distinct requests in the window, successful or not.
+    pub all_requests: u64,
+    /// `all_requests - unique_requests`.
+    pub failed_requests: u64,
     pub total_rows: u64,
     pub total_attempts: u64,
     pub winners: u64,
@@ -106,8 +111,12 @@ pub struct ErrorRow {
 }
 
 fn row_to_usage_summary(row: &Row<'_>) -> rusqlite::Result<UsageSummary> {
+    let unique_requests = as_u64(row.get(0)?, "unique_requests")?;
+    let all_requests = as_u64(row.get(17)?, "all_requests")?;
     Ok(UsageSummary {
-        unique_requests: as_u64(row.get(0)?, "unique_requests")?,
+        unique_requests,
+        all_requests,
+        failed_requests: all_requests.saturating_sub(unique_requests),
         total_rows: as_u64(row.get(1)?, "total_rows")?,
         total_attempts: as_u64(row.get(2)?, "total_attempts")?,
         winners: as_u64(row.get::<_, Option<i64>>(3)?.unwrap_or(0), "winners")?,
@@ -134,7 +143,7 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
     let w = BuiltWhere::from_filter(f);
     let sql = format!(
         "SELECT \
-             COUNT(DISTINCT request_id) AS unique_requests, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              COUNT(DISTINCT trace_id) AS total_attempts, \
              SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
@@ -150,7 +159,8 @@ pub fn summary(conn: &Connection, f: &UsageFilter) -> Result<UsageSummary> {
              AVG(connect_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND connect_ms IS NOT NULL) AS avg_success_connect_ms, \
              AVG(ttft_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND ttft_ms IS NOT NULL) AS avg_success_ttft_ms, \
              AVG(total_ms) FILTER (WHERE status_code >= 200 AND status_code < 400 AND total_ms IS NOT NULL) AS avg_success_total_ms, \
-             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct \
+             AVG(compression_savings_pct) FILTER (WHERE status_code >= 200 AND status_code < 400) AS avg_compression_savings_pct, \
+             COUNT(DISTINCT request_id) AS all_requests \
          FROM usage {}",
         w.sql,
     );
@@ -188,7 +198,7 @@ pub fn by_model(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByModelRow>> {
         "SELECT \
              provider_id, \
              upstream_model_id, \
-             COUNT(DISTINCT request_id) AS unique_requests, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
@@ -233,7 +243,7 @@ pub fn by_provider(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByProviderR
     let sql = format!(
         "SELECT \
              provider_id, \
-             COUNT(DISTINCT request_id) AS unique_requests, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              SUM(CASE WHEN status_code >= 200 AND status_code < 400 AND race_lost = 0 THEN 1 ELSE 0 END) AS winners, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
@@ -268,7 +278,7 @@ pub fn monthly_by_provider(
         "SELECT \
              provider_id, \
              strftime('%Y-%m', created_at) AS month, \
-             COUNT(DISTINCT request_id) AS unique_requests, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
@@ -306,7 +316,7 @@ pub fn by_day(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByDayRow>> {
     let sql = format!(
         "SELECT \
              strftime('%Y-%m-%d', created_at) AS date, \
-             COUNT(DISTINCT request_id) AS unique_requests, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN prompt_tokens ELSE 0 END), 0) AS total_prompt_tokens, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN completion_tokens ELSE 0 END), 0) AS total_completion_tokens, \
@@ -352,7 +362,7 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
         "SELECT \
              account_id, \
              provider_id, \
-             COUNT(DISTINCT request_id) AS unique_requests, \
+             COUNT(DISTINCT CASE WHEN status_code >= 200 AND status_code < 400 THEN request_id END) AS unique_requests, \
              COUNT(*) AS total_rows, \
              SUM(CASE WHEN status_code >= 400 THEN 1 ELSE 0 END) AS errors, \
              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN cost_usd ELSE 0.0 END), 0.0) AS total_cost_usd \

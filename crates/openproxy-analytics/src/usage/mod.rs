@@ -5,8 +5,9 @@
 //! This module is the *read* side of the usage table; inserts live in
 //! [`crate::cost::record`]. All queries share a common filter shape and are
 //! race-aware: `winners` counts rows where `race_lost = 0`, `losers` counts
-//! `race_lost = 1`, and `unique_requests` is `COUNT(DISTINCT request_id)` so a
-//! race of N losers + 1 winner counts as one logical request.
+//! `race_lost = 1`, and `unique_requests` is the number of DISTINCT
+//! `request_id`s with a successful row, so a race of N losers + 1 winner
+//! counts as one logical request.
 //!
 //! ## Broadcast channel
 //!

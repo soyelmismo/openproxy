@@ -232,3 +232,68 @@ fn test_detail_by_id_includes_account_label() {
     assert_eq!(detail2.account_id, None);
     assert_eq!(detail2.account_label, None);
 }
+
+mod exclusions {
+    use super::super::filter::{BuiltWhere, UsageFilter};
+
+    #[test]
+    fn built_where_writes_not_in_with_params() {
+        let f = UsageFilter {
+            exclude_models: vec!["m-a".into(), "m-b".into()],
+            exclude_providers: vec!["p-x".into()],
+            ..Default::default()
+        };
+        assert!(!f.is_empty());
+        let w = BuiltWhere::from_filter(&f);
+        assert!(w.sql.contains("upstream_model_id NOT IN (?, ?)"));
+        assert!(w.sql.contains("provider_id NOT IN (?)"));
+        assert_eq!(w.params.len(), 3);
+    }
+
+    #[test]
+    fn built_where_empty_without_exclusions() {
+        let f = UsageFilter::default();
+        assert!(f.is_empty());
+        let w = BuiltWhere::from_filter(&f);
+        assert!(w.sql.is_empty());
+        assert!(w.params.is_empty());
+    }
+}
+
+/// unique_requests must count only requests with a successful row, and the
+/// exclusion lists must drop models/providers from the aggregates.
+#[test]
+fn by_model_success_only_and_exclusions() {
+    use crate::usage::analytics::aggregates::{by_model, summary};
+    use crate::usage::analytics::filter::UsageFilter;
+
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(TEST_USAGE_SCHEMA).unwrap();
+    conn.execute_batch(
+        "INSERT INTO usage (request_id, trace_id, provider_id, upstream_model_id, status_code, total_ms, created_at) VALUES
+            ('r1', 't1', 'prov', 'm1', 200, 100, '2026-01-01 10:00:00'),
+            ('r2', 't2', 'prov', 'm1', 500, 100, '2026-01-01 10:01:00'),
+            ('r3', 't3', 'prov', 'm2', 200, 100, '2026-01-01 10:02:00');",
+    )
+    .unwrap();
+
+    let s = summary(&conn, &UsageFilter::default()).unwrap();
+    assert_eq!(s.unique_requests, 2); // r1 + r3
+    assert_eq!(s.all_requests, 3);
+    assert_eq!(s.failed_requests, 1); // r2
+
+    let rows = by_model(&conn, &UsageFilter::default()).unwrap();
+    assert_eq!(rows.len(), 2);
+    let m1 = rows.iter().find(|r| r.upstream_model_id == "m1").unwrap();
+    // r1 (success) + r2 (failure) -> only r1 counts as a successful request.
+    assert_eq!(m1.unique_requests, 1);
+    assert_eq!(m1.total_rows, 2);
+
+    let rows = by_model(&conn, &UsageFilter {
+        exclude_models: vec!["m2".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].upstream_model_id, "m1");
+}

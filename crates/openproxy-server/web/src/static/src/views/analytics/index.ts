@@ -11,7 +11,9 @@ import {
   byModel,
   byProvider,
   byStatus,
+  clearRankExclusions,
   errorMsg,
+  exclusionsExtra,
   fmtCost,
   fmtNumber,
   fmtPercent,
@@ -29,6 +31,9 @@ import {
   setRankMetric,
   setViewState,
   summary,
+  toggleRankExclusion,
+  excludedModels,
+  excludedProviders,
   type ApiKeyFilterRow,
   type LatencyPayload,
   type RaceStatsPayload,
@@ -63,12 +68,16 @@ import type {
 
 function renderMetrics(): TemplateResult {
   if (!summary) return html``;
-  const successRate = summary.unique_requests > 0 ? summary.winners / summary.unique_requests : NaN;
+  // Requests KPI counts only requests with a successful row; failures feed
+  // the success rate and the failed counter. The all/failed fields come
+  // from the newer backend; fall back gracefully against an older one.
+  const allRequests = summary.all_requests ?? summary.total_rows;
+  const failedRequests = summary.failed_requests ?? Math.max(0, summary.errors);
+  const successRate = allRequests > 0 ? summary.unique_requests / allRequests : NaN;
   const totalTokens = summary.total_prompt_tokens + summary.total_completion_tokens;
   const costPerRequest = summary.unique_requests > 0 ? summary.total_cost_usd / summary.unique_requests : 0;
   const p95Total = latency?.p95_total_ms;
   const successTone = !Number.isFinite(successRate) ? "" : successRate >= 0.95 ? "is-good" : successRate >= 0.85 ? "is-warn" : "is-bad";
-  const failedRequests = Math.max(0, summary.unique_requests - summary.winners);
   return html`<div class="analytics-metrics" aria-label=${t("analytics.summary")}>
     ${metric(t("analytics.summary.unique_requests"), fmtNumber(summary.unique_requests), `${fmtNumber(summary.total_attempts)} ${t("analytics.metric.attempts")}`)}
     ${metric(t("analytics.metric.success_rate"), fmtPercent(successRate), `${fmtNumber(failedRequests)} ${t("analytics.metric.failed_responses")}`, successTone)}
@@ -84,15 +93,22 @@ function renderMetrics(): TemplateResult {
 
 // ── Ranking list (used by model + provider strips) ──────────────────
 
-function renderRanking(title: string, subtitle: string, items: RankingItem[]): TemplateResult {
+function renderRanking(
+  title: string,
+  subtitle: string,
+  items: RankingItem[],
+  kind: "models" | "providers",
+): TemplateResult {
   const ranked = [...items]
     .sort((a, b) => rankMetricValue(b, rankMetric) - rankMetricValue(a, rankMetric))
     .slice(0, 8);
+  const excludedSet = kind === "models" ? excludedModels : excludedProviders;
   const total = items.reduce((sum, item) => sum + rankMetricValue(item, rankMetric), 0);
   const max = ranked.length > 0 ? rankMetricValue(ranked[0]!, rankMetric) : 0;
   return html`<section class="card analytics-ranking-card">
     <div class="analytics-card-heading">
       <div><h3>${title}</h3><p>${subtitle}</p></div>
+      ${excludedSet.size > 0 ? html`<button type="button" class="btn btn-sm analytics-rank-clear" @click=${onClearExclusions}>${t("analytics.rank.clear_exclusions", { n: excludedSet.size })}</button>` : nothing}
     </div>
     ${ranked.length === 0 ? html`<p class="empty">${t("analytics.empty.no_usage")}</p>` : html`
       <div class="analytics-ranking-list">
@@ -100,11 +116,20 @@ function renderRanking(title: string, subtitle: string, items: RankingItem[]): T
           const value = rankMetricValue(item, rankMetric);
           const width = max > 0 ? Math.max(2, value / max * 100) : 0;
           const share = total > 0 ? value / total : 0;
-          return html`<div class="analytics-ranking-row">
+          const excluded = excludedSet.has(item.name);
+          return html`<div
+            class="analytics-ranking-row${excluded ? " is-excluded" : ""}"
+            role="button"
+            tabindex="0"
+            title=${excluded ? t("analytics.rank.include_hint") : t("analytics.rank.exclude_hint")}
+            @click=${() => onRankToggle(kind, item.name)}
+            @keydown=${(e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onRankToggle(kind, item.name); } }}
+          >
             <span class="analytics-rank">${index + 1}</span>
             <div class="analytics-ranking-main">
               <div class="analytics-ranking-copy">
                 <span class="analytics-ranking-name" title=${item.name}>${item.name}</span>
+                ${excluded ? html`<span class="analytics-rank-excluded-badge">${t("analytics.rank.excluded_badge")}</span>` : nothing}
                 <span class="analytics-ranking-context">${item.context} · ${fmtNumber(item.requests)} req</span>
               </div>
               <div class="analytics-ranking-value"><strong>${formatRankValue(rankMetric, value)}</strong><span>${fmtPercent(share)}</span></div>
@@ -249,8 +274,8 @@ function renderBody(): TemplateResult {
         <span class="analytics-rank-head-label">${t("analytics.rank.label")}</span>
         ${renderRankMetricSwitch()}
       </div>
-      ${renderRanking(t("analytics.chart.by_model"), rankSubtitle, modelItems)}
-      ${renderRanking(t("analytics.chart.by_provider"), rankSubtitle, providerItems)}
+      ${renderRanking(t("analytics.chart.by_model"), rankSubtitle, modelItems, "models")}
+      ${renderRanking(t("analytics.chart.by_provider"), rankSubtitle, providerItems, "providers")}
     </div>
     <div class="analytics-insight-grid">
       ${renderLatencyBlock()}
@@ -287,6 +312,7 @@ export async function mountAnalytics(
   const el = (target instanceof HTMLElement) ? target : document.getElementById("main");
   if (!el || !el.isConnected) return;
 
+  mountedEl = el;
   // Fresh start: the previous mount's charts died with its cleanup fn.
   setViewState({
     loading: true,
@@ -298,13 +324,42 @@ export async function mountAnalytics(
   const cleanupReactive = mountView(el, renderAnalytics);
   document.addEventListener("themechange", refreshAnalyticsChartTheme);
 
-  const { preset, providerId, apiKeyId, modelId, rank } = parseHashParams();
+  const { rank } = parseHashParams();
   setRankMetric(rank);
+  if (!(await fetchAndApply(el, { showLoading: true }))) {
+    cleanupReactive();
+    mountedEl = null;
+    return () => {
+      destroyAnalyticsCharts();
+      document.removeEventListener("themechange", refreshAnalyticsChartTheme);
+    };
+  }
+  return () => {
+    destroyAnalyticsCharts();
+    document.removeEventListener("themechange", refreshAnalyticsChartTheme);
+    cleanupReactive();
+    if (mountedEl === el) mountedEl = null;
+  };
+}
+
+// ── Data fetch (mount + ranking exclusion toggles) ──────────────────
+
+let mountedEl: HTMLElement | null = null;
+
+/** Fetch every analytics payload and paint. Returns `false` when the view
+ *  was unmounted mid-flight (the caller must run its cleanup). */
+async function fetchAndApply(
+  el: HTMLElement,
+  opts: { showLoading: boolean } = { showLoading: false },
+): Promise<boolean> {
+  if (opts.showLoading) setViewState({ loading: true, errorMsg: null });
+  const { preset, providerId, apiKeyId, modelId } = parseHashParams();
   try {
     // Shared by every `/usage/*` fetch; errors adds `limit=10` to cap the table.
+    // Ranking exclusions ride along on every aggregate.
     const modelFilter = modelId ? { model_id: modelId } : {};
-    const usageQ = buildUsageQuery(preset, providerId, apiKeyId, modelFilter);
-    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10", ...modelFilter });
+    const usageQ = buildUsageQuery(preset, providerId, apiKeyId, { ...modelFilter, ...exclusionsExtra() });
+    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10", ...modelFilter, ...exclusionsExtra() });
     const [
       summaryResp, byModelResp, byProviderResp, monthlyByProviderResp, latencyResp, racesResp,
       byDayResp, byStatusResp, errorsResp, providersResp, apiKeysResp,
@@ -340,13 +395,7 @@ export async function mountAnalytics(
           ),
     ]);
 
-    if (!el.isConnected) {
-      cleanupReactive();
-      return () => {
-        destroyAnalyticsCharts();
-        document.removeEventListener("themechange", refreshAnalyticsChartTheme);
-      };
-    }
+    if (!el.isConnected) return false;
 
     setViewState({
       summary: summaryResp,
@@ -373,14 +422,9 @@ export async function mountAnalytics(
       if (!el.isConnected) return;
       createAnalyticsCharts();
     });
+    return true;
   } catch (e: unknown) {
-    if (!el.isConnected) {
-      cleanupReactive();
-      return () => {
-        destroyAnalyticsCharts();
-        document.removeEventListener("themechange", refreshAnalyticsChartTheme);
-      };
-    }
+    if (!el.isConnected) return false;
     setViewState({
       errorMsg: e instanceof Error ? e.message : String(e),
       providers: state.providers || [],
@@ -388,10 +432,19 @@ export async function mountAnalytics(
       loading: false,
     });
     requestUpdate();
+    return true;
   }
-  return () => {
-    destroyAnalyticsCharts();
-    document.removeEventListener("themechange", refreshAnalyticsChartTheme);
-    cleanupReactive();
-  };
+}
+
+/** Toggle a ranking entry out of (or back into) every aggregate and refresh. */
+function onRankToggle(kind: "models" | "providers", id: string): void {
+  toggleRankExclusion(kind, id);
+  const el = mountedEl;
+  if (el && el.isConnected) void fetchAndApply(el, { showLoading: false });
+}
+
+function onClearExclusions(): void {
+  clearRankExclusions();
+  const el = mountedEl;
+  if (el && el.isConnected) void fetchAndApply(el, { showLoading: false });
 }

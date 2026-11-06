@@ -99,6 +99,8 @@ export type UsagePreset =
 
 export interface UsageSummary {
   unique_requests: number;
+  all_requests: number;
+  failed_requests: number;
   total_rows: number;
   total_attempts: number;
   winners: number;

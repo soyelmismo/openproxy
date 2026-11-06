@@ -1,0 +1,123 @@
+[
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 127.22,
+    "error": "Upstream error: upstream error: status=502 provider=nocta model=MiniMax-M2.7 body=upstream connection lost",
+    "preview": "",
+    "id": 14911960,
+    "model_id": "MiniMax-M2.7"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 62.31,
+    "error": "Upstream error: upstream error: status=504 provider=nocta model=DeepSeek-V4.1-Flash-Uncensored body=upstream phase `headers` timed out after 20008ms (config: ttft_ms)",
+    "preview": "",
+    "id": 14911961,
+    "model_id": "DeepSeek-V4.1-Flash-Uncensored"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 62.01,
+    "error": "Upstream error: upstream error: status=504 provider=nocta model=step-5-preview body=upstream phase `headers` timed out after 20010ms (config: ttft_ms)",
+    "preview": "",
+    "id": 14911962,
+    "model_id": "step-5-preview"
+  },
+  {
+    "status": "VERIFIED",
+    "prediction": "mimo-v2.5-pro",
+    "family": "mimo",
+    "score": 2.236,
+    "numbers_parsed": 174,
+    "ttft_s": 3.09,
+    "tps": 17.5,
+    "duration_s": 40.98,
+    "error": null,
+    "id": 14911963,
+    "model_id": "Solar Pro 4 Uncen VIP"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 62.19,
+    "error": "Upstream error: upstream error: status=504 provider=nocta model=GLM-5.3-Flash body=upstream phase `headers` timed out after 20009ms (config: ttft_ms)",
+    "preview": "",
+    "id": 14911964,
+    "model_id": "GLM-5.3-Flash"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 24.25,
+    "error": "Upstream error: rate limited: provider=nocta retry_after_ms=5000",
+    "preview": "",
+    "id": 14911965,
+    "model_id": "DeepSeek-V4.1-Flash"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 3.19,
+    "error": "Upstream error: rate limited: provider=nocta retry_after_ms=5000",
+    "preview": "",
+    "id": 14911966,
+    "model_id": "DeepSeek-V4.1-Flash-1017"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 4.0,
+    "error": "Upstream error: rate limited: provider=nocta retry_after_ms=5000",
+    "preview": "",
+    "id": 14911967,
+    "model_id": "qwen3.8-27b"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 3.89,
+    "error": "Upstream error: rate limited: provider=nocta retry_after_ms=5000",
+    "preview": "",
+    "id": 14911968,
+    "model_id": "step-3.7-flash"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 4.29,
+    "error": "Upstream error: rate limited: provider=nocta retry_after_ms=5000",
+    "preview": "",
+    "id": 14911969,
+    "model_id": "step-3.5-flash-2603"
+  }
+]

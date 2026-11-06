@@ -45,6 +45,26 @@ pub struct UsageQuery {
     pub combo_id: Option<i64>,
     pub api_key_id: Option<i64>,
     pub preset: Option<String>,
+    /// Comma-separated upstream models excluded from every aggregate
+    /// (the analytics ranking view toggles these per entry).
+    pub exclude_models: Option<String>,
+    /// Comma-separated providers excluded from every aggregate.
+    pub exclude_providers: Option<String>,
+}
+
+/// Comma-separated query value -> trimmed, deduped, non-empty list.
+/// Hard cap keeps pathological queries from bloating the SQL placeholders.
+fn parse_exclude_list(raw: Option<&str>) -> Vec<String> {
+    const MAX_EXCLUSIONS: usize = 100;
+    let mut seen = std::collections::HashSet::new();
+    raw.into_iter()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .take(MAX_EXCLUSIONS)
+        .filter(|s| seen.insert((*s).to_owned()))
+        .map(str::to_owned)
+        .collect()
 }
 
 pub fn router() -> axum::Router<AppState> {
@@ -529,6 +549,8 @@ impl UsageQuery {
             account_id: self.account_id.map(AccountId::new),
             combo_id: self.combo_id.map(ComboId),
             api_key_id: self.api_key_id.map(ApiKeyId),
+            exclude_models: parse_exclude_list(self.exclude_models.as_deref()),
+            exclude_providers: parse_exclude_list(self.exclude_providers.as_deref()),
         })
     }
 }

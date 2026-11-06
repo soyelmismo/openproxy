@@ -62,35 +62,62 @@ struct BuiltWhere<'a> {
     params: Vec<&'a dyn ToSql>,
 }
 
+/// NOT IN clauses shared by every query that qualifies the same columns
+/// (the race join qualifies them with `usage.` via string replace, so the
+/// bare column name must appear first in each clause).
+fn push_exclusions<'a>(
+    clauses: &mut Vec<String>,
+    params: &mut Vec<&'a dyn ToSql>,
+    f: &'a UsageFilter,
+) {
+    for (col, values) in [
+        ("upstream_model_id", &f.exclude_models),
+        ("provider_id", &f.exclude_providers),
+    ] {
+        if values.is_empty() {
+            continue;
+        }
+        let placeholders = std::iter::repeat("?")
+            .take(values.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        clauses.push(format!("{col} NOT IN ({placeholders})"));
+        for v in values {
+            params.push(v);
+        }
+    }
+}
+
 impl<'a> BuiltWhere<'a> {
     fn from_filter(f: &'a UsageFilter) -> Self {
-        let mut clauses: Vec<&'static str> = Vec::new();
+        let mut clauses: Vec<String> = Vec::new();
         let mut params: Vec<&'a dyn ToSql> = Vec::new();
 
         if let Some(from) = &f.from {
-            clauses.push("created_at >= datetime(?)");
+            clauses.push("created_at >= datetime(?)".into());
             params.push(from);
         }
         if let Some(to) = &f.to {
-            clauses.push("created_at < datetime(?)");
+            clauses.push("created_at < datetime(?)".into());
             params.push(to);
         }
         if let Some(pid) = &f.provider_id {
-            clauses.push("provider_id = ?");
+            clauses.push("provider_id = ?".into());
             params.push(&pid.0);
         }
         if let Some(mid) = &f.model_id {
-            clauses.push("upstream_model_id = ?");
+            clauses.push("upstream_model_id = ?".into());
             params.push(mid);
         }
         if let Some(aid) = &f.account_id {
-            clauses.push("account_id = ?");
+            clauses.push("account_id = ?".into());
             params.push(&aid.0);
         }
         if let Some(cid) = &f.combo_id {
-            clauses.push("combo_id = ?");
+            clauses.push("combo_id = ?".into());
             params.push(&cid.0);
         }
+        push_exclusions(&mut clauses, &mut params, f);
 
         if clauses.is_empty() {
             return Self {

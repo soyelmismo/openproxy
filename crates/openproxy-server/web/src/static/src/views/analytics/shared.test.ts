@@ -22,8 +22,8 @@ function mrow(provider_id: string, month: string, total_cost_usd: number, reqs: 
   };
 }
 const srow = (status_code: number, count: number): ByStatusRow => ({ status_code, count });
-const drow = (date: string, unique_requests: number, errors: number, total_cost_usd: number): ByDayRow => ({
-  date, unique_requests, total_rows: unique_requests, total_prompt_tokens: 0, total_completion_tokens: 0, total_cost_usd, errors,
+const drow = (date: string, unique_requests: number, errors: number, total_cost_usd: number, total_prompt_tokens = 0, total_completion_tokens = 0): ByDayRow => ({
+  date, unique_requests, total_rows: unique_requests, total_prompt_tokens, total_completion_tokens, total_cost_usd, errors,
 });
 
 const PIVOT_ROWS: MonthlyByProviderRow[] = [
@@ -154,11 +154,15 @@ describe("buildUsageQuery", () => {
 
 describe("dailyUsageData", () => {
   it("handles empty and maps data to uPlot series", () => {
-    expect(dailyUsageData([])).toEqual([[], [], [], []]);
-    const data = dailyUsageData([drow("2026-06-21", 5, 1, 1.5), drow("2026-06-22", 0, 0, 0)]);
+    expect(dailyUsageData([])).toEqual([[], [], []]);
+    const data = dailyUsageData([
+      drow("2026-06-21", 5, 1, 1.5, 100, 20),
+      drow("2026-06-22", 0, 0, 0),
+    ]);
     expect(data).toEqual([
       [Date.UTC(2026, 5, 21) / 1000, Date.UTC(2026, 5, 22) / 1000],
-      [5, 0], [1, 0], [1.5, 0],
+      [1.5, 0],
+      [120, 0],
     ]);
     const pthru = dailyUsageData([drow("2026-06-22", 2, 0, 2), drow("2026-06-21", 1, 0, 1)]);
     expect(pthru[0]).toEqual([Date.UTC(2026, 5, 22) / 1000, Date.UTC(2026, 5, 21) / 1000]);
