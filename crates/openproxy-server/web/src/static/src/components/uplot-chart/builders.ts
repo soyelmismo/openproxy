@@ -10,6 +10,8 @@ import uPlot from "uplot";
 
 import { CHART_COLORS, cssVar } from "./colors.js";
 import {
+  AXIS_FONT,
+  areaFill,
   createLiveChart,
   smoothPath,
 } from "./lifecycle.js";
@@ -101,7 +103,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         grid: { stroke: cssVar("--color-border-soft"), width: 1 },
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: timeFormatter,
       },
       {
@@ -109,7 +111,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         side: 3, // left
         grid: { show: false },
         stroke: CHART_COLORS.blue,
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: compactNumber,
         size: 44,
       },
@@ -118,7 +120,7 @@ export function buildThroughputChart(container: HTMLElement): uPlot {
         side: 1, // right
         grid: { show: false },
         stroke: CHART_COLORS.green,
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: compactNumber,
         size: 52,
       },
@@ -134,7 +136,7 @@ export function buildStatusCodesChart(container: HTMLElement): uPlot {
       {
         label: "Successful",
         stroke: CHART_COLORS.status2xx,
-        fill: "rgba(22, 163, 74, 0.12)",
+        fill: areaFill(CHART_COLORS.status2xx, 0.18),
         width: 2,
         paths: smoothPath,
         points: { show: false },
@@ -166,14 +168,14 @@ export function buildStatusCodesChart(container: HTMLElement): uPlot {
         grid: { stroke: cssVar("--color-border-soft"), width: 1 },
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: timeFormatter,
       },
       {
         side: 3,
         grid: { show: false },
         stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: compactNumber,
         size: 40,
       },
@@ -192,7 +194,7 @@ export function buildLatencyChart(container: HTMLElement): uPlot {
         width: 2,
         paths: smoothPath,
         points: { show: false },
-        fill: "rgba(37, 99, 235, 0.10)",
+        fill: areaFill(CHART_COLORS.blue, 0.14),
         value: formatDuration,
       },
       {
@@ -221,14 +223,14 @@ export function buildLatencyChart(container: HTMLElement): uPlot {
         grid: { stroke: cssVar("--color-border-soft"), width: 1 },
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: timeFormatter,
       },
       {
         side: 3,
         grid: { show: false },
         stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: (_u: uPlot, vals: number[]): string[] => {
           return vals.map((v: number) => {
             if (!Number.isFinite(v)) return "";
@@ -282,7 +284,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         stroke: CHART_COLORS.blue,
         width: 2,
         points: { show: true, size: 5, width: 2 },
-        fill: "rgba(37, 99, 235, 0.10)",
+        fill: areaFill(CHART_COLORS.blue, 0.14),
         scale: "reqs",
         value: formatCount,
       },
@@ -313,7 +315,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         grid: { stroke: cssVar("--color-border-soft"), width: 1 },
         ticks: { stroke: cssVar("--color-border"), width: 1 },
         stroke: cssVar("--color-text-muted"),
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: dateFormatter,
       },
       {
@@ -321,7 +323,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         side: 3, // left
         grid: { show: false },
         stroke: CHART_COLORS.blue,
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: compactNumber,
         size: 40,
       },
@@ -330,7 +332,7 @@ export function buildDailyUsageChart(container: HTMLElement): uPlot {
         side: 1, // right
         grid: { show: false },
         stroke: CHART_COLORS.orange,
-        font: "10px 'Courier New', monospace",
+        font: AXIS_FONT,
         values: costAxisFormatter,
         size: 44,
       },

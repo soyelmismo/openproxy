@@ -16,7 +16,9 @@ import {
   reloadProxies,
 } from "../handlers/proxy-handlers.js";
 import { t } from "../i18n/index.js";
-import { renderResponsiveCardTable, type ResponsiveColumn } from "../components/render-responsive-card-table.js";
+import { showConfirm } from "../lib/show-confirm.js";
+import { showToast } from "../components/toast.js";
+import { renderDataGrid, type GridColumn } from "../components/data-grid.js";
 
 interface FreeProxyRow {
   id: string;
@@ -106,6 +108,29 @@ async function triggerSync(): Promise<void> {
     isSyncing = false;
     fetchFilteredProxies();
   }
+}
+
+async function onBulkDeleteProxies(picked: FreeProxyRow[]): Promise<void> {
+  if (picked.length === 0) return;
+  if (!(await showConfirm({
+    title: t("proxies.bulk.delete_confirm_title", { n: picked.length }),
+    message: t("proxies.bulk.delete_confirm_message", { list: picked.map((p) => `${p.host}:${p.port}`).join(", ") }),
+    danger: true,
+    confirmLabel: t("common.delete"),
+  }))) return;
+
+  const failed: string[] = [];
+  for (const p of picked) {
+    try {
+      await deleteProxy(p.id);
+    } catch {
+      failed.push(`${p.host}:${p.port}`);
+    }
+  }
+  if (failed.length > 0) {
+    showToast(t("proxies.bulk.partial_error", { list: failed.join(", ") }), "error");
+  }
+  fetchFilteredProxies();
 }
 
 function formatTimeAgo(isoString: string | null): string {
@@ -221,6 +246,16 @@ function renderFilterBar(search: string, protocol: string, source: string, statu
   `;
 }
 
+function formatProxyStatus(p: FreeProxyRow) {
+  const isAlive = p.status === "alive";
+  const isDead = p.status === "dead";
+  const statusLabel = isAlive
+    ? t("proxies.list.status.alive")
+    : (isDead ? t("proxies.list.status.dead") : (t(`proxies.status.${p.status}`) || p.status.toUpperCase()));
+  const dotClass = isAlive ? "on" : (isDead ? "off" : "unknown");
+  return { statusLabel, dotClass };
+}
+
 function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: number, hasPrevPage: boolean, hasNextPage: boolean): TemplateResult {
   if (error) {
     return html`<div class="banner banner-error">${error}</div>`;
@@ -229,86 +264,112 @@ function renderProxiesList(proxies: FreeProxyRow[], error: string | null, page: 
     return html`<p class="empty">${t("common.empty")}</p>`;
   }
 
-  const columns: ResponsiveColumn<FreeProxyRow>[] = [
+  const columns: GridColumn<FreeProxyRow>[] = [
     {
       key: "host",
       label: t("proxies.table.col_host"),
-      render: (p) => html`<strong>${p.host}</strong>`,
+      min: 120,
+      elastic: true,
+      render: (p) => html`<strong class="proxy-host-text">${p.host}</strong>`,
     },
     {
       key: "port",
       label: t("proxies.table.col_port"),
-      render: (p) => html`<code class="proxy-port-code">${p.port}</code>`,
+      max: 80,
+      render: (p) => html`<code class="proxy-port-num">${p.port}</code>`,
     },
     {
       key: "type",
       label: t("proxies.table.col_type"),
+      max: 90,
+      fold: 5,
       render: (p) => html`<span class="chip chip-protocol">${p.type.toUpperCase()}</span>`,
     },
     {
       key: "source",
       label: t("proxies.table.col_source"),
-      render: (p) => html`<span class="badge badge-source">${p.source}</span>`,
+      max: 150,
+      fold: 4,
+      render: (p) => html`<span class="badge proxy-source-badge" title=${p.source}>${p.source}</span>`,
     },
     {
       key: "status",
       label: t("proxies.table.col_status"),
       render: (p) => {
-        const isAlive = p.status === "alive";
-        const isDead = p.status === "dead";
-        const statusLabel = isAlive
-          ? t("proxies.list.status.alive")
-          : (isDead ? t("proxies.list.status.dead") : p.status.toUpperCase());
-        const statusClass = isAlive ? "alive on" : (isDead ? "dead off" : "unknown");
-        return html`
-          <span class=${"status-pill " + statusClass}>
-            <span class="status-dot"></span>
-            ${statusLabel}
-          </span>
-        `;
+        const { statusLabel, dotClass } = formatProxyStatus(p);
+        return html`<span class="dg-dot ${dotClass}" title=${statusLabel} aria-label=${statusLabel}></span>`;
       },
     },
     {
       key: "country",
       label: t("proxies.table.col_country"),
-      render: (p) => html`<code class="proxy-country-code">${p.country_code || "XX"}</code>`,
+      max: 80,
+      fold: 3,
+      render: (p) => html`<code class="proxy-country-chip">${p.country_code || "XX"}</code>`,
     },
     {
       key: "latency",
       label: t("proxies.table.col_latency"),
+      max: 100,
+      fold: 2,
       render: (p) => {
-        if (p.latency_ms == null) return html`—`;
+        if (p.latency_ms == null) return html`<span class="dg-dim">—</span>`;
         let cls = "";
         if (p.latency_ms < 300) cls = "latency-low";
         else if (p.latency_ms < 800) cls = "latency-medium";
         else cls = "latency-high";
-        return html`<span class=${cls}>${p.latency_ms} ${t("proxies.list.latency_unit")}</span>`;
+        return html`<span class="${cls} dg-mono">${p.latency_ms} ${t("proxies.list.latency_unit")}</span>`;
       },
     },
     {
       key: "last_validated",
       label: t("proxies.table.col_last_val"),
-      render: (p) => html`<small class="proxy-time-text">${formatTimeAgo(p.last_validated)}</small>`,
-    },
-    {
-      key: "actions",
-      label: t("proxies.list.col.actions"),
-      render: (p) => html`
-        <div class="proxy-actions-wrap">
-          <button class="small" @click=${() => void testProxy(p.id)}>${icons.flask()} ${t("common.retry")}</button>
-          <button class="small danger" @click=${() => void deleteProxy(p.id)}>${icons.trash()} ${t("common.delete")}</button>
-        </div>
-      `,
+      max: 120,
+      fold: 1,
+      render: (p) => html`<span class="dg-dim">${formatTimeAgo(p.last_validated)}</span>`,
     },
   ];
 
   return html`
-    ${renderResponsiveCardTable<FreeProxyRow>({
+    ${renderDataGrid<FreeProxyRow>({
+      id: "proxies-grid",
+      className: "proxies-table",
       columns,
       rows: proxies,
       rowKey: (p) => p.id,
       rowClass: (p) => p.status === "alive" ? "alive" : (p.status === "dead" ? "dead" : "unknown"),
-      className: "proxies-table",
+      emptyMessage: t("common.empty"),
+      quickActions: () => [
+        { action: "test", title: t("proxies.list.col.test"), icon: icons.flask() },
+        { action: "delete", title: t("common.delete"), icon: icons.trash(), danger: true },
+      ],
+      menuItems: () => [
+        { action: "test", label: t("proxies.list.col.test"), shortcut: "T" },
+        { action: "copy_endpoint", label: t("grid.menu.copy_endpoint") || "Copy host:port", shortcut: "C" },
+        { separator: true },
+        { action: "delete", label: t("common.delete"), shortcut: "Supr", danger: true },
+      ],
+      onAction: (p, action) => {
+        switch (action) {
+          case "test": return void testProxy(p.id);
+          case "copy_endpoint": {
+            void navigator.clipboard?.writeText(`${p.host}:${p.port}`);
+            showToast(t("grid.toast.copied"));
+            return;
+          }
+          case "delete": return void deleteProxy(p.id);
+        }
+      },
+      bulkActions: [
+        {
+          key: "delete",
+          label: t("common.delete"),
+          danger: true,
+          run: (picked) => void onBulkDeleteProxies(picked),
+        },
+      ],
+      bulkCountLabel: (n) => t("grid.bulk.selected", { n }),
+      __refresh: () => requestUpdate(),
     })}
     <div class="pagination" style="display: flex; justify-content: space-between; align-items: center; margin: 1.5rem 0;">
       <span>${t("proxies.list.pagination.page", { page })}</span>

@@ -172,17 +172,22 @@
   flex-wrap: wrap;
   gap: var(--space-1);
   padding: var(--space-2);
+  padding-right: 5.5rem; /* room for the pinned edit link */
   background: var(--color-surface-2);
   border: var(--border-w) var(--border-style) var(--color-border);
+  position: relative;
 }
 .model-picker-display > button.link-btn {
-  margin-left: auto;
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
   background: transparent;
   border: none;
   color: var(--color-link);
   text-decoration: underline;
-  padding: 0 0.4rem;
+  padding: 0 0.2rem;
   font-size: var(--fs-sm);
+  white-space: nowrap;
 }
 
 .scopes-list {
@@ -190,10 +195,14 @@
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--space-2);
 }
+/* Checkbox owns a narrow left gutter; name + description stack to its
+   right and the whole card is one compact row, not a tall stack with a
+   detached checkbox floating above its label. */
 .scope-card {
   display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);
@@ -206,8 +215,14 @@
   border-color: var(--color-text-muted);
 }
 .scope-card input[type="checkbox"] {
-  margin: 0 0 0.25rem 0;
+  margin: 0.15rem 0 0 0;
   cursor: pointer;
+  flex: none;
+}
+.scope-card .scope-name,
+.scope-card .scope-desc {
+  flex: 1;
+  min-width: 0;
 }
 .scope-card .scope-name {
   font-weight: 600;

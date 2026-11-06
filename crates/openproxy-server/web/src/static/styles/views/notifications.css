@@ -30,137 +30,198 @@
   100% { transform: scale(1); }
 }
 
-/* Notifications view — compact rows: one notification per line. */
+/* Notifications view — dense listing (32px rows) matching data-grid aesthetic */
 .notification-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: 0;
   align-items: stretch;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
 }
+
 .notification-card {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  height: 32px;
+  min-height: 32px;
+  padding: 0 10px;
+  gap: 8px;
   background: var(--color-surface);
-  border: var(--border-w) var(--border-style) var(--color-border);
-  /* Faint accent tint so each notification type reads at a
-   * glance. color-mix keeps it subtle. */
-  background-image: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--card-accent, transparent) 8%, transparent) 0%,
-    transparent 40%
-  );
-  transition: background var(--t-fast), border-color var(--t-fast);
+  border: 0;
+  border-bottom: 1px solid var(--color-border-soft);
   box-sizing: border-box;
+  transition: background var(--t-fast);
+  cursor: default;
 }
+
+.notification-card:last-child {
+  border-bottom: 0;
+}
+
+.notification-card:hover {
+  background: color-mix(in oklab, var(--color-primary) 7%, transparent);
+}
+
 .notification-card.unread {
-  border-color: var(--card-accent, var(--color-primary));
-  background: color-mix(in srgb, var(--card-accent, var(--color-primary)) 10%, var(--color-surface));
+  background: color-mix(in oklab, var(--card-accent, var(--color-primary)) 10%, var(--color-surface));
 }
+
+.notification-card.unread:hover {
+  background: color-mix(in oklab, var(--card-accent, var(--color-primary)) 16%, var(--color-surface));
+}
+
 .notification-card.draggable {
   cursor: grab;
 }
+
 .notification-card.draggable:active {
   cursor: grabbing;
 }
-.notification-card.draggable:hover {
-  border-color: var(--card-accent, var(--color-primary));
-}
+
 .notification-card-icon {
-  font-size: 1.2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  font-size: 13px;
   line-height: 1;
   text-align: center;
-  flex: 0 0 auto;
-  width: 24px;
-  /* `--icon-color` is set inline by `renderRow` for `system`
-   * notifications whose `payload.code` has a per-code override (see
-   * `SYSTEM_CODE_COLOR_VAR` in `views/notifications/shared.ts`).
-   * Unset, it falls back to `--card-accent` / `--color-text-muted`. */
   color: var(--icon-color, var(--card-accent, var(--color-text-muted)));
 }
+
+.notification-card-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
 .notification-card.unread .notification-card-icon {
   color: var(--icon-color, var(--card-accent, var(--color-primary)));
 }
+
 .notification-card-body {
   min-width: 0;
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: var(--space-3);
+  gap: 8px;
   flex: 1 1 auto;
 }
+
 .notification-card-text {
-  font-size: var(--fs-sm);
-  word-break: break-word;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   flex: 1 1 auto;
   min-width: 0;
 }
+
 .notification-card-meta {
-  display: flex;
-  gap: var(--space-2);
+  display: inline-flex;
+  gap: 6px;
   align-items: center;
-  font-size: var(--fs-xs);
+  font-size: 11px;
   color: var(--color-text-muted);
   flex-wrap: nowrap;
   flex: 0 0 auto;
   white-space: nowrap;
 }
+
 .notification-card-kind {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--card-accent, var(--color-text-muted));
   font-weight: 600;
 }
+
 .notification-card-ago {
   font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
 }
+
 .notification-card-unread-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--card-accent, var(--color-primary));
   display: inline-block;
+  flex: 0 0 auto;
 }
+
+/* Quick Actions: ghost icon buttons revealing on hover/focus */
 .notification-card-actions {
-  display: flex;
-  gap: var(--space-2);
+  display: inline-flex;
+  gap: 2px;
   align-items: center;
   flex-wrap: nowrap;
   margin-top: 0;
   padding-top: 0;
   flex: 0 0 auto;
 }
-/* Mobile (≤640px): stack the card vertically with text on top and
- * actions in their own full-width row below, so the buttons never
- * squeeze the notification text. Row direction and the DnD attributes
- * stay untouched above 640px. */
+
+.notification-qa {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-fast), background var(--t-fast), color var(--t-fast);
+}
+
+.notification-qa svg {
+  width: 13px;
+  height: 13px;
+}
+
+.notification-card:hover .notification-qa,
+.notification-card:focus-within .notification-qa {
+  opacity: 1;
+}
+
+.notification-qa:hover {
+  background: color-mix(in oklab, var(--color-text) 12%, transparent);
+  color: var(--color-text);
+}
+
+.notification-qa.danger:hover {
+  color: var(--color-error);
+  background: color-mix(in oklab, var(--color-error) 14%, transparent);
+}
+
+/* Mobile (≤640px): keep legible if narrow, allow vertical wrap */
 @media (max-width: 640px) {
   .notification-card {
-    flex-direction: column;
-    align-items: flex-start;
+    height: auto;
+    min-height: 36px;
+    padding: 6px 10px;
+    flex-wrap: wrap;
   }
   .notification-card-body {
-    flex-direction: column;
-    align-items: stretch;
-    width: 100%;
-  }
-  .notification-card-text {
-    flex: 1 1 auto;
-    width: 100%;
-  }
-  .notification-card-meta {
-    white-space: normal;
     flex-wrap: wrap;
   }
   .notification-card-actions {
-    flex-wrap: wrap;
-    width: 100%;
-    border-top: var(--border-w) var(--border-style) var(--color-border);
-    padding-top: var(--space-2);
-    margin-top: var(--space-1);
+    margin-left: auto;
+  }
+  .notification-qa {
+    opacity: 1;
   }
 }
 .notification-empty {

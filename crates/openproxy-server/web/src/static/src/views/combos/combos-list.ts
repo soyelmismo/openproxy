@@ -1,14 +1,20 @@
-// views/combos/combos-list.ts — responsive table listing for combos: custom
-// user-created combos separate from auto-generated provider combos.
+// views/combos/combos-list.ts — dense listing primitive for combos view.
+//
+// Powered by renderDataGrid: one line per row (32px), elastic name column with min,
+// semantic max for content columns, space-driven folding, context menu, hover quick actions,
+// bulk actions, inline rename (dblclick / F2), and toolbar filters.
 
-import { html, type TemplateResult } from 'lit-html';
+import { html, type TemplateResult } from "lit-html";
 import { state } from "../../state/index.js";
+import { api } from "../../state/api.js";
 import { icons } from "../../lib/icons.js";
 import { t } from "../../i18n/index.js";
 import { PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS } from "../../lib/constants.js";
 import { showCreateCombo, cloneCombo, deleteCombo } from "../../handlers/combo-handlers.js";
+import { showToast } from "../../components/toast.js";
+import { showConfirm } from "../../lib/show-confirm.js";
 import type { Combo, PriorityMode } from "../../lib/types/api.js";
-import { renderResponsiveCardTable, type ResponsiveColumn } from "../../components/render-responsive-card-table.js";
+import { renderDataGrid, type GridColumn } from "../../components/data-grid.js";
 import { requestUpdate } from "../../state/reactive.js";
 
 const priorityModeOf = (c: Combo): PriorityMode => (c.priority_mode ?? "strict") as PriorityMode;
@@ -37,46 +43,82 @@ function onPriorityModeFilterChange(e: Event): void {
   requestUpdate();
 }
 
-function getCombosColumns(): ResponsiveColumn<Combo>[] {
+async function onRenameCombo(id: number, name: string): Promise<void> {
+  try {
+    await api(`/combos/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+    const item = (state.combos || []).find((c) => c.id === id);
+    if (item) item.name = name;
+    showToast(t("combos.detail.renamed_toast", { name, defaultValue: `Combo renamed to "${name}"` }), "success");
+    requestUpdate();
+  } catch (err: unknown) {
+    showToast(t("combos.toast.error", { message: err instanceof Error ? err.message : String(err) }), "error");
+  }
+}
+
+async function onBulkDeleteCombos(picked: Combo[]): Promise<void> {
+  if (picked.length === 0) return;
+  if (!(await showConfirm({
+    title: t("keys.list.bulk.confirm_delete.title", { count: picked.length }),
+    message: t("keys.list.bulk.confirm_delete.message", { list: picked.map((c) => c.name || "#" + c.id).join(", ") }),
+    danger: true,
+    confirmLabel: t("common.delete"),
+  }))) return;
+
+  const failed: string[] = [];
+  for (const c of picked) {
+    try {
+      await api(`/combos/${c.id}`, { method: "DELETE" });
+      state.combos = ((state.combos || []) as Combo[]).filter((x) => x.id !== c.id);
+    } catch {
+      failed.push(c.name || "#" + c.id);
+    }
+  }
+  requestUpdate();
+  if (failed.length > 0) {
+    showToast(t("keys.list.bulk.partial_error", { list: failed.join(", ") }), "error");
+  }
+}
+
+function getCombosColumns(): GridColumn<Combo>[] {
   return [
     {
       key: "name",
-      label: "Name",
+      label: t("common.filter") || "Name",
+      min: 140,
+      elastic: true,
       render: (c) => {
         const pm = priorityModeOf(c);
         return html`
-          <div class="combo-table-name-wrap">
-            <div class="combo-table-title-row">
-              <a class="combo-table-name-link" href="#/combos/${c.id}">
-                <strong class="combo-name-title">${c.name}</strong>
-              </a>
-              <span class="muted combo-id-badge">#${c.id}</span>
-            </div>
-            <div class="combo-table-badges-row">
-              ${pm === "decision" && c.decision_model ? html`
-                <span class="subcombo-meta-pill decision" title="Decision model: ${c.decision_model}">
-                  Jev: <strong>${c.decision_model}</strong>
-                </span>
-              ` : ""}
-              ${c.preventive_rate_limit ? html`
-                <span class="chip chip-rl" title="Predictive Rate Limiting enabled">${icons.lightning()} RL</span>
-              ` : ""}
-              ${c.sanitize_response ? html`
-                <span class="chip chip-sanitize" title="Sanitize Responses: rewrites model and purges reasoning metadata">${icons.check()} Sanitize</span>
-              ` : ""}
-            </div>
-          </div>
+          <a class="combo-table-name-link" href="#/combos/${c.id}">
+            <strong class="combo-name-title">${c.name}</strong>
+            <span class="combo-id-badge">#${c.id}</span>
+          </a>
+          ${pm === "decision" && c.decision_model ? html`
+            <span class="subcombo-meta-pill decision" title="Decision model: ${c.decision_model}">
+              Jev: <strong>${c.decision_model}</strong>
+            </span>
+          ` : ""}
+          ${c.preventive_rate_limit ? html`
+            <span class="chip chip-rl" title="Predictive Rate Limiting enabled">${icons.lightning()} RL</span>
+          ` : ""}
+          ${c.sanitize_response ? html`
+            <span class="chip chip-sanitize" title="Sanitize Responses: rewrites model and purges reasoning metadata">${icons.check()} Sanitize</span>
+          ` : ""}
         `;
       },
     },
     {
       key: "strategy",
       label: "Strategy",
+      max: 120,
+      fold: 2,
       render: (c) => html`<span class="chip chip-strategy" title="Routing Strategy: ${c.strategy}">${c.strategy}</span>`,
     },
     {
       key: "priority_mode",
       label: "Priority Mode",
+      max: 140,
+      fold: 1,
       render: (c) => {
         const pm = priorityModeOf(c);
         return html`<span class="chip chip-pm" title=${PRIORITY_MODE_TOOLTIPS[pm] || ""}>${PRIORITY_MODE_LABELS[pm] || pm}</span>`;
@@ -85,29 +127,16 @@ function getCombosColumns(): ResponsiveColumn<Combo>[] {
     {
       key: "race_size",
       label: "Race",
+      max: 80,
+      fold: 3,
       render: (c) => html`<span class="combo-race-badge" title="Race size: ${c.race_size}">race ${c.race_size}</span>`,
     },
     {
       key: "context_window",
       label: "Context",
-      render: (c) => html`<span class="combo-context-value">${c.context_window != null ? formatTokens(c.context_window) : "auto"}</span>`,
-    },
-    {
-      key: "actions",
-      label: "Actions",
-      render: (c) => html`
-        <div class="combo-table-actions">
-          <a class="button small primary" href="#/combos/${c.id}" title="View details and targets">
-            ${icons.pencil()} Details
-          </a>
-          <button type="button" class="small" title="Clone combo" @click=${() => cloneCombo(c.id, c.name)}>
-            ${icons.copy()} Clone
-          </button>
-          <button type="button" class="small danger" title="Delete combo" @click=${() => deleteCombo(c.id)}>
-            ${icons.trash()}
-          </button>
-        </div>
-      `,
+      max: 90,
+      fold: 4,
+      render: (c) => html`<span class="combo-context-value dg-mono">${c.context_window != null ? formatTokens(c.context_window) : "auto"}</span>`,
     },
   ];
 }
@@ -136,6 +165,10 @@ export function renderCombosList(): TemplateResult {
   const filteredCustom = list.filter(matches);
   const columns = getCombosColumns();
   const isFiltered = q.length > 0 || comboStrategyFilter !== "all" || comboPriorityModeFilter !== "all";
+
+  const emptyMsg = isFiltered
+    ? "No combos matching your filters."
+    : (t("combos.grid.empty") || "No combos yet. Create one to start routing.");
 
   return html`
     <div class="combos-view-container">
@@ -178,14 +211,53 @@ export function renderCombosList(): TemplateResult {
       ${list.length === 0 ? html`<p class="empty">${t("combos.grid.empty")}</p>` : html`
         <div class="combos-list-container">
           <section class="combos-section custom-combos-section">
-            ${renderResponsiveCardTable<Combo>({
+            ${renderDataGrid<Combo>({
+              id: "combos-grid",
+              className: "combos-table custom-combos-table",
               columns,
               rows: filteredCustom,
               rowKey: (c) => c.id,
-              className: "combos-table custom-combos-table",
-              emptyMessage: isFiltered
-                ? `No combos matching your filters.`
-                : "No combos created yet. Click 'Create combo' to add one.",
+              emptyMessage: emptyMsg,
+              renameable: (c) => c.name,
+              onRename: (c, value) => { void onRenameCombo(c.id, value); },
+              quickActions: () => [
+                { action: "details", title: "Details", icon: icons.pencil() },
+                { action: "clone", title: "Clone", icon: icons.copy() },
+                { action: "delete", title: t("common.delete") || "Delete", icon: icons.trash(), danger: true },
+              ],
+              menuItems: () => [
+                { action: "details", label: "Details" },
+                { action: "rename", label: t("grid.menu.rename"), shortcut: "F2" },
+                { action: "clone", label: "Clone" },
+                { separator: true },
+                { action: "copy_name", label: "Copy name" },
+                { separator: true },
+                { action: "delete", label: t("common.delete") || "Delete", shortcut: "Supr", danger: true },
+              ],
+              onAction: (c, action) => {
+                switch (action) {
+                  case "details":
+                    location.hash = `#/combos/${c.id}`;
+                    return;
+                  case "rename":
+                    return; // Handled inline by renderDataGrid
+                  case "clone":
+                    void cloneCombo(c.id, c.name);
+                    return;
+                  case "copy_name":
+                    void navigator.clipboard?.writeText(c.name);
+                    showToast(t("grid.toast.copied") || "Copied to clipboard");
+                    return;
+                  case "delete":
+                    void deleteCombo(c.id);
+                    return;
+                }
+              },
+              bulkActions: [
+                { key: "delete", label: t("common.delete") || "Delete", danger: true, run: (picked) => void onBulkDeleteCombos(picked) },
+              ],
+              bulkCountLabel: (n) => t("grid.bulk.selected", { n }),
+              __refresh: () => requestUpdate(),
             })}
           </section>
         </div>

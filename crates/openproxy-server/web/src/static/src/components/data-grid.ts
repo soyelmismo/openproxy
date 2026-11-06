@@ -162,42 +162,91 @@ function measureAndSize(root: HTMLElement): void {
     Array.from(scope.querySelectorAll<HTMLElement>(":scope > .dg-col"))
   );
 
-  /** Apply an active set: template tracks, explicit placement, hides. */
-  const apply = (active: number[]): void => {
-    const tracks = active.map((i) =>
-      i === elastic ? `minmax(${Math.max(mins[i] ?? 0, 24)}px, 1fr)` : "max-content"
-    );
-    root.style.setProperty("--dg-cols", tracks.join(" "));
-    let track = 1;
-    for (let i = 0; i < n; i++) {
-      const on = active.includes(i);
-      for (const cells of slides) {
-        if (!cells[i]) continue;
-        cells[i]!.style.display = on ? "" : "none";
-        if (on) cells[i]!.style.gridColumn = String(track);
-      }
-      if (on) track++;
-    }
-  };
-
   const wrap = root.querySelector<HTMLElement>(".dg-wrap");
   if (!wrap) return;
 
-  // Start with everything visible; fold while the row genuinely overflows.
+  // Every .dg-row is its own grid container, so tracks must be FIXED pixels
+  // for the whole grid: native max-content tracks resolve per container and
+  // headers drift away from body cells. Pass 1 lays everything out with an
+  // all-max-content template purely to let the browser compute each column's
+  // natural width; pass 2 freezes the survivors to px (identical on every
+  // row) and folds the rest to 0px tracks with visibility:hidden - folded
+  // cells keep their auto-placement slot, so the column mapping survives any
+  // re-render without bookkeeping.
+  const applyTracks = (tpl: string[], hidden: number[]): void => {
+    root.style.setProperty("--dg-cols", tpl.join(" "));
+    for (let i = 0; i < n; i++) {
+      const on = !hidden.includes(i);
+      for (const cells of slides) {
+        if (!cells[i]) continue;
+        cells[i]!.style.visibility = on ? "" : "hidden";
+      }
+    }
+  };
+
+  // Pass 1: everything visible at max-content.
+  applyTracks(Array.from({ length: n }, () => "max-content"), []);
+  void wrap.offsetWidth; // force layout before measuring
+
+  const natural: number[] = new Array(n).fill(0);
+  for (const cells of slides) {
+    for (let i = 0; i < n && i < cells.length; i++) {
+      const w = cells[i]!.getBoundingClientRect().width;
+      if (w > natural[i]!) natural[i] = w;
+    }
+  }
+
+  // The quick-actions column is intrinsic: its buttons cannot shrink, so its
+  // floor is its own natural width, and it never folds.
+  const floor: number[] = natural.map((_, i) => Math.max(mins[i] ?? 0, 24));
+  const foldRank: number[] = natural.map((_, i) => folds[i] ?? 0);
+  if (root.querySelector(".dg-row .dg-actions")) {
+    floor[n - 1] = natural[n - 1]!;
+    foldRank[n - 1] = 0;
+  }
+
+  // Fold rank 1 first, 2 next, ... until what remains fits the tile with the
+  // elastic column at its floor. Folding is driven by one real number - does
+  // the wrap overflow - never by breakpoints.
   const active: number[] = Array.from({ length: n }, (_, i) => i);
-  for (let guard = 0; guard <= n; guard++) {
-    apply(active);
-    void wrap.offsetWidth; // force layout before the overflow check
-    if (wrap.scrollWidth <= wrap.clientWidth) break;
-    // Rank 1 folds first, 2 next, ...; the elastic column and rank 0 never.
+  const needed = (list: number[]): number =>
+    list.reduce((a, i) => a + (i === elastic ? floor[i]! : natural[i]!), 0);
+  const avail = root.clientWidth;
+  for (let guard = 0; guard < n; guard++) {
+    if (needed(active) <= avail) break;
     let victim = -1, victimRank = Number.POSITIVE_INFINITY;
     for (const i of active) {
       if (i === elastic) continue;
-      const r = folds[i] ?? 0;
+      const r = foldRank[i]!;
       if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
     }
     if (victim === -1) break;
     active.splice(active.indexOf(victim), 1);
+  }
+
+  // Pass 2: freeze survivors to px, fold the rest to 0px tracks. The
+  // needed() estimate rounds, so after applying the template the wrap is
+  // re-checked for REAL overflow and another column folds if the rounded
+  // tracks actually spill - the layout is self-correcting.
+  let hidden: number[] = [];
+  for (let i = 0; i < n; i++) if (!active.includes(i)) hidden.push(i);
+  const buildTpl = (): string[] => Array.from({ length: n }, (_, i) =>
+    hidden.includes(i) ? "0px"
+      : i === elastic ? `minmax(${Math.ceil(floor[i]!)}px, 1fr)`
+      : `${Math.ceil(natural[i]!)}px`
+  );
+  for (let guard = 0; guard < n; guard++) {
+    applyTracks(buildTpl(), hidden);
+    void wrap.offsetWidth;
+    if (wrap.scrollWidth <= wrap.clientWidth) break;
+    let victim = -1, victimRank = Number.POSITIVE_INFINITY;
+    for (const i of active) {
+      if (i === elastic || hidden.includes(i)) continue;
+      const r = foldRank[i]!;
+      if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
+    }
+    if (victim === -1) break;
+    hidden.push(victim);
   }
 }
 

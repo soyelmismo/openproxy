@@ -884,5 +884,9 @@
   "keys.list.bulk.only_session": "Every selected key is the current session key; nothing was deleted.",
   "keys.list.bulk.confirm_delete.title": "Delete {count} keys?",
   "keys.list.bulk.confirm_delete.message": "This permanently deletes: {list}",
-  "keys.list.bulk.partial_error": "Could not delete: {list}"
+  "keys.list.bulk.partial_error": "Could not delete: {list}",
+  "grid.menu.copy_endpoint": "Copy host:port",
+  "proxies.bulk.delete_confirm_title": "Delete {{n}} proxies?",
+  "proxies.bulk.delete_confirm_message": "Proxies: {{list}}",
+  "proxies.bulk.partial_error": "Failed to delete: {{list}}"
 }

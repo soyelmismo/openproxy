@@ -1,0 +1,46 @@
+/* styles/views/combos-list.css — custom styles for combos list data-grid view */
+
+.combos-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  min-width: 0;
+}
+
+.combos-table .combo-name-title {
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  letter-spacing: -0.01em;
+  color: var(--color-text);
+}
+
+.combos-table .combo-id-badge {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-soft);
+}
+
+.combos-table .combo-table-name-link {
+  text-decoration: none;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.combos-table .combo-table-name-link:hover .combo-name-title {
+  color: var(--color-primary);
+}
+
+.combos-table .dg-inner {
+  align-items: center;
+}

@@ -2,6 +2,7 @@
 @import url("./views/providers.css");
 @import url("./views/providers_mobile.css");
 @import url("./views/combos.css");
+@import url("./views/combos-list.css");
 @import url("./views/combos_mobile.css");
 @import url("./views/logs.css");
 @import url("./views/logs_mobile.css");
@@ -14,6 +15,7 @@
 @import url("./views/config.css");
 @import url("./views/notifications.css");
 @import url("./views/proxies.css");
+@import url("./views/proxies-grid.css");
 @import url("./views/keys.css");
 @import url("./views/provider-detail.css");
 @import url("./views/responsive_tables.css");

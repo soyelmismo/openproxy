@@ -15,12 +15,17 @@
   overflow-y: hidden;
 }
 
+/* Column spacing lives on .dg-inner padding, not column-gap: folded
+   columns collapse to 0px tracks, and a gap would still render between the
+   tracks around them, producing uneven spacing at fold points. With
+   padding-based spacing every visible neighbor sits exactly 18px from the
+   next, folded or not. */
 .dg-head,
 .dg-row {
   display: grid;
   grid-template-columns: var(--dg-cols, none);
   align-items: center;
-  column-gap: 10px;
+  column-gap: 0;
   padding: 0 10px;
 }
 
@@ -70,6 +75,11 @@
 .dg-col {
   overflow: hidden;
   min-width: 0;
+}
+
+.dg-head .dg-inner,
+.dg-row .dg-inner {
+  padding: 0 9px;
 }
 
 /* scrollWidth of this inner div is the content's natural width — the whole

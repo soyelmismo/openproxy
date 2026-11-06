@@ -15,6 +15,7 @@ import {
   payloadProviderId, payloadModelId, type DragPayload,
 } from "./shared.js";
 import { openOverlay, closeOverlay } from "./dnd-overlay.js";
+import { openContextMenu, type ContextMenuItem } from "../../components/context-menu.js";
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: "all" | "unread" | NotificationKind; key: string }> = [
   { value: "all", key: "notifications.filter.all" },
@@ -190,6 +191,66 @@ async function onDelete(r: NotificationRow): Promise<void> {
   catch { rows = snapshot; if (wasUnread) setUnreadCount(getUnreadCount() + 1); requestUpdate(); void refreshUnreadCount(); showToast(t("notifications.error.delete_failed"), "error"); }
 }
 
+function openNotificationMenu(r: NotificationRow, x: number, y: number): void {
+  const pId = payloadProviderId(r);
+  const mId = payloadModelId(r);
+  const unread = isUnread(r);
+  const draggable = isRowDraggable(r);
+  const deletable = isDeletable(r);
+
+  const items: (ContextMenuItem | "separator")[] = [];
+
+  if (pId) {
+    items.push({
+      action: "view_provider",
+      label: t("notifications.action.view_provider"),
+      run: () => {
+        void markAsRead(r.id);
+        location.hash = "#/providers/" + encodeURIComponent(pId);
+      },
+    });
+  }
+
+  if (draggable && pId && mId) {
+    items.push({
+      action: "add_to_combo",
+      label: t("notifications.action.add_to_combo"),
+      run: () => openOverlay({ notification_id: r.id, provider_id: pId, model_id: mId }, true),
+    });
+  }
+
+  if (unread) {
+    items.push({
+      action: "mark_read",
+      label: t("notifications.action.mark_read"),
+      run: () => { void markAsRead(r.id); },
+    });
+  }
+
+  if (items.length > 0) {
+    items.push("separator");
+  }
+
+  items.push({
+    action: "dismiss",
+    label: t("notifications.action.dismiss"),
+    danger: true,
+    run: () => { void archive(r.id); },
+  });
+
+  if (deletable) {
+    items.push({
+      action: "delete",
+      label: t("notifications.action.delete"),
+      danger: true,
+      shortcut: "Supr",
+      run: () => { void onDelete(r); },
+    });
+  }
+
+  openContextMenu({ x, y, items });
+}
+
 function renderRow(r: NotificationRow): TemplateResult {
   const icon = notificationIcon(r);
   const iconColorVar = notificationIconColorVar(r);
@@ -211,22 +272,40 @@ function renderRow(r: NotificationRow): TemplateResult {
     scheduleDndOverlay(payload);
   } : null;
 
-  return html`<div class=${rowClasses} data-id=${String(r.id)} style=${rowStyle} draggable=${draggable ? "true" : "false"}
-      @dragstart=${dragStart} @dragend=${draggable ? () => { cancelPendingDndOverlay(); closeOverlay(); } : null}>
+  return html`<div
+      class=${rowClasses}
+      data-id=${String(r.id)}
+      style=${rowStyle}
+      draggable=${draggable ? "true" : "false"}
+      tabindex="0"
+      @dragstart=${dragStart}
+      @dragend=${draggable ? () => { cancelPendingDndOverlay(); closeOverlay(); } : null}
+      @contextmenu=${(e: MouseEvent) => {
+        e.preventDefault();
+        openNotificationMenu(r, e.clientX, e.clientY);
+      }}
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === "Delete" || e.key === "Backspace") {
+          e.preventDefault();
+          if (deletable) void onDelete(r);
+          else void archive(r.id);
+        }
+      }}
+    >
     <div class="notification-card-icon" style=${rowStyle} aria-hidden="true">${icon}</div>
     <div class="notification-card-body">
-      <div class="notification-card-text">${body}</div>
+      <div class="notification-card-text" title=${body}>${body}</div>
       <div class="notification-card-meta">
         <span class="notification-card-kind">${notificationKindLabel(r)}</span>
         ${ago ? html`<span class="notification-card-ago">${ago}</span>` : nothing}
         ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")} aria-label=${t("common.unread")}></span>` : nothing}
       </div>
       <div class="notification-card-actions">
-        ${pId ? html`<button class="small" @click=${() => { void markAsRead(r.id); location.hash = "#/providers/" + encodeURIComponent(pId); }}>${t("notifications.action.view_provider")}</button>` : nothing}
-        ${DRAGGABLE_KINDS.has(r.kind) && pId && mId ? html`<button class="small" @click=${() => openOverlay({ notification_id: r.id, provider_id: pId, model_id: mId }, true)}>${t("notifications.action.add_to_combo")}</button>` : nothing}
-        ${unread ? html`<button class="small" @click=${() => { void markAsRead(r.id); }}>${t("notifications.action.mark_read")}</button>` : nothing}
-        <button class="small danger" @click=${() => { void archive(r.id); }}>${t("notifications.action.dismiss")}</button>
-        ${deletable ? html`<button class="small danger" @click=${() => { void onDelete(r); }}>${t("notifications.action.delete")}</button>` : nothing}
+        ${pId ? html`<button class="small notification-qa" title=${t("notifications.action.view_provider")} @click=${() => { void markAsRead(r.id); location.hash = "#/providers/" + encodeURIComponent(pId); }}>${icons.eye()}</button>` : nothing}
+        ${DRAGGABLE_KINDS.has(r.kind) && pId && mId ? html`<button class="small notification-qa" title=${t("notifications.action.add_to_combo")} @click=${() => openOverlay({ notification_id: r.id, provider_id: pId, model_id: mId }, true)}>${icons.plus()}</button>` : nothing}
+        ${unread ? html`<button class="small notification-qa" title=${t("notifications.action.mark_read")} @click=${() => { void markAsRead(r.id); }}>${icons.check()}</button>` : nothing}
+        <button class="small danger notification-qa" title=${t("notifications.action.dismiss")} @click=${() => { void archive(r.id); }}>${icons.close()}</button>
+        ${deletable ? html`<button class="small danger notification-qa" title=${t("notifications.action.delete")} @click=${() => { void onDelete(r); }}>${icons.trash()}</button>` : nothing}
       </div>
     </div>
   </div>`;

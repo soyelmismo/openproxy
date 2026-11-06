@@ -87,6 +87,23 @@ export function extractDomain(urlStr: string | null | undefined): string | null 
   }
 }
 
+export function getProviderCountryCode(p: Provider): string {
+  const host = extractDomain(p.base_url);
+  if (!host) return "—";
+  const parts = host.toLowerCase().split(".");
+  const tld = parts[parts.length - 1];
+  if (tld && tld.length === 2 && /^[a-z]{2}$/.test(tld)) {
+    // Standard ccTLDs (uk, de, fr, jp, cn, us...)
+    if (tld === "uk") return "GB";
+    return tld.toUpperCase();
+  }
+  // Generic / commercial TLDs mostly based in the US
+  if (tld === "com" || tld === "ai" || tld === "io" || tld === "org" || tld === "net" || tld === "app" || tld === "dev") {
+    return "US";
+  }
+  return tld ? tld.toUpperCase() : "—";
+}
+
 /** Reduce a hostname to its apex (registered) domain. Naive but
  *  good-enough heuristic for favicon lookups — handles common
  *  compound TLDs (`.co.uk`, `.com.au`, ...) so we don't accidentally
@@ -160,7 +177,7 @@ export function invalidateProviderIcon(providerId: string): void {
  *
  *  Used by both `renderProviderCard` (grid) and `renderDetailHeader`
  *  (detail). */
-export function renderProviderIcon(p: Provider): TemplateResult {
+export function renderProviderIcon(p: Provider, size?: 'small' | 'large'): TemplateResult {
   const fallback = (p.id[0] || '?').toUpperCase();
   const host = extractDomain(p.base_url);
   const apex = host ? extractApexDomain(host) : null;
@@ -205,8 +222,10 @@ export function renderProviderIcon(p: Provider): TemplateResult {
     }
   };
 
+  const imgCls = size === 'small' ? 'provider-favicon provider-favicon-sm' : 'provider-favicon';
+
   return html`
-    <img src=${src ?? ''} alt=${p.name} class="provider-favicon" @error=${onImgError} loading="lazy" ${ref(onImgMounted)} />
+    <img src=${src ?? ''} alt=${p.name} class=${imgCls} @error=${onImgError} loading="lazy" ${ref(onImgMounted)} />
     <span style="display: none;">${fallback}</span>
   `;
 }

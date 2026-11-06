@@ -87,6 +87,33 @@ export function createLiveChart(container: HTMLElement, opts: LiveChartOpts): uP
   return u;
 }
 
+/** Axis typography shared by every chart: a modern system sans at a small,
+ *  quiet size. The old `10px Courier New` read as a 2010s console and is the
+ *  single biggest contributor to the "dated" chart look. */
+export const AXIS_FONT = "10.5px system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+
+/** Vertical gradient fill for area-style series: color at `topAlpha` at the
+ *  plot's top edge, fully transparent at its bottom. Resolved per chart, so
+ *  canvas gradients track the theme without recreation. */
+export function areaFill(
+  color: string,
+  topAlpha = 0.22,
+): (u: uPlot, seriesIdx: number) => CanvasGradient | string {
+  return (u: uPlot, _seriesIdx: number): CanvasGradient | string => {
+    const m = /^#([0-9a-fA-F]{6})$/.exec(color);
+    if (!m) return color;
+    const n = parseInt(m[1]!, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    const { top, height } = u.bbox;
+    const grad = u.ctx.createLinearGradient(0, top, 0, top + height);
+    grad.addColorStop(0, "rgba(" + r + ", " + g + ", " + b + ", " + topAlpha + ")");
+    grad.addColorStop(1, "rgba(" + r + ", " + g + ", " + b + ", 0)");
+    return grad;
+  };
+}
+
 /** Smooth Catmull-Rom cubic spline path builder for uPlot. */
 export function smoothSpline(): uPlot.Series.PathBuilder {
   return (u: uPlot, seriesIdx: number, idx0: number, idx1: number): uPlot.Series.Paths | null => {
