@@ -9,7 +9,7 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_types::accounts::HealthStatus;
 
 use crate::oauth::{
-    DbRef, OAuthProviderRegistry, OAuthRefreshParams, TokenRefreshCoordinator, TokenResponse,
+    DbRef, OAuthProvider, OAuthProviderRegistry, OAuthRefreshParams, TokenRefreshCoordinator, TokenResponse,
 };
 
 use super::refresh_lead_seconds;
@@ -69,7 +69,7 @@ pub async fn run_refresh_scheduler(
         return;
     }
 
-    backfill_missing_expiries(&db_pool, &master_key).await;
+    backfill_missing_expiries(&db_pool, &master_key, &registry).await;
 
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(check_interval_secs));
     // Skip the first immediate tick while respecting cancellation.
@@ -126,9 +126,11 @@ pub async fn run_refresh_scheduler(
 async fn backfill_missing_expiries(
     db_pool: &Arc<openproxy_db::DbPool>,
     master_key: &Arc<MasterKey>,
+    registry: &Arc<OAuthProviderRegistry>,
 ) {
     let db_pool = Arc::clone(db_pool);
     let master_key = Arc::clone(master_key);
+    let registry = Arc::clone(registry);
     let recovered = tokio::task::spawn_blocking(move || {
         let read_conn = db_pool.reader();
         let accounts =
@@ -145,6 +147,11 @@ async fn backfill_missing_expiries(
 
         let mut recovered = 0;
         for account in accounts {
+            if let Some(provider) = registry.get(account.provider_id.as_str())
+                && !provider.access_tokens_expire()
+            {
+                continue;
+            }
             let access_token =
                 crate::accounts::decrypt_access_token(&read_conn, account.id, master_key.as_ref())
                     .ok();
@@ -228,6 +235,15 @@ async fn tick_refresh_cycle(
             );
             continue;
         };
+
+        if !provider.supports_refresh() {
+            tracing::debug!(
+                provider = %account.provider_id,
+                account = account.id.0,
+                "oauth refresh: provider does not support token refresh, skipping"
+            );
+            continue;
+        }
 
         let account_id = account.id.0;
         if let Some(last_attempt) = last_refresh_attempts.get(&account_id) {

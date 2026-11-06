@@ -282,7 +282,16 @@ pub trait OAuthProvider: Send + Sync {
         None
     }
 
-    /// Whether the provider's access tokens carry a deadline worth tracking.
+    /// Whether this provider supports token refresh via a refresh token.
+    ///
+    /// Providers that do not support token refresh (e.g. Z.ai / ZCode where
+    /// tokens are session-only and require manual re-authentication) return `false`.
+    /// The refresh scheduler and background checkers will skip refresh attempts
+    /// for such providers instead of continuously failing and degrading health.
+    fn supports_refresh(&self) -> bool {
+        true
+    }
+
     ///
     /// Providers issuing permanent session credentials (no refresh grant
     /// exists and the issuer does not enforce the token's own `exp` claim)
@@ -427,6 +436,12 @@ macro_rules! define_oauth_provider {
                 match self {
                     $( Self::$b_variant(inner) => inner.email_from_token(token), )+
                     $( Self::$c_variant(inner) => inner.email_from_token(token), )+
+                }
+            }
+            fn supports_refresh(&self) -> bool {
+                match self {
+                    $( Self::$b_variant(inner) => inner.supports_refresh(), )+
+                    $( Self::$c_variant(inner) => inner.supports_refresh(), )+
                 }
             }
             fn access_tokens_expire(&self) -> bool {

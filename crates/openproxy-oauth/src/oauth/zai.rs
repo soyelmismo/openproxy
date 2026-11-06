@@ -378,6 +378,14 @@ impl OAuthProvider for ZaiOAuthProvider {
         )))
     }
 
+    fn supports_refresh(&self) -> bool {
+        false
+    }
+
+    fn access_tokens_expire(&self) -> bool {
+        false
+    }
+
     fn refresh_token(
         &self,
         _refresh_token: &str,

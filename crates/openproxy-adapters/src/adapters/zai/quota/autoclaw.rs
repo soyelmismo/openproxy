@@ -106,16 +106,21 @@ fn checkin_throttle_allows(token: &str, now_secs: u64) -> bool {
     }
 }
 
-pub(crate) async fn perform_autoclaw_checkin(
+pub struct AutoclawCheckinResult {
+    pub last_checkin_date: String,
+    pub streak_days: u32,
+}
+
+pub async fn perform_autoclaw_checkin(
     upstream: &std::sync::Arc<crate::upstream::UpstreamClient>,
     token: &str,
     proxy: Option<&str>,
-) {
+) -> Option<AutoclawCheckinResult> {
     let now_u64 = openproxy_types::now_unix_secs_str()
         .parse::<u64>()
         .unwrap_or(0);
     if !checkin_throttle_allows(token, now_u64) {
-        return;
+        return None;
     }
     let clean_token = token.trim();
     let raw_token = clean_token.strip_prefix("Bearer ").unwrap_or(clean_token);
@@ -189,4 +194,93 @@ pub(crate) async fn perform_autoclaw_checkin(
             )
             .await;
     }
+
+    // Query task list to retrieve current streak and checkin status
+    let app_id = "100003";
+    let app_key = "6c79a4059ae078650bc7886b627cf9f9";
+    let now_sec = openproxy_types::now_unix_secs_str();
+    let sign = crate::adapters::zai::md5::md5::md5_hex(format!("{app_id}&{now_sec}&{app_key}"));
+
+    let mut list_req = crate::upstream::UpstreamRequest::get(
+        "https://autoglm-api.autoglm.ai/autoclaw-proxy/proxy/autoclaw-task-list",
+    );
+    list_req.proxy = proxy.map(ToString::to_string);
+    if let Ok(val) = crate::antigravity_headers::build_bearer_header(raw_token) {
+        list_req.headers.insert(http::header::AUTHORIZATION, val);
+    }
+    list_req.headers.insert(http::header::USER_AGENT, http::HeaderValue::from_static("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"));
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-auth-appid"),
+        http::HeaderValue::from_static("100003"),
+    );
+    if let Ok(ts_val) = http::HeaderValue::from_str(&now_sec) {
+        list_req.headers
+            .insert(http::HeaderName::from_static("x-auth-timestamp"), ts_val);
+    }
+    if let Ok(sign_val) = http::HeaderValue::from_str(&sign) {
+        list_req.headers
+            .insert(http::HeaderName::from_static("x-auth-sign"), sign_val);
+    }
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-channel"),
+        http::HeaderValue::from_static("official"),
+    );
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-client-type"),
+        http::HeaderValue::from_static("web"),
+    );
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-lang"),
+        http::HeaderValue::from_static("es"),
+    );
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-product"),
+        http::HeaderValue::from_static("autoclaw"),
+    );
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-tm"),
+        http::HeaderValue::from_static("web"),
+    );
+    list_req.headers.insert(
+        http::HeaderName::from_static("x-version"),
+        http::HeaderValue::from_static("1.12.1"),
+    );
+
+    if let Ok(resp) = upstream
+        .call(
+            list_req,
+            crate::upstream::TimeoutProfile::Quota,
+            crate::upstream::CancellationToken::new(),
+        )
+        .await
+    {
+        if resp.status.is_success() {
+            if let Ok(body_bytes) = resp.collect().await {
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
+                    if let Some(tasks) = v.get("data").and_then(|d| d.as_array()) {
+                        for t in tasks {
+                            if t.get("task_id").and_then(|id| id.as_str()) == Some("daily_signin") {
+                                let mut streak = 0;
+                                if let Some(desc) = t.get("status_description").and_then(|d| d.as_str()) {
+                                    for word in desc.split(|c: char| !c.is_ascii_digit()) {
+                                        if let Ok(n) = word.parse::<u32>() {
+                                            streak = n;
+                                            break;
+                                        }
+                                    }
+                                }
+                                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                                return Some(AutoclawCheckinResult {
+                                    last_checkin_date: today,
+                                    streak_days: streak,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }

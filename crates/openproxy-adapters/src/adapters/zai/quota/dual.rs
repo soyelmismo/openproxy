@@ -206,7 +206,7 @@ pub(super) async fn fetch_dual_at(
         {
             Some(token) => {
                 // Auto-claim daily checkin & inspiration center bonuses before fetching balance
-                super::autoclaw::perform_autoclaw_checkin(upstream, token, proxy).await;
+                let _ = super::autoclaw::perform_autoclaw_checkin(upstream, token, proxy).await;
                 let fetch_res =
                     fetch_json(upstream, endpoints.autoclaw_wallets, token, proxy).await;
                 match fetch_res {

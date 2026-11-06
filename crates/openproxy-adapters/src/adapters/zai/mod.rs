@@ -11,6 +11,7 @@ pub mod api_key;
 pub mod md5;
 pub mod models;
 pub mod quota;
+pub use quota::autoclaw::{perform_autoclaw_checkin, AutoclawCheckinResult};
 pub mod routing;
 pub mod routing_refresh;
 
@@ -182,8 +183,10 @@ impl ProviderAdapter for ZaiAdapter {
 
             // Fix body for AutoClaw Stainless/OpenAI schema:
             // 1. Convert max_tokens -> max_completion_tokens (AutoClaw returns 406 if max_tokens is present)
-            // 2. Clean double-Bearer in headers
-            // 3. Inject AutoClaw required system prefix
+            // 2. Strict system message: AutoClaw WAF rejects custom system instructions
+            //    (e.g. mentions of "Hermes", "Nous Research", or other agent personas return 406).
+            //    We replace the system prompt with the exact required AutoClaw system prompt
+            //    and relocate the caller's system instructions into the first user message.
             const REQUIRED_PREFIX: &str =
                 "You are AutoClaw. Answer the user directly and concisely.";
             let patched_body = crate::adapters::traits::patch_json_request_body(body, |obj| {
@@ -205,33 +208,61 @@ impl ProviderAdapter for ZaiAdapter {
                     }
                 }
                 if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
-                    let has_autoclaw_prefix = messages.iter().any(|m| {
-                        m.get("role").and_then(|r| r.as_str()) == Some("system")
-                            && m.get("content")
-                                .and_then(|c| c.as_str())
-                                .map_or(false, |c| c.starts_with("You are AutoClaw."))
-                    });
-                    if !has_autoclaw_prefix {
-                        if let Some(first_sys) = messages
+                    let mut orig_sys_instructions = Vec::new();
+
+                    for msg in messages.iter_mut() {
+                        if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
+                            if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
+                                let trimmed = c.trim();
+                                if !trimmed.is_empty()
+                                    && trimmed != REQUIRED_PREFIX
+                                    && !trimmed.starts_with(REQUIRED_PREFIX)
+                                {
+                                    orig_sys_instructions.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+
+                    // Keep only non-system messages
+                    messages.retain(|m| m.get("role").and_then(|r| r.as_str()) != Some("system"));
+
+                    // If caller had custom system instructions, inject them into first user turn
+                    if !orig_sys_instructions.is_empty() {
+                        let sys_block = format!(
+                            "[System Instructions & Context:\n{}\n]",
+                            orig_sys_instructions.join("\n\n")
+                        );
+                        if let Some(first_user) = messages
                             .iter_mut()
-                            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("system"))
+                            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
                         {
-                            if let Some(content) = first_sys.get_mut("content") {
-                                let orig = content.as_str().unwrap_or("");
-                                *content = serde_json::Value::String(format!(
-                                    "{REQUIRED_PREFIX}\n\n{orig}"
-                                ));
+                            if let Some(content) = first_user.get_mut("content") {
+                                if let Some(orig_u) = content.as_str() {
+                                    *content = serde_json::Value::String(format!(
+                                        "{sys_block}\n\n{orig_u}"
+                                    ));
+                                }
                             }
                         } else {
                             messages.insert(
                                 0,
                                 serde_json::json!({
-                                    "role": "system",
-                                    "content": REQUIRED_PREFIX
+                                    "role": "user",
+                                    "content": sys_block,
                                 }),
                             );
                         }
                     }
+
+                    // Prepend the exact system prompt required by AutoClaw upstream
+                    messages.insert(
+                        0,
+                        serde_json::json!({
+                            "role": "system",
+                            "content": REQUIRED_PREFIX,
+                        }),
+                    );
                 }
             })?;
 

@@ -755,6 +755,10 @@ pub(crate) async fn refresh_oauth_if_needed(
         return access_token;
     };
 
+    if !provider.supports_refresh() {
+        return access_token;
+    }
+
     tracing::info!(
         account = account.id.0,
         provider = %provider_id,
