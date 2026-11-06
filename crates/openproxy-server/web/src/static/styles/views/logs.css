@@ -640,7 +640,7 @@ body[data-view="logs"] #main {
 @container tile-view (max-width: 840px) {
   .logs-search-box {
     order: 1;
-    flex: 1 1 auto;
+    flex: 1 1 0%;
     min-width: 0;
   }
 

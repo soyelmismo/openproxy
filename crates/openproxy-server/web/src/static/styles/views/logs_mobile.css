@@ -110,8 +110,9 @@
   /* Scrollable search and filters */
   .logs-filter-toolbar {
     display: flex !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
     gap: 6px !important;
     padding: 6px 12px !important;
     margin: 0 !important;
@@ -122,17 +123,25 @@
   }
 
   .logs-search-box {
-    width: 100% !important;
+    order: 1;
+    width: auto !important;
     height: 32px !important;
     min-height: 32px !important;
     max-height: 32px !important;
-    flex: 0 0 32px !important;
+    flex: 1 1 0% !important;
+    min-width: 0;
     margin: 0 !important;
     padding: 0 !important;
-    box-sizing: border-box !important;
+    box-sizing: border-box;
     position: relative !important;
     display: flex !important;
     align-items: center !important;
+  }
+
+  .logs-key-filter {
+    order: 2;
+    flex: 0 0 auto !important;
+    max-width: 45% !important;
   }
 
   .logs-search-wrapper {
@@ -166,6 +175,7 @@
     width: 100% !important;
     box-sizing: border-box !important;
     flex: 0 0 auto !important;
+    order: 3 !important;
   }
 
   .logs-status-filters::-webkit-scrollbar {
