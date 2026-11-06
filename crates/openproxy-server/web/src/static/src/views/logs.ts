@@ -157,11 +157,21 @@ function renderLogsView(): TemplateResult {
   return html`
     <div class="logs-header">
       <div class="m-header-status-badges">
-        <span id="logs-connection-status" class="logs-connection-badge disconnected"><span class="status-dot"></span> disconnected</span>
+        <span id="logs-connection-status" class="logs-connection-badge disconnected" role="img" title="Disconnected" aria-label="Disconnected">
+          <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="7" fill="currentColor" /></svg>
+        </span>
         <button id="logs-recording-toggle" class="logs-recording-toggle" type="button" @click=${() => void toggleRecording()}>
           <span class="logs-recording-dot" aria-hidden="true"></span>
           <span class="logs-recording-label">Record: <strong>OFF</strong></span>
         </button>
+        <select class="logs-status-filter" aria-label="Filter by status" .value=${filterStatus} @change=${(e: Event) => onSetStatusFilter((e.target as HTMLSelectElement).value)}>
+          <option value="all">All statuses</option>
+          <option value="inflight">In-flight</option>
+          <option value="2xx">2xx OK</option>
+          <option value="4xx">4xx Client</option>
+          <option value="5xx">5xx Server</option>
+          <option value="error">All Errors</option>
+        </select>
       </div>
       <div class="logs-header-actions m-header-actions-row">
         <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" title=${isPaused ? "Resume live updates" : "Pause live updates"} @click=${() => { isPaused = !isPaused; requestUpdate(); }}>
@@ -181,9 +191,6 @@ function renderLogsView(): TemplateResult {
         <span class="logs-search-icon">${icons.search()}</span>
         <input type="search" class="logs-search-input" placeholder="Filter by model, provider, request id, trace..." .value=${filterSearch} @input=${onSearchInput} />
         ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${() => { if (searchDebounceTimer) clearTimeout(searchDebounceTimer); filterSearch = ""; frozenLogsSnapshot = null; state.logs.page = 1; state.logs.followTail = true; requestUpdate(); }}>${icons.close()}</button>` : null}
-      </div>
-      <div class="logs-status-filters" role="group">
-        ${([["all", "All"], ["inflight", "In-flight"], ["2xx", "2xx OK"], ["4xx", "4xx Client"], ["5xx", "5xx Server"], ["error", "All Errors"]] as const).map(([st, lbl]) => html`<button type="button" class="logs-filter-btn ${filterStatus === st ? "active" : ""}" @click=${() => onSetStatusFilter(st)}>${st === "inflight" ? icons.lightning() : ""} ${lbl}</button>`)}
       </div>
       ${activeKeyOptions.length > 0 || hasNoApiKeyRows ? html`
         <select class="logs-key-filter" aria-label="Filter by API Key" .value=${filterApiKeyId} @change=${(e: Event) => onSetApiKeyFilter((e.target as HTMLSelectElement).value)}>

@@ -19,7 +19,8 @@ async function gotoLogs(page: Page): Promise<void> {
   // And give the WS a tick so any in-flight rows don't race the
   // first assertion (they shouldn't, since the table is empty on
   // a fresh load, but the existing e2e spec does this too).
-  await expect(page.locator('#logs-connection-status')).toHaveText('🟢 connected', { timeout: 10000 });
+  // The badge is a bare SVG: assert the state class it carries rather than text.
+  await expect(page.locator('#logs-connection-status')).toHaveClass(/connected/, { timeout: 10000 });
 }
 
 test.beforeEach(async ({ page }: { page: Page }) => {

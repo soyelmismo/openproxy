@@ -118,21 +118,22 @@
   display: inline-block;
   flex-shrink: 0;
 }
+/* Bare status indicator: a coloured dot only. The state is carried by the
+   class, the word lives in the element's title and aria-label. */
 .logs-connection-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
   height: 24px;
   box-sizing: border-box;
-  padding: 0 0.55rem;
-  font-size: var(--fs-xs);
-  font-family: var(--font-mono);
-  line-height: 1;
+  padding: 0;
   border: var(--border-w) var(--border-style) var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
-  user-select: none;
-  white-space: nowrap;
+  color: var(--color-text-muted);
+  cursor: default;
 }
 .logs-connection-badge.connected    { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
 .logs-connection-badge.connecting,

@@ -59,14 +59,18 @@ export function setLogsStatus(status: LogsStatus): void {
   for (const subscriber of statusSubscribers) subscriber(status);
   const badge: HTMLElement | null = document.getElementById("logs-connection-status");
   if (!badge) return;
+  // The badge is a bare SVG whose colour comes from the state class, so the word
+  // lives on the element as its accessible name instead of as text content.
   const labels = {
-    connected: "🟢 connected",
-    connecting: "🟡 connecting",
-    reconnecting: "🟡 reconnecting",
-    disconnected: "🔴 disconnected",
+    connected: "Connected",
+    connecting: "Connecting",
+    reconnecting: "Reconnecting",
+    disconnected: "Disconnected",
   } satisfies Record<LogsStatus, string>;
   badge.className = `logs-connection-badge ${status}`;
-  badge.textContent = labels[status] || "🔴 disconnected";
+  const label = labels[status] || "Disconnected";
+  badge.title = label;
+  badge.setAttribute("aria-label", label);
 }
 
 function clearLogsReconnectTimer(): void {
