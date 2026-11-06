@@ -114,11 +114,11 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
   const isFirst = state.logs.page <= 1; const isLast = state.logs.page >= totalP;
   return html`<div class="logs-pagination">
     <div class="mobile-pag-row-controls">
-      <button ?disabled=${isFirst} @click=${() => logsGoPage(1)} title="First page">${icons.chevronsLeft()}</button>
-      <button ?disabled=${isFirst} @click=${logsPrevPage} title="Previous page">${icons.chevronLeft()} Prev</button>
+      <button ?disabled=${isFirst} @click=${() => logsGoPage(1)} title="First page" aria-label="First page">${icons.chevronsLeft()}</button>
+      <button ?disabled=${isFirst} @click=${logsPrevPage} title="Previous page" aria-label="Previous page">${icons.chevronLeft()}<span class="pag-label">Prev</span></button>
       <span class="page-info">Page ${state.logs.page} of ${totalP}</span>
-      <button ?disabled=${isLast} @click=${logsNextPage} title="Next page">Next ${icons.chevronRight()}</button>
-      <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)} title="Last page">${icons.chevronsRight()}</button>
+      <button ?disabled=${isLast} @click=${logsNextPage} title="Next page" aria-label="Next page"><span class="pag-label">Next</span>${icons.chevronRight()}</button>
+      <button ?disabled=${isLast} @click=${() => logsGoPage(totalP)} title="Last page" aria-label="Last page">${icons.chevronsRight()}</button>
     </div>
     <div class="mobile-pag-row-meta">
       <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>

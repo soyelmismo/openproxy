@@ -662,16 +662,44 @@ body[data-view="logs"] #main {
 }
 
 
-/* Logs pagination */
+/* Logs pagination. One centred row: the page controls in the middle, the row
+   count and the follow toggle flanking them. The Prev/Next labels collapse
+   before the row has to break, so it stays a single line on a narrow tile. */
 .logs-pagination {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 5px var(--space-2);
   background: var(--color-surface-2);
   border-top: var(--border-w) var(--border-style) var(--color-border);
-  font-size: var(--fs-sm);
-  flex-wrap: wrap;
+  font-size: var(--fs-xs);
+  container-type: inline-size;
+  container-name: logs-pag;
+}
+.mobile-pag-row-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+.mobile-pag-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+.logs-pagination button {
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  font-size: var(--fs-xs);
+}
+.pag-label {
+  white-space: nowrap;
 }
 .logs-pagination .rows-info { color: var(--color-text-muted); }
 .logs-pagination .page-info { color: var(--color-text-muted); font-family: var(--font-mono); }
@@ -679,7 +707,20 @@ body[data-view="logs"] #main {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  margin-left: auto;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
+}
+
+@container logs-pag (max-width: 460px) {
+  .logs-pagination .pag-label {
+    display: none;
+  }
+}
+
+/* Below roughly a 400px tile the whole bar does not fit on one line even
+   without labels. The count is the least load-bearing item, so it folds. */
+@container logs-pag (max-width: 400px) {
+  .logs-pagination .mobile-pag-row-meta {
+    display: none;
+  }
 }

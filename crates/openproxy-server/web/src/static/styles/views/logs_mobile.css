@@ -330,27 +330,19 @@
 
   /* Pagination */
   .logs-pagination {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 6px 12px;
-    background: var(--color-surface-2);
-    border-top: 1px solid var(--color-border);
+    gap: 6px;
+    padding: 6px 10px;
     box-sizing: border-box;
   }
 
   .mobile-pag-row-controls {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    width: 100%;
+    gap: 3px;
   }
 
   .mobile-pag-row-controls button {
-    min-width: 34px;
-    height: 28px;
-    padding: 0 8px;
+    min-width: 32px;
+    height: 30px;
+    padding: 0 7px;
     font-size: var(--fs-xs);
     border-radius: 0;
   }
@@ -358,14 +350,11 @@
   .mobile-pag-row-controls .page-info {
     font-size: var(--fs-xs);
     font-family: var(--font-mono);
-    margin: 0 6px;
+    margin: 0 5px;
   }
 
   .mobile-pag-row-meta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
+    gap: 6px;
     font-size: var(--fs-xs);
     color: var(--color-text-muted);
   }
