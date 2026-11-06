@@ -44,7 +44,7 @@ async function seedNotifications(rows: NotificationSeed[]): Promise<number[]> {
 }
 
 function clearTestNotifications(): void {
-  database.prepare("DELETE FROM notifications WHERE kind = 'system' OR kind = 'model_new'").run();
+  database.prepare("DELETE FROM notifications").run();
 }
 
 function adminAuthHeaders(): Record<string, string> {
