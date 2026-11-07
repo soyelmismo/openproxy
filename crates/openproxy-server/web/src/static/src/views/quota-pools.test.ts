@@ -524,3 +524,88 @@ describe("renderQuotaCell — Quota Families & Tabs (Design D)", () => {
     expect(dom.querySelector(".quota-window")).not.toBeNull();
   });
 });
+
+describe("daily check-in badge", () => {
+  // The suite runs under a fake clock (see beforeEach), so "today" must be
+  // derived inside each test, never captured at module load.
+  const isoDay = (offsetMs = 0): string =>
+    new Date(Date.now() + offsetMs).toISOString().slice(0, 10);
+
+  function autoclawAccount(specific: Record<string, unknown> | null): Account {
+    return makeAccount({
+      provider_id: "zai",
+      oauth_provider_specific: specific === null ? null : JSON.stringify(specific),
+    });
+  }
+
+  it("renders pending when the AutoClaw credential exists but no check-in was ever recorded", () => {
+    const dom = toDom(
+      renderQuotaCell(autoclawAccount({ autoclaw_access_token: "Bearer token" })),
+    );
+    const badge = dom.querySelector(".quota-tag.checkin-pending");
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain("Check-in pending");
+  });
+
+  it("renders pending when the recorded check-in is from an earlier day", () => {
+    const dom = toDom(
+      renderQuotaCell(
+        autoclawAccount({
+          autoclaw_access_token: "Bearer token",
+          last_checkin_date: isoDay(-86_400_000),
+          streak_days: 2,
+        }),
+      ),
+    );
+    const badge = dom.querySelector(".quota-tag.checkin-pending");
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain("2d streak");
+  });
+
+  it("renders done when the recorded check-in is from today", () => {
+    const dom = toDom(
+      renderQuotaCell(
+        autoclawAccount({
+          autoclaw_access_token: "Bearer token",
+          last_checkin_date: isoDay(),
+          streak_days: 3,
+        }),
+      ),
+    );
+    expect(dom.querySelector(".quota-tag.checkin-pending")).toBeNull();
+    const badge = dom.querySelector(".quota-tag.checkin-done");
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toContain("3d streak");
+  });
+
+  it("still renders pending when metadata exists without a credential (legacy rows)", () => {
+    const dom = toDom(
+      renderQuotaCell(
+        autoclawAccount({ last_checkin_date: isoDay(-86_400_000), streak_days: 1 }),
+      ),
+    );
+    expect(dom.querySelector(".quota-tag.checkin-pending")).not.toBeNull();
+  });
+
+  it("does not render the badge for providers without a daily check-in", () => {
+    const dom = toDom(
+      renderQuotaCell(
+        makeAccount({
+          provider_id: "codex",
+          oauth_provider_specific: JSON.stringify({
+            last_checkin_date: isoDay(-86_400_000),
+            streak_days: 4,
+          }),
+        }),
+      ),
+    );
+    expect(dom.querySelector(".quota-tag.checkin-pending")).toBeNull();
+    expect(dom.querySelector(".quota-tag.checkin-done")).toBeNull();
+  });
+
+  it("does not render the badge for a zai account with no AutoClaw credential at all", () => {
+    const dom = toDom(renderQuotaCell(autoclawAccount(null)));
+    expect(dom.querySelector(".quota-tag.checkin-pending")).toBeNull();
+    expect(dom.querySelector(".quota-tag.checkin-done")).toBeNull();
+  });
+});

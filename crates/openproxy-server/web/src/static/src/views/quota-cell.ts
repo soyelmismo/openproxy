@@ -56,6 +56,8 @@ interface ProviderSpecificMeta {
   streak_days?: number;
   reset_credits?: number;
   banked_resets?: number;
+  /** Presence of an AutoClaw credential, not its value. */
+  autoclaw_access_token?: string | null;
 }
 
 function parseProviderSpecific(raw: string | null | undefined): ProviderSpecificMeta | null {
@@ -99,10 +101,19 @@ function renderMetaBadges(meta: ProviderSpecificMeta | null, account?: Account):
       );
     }
 
-    if (meta.last_checkin_date || meta.streak_days != null) {
+    // The check-in badge is driven by capability, not by stored data: an
+    // AutoClaw account that has never recorded a check-in still has one
+    // pending, so keying this off `last_checkin_date` alone hid the badge
+    // entirely on fresh accounts.
+    const supportsCheckin =
+      account?.provider_id === "zai" &&
+      (meta?.autoclaw_access_token != null ||
+        meta?.last_checkin_date != null ||
+        meta?.streak_days != null);
+    if (supportsCheckin) {
       const todayStr = new Date().toISOString().slice(0, 10);
-      const isToday = meta.last_checkin_date === todayStr;
-      const streak = meta.streak_days ?? 0;
+      const isToday = meta?.last_checkin_date === todayStr;
+      const streak = meta?.streak_days ?? 0;
       if (isToday) {
         badges.push(
           html`<span class="quota-tag checkin-done" title="Daily check-in completed today">${icons.check()} <span>Checked in${streak > 0 ? ` (${streak}d streak)` : ""}</span></span>`
