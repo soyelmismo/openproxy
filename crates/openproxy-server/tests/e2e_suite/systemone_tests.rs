@@ -480,7 +480,11 @@ async fn test_admin_model_tester_rejects_empty_dummy_completion() {
         .admin_post(&format!("/admin/api/models/{model_row_id}/test"), json!({}))
         .await;
 
-    assert_eq!(status, StatusCode::OK, "HTTP call itself returns 200 JSON wrapper");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "HTTP call itself returns 200 JSON wrapper"
+    );
     assert_eq!(
         resp["status"], 502,
         "test result status must be 502 due to dummy empty tokens: {resp}"
