@@ -282,6 +282,25 @@ pub trait OAuthProvider: Send + Sync {
         None
     }
 
+    /// Write provider state that only a refresh knows about.
+    ///
+    /// Runs after [`Self::refresh_token`] succeeded and the generic tokens are
+    /// stored, with the master key available so encrypted blobs can be rewritten
+    /// in place. Providers whose credential lives somewhere the generic path
+    /// does not touch override this; the default writes nothing.
+    ///
+    /// A failure here is reported but must not discard the renewed tokens: they
+    /// are already stored and the next cycle retries.
+    fn persist_refreshed_state(
+        &self,
+        _account_id: AccountId,
+        _db: DbRef<'_>,
+        _master_key: &MasterKey,
+        _token: &TokenResponse,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move { Ok(()) }
+    }
+
     /// Whether this provider supports token refresh via a refresh token.
     ///
     /// Providers that do not support token refresh (e.g. Z.ai / ZCode where
@@ -430,6 +449,18 @@ macro_rules! define_oauth_provider {
                 match self {
                     $( Self::$b_variant(inner) => inner.provider_specific_from_token(token), )+
                     $( Self::$c_variant(inner) => inner.provider_specific_from_token(token), )+
+                }
+            }
+            async fn persist_refreshed_state(
+                &self,
+                account_id: AccountId,
+                db: DbRef<'_>,
+                master_key: &MasterKey,
+                token: &TokenResponse,
+            ) -> Result<()> {
+                match self {
+                    $( Self::$b_variant(inner) => inner.persist_refreshed_state(account_id, db, master_key, token).await, )+
+                    $( Self::$c_variant(inner) => inner.persist_refreshed_state(account_id, db, master_key, token).await, )+
                 }
             }
             fn email_from_token(&self, token: &TokenResponse) -> Option<String> {

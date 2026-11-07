@@ -506,3 +506,142 @@ async fn test_token_refresh_coordinator_unforced_reuses_unexpired_token() {
 
     assert_eq!(res_cached.access_token, "old-access-token");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn zai_persist_refreshed_state_merges_credentials_and_keeps_checkin_keys() {
+    let conn = openproxy_db::testing::open_in_memory();
+    conn.execute(
+        "INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('zai', 'Z.ai', 'https://api.z.ai', 'oauth', 'openai')",
+        [],
+    )
+    .unwrap();
+
+    let master_key = openproxy_db::secrets::MasterKey::generate().unwrap();
+    let account_id = openproxy_db::accounts::create(
+        &conn,
+        &ProviderId::new("zai"),
+        None,
+        &master_key,
+        Some("test-zai-refresh"),
+        0,
+        None,
+    )
+    .unwrap();
+    let stored = serde_json::json!({
+        "autoclaw_access_token": "old-access",
+        "autoclaw_refresh_token": "old-refresh",
+        "zcode_jwt_token": "old-jwt",
+        "user_id": "189711",
+        "email": "zai@example.com",
+        "last_checkin_date": "2026-11-07",
+        "streak_days": 3,
+    })
+    .to_string();
+    crate::accounts::store_oauth_tokens(
+        &conn,
+        account_id,
+        &master_key,
+        crate::accounts::StoreOAuthTokensParams {
+            access_token: "old-access",
+            refresh_token: Some("old-refresh"),
+            token_type: "Bearer",
+            expires_at: None,
+            scope: None,
+            provider_specific: Some(&stored),
+            email: Some("zai@example.com"),
+        },
+    )
+    .unwrap();
+
+    let provider = crate::oauth::zai::ZaiOAuthProvider::new();
+    let shared = Arc::new(parking_lot::Mutex::new(conn));
+    let renewed = TokenResponse {
+        access_token: "renewed-access".into(),
+        token_type: "Bearer".into(),
+        expires_in: None,
+        refresh_token: Some("renewed-refresh".into()),
+        scope: None,
+        id_token: None,
+    };
+    provider
+        .persist_refreshed_state(account_id, DbRef::Shared(&shared), &master_key, &renewed)
+        .await
+        .unwrap();
+
+    let conn = shared.lock();
+    let encrypted: Option<String> = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let merged: serde_json::Value = serde_json::from_str(
+        &openproxy_db::accounts::oauth::decrypt_oauth_provider_specific(
+            encrypted.as_deref(),
+            &master_key,
+        )
+        .expect("blob must still decrypt"),
+    )
+    .unwrap();
+
+    assert_eq!(merged["autoclaw_access_token"], "renewed-access");
+    assert_eq!(merged["autoclaw_refresh_token"], "renewed-refresh");
+    // Everything else in the blob survives untouched, the daily check-in
+    // bookkeeping included.
+    assert_eq!(merged["user_id"], "189711");
+    assert_eq!(merged["zcode_jwt_token"], "old-jwt");
+    assert_eq!(merged["last_checkin_date"], "2026-11-07");
+    assert_eq!(merged["streak_days"], 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zai_persist_refreshed_state_writes_nothing_without_a_stored_blob() {
+    let conn = openproxy_db::testing::open_in_memory();
+    conn.execute(
+        "INSERT OR IGNORE INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('zai', 'Z.ai', 'https://api.z.ai', 'oauth', 'openai')",
+        [],
+    )
+    .unwrap();
+
+    let master_key = openproxy_db::secrets::MasterKey::generate().unwrap();
+    let account_id = openproxy_db::accounts::create(
+        &conn,
+        &ProviderId::new("zai"),
+        None,
+        &master_key,
+        Some("test-zai-noblob"),
+        0,
+        None,
+    )
+    .unwrap();
+    let provider = crate::oauth::zai::ZaiOAuthProvider::new();
+    let shared = Arc::new(parking_lot::Mutex::new(conn));
+    let renewed = TokenResponse {
+        access_token: "sec_94c5e1c2".into(),
+        token_type: "sec_fb30Bearer".into(),
+        expires_in: None,
+        refresh_token: Some("sec_823b5983".into()),
+        scope: None,
+        id_token: None,
+    };
+    provider
+        .persist_refreshed_state(account_id, DbRef::Shared(&shared), &master_key, &renewed)
+        .await
+        .unwrap();
+
+    let conn = shared.lock();
+    let encrypted: Option<String> = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id.0],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        encrypted.is_none(),
+        "an account with no blob must not gain one from a refresh"
+    );
+}

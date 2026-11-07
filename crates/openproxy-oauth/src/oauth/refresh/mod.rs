@@ -317,6 +317,12 @@ impl TokenRefreshCoordinator {
         let store_token = stored_token.clone();
         let store_expires_at = expires_at.clone();
         let store_email = email.clone();
+        // A renewal only knows the fields it touched, so the provider decides
+        // what to rewrite; the default keeps the stored blob as-is.
+        let persist_master_key = master_key.clone();
+        let persist_account_id = account_id;
+        let persist_db = db;
+        let persist_token = stored_token.clone();
         db.with_conn_async(move |conn| {
             store_oauth_tokens(
                 conn,
@@ -334,6 +340,25 @@ impl TokenRefreshCoordinator {
             )
         })
         .await?;
+
+        if let Err(e) = provider
+            .persist_refreshed_state(
+                persist_account_id,
+                persist_db,
+                &persist_master_key,
+                &persist_token,
+            )
+            .await
+        {
+            // The renewed tokens are already stored; losing the side write only
+            // costs one more cycle, so it must not fail the refresh.
+            tracing::warn!(
+                account = account_id.0,
+                provider = provider_id,
+                error = %e,
+                "oauth refresh: provider failed to persist refreshed state"
+            );
+        }
 
         // Propagate newly refreshed tokens back to host CLI if this account is active locally
         if let Some((_, _, _, acc)) = &check_res {

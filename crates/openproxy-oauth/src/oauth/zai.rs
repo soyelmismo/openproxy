@@ -22,6 +22,29 @@ pub const ZAI_DEFAULT_USERINFO_URL: &str = "https://chat.z.ai/api/oauth/userinfo
 pub const ZAI_REDIRECT_URI: &str =
     "https://zcode.z.ai/app/oauth/login?redirect=zcode%3A%2F%2Foauth%2Fcallback&app_version=3.14.0";
 
+/// AutoClaw credential renewal.
+///
+/// The AutoClaw session access token is a JWT that lives 24h. The refresh grant
+/// issued by `zai-oauth-login` lasts 30 days and comes back unchanged from a
+/// successful renewal, so this endpoint is a steady-state loop, not a one-shot
+/// recovery. `zai-oauth-url`/`zai-oauth-login` are the only other way in and
+/// both need a fresh captcha, so without this call every account dies daily.
+///
+/// Mirrors `ProductAccountCredentialRefreshAdapter` in the official AutoClaw
+/// client, which renews on the very rejection this provider used to swallow:
+/// HTTP 200 carrying `code: 410000` ("Please log in to continue").
+pub const ZAI_AUTOCLAW_REFRESH_URL: &str = "https://autoglm-api.autoglm.ai/userapi/v1/refresh";
+const AUTOCLAW_APP_ID: &str = "100003";
+const AUTOCLAW_APP_KEY: &str = "38d2391985e2369a5fb8227d8e6cd5e5";
+const AUTOCLAW_APP_VERSION: &str = "2.0.3";
+/// Device identity for the renewal call.
+///
+/// A property of this client installation rather than of the account: the
+/// official app hardcodes it and every access token it issues carries the same
+/// value in its `device_id` claim, so the login and the renewal agree by
+/// construction. Reading it back per account would buy nothing.
+const AUTOCLAW_DEVICE_ID: &str = "b1b01c10-91dc-4af5-9d32-d17b5f5bbd9b";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ZaiAccountMeta {
     pub autoclaw_access_token: Option<String>,
@@ -235,11 +258,6 @@ impl OAuthProvider for ZaiOAuthProvider {
             "device_id": "b1b01c10-91dc-4a25-9d32-d17b5f5bbd9b"
         });
 
-        const APP_ID: &str = "100003";
-        const APP_KEY: &str = "38d2391985e2369a5fb8227d8e6cd5e5";
-        let now_ts = openproxy_types::now_unix_secs_str();
-        let sign_md5 = crate::oauth::minimax::md5::md5_hex(format!("{APP_ID}&{now_ts}&{APP_KEY}"));
-
         if let Ok(body_bytes) = serde_json::to_vec(&autoclaw_payload) {
             let mut req_ac = UpstreamRequest::post_json(
                 "https://autoglm-api.autoglm.ai/userapi/overseasv1/zai-oauth-login",
@@ -254,41 +272,7 @@ impl OAuthProvider for ZaiOAuthProvider {
                 http::header::USER_AGENT,
                 http::HeaderValue::from_static("AutoClaw/2.0.3"),
             );
-            req_ac.headers.insert(
-                http::header::HeaderName::from_static("x-product"),
-                http::HeaderValue::from_static("autoclaw"),
-            );
-            req_ac.headers.insert(
-                http::header::HeaderName::from_static("x-version"),
-                http::HeaderValue::from_static("2.0.3"),
-            );
-            req_ac.headers.insert(
-                http::header::HeaderName::from_static("x-tm"),
-                http::HeaderValue::from_static("linux"),
-            );
-            req_ac.headers.insert(
-                http::header::HeaderName::from_static("x-channel"),
-                http::HeaderValue::from_static("official"),
-            );
-            req_ac.headers.insert(
-                http::header::HeaderName::from_static("x-auth-appid"),
-                http::HeaderValue::from_static(APP_ID),
-            );
-            if let Ok(val) = http::HeaderValue::from_str(&now_ts) {
-                req_ac.headers.insert(
-                    http::header::HeaderName::from_static("x-auth-timestamp"),
-                    val,
-                );
-            }
-            if let Ok(val) = http::HeaderValue::from_str(&sign_md5) {
-                req_ac
-                    .headers
-                    .insert(http::header::HeaderName::from_static("x-auth-sign"), val);
-            }
-            req_ac.headers.insert(
-                http::header::HeaderName::from_static("x-lang"),
-                http::HeaderValue::from_static("zh-CN"),
-            );
+            apply_autoclaw_identity_headers(&mut req_ac);
 
             if let Ok((_status, ac_bytes)) =
                 crate::oauth::call_oauth(upstream_client, req_ac, "autoclaw oauth login").await
@@ -379,27 +363,198 @@ impl OAuthProvider for ZaiOAuthProvider {
     }
 
     fn supports_refresh(&self) -> bool {
-        false
+        true
     }
 
     fn access_tokens_expire(&self) -> bool {
-        false
+        true
     }
 
-    fn refresh_token(
+    /// Renew the AutoClaw session against the identity gateway.
+    ///
+    /// The access token is a 24h JWT and the refresh grant survives 30 days
+    /// without rotating, so this is the steady-state loop that keeps an account
+    /// alive. Rejections come back as HTTP 200 with a business `code`, never as
+    /// a transport error, so a non-zero envelope is reported as an auth failure
+    /// rather than a parse one.
+    ///
+    /// The gateway also keeps the AutoClaw credential inside
+    /// `oauth_provider_specific`, which the generic refresh path does not
+    /// rebuild, so the renewed token is merged into that blob here and handed
+    /// back through [`Self::refreshed_provider_specific`]. Unknown keys are
+    /// preserved: the daily check-in bookkeeping lives next to the credential.
+    async fn refresh_token(
         &self,
-        _refresh_token: &str,
-        _upstream_client: &Arc<UpstreamClient>,
+        refresh_token: &str,
+        upstream_client: &Arc<UpstreamClient>,
         _account_id: AccountId,
         _db: DbRef<'_>,
-    ) -> impl std::future::Future<Output = Result<TokenResponse>> + Send {
-        std::future::ready(Err(CoreError::Validation(
-            "Z.ai does not support token refresh; re-authentication required".into(),
-        )))
+    ) -> Result<TokenResponse> {
+        let raw_refresh = strip_bearer(&refresh_token).ok_or_else(|| {
+            CoreError::Validation("zai refresh: no AutoClaw refresh token stored".into())
+        })?;
+
+        let body = serde_json::json!({
+            "refresh_token": raw_refresh,
+            "source_id": "autoclaw",
+            "device_id": AUTOCLAW_DEVICE_ID,
+        });
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| CoreError::Validation(format!("zai refresh encode: {e}")))?;
+
+        let mut req =
+            UpstreamRequest::post_json(ZAI_AUTOCLAW_REFRESH_URL, bytes::Bytes::from(body_bytes))
+                .with_accept_json();
+        req.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static("application/json"),
+        );
+        req.headers.insert(
+            http::header::USER_AGENT,
+            http::HeaderValue::from_static("AutoClaw/2.0.3"),
+        );
+        apply_autoclaw_identity_headers(&mut req);
+
+        let (_status, resp_bytes) =
+            crate::oauth::call_oauth(upstream_client, req, "zai autoclaw refresh").await?;
+
+        let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
+            .map_err(|e| CoreError::Parse(format!("zai refresh parse: {e}")))?;
+
+        let code = json
+            .get("code")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(-1);
+        if code != 0 {
+            let msg = json
+                .get("msg")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            return Err(CoreError::Auth(format!(
+                "zai refresh rejected by AutoClaw (code {code}): {msg}"
+            )));
+        }
+
+        let data = json.get("data").ok_or_else(|| {
+            CoreError::Parse("zai refresh: response carried no data envelope".into())
+        })?;
+        let new_access = data
+            .get("access_token")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                CoreError::Parse("zai refresh: response carried no access_token".into())
+            })?
+            .to_string();
+        // A successful renewal echoes the same grant back. Keep whatever came
+        // back so a future rotation is picked up instead of silently ignored.
+        let new_refresh = data
+            .get("refresh_token")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string);
+
+        // The response carries no `expires_in`; the JWT's own `exp` is the only
+        // deadline, and the coordinator reads it straight off the token.
+        let expires_in = openproxy_adapters::jwt::claim_i64(&new_access, "exp")
+            .zip(openproxy_adapters::jwt::claim_i64(&new_access, "iat"))
+            .and_then(|(exp, iat)| u64::try_from(exp - iat).ok());
+
+        Ok(TokenResponse {
+            access_token: new_access,
+            token_type: "_fb30a070Bearer".into(),
+            expires_in,
+            refresh_token: new_refresh,
+            scope: None,
+            id_token: None,
+        })
     }
 
     fn provider_specific_from_token(&self, token: &TokenResponse) -> Option<String> {
         token.id_token.clone()
+    }
+
+    /// Rewrite the AutoClaw credential inside `oauth_provider_specific`.
+    ///
+    /// The generic refresh path stores `access_token_encrypted` and leaves this
+    /// blob alone, but the AutoClaw check-in reads `autoclaw_access_token` from
+    /// it. Without this write the session would renew for proxying while the
+    /// check-in kept using the dead token.
+    ///
+    /// The blob is read as a plain JSON value and only the two credential keys
+    /// are touched, so everything else in it (including the daily check-in
+    /// bookkeeping) survives untouched.
+    async fn persist_refreshed_state(
+        &self,
+        account_id: AccountId,
+        db: DbRef<'_>,
+        master_key: &MasterKey,
+        token: &TokenResponse,
+    ) -> Result<()> {
+        let new_access = token.access_token.clone();
+        let raw_refresh = token
+            .refresh_token
+            .as_deref()
+            .and_then(strip_bearer)
+            .unwrap_or_default()
+            .to_string();
+        if new_access.trim().is_empty() || raw_refresh.is_empty() {
+            return Ok(());
+        }
+
+        let id = account_id;
+        let write_master_key = master_key.clone();
+        let write_access = new_access.clone();
+        let write_refresh = raw_refresh.clone();
+        db.with_conn_async(move |conn| {
+            let encrypted: Option<String> = conn
+                .query_row(
+                    "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+                    rusqlite::params![id.0],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+
+            // Fail closed when the blob does not decrypt: the same column also
+            // carries the OAuth credential, so a blind write could destroy it.
+            let Some(existing) = openproxy_db::accounts::oauth::decrypt_oauth_provider_specific(
+                encrypted.as_deref(),
+                &write_master_key,
+            ) else {
+                return Ok(());
+            };
+
+            let mut value: serde_json::Value = serde_json::from_str(&existing)
+                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+            let Some(obj) = value.as_object_mut() else {
+                return Ok(());
+            };
+            obj.insert(
+                "autoclaw_access_token".to_string(),
+                serde_json::Value::String(write_access),
+            );
+            obj.insert(
+                "autoclaw_refresh_token".to_string(),
+                serde_json::Value::String(write_refresh),
+            );
+
+            let serialized = serde_json::to_string(&value)
+                .map_err(|e| CoreError::Parse(format!("zai persist encode: {e}")))?;
+            let encrypted_new = openproxy_db::accounts::oauth::encrypt_oauth_provider_specific(
+                &serialized,
+                &write_master_key,
+            )?;
+            conn.execute(
+                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                rusqlite::params![encrypted_new, id.0],
+            )
+            .map_err(|e| CoreError::Internal(format!("zai persist write: {e}")))?;
+            Ok(())
+        })
+        .await
     }
 
     fn email_from_token(&self, token: &TokenResponse) -> Option<String> {
@@ -462,6 +617,47 @@ impl OAuthProvider for ZaiOAuthProvider {
 
         Ok(())
     }
+}
+
+/// Product identity headers the AutoClaw identity gateway requires.
+///
+/// `X-Auth-Sign` is an MD5 over `appId & timestamp & appKey`, exactly as the
+/// official client computes it. A stale timestamp or a wrong signature is
+/// rejected with `400002 Middleware sign error`, so both are minted together
+/// here and nowhere else.
+fn apply_autoclaw_identity_headers(req: &mut openproxy_adapters::upstream::UpstreamRequest) {
+    let timestamp = openproxy_types::now_unix_secs_str();
+    let sign = crate::oauth::minimax::md5::md5_hex(format!(
+        "{AUTOCLAW_APP_ID}&{timestamp}&{AUTOCLAW_APP_KEY}"
+    ));
+    for (name, value) in [
+        ("x-product", "autoclaw".to_string()),
+        ("x-version", AUTOCLAW_APP_VERSION.to_string()),
+        ("x-tm", "linux".to_string()),
+        ("x-channel", "official".to_string()),
+        ("x-auth-appid", AUTOCLAW_APP_ID.to_string()),
+        ("x-auth-timestamp", timestamp),
+        ("x-auth-sign", sign),
+        ("x-lang", "zh-CN".to_string()),
+    ] {
+        if let (Ok(name), Ok(value)) = (
+            http::HeaderName::try_from(name),
+            http::HeaderValue::from_str(&value),
+        ) {
+            req.headers.insert(name, value);
+        }
+    }
+}
+
+/// Strip the `Bearer ` prefix the gateway stores its JWTs with.
+fn strip_bearer(token: &str) -> Option<&str> {
+    let trimmed = token.trim();
+    let stripped = trimmed
+        .strip_prefix("Bearer ")
+        .or_else(|| trimmed.strip_prefix("bearer "))
+        .unwrap_or(trimmed)
+        .trim();
+    (!stripped.is_empty()).then_some(stripped)
 }
 
 impl ZaiOAuthProvider {
