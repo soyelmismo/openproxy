@@ -244,6 +244,166 @@ async fn run_quota_sync_cycle(
     tracing::debug!("[QuotaSync] Cycle completed");
 }
 
+/// Writes `last_checkin_date` / `streak_days` into the account's encrypted
+/// `oauth_provider_specific` blob.
+///
+/// Split out of [`spawn_autoclaw_checkin`] so the read-modify-write can be
+/// exercised against a real database without reaching the network.
+///
+/// Fail-closed on an unreadable blob: the column also holds the account's OAuth
+/// tokens, so overwriting it with a two-key map would destroy the credential.
+fn persist_autoclaw_checkin(
+    db_pool: &DbPool,
+    master_key: &MasterKey,
+    account_id: AccountId,
+    checkin: &openproxy_adapters::adapters::zai::AutoclawCheckinResult,
+) -> crate::error::Result<()> {
+    let conn = db_pool
+        .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
+        .ok_or_else(|| crate::error::CoreError::Internal("writer timeout".into()))?;
+    // One immediate transaction: the pool serialises writers, and this keeps
+    // the read-modify-write of the credential blob indivisible.
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(openproxy_db::error::map_db_error)?;
+
+    let row: Option<String> = tx
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+            rusqlite::params![account_id.0],
+            |r| r.get(0),
+        )
+        .ok()
+        .flatten();
+
+    let mut map = match row.as_deref() {
+        Some(raw_enc) => {
+            let plain =
+                openproxy_db::accounts::decrypt_oauth_provider_specific(Some(raw_enc), master_key);
+            match plain.as_deref().and_then(|p| {
+                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(p).ok()
+            }) {
+                Some(existing) => existing,
+                None => {
+                    tracing::error!(
+                        account_id = account_id.0,
+                        "autoclaw check-in metadata not persisted: existing \
+                         oauth_provider_specific is unreadable"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        None => serde_json::Map::new(),
+    };
+
+    map.insert(
+        "last_checkin_date".to_string(),
+        serde_json::Value::String(checkin.last_checkin_date.clone()),
+    );
+    map.insert(
+        "streak_days".to_string(),
+        serde_json::Value::Number(checkin.streak_days.into()),
+    );
+    let updated_json = serde_json::to_string(&map).unwrap_or_default();
+    let enc = openproxy_db::accounts::encrypt_oauth_provider_specific(&updated_json, master_key)?;
+    tx.execute(
+        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+        rusqlite::params![enc, account_id.0],
+    )
+    .map_err(openproxy_db::error::map_db_error_ctx(
+        "update autoclaw streak metadata",
+    ))?;
+    tx.commit().map_err(openproxy_db::error::map_db_error)?;
+    Ok(())
+}
+
+/// Spawns the AutoClaw daily check-in for one zai account and persists the
+/// resulting streak.
+///
+/// This is the only site that performs the check-in; the quota fetch stays a
+/// pure read. Two invariants keep it correct across restarts and manual
+/// refreshes:
+///
+/// 1. **The daily gate is durable.** The advisory check here reads the persisted
+///    `last_checkin_date` from the database, so it survives restarts, and the
+///    upstream task list inside [`perform_autoclaw_checkin`] is the final
+///    authority on whether a claim is still needed. The in-process dedupe window
+///    is 60 s and only collapses concurrent runs: a long window silently
+///    swallows the next day's claim, which is how the previous 6 h throttle
+///    broke the daily bonus.
+/// 2. **The write is fail-closed.** See [`persist_autoclaw_checkin`].
+fn spawn_autoclaw_checkin(
+    account_id: AccountId,
+    db_pool: &Arc<DbPool>,
+    master_key: &Arc<MasterKey>,
+    upstream_client: &Arc<UpstreamClient>,
+    token: String,
+    proxy: Option<String>,
+    provider_specific: Option<Box<str>>,
+) {
+    // Advisory daily gate. Skipping here only avoids a pointless round trip;
+    // the upstream probe inside `perform_autoclaw_checkin` is authoritative.
+    if let Some(raw) = provider_specific.as_deref()
+        && let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw)
+        && map.get("last_checkin_date").and_then(|v| v.as_str())
+            == Some(openproxy_adapters::adapters::zai::today_utc().as_str())
+    {
+        tracing::debug!(
+            account_id = account_id.0,
+            "autoclaw check-in already recorded for today; skipping"
+        );
+        return;
+    }
+
+    let pool = Arc::clone(db_pool);
+    let up = Arc::clone(upstream_client);
+    let mk = Arc::clone(master_key);
+    tokio::spawn(async move {
+        let Some(checkin) = openproxy_adapters::adapters::zai::perform_autoclaw_checkin(
+            &up,
+            &token,
+            proxy.as_deref(),
+        )
+        .await
+        else {
+            return;
+        };
+
+        // Logged after the write, so keep the fields out of the blocking closure.
+        let logged_date = checkin.last_checkin_date.clone();
+        let logged_streak = checkin.streak_days;
+        let logged_already_claimed = checkin.already_claimed;
+
+        let pool = Arc::clone(&pool);
+        let mk = Arc::clone(&mk);
+        let write_res = tokio::task::spawn_blocking(move || {
+            persist_autoclaw_checkin(&pool, &mk, account_id, &checkin)
+        })
+        .await;
+
+        match write_res {
+            Ok(Ok(())) => tracing::info!(
+                account_id = account_id.0,
+                streak = logged_streak,
+                date = %logged_date,
+                already_claimed = logged_already_claimed,
+                "autoclaw check-in metadata persisted"
+            ),
+            Ok(Err(e)) => tracing::warn!(
+                account_id = account_id.0,
+                error = %e,
+                "Failed to update AutoClaw checkin streak metadata"
+            ),
+            Err(e) => tracing::warn!(
+                account_id = account_id.0,
+                error = %e,
+                "AutoClaw check-in metadata writer task failed"
+            ),
+        }
+    });
+}
+
 /// Core logic to refresh a single account's quota, including OAuth token refresh retries
 /// and low-quota notifications. Used by both the background daemon and the manual UI endpoint.
 pub async fn refresh_single_account_quota(
@@ -325,77 +485,8 @@ pub async fn refresh_single_account_quota(
     }
 
     if provider_id_str == "zai" && access_token.is_some() {
-        let pool = Arc::clone(db_pool);
-        let up = Arc::clone(upstream_client);
-        let tok = access_token.clone().unwrap_or_default();
-        let mk = Arc::clone(master_key);
-        let proxy_opt = active_proxy.clone();
-        tokio::spawn(async move {
-            let res = openproxy_adapters::adapters::zai::perform_autoclaw_checkin(
-                &up,
-                &tok,
-                proxy_opt.as_deref(),
-            )
-            .await;
-            if let Some(checkin) = res {
-                let write_res = tokio::task::spawn_blocking(move || -> std::result::Result<(), crate::error::CoreError> {
-                    let conn = pool
-                        .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
-                        .ok_or_else(|| crate::error::CoreError::Internal("writer timeout".into()))?;
-                    let row: Option<String> = conn
-                        .query_row(
-                            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-                            rusqlite::params![account_id.0],
-                            |r| r.get(0),
-                        )
-                        .ok();
-                    let mut map = match row.as_deref() {
-                        Some(raw_enc) => {
-                            match openproxy_db::accounts::decrypt_oauth_provider_specific(
-                                Some(raw_enc),
-                                &mk,
-                            ) {
-                                Some(plain) => {
-                                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&plain)
-                                        .unwrap_or_default()
-                                }
-                                None => serde_json::Map::new(),
-                            }
-                        }
-                        None => serde_json::Map::new(),
-                    };
-                    map.insert(
-                        "last_checkin_date".to_string(),
-                        serde_json::Value::String(checkin.last_checkin_date),
-                    );
-                    map.insert(
-                        "streak_days".to_string(),
-                        serde_json::Value::Number(checkin.streak_days.into()),
-                    );
-                    let updated_json = serde_json::to_string(&map).unwrap_or_default();
-                    let enc = openproxy_db::accounts::encrypt_oauth_provider_specific(
-                        &updated_json,
-                        &mk,
-                    )?;
-                    conn.execute(
-                        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                        rusqlite::params![enc, account_id.0],
-                    )
-                    .map_err(openproxy_db::error::map_db_error_ctx(
-                        "update autoclaw streak metadata",
-                    ))?;
-                    Ok(())
-                })
-                .await;
-                if let Err(e) = write_res {
-                    tracing::warn!(
-                        account = account_id.0,
-                        error = %e,
-                        "Failed to update AutoClaw checkin streak metadata"
-                    );
-                }
-            }
-        });
+        // The daily check-in runs after the token-refresh retry below, so it
+        // always uses a live credential. See `spawn_autoclaw_checkin`.
     }
 
     if provider_id_str == "codex" && access_token.is_some() {
@@ -431,6 +522,7 @@ pub async fn refresh_single_account_quota(
         });
     }
 
+    let mut effective_token = access_token.clone();
     let q = if q.fetch_error.as_deref().is_some_and(|e| e.contains("401")) && access_token.is_some()
     {
         let refresh_result = {
@@ -466,6 +558,7 @@ pub async fn refresh_single_account_quota(
                 .await
             {
                 Ok(new_tokens) => {
+                    effective_token = Some(new_tokens.access_token.clone());
                     // Retry quota fetch with the new access token
                     admin::fetch_account_quota_with_proxy(
                         &provider_id_str,
@@ -508,6 +601,20 @@ pub async fn refresh_single_account_quota(
     } else {
         q
     };
+
+    if provider_id_str == "zai"
+        && let Some(token) = effective_token
+    {
+        spawn_autoclaw_checkin(
+            account_id,
+            db_pool,
+            master_key,
+            upstream_client,
+            token,
+            active_proxy.clone(),
+            provider_specific.clone(),
+        );
+    }
 
     {
         let db_pool = Arc::clone(db_pool);
@@ -702,9 +809,15 @@ fn quota_pool_health(pools: &[openproxy_types::quota::QuotaPool]) -> accounts::H
     let usable_source = pools
         .iter()
         .any(|pool| pool.status == QuotaPoolStatus::Active && pool.fetch_error.is_none());
-    let unreadable_source = pools
-        .iter()
-        .any(|pool| pool.status == QuotaPoolStatus::Unavailable || pool.fetch_error.is_some());
+    let unreadable_source = pools.iter().any(|pool| {
+        let is_missing_credential = pool.fetch_error.as_deref().is_some_and(|err| {
+            err.contains("not configured")
+                || err.contains("credential is missing")
+                || err.contains("credential is not configured")
+        });
+        !is_missing_credential
+            && (pool.status == QuotaPoolStatus::Unavailable || pool.fetch_error.is_some())
+    });
     if usable_source || !unreadable_source {
         accounts::HealthStatus::Healthy
     } else {

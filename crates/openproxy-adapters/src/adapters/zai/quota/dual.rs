@@ -205,8 +205,13 @@ pub(super) async fn fetch_dual_at(
             .or(tokens.zai_access_token.as_deref())
         {
             Some(token) => {
-                // Auto-claim daily checkin & inspiration center bonuses before fetching balance
-                let _ = super::autoclaw::perform_autoclaw_checkin(upstream, token, proxy).await;
+                // Pure read. The daily check-in is deliberately NOT performed
+                // here: it belongs to the quota-sync path
+                // (`openproxy_core::quota_sync`), which is the only caller that
+                // persists the resulting streak. Running it from inside the
+                // balance fetch both blocked the fetch for ~10 s and consumed
+                // the dedupe window, so the persistence call was always
+                // suppressed and the dashboard never saw a fresh check-in.
                 let fetch_res =
                     fetch_json(upstream, endpoints.autoclaw_wallets, token, proxy).await;
                 match fetch_res {

@@ -40,6 +40,19 @@ fn quota_unknown_is_degraded_not_unhealthy() {
 }
 
 #[test]
+fn autoclaw_without_other_credentials_is_healthy_even_when_exhausted() {
+    let mut zcode = pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Unavailable);
+    zcode.fetch_error = Some("ZCode OAuth credential is not configured for this account".into());
+    let mut coding = pool(QuotaSource::CodingPlan, QuotaPoolStatus::Unavailable);
+    coding.fetch_error =
+        Some("Coding Plan credential is missing; subscription could not be verified".into());
+    let autoclaw = pool(QuotaSource::AutoclawStarter, QuotaPoolStatus::Exhausted);
+
+    let pools = [autoclaw, zcode, coding];
+    assert_eq!(quota_pool_health(&pools), accounts::HealthStatus::Healthy);
+}
+
+#[test]
 fn expired_entitlements_are_not_invalid_authentication() {
     let pools = [
         pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Expired),

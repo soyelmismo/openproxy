@@ -11,7 +11,7 @@ pub mod api_key;
 pub mod md5;
 pub mod models;
 pub mod quota;
-pub use quota::autoclaw::{perform_autoclaw_checkin, AutoclawCheckinResult};
+pub use quota::autoclaw::{AutoclawCheckinResult, perform_autoclaw_checkin, today_utc};
 pub mod routing;
 pub mod routing_refresh;
 
