@@ -40,6 +40,7 @@ impl ValidatedApiToken {
     }
 }
 
+#[allow(dead_code)]
 fn pattern_matches(spec: &str, candidate: &str) -> bool {
     if spec == "*" || spec == candidate {
         return true;
@@ -56,6 +57,7 @@ fn pattern_matches(spec: &str, candidate: &str) -> bool {
     candidate.ends_with(suffix)
 }
 
+#[allow(dead_code)]
 fn matches_any_model_pattern(
     pattern: &str,
     model: &str,
@@ -74,6 +76,7 @@ fn matches_any_model_pattern(
     pattern_matches(pattern, f)
 }
 
+#[allow(dead_code)]
 fn is_provider_blacklisted(
     blacklisted_provs: &[String],
     provider_id: Option<&str>,

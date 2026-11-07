@@ -137,11 +137,8 @@ impl ApiKey {
             return false;
         }
 
-        let is_in_allowlist =
-            is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
-                || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model);
-
-        is_in_allowlist
+        is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
+            || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model)
     }
 
     /// Returns whether the specified provider is permitted by this key.

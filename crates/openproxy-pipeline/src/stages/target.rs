@@ -210,35 +210,32 @@ impl PipelineStage for FormattingStage {
         };
 
         let mut target_format = resolve_target_format(&adapter, current.model.target_format);
-        if current.target.provider_id.as_str() == "zai" {
-            if let Some(acc_id) = current.target.account_id {
-                let key = std::sync::Arc::clone(&ctx.pipeline.config.master_key);
-                if let Ok(Some(acc)) = ctx
-                    .pipeline
-                    .async_repo()
-                    .run(move |repo| repo.get_account(acc_id, &key))
-                    .await
+        if current.target.provider_id.as_str() == "zai"
+            && let Some(acc_id) = current.target.account_id
+        {
+            let key = std::sync::Arc::clone(&ctx.pipeline.config.master_key);
+            if let Ok(Some(acc)) = ctx
+                .pipeline
+                .async_repo()
+                .run(move |repo| repo.get_account(acc_id, &key))
+                .await
+            {
+                let now = openproxy_types::now_unix_secs_str()
+                    .parse::<u64>()
+                    .unwrap_or(0);
+                let fallback = current
+                    .custom_meta
+                    .as_ref()
+                    .map_or(current.api_key.as_str(), |m| m.access_token.as_str());
+                if let Ok(route) = openproxy_adapters::adapters::zai::resolve_zai_inference_route(
+                    &acc,
+                    fallback,
+                    current.model.model_id.as_str(),
+                    now,
+                    &adapter.config().base_url,
+                ) && route.source == openproxy_types::quota::QuotaSource::AutoclawStarter
                 {
-                    let now = openproxy_types::now_unix_secs_str()
-                        .parse::<u64>()
-                        .unwrap_or(0);
-                    let fallback = current
-                        .custom_meta
-                        .as_ref()
-                        .map_or(current.api_key.as_str(), |m| m.access_token.as_str());
-                    if let Ok(route) =
-                        openproxy_adapters::adapters::zai::resolve_zai_inference_route(
-                            &acc,
-                            fallback,
-                            current.model.model_id.as_str(),
-                            now,
-                            &adapter.config().base_url,
-                        )
-                    {
-                        if route.source == openproxy_types::quota::QuotaSource::AutoclawStarter {
-                            target_format = openproxy_types::TargetFormat::Openai;
-                        }
-                    }
+                    target_format = openproxy_types::TargetFormat::Openai;
                 }
             }
         }
@@ -446,7 +443,7 @@ fn resolve_target_format(
 /// - 0 active prefixes: returns None (no prefix injected).
 /// - 1 active prefix: returns Some(system_text) directly.
 /// - >=2 active prefixes: runs System One decision router (Laya/Jev) evaluating
-///   each prefix's `criteria` against the user's prompt to select the best persona.
+///   > each prefix's `criteria` against the user's prompt to select the best persona.
 async fn resolve_system_prefix_for_target(
     ctx: &PipelineContext,
     target_id: openproxy_types::ids::ComboTargetId,

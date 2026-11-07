@@ -235,12 +235,12 @@ pub async fn recompute_usage_costs(
     State(s): State<AppState>,
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if let Some(axum::Extension(ref id)) = identity {
-        if !id.has_manage_scope() {
-            return Err(ApiError(CoreError::Auth(
-                "forbidden: recomputing costs requires manage scope".into(),
-            )));
-        }
+    if let Some(axum::Extension(ref id)) = identity
+        && !id.has_manage_scope()
+    {
+        return Err(ApiError(CoreError::Auth(
+            "forbidden: recomputing costs requires manage scope".into(),
+        )));
     }
     let updated = s
         .db_pool()
@@ -257,13 +257,13 @@ pub async fn usage_recent(
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     Query(q): Query<RecentQuery>,
 ) -> Result<Json<Vec<openproxy_types::usage::RecentUsageRow>>, ApiError> {
-    if let Some(axum::Extension(ref id)) = identity {
-        if !id.has_manage_scope() {
-            // Analytics-only users are prohibited from watching the global request stream.
-            return Err(ApiError(CoreError::Auth(
-                "forbidden: global request log stream requires manage scope".into(),
-            )));
-        }
+    if let Some(axum::Extension(ref id)) = identity
+        && !id.has_manage_scope()
+    {
+        // Analytics-only users are prohibited from watching the global request stream.
+        return Err(ApiError(CoreError::Auth(
+            "forbidden: global request log stream requires manage scope".into(),
+        )));
     }
 
     crate::error::run_blocking(move || {

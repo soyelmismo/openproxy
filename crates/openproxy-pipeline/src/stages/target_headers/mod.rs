@@ -308,7 +308,7 @@ pub fn propagate_provider_target_headers_with_profile(
     codex_workspace_id: Option<&str>,
     client_profile: Option<openproxy_types::ClientProfile>,
 ) {
-    let profile_str = client_profile.map(|p| p.as_str()).unwrap_or("");
+    let profile_str = client_profile.map_or("", |p| p.as_str());
     let matches = |prefix: &str| {
         profile_str.starts_with(prefix)
             || provider_id.starts_with(prefix)

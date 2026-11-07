@@ -214,7 +214,7 @@ fn filter_combo_targets_by_auth(
     targets: &mut Vec<ComboTarget>,
     auth: &ValidatedApiToken,
 ) -> Result<(), ApiError> {
-    let is_synthetic_direct = combo_id.0 == openproxy_core::routing::SYNTHETIC_COMBO_ID;
+    let _is_synthetic_direct = combo_id.0 == openproxy_core::routing::SYNTHETIC_COMBO_ID;
     let is_whitelisted_combo = auth
         .key
         .allowed_combos
