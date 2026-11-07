@@ -152,67 +152,67 @@ impl OAuthProvider for ZaiOAuthProvider {
                     .get("code")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(-1);
-                if code_num == 0 {
-                    if let Some(data) = json.get("data") {
-                        zcode_jwt = data
-                            .get("token")
-                            .and_then(serde_json::Value::as_str)
-                            .map(|s| s.trim().to_string());
+                if code_num == 0
+                    && let Some(data) = json.get("data")
+                {
+                    zcode_jwt = data
+                        .get("token")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string());
 
-                        zai_access_token = data
-                            .get("zai")
-                            .and_then(|z| z.get("access_token"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(|s| s.trim().to_string());
+                    zai_access_token = data
+                        .get("zai")
+                        .and_then(|z| z.get("access_token"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string());
 
-                        let raw_expires_in = data
-                            .get("expires_in")
-                            .or_else(|| data.get("expiresIn"))
-                            .and_then(serde_json::Value::as_u64);
-                        let raw_expires_at = data
-                            .get("expires_at")
-                            .or_else(|| data.get("expiresAt"))
-                            .and_then(serde_json::Value::as_str);
-                        expires_in =
-                            crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
-                                .or(Some(86400 * 30));
+                    let raw_expires_in = data
+                        .get("expires_in")
+                        .or_else(|| data.get("expiresIn"))
+                        .and_then(serde_json::Value::as_u64);
+                    let raw_expires_at = data
+                        .get("expires_at")
+                        .or_else(|| data.get("expiresAt"))
+                        .and_then(serde_json::Value::as_str);
+                    expires_in =
+                        crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
+                            .or(Some(86400 * 30));
 
-                        let user_val = data.get("user");
-                        user_id = user_val
-                            .and_then(|u| u.get("id").or_else(|| u.get("user_id")))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        name = user_val
-                            .and_then(|u| u.get("name").or_else(|| u.get("username")))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        email = user_val
-                            .and_then(|u| u.get("email"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        avatar = user_val
-                            .and_then(|u| u.get("avatar"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
+                    let user_val = data.get("user");
+                    user_id = user_val
+                        .and_then(|u| u.get("id").or_else(|| u.get("user_id")))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    name = user_val
+                        .and_then(|u| u.get("name").or_else(|| u.get("username")))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    email = user_val
+                        .and_then(|u| u.get("email"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    avatar = user_val
+                        .and_then(|u| u.get("avatar"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
 
-                        business_access_token = match zai_access_token.as_deref() {
-                            Some(tok) => Self::exchange_business_token(upstream_client, tok)
-                                .await
-                                .ok(),
-                            None => None,
-                        };
+                    business_access_token = match zai_access_token.as_deref() {
+                        Some(tok) => Self::exchange_business_token(upstream_client, tok)
+                            .await
+                            .ok(),
+                        None => None,
+                    };
 
-                        api_key = match business_access_token.as_deref() {
-                            Some(tok) => {
-                                openproxy_adapters::adapters::zai::resolve_zai_api_key(
-                                    upstream_client,
-                                    tok,
-                                )
-                                .await
-                            }
-                            None => None,
-                        };
-                    }
+                    api_key = match business_access_token.as_deref() {
+                        Some(tok) => {
+                            openproxy_adapters::adapters::zai::resolve_zai_api_key(
+                                upstream_client,
+                                tok,
+                            )
+                            .await
+                        }
+                        None => None,
+                    };
                 }
             }
         }
@@ -292,32 +292,29 @@ impl OAuthProvider for ZaiOAuthProvider {
 
             if let Ok((_status, ac_bytes)) =
                 crate::oauth::call_oauth(upstream_client, req_ac, "autoclaw oauth login").await
+                && let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes)
+                && ac_json.get("code").and_then(serde_json::Value::as_i64) == Some(0)
+                && let Some(ac_data) = ac_json.get("data")
             {
-                if let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes) {
-                    if ac_json.get("code").and_then(serde_json::Value::as_i64) == Some(0) {
-                        if let Some(ac_data) = ac_json.get("data") {
-                            autoclaw_access_token = ac_data
-                                .get("access_token")
-                                .and_then(serde_json::Value::as_str)
-                                .map(|s| s.trim().to_string());
-                            autoclaw_refresh_token = ac_data
-                                .get("refresh_token")
-                                .and_then(serde_json::Value::as_str)
-                                .map(|s| s.trim().to_string());
-                            if user_id.is_none() {
-                                user_id = ac_data
-                                    .get("user_id")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(ToString::to_string);
-                            }
-                            if name.is_none() {
-                                name = ac_data
-                                    .get("user_name")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(ToString::to_string);
-                            }
-                        }
-                    }
+                autoclaw_access_token = ac_data
+                    .get("access_token")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| s.trim().to_string());
+                autoclaw_refresh_token = ac_data
+                    .get("refresh_token")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| s.trim().to_string());
+                if user_id.is_none() {
+                    user_id = ac_data
+                        .get("user_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                }
+                if name.is_none() {
+                    name = ac_data
+                        .get("user_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
                 }
             }
         }

@@ -308,7 +308,7 @@ pub fn propagate_provider_target_headers_with_profile(
     codex_workspace_id: Option<&str>,
     client_profile: Option<openproxy_types::ClientProfile>,
 ) {
-    let profile_str = client_profile.map(|p| p.as_str()).unwrap_or("");
+    let profile_str = client_profile.map_or("", |p| p.as_str());
     let matches = |prefix: &str| {
         profile_str.starts_with(prefix)
             || provider_id.starts_with(prefix)
@@ -329,7 +329,11 @@ pub fn propagate_provider_target_headers_with_profile(
 
     if matches("opencode") {
         propagate_opencode_headers(headers, req_headers, openai_req);
-    } else if matches("antigravity") || provider_id == "agy" || adapter_id == "agy" || profile_str == "antigravity" {
+    } else if matches("antigravity")
+        || provider_id == "agy"
+        || adapter_id == "agy"
+        || profile_str == "antigravity"
+    {
         propagate_antigravity_headers(headers, req_headers);
     } else if matches("minimax") {
         propagate_minimax_headers(headers, req_headers);
@@ -348,7 +352,11 @@ pub fn propagate_provider_target_headers_with_profile(
         }
     } else if matches("kiro") {
         propagate_kiro_headers(headers, req_headers);
-    } else if matches("commandcode") || provider_id == "cmd" || adapter_id == "cmd" || profile_str == "commandcode" {
+    } else if matches("commandcode")
+        || provider_id == "cmd"
+        || adapter_id == "cmd"
+        || profile_str == "commandcode"
+    {
         propagate_commandcode_headers(headers, req_headers);
     } else if matches("codebuddy") {
         propagate_codebuddy_headers(headers, req_headers, openai_req);
@@ -361,7 +369,13 @@ pub fn propagate_provider_target_headers_with_profile(
     } else {
         provider_id
     };
-    apply_provider_session_affinity(headers, effective_provider, adapter_id, req_headers, openai_req);
+    apply_provider_session_affinity(
+        headers,
+        effective_provider,
+        adapter_id,
+        req_headers,
+        openai_req,
+    );
 }
 
 /// Forwards `x-codebuddy-*`, `codebuddy-*` and client identity headers

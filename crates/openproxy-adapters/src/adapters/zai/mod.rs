@@ -11,7 +11,7 @@ pub mod api_key;
 pub mod md5;
 pub mod models;
 pub mod quota;
-pub use quota::autoclaw::{perform_autoclaw_checkin, AutoclawCheckinResult};
+pub use quota::autoclaw::{AutoclawCheckinResult, perform_autoclaw_checkin};
 pub mod routing;
 pub mod routing_refresh;
 
@@ -110,17 +110,16 @@ impl ProviderAdapter for ZaiAdapter {
         crate::adapters::traits::patch_json_request_body(body, |obj| {
             if let Some(m) = obj.get("model").and_then(|v| v.as_str()) {
                 let m_lower = m.to_ascii_lowercase();
-                if m_lower.contains("flash") {
-                    obj.insert(
-                        "model".to_string(),
-                        serde_json::Value::String("zai_glm-5.3-flash".into()),
-                    );
+                #[allow(clippy::if_same_then_else)]
+                let target_model = if m_lower.contains("flash") {
+                    "zai_glm-5.3-flash"
                 } else {
-                    obj.insert(
-                        "model".to_string(),
-                        serde_json::Value::String("zai_glm-5.3-flash".into()),
-                    );
-                }
+                    "zai_glm-5.3-flash"
+                };
+                obj.insert(
+                    "model".to_string(),
+                    serde_json::Value::String(target_model.into()),
+                );
             }
         })
     }
@@ -195,31 +194,30 @@ impl ProviderAdapter for ZaiAdapter {
                 }
                 if let Some(m) = obj.get("model").and_then(|v| v.as_str()) {
                     let m_lower = m.to_ascii_lowercase();
-                    if m_lower.contains("flash") {
-                        obj.insert(
-                            "model".to_string(),
-                            serde_json::Value::String("zai_glm-5.3-flash".into()),
-                        );
+                    #[allow(clippy::if_same_then_else)]
+                    let target_model = if m_lower.contains("flash") {
+                        "zai_glm-5.3-flash"
                     } else {
-                        obj.insert(
-                            "model".to_string(),
-                            serde_json::Value::String("zai_glm-5.3-flash".into()),
-                        );
-                    }
+                        "zai_glm-5.3-flash"
+                    };
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::Value::String(target_model.into()),
+                    );
                 }
                 if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
                     let mut orig_sys_instructions = Vec::new();
 
                     for msg in messages.iter_mut() {
-                        if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
-                            if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                                let trimmed = c.trim();
-                                if !trimmed.is_empty()
-                                    && trimmed != REQUIRED_PREFIX
-                                    && !trimmed.starts_with(REQUIRED_PREFIX)
-                                {
-                                    orig_sys_instructions.push(trimmed.to_string());
-                                }
+                        if msg.get("role").and_then(|r| r.as_str()) == Some("system")
+                            && let Some(c) = msg.get("content").and_then(|v| v.as_str())
+                        {
+                            let trimmed = c.trim();
+                            if !trimmed.is_empty()
+                                && trimmed != REQUIRED_PREFIX
+                                && !trimmed.starts_with(REQUIRED_PREFIX)
+                            {
+                                orig_sys_instructions.push(trimmed.to_string());
                             }
                         }
                     }
@@ -237,12 +235,11 @@ impl ProviderAdapter for ZaiAdapter {
                             .iter_mut()
                             .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
                         {
-                            if let Some(content) = first_user.get_mut("content") {
-                                if let Some(orig_u) = content.as_str() {
-                                    *content = serde_json::Value::String(format!(
-                                        "{sys_block}\n\n{orig_u}"
-                                    ));
-                                }
+                            if let Some(content) = first_user.get_mut("content")
+                                && let Some(orig_u) = content.as_str()
+                            {
+                                *content =
+                                    serde_json::Value::String(format!("{sys_block}\n\n{orig_u}"));
                             }
                         } else {
                             messages.insert(
@@ -270,8 +267,12 @@ impl ProviderAdapter for ZaiAdapter {
             for (k, v) in headers.iter_mut() {
                 if k.eq_ignore_ascii_case("x-authorization") || k.eq_ignore_ascii_case("x-api-key")
                 {
-                    while v.starts_with("Bearer Bearer ") {
-                        *v = v.strip_prefix("Bearer ").unwrap().to_string();
+                    while let Some(stripped) = v.strip_prefix("Bearer ") {
+                        if v.starts_with("Bearer Bearer ") {
+                            *v = stripped.to_string();
+                        } else {
+                            break;
+                        }
                     }
                 }
             }

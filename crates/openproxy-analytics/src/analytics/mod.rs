@@ -82,8 +82,7 @@ fn push_exclusions<'a>(
         if values.is_empty() {
             continue;
         }
-        let placeholders = std::iter::repeat("?")
-            .take(values.len())
+        let placeholders = std::iter::repeat_n("?", values.len())
             .collect::<Vec<_>>()
             .join(", ");
         clauses.push(format!("{col} NOT IN ({placeholders})"));
@@ -106,14 +105,15 @@ fn push_public_visibility<'a>(
         if values.is_empty() {
             return;
         }
-        let placeholders = std::iter::repeat("?")
-            .take(values.len())
+        use std::fmt::Write;
+        let placeholders = std::iter::repeat_n("?", values.len())
             .collect::<Vec<_>>()
             .join(", ");
-        sql.push_str(&format!(
+        let _ = write!(
+            sql,
             " AND {col} {} ({placeholders})",
             if negated { "NOT IN" } else { "IN" }
-        ));
+        );
         for v in values {
             params.push(v);
         }

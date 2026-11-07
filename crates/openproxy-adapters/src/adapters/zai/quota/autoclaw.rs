@@ -11,7 +11,9 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
     let data = match json.get("data") {
         Some(d) if d.is_object() => d,
         Some(d) if d.is_null() => {
-            return Err(CoreError::Parse("AutoClaw wallets response carried null data".into()));
+            return Err(CoreError::Parse(
+                "AutoClaw wallets response carried null data".into(),
+            ));
         }
         None => {
             return Ok(vec![status_pool(
@@ -22,17 +24,16 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
             )]);
         }
         Some(_) => {
-            return Err(CoreError::Parse("AutoClaw wallets response data is not an object".into()));
+            return Err(CoreError::Parse(
+                "AutoClaw wallets response data is not an object".into(),
+            ));
         }
     };
 
-    let total_balance = match super::envelope::as_i64(data.get("total_balance")) {
-        Some(v) => v,
-        None => {
-            return Err(CoreError::Parse(
-                "AutoClaw wallets response carried no valid total_balance".into(),
-            ));
-        }
+    let Some(total_balance) = super::envelope::as_i64(data.get("total_balance")) else {
+        return Err(CoreError::Parse(
+            "AutoClaw wallets response carried no valid total_balance".into(),
+        ));
     };
 
     let default_models = vec![
@@ -214,11 +215,13 @@ pub async fn perform_autoclaw_checkin(
         http::HeaderValue::from_static("100003"),
     );
     if let Ok(ts_val) = http::HeaderValue::from_str(&now_sec) {
-        list_req.headers
+        list_req
+            .headers
             .insert(http::HeaderName::from_static("x-auth-timestamp"), ts_val);
     }
     if let Ok(sign_val) = http::HeaderValue::from_str(&sign) {
-        list_req.headers
+        list_req
+            .headers
             .insert(http::HeaderName::from_static("x-auth-sign"), sign_val);
     }
     list_req.headers.insert(
@@ -253,31 +256,27 @@ pub async fn perform_autoclaw_checkin(
             crate::upstream::CancellationToken::new(),
         )
         .await
+        && resp.status.is_success()
+        && let Ok(body_bytes) = resp.collect().await
+        && let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes)
+        && let Some(tasks) = v.get("data").and_then(|d| d.as_array())
     {
-        if resp.status.is_success() {
-            if let Ok(body_bytes) = resp.collect().await {
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body_bytes) {
-                    if let Some(tasks) = v.get("data").and_then(|d| d.as_array()) {
-                        for t in tasks {
-                            if t.get("task_id").and_then(|id| id.as_str()) == Some("daily_signin") {
-                                let mut streak = 0;
-                                if let Some(desc) = t.get("status_description").and_then(|d| d.as_str()) {
-                                    for word in desc.split(|c: char| !c.is_ascii_digit()) {
-                                        if let Ok(n) = word.parse::<u32>() {
-                                            streak = n;
-                                            break;
-                                        }
-                                    }
-                                }
-                                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                                return Some(AutoclawCheckinResult {
-                                    last_checkin_date: today,
-                                    streak_days: streak,
-                                });
-                            }
+        for t in tasks {
+            if t.get("task_id").and_then(|id| id.as_str()) == Some("daily_signin") {
+                let mut streak = 0;
+                if let Some(desc) = t.get("status_description").and_then(|d| d.as_str()) {
+                    for word in desc.split(|c: char| !c.is_ascii_digit()) {
+                        if let Ok(n) = word.parse::<u32>() {
+                            streak = n;
+                            break;
                         }
                     }
                 }
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+                return Some(AutoclawCheckinResult {
+                    last_checkin_date: today,
+                    streak_days: streak,
+                });
             }
         }
     }

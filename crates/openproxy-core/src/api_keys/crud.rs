@@ -232,6 +232,7 @@ fn serialize_update_field<T: serde::Serialize>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_update_json_clauses(
     scopes_json: Option<String>,
     allowed_models_json: UpdateField<String>,
