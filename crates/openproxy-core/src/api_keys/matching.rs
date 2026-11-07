@@ -130,14 +130,16 @@ impl ApiKey {
         // from those providers are allowed by default (unless explicitly whitelisted above).
         // Blacklisted providers filter: if blacklisted_providers is set, models from
         // those providers are denied.
-        let is_blacklisted = is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-            || is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model);
+        let is_blacklisted =
+            is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+                || is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model);
         if is_blacklisted {
             return false;
         }
 
-        let is_in_allowlist = is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
-            || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model);
+        let is_in_allowlist =
+            is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
+                || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model);
 
         is_in_allowlist
     }
