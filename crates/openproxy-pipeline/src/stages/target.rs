@@ -336,12 +336,7 @@ impl PipelineStage for FormattingStage {
                 if let Some(profile) = current.client_profile()
                     && adapter.id().as_str() != "claude-code"
                 {
-                    super::profile_cloaking::wrap_profile_request_body(
-                        body,
-                        profile,
-                        target_format,
-                        current,
-                    )
+                    super::profile_cloaking::wrap_profile_request_body(body, profile, target_format, current)
                 } else {
                     Ok(body)
                 }

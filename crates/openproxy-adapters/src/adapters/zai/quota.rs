@@ -5,7 +5,7 @@ use crate::adapters::{
 use openproxy_types::{AccountQuota, ModelQuotaDetail};
 
 pub mod autoclaw;
-pub use autoclaw::{AutoclawCheckinResult, perform_autoclaw_checkin};
+pub use autoclaw::{perform_autoclaw_checkin, AutoclawCheckinResult};
 mod coding_plan;
 mod dual;
 #[cfg(test)]

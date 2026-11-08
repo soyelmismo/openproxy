@@ -289,13 +289,10 @@ fn by_model_success_only_and_exclusions() {
     assert_eq!(m1.unique_requests, 1);
     assert_eq!(m1.total_rows, 2);
 
-    let rows = by_model(
-        &conn,
-        &UsageFilter {
-            exclude_models: vec!["m2".into()],
-            ..Default::default()
-        },
-    )
+    let rows = by_model(&conn, &UsageFilter {
+        exclude_models: vec!["m2".into()],
+        ..Default::default()
+    })
     .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].upstream_model_id, "m1");
@@ -363,10 +360,7 @@ fn public_scope_projects_combo_alias_and_whitelisted_catalog() {
     )
     .unwrap();
     assert_eq!(rows.len(), 2);
-    let combo = rows
-        .iter()
-        .find(|r| r.upstream_model_id == "minmax")
-        .unwrap();
+    let combo = rows.iter().find(|r| r.upstream_model_id == "minmax").unwrap();
     assert_eq!(combo.total_rows, 2);
     assert_eq!(combo.unique_requests, 1);
     assert_eq!(combo.provider_id, ProviderId::new("")); // combos hide the target provider
@@ -376,21 +370,9 @@ fn public_scope_projects_combo_alias_and_whitelisted_catalog() {
         .unwrap();
     assert_eq!(direct.provider_id, ProviderId::new("xkiro")); // whitelisted catalog provider
     assert!(!rows.iter().any(|r| r.upstream_model_id.contains("minimax")));
-    assert!(
-        !rows
-            .iter()
-            .any(|r| r.provider_id == ProviderId::new("vercel-gateway"))
-    );
-    assert!(
-        !rows
-            .iter()
-            .any(|r| r.provider_id == ProviderId::new("secret-upstream"))
-    );
-    assert!(
-        !rows
-            .iter()
-            .any(|r| r.provider_id == ProviderId::new("not-allowed-prov"))
-    );
+    assert!(!rows.iter().any(|r| r.provider_id == ProviderId::new("vercel-gateway")));
+    assert!(!rows.iter().any(|r| r.provider_id == ProviderId::new("secret-upstream")));
+    assert!(!rows.iter().any(|r| r.provider_id == ProviderId::new("not-allowed-prov")));
 
     // by_provider: grouped by public name - no internal providers leak.
     let rows = by_provider(
@@ -404,10 +386,9 @@ fn public_scope_projects_combo_alias_and_whitelisted_catalog() {
     .unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().any(|r| r.provider_id == "minmax"));
-    assert!(
-        rows.iter()
-            .any(|r| r.provider_id == "xkiro/qwen/qwen3.8-max:free")
-    );
+    assert!(rows
+        .iter()
+        .any(|r| r.provider_id == "xkiro/qwen/qwen3.8-max:free"));
 
     // Errors: row-level projection keeps the same masking.
     let rows = errors(

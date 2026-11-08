@@ -11,9 +11,7 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
     let data = match json.get("data") {
         Some(d) if d.is_object() => d,
         Some(d) if d.is_null() => {
-            return Err(CoreError::Parse(
-                "AutoClaw wallets response carried null data".into(),
-            ));
+            return Err(CoreError::Parse("AutoClaw wallets response carried null data".into()));
         }
         None => {
             return Ok(vec![status_pool(
@@ -24,9 +22,7 @@ pub(crate) fn parse_autoclaw_pools(json: &Value, now: u64) -> Result<Vec<QuotaPo
             )]);
         }
         Some(_) => {
-            return Err(CoreError::Parse(
-                "AutoClaw wallets response data is not an object".into(),
-            ));
+            return Err(CoreError::Parse("AutoClaw wallets response data is not an object".into()));
         }
     };
 
@@ -218,13 +214,11 @@ pub async fn perform_autoclaw_checkin(
         http::HeaderValue::from_static("100003"),
     );
     if let Ok(ts_val) = http::HeaderValue::from_str(&now_sec) {
-        list_req
-            .headers
+        list_req.headers
             .insert(http::HeaderName::from_static("x-auth-timestamp"), ts_val);
     }
     if let Ok(sign_val) = http::HeaderValue::from_str(&sign) {
-        list_req
-            .headers
+        list_req.headers
             .insert(http::HeaderName::from_static("x-auth-sign"), sign_val);
     }
     list_req.headers.insert(
@@ -267,9 +261,7 @@ pub async fn perform_autoclaw_checkin(
                         for t in tasks {
                             if t.get("task_id").and_then(|id| id.as_str()) == Some("daily_signin") {
                                 let mut streak = 0;
-                                if let Some(desc) =
-                                    t.get("status_description").and_then(|d| d.as_str())
-                                {
+                                if let Some(desc) = t.get("status_description").and_then(|d| d.as_str()) {
                                     for word in desc.split(|c: char| !c.is_ascii_digit()) {
                                         if let Ok(n) = word.parse::<u32>() {
                                             streak = n;
