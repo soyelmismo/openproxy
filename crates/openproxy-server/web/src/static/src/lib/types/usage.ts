@@ -77,6 +77,22 @@ export interface ByStatusRow {
   count: number;
 }
 
+export interface ByComboRow {
+  combo_id: number;
+  combo_name: string;
+  requests: number;
+  ok_requests: number;
+  error_requests: number;
+  total_attempts: number;
+  success_rate_pct: number;
+  error_rate_pct: number;
+  avg_attempts: number;
+  /** Mean ms of a successful request, across all the attempts it consumed. */
+  avg_ok_ms: number | null;
+  /** Mean ms of a request the combo never covered, until the client error. */
+  avg_error_ms: number | null;
+}
+
 export interface ErrorRow {
   request_id: string;
   trace_id: string;

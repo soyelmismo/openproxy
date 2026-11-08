@@ -448,6 +448,98 @@ pub fn by_account(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByAccountRow
     collect_rows(rows, "by_account")
 }
 
+/// Health of one combo at request granularity.
+///
+/// A request counts as **successful** when at least one of its attempts
+/// produced a 2xx/3xx response, and as a **client-visible error** when none
+/// did (the combo exhausted its targets and never covered the request).
+/// Retries are not errors: they only raise `total_attempts`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ByComboRow {
+    pub combo_id: i64,
+    pub combo_name: String,
+    /// Distinct requests routed through the combo.
+    pub requests: u64,
+    /// Requests with at least one successful attempt.
+    pub ok_requests: u64,
+    /// Requests that never got a successful attempt (client saw an error).
+    pub error_requests: u64,
+    /// Sum of attempts across every request (retries included).
+    pub total_attempts: u64,
+    pub success_rate_pct: f64,
+    pub error_rate_pct: f64,
+    /// Attempts per request (1.0 = every request succeeded first try).
+    pub avg_attempts: f64,
+    /// Mean wall-clock ms of a *successful* request, summed across the
+    /// attempts it consumed (what the client actually waited).
+    pub avg_ok_ms: Option<f64>,
+    /// Mean wall-clock ms of a request the combo never covered: the full
+    /// time spent exhausting targets before the client got the error.
+    pub avg_error_ms: Option<f64>,
+}
+
+/// Combo health: success rate and client-visible error rate per combo.
+///
+/// The aggregate is computed over *requests*, not rows: `usage` stores one
+/// row per attempt, so grouping by `request_id` first is what separates
+/// "the combo retried and recovered" from "the combo never covered it".
+pub fn by_combo(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByComboRow>> {
+    let w = BuiltWhere::from_filter(f);
+    let sep = if w.sql.is_empty() { "WHERE" } else { "AND" };
+    let sql = format!(
+        "WITH req AS ( \
+             SELECT request_id, combo_id, \
+                    MAX(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END) AS ok, \
+                    COUNT(*) AS attempts, \
+                    COALESCE(SUM(COALESCE(total_ms, 0)), 0) AS waited_ms \
+             FROM usage {where_sql} \
+             {sep} request_id IS NOT NULL \
+             GROUP BY request_id, combo_id \
+         ) \
+         SELECT r.combo_id, COALESCE(c.name, '') AS combo_name, \
+                COUNT(*) AS requests, \
+                SUM(r.ok) AS ok_requests, \
+                COUNT(*) - SUM(r.ok) AS error_requests, \
+                SUM(r.attempts) AS total_attempts, \
+                ROUND(100.0 * SUM(r.ok) / COUNT(*), 2) AS success_rate_pct, \
+                ROUND(100.0 * (COUNT(*) - SUM(r.ok)) / COUNT(*), 2) AS error_rate_pct, \
+                ROUND(1.0 * SUM(r.attempts) / COUNT(*), 2) AS avg_attempts, \
+                AVG(CASE WHEN r.ok = 1 THEN r.waited_ms END) AS avg_ok_ms, \
+                AVG(CASE WHEN r.ok = 0 THEN r.waited_ms END) AS avg_error_ms \
+         FROM req r \
+         LEFT JOIN combos c ON c.id = r.combo_id \
+         WHERE r.combo_id IS NOT NULL AND r.combo_id > 0 \
+         GROUP BY r.combo_id, c.name \
+         ORDER BY requests DESC, r.combo_id ASC",
+        where_sql = w.sql,
+        sep = sep,
+    );
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(openproxy_db::error::map_db_error)?;
+    let params_slice = to_params(&w.params);
+    let rows = stmt
+        .query_map(params_from_iter(params_slice), |row| {
+            Ok(ByComboRow {
+                combo_id: row.get(0)?,
+                combo_name: row.get(1)?,
+                requests: get_u64_col(row, 2, "requests")?,
+                ok_requests: get_u64_col(row, 3, "ok_requests")?,
+                error_requests: get_u64_col(row, 4, "error_requests")?,
+                total_attempts: get_u64_col(row, 5, "total_attempts")?,
+                success_rate_pct: row.get(6)?,
+                error_rate_pct: row.get(7)?,
+                avg_attempts: row.get(8)?,
+                avg_ok_ms: row.get(9)?,
+                avg_error_ms: row.get(10)?,
+            })
+        })
+        .map_err(openproxy_db::error::map_db_error)?;
+
+    collect_rows(rows, "by_combo")
+}
+
 pub fn by_status(conn: &Connection, f: &UsageFilter) -> Result<Vec<ByStatusRow>> {
     let w = BuiltWhere::from_filter(f);
     let sql = format!(

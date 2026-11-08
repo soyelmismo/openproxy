@@ -1,6 +1,7 @@
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 
+mod combos;
 mod latency;
 mod races;
 

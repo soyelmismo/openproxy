@@ -22,7 +22,7 @@ import {
   resolveTargetEffectiveCw,
   clearSubComboCache,
 } from "./combos/subcombo-group.js";
-import { renderCombosList } from "./combos/combos-list.js";
+import { renderCombosList, loadComboHealth } from "./combos/combos-list.js";
 import { showTargetPrefixesModal } from "./combos/target-prefixes-modal.js";
 import { renderClientProfileSelect } from "../components/client-profile-select.js";
 import type { ClientProfile } from "../lib/types/client-profile.js";
@@ -906,7 +906,12 @@ export async function mountCombos(
   return createView<Combo[]>({
     container,
     loader: () => api("/combos") as Promise<Combo[]>,
-    onLoaded: (combos) => { state.combos = combos; },
+    onLoaded: (combos) => {
+      state.combos = combos;
+      // Health loads after the grid is usable: the columns fill in when the
+      // aggregate lands, and a failure leaves them as em dashes.
+      void loadComboHealth();
+    },
     render: () => renderCombosList(),
     loading: () => html`<div class="loading">${t("common.loading")}</div>`,
     empty: () => false,

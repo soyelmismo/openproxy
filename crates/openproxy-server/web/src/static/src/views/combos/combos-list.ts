@@ -13,7 +13,7 @@ import { PRIORITY_MODE_LABELS, PRIORITY_MODE_TOOLTIPS } from "../../lib/constant
 import { showCreateCombo, cloneCombo, deleteCombo } from "../../handlers/combo-handlers.js";
 import { showToast } from "../../components/toast.js";
 import { showConfirm } from "../../lib/show-confirm.js";
-import type { Combo, PriorityMode } from "../../lib/types/api.js";
+import type { ByComboRow, Combo, PriorityMode } from "../../lib/types/api.js";
 import { renderDataGrid, type GridColumn } from "../../components/data-grid.js";
 import { requestUpdate } from "../../state/reactive.js";
 
@@ -22,6 +22,42 @@ const priorityModeOf = (c: Combo): PriorityMode => (c.priority_mode ?? "strict")
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
   return n >= 1_000 ? (n / 1_000).toFixed(0) + "k" : String(n);
+}
+
+/** Combo health snapshot, keyed by combo id. Loaded lazily alongside the
+ *  list so a failed/absent health query never blocks the grid itself. */
+let comboHealth = new Map<number, ByComboRow>();
+let comboHealthLoaded = false;
+
+/** Fetch request-level health for every combo (last 7 days). Failures are
+ *  swallowed: the health columns simply render empty until the next load. */
+export async function loadComboHealth(): Promise<void> {
+  if (comboHealthLoaded) return;
+  try {
+    const rows = (await api("/usage/by-combo?preset=7d")) as ByComboRow[];
+    comboHealth = new Map(rows.map((r) => [r.combo_id, r]));
+    comboHealthLoaded = true;
+    requestUpdate();
+  } catch {
+    // Health is optional chrome on the combos list; keep the grid usable.
+  }
+}
+
+/** Test/reset hook. */
+export function resetComboHealth(): void {
+  comboHealth = new Map();
+  comboHealthLoaded = false;
+}
+
+function fmtMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (ms < 1_000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1_000).toFixed(1)}s`;
+  return `${(ms / 60_000).toFixed(1)}m`;
+}
+
+function healthToneClass(successRatePct: number): string {
+  return successRatePct >= 99 ? "good" : successRatePct >= 95 ? "warn" : "bad";
 }
 
 let comboSearchQuery = "";
@@ -137,6 +173,37 @@ function getCombosColumns(): GridColumn<Combo>[] {
       max: 90,
       fold: 4,
       render: (c) => html`<span class="combo-context-value dg-mono">${c.context_window != null ? formatTokens(c.context_window) : "auto"}</span>`,
+    },
+    {
+      key: "health",
+      label: t("combos.list.col_health"),
+      max: 100,
+      fold: 5,
+      render: (c) => {
+        const h = comboHealth.get(c.id);
+        if (!h) return html`<span class="combo-health-cell muted">—</span>`;
+        const tone = healthToneClass(h.success_rate_pct);
+        const tooltip = t("combos.list.health_tooltip", {
+          requests: h.requests,
+          errors: h.error_requests,
+          attempts: h.avg_attempts.toFixed(2),
+          defaultValue: `${h.requests} requests · ${h.error_requests} client errors · ${h.avg_attempts.toFixed(2)} attempts/req`,
+        });
+        return html`<span class="combo-health-cell ${tone}" title=${tooltip}>
+          <span class="combo-health-dot"></span>${h.success_rate_pct.toFixed(1)}%
+        </span>`;
+      },
+    },
+    {
+      key: "ok_time",
+      label: t("combos.list.col_ok_time"),
+      max: 90,
+      fold: 6,
+      render: (c) => {
+        const h = comboHealth.get(c.id);
+        if (!h) return html`<span class="dg-num muted">—</span>`;
+        return html`<span class="dg-num combo-time-ok" title="Average wait of a successful request">${fmtMs(h.avg_ok_ms)}</span>`;
+      },
     },
   ];
 }

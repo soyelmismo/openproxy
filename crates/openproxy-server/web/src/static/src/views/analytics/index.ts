@@ -47,6 +47,7 @@ import {
   renderRankMetricSwitch,
   resetAnalyticsMenus,
 } from "./charts.js";
+import { renderComboHealth } from "./combo-health.js";
 import {
   renderByModelTable,
   renderByProviderTable,
@@ -54,6 +55,7 @@ import {
   renderRecentErrors,
 } from "./tables.js";
 import type {
+  ByComboRow,
   ByDayRow,
   ByModelRow,
   ByProviderRow,
@@ -283,6 +285,7 @@ function renderBody(): TemplateResult {
       ${renderLatencyBlock()}
       ${renderRaceBlock()}
     </div>
+    ${renderComboHealth()}
     <details class="analytics-details" .open=${detailsExpanded} @toggle=${onDetailsToggle}>
       <summary><span>${t("analytics.details.title")}</span><small>${t("analytics.details.subtitle")}</small></summary>
       ${detailsExpanded ? html`
@@ -364,7 +367,7 @@ async function fetchAndApply(
     const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10", ...modelFilter, ...exclusionsExtra() });
     const [
       summaryResp, byModelResp, byProviderResp, monthlyByProviderResp, latencyResp, racesResp,
-      byDayResp, byStatusResp, errorsResp, providersResp, apiKeysResp,
+      byDayResp, byStatusResp, byComboResp, errorsResp, providersResp, apiKeysResp,
     ] = await Promise.all([
       api(`/usage/summary${usageQ}`) as Promise<UsageSummary>,
       api(`/usage/by-model${usageQ}`) as Promise<ByModelRow[]>,
@@ -378,6 +381,7 @@ async function fetchAndApply(
       api(`/usage/races${usageQ}`) as Promise<RaceStatsPayload>,
       api(`/usage/by-day${usageQ}`) as Promise<ByDayRow[]>,
       api(`/usage/by-status${usageQ}`) as Promise<ByStatusRow[]>,
+      api(`/usage/by-combo${usageQ}`) as Promise<ByComboRow[]>,
       api(`/usage/errors${errorsQ}`) as Promise<ErrorRow[]>,
       // Prefer the bg-poll's cache; fall back to a direct fetch on a cold paint.
       // Non-admin keys cannot access /providers or /keys (they are strictly forbidden).
@@ -412,6 +416,7 @@ async function fetchAndApply(
       races: racesResp,
       byDay: byDayResp,
       byStatus: byStatusResp,
+      byCombo: byComboResp,
       errors: errorsResp,
       providers: providersResp,
       apiKeys: apiKeysResp,

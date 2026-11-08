@@ -889,3 +889,66 @@ table.monthly-matrix {
   .analytics-status-legend { display: flex; }
   .analytics-chart-container { height: 250px; }
 }
+
+/* ── Combo health card ─────────────────────────────────────────────
+   Request-level health: the success/error split and the two average waits.
+   Colors answer the same thresholds as the KPI strip (99/95). */
+
+.analytics-combo-card { display: flex; flex-direction: column; gap: var(--space-4); }
+
+.combo-health-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.combo-health-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2, transparent);
+}
+.combo-health-kpi > span { font-size: var(--font-xs); color: var(--muted-foreground); }
+.combo-health-kpi > strong { font-size: var(--font-lg); font-variant-numeric: tabular-nums; }
+.combo-health-kpi > small { font-size: var(--font-xs); color: var(--muted-foreground); }
+
+.combo-health-kpi strong.good, .combo-health-cell.good { color: var(--success, #2f9e44); }
+.combo-health-kpi strong.warn, .combo-health-cell.warn { color: var(--warning, #e8a33d); }
+.combo-health-kpi strong.bad,  .combo-health-cell.bad  { color: var(--danger, #e03131); }
+
+.combo-health-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.combo-health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.combo-time-ok, .combo-time-err { font-variant-numeric: tabular-nums; }
+.combo-time-err { color: var(--muted-foreground); }
+.combo-error-cell { color: var(--danger, #e03131); }
+
+.combo-health-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-xs);
+  color: var(--muted-foreground);
+}
+.combo-health-notes p { margin: 0; }
+
+.analytics-combo-link { text-decoration: none; color: inherit; }
+.analytics-combo-link:hover strong { text-decoration: underline; }
+
+@container (max-width: 640px) {
+  .combo-health-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

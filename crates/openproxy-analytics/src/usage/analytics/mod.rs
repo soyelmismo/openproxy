@@ -9,9 +9,9 @@ pub mod recent;
 mod tests;
 
 pub use aggregates::{
-    ByAccountRow, ByDayRow, ByModelRow, ByProviderRow, ByStatusRow, ErrorRow, MonthlyByProviderRow,
-    UsageSummary, by_account, by_day, by_model, by_provider, by_status, errors,
-    monthly_by_provider, summary,
+    ByAccountRow, ByComboRow, ByDayRow, ByModelRow, ByProviderRow, ByStatusRow, ErrorRow,
+    MonthlyByProviderRow, UsageSummary, by_account, by_combo, by_day, by_model, by_provider,
+    by_status, errors, monthly_by_provider, summary,
 };
 pub use detail::{
     UsageDetailRow, detail_by_id, detail_by_trace_id, prune_expired_recording_bodies,

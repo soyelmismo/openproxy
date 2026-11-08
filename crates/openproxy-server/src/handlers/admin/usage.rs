@@ -75,6 +75,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/summary", axum::routing::get(usage_summary))
         .route("/by-model", axum::routing::get(usage_by_model))
         .route("/by-provider", axum::routing::get(usage_by_provider))
+        .route("/by-combo", axum::routing::get(usage_by_combo))
         .route(
             "/monthly-by-provider",
             axum::routing::get(usage_monthly_by_provider),
@@ -190,6 +191,12 @@ analytics_handler!(
     "by_account",
     core_usage::by_account,
     Vec<core_usage::ByAccountRow>
+);
+analytics_handler!(
+    usage_by_combo,
+    "by_combo",
+    core_usage::by_combo,
+    Vec<core_usage::ByComboRow>
 );
 analytics_handler!(
     usage_by_status,

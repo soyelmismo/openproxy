@@ -4,6 +4,7 @@ import { html, type TemplateResult } from "lit-html";
 import type uPlot from "uplot";
 import type {
   ByDayRow,
+  ByComboRow,
   ByModelRow,
   ByProviderRow,
   ByStatusRow,
@@ -405,6 +406,7 @@ export let byDay: ByDayRow[] = [];
 export let byModel: ByModelRow[] = [];
 export let byProvider: ByProviderRow[] = [];
 export let byStatus: ByStatusRow[] = [];
+export let byCombo: ByComboRow[] = [];
 export let monthlyByProvider: MonthlyByProviderRow[] = [];
 export let latency: LatencyPayload | null = null;
 export let races: RaceStatsPayload | null = null;
@@ -421,6 +423,7 @@ export function setViewState(next: {
   byModel?: ByModelRow[];
   byProvider?: ByProviderRow[];
   byStatus?: ByStatusRow[];
+  byCombo?: ByComboRow[];
   monthlyByProvider?: MonthlyByProviderRow[];
   latency?: LatencyPayload | null;
   races?: RaceStatsPayload | null;
@@ -435,6 +438,7 @@ export function setViewState(next: {
   if (next.byModel !== undefined) byModel = next.byModel;
   if (next.byProvider !== undefined) byProvider = next.byProvider;
   if (next.byStatus !== undefined) byStatus = next.byStatus;
+  if (next.byCombo !== undefined) byCombo = next.byCombo;
   if (next.monthlyByProvider !== undefined) monthlyByProvider = next.monthlyByProvider;
   if (next.latency !== undefined) latency = next.latency;
   if (next.races !== undefined) races = next.races;
