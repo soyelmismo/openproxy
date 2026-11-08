@@ -103,6 +103,10 @@ fn apply_layers(routes: Router<AppState>, state: AppState) -> Router {
 
     routes
         .layer(crate::middleware::compression::transport_compression_layer())
+        // Innermost: strip JetBrains JBR25 `Upgrade: h2c` preambles so those
+        // clients fall back to plain HTTP/1.1 (see `middleware::h2c`). Only
+        // touches the literal h2c token — WebSocket handshakes are untouched.
+        .layer(middleware::from_fn(crate::middleware::h2c::h2c_downgrade))
         .layer(middleware::from_fn(
             crate::middleware::request_id::request_id,
         ))

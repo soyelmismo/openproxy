@@ -1,6 +1,7 @@
 pub mod auth;
 pub(crate) mod auth_sanitization;
 pub mod compression;
+pub mod h2c;
 pub mod rate_limit;
 pub mod request_id;
 pub mod routing;
