@@ -915,9 +915,9 @@ table.monthly-matrix {
 .combo-health-kpi > strong { font-size: var(--font-lg); font-variant-numeric: tabular-nums; }
 .combo-health-kpi > small { font-size: var(--font-xs); color: var(--muted-foreground); }
 
-.combo-health-kpi strong.good, .combo-health-cell.good { color: var(--success, #2f9e44); }
-.combo-health-kpi strong.warn, .combo-health-cell.warn { color: var(--warning, #e8a33d); }
-.combo-health-kpi strong.bad,  .combo-health-cell.bad  { color: var(--danger, #e03131); }
+.combo-health-kpi strong.good, .combo-health-cell.good { color: var(--color-success); font-weight: 600; }
+.combo-health-kpi strong.warn, .combo-health-cell.warn { color: var(--color-warn); }
+.combo-health-kpi strong.bad,  .combo-health-cell.bad  { color: var(--color-error); font-weight: 600; }
 
 .combo-health-cell {
   display: inline-flex;
@@ -935,7 +935,7 @@ table.monthly-matrix {
 
 .combo-time-ok, .combo-time-err { font-variant-numeric: tabular-nums; }
 .combo-time-err { color: var(--muted-foreground); }
-.combo-error-cell { color: var(--danger, #e03131); }
+.combo-error-cell { color: var(--color-error); font-weight: 600; }
 
 .combo-health-notes {
   display: flex;

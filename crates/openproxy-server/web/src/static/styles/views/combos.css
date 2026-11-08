@@ -1350,7 +1350,7 @@
   background: currentColor;
   flex: none;
 }
-.combo-health-cell.good { color: var(--success, #2f9e44); }
-.combo-health-cell.warn { color: var(--warning, #e8a33d); }
-.combo-health-cell.bad { color: var(--danger, #e03131); }
+.combo-health-cell.good { color: var(--color-success); font-weight: 600; }
+.combo-health-cell.warn { color: var(--color-warn); }
+.combo-health-cell.bad { color: var(--color-error); font-weight: 600; }
 .combo-time-ok { font-variant-numeric: tabular-nums; }
