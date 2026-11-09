@@ -243,7 +243,7 @@ pub fn clone_combo(
                 t.sub_combo_id.map(|c| c.0),
                 t.priority_order,
                 t.weight,
-                if t.active { 1 } else { 0 },
+                i32::from(t.active),
                 t.cooldown_mode.map(|c| c.as_str().to_string()),
                 t.cooldown_base_secs.map(|v| v as i64),
                 t.cooldown_max_secs.map(|v| v as i64),
@@ -269,7 +269,7 @@ pub fn clone_combo(
                     p.name,
                     p.criteria,
                     p.system_text,
-                    if p.active { 1 } else { 0 },
+                    i32::from(p.active),
                     p.priority_order,
                 ],
             )
