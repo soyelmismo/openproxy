@@ -101,6 +101,10 @@ async fn run_and_format_single_combo_target(
         None,
         TestOptions {
             in_combo_fanout: true,
+            // Honour the accounts the target actually allows. `None` (no
+            // restriction) and `Some([])` (all accounts removed) are different
+            // intents, so the empty list must be forwarded verbatim.
+            allowed_accounts: t.selected_accounts.as_deref(),
         },
         cancel_rx,
     )
@@ -134,7 +138,14 @@ async fn fetch_combo_targets_for_test(
         let pool = Arc::clone(s.db_pool());
         move || {
             let w = pool.writer();
-            core_combos::list_targets_with_model(&w, ComboId(id))
+            let targets = core_combos::list_targets_with_model(&w, ComboId(id))?;
+            // Expand through the same account-selection rules live traffic
+            // uses: a target with `account_id = NULL` and a `selected_accounts`
+            // restriction is not one testable unit, it is one per allowed
+            // account. Without this, the fan-out shows an unresolved account
+            // and lets the tester fall back to any account of the provider,
+            // which is exactly the account the target excluded.
+            core_combos::expand_target_with_model_rotation(&w, targets)
         }
     })
     .await

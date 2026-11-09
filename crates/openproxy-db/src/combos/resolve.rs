@@ -429,6 +429,65 @@ fn fetch_accounts_by_health_priority(
     Ok(all)
 }
 
+/// The single point that decides which accounts a target may use.
+///
+/// Returns `None` when the target has no usable account and must be dropped
+/// from the expansion, and `Some(accounts)` with the ordered candidates in the
+/// exact order production would try them. An empty `Some([])` means "run this
+/// target with no account at all", which only happens when the provider has no
+/// accounts in the database: the call is keyless rather than broken.
+///
+/// `selected_accounts` is honoured verbatim: `None` is "unrestricted", while
+/// `Some([])` is an explicit removal of every account from the target.
+fn resolve_target_candidate_accounts(
+    conn: &rusqlite::Connection,
+    provider_id: &ProviderId,
+    account_id: Option<AccountId>,
+    selected_accounts: Option<&[AccountId]>,
+) -> Result<Option<Vec<AccountId>>> {
+    if let Some(aid) = account_id {
+        // Explicit single account target: ignore if deactivated / paused from routing.
+        let is_active: bool = conn
+            .query_row(
+                "SELECT active = 1 FROM accounts WHERE id = ?1",
+                rusqlite::params![aid.0],
+                |r| r.get(0),
+            )
+            .unwrap_or(true);
+        return Ok(if is_active { Some(vec![aid]) } else { None });
+    }
+    let prioritized_accounts = fetch_accounts_by_health_priority(conn, provider_id)?;
+    let candidate_accounts: Vec<AccountId> = match selected_accounts {
+        Some(allowed) if allowed.is_empty() => Vec::new(),
+        Some(allowed) => prioritized_accounts
+            .into_iter()
+            .filter(|id| allowed.contains(id))
+            .collect(),
+        None => prioritized_accounts,
+    };
+
+    if candidate_accounts.is_empty() {
+        if selected_accounts.is_some() {
+            // User explicitly restricted accounts and none are eligible
+            return Ok(None);
+        }
+        // If there are accounts for this provider in the database, but all are
+        // inactive / paused from routing, skip this target entirely.
+        let has_any_accounts: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE provider_id = ?1)",
+                rusqlite::params![provider_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if has_any_accounts {
+            return Ok(None);
+        }
+        return Ok(Some(Vec::new()));
+    }
+    Ok(Some(candidate_accounts))
+}
+
 fn expand_single_target_rotation(
     conn: &rusqlite::Connection,
     target: ComboTarget,
@@ -438,61 +497,59 @@ fn expand_single_target_rotation(
         out.push(target);
         return Ok(());
     }
-    if let Some(aid) = target.account_id {
-        // Explicit single account target: ignore if deactivated / paused from routing.
-        let is_active: bool = conn
-            .query_row(
-                "SELECT active = 1 FROM accounts WHERE id = ?1",
-                rusqlite::params![aid.0],
-                |r| r.get(0),
-            )
-            .unwrap_or(true);
-        if is_active {
-            out.push(target);
-        }
+    let candidates = resolve_target_candidate_accounts(
+        conn,
+        &target.provider_id,
+        target.account_id,
+        target.selected_accounts.as_deref(),
+    )?;
+    let Some(accounts) = candidates else {
+        return Ok(());
+    };
+    if accounts.is_empty() {
+        out.push(target);
         return Ok(());
     }
-    let prioritized_accounts = fetch_accounts_by_health_priority(conn, &target.provider_id)?;
-    let candidate_accounts: Vec<AccountId> = if let Some(ref allowed) = target.selected_accounts {
-        if allowed.is_empty() {
-            // Empty list means no accounts allowed/all ignored
-            Vec::new()
-        } else {
-            prioritized_accounts
-                .into_iter()
-                .filter(|id| allowed.contains(id))
-                .collect()
-        }
-    } else {
-        prioritized_accounts
-    };
+    for acc_id in accounts {
+        let mut ct = target.clone();
+        ct.account_id = Some(acc_id);
+        out.push(ct);
+    }
+    Ok(())
+}
 
-    if candidate_accounts.is_empty() {
-        if target.selected_accounts.is_some() {
-            // User explicitly restricted accounts and none are eligible
-            return Ok(());
+/// Expand a combo's targets into the concrete account list production would
+/// route through, keeping the model metadata of each target.
+///
+/// This is the same expansion the pipeline performs for live traffic, exposed
+/// for callers that need to display or test what routing would actually do
+/// instead of echoing a target whose account is still unresolved.
+pub fn expand_target_with_model_rotation(
+    conn: &rusqlite::Connection,
+    targets: Vec<openproxy_types::combos::ComboTargetWithModel>,
+) -> Result<Vec<openproxy_types::combos::ComboTargetWithModel>> {
+    let mut out = Vec::with_capacity(targets.len());
+    for t in targets {
+        let Some(accounts) = resolve_target_candidate_accounts(
+            conn,
+            &t.provider_id,
+            t.account_id,
+            t.selected_accounts.as_deref(),
+        )?
+        else {
+            continue;
+        };
+        if accounts.is_empty() {
+            out.push(t);
+            continue;
         }
-        // If there are accounts for this provider in the database, but all are
-        // inactive / paused from routing, skip this target entirely.
-        let has_any_accounts: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM accounts WHERE provider_id = ?1)",
-                rusqlite::params![target.provider_id.as_str()],
-                |r| r.get(0),
-            )
-            .unwrap_or(false);
-        if has_any_accounts {
-            return Ok(());
-        }
-        out.push(target);
-    } else {
-        for acc_id in candidate_accounts {
-            let mut ct = target.clone();
+        for acc_id in accounts {
+            let mut ct = t.clone();
             ct.account_id = Some(acc_id);
             out.push(ct);
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 pub fn expand_account_rotation(

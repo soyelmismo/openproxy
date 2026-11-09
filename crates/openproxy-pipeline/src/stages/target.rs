@@ -902,8 +902,13 @@ impl PipelineStage for DispatchStage {
             .as_ref()
             .is_some_and(openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion);
         if starter_depleted
-            && !ctx.is_streaming.unwrap_or(false)
-            && ctx.req.stream_sink.is_none()
+            // A streaming request can still be retried while nothing has been
+            // written to the client: the Depleted signal is raised by
+            // `dispatch_upstream` itself, before any byte reaches the sink.
+            // Gating on `is_streaming` alone therefore discards the paid quota
+            // on every streaming request and turns a recoverable exhaustion
+            // into a hard 403 for the caller.
+            && !ctx.req.has_stream_output()
             && let Some(prepared) = zai_route.as_mut()
             && super::zai::prepare_zai_paid_fallback(
                 &ctx.pipeline,

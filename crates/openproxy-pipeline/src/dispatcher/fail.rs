@@ -316,6 +316,19 @@ impl UpstreamDispatcher {
             .await;
         }
 
+        // Classify the upstream answer once. The same verdict drives both the
+        // body rewrite and the error construction below, so the two can never
+        // disagree about whether this was a depletion.
+        let zai_depletion = target.provider_id.as_str() == "zai"
+            && openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion(
+                &CoreError::upstream_error(
+                    status_code,
+                    "zai",
+                    dctx.model.model_id.as_str(),
+                    &body_str,
+                    false,
+                ),
+            );
         let body_str = if target.provider_id.as_str() == "zai" {
             tracing::warn!(
                 status_code,
@@ -323,18 +336,17 @@ impl UpstreamDispatcher {
                 upstream_body = %body_str,
                 "Z.ai upstream non-2xx raw response"
             );
-            let probe = CoreError::upstream_error(
-                status_code,
-                "zai",
-                dctx.model.model_id.as_str(),
-                &body_str,
-                false,
-            );
-            if openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion(&probe) {
+            if zai_depletion {
                 r#"{"error":{"code":"entitlement_exhausted","message":"Z.ai selected quota is exhausted or expired"}}"#.to_owned()
             } else {
+                // Never assert anything about the paid fallback here. The
+                // fallback runs before this point for every answer recognised
+                // as depletion, so a blanket "was not attempted" is false for
+                // exactly the errors a reader needs to understand: the ones
+                // that did *not* look like depletion. Name the route that
+                // answered and let its body speak.
                 format!(
-                    "Z.ai selected quota inference failed (HTTP {status_code}); paid fallback was not attempted; upstream: {body_str}"
+                    "Z.ai upstream rejected the selected route (HTTP {status_code}); upstream: {body_str}"
                 )
             }
         } else if let Some(ref purl) = dctx.proxy_url {
@@ -360,16 +372,7 @@ impl UpstreamDispatcher {
             .await;
         }
 
-        let structured_depletion = target.provider_id.as_str() == "zai"
-            && openproxy_adapters::adapters::zai::is_zcode_entitlement_exhaustion(
-                &CoreError::upstream_error(
-                    status_code,
-                    "zai",
-                    dctx.model.model_id.as_str(),
-                    &body_str,
-                    false,
-                ),
-            );
+        let structured_depletion = zai_depletion;
         let err = if structured_depletion {
             CoreError::upstream_error(
                 status_code,

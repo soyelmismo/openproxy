@@ -77,8 +77,12 @@ impl TestResult {
 /// Knobs that distinguish the per-row test path from the
 /// per-combo fan-out.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TestOptions {
+pub struct TestOptions<'a> {
     pub in_combo_fanout: bool,
+    /// Accounts this call may use, when the caller is testing a target that
+    /// restricts them through `selected_accounts`. `None` leaves the set
+    /// unrestricted.
+    pub allowed_accounts: Option<&'a [AccountId]>,
 }
 
 pub async fn resolve_proxy_url_by_id(s: &AppState, pid: &str) -> Option<String> {
@@ -153,7 +157,7 @@ pub async fn run_test_for_model(
     model_row_id: i64,
     account_id: Option<AccountId>,
     proxy_override: Option<(String, String)>,
-    opts: TestOptions,
+    opts: TestOptions<'_>,
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
 ) -> (TestResult, Option<serde_json::Value>) {
     let row_id = ModelRowId(model_row_id);
@@ -182,7 +186,9 @@ pub async fn run_test_for_model(
 
     // 3. Resolve account & credentials
     let (_account_id_opt, account_label, api_key, raw_account_opt) =
-        match resolve_test_credentials(s, &model, model_row_id, account_id, start).await {
+        match resolve_test_credentials(s, &model, model_row_id, account_id, opts.allowed_accounts, start)
+            .await
+        {
             Ok(creds) => creds,
             Err(err_res) => return (err_res, None),
         };

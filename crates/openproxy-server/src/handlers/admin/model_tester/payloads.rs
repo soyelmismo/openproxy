@@ -70,16 +70,31 @@ pub fn resolve_effective_target_format(
     }
 }
 
-pub fn select_account_candidate(accounts_list: &[core_accounts::Account]) -> Option<AccountId> {
-    accounts_list
+/// Pick the account an ad-hoc test should run against.
+///
+/// Filtering is the same for every provider because the exhausted-skip
+/// decision is centralised in
+/// [`openproxy_pipeline::quotas::account_is_exhausted_for_model`]: a paused or
+/// depleted account is skipped before the adapter is ever called, so the test
+/// reproduces what production routing would have done instead of spending a
+/// request on an account that cannot answer it.
+pub fn select_account_candidate(
+    accounts_list: &[core_accounts::Account],
+    model: &str,
+) -> Option<AccountId> {
+    let usable = accounts_list
         .iter()
+        .filter(|a| a.active)
+        .filter(|a| !openproxy_pipeline::quotas::account_is_exhausted_for_model(a, model));
+    usable
+        .clone()
         .find(|a| a.health_status == core_accounts::HealthStatus::Healthy)
         .or_else(|| {
-            accounts_list
-                .iter()
+            usable
+                .clone()
                 .find(|a| a.health_status == core_accounts::HealthStatus::Degraded)
         })
-        .or_else(|| accounts_list.first())
+        .or_else(|| usable.clone().next())
         .map(|a| a.id)
 }
 
@@ -131,6 +146,7 @@ pub async fn resolve_test_credentials(
     model: &core_models::Model,
     model_row_id: i64,
     account_id: Option<AccountId>,
+    allowed_accounts: Option<&[AccountId]>,
     start: std::time::Instant,
 ) -> Result<
     (
@@ -154,7 +170,27 @@ pub async fn resolve_test_credentials(
         .await
         .map_err(|e| test_error_result(model_row_id, e.http_status(), &e.to_string()))?;
 
-    let resolved_aid = account_id.or_else(|| select_account_candidate(&accounts_list));
+    // Only accounts the target explicitly allows are considered. `None` means
+    // the caller did not restrict the set, which is the case for an ad-hoc test
+    // of a model row and for a combo target that carries no restriction.
+    let candidates = allowed_accounts.map_or_else(
+        || accounts_list.iter().cloned().collect::<Vec<_>>(),
+        |allowed| {
+            accounts_list
+                .iter()
+                .filter(|a| allowed.contains(&a.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        },
+    );
+    let resolved_aid = account_id.or_else(|| select_account_candidate(&candidates, model.model_id.as_str()));
+    if resolved_aid.is_none() && !candidates.is_empty() {
+        return Err(test_error_result(
+            model_row_id,
+            503,
+            "no eligible account: every account allowed by this target is paused or exhausted for this model",
+        ));
+    }
     if let Some(aid) = resolved_aid {
         let pool = std::sync::Arc::clone(s.db_pool());
         let master_key = std::sync::Arc::clone(s.master_key());

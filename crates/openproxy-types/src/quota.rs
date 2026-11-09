@@ -278,6 +278,18 @@ impl QuotaPool {
             || self.has_known_exhaustion()
     }
 
+    /// Whether the pool has no credential at all, as opposed to a credential
+    /// that could not be read.
+    ///
+    /// "Not configured" is a *configuration* fact, not a transport failure:
+    /// it must never make the account look uncertain, because that would keep
+    /// dispatching requests to a route the account cannot possibly use.
+    pub fn is_missing_credential(&self) -> bool {
+        self.fetch_error.as_deref().is_some_and(|err| {
+            err.contains("not configured") || err.contains("credential is missing")
+        })
+    }
+
     /// Whether this pool may serve a request for `model` at `now_secs`.
     ///
     /// Fails closed on [`QuotaPoolStatus::Unavailable`]: an unreadable pool
@@ -395,12 +407,7 @@ pub fn zai_remaining_fraction(pools: &[QuotaPool], model: &str, now_secs: u64) -
     // Notice: pools where the credential is not configured or missing are NOT unreadable;
     // they are absent/unconfigured by design and should not block recognizing exhaustion.
     if pools.iter().any(|p| {
-        let is_missing_credential = p.fetch_error.as_deref().is_some_and(|err| {
-            err.contains("not configured")
-                || err.contains("credential is missing")
-                || err.contains("credential is not configured")
-        });
-        !is_missing_credential
+        !p.is_missing_credential()
             && (p.matches_model(model)
                 || (p.source != QuotaSource::CodingPlan && p.model_ids.is_empty()))
             && (p.fetch_error.is_some() || p.status == QuotaPoolStatus::Unavailable)

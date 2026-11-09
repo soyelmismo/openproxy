@@ -174,7 +174,25 @@ fn check_quota_windows_exhausted(
         || is_credit_balance_exhausted(account)
 }
 
-pub(crate) fn evaluate_account_quota(
+/// The single decision point for "this account cannot serve `model` any more".
+///
+/// Every consumer resolves exhaustion here: the quota enforcer that orders
+/// production targets, the combo rotation that expands them, and the model
+/// tester. Provider quirks live inside this function and nowhere else, so a
+/// new provider gets correct skip behaviour by reading its quota into the
+/// shared types instead of adding a second branch in a second caller.
+///
+/// `quota_protection_*` are the *soft* routing knobs: protection also retires
+/// accounts that are merely low. Skipping is only ever driven by exhaustion,
+/// so they carry no threshold here.
+pub fn account_is_exhausted_for_model(
+    account: &openproxy_types::accounts::Account,
+    model: &str,
+) -> bool {
+    evaluate_account_quota(false, 0, account, &[model]) == QuotaStatus::Exhausted
+}
+
+pub fn evaluate_account_quota(
     quota_protection_enabled: bool,
     threshold_percentage: u32,
     account: &openproxy_types::accounts::Account,
@@ -208,21 +226,27 @@ pub(crate) fn evaluate_account_quota(
             return QuotaStatus::Available;
         }
 
-        if !pools
+        // `zai_remaining_fraction` returns `None` when no pool can serve this
+        // model. Two very different situations produce that: "every pool is
+        // definitively unusable" and "the reading is not trustworthy".
+        // Only the first retires the account; the second must stay Available
+        // so route preparation can refresh both sources and keep the locally
+        // read balance alive (see `zai_remaining_fraction`).
+        let model = candidates.first().copied().unwrap_or_default();
+        let any_pool_could_serve = pools
             .iter()
-            .any(|p| p.source == openproxy_types::QuotaSource::ZcodeStarter)
-            || !pools
-                .iter()
-                .any(|p| p.source == openproxy_types::QuotaSource::CodingPlan)
-            || pools.iter().any(|pool| {
-                pool.last_fetched_at.parse::<u64>().map_or(true, |fetched| {
-                    fetched > now || now.saturating_sub(fetched) > 60
-                })
-            })
-        {
-            return QuotaStatus::Available;
+            .any(|p| !p.is_missing_credential() && !p.is_known_ineligible_for_model(now, model));
+        // Stale counters must reach route preparation, which refreshes both
+        // sources. Otherwise a depleted cached pool permanently retires a
+        // newly renewed entitlement before its balance can ever be read.
+        let counters_stale = pools.iter().any(|pool| {
+            pool.last_fetched_at
+                .parse::<u64>()
+                .map_or(true, |fetched| fetched > now || now.saturating_sub(fetched) > 60)
+        });
+        if !any_pool_could_serve && !counters_stale {
+            return QuotaStatus::Exhausted;
         }
-
         return QuotaStatus::Available;
     }
     if check_quota_windows_exhausted(account, candidates) {
