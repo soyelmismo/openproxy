@@ -163,7 +163,9 @@ fn apply_combo_general_updates(
 ) -> Result<(), ApiError> {
     if let Some(v) = body.get("name") {
         let name = v.as_str().ok_or_else(|| {
-            ApiError(CoreError::Validation("name must be a string when present".into()))
+            ApiError(CoreError::Validation(
+                "name must be a string when present".into(),
+            ))
         })?;
         core_combos::update_name(w, id, name)?;
     }

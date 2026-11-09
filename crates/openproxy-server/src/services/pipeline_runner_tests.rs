@@ -215,8 +215,8 @@ async fn setup_test_env(cut_p1_midstream: bool) -> TestEnv {
                             description: None,
                             selected_accounts: None,
                             client_profile: None,
-                            },
-                            )?;
+                        },
+                    )?;
                 }
 
                 let (_rec, plaintext) = openproxy_core::api_keys::create(
