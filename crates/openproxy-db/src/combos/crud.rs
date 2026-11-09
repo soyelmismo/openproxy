@@ -117,10 +117,16 @@ pub fn update_name(conn: &Connection, id: ComboId, name: &str) -> Result<()> {
         Ok(0) => Err(CoreError::ComboNotFound(id.0)),
         Ok(_) => Ok(()),
         Err(e) => {
-            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation {
-                Err(CoreError::Validation(format!("combo name already exists: {trimmed}")))
+            if crate::error::classify_sqlite_error(&e) == crate::error::DbErrorKind::UniqueViolation
+            {
+                Err(CoreError::Validation(format!(
+                    "combo name already exists: {trimmed}"
+                )))
             } else {
-                Err(crate::error::map_db_error_ctx(format!("update name for combo {}", id.0))(e))
+                Err(crate::error::map_db_error_ctx(format!(
+                    "update name for combo {}",
+                    id.0
+                ))(e))
             }
         }
     }
