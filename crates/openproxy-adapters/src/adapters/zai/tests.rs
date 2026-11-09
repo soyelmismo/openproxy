@@ -218,3 +218,37 @@ fn zai_pick_org_and_project_success() {
     assert_eq!(res.organization_id, "org-857c428203bE4c22be25c082CAc34ecc");
     assert_eq!(res.project_id, "proj_4050cF9b4bDb4fe98ee6f39Dfcef34b5");
 }
+
+/// Regression: AutoClaw's inference WAF answers a bare 403 {"message":"forbidden"}
+/// to desktop Linux clients. Advertising linux here broke every request from the
+/// accounts it flagged, so the platform value must stay off linux.
+#[test]
+fn zai_autoclaw_headers_never_advertise_linux() {
+    use crate::adapters::ProviderAdapter;
+
+    let adapter = ZaiAdapter::new();
+    let model = ModelId::new("GLM-5.3");
+    let mut headers: Vec<(String, String)> =
+        vec![("X-Authorization".to_string(), "Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig".to_string())];
+    let body = bytes::Bytes::from_static(
+        br#"{"model":"GLM-5.3","messages":[{"role":"user","content":"hi"}]}"#,
+    );
+    let resolved = openproxy_types::context::ResolvedTarget::test("zai", "GLM-5.3");
+
+    adapter
+        .finalize_request(body, &mut headers, TargetFormat::Openai, &model, &resolved)
+        .expect("finalize_request should succeed for an AutoClaw token");
+
+    let tm: Vec<&str> = headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("x-tm"))
+        .map(|(_, v)| v.as_str())
+        .collect();
+    assert_eq!(tm, vec!["windows"], "X-Tm must be present and non-linux");
+    assert!(
+        !headers
+            .iter()
+            .any(|(k, v)| k.eq_ignore_ascii_case("x-tm") && v.eq_ignore_ascii_case("linux")),
+        "linux is blocked by AutoClaw's inference WAF"
+    );
+}
