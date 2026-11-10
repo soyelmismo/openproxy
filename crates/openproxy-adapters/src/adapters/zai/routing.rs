@@ -60,8 +60,7 @@ pub fn select_zai_inference_source(
         let has_any_free = pools.iter().any(|p| free_sources.contains(&p.source));
         if !has_any_free
             || pools.iter().any(|p| {
-                free_sources.contains(&p.source)
-                    && !p.is_known_ineligible_for_model(now_secs, model)
+                free_sources.contains(&p.source) && !p.is_known_ineligible_for_model(now_secs, model)
             })
         {
             // Last-known-good fallback: AutoClaw promotional balance is prepaid, so a
@@ -461,11 +460,9 @@ mod tests {
         );
         autoclaw.remaining = Some(12365);
         let mut zcode = pool(QuotaSource::ZcodeStarter, QuotaPoolStatus::Absent, &[]);
-        zcode.fetch_error =
-            Some("ZCode OAuth credential is not configured for this account".into());
+        zcode.fetch_error = Some("ZCode OAuth credential is not configured for this account".into());
         let mut coding = pool(QuotaSource::CodingPlan, QuotaPoolStatus::Unavailable, &[]);
-        coding.fetch_error =
-            Some("Coding Plan credential is missing; subscription could not be verified".into());
+        coding.fetch_error = Some("Coding Plan credential is missing; subscription could not be verified".into());
 
         let pools = [autoclaw, zcode, coding];
 

@@ -269,12 +269,8 @@ async fn analytics_scope_can_access_auth_me_and_usage_but_not_config() {
 
     let addr = "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap();
     let mut headers = HeaderMap::new();
-    headers.insert(
-        "authorization",
-        format!("Bearer {analytics_raw_key}").parse().unwrap(),
-    );
-    let authed =
-        crate::handlers::admin::auth::authenticate_admin(&state, &headers, Some(&addr)).await;
+    headers.insert("authorization", format!("Bearer {analytics_raw_key}").parse().unwrap());
+    let authed = crate::handlers::admin::auth::authenticate_admin(&state, &headers, Some(&addr)).await;
     println!("Direct authenticate_admin result: {authed:?}");
 
     let app = app_for(&state);
@@ -293,9 +289,7 @@ async fn analytics_scope_can_access_auth_me_and_usage_but_not_config() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let me: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(me["is_admin"], false);
     assert_eq!(me["label"], "Analytics Guest");

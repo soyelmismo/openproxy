@@ -60,7 +60,9 @@ pub struct AuthMeResponse {
 pub async fn auth_me(
     identity: Option<axum::Extension<AdminIdentity>>,
 ) -> Result<axum::Json<AuthMeResponse>, ApiError> {
-    let id = identity.as_ref().map(|axum::Extension(i)| i);
+    let id = identity
+        .as_ref()
+        .map(|axum::Extension(i)| i);
 
     match id {
         Some(identity) => match &identity.key {
@@ -280,7 +282,12 @@ pub(crate) async fn authenticate_admin_ws(
 
     let key = match (extract_bearer_token(headers)?, ticket) {
         (Some(token), _) => {
-            crate::middleware::auth::verify_key_credentials(state, token, "manage").await?
+            crate::middleware::auth::verify_key_credentials(
+                state,
+                token,
+                "manage",
+            )
+            .await?
         }
         (None, Some(t)) if !t.is_empty() => authenticate_ws_ticket(state, t).await?,
         _ => {

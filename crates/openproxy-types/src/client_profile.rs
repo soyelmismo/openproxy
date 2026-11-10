@@ -98,22 +98,10 @@ mod tests {
 
     #[test]
     fn parse_aliases() {
-        assert_eq!(
-            "claude".parse::<ClientProfile>().unwrap(),
-            ClientProfile::ClaudeCode
-        );
-        assert_eq!(
-            "claude-code".parse::<ClientProfile>().unwrap(),
-            ClientProfile::ClaudeCode
-        );
-        assert_eq!(
-            "cmd".parse::<ClientProfile>().unwrap(),
-            ClientProfile::CommandCode
-        );
-        assert_eq!(
-            "code_buddy".parse::<ClientProfile>().unwrap(),
-            ClientProfile::CodeBuddy
-        );
+        assert_eq!("claude".parse::<ClientProfile>().unwrap(), ClientProfile::ClaudeCode);
+        assert_eq!("claude-code".parse::<ClientProfile>().unwrap(), ClientProfile::ClaudeCode);
+        assert_eq!("cmd".parse::<ClientProfile>().unwrap(), ClientProfile::CommandCode);
+        assert_eq!("code_buddy".parse::<ClientProfile>().unwrap(), ClientProfile::CodeBuddy);
         assert!("unknown".parse::<ClientProfile>().is_err());
     }
 }

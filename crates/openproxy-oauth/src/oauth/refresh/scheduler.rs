@@ -9,8 +9,7 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_types::accounts::HealthStatus;
 
 use crate::oauth::{
-    DbRef, OAuthProvider, OAuthProviderRegistry, OAuthRefreshParams, TokenRefreshCoordinator,
-    TokenResponse,
+    DbRef, OAuthProvider, OAuthProviderRegistry, OAuthRefreshParams, TokenRefreshCoordinator, TokenResponse,
 };
 
 use super::refresh_lead_seconds;

@@ -164,7 +164,12 @@ fn push_public_entity_filters(
     push_public_visibility(scope, clauses, params);
 }
 
-fn push_in_list(sql: &mut String, params: &mut Vec<Box<dyn ToSql>>, col: &str, values: &[String]) {
+fn push_in_list(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn ToSql>>,
+    col: &str,
+    values: &[String],
+) {
     if values.is_empty() {
         return;
     }
