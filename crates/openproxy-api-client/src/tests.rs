@@ -40,6 +40,9 @@ fn usage_filter_query_serializes_known_fields() {
         account_id: Some(AccountId::new(7)),
         combo_id: None,
         api_key_id: None,
+        exclude_models: Vec::new(),
+        exclude_providers: Vec::new(),
+        scope_public: None,
     };
     let q = usage_filter_query(&f);
     assert!(q.contains("from=2026-01-01T00:00:00Z"));

@@ -9,6 +9,8 @@ yanked = "warn"
 ignore = [
     # paste is unmaintained, pulled transitively by tokenizers (huggingface)
     "RUSTSEC-2024-0436",
+    # libsqlite3-sys 0.38.2 bundled SQLite CVE-2026-119375; pending rusqlite upgrade
+    "RUSTSEC-2026-0459",
 ]
 
 [licenses]
