@@ -338,54 +338,58 @@ pub async fn refresh_single_account_quota(
             )
             .await;
             if let Some(checkin) = res {
-                let write_res = tokio::task::spawn_blocking(move || -> std::result::Result<(), crate::error::CoreError> {
-                    let conn = pool
-                        .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
-                        .ok_or_else(|| crate::error::CoreError::Internal("writer timeout".into()))?;
-                    let row: Option<String> = conn
-                        .query_row(
-                            "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-                            rusqlite::params![account_id.0],
-                            |r| r.get(0),
-                        )
-                        .ok();
-                    let mut map = match row.as_deref() {
-                        Some(raw_enc) => {
-                            match openproxy_db::accounts::decrypt_oauth_provider_specific(
-                                Some(raw_enc),
-                                &mk,
-                            ) {
-                                Some(plain) => {
-                                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&plain)
-                                        .unwrap_or_default()
+                let write_res = tokio::task::spawn_blocking(
+                    move || -> std::result::Result<(), crate::error::CoreError> {
+                        let conn = pool
+                            .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
+                            .ok_or_else(|| {
+                                crate::error::CoreError::Internal("writer timeout".into())
+                            })?;
+                        let row: Option<String> = conn
+                            .query_row(
+                                "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+                                rusqlite::params![account_id.0],
+                                |r| r.get(0),
+                            )
+                            .ok();
+                        let mut map = match row.as_deref() {
+                            Some(raw_enc) => {
+                                match openproxy_db::accounts::decrypt_oauth_provider_specific(
+                                    Some(raw_enc),
+                                    &mk,
+                                ) {
+                                    Some(plain) => serde_json::from_str::<
+                                        serde_json::Map<String, serde_json::Value>,
+                                    >(&plain)
+                                    .unwrap_or_default(),
+                                    None => serde_json::Map::new(),
                                 }
-                                None => serde_json::Map::new(),
                             }
-                        }
-                        None => serde_json::Map::new(),
-                    };
-                    map.insert(
-                        "last_checkin_date".to_string(),
-                        serde_json::Value::String(checkin.last_checkin_date),
-                    );
-                    map.insert(
-                        "streak_days".to_string(),
-                        serde_json::Value::Number(checkin.streak_days.into()),
-                    );
-                    let updated_json = serde_json::to_string(&map).unwrap_or_default();
-                    let enc = openproxy_db::accounts::encrypt_oauth_provider_specific(
-                        &updated_json,
-                        &mk,
-                    )?;
-                    conn.execute(
-                        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                        rusqlite::params![enc, account_id.0],
-                    )
-                    .map_err(openproxy_db::error::map_db_error_ctx(
-                        "update autoclaw streak metadata",
-                    ))?;
-                    Ok(())
-                })
+                            None => serde_json::Map::new(),
+                        };
+                        map.insert(
+                            "last_checkin_date".to_string(),
+                            serde_json::Value::String(checkin.last_checkin_date),
+                        );
+                        map.insert(
+                            "streak_days".to_string(),
+                            serde_json::Value::Number(checkin.streak_days.into()),
+                        );
+                        let updated_json = serde_json::to_string(&map).unwrap_or_default();
+                        let enc = openproxy_db::accounts::encrypt_oauth_provider_specific(
+                            &updated_json,
+                            &mk,
+                        )?;
+                        conn.execute(
+                            "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                            rusqlite::params![enc, account_id.0],
+                        )
+                        .map_err(openproxy_db::error::map_db_error_ctx(
+                            "update autoclaw streak metadata",
+                        ))?;
+                        Ok(())
+                    },
+                )
                 .await;
                 if let Err(e) = write_res {
                     tracing::warn!(
