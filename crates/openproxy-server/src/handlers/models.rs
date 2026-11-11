@@ -104,7 +104,7 @@ pub async fn list_models(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let maybe_api_key = authenticate_chat_or_anonymous(&state, &headers).await?;
+    let maybe_api_key = authenticate_chat(&state, &headers).await?;
 
     crate::error::run_blocking(move || {
         let raw_models = state
@@ -183,26 +183,16 @@ fn extract_auth_header_token(headers: &HeaderMap) -> Option<&str> {
         })
 }
 
-/// Authenticate with a chat-scope key, or allow anonymous when zero active keys
-/// exist (first-boot window) AND the operator opted in via
-/// `server.allow_anonymous` — the same gate the chat routes apply in
-/// `middleware::auth::check_anonymous_fallback`. Without the opt-in the catalog
-/// stays private during the first-boot window and after the last key is revoked
-/// (e.g. mid-rotation). Returns the key, or `None` when anonymous.
-async fn authenticate_chat_or_anonymous(
+/// Authenticate with a chat-scope key. Every /v1 request requires an api key
+/// since 2026-11-11 (ghost-request fix): the anonymous first-boot window is
+/// gone, so an unauthenticated catalog request is rejected with 401.
+async fn authenticate_chat(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<std::sync::Arc<openproxy_core::api_keys::ApiKey>>, ApiError> {
     let token = extract_auth_header_token(headers);
 
     let Some(token) = token else {
-        let active = state
-            .db_pool()
-            .spawn_read(openproxy_core::api_keys::count_active)
-            .await?;
-        if active == 0 && state.config().server.allow_anonymous {
-            return Ok(None);
-        }
         return Err(ApiError(CoreError::Auth("missing api key".into())));
     };
 

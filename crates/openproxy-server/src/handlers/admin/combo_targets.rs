@@ -93,12 +93,14 @@ async fn run_and_format_single_combo_target(
     s: &AppState,
     t: &types_combos::ComboTargetWithModel,
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
+    attribution: openproxy_types::ids::ApiKeyId,
 ) -> serde_json::Value {
     let (r, _) = run_test_for_model(
         s,
         t.model_row_id.unwrap_or(ModelRowId(0)).0,
         t.account_id,
         None,
+        attribution,
         TestOptions {
             in_combo_fanout: true,
             // Honour the accounts the target actually allows. `None` (no
@@ -158,6 +160,7 @@ async fn run_fan_out_combo_tests(
     id: i64,
     targets: Vec<types_combos::ComboTargetWithModel>,
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
+    attribution: openproxy_types::ids::ApiKeyId,
 ) -> Result<Vec<serde_json::Value>, ApiError> {
     let fan_out = async {
         if let Some(ref rx) = cancel_rx
@@ -169,6 +172,7 @@ async fn run_fan_out_combo_tests(
 
         let tasks = targets.into_iter().map(|t| {
             let cancel_rx = cancel_rx.clone();
+            let attribution = attribution.clone();
             async move {
                 if let Some(skipped) = build_skipped_target_entry(&t) {
                     return skipped;
@@ -190,7 +194,7 @@ async fn run_fan_out_combo_tests(
                         "skipped": true,
                     });
                 }
-                run_and_format_single_combo_target(s, &t, cancel_rx).await
+                run_and_format_single_combo_target(s, &t, cancel_rx, attribution).await
             }
         });
         futures::future::join_all(tasks).await
@@ -210,10 +214,17 @@ pub async fn test_combo_targets(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
     let targets = fetch_combo_targets_for_test(&s, id).await?;
-    let results = run_fan_out_combo_tests(&s, id, targets, cancel_rx).await?;
+    let attribution = super::model_tester::resolve_tester_api_key_id(
+        &s,
+        identity.and_then(|axum::Extension(i)| i.key_id()),
+    )
+    .await
+    .map_err(ApiError)?;
+    let results = run_fan_out_combo_tests(&s, id, targets, cancel_rx, attribution).await?;
     Ok(Json(results))
 }
 
@@ -584,7 +595,7 @@ mod tests {
         t2.cooldown_reason = Some("test cooldown".into());
 
         let targets = vec![t1, t2];
-        let results = run_fan_out_combo_tests(&state, 10, targets, Some(tx.subscribe()))
+        let results = run_fan_out_combo_tests(&state, 10, targets, Some(tx.subscribe()), openproxy_types::ids::ApiKeyId(10))
             .await
             .expect("fan out failed");
 

@@ -262,6 +262,24 @@ async fn run_runner_bridge_with_cut(
     target_format: TargetFormat,
 ) -> (String, usize, usize) {
     let env = setup_test_env(cut_midstream).await;
+    // The pipeline refuses unattributed executions (2026-11-11 ghost-request
+    // fix): give the bridge run a real chat key to record usage against.
+    let api_key_id = {
+        let w = env.state.db_pool().writer();
+        w.execute(
+            "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, \
+                    allowed_models_json, allowed_combos_json, expires_at, created_by) \
+                 VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'test')",
+            rusqlite::params![
+                openproxy_core::api_keys::hash_key("bridge-test-key"),
+                "bridge-test-",
+                "bridge-test",
+                "[\"chat\"]",
+            ],
+        )
+        .unwrap();
+        w.last_insert_rowid()
+    };
     let pipeline = PipelineRunner::build_pipeline(&env.state);
 
     let cancel = CancelWatch::new();
@@ -277,7 +295,7 @@ async fn run_runner_bridge_with_cut(
         cancel,
         openai_req,
         raw_request_body: Bytes::from_static(b"{\"model\":\"bridge-combo\",\"stream\":true}"),
-        api_key_id: None,
+        api_key_id: Some(openproxy_types::ids::ApiKeyId(api_key_id)),
         combo_id: env.combo_id,
         combo_override: None,
         targets_override: None,

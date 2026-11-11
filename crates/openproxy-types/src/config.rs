@@ -22,6 +22,10 @@ pub struct ServerConfig {
     pub request_max_body_bytes: usize,
     #[serde(default = "default_rate_limit_requests")]
     pub rate_limit_requests_per_minute: u32,
+    /// DEPRECATED and ignored since 2026-11-11: the anonymous first-boot
+    /// window was the only path that could produce unattributed (keyless)
+    /// pipeline runs. Kept for config compatibility; every /v1 request now
+    /// requires an api key (bootstrap key covers first-boot operator access).
     #[serde(default = "default_allow_anonymous")]
     pub allow_anonymous: bool,
     #[serde(default)]

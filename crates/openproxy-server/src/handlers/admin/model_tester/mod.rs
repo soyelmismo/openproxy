@@ -9,6 +9,57 @@ use axum::{
 
 use super::models::resolve_adapter;
 
+/// Attribution label of the synthetic key used for tester pipeline runs when
+/// the caller has no admin identity (dev bypass, background callers, tests).
+pub(crate) const INTERNAL_TESTER_KEY_LABEL: &str = "internal-tester";
+
+/// Api key a tester run is attributed to: the caller's admin key when
+/// present, else the lazily-created `internal-tester` key. The pipeline
+/// refuses unattributed executions, so tester runs must never go keyless.
+pub(crate) async fn resolve_tester_api_key_id(
+    s: &AppState,
+    caller_key_id: Option<i64>,
+) -> Result<openproxy_types::ids::ApiKeyId, CoreError> {
+    if let Some(id) = caller_key_id {
+        return Ok(openproxy_types::ids::ApiKeyId(id));
+    }
+    let label = INTERNAL_TESTER_KEY_LABEL.to_string();
+    let label_for_read = label.clone();
+    let existing = s
+        .db_pool()
+        .spawn_read(move |r| {
+            Ok(openproxy_core::api_keys::list(r)?
+                .into_iter()
+                .find(|k| k.label.as_deref() == Some(label_for_read.as_str()))
+                .map(|k| k.id))
+        })
+        .await?;
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    s.db_pool()
+        .spawn_write(move |w| {
+            // Re-check inside the write lock: two concurrent callers may both
+            // miss in the read phase.
+            if let Some(k) = openproxy_core::api_keys::list(w)?
+                .into_iter()
+                .find(|k| k.label.as_deref() == Some(label.as_str()))
+            {
+                return Ok(k.id);
+            }
+            let (key, _plaintext) = openproxy_core::api_keys::create(
+                w,
+                openproxy_core::api_keys::CreateApiKeyInput {
+                    label: Some(label.clone()),
+                    scopes: vec!["chat".to_string()],
+                    ..Default::default()
+                },
+                "system",
+            )?;
+            Ok(key.id)
+        })
+        .await
+}
 /// `POST /admin/models/:id/test` input
 #[derive(Debug, Default, Deserialize)]
 pub struct TestModelInput {
@@ -129,16 +180,24 @@ pub async fn test_model(
     State(s): State<AppState>,
     Path(model_row_id): Path<i64>,
     cancel_watch: Option<axum::Extension<crate::disconnect::CancelWatch>>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     body_bytes: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
     let (account_id, proxy_override) = parse_test_model_params(&s, &body_bytes).await?;
+    let attribution = resolve_tester_api_key_id(
+        &s,
+        identity.and_then(|axum::Extension(i)| i.key_id()),
+    )
+    .await
+    .map_err(ApiError)?;
 
     let (r, debug_payload) = run_test_for_model(
         &s,
         model_row_id,
         account_id,
         proxy_override,
+        attribution,
         TestOptions::default(),
         cancel_rx,
     )
@@ -157,6 +216,7 @@ pub async fn run_test_for_model(
     model_row_id: i64,
     account_id: Option<AccountId>,
     proxy_override: Option<(String, String)>,
+    attribution: openproxy_types::ids::ApiKeyId,
     opts: TestOptions<'_>,
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
 ) -> (TestResult, Option<serde_json::Value>) {
@@ -613,7 +673,7 @@ pub async fn run_test_for_model(
             openai_request: std::sync::Arc::new(openai_req.clone()),
             client_disconnected,
             stream_sink: None,
-            api_key_id: None,
+            api_key_id: Some(attribution),
             race_cancel: None,
             combo_override: None,
             targets_override: None,

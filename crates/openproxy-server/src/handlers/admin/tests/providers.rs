@@ -39,11 +39,16 @@ async fn test_run_test_for_model_cancellation() {
     let (tx, rx) = tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
     tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
         .unwrap();
+    let attribution =
+        crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, None)
+            .await
+            .unwrap();
     let (r, _) = run_test_for_model(
         &state,
         model_row_id,
         None,
         None,
+        attribution,
         TestOptions::default(),
         Some(rx),
     )
@@ -362,4 +367,26 @@ async fn test_get_provider_icon_adversarial_contract_and_stress() {
         openproxy_db::providers::get_provider_favicon(&state.db_pool().reader(), "prov-ico")
             .unwrap();
     assert!(fav_opt.is_none(), "favicon must be deleted on FK cascade");
+}
+
+#[tokio::test]
+async fn resolve_tester_api_key_id_is_idempotent_and_caller_wins() {
+    let dir = tempdir();
+    let (state, _plaintext) = make_state_with_key(&dir).await;
+
+    // Without a caller identity: lazily creates the internal tester key and
+    // returns the SAME id on every subsequent call (no duplicate rows).
+    let first = crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, None)
+        .await
+        .unwrap();
+    let second = crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, None)
+        .await
+        .unwrap();
+    assert_eq!(first, second);
+
+    // With a caller identity (admin manage key): the caller wins.
+    let caller = crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, Some(4242))
+        .await
+        .unwrap();
+    assert_eq!(caller, openproxy_types::ids::ApiKeyId(4242));
 }

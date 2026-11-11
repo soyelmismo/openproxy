@@ -56,25 +56,6 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|t| !t.is_empty())
 }
 
-async fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedApiToken>, ApiError> {
-    let active = state
-        .db_pool()
-        .spawn_read(core_api_keys::count_active)
-        .await
-        .map_err(|e| {
-            tracing::error!(%e, "db error counting active keys");
-            ApiError(CoreError::Auth("missing api key".into()))
-        })?;
-    if active == 0 && state.config().server.allow_anonymous {
-        tracing::debug!(
-            target: "openproxy::auth",
-            "anonymous request admitted (no active api keys configured)"
-        );
-        return Ok(None);
-    }
-    Err(ApiError(CoreError::Auth("missing api key".into())))
-}
-
 /// Resolve the caller from the `Authorization` header.
 /// Reject the request with 429 when the key already spent its dollar cap in
 /// any enabled quota window. Keys without a quota row pass untouched.
@@ -111,8 +92,16 @@ pub(crate) async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<Option<ValidatedApiToken>, ApiError> {
+    static ALLOW_ANONYMOUS_DEPRECATION: std::sync::Once = std::sync::Once::new();
+    if state.config().server.allow_anonymous {
+        ALLOW_ANONYMOUS_DEPRECATION.call_once(|| {
+            tracing::warn!(
+                "server.allow_anonymous is deprecated and ignored: every /v1 request requires an api key"
+            );
+        });
+    }
     let Some(token) = extract_bearer_or_api_key_token(headers) else {
-        return check_anonymous_fallback(state).await;
+        return Err(ApiError(CoreError::Auth("missing api key".into())));
     };
 
     let key = match verify_key_credentials(state, token, "chat").await {

@@ -427,6 +427,26 @@ impl Pipeline {
             total_targets,
             race_cancel,
         } = params;
+        // SECURITY: every upstream dispatch must carry an api key identity.
+        // Keyless executions produce ghost usage rows ("No API Key") and
+        // unbillable traffic; callers without a caller identity must resolve
+        // one (admin key or the internal tester key) before building the
+        // request. See the 2026-11-11 ghost-request incident.
+        let Some(_attribution) = req.api_key_id else {
+            tracing::error!(
+                request_id = %req.request_id,
+                "rejected pipeline execution without api key attribution"
+            );
+            return PipelineResult {
+                status_code: 500,
+                error: Some(CoreError::Validation(
+                    "pipeline request without api key attribution rejected".into(),
+                )),
+                final_response: None,
+                attempts: 1,
+                usage_tuple: None,
+            };
+        };
         let mut ctx = crate::context::PipelineContext::new(req, self.clone());
         ctx.combo = Some(combo.clone());
         ctx.current_target = Some(resolved_target.clone());

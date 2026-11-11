@@ -22,6 +22,30 @@ async fn make_state() -> AppState {
     AppState::for_test(config, db_pool, master_key, adapters)
 }
 
+/// Keyed variant of `make_state`: anonymous /v1 access is gone (2026-11-11
+/// ghost-request fix), so validation tests authenticate with a real chat key.
+async fn make_state_with_key() -> (AppState, &'static str) {
+    let state = make_state().await;
+    let api_key = "test-api-key-123";
+    let key_hash = openproxy_core::api_keys::hash_key(api_key);
+    {
+        let w = state.db_pool().writer();
+        w.execute(
+            "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, \
+                    allowed_models_json, allowed_combos_json, expires_at, created_by) \
+                 VALUES (?1, ?2, ?3, ?4, NULL, NULL, NULL, 'test')",
+            rusqlite::params![
+                key_hash,
+                &api_key[..api_key.len().min(12)],
+                "router-test",
+                "[\"chat\"]",
+            ],
+        )
+        .unwrap();
+    }
+    (state, api_key)
+}
+
 fn fresh_pool() -> (core_db::DbPool, PathBuf) {
     let pool = core_db::DbPool::test_pool_with_prefix("openproxy-router-test").expect("open pool");
     let path = pool.path().to_path_buf();
@@ -126,18 +150,17 @@ async fn test_public_health() {
 }
 
 #[tokio::test]
-async fn test_models_catalog_requires_key_unless_anonymous_opt_in() {
-    // No active keys + `allow_anonymous = false` (the default): the catalog
-    // must not leak. Same gate as chat.
+async fn test_models_catalog_requires_key_always() {
+    // Regression (2026-11-11): the anonymous first-boot window is gone.
+    // Every /v1 request requires an api key — keyless runs produced ghost
+    // usage rows ("No API Key") and unbillable upstream traffic.
     let (pool, _path) = fresh_pool();
     let db_pool = Arc::new(pool);
     let master_key = Arc::new(MasterKey::generate().unwrap());
     let adapters = Arc::new(RwLock::new(Arc::new(
         Vec::<adapters::ProviderAdapterEnum>::new(),
     )));
-    let config = AppConfig::default();
-    assert!(!config.server.allow_anonymous, "default must be closed");
-    let state = AppState::for_test(config, db_pool, master_key, adapters);
+    let state = AppState::for_test(AppConfig::default(), db_pool, master_key, adapters);
     let app = build_router(state);
 
     let response = app
@@ -151,7 +174,7 @@ async fn test_models_catalog_requires_key_unless_anonymous_opt_in() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    // The explicit opt-in (`make_state()`) keeps the first-boot window open.
+    // The deprecated `allow_anonymous` opt-in no longer opens the window.
     let app = build_router(make_state().await);
     let response = app
         .oneshot(
@@ -162,7 +185,7 @@ async fn test_models_catalog_requires_key_unless_anonymous_opt_in() {
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -402,7 +425,7 @@ async fn test_admin_api_fallback_404_json() {
 
 #[tokio::test]
 async fn test_transport_compression_json_gzip() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let response = app
@@ -410,6 +433,7 @@ async fn test_transport_compression_json_gzip() {
             Request::builder()
                 .uri("/v1/models")
                 .header("Accept-Encoding", "gzip")
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -428,7 +452,7 @@ async fn test_transport_compression_json_gzip() {
 
 #[tokio::test]
 async fn test_transport_compression_json_gzip_fallback_or_bypass() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let response = app
@@ -436,6 +460,7 @@ async fn test_transport_compression_json_gzip_fallback_or_bypass() {
             Request::builder()
                 .uri("/v1/models")
                 .header("Accept-Encoding", "gzip, zstd")
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -454,7 +479,7 @@ async fn test_transport_compression_json_gzip_fallback_or_bypass() {
 
 #[tokio::test]
 async fn test_image_generations_not_found_returns_404() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let response = app
@@ -463,6 +488,7 @@ async fn test_image_generations_not_found_returns_404() {
                 .method("POST")
                 .uri("/v1/images/generations")
                 .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(
                     r#"{"prompt":"a painting of a sunset","model":"nonexistent-image-model"}"#,
                 ))
@@ -476,7 +502,7 @@ async fn test_image_generations_not_found_returns_404() {
 
 #[tokio::test]
 async fn test_image_generations_empty_prompt_validation() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let response = app
@@ -485,6 +511,7 @@ async fn test_image_generations_empty_prompt_validation() {
                 .method("POST")
                 .uri("/v1/images/generations")
                 .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(
                     r#"{"prompt":"","model":"dall-e-3"}"#,
                 ))
@@ -498,7 +525,7 @@ async fn test_image_generations_empty_prompt_validation() {
 
 #[tokio::test]
 async fn test_embeddings_not_found_returns_404() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let response = app
@@ -507,6 +534,7 @@ async fn test_embeddings_not_found_returns_404() {
                 .method("POST")
                 .uri("/v1/embeddings")
                 .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(
                     r#"{"input":"hello world","model":"nonexistent-embedding-model"}"#,
                 ))
@@ -520,7 +548,7 @@ async fn test_embeddings_not_found_returns_404() {
 
 #[tokio::test]
 async fn test_embeddings_empty_input_validation() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let response = app
@@ -529,6 +557,7 @@ async fn test_embeddings_empty_input_validation() {
                 .method("POST")
                 .uri("/v1/embeddings")
                 .header("Content-Type", "application/json")
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(
                     r#"{"input":"","model":"text-embedding-3-small"}"#,
                 ))
@@ -542,7 +571,7 @@ async fn test_embeddings_empty_input_validation() {
 
 #[tokio::test]
 async fn test_image_edits_missing_image_returns_400() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let boundary = "------------------------boundary123";
@@ -559,6 +588,7 @@ async fn test_image_edits_missing_image_returns_400() {
                     "Content-Type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(body))
                 .unwrap(),
         )
@@ -570,7 +600,7 @@ async fn test_image_edits_missing_image_returns_400() {
 
 #[tokio::test]
 async fn test_image_edits_missing_prompt_returns_400() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let boundary = "------------------------boundary123";
@@ -587,6 +617,7 @@ async fn test_image_edits_missing_prompt_returns_400() {
                     "Content-Type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(body))
                 .unwrap(),
         )
@@ -598,7 +629,7 @@ async fn test_image_edits_missing_prompt_returns_400() {
 
 #[tokio::test]
 async fn test_image_variations_missing_image_returns_400() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let boundary = "------------------------boundary123";
@@ -615,6 +646,7 @@ async fn test_image_variations_missing_image_returns_400() {
                     "Content-Type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(body))
                 .unwrap(),
         )
@@ -626,7 +658,7 @@ async fn test_image_variations_missing_image_returns_400() {
 
 #[tokio::test]
 async fn test_image_edits_not_found_returns_404() {
-    let state = make_state().await;
+    let (state, api_key) = make_state_with_key().await;
     let app = build_router(state);
 
     let boundary = "------------------------boundary123";
@@ -643,6 +675,7 @@ async fn test_image_edits_not_found_returns_404() {
                     "Content-Type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
+                .header("Authorization", format!("Bearer {api_key}"))
                 .body(axum::body::Body::from(body))
                 .unwrap(),
         )
