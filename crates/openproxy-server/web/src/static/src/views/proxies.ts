@@ -1,6 +1,7 @@
 // views/proxies.ts — Free proxies management view.
 
 import { html, type TemplateResult } from 'lit-html';
+import { live } from 'lit-html/directives/live.js';
 import { state } from "../state/index.js";
 import { requestUpdate } from "../state/reactive.js";
 import { createView } from "../lib/view-utils.js";
@@ -151,14 +152,19 @@ function formatTimeAgo(isoString: string | null): string {
 
 function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateResult {
   return html`
-    <div class="page-header">
-      <div>
-        <h2>${t("proxies.title")}</h2>
-        <p class="subtitle">${t("proxies.subtitle")}</p>
-        <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
-          <input 
-            type="text" 
-            .value=${proxyTestUrl} 
+    <div class="cx-toolbar cx-proxies-toolbar" title=${t("proxies.subtitle")} aria-description=${t("proxies.subtitle")}>
+      <h2 class="view-identity">${t("proxies.title")}</h2>
+      <details class="cx-details cx-proxies-testurl">
+        <summary title=${t("proxies.subtitle")}>
+          ${icons.target()}
+          <span class="cx-details-label">Test URL</span>
+        </summary>
+        <div class="cx-details-panel">
+          <label class="sr-only" for="proxy-test-url">${t("proxies.list.test_url_placeholder")}</label>
+          <input
+            id="proxy-test-url"
+            type="text"
+            .value=${proxyTestUrl}
             @change=${async (e: Event) => {
               proxyTestUrl = (e.target as HTMLInputElement).value;
               isSavingTestUrl = true;
@@ -171,21 +177,20 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
               }
             }}
             placeholder=${t("proxies.list.test_url_placeholder")}
-            style="width: 100%; max-width: 320px; min-width: 0; padding: 0.35rem 0.5rem; border-radius: var(--radius-sm); border: var(--border-w) var(--border-style) var(--color-border);"
           />
-          ${isSavingTestUrl ? html`<span class="spinner" style="width: 14px; height: 14px;"></span>` : ""}
+          ${isSavingTestUrl ? html`<span class="spinner"></span>` : ""}
         </div>
-      </div>
-      <div class="actions">
-        <button class="primary" ?disabled=${isSyncing} @click=${triggerSync}>
+      </details>
+      <div class="cx-toolbar-actions">
+        <button class="primary" ?disabled=${isSyncing} @click=${triggerSync} title=${syncBtnLabel} aria-label=${syncBtnLabel}>
           ${isSyncing ? html`<span class="spinner"></span>` : icons.refresh()}
-          ${syncBtnLabel}
+          <span class="cx-btn-label">${syncBtnLabel}</span>
         </button>
-        <button class="secondary" @click=${() => void testAllProxies()}>
-          ${icons.flask()} ${t("proxies.btn.test_all")}
+        <button class="secondary" @click=${() => void testAllProxies()} title=${t("proxies.btn.test_all")} aria-label=${t("proxies.btn.test_all")}>
+          ${icons.flask()}<span class="cx-btn-label">${t("proxies.btn.test_all")}</span>
         </button>
-        <button class="secondary" @click=${showAddCustomProxy}>
-          ${icons.plus()} ${t("proxies.btn.add")}
+        <button class="secondary" @click=${showAddCustomProxy} title=${t("proxies.btn.add")} aria-label=${t("proxies.btn.add")}>
+          ${icons.plus()}<span class="cx-btn-label">${t("proxies.btn.add")}</span>
         </button>
       </div>
     </div>
@@ -194,22 +199,22 @@ function renderPageHeader(isSyncing: boolean, syncBtnLabel: string): TemplateRes
 
 function renderKpisDashboard(total: number, alive: number, dead: number, avgLatency: number | null): TemplateResult {
   return html`
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-title">${t("proxies.kpi.total")}</div>
-        <div class="kpi-value">${total}</div>
+    <div class="cx-kpi-strip">
+      <div class="cx-kpi">
+        <span class="cx-kpi-label">${t("proxies.kpi.total")}</span>
+        <span class="cx-kpi-value">${total}</span>
       </div>
-      <div class="kpi-card kpi-success">
-        <div class="kpi-title">${t("proxies.kpi.alive")}</div>
-        <div class="kpi-value glow-green">${alive}</div>
+      <div class="cx-kpi cx-kpi-success">
+        <span class="cx-kpi-label">${t("proxies.kpi.alive")}</span>
+        <span class="cx-kpi-value">${alive}</span>
       </div>
-      <div class="kpi-card kpi-error">
-        <div class="kpi-title">${t("proxies.kpi.dead")}</div>
-        <div class="kpi-value">${dead}</div>
+      <div class="cx-kpi cx-kpi-error">
+        <span class="cx-kpi-label">${t("proxies.kpi.dead")}</span>
+        <span class="cx-kpi-value">${dead}</span>
       </div>
-      <div class="kpi-card kpi-latency">
-        <div class="kpi-title">${t("proxies.kpi.avg_latency")}</div>
-        <div class="kpi-value">${avgLatency !== null ? html`${avgLatency} <small>${t("proxies.list.avg_latency_unit")}</small>` : "—"}</div>
+      <div class="cx-kpi">
+        <span class="cx-kpi-label">${t("proxies.kpi.avg_latency")}</span>
+        <span class="cx-kpi-value">${avgLatency !== null ? html`${avgLatency} <small>${t("proxies.list.avg_latency_unit")}</small>` : "—"}</span>
       </div>
     </div>
   `;
@@ -217,29 +222,29 @@ function renderKpisDashboard(total: number, alive: number, dead: number, avgLate
 
 function renderFilterBar(search: string, protocol: string, source: string, status: string, uniqueProtocols: string[], uniqueSources: string[]): TemplateResult {
   return html`
-    <div class="filter-bar">
-      <div class="filter-search">
-        <input 
-          type="text" 
-          .value=${search}
-          placeholder=${t("proxies.filter.search_placeholder")} 
-          @input=${onSearchInput}
-        />
-      </div>
-      <div class="filter-selects">
-        <select @change=${onProtocolChange} .value=${protocol}>
-          <option value="">${t("proxies.filter.all_protocols")}</option>
-          ${uniqueProtocols.map((p: string) => html`<option value=${p}>${p.toUpperCase()}</option>`)}
+    <div class="cx-filterbar">
+      <input
+        class="cx-filter-search"
+        type="text"
+        .value=${search}
+        placeholder=${t("proxies.filter.search_placeholder")}
+        aria-label=${t("proxies.filter.search_placeholder")}
+        @input=${onSearchInput}
+      />
+      <div class="cx-filter-selects">
+        <select aria-label=${t("proxies.filter.all_protocols")} @change=${onProtocolChange} .value=${live(protocol)}>
+          <option value="" ?selected=${protocol === ""}>${t("proxies.filter.all_protocols")}</option>
+          ${uniqueProtocols.map((p: string) => html`<option value=${p} ?selected=${protocol === p}>${p.toUpperCase()}</option>`)}
         </select>
-        <select @change=${onSourceChange} .value=${source}>
-          <option value="">${t("proxies.filter.all_sources")}</option>
-          ${uniqueSources.map((s: string) => html`<option value=${s}>${s}</option>`)}
+        <select aria-label=${t("proxies.filter.all_sources")} @change=${onSourceChange} .value=${live(source)}>
+          <option value="" ?selected=${source === ""}>${t("proxies.filter.all_sources")}</option>
+          ${uniqueSources.map((s: string) => html`<option value=${s} ?selected=${source === s}>${s}</option>`)}
         </select>
-        <select @change=${onStatusChange} .value=${status}>
-          <option value="">${t("proxies.filter.all_statuses")}</option>
-          <option value="unknown">${t("proxies.status.unknown")}</option>
-          <option value="alive">${t("proxies.status.alive")}</option>
-          <option value="dead">${t("proxies.status.dead")}</option>
+        <select aria-label=${t("proxies.filter.all_statuses")} @change=${onStatusChange} .value=${live(status)}>
+          <option value="" ?selected=${status === ""}>${t("proxies.filter.all_statuses")}</option>
+          <option value="unknown" ?selected=${status === "unknown"}>${t("proxies.status.unknown")}</option>
+          <option value="alive" ?selected=${status === "alive"}>${t("proxies.status.alive")}</option>
+          <option value="dead" ?selected=${status === "dead"}>${t("proxies.status.dead")}</option>
         </select>
       </div>
     </div>

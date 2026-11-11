@@ -101,6 +101,16 @@ pub enum CoreError {
         is_proxy_rotated: bool,
     },
 
+    #[error(
+        "quota exceeded: window={window} spent_usd={spent_usd:.4} cap_usd={cap_usd:.4} resets_at={resets_at}"
+    )]
+    QuotaExceeded {
+        window: String,
+        spent_usd: f64,
+        cap_usd: f64,
+        resets_at: String,
+    },
+
     #[error("parse error: {0}")]
     Parse(String),
 
@@ -295,6 +305,7 @@ impl CoreError {
             | CoreError::ModelNotFound { .. }
             | CoreError::NotFound { .. } => 404,
             CoreError::RateLimited { .. } => 429,
+            CoreError::QuotaExceeded { .. } => 429,
             CoreError::UpstreamError { status, .. } => *status,
             CoreError::UpstreamTimeout { .. } => 529,
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
@@ -326,6 +337,7 @@ impl CoreError {
             CoreError::UpstreamConnection(_) => "upstream_connection",
             CoreError::UpstreamError { .. } => "upstream_error",
             CoreError::RateLimited { .. } => "rate_limited",
+            CoreError::QuotaExceeded { .. } => "quota_exceeded",
             CoreError::Parse(_) => "parse_error",
             CoreError::Cancelled(r) => r.as_str(),
             CoreError::RaceLost => "race_lost",

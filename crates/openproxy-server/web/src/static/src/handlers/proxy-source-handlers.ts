@@ -8,6 +8,7 @@ import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
 import type { ProxySource } from "../lib/types/api.js";
+import { beginButtonBusy, resolveBusyButton } from "../lib/button-busy.js";
 
 export async function reloadProxySources(): Promise<void> {
   try {
@@ -124,6 +125,7 @@ export async function createProxySource(e: Event, wrapper: HTMLElement): Promise
   const body = buildProxySourceBodyFromForm(target);
   const { name } = body;
 
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Adding…" });
   try {
     await api("/proxy-sources", {
       method: "POST",
@@ -134,6 +136,8 @@ export async function createProxySource(e: Event, wrapper: HTMLElement): Promise
     await reloadProxySources();
   } catch (err: unknown) {
     showApiError(err, "Failed to create proxy source");
+  } finally {
+    busy.release();
   }
 }
 
@@ -231,6 +235,7 @@ export async function updateProxySource(
   const body = buildProxySourceBodyFromForm(target);
   const { name } = body;
 
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Saving…" });
   try {
     await api(`/proxy-sources/${id}`, {
       method: "PUT",
@@ -241,6 +246,8 @@ export async function updateProxySource(
     await reloadProxySources();
   } catch (err: unknown) {
     showApiError(err, "Failed to update proxy source");
+  } finally {
+    busy.release();
   }
 }
 

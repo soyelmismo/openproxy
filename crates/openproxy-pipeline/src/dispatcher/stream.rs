@@ -131,6 +131,7 @@ impl UpstreamDispatcher {
             trace_id: trace_id,
             stage: "waiting_ttft",
             elapsed_ms: started.elapsed().as_millis() as u64,
+            session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&req),
             connect_ms: connect_and_send_ms,
             status_code: status_code,
         );
@@ -532,6 +533,7 @@ impl UpstreamDispatcher {
         let ttft_ms = args.state.ttft_ms;
         let stop_reason = args.state.stop_reason;
         let done_sent = args.state.done_sent;
+        let chunk_gap_telemetry = (args.state.max_chunk_gap_ms, args.state.avg_chunk_gap_ms);
         let total_ms = params.started.elapsed().as_millis() as u64;
 
         let prompt_tokens = usage.as_ref().map(|u| u.prompt_tokens);
@@ -646,6 +648,7 @@ impl UpstreamDispatcher {
         .err_opt(None)
         .connect_ms_opt(Some(args.connect_and_send_ms))
         .ttft_ms_opt(ttft_ms)
+        .chunk_gap_ms_opt(chunk_gap_telemetry.0, chunk_gap_telemetry.1)
         .total_ms(total_ms)
         .status_code(args.status_code)
         .attempt(params.attempt)

@@ -17,6 +17,7 @@ import {
   renderPiiCard, renderQuotaCard, renderRecordingTtlCard, renderTimeoutsCard,
 } from "./editable-cards.js";
 import { loadMaintenanceState, pollVacuumStatus, renderMaintenanceCard } from "./maintenance.js";
+import { tileRootActive } from "../../lib/tile-active.js";
 import { renderBackupCard } from "./backup.js";
 
 export {
@@ -73,41 +74,61 @@ function renderStaticRegion(cfg: ConfigPayload): TemplateResult {
 
 function renderConfig(): TemplateResult {
   if (loading) {
-    return html`<div class="page-header"><h2>${t("config.title")}</h2></div>
+    return html`<div class="page-header"><h2 class="view-identity">${t("config.title")}</h2></div>
       <div class="loading">${t("common.loading")}</div>`;
   }
   if (errorMsg) {
-    return html`<div class="page-header"><h2>${t("config.title")}</h2></div>
+    return html`<div class="page-header"><h2 class="view-identity">${t("config.title")}</h2></div>
       <div class="banner banner-error">${errorMsg}</div>`;
   }
   const cfg = getConfig();
   if (!cfg) {
-    return html`<div class="page-header"><h2>${t("config.title")}</h2></div>
+    return html`<div class="page-header"><h2 class="view-identity">${t("config.title")}</h2></div>
       <div class="loading">${t("common.loading")}</div>`;
   }
   const banner = getBanner();
 
   return html`
     <div class="view-config">
-      <div class="page-header"><h2>${t("config.title")}</h2></div>
-      <div class="banner banner-${banner.kind} config-banner">
-        <div class="banner-status-dot"></div>
-        <div class="banner-body-wrap">
+      <div class="page-header config-page-header">
+        <h2 class="view-identity">${t("config.title")}</h2>
+        <div class="banner banner-${banner.kind} config-banner" title=${banner.body}>
+          <span class="banner-status-dot" aria-hidden="true"></span>
           <strong class="banner-title">${banner.title}</strong>
           <span class="banner-text">${banner.body}</span>
         </div>
       </div>
-      <div class="config-editable-region">
-        ${renderTimeoutsCard()}
-        ${renderRecordingTtlCard()}
-        ${renderCompressionCard()}
-        ${renderIdleChunkCard()}
-        ${renderNotificationsCard()}
-        ${renderModalityCard()}
-        ${renderQuotaCard()}
-        ${renderPiiCard()}
-        ${renderMaintenanceCard()}
-        ${renderBackupCard()}
+      <div class="config-groups">
+        <section class="config-group config-group-limits">
+          <div class="config-group-grid">
+            ${renderTimeoutsCard()}
+          </div>
+        </section>
+        <section class="config-group config-group-response">
+          <div class="config-group-grid">
+            ${renderRecordingTtlCard()}
+            ${renderCompressionCard()}
+            ${renderIdleChunkCard()}
+          </div>
+        </section>
+        <section class="config-group config-group-routing">
+          <div class="config-group-grid">
+            ${renderModalityCard()}
+            ${renderNotificationsCard()}
+          </div>
+        </section>
+        <section class="config-group config-group-protection">
+          <div class="config-group-grid">
+            ${renderQuotaCard()}
+            ${renderPiiCard()}
+          </div>
+        </section>
+        <section class="config-group config-group-data">
+          <div class="config-group-grid">
+            ${renderMaintenanceCard()}
+            ${renderBackupCard()}
+          </div>
+        </section>
       </div>
       ${renderStaticRegion(cfg)}
       <details class="config-details">
@@ -146,9 +167,12 @@ export async function mountConfig(
       setConfig(payload);
       applyServerConfig(payload);
       await loadMaintenanceState();
-      // 5s poll so the button reflects a completing VACUUM
+      // 5s poll so the button reflects a completing VACUUM. Hibernated while
+      // another tile is maximized: the poll ticks, but does nothing.
       if (vacuumPollHandle) clearInterval(vacuumPollHandle);
-      vacuumPollHandle = setInterval(() => void pollVacuumStatus(), 5000);
+      vacuumPollHandle = setInterval(() => {
+        if (tileRootActive(document.querySelector('.tile-view[data-view="config"]'))) void pollVacuumStatus();
+      }, 5000);
       setBanner("info", t("config.banner.live_values"),
         t("config.banner.live_values_body"));
       loading = false;

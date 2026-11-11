@@ -53,6 +53,21 @@ describe("mountLogs native mount target and lifecycle", () => {
     expect(container.isConnected).toBe(true);
   });
 
+  it("keeps controls together and the log body outside the wrapping toolbar", async () => {
+    const cleanup = await mountLogs(container);
+    try {
+      const deck = container.querySelector('.logs-control-deck');
+      expect(deck).not.toBeNull();
+      expect(deck?.querySelector('.logs-header-actions')).not.toBeNull();
+      expect(deck?.querySelector('.logs-search-box')).not.toBeNull();
+      const body = container.querySelector('#logs');
+      expect(body).not.toBeNull();
+      expect(deck?.contains(body)).toBe(false);
+    } finally {
+      if (typeof cleanup === 'function') cleanup();
+    }
+  });
+
   it("parses query parameters from the route argument rather than location.hash", async () => {
     const openLogDetailSpy = vi.spyOn(logDetailModule, "openLogDetail").mockResolvedValue(undefined);
     window.location.hash = "#/logs?trace_id=wrong_trace&request_id=wrong_req";

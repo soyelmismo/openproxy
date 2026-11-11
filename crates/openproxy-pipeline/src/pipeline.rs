@@ -285,7 +285,7 @@ impl Pipeline {
         );
         dispatcher.message_threads = Some(Arc::clone(&message_threads));
         let latency_budget =
-            crate::latency_budget::LatencyBudget::with_pool_if_present(&db_pool);
+            crate::latency_budget::LatencyBudget::with_pool_if_present(db_pool.as_ref());
         Self {
             conn,
             db_pool,

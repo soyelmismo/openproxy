@@ -195,6 +195,17 @@ pub static REGEX_SECRET_HIGH_ENTROPY: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(r"\b[a-zA-Z0-9_-]{32,64}\b|\b[a-zA-Z0-9+/]{30,62}={1,2}\b")
 });
 
+/// Names bound by an assignment in the same payload (`RT_RAW = read()`,
+/// `const token = ...`). A labeled value that is one of them is a variable
+/// reference, not a credential: masking it renames the variable and breaks
+/// the code that reads it, which is how `RT_RAW` became `sec_1f689c8a` in a
+/// real session. `==` and friends are excluded by requiring a non-`=` next.
+pub static REGEX_CODE_ASSIGNMENT: LazyLock<Regex> = LazyLock::new(|| {
+    openproxy_types::static_regex!(
+        r"(?m)^[ \t]*(?:(?:const|let|var|val|our)\s+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?::[^=\n]+)?=[ \t]*[^=\n]"
+    )
+});
+
 pub static REGEX_SECRET_JWT: LazyLock<Regex> = LazyLock::new(|| {
     openproxy_types::static_regex!(
         r"\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b"

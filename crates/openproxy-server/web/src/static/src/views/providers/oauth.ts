@@ -319,7 +319,7 @@ export function renderConnectionsSection(
                           )}
                           @click=${(e: MouseEvent) =>
                             onBeginAccountRename(e)}>
-                          <span class="account-name-text">${displayName}</span>
+                          <span class="account-name-text" title=${displayName}>${displayName}</span>
                           ${icons.pencil()}
                         </button>
                         <input

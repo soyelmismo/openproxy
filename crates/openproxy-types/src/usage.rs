@@ -57,6 +57,16 @@ pub struct UsageInput {
     /// per-target global one. NULL when the request carries no session identity.
     #[serde(default)]
     pub session_hash: Option<u64>,
+    /// Largest gap between consecutive content/progress chunks of a completed
+    /// streaming response, in milliseconds. Feeds the adaptive idle-chunk
+    /// budget (`crate::latency_budget::chunk_budget`): only gaps a stream
+    /// actually survived belong in the learned distribution. NULL for unary
+    /// requests and single-chunk streams.
+    #[serde(default)]
+    pub max_chunk_gap_ms: Option<u64>,
+    /// Mean inter-chunk gap of the same stream, in milliseconds.
+    #[serde(default)]
+    pub avg_chunk_gap_ms: Option<u64>,
 }
 
 mod optional_bytes {
@@ -88,6 +98,32 @@ impl UsageInput {
     }
 }
 
+/// Serde helper: 64-bit session fingerprints ride the wire as decimal
+/// strings. JavaScript numbers lose integer precision above 2^53, so a
+/// raw u64 JSON number could round two distinct sessions into one.
+mod session_hash_wire {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(h) => h.to_string().serialize(serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        let raw = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(match raw {
+            Some(serde_json::Value::String(s)) => s.parse().ok(),
+            Some(serde_json::Value::Number(n)) => n.as_u64(),
+            _ => None,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StageEvent {
     pub request_id: String,
@@ -116,6 +152,14 @@ pub struct StageEvent {
     pub pii_redacted: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_id: Option<i64>,
+    /// Session fingerprint (see `SessionAffinityRegistry::extract_session_hash`),
+    /// serialized as a decimal string for the dashboard wire.
+    #[serde(
+        with = "session_hash_wire",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub session_hash: Option<u64>,
 }
 
 #[doc(hidden)]
@@ -251,6 +295,14 @@ pub struct InflightAttempt {
     pub endpoint_kind: Option<EndpointKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key_id: Option<i64>,
+    /// Session fingerprint (see `SessionAffinityRegistry::extract_session_hash`),
+    /// serialized as a decimal string for the dashboard wire.
+    #[serde(
+        with = "session_hash_wire",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub session_hash: Option<u64>,
 }
 
 pub static STAGE_EVENT_PUBLISHER: std::sync::OnceLock<fn(StageEvent)> = std::sync::OnceLock::new();
@@ -295,6 +347,10 @@ pub struct RecentUsageRow {
     pub api_key_id: Option<i64>,
     /// Audio duration in milliseconds for transcription rows; `None` elsewhere.
     pub audio_ms: Option<u32>,
+    /// Session fingerprint (see `SessionAffinityRegistry::extract_session_hash`).
+    /// Groups dashboard rows into the conversation/session view; `None` when
+    /// the request carried no session identity.
+    pub session_hash: Option<u64>,
 }
 
 impl RecentUsageRow {
@@ -376,6 +432,12 @@ struct RecentUsageRowSerde<'a> {
     pub api_key_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub audio_ms: Option<u32>,
+    #[serde(
+        with = "session_hash_wire",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub session_hash: Option<u64>,
 }
 
 impl Serialize for RecentUsageRow {
@@ -422,6 +484,7 @@ impl Serialize for RecentUsageRow {
             endpoint_kind: self.endpoint_kind,
             api_key_id: self.api_key_id,
             audio_ms: self.audio_ms,
+            session_hash: self.session_hash,
         }
         .serialize(serializer)
     }
@@ -472,6 +535,7 @@ impl<'de> Deserialize<'de> for RecentUsageRow {
             endpoint_kind: s.endpoint_kind,
             api_key_id: s.api_key_id,
             audio_ms: s.audio_ms,
+            session_hash: s.session_hash,
         })
     }
 }
@@ -583,6 +647,8 @@ mod tests {
             flags: 0,
             audio_ms: None,
             session_hash: None,
+            max_chunk_gap_ms: None,
+            avg_chunk_gap_ms: None,
         };
 
         assert!(!input.has_flag(USAGE_FLAG_IS_STREAMING));
@@ -630,6 +696,8 @@ mod tests {
             endpoint_kind: EndpointKind::Chat,
             api_key_id: Some(999),
             audio_ms: None,
+            // Max u64: proves the wire keeps full 64-bit precision as a string.
+            session_hash: Some(u64::MAX),
         };
 
         assert!(row.has_flag(USAGE_FLAG_IS_STREAMING));
@@ -642,9 +710,12 @@ mod tests {
         assert!(json.contains("\"client_response\":true"));
         assert!(json.contains("\"stream_complete\":true"));
         assert!(json.contains("\"race_lost\":false"));
+        // Session hash rides as a decimal STRING, never a lossy JS number.
+        assert!(json.contains("\"session_hash\":\"18446744073709551615\""));
 
         let deserialized: RecentUsageRow = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(deserialized.flags, row.flags);
         assert_eq!(deserialized.id, crate::ids::UsageId(42));
+        assert_eq!(deserialized.session_hash, Some(u64::MAX));
     }
 }

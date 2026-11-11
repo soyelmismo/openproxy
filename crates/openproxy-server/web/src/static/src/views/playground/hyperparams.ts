@@ -107,7 +107,7 @@ export function renderImageHyperparams(st: PlaygroundState): TemplateResult {
                 }} />
                 <span style="font-weight: ${isSelected ? '600' : '400'}; color: ${isSelected ? 'var(--color-text-emphasis)' : 'var(--color-text)'};">${pp.label}</span>
               </div>
-              <span style="font-size: 0.72rem; color: var(--color-text-muted);">${pp.desc}</span>
+              <span style="font-size: max(10px, 0.72rem); color: var(--color-text-muted);">${pp.desc}</span>
             </label>`;
         })}
       </div>

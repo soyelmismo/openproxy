@@ -1,7 +1,6 @@
 //! Stateless payload translation from Anthropic SSE wire format into OpenAI SSE chunks.
 
 use super::super::UpstreamSseChunk;
-use openproxy_types::ResultExt;
 use openproxy_types::error::Result;
 use openproxy_types::message::{OpenAIUsage, PromptTokensDetails};
 use serde_json::Value;
@@ -233,7 +232,7 @@ pub fn translate_anthropic_sse_payload(
         return Ok(None);
     }
 
-    let data: Value = serde_json::from_str(data_json).ctx_parse("anthropic sse json")?;
+    let data: Value = super::super::parse_provider_json(data_json, "anthropic")?;
 
     match event_type {
         "message_start" => Ok(Some(build_anthropic_message_start_chunk(

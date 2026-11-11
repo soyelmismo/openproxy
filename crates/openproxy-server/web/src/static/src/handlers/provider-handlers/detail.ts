@@ -10,6 +10,7 @@ import { ensureModalRoot, flashButton, showApiError } from "../../lib/ui-utils.j
 import { showConfirm } from "../../lib/show-confirm.js";
 import { showToast } from "../../components/toast.js";
 import { navigate } from "../../state/router.js";
+import { beginButtonBusy, resolveBusyButton } from "../../lib/button-busy.js";
 
 // ── Extra headers editor ───────────────────────────────────────────────────
 
@@ -492,22 +493,22 @@ export async function setHealth(id: number, e: Event | null): Promise<void> {
 
 // POST /admin/accounts/:id/refresh-quota — fetch a fresh quota.
 export async function refreshAccountQuota(accountId: number, e: Event | null): Promise<void> {
-  const target = e && e.target && e.target instanceof HTMLButtonElement ? e.target : null;
-  const btn: HTMLButtonElement | null = target;
-  const oldText = btn ? btn.textContent : null;
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "...";
-  }
+  const btn = resolveBusyButton(e);
+  const originalHtml = btn ? btn.innerHTML : "";
+  const originalText = btn ? btn.textContent : null;
+  const busy = beginButtonBusy(btn, { label: "Refreshing…" });
+  // Deferred flash: the helper restores the original label in `finally`, so the ✓/✗ marker is
+  // painted afterwards and held for 1.5 s (the button stays disabled meanwhile).
+  let flash: { text: string; color: string } | null = null;
   try {
     const result = (await api("/accounts/" + accountId + "/refresh-quota", { method: "POST" })) as
       { supported?: boolean; error?: string; model_details?: Array<unknown> } | null;
     if (result && result.supported === false) {
-      if (btn) flashButton(btn, "n/a", "#9399b2");
+      flash = { text: "n/a", color: "#9399b2" };
     } else if (result && result.error) {
-      if (btn) flashButton(btn, "✗ err", "#f38ba8");
+      flash = { text: "✗ err", color: "#f38ba8" };
     } else {
-      if (btn) flashButton(btn, "✓", "#a6e3a1");
+      flash = { text: "✓", color: "#a6e3a1" };
     }
     state.accounts = await api("/accounts") as typeof state.accounts;
     if (result && "model_details" in result && result.model_details != null) {
@@ -518,17 +519,26 @@ export async function refreshAccountQuota(accountId: number, e: Event | null): P
     }
     requestUpdate();
   } catch (err: unknown) {
-    if (btn) flashButton(btn, "✗", "#f38ba8");
+    flash = { text: "✗", color: "#f38ba8" };
     showApiError(err, "Error");
   } finally {
+    busy.release();
     if (btn) {
-      setTimeout(() => { btn.disabled = false; btn.textContent = oldText; }, 1500);
+      if (flash) {
+        flashButton(btn, flash.text, flash.color);
+        btn.disabled = true;
+        setTimeout(() => {
+          btn.disabled = false;
+          if (btn.isConnected) btn.innerHTML = originalHtml;
+          else btn.textContent = originalText;
+        }, 1500);
+      }
     }
   }
 }
 
 // Walk every quota-capable account of a provider and refresh each.
-export async function refreshAllQuotas(providerId: string): Promise<void> {
+export async function refreshAllQuotas(providerId: string, e?: Event | null): Promise<void> {
   const accounts = (state.accounts || []).filter((a) => a.provider_id === providerId);
   const supported = accounts.filter((a) => {
     const p = state.providers.find((p) => p.id === a.provider_id);
@@ -543,14 +553,19 @@ export async function refreshAllQuotas(providerId: string): Promise<void> {
     message: `Refresh quota for ${supported.length} accounts?`,
     confirmLabel: "Refresh",
   }))) return;
-  for (const a of supported) {
-    try {
-      await api("/accounts/" + a.id + "/refresh-quota", { method: "POST" });
-    } catch (err: unknown) {
-      console.error("Failed to refresh quota for", a.id, err);
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Refreshing…" });
+  try {
+    for (const a of supported) {
+      try {
+        await api("/accounts/" + a.id + "/refresh-quota", { method: "POST" });
+      } catch (err: unknown) {
+        console.error("Failed to refresh quota for", a.id, err);
+      }
     }
+    state.accounts = await api("/accounts") as typeof state.accounts;
+    requestUpdate();
+    showToast("Quotas refreshed.", "success");
+  } finally {
+    busy.release();
   }
-  state.accounts = await api("/accounts") as typeof state.accounts;
-  requestUpdate();
-  showToast("Quotas refreshed.", "success");
 }

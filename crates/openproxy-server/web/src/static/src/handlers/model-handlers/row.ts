@@ -17,6 +17,7 @@ import { renderBulkActionsBar } from "../../components/model-bulk-actions.js";
 import { statusPillClass } from "../../lib/constants.js";
 import { requestUpdate } from "../../state/reactive.js";
 import { flashButton, showApiError } from "../../lib/ui-utils.js";
+import { beginButtonBusy, resolveBusyButton } from "../../lib/button-busy.js";
 
 export interface TestResult {
   status: number;
@@ -57,13 +58,13 @@ export async function toggleModel(rowId: number, newActive: boolean | unknown, e
 
 // Fire a single upstream test for one model. Only the affected row's "last test" cell is
 // repainted (a full redraw is wasteful on a 200-row table), and the button flashes so the click
-// feels acknowledged on a slow request.
-export async function testModel(rowId: number, _modelId: string, _e: Event | null): Promise<void> {
-  const btn = document.getElementById(`test-btn-${rowId}`) as HTMLButtonElement | null;
-  if (!btn) return;
-  const oldText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = "Testing...";
+// feels acknowledged on a slow request. The busy state is resolved before the first await and
+// released in `finally`, so a network error can never leave the button stuck on "Testing…".
+export async function testModel(rowId: number, _modelId: string, e: Event | null): Promise<void> {
+  const btn = resolveBusyButton(e) ?? (document.getElementById(`test-btn-${rowId}`) as HTMLButtonElement | null);
+  const originalHtml = btn ? btn.innerHTML : "";
+  const busy = beginButtonBusy(btn, { label: "Testing…" });
+  let flash: { text: string; color: string } | null = null;
   try {
     const result = (await api(`/models/${rowId}/test`, { method: "POST" })) as TestResult;
     // Repaint only the "last test" cell to preserve scroll/focus. The server sets the row id in
@@ -78,20 +79,25 @@ export async function testModel(rowId: number, _modelId: string, _e: Event | nul
       }
     }
     if (result.status >= 200 && result.status < 300) {
-      flashButton(btn, "✓", "#a6e3a1");
+      flash = { text: "✓", color: "#a6e3a1" };
     } else if (result.status === 0) {
-      flashButton(btn, "✗ net", "#f38ba8");
+      flash = { text: "✗ net", color: "#f38ba8" };
     } else {
-      flashButton(btn, "✗ " + result.status, "#f38ba8");
+      flash = { text: "✗ " + result.status, color: "#f38ba8" };
     }
   } catch (err: unknown) {
-    flashButton(btn, "✗", "#f38ba8");
+    flash = { text: "✗", color: "#f38ba8" };
     setTimeout(() => showApiError(err, "Test failed"), 100);
   } finally {
-    setTimeout(() => {
-      btn.disabled = false;
-      btn.textContent = oldText;
-    }, 1500);
+    busy.release();
+    if (flash && btn) {
+      flashButton(btn, flash.text, flash.color);
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.disabled = false;
+        if (btn.isConnected) btn.innerHTML = originalHtml;
+      }, 1500);
+    }
   }
 }
 

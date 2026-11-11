@@ -40,8 +40,7 @@ mod tests {
             let headers = headers_for_client_profile(*profile, Some("test-model"));
             assert!(
                 !headers.is_empty(),
-                "profile {:?} produced empty headers",
-                profile
+                "profile {profile:?} produced empty headers",
             );
         }
     }

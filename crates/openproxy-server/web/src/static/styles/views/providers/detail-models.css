@@ -1,0 +1,54 @@
+/* Provider Detail Models DataGrid table styling */
+.provider-models-table .dg-row {
+  height: auto;
+  min-height: 36px;
+  padding-block: 5px;
+}
+.provider-models-table .dg-row > .dg-col:first-child > .dg-inner {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  white-space: normal;
+}
+.provider-models-table .model-name-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.provider-models-table .model-usage-code {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: copy;
+}
+.provider-models-table .model-usage-code:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+.provider-models-table .model-profile-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-info);
+  border: 1px solid var(--color-border-soft);
+}
+.provider-models-table .model-caps-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.provider-models-table .dg-row.inactive {
+  opacity: 0.6;
+}
+

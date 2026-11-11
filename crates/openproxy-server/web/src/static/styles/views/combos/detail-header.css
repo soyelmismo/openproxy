@@ -1,0 +1,258 @@
+
+/* =============================================================================
+   Combo Detail Header — two rows, no wasted bands.
+   Row 1: back link | title + pills | quick actions
+   Row 2: strategy / race / predictive controls, inline
+   ============================================================================= */
+.combo-detail-header-card {
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.combo-header-top-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.combo-detail-header-card .combo-back-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 2px 4px 2px 0;
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.combo-detail-header-card .combo-back-link svg {
+  width: 14px;
+  height: 14px;
+}
+
+.combo-header-quick-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.combo-header-quick-actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.combo-header-quick-actions .button.secondary {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+
+.combo-header-quick-actions .button.secondary:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-hover);
+}
+
+.combo-header-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.combo-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.combo-header-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-text);
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.combo-title-edit-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.combo-title-edit-btn:hover {
+  opacity: 1;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-color: var(--color-border);
+}
+
+.combo-header-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.combo-header-controls-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 10px;
+  min-height: 30px;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-md);
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.combo-control-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.combo-control-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: var(--fs-2xs);
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.combo-header-controls-card .combo-strategy-select {
+  height: 26px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  cursor: pointer;
+}
+
+.combo-header-controls-card .race-input {
+  width: 56px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  box-sizing: border-box;
+}
+
+.combo-control-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-soft);
+}
+
+.combo-toggle-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.combo-toggle-control input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.combo-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #eab308;
+}
+
+.combo-toggle-label {
+  white-space: nowrap;
+}
+
+/* Container query hardening for narrow tiles: labels that are only
+   affordances (not information) fold first, so the two rows stay two rows. */
+@container tile-view (max-width: 760px) {
+  .combo-header-quick-actions .button {
+    padding: 4px 7px;
+  }
+  .combo-header-quick-actions .button > span {
+    display: none;
+  }
+}
+
+@container tile-view (max-width: 620px) {
+  .combo-control-label {
+    display: none;
+  }
+}
+
+@container tile-view (max-width: 470px) {
+  .combo-detail-header-card {
+    padding: var(--space-3);
+  }
+  .combo-header-top-row {
+    gap: var(--space-2);
+  }
+  .combo-back-label {
+    display: none;
+  }
+  .combo-header-controls-card {
+    gap: 6px;
+    padding: 3px 8px;
+  }
+  .combo-control-divider {
+    display: none;
+  }
+  .combo-header-controls-card .combo-strategy-select {
+    max-width: 96px;
+  }
+}
+

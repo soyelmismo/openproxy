@@ -94,7 +94,7 @@ impl PiiEngine {
         let mut out = String::with_capacity(text.len() + 32);
         let mut curr = 0;
 
-        for cand in non_overlapping {
+        for cand in &non_overlapping {
             out.push_str(&text[curr..cand.start]);
             let placeholder = session.get_or_create_placeholder(cand.entity, cand.matched_text);
             out.push_str(&placeholder);
@@ -102,6 +102,43 @@ impl PiiEngine {
         }
 
         out.push_str(&text[curr..]);
+
+        // A value detected in one span must not survive in another. When the
+        // provider sees `skill_view(name='Alex Vance-rs-development')` next to
+        // `` `gpthon-rs-development` `` it correlates both forms and
+        // reconstructs the mapping, which is what makes the redaction
+        // transparent-but-distracting. Re-apply every mapping to the
+        // remaining occurrences, longest original first so a shorter value
+        // can never corrupt a longer placeholder.
+        let mut mappings: Vec<(String, String)> = Vec::new();
+        for cand in &non_overlapping {
+            if let Some(placeholder) = session.forward.get(cand.matched_text)
+                && !mappings
+                    .iter()
+                    .any(|(original, _)| original == cand.matched_text)
+            {
+                mappings.push((cand.matched_text.to_string(), placeholder.clone()));
+            }
+        }
+        mappings.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
+        for (original, placeholder) in &mappings {
+            if placeholder.contains(original.as_str()) {
+                // Replacing would corrupt the synthetic value itself.
+                continue;
+            }
+            let shadowed = mappings.iter().any(|(other_original, other_placeholder)| {
+                other_original != original
+                    && (other_original.contains(original.as_str())
+                        || other_placeholder.contains(original.as_str()))
+            });
+            if shadowed {
+                continue;
+            }
+            if out.contains(original.as_str()) {
+                out = out.replace(original.as_str(), placeholder.as_str());
+            }
+        }
+
         out
     }
 

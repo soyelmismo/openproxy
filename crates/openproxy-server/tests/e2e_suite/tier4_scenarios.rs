@@ -5,8 +5,12 @@ use openproxy_core::admin;
 use serde_json::json;
 use std::time::Duration;
 
-#[tokio::test]
-async fn test_tier4_scenario_multiturn_conversation() {
+#[test]
+fn test_tier4_scenario_multiturn_conversation() {
+    crate::run_with_big_stack(test_tier4_scenario_multiturn_conversation_body);
+}
+
+async fn test_tier4_scenario_multiturn_conversation_body() {
     let harness = TestHarness::new().await;
     let turn1 = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "My project is named OpenProxy Gateway."}], "stream": false});
     let (status1, resp1) = harness
@@ -43,8 +47,12 @@ async fn test_tier4_scenario_multiturn_conversation() {
     );
 }
 
-#[tokio::test]
-async fn test_tier4_scenario_dynamic_model_discovery_sync() {
+#[test]
+fn test_tier4_scenario_dynamic_model_discovery_sync() {
+    crate::run_with_big_stack(test_tier4_scenario_dynamic_model_discovery_sync_body);
+}
+
+async fn test_tier4_scenario_dynamic_model_discovery_sync_body() {
     let harness = TestHarness::new().await;
     harness.mock_handle.replace_catalog(vec![
         "discovery-model-alpha".into(),
@@ -84,8 +92,12 @@ async fn test_tier4_scenario_dynamic_model_discovery_sync() {
     );
 }
 
-#[tokio::test]
-async fn test_tier4_scenario_multi_client_analytics_accumulation() {
+#[test]
+fn test_tier4_scenario_multi_client_analytics_accumulation() {
+    crate::run_with_big_stack(test_tier4_scenario_multi_client_analytics_accumulation_body);
+}
+
+async fn test_tier4_scenario_multi_client_analytics_accumulation_body() {
     let harness = TestHarness::new().await;
     let (_, key_a) = harness
         .admin_post(
@@ -126,8 +138,12 @@ async fn test_tier4_scenario_multi_client_analytics_accumulation() {
     assert!(by_model.is_array());
 }
 
-#[tokio::test]
-async fn test_tier4_scenario_concurrent_race_winner_selection() {
+#[test]
+fn test_tier4_scenario_concurrent_race_winner_selection() {
+    crate::run_with_big_stack(test_tier4_scenario_concurrent_race_winner_selection_body);
+}
+
+async fn test_tier4_scenario_concurrent_race_winner_selection_body() {
     let harness = TestHarness::new().await;
     let (_, combo) = harness
         .admin_post(
@@ -159,8 +175,12 @@ async fn test_tier4_scenario_concurrent_race_winner_selection() {
     assert!(start.elapsed() < Duration::from_secs(5));
 }
 
-#[tokio::test]
-async fn test_tier4_scenario_full_admin_lifecycle() {
+#[test]
+fn test_tier4_scenario_full_admin_lifecycle() {
+    crate::run_with_big_stack(test_tier4_scenario_full_admin_lifecycle_body);
+}
+
+async fn test_tier4_scenario_full_admin_lifecycle_body() {
     let harness = TestHarness::new().await;
     let prov_id = "lifecycle-provider";
     let (st1, p_res) = harness.admin_post("/admin/api/providers", json!({"id": prov_id, "name": "Lifecycle Provider", "base_url": format!("http://{}/v1", harness.mock_addr), "auth_type": "bearer", "format": "openai"})).await;
@@ -244,8 +264,12 @@ async fn test_tier4_scenario_full_admin_lifecycle() {
     );
 }
 
-#[tokio::test]
-async fn test_tier4_scenario_responses_api_streaming_and_non_streaming() {
+#[test]
+fn test_tier4_scenario_responses_api_streaming_and_non_streaming() {
+    crate::run_with_big_stack(test_tier4_scenario_responses_api_streaming_and_non_streaming_body);
+}
+
+async fn test_tier4_scenario_responses_api_streaming_and_non_streaming_body() {
     let harness = TestHarness::new().await;
 
     // 1. Streaming Responses request

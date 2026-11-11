@@ -36,8 +36,11 @@ fn row_for(rows: &[ByComboRow], combo_id: i64) -> &ByComboRow {
 #[test]
 fn retries_are_not_errors_and_uncovered_requests_are() {
     let (conn, _) = fresh_conn();
-    conn.execute("INSERT INTO combos (id, name, strategy) VALUES (1, 'ninja', 'priority')", [])
-        .expect("insert combo");
+    conn.execute(
+        "INSERT INTO combos (id, name, strategy) VALUES (1, 'ninja', 'priority')",
+        [],
+    )
+    .expect("insert combo");
 
     // req-a: one retry, then success -> successful request, 2 attempts.
     insert_row(&conn, "req-a", Some(1), 429);
@@ -54,11 +57,25 @@ fn retries_are_not_errors_and_uncovered_requests_are() {
     let r = row_for(&rows, 1);
     assert_eq!(r.combo_name, "ninja");
     assert_eq!(r.requests, 3);
-    assert_eq!(r.ok_requests, 2, "retried-then-successful requests count as ok");
-    assert_eq!(r.error_requests, 1, "only the uncovered request is an error");
+    assert_eq!(
+        r.ok_requests, 2,
+        "retried-then-successful requests count as ok"
+    );
+    assert_eq!(
+        r.error_requests, 1,
+        "only the uncovered request is an error"
+    );
     assert_eq!(r.total_attempts, 6);
-    assert!((r.success_rate_pct - 66.67).abs() < 0.01, "{}", r.success_rate_pct);
-    assert!((r.error_rate_pct - 33.33).abs() < 0.01, "{}", r.error_rate_pct);
+    assert!(
+        (r.success_rate_pct - 66.67).abs() < 0.01,
+        "{}",
+        r.success_rate_pct
+    );
+    assert!(
+        (r.error_rate_pct - 33.33).abs() < 0.01,
+        "{}",
+        r.error_rate_pct
+    );
     assert!((r.avg_attempts - 2.0).abs() < 0.01, "{}", r.avg_attempts);
 }
 
@@ -90,8 +107,11 @@ fn combos_are_isolated_and_direct_rows_are_excluded() {
 #[test]
 fn date_filter_applies_before_request_grouping() {
     let (conn, _) = fresh_conn();
-    conn.execute("INSERT INTO combos (id, name, strategy) VALUES (1, 'c', 'priority')", [])
-        .expect("insert combo");
+    conn.execute(
+        "INSERT INTO combos (id, name, strategy) VALUES (1, 'c', 'priority')",
+        [],
+    )
+    .expect("insert combo");
 
     insert_row(&conn, "old-ok", Some(1), 200);
     conn.execute(
@@ -120,8 +140,11 @@ fn date_filter_applies_before_request_grouping() {
 #[test]
 fn average_times_separate_success_from_absolute_failure() {
     let (conn, _) = fresh_conn();
-    conn.execute("INSERT INTO combos (id, name, strategy) VALUES (1, 'c', 'priority')", [])
-        .expect("insert combo");
+    conn.execute(
+        "INSERT INTO combos (id, name, strategy) VALUES (1, 'c', 'priority')",
+        [],
+    )
+    .expect("insert combo");
 
     // Successful request: 2 attempts of 1000ms + 2000ms = 3000ms waited.
     insert_row_ms(&conn, "ok-1", Some(1), 429, 1_000);
@@ -139,14 +162,21 @@ fn average_times_separate_success_from_absolute_failure() {
     // Successes: (3000 + 4000) / 2.
     assert_eq!(r.avg_ok_ms, Some(3_500.0), "median of successful waits");
     // The failure carries the whole exhausting path, not one attempt.
-    assert_eq!(r.avg_error_ms, Some(60_000.0), "full time until the client error");
+    assert_eq!(
+        r.avg_error_ms,
+        Some(60_000.0),
+        "full time until the client error"
+    );
 }
 
 #[test]
 fn a_combo_with_only_successes_reports_no_failure_time() {
     let (conn, _) = fresh_conn();
-    conn.execute("INSERT INTO combos (id, name, strategy) VALUES (1, 'c', 'priority')", [])
-        .expect("insert combo");
+    conn.execute(
+        "INSERT INTO combos (id, name, strategy) VALUES (1, 'c', 'priority')",
+        [],
+    )
+    .expect("insert combo");
     insert_row_ms(&conn, "ok", Some(1), 200, 1_500);
 
     let rows = by_combo(&conn, &UsageFilter::default()).expect("by_combo");

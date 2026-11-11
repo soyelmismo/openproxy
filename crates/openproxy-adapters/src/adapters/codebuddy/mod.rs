@@ -40,6 +40,27 @@ pub fn apply_codebuddy_spoofing_headers(req: &mut UpstreamRequest) {
     CodeBuddySpoofer.apply_to_request(req);
 }
 
+/// Extracts the account UID (`sub` claim) from a CodeBuddy OAuth access token.
+///
+/// The official CLI sends this as `X-User-Id` on every chat request. The
+/// backend uses it to attribute the conversation to the account, which is what
+/// drives the daily activity credit bonus. A missing `X-User-Id` still serves
+/// and bills the request, but the account never accrues activity credit.
+pub fn codebuddy_uid_from_token(token: &str) -> Option<String> {
+    let payload = token.trim().split('.').nth(1)?;
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(payload))
+        .ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    let uid = json.get("sub").and_then(|v| v.as_str())?;
+    if uid.trim().is_empty() {
+        return None;
+    }
+    Some(uid.to_string())
+}
+
 pub const NPM_CODEBUDDY_METADATA_URL: &str =
     "https://registry.npmjs.org/@tencent-ai/codebuddy-code/latest";
 
@@ -231,8 +252,9 @@ impl ProviderAdapter for CodeBuddyAdapter {
             cur_ver = version.to_string();
             cur_ua = format!("CLI/{version} CodeBuddy/{version}");
         }
-        crate::spoofer::upsert_header(&mut headers, "x-ide-version", cur_ver);
+        crate::spoofer::upsert_header(&mut headers, "x-ide-version", cur_ver.clone());
         crate::spoofer::upsert_header(&mut headers, "user-agent", cur_ua);
+        crate::spoofer::upsert_header(&mut headers, "x-product-version", cur_ver);
 
         // Required conversation and message tracing headers observed in official CLI
         // to pass Tencent backend channel verification (error 11128).
@@ -240,8 +262,17 @@ impl ProviderAdapter for CodeBuddyAdapter {
         let msg_id = uuid::Uuid::new_v4().simple().to_string();
         let req_id = uuid::Uuid::new_v4().to_string();
         crate::spoofer::upsert_header(&mut headers, "x-conversation-id", conv_id);
-        crate::spoofer::upsert_header(&mut headers, "x-conversation-request-id", req_id);
+        crate::spoofer::upsert_header(&mut headers, "x-conversation-request-id", req_id.clone());
         crate::spoofer::upsert_header(&mut headers, "x-conversation-message-id", msg_id);
+        crate::spoofer::upsert_header(&mut headers, "x-request-id", req_id);
+
+        // X-User-Id is the account attribution header the official CLI derives
+        // from the OAuth JWT `sub`. Without it the backend cannot tie the
+        // conversation to the account, so the daily activity bonus is never
+        // credited even though the chat call itself succeeds and bills credits.
+        if let Some(uid) = codebuddy_uid_from_token(access_token) {
+            crate::spoofer::upsert_header(&mut headers, "x-user-id", uid);
+        }
 
         // El override de configuración gana sobre el contrato y sobre el
         // spoofer: es la decisión explícita del despliegue.

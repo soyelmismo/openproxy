@@ -1,6 +1,7 @@
 // views/analytics/charts.ts — uPlot instances + lifecycle, preset/toolbar templates.
 
 import { html, type TemplateResult } from "lit-html";
+import { live } from "lit-html/directives/live.js";
 import {
   buildDailyUsageChart,
   observeResize,
@@ -60,6 +61,21 @@ export function destroyAnalyticsCharts(): void {
   setCharts(null);
 }
 
+/** Re-create the charts if a re-render removed their canvas from the
+ *  container: uPlot is mounted imperatively, outside lit's diff, so any
+ *  template re-creation of `#chart-daily-usage` silently kills the canvas.
+ *  Called after every view render; cheap when everything is alive. */
+export function ensureAnalyticsChartsAlive(): void {
+  const dailyEl: HTMLElement | null = document.getElementById("chart-daily-usage");
+  if (!dailyEl || !dailyEl.isConnected) return;
+  if (charts && dailyEl.querySelector(".uplot") !== null) return; // alive
+  if (charts) destroyAnalyticsCharts();
+  const dailyUsage = buildDailyUsageChart(dailyEl);
+  const disposer = observeResize(dailyUsage, dailyEl);
+  setCharts({ dailyUsage, resizeDisposers: [disposer] });
+  dailyUsage.setData(dailyUsageData(byDay));
+}
+
 /** Recreate chart instances after a theme change. */
 export function refreshAnalyticsChartTheme(): void {
   destroyAnalyticsCharts();
@@ -100,9 +116,9 @@ export function renderAnalyticsToolbar(
       ${isFullAdmin() ? html`
       <label class="analytics-filter-field" for="analytics-key-filter">
         <span>${t("analytics.filter.api_key")}</span>
-        <select id="analytics-key-filter" class="filter-dropdown" .value=${apiKeyId} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
-          <option value="">${t("analytics.filter.all_api_keys")}</option>
-          ${apiKeys.map((k) => html`<option value=${String(k.id)}>${k.label || k.key_prefix || "—"}${k.key_prefix ? ` · ${k.key_prefix}` : ""}</option>`)}
+        <select id="analytics-key-filter" class="filter-dropdown" .value=${live(apiKeyId)} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
+          <option value="" ?selected=${apiKeyId === ""}>${t("analytics.filter.all_api_keys")}</option>
+          ${apiKeys.map((k) => html`<option value=${String(k.id)} ?selected=${apiKeyId === String(k.id)}>${k.label || k.key_prefix || "—"}${k.key_prefix ? ` · ${k.key_prefix}` : ""}</option>`)}
         </select>
       </label>` : html``}
       <div class="analytics-filter-field analytics-model-filter">

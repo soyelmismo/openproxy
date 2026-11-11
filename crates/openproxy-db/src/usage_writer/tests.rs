@@ -37,6 +37,9 @@ fn input() -> UsageInput {
         proxy_status: None,
         flags: 0,
         audio_ms: None,
+        session_hash: None,
+        max_chunk_gap_ms: None,
+        avg_chunk_gap_ms: None,
     }
 }
 

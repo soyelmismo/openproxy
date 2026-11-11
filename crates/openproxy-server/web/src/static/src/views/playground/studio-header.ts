@@ -104,7 +104,7 @@ export function renderStudioHeader(st: PlaygroundState, callbacks: StudioHeaderC
     <div class="playground-studio-header">
       <div class="playground-studio-title-area">
         <div class="playground-title-row">
-          <h2 class="playground-studio-title">${t('playground.title')}</h2>
+          <h2 class="playground-studio-title view-identity">${t('playground.title')}</h2>
           ${renderStatusBadge(st)}
         </div>
       </div>

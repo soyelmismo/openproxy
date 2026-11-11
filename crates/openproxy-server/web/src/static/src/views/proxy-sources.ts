@@ -140,14 +140,13 @@ async function onBulkDeleteSources(picked: ProxySource[]): Promise<void> {
 
 function renderPageHeader(): TemplateResult {
   return html`
-    <div class="page-header">
-      <div>
-        <h2>Proxy Sources</h2>
-        <p class="subtitle">
-          Manage dynamic URLs and endpoints to automatically scrape proxies from.
-        </p>
-      </div>
-      <div class="actions">
+    <div
+      class="cx-toolbar cx-sources-toolbar"
+      title="Manage dynamic URLs and endpoints to automatically scrape proxies from."
+      aria-description="Manage dynamic URLs and endpoints to automatically scrape proxies from."
+    >
+      <h2 class="view-identity">Proxy Sources</h2>
+      <div class="cx-toolbar-actions">
         <button
           type="button"
           class="primary"

@@ -131,6 +131,15 @@
     position: static;
   }
 }
+@container tile-view (max-width: 960px) {
+  .playground-inspector-sidebar {
+    width: 100%;
+    position: static;
+    border-left: none;
+    border-top: var(--border-w) var(--border-style) var(--color-border);
+    padding-top: var(--space-3);
+  }
+}
 .playground-sidebar-card {
   background: var(--color-surface);
   border: var(--border-w) var(--border-style) var(--color-border);

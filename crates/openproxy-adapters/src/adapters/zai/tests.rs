@@ -228,8 +228,10 @@ fn zai_autoclaw_headers_never_advertise_linux() {
 
     let adapter = ZaiAdapter::new();
     let model = ModelId::new("GLM-5.3");
-    let mut headers: Vec<(String, String)> =
-        vec![("X-Authorization".to_string(), "Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig".to_string())];
+    let mut headers: Vec<(String, String)> = vec![(
+        "X-Authorization".to_string(),
+        "Bearer eyJhbGciOiJSUzI1NiJ9.payload.sig".to_string(),
+    )];
     let body = bytes::Bytes::from_static(
         br#"{"model":"GLM-5.3","messages":[{"role":"user","content":"hi"}]}"#,
     );

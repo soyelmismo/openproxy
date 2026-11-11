@@ -91,7 +91,7 @@
     margin-bottom: 6px;
   }
 
-  .actions:has(button) {
+  .page-header .actions:has(button) {
     display: grid;
     grid-template-columns: 1.2fr 1fr 1.1fr;
     gap: 4px;
@@ -99,7 +99,7 @@
     margin-bottom: 6px;
   }
 
-  .actions:has(button) button {
+  .page-header .actions:has(button) button {
     height: 28px;
     font-size: var(--fs-xs);
     padding: 0 4px;
@@ -427,14 +427,14 @@
 
 /* Container query support for Proxies and Proxy Sources in narrow workspace tiles */
 @container tile-view (max-width: 600px) {
-  .actions:has(button) {
+  .page-header .actions:has(button) {
     display: flex;
     flex-direction: column;
     width: 100%;
     gap: 4px;
   }
 
-  .actions:has(button) button {
+  .page-header .actions:has(button) button {
     width: 100%;
     justify-content: center;
   }
@@ -444,7 +444,8 @@
     gap: 4px;
   }
 
-  .filter-bar {
+  .tile-view[data-view="proxies"] .filter-bar,
+  .tile-view[data-view="proxy-sources"] .filter-bar {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -522,4 +523,132 @@
     grid-column: 1 / -1;
     width: 100%;
   }
+}
+
+
+/* ── Compact single-row header ────────────────────────────────────────────
+   Identity (visually hidden inside a tile) · Test URL disclosure · actions.
+   One 34px band, 28px controls, no stacked button column at any width. */
+.cx-proxies-toolbar {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 0 6px;
+  margin-bottom: var(--space-3);
+}
+.cx-proxies-toolbar .cx-details { flex: 0 0 auto; }
+.cx-proxies-toolbar .cx-details > summary {
+  height: 28px;
+  min-height: 28px;
+  padding: 0 8px;
+  gap: 5px;
+}
+.cx-proxies-toolbar .cx-details > summary .icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.cx-proxies-toolbar .cx-details[open] > summary { color: var(--color-text); }
+.cx-proxies-toolbar .cx-toolbar-actions {
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.cx-proxies-toolbar .cx-toolbar-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+.cx-proxies-toolbar .cx-toolbar-actions button .icon { flex: none; }
+.cx-proxies-toolbar .cx-btn-label { white-space: nowrap; }
+
+@container tile-view (max-width: 420px) {
+  .cx-proxies-toolbar .cx-btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .cx-proxies-toolbar .cx-toolbar-actions button {
+    position: relative;
+    width: 30px;
+    padding: 0;
+  }
+}
+
+/* Filter row keeps the search and the three selects on one line; it only
+   stacks once the tile is narrower than the controls can compress to. */
+.tile-view .cx-filterbar { flex-wrap: nowrap; }
+.tile-view .cx-filterbar .cx-filter-search { flex: 1 1 120px; min-width: 0; }
+.tile-view .cx-filterbar .cx-filter-selects {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+}
+.tile-view .cx-filterbar .cx-filter-selects select { flex: 0 1 auto; width: auto; min-width: 0; }
+@container tile-view (max-width: 420px) {
+  .tile-view .cx-filterbar { flex-wrap: wrap; }
+  .tile-view .cx-filterbar .cx-filter-search { flex: 1 1 100%; }
+  .tile-view .cx-filterbar .cx-filter-selects {
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .tile-view .cx-filterbar .cx-filter-selects select { width: 100%; }
+}
+
+/* KPI strip: one dense stat row — label over value, four equal cells. */
+@container tile-view (max-width: 640px) {
+  .tile-view .cx-kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 0;
+  }
+  .tile-view .cx-kpi {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    padding: 4px 8px;
+    min-width: 0;
+  }
+  .tile-view .cx-kpi + .cx-kpi { border-left: 1px solid var(--color-border-soft); }
+  .tile-view .cx-kpi-label {
+    font-size: 10px;
+    line-height: 1.3;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tile-view .cx-kpi-value { font-size: var(--fs-sm); line-height: 1.25; }
+}
+@container tile-view (max-width: 380px) {
+  .tile-view .cx-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tile-view .cx-kpi {
+    flex-direction: row;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0 6px;
+    padding: 3px 8px;
+  }
+  /* Two per row leaves too little room for a nowrap label: let it breathe. */
+  .tile-view .cx-kpi-label {
+    flex: 1 1 100%;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    font-size: 10px;
+  }
+  .tile-view .cx-kpi-value { align-items: baseline; }
+  .tile-view .cx-kpi:nth-child(n + 3) { border-top: 1px solid var(--color-border-soft); }
+  .tile-view .cx-kpi:nth-child(odd) { border-left: 0; }
 }

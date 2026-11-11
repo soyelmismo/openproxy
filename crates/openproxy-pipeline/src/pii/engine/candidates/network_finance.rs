@@ -13,6 +13,13 @@ use super::super::regexes::{
 use super::super::validators::{is_valid_iban, luhn_check};
 use super::Candidate;
 
+/// ASCII identifier bytes. A real IPv6 address never has one glued to the
+/// `::` it starts or ends with; code paths always do.
+#[inline]
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
 pub(crate) fn collect_network_finance_candidates<'a>(
     entities: &[PiiEntity],
     text: &'a str,
@@ -21,6 +28,15 @@ pub(crate) fn collect_network_finance_candidates<'a>(
 ) {
     if entities.contains(&PiiEntity::Email) {
         for m in REGEX_EMAIL.find_iter(text) {
+            let s = m.as_str();
+            // URL-encoded npm scopes (`@scope%2Fpackage@1.2.3.patch`) and
+            // paths are not addresses: no real local part carries
+            // percent-encoding or slashes. Masking them also strands a
+            // placeholder behind an `@`, which the restore stage then refuses
+            // to detach from the contact boundary.
+            if s.contains('%') || s.contains('/') {
+                continue;
+            }
             if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
                 candidates.push(Candidate {
                     start: m.start(),
@@ -127,6 +143,19 @@ pub(crate) fn collect_network_finance_candidates<'a>(
                 }
             }
             let s = m.as_str();
+            // Rust, C++ and Python path separators are not compressed
+            // addresses: `db::skills_store` and `openproxy-adapters::eac`
+            // start or end with `::` glued to an identifier, which no real
+            // address does. Matching them corrupts the payload with an IPv6
+            // placeholder the restore stage cannot detach from its token.
+            if s.starts_with("::") && m.start() > 0 && is_ident_byte(text.as_bytes()[m.start() - 1])
+            {
+                continue;
+            }
+            if s.ends_with("::") && m.end() < text.len() && is_ident_byte(text.as_bytes()[m.end()])
+            {
+                continue;
+            }
             if s == "::" {
                 let attached = text[..m.start()]
                     .chars()

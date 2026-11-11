@@ -8,7 +8,7 @@ import { keyFormTemplate, buildKeyBodyFromForm } from "../handlers/key-handlers.
 import { renderAllowedModelsChips, renderBlacklistedModelsChips, renderAllowedCombosChips } from "../components/model-picker.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
-import type { ApiKey, Model, Provider } from "../lib/types/api.js";
+import type { ApiKey, KeyQuotaResponse, Model, Provider } from "../lib/types/api.js";
 
 export async function mountKeyDetail(
   id: number,
@@ -21,8 +21,9 @@ export async function mountKeyDetail(
   let cleanup = (): void => {};
   render(html`<p role="status">${t("workspace.loading")}</p>`, container);
   try {
-    const [loaded] = await Promise.all([
+    const [loaded, quotaResp] = await Promise.all([
       api(`/keys/${id}`) as Promise<ApiKey>,
+      api(`/keys/${id}/quota`) as Promise<KeyQuotaResponse>,
       state.modelsComplete ? Promise.resolve() : api("/models").then(models => {
         state.models = models as Model[];
         state.modelsComplete = true;
@@ -38,6 +39,13 @@ export async function mountKeyDetail(
       (form.elements.namedItem("expires_unit") as HTMLSelectElement | null)?.value ?? "",
     ];
     const status = (): string => t(key.revoked_at ? "keys.list.status.revoked" : key.is_active ? "keys.list.status.active" : "keys.list.status.inactive");
+    // Compact one-line dates keep the summary strip to a single row; the full
+    // timestamp stays available on hover via `title`.
+    const shortDate = (iso?: string | null): string => iso
+      ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+      : "—";
+    const fullDate = (iso?: string | null): string => iso ? new Date(iso).toLocaleString() : "";
+    const statusClass = key.revoked_at ? "is-revoked" : key.is_active ? "is-active" : "is-inactive";
     const save = async (event: Event): Promise<void> => {
       const form = event.target;
       if (!(form instanceof HTMLFormElement) || saving || disposed || !container.isConnected) return;
@@ -66,18 +74,18 @@ export async function mountKeyDetail(
       }
     };
     cleanup = mountView(container, () => html`<section class="key-detail">
-      <header class="key-detail-header">
-        <div><a href="#/keys">${t("keys.detail.back")}</a><h1>${key.label || `#${key.id}`}</h1>
-          <p>${t("keys.detail.subtitle")}</p></div>
-        <a class="btn" href=${`#/keys/${id}/usage`}>${t("keys.list.btn.usage")}</a>
+      <header class="cx-key-header">
+        <a href="#/keys" class="back-link cx-back-link">${t("keys.detail.back")}</a>
+        <h1 title=${t("keys.detail.subtitle")} aria-description=${t("keys.detail.subtitle")}>${key.label || `#${key.id}`}</h1>
+        <a class="btn cx-key-usage" href=${`#/keys/${id}/usage`}>${t("keys.list.btn.usage")}</a>
       </header>
-      <dl class="key-detail-summary">
-        <div><dt>${t("keys.detail.prefix")}</dt><dd><code>${key.key_prefix || "—"}</code></dd></div>
-        <div><dt>${t("keys.detail.status")}</dt><dd>${status()}</dd></div>
-        <div><dt>${t("keys.detail.created")}</dt><dd>${key.created_at ? new Date(key.created_at).toLocaleString() : "—"}</dd></div>
-        <div><dt>${t("keys.detail.last_used")}</dt><dd>${key.last_used_at ? new Date(key.last_used_at).toLocaleString() : "—"}</dd></div>
+      <dl class="cx-key-summary">
+        <div class="cx-key-stat cx-key-stat--prefix"><dt>${t("keys.detail.prefix")}</dt><dd><code>${key.key_prefix || "—"}</code></dd></div>
+        <div class=${`cx-key-stat cx-key-stat--status ${statusClass}`}><dt>${t("keys.detail.status")}</dt><dd>${status()}</dd></div>
+        <div class="cx-key-stat"><dt>${t("keys.detail.created")}</dt><dd title=${fullDate(key.created_at)}>${shortDate(key.created_at)}</dd></div>
+        <div class="cx-key-stat"><dt>${t("keys.detail.last_used")}</dt><dd title=${fullDate(key.last_used_at)}>${shortDate(key.last_used_at)}</dd></div>
       </dl>
-      ${keyFormTemplate({ mode: "edit", key, wrapper: container, inline: true, onSubmit: event => { void save(event); }, onCancel: () => { location.hash = "#/keys"; } })}
+      ${keyFormTemplate({ mode: "edit", key, quota: quotaResp ? (quotaResp.caps ?? null) : null, wrapper: container, inline: true, onSubmit: event => { void save(event); }, onCancel: () => { location.hash = "#/keys"; } })}
     </section>`);
     renderAllowedModelsChips();
     renderBlacklistedModelsChips();

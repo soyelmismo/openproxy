@@ -1,4 +1,5 @@
-use super::{FormattingStage, enforce_stream_body, resolve_upstream_streaming, stream_request_url};
+use super::FormattingStage;
+use super::formatting::{enforce_stream_body, resolve_upstream_streaming, stream_request_url};
 use crate::context::{PipelineContext, ResolvedTarget};
 use crate::test_utils::{make_request, test_config};
 use openproxy_adapters::adapters::{CustomAdapter, ProviderAdapterConfig, ProviderAdapterEnum};

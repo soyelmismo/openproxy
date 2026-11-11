@@ -21,6 +21,7 @@ fn test_codebuddy_pinned_unverified_contract_does_not_elevate_headers() {
                 !k.eq_ignore_ascii_case("x-conversation-id")
                     && !k.eq_ignore_ascii_case("x-conversation-request-id")
                     && !k.eq_ignore_ascii_case("x-conversation-message-id")
+                    && !k.eq_ignore_ascii_case("x-request-id")
             })
             .cloned()
             .collect()

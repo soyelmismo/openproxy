@@ -73,10 +73,10 @@ pub async fn h2c_downgrade(mut req: Request, next: Next) -> Response {
             .and_then(|v| v.to_str().ok())
         {
             Some(value) => {
-                if let Some(cleaned) = cleaned_connection_tokens(value) {
-                    if let Ok(header_value) = axum::http::HeaderValue::from_str(&cleaned) {
-                        headers.insert(axum::http::header::CONNECTION, header_value);
-                    }
+                if let Some(cleaned) = cleaned_connection_tokens(value)
+                    && let Ok(header_value) = axum::http::HeaderValue::from_str(&cleaned)
+                {
+                    headers.insert(axum::http::header::CONNECTION, header_value);
                 }
             }
             None => {
@@ -138,11 +138,10 @@ mod tests {
                 axum::routing::any(|req: Request| async move {
                     let mut response = axum::response::Response::new(axum::body::Body::empty());
                     for (name, value) in req.headers() {
-                        if matches!(name.as_str(), "upgrade" | "connection" | "http2-settings") {
-                            if let Ok(value) = axum::http::HeaderValue::from_bytes(value.as_bytes())
-                            {
-                                response.headers_mut().append(name, value);
-                            }
+                        if matches!(name.as_str(), "upgrade" | "connection" | "http2-settings")
+                            && let Ok(value) = axum::http::HeaderValue::from_bytes(value.as_bytes())
+                        {
+                            response.headers_mut().append(name, value);
                         }
                     }
                     response

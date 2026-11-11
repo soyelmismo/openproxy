@@ -452,6 +452,7 @@ impl Pipeline {
             trace_id: ctx.trace_id,
             stage: "started",
             elapsed_ms: 0,
+            session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req),
             provider_id: resolved_target.target.provider_id.to_string(),
             upstream_model_id: resolved_target.model.model_id.as_str(),
             timestamp: String::new(),

@@ -1,0 +1,192 @@
+
+.quota-cell { display: flex; flex-direction: column; gap: 0.15rem; min-width: 175px; }
+.quota-cell.muted { color: var(--color-text-muted); }
+.quota-cell.error { color: var(--color-error); }
+.quota-cell .quota-plan { color: var(--color-text-muted); font-size: var(--fs-xs); }
+.quota-cell .quota-plan-row { display: flex; align-items: center; gap: var(--space-2, 0.5rem); }
+.quota-cell .quota-meta-row,
+.account-quota-families .quota-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+.quota-cell .quota-tag,
+.account-quota-families .quota-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--fs-2xs, 0.7rem);
+  font-weight: 500;
+  line-height: 1.3;
+}
+.quota-cell .quota-tag svg,
+.quota-cell .quota-tag .icon,
+.account-quota-families .quota-tag svg,
+.account-quota-families .quota-tag .icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.quota-cell .quota-tag.credits,
+.account-quota-families .quota-tag.credits {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.quota-cell .quota-tag.credits.clickable,
+.account-quota-families .quota-tag.credits.clickable {
+  cursor: pointer;
+  transition: background var(--t-fast, 120ms), border-color var(--t-fast, 120ms), transform var(--t-fast, 120ms), color var(--t-fast, 120ms);
+  user-select: none;
+}
+.quota-cell .quota-tag.credits.clickable:hover,
+.account-quota-families .quota-tag.credits.clickable:hover {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.55);
+  color: #7dd3fc;
+}
+.quota-cell .quota-tag.credits.clickable:focus-visible,
+.account-quota-families .quota-tag.credits.clickable:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+.quota-cell .quota-tag.credits.clickable:active,
+.account-quota-families .quota-tag.credits.clickable:active {
+  transform: scale(0.97);
+}
+.quota-cell .quota-tag.reserve,
+.account-quota-families .quota-tag.reserve {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.28);
+}
+.quota-cell .quota-tag.checkin-done,
+.account-quota-families .quota-tag.checkin-done {
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--color-success, #22c55e);
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+.quota-cell .quota-tag.checkin-pending,
+.account-quota-families .quota-tag.checkin-pending {
+  background: rgba(234, 179, 8, 0.12);
+  color: var(--color-warn, #eab308);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+}
+
+.quota-bar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.quota-bar-label-left {
+  font-weight: 500;
+  color: var(--color-text);
+}
+.quota-bar-label-right {
+  color: var(--color-text-muted);
+}
+
+.quota-model-details {
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+  min-width: 175px;
+}
+.quota-model-details summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+.quota-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+.quota-model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.quota-model-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.quota-model-name {
+  font-family: var(--font-mono);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quota-model-text {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Z.ai dual-quota pools. Each pool is an independent source with its own unit,
+   figures and lifecycle. Starter always renders above the paid plan. */
+.quota-cell .quota-pools {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.quota-cell .quota-pool-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+.quota-cell .quota-pool-title {
+  font-weight: 600;
+  color: var(--color-text);
+}
+.quota-cell .quota-pool-source {
+  display: block;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  font-size: var(--fs-2xs);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quota-cell .quota-bar.quota-pool {
+  margin: 0;
+}
+/* Per-pool fetch error: scoped so it can't hide a healthy sibling pool. */
+.quota-cell .quota-pool-error {
+  color: var(--color-error);
+  font-size: var(--fs-2xs);
+  margin-top: 2px;
+}
+.quota-cell .quota-pool-error.top {
+  margin-top: 0;
+  margin-bottom: var(--space-1);
+}
+.quota-cell .quota-pool-muted {
+  color: var(--color-text-muted);
+  font-size: var(--fs-2xs);
+}
+/* Status already communicates through the pill; the bar keeps its fill muted
+   so a dead pool never reads as a healthy green bar. */
+.quota-cell .quota-bar.status-absent .quota-bar-fill,
+.quota-cell .quota-bar.status-expired .quota-bar-fill,
+.quota-cell .quota-bar.status-unavailable .quota-bar-fill {
+  background: var(--color-surface-2);
+}
+.quota-cell .quota-bar.status-exhausted .quota-bar-fill {
+  background: var(--color-error);
+}

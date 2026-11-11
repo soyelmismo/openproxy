@@ -205,7 +205,7 @@ fn apply_signed_headers(req: &mut UpstreamRequest, profile: &SignProfile, raw_to
         openproxy_types::now_unix_secs_str()
     };
     let sign =
-        crate::adapters::zai::md5::md5::md5_hex(format!("{}&{}&{}", APP_ID, now, profile.app_key));
+        crate::adapters::zai::md5::md5_hex(format!("{}&{}&{}", APP_ID, now, profile.app_key));
 
     if let Ok(val) = crate::antigravity_headers::build_bearer_header(raw_token) {
         req.headers.insert(http::header::AUTHORIZATION, val);

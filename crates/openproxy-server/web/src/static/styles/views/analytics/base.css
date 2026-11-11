@@ -1,0 +1,93 @@
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+}
+.metrics > div {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.metrics > div label {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.metrics > div value,
+.metrics > div .value {
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  color: var(--color-text);
+}
+
+.banner-error {
+  background: var(--color-error-soft);
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+/* Null-pricing warning banner: yellow/orange variant for the
+   "N rows had no pricing data" alert, raised when
+   summary.rows_with_null_pricing > 0. Reuses the warn token pair so
+   it matches the banner-info palette. */
+.banner-warning {
+  background: var(--color-warn-soft);
+  border-color: var(--color-warn);
+  color: var(--color-warn);
+}
+
+.preset-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-4);
+}
+.preset-btn {
+  padding: 0.3rem 0.7rem;
+  font-size: var(--fs-xs);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  color: var(--color-text-muted);
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.preset-btn:hover:not(.active) {
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+.preset-btn.active {
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  border-color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* Monthly providers × months cost matrix. Monospace,
+   right-aligned numeric cells so the cost columns line up; the first
+   column (provider id) stays left-aligned, the Total column and totals
+   row are bolded. */
+table.monthly-matrix {
+  font-size: var(--fs-xs);
+  table-layout: auto;
+}
+.monthly-matrix th,
+.monthly-matrix td {
+  padding: 0.3rem 0.5rem;
+  white-space: nowrap;
+}
+.monthly-matrix th.num,
+.monthly-matrix td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+.monthly-matrix td.total,
+.monthly-matrix tfoot th {
+  font-weight: 600;
+}
+.monthly-matrix tfoot th {
+  border-top: var(--border-w-2) var(--border-style) var(--color-border);
+}
+.monthly-matrix tbody tr:hover { background: var(--color-surface-2); }
+

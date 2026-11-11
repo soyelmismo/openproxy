@@ -1,0 +1,71 @@
+  /* Desktop hides the mobile-only card cells. The views below still
+     use a bespoke two-layout table; proxies/keys moved to
+     renderResponsiveCardTable and no longer emit these cells. */
+  .mobile-model-card-cell,
+  .mobile-proxy-source-card-cell,
+  .mobile-analytics-error-card-cell {
+    display: none;
+  }
+
+  .cap-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  font-size: var(--fs-2xs);
+  font-family: var(--font-mono);
+  background: var(--color-info-soft);
+  color: var(--color-info);
+  border: var(--border-w) var(--border-style) var(--color-info);
+  margin: 0 0.15rem 0.15rem 0;
+}
+.cap-badge.warn {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+}
+
+/* Capability icons (model lists): shape + color + title tooltip replace the
+   text chips that clipped the row in narrow tiles. */
+.caps-row {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.cap-ic {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+}
+.cap-ic svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+.cap-ic-unary { color: var(--color-error); }
+.cap-ic-stream, .cap-ic-attach { color: var(--color-info); }
+.cap-ic-vision { color: var(--color-link); }
+.cap-ic-tools, .cap-ic-reasoning, .cap-ic-thinking { color: var(--color-primary); }
+.cap-ic-json, .cap-ic-decisions { color: var(--color-success); }
+.badge.custom {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+  border-color: var(--color-warn);
+  margin-left: var(--space-1);
+  font-size: var(--fs-2xs);
+  padding: 0.05rem 0.4rem;
+}
+
+.readonly-field {
+  padding: 0.4rem 0.6rem;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-mono);
+}
+
+.health-select {
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.4rem;
+}
+.health-select.healthy   { color: var(--color-success); border-color: var(--color-success); }
+.health-select.degraded  { color: var(--color-warn);    border-color: var(--color-warn); }
+.health-select.unhealthy { color: var(--color-error);   border-color: var(--color-error); }

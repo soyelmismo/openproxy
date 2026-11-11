@@ -10,7 +10,8 @@ import { fetchRecordingState, toggleRecording, exportLogsCSV } from "../handlers
 import { api } from "../lib/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
 import { openLogDetail } from "../components/log-detail/index.js";
-import { liveLogsStore, type AttemptState } from "../state/live-logs-store.js";
+import { liveLogsStore, sessionGroupState, NO_SESSION_KEY, type AttemptState, type SessionGroup } from "../state/live-logs-store.js";
+import { tileRootActive } from "../lib/tile-active.js";
 import { clockStore } from "../state/clock-store.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
 import type { NotificationEvent } from "../lib/types/notifications.js";
@@ -55,6 +56,44 @@ let isPaused = false;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let frozenLogsSnapshot: AttemptState[] | null = null;
 
+// ── Sessions view mode ────────────────────────────────────────────────
+type LogsViewMode = "classic" | "sessions";
+const LOGS_VIEW_MODE_STORAGE_KEY = "openproxy:logs:viewMode";
+let logsViewMode: LogsViewMode = "classic";
+const expandedSessions = new Set<string>();
+let sessionsAutoExpandPending = false;
+
+function loadViewMode(): LogsViewMode {
+  try {
+    const v = localStorage.getItem(LOGS_VIEW_MODE_STORAGE_KEY);
+    if (v === "sessions" || v === "classic") return v;
+  } catch { /* ignore */ }
+  return "classic";
+}
+
+function onSetLogsViewMode(mode: LogsViewMode): void {
+  if (logsViewMode === mode) return;
+  logsViewMode = mode;
+  try { localStorage.setItem(LOGS_VIEW_MODE_STORAGE_KEY, mode); } catch { /* ignore */ }
+  if (mode === "sessions") sessionsAutoExpandPending = true;
+  requestUpdate();
+}
+
+function onToggleSessionGroup(key: string): void {
+  if (expandedSessions.has(key)) expandedSessions.delete(key);
+  else expandedSessions.add(key);
+  requestUpdate();
+}
+
+function formatRelativeAge(msAgo: number): string {
+  if (!Number.isFinite(msAgo) || msAgo < 0) return "now";
+  if (msAgo < 5_000) return "now";
+  if (msAgo < 60_000) return `${Math.floor(msAgo / 1_000)}s ago`;
+  if (msAgo < 3_600_000) return `${Math.floor(msAgo / 60_000)}m ago`;
+  if (msAgo < 86_400_000) return `${Math.floor(msAgo / 3_600_000)}h ago`;
+  return `${Math.floor(msAgo / 86_400_000)}d ago`;
+}
+
 function onSearchInput(e: Event): void {
   const val = (e.target as HTMLInputElement).value.trim().toLowerCase();
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
@@ -79,6 +118,9 @@ let logsFrameQueued = false;
 
 function handleLogsMessage(event: MessageEvent): void {
   if (isPaused) return;
+  // Hibernation: while another tile is maximized this panel is background, so
+  // its store dispatch and repaint are skipped entirely.
+  if (!tileRootActive(document.querySelector('.tile-view[data-view="logs"]'))) return;
   try { liveLogsStore.dispatch(JSON.parse(event.data) as WsEnvelope); } catch { /* ignore */ }
   if (logsFrameQueued) return;
   logsFrameQueued = true;
@@ -113,7 +155,7 @@ function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; re
 }
 
 function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
-  return html`<div class="log-row desktop-table-header" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:0.72rem;text-transform:uppercase;color:var(--color-log-header-fg);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
+  return html`<div class="log-row desktop-table-header" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:max(10px,0.72rem);text-transform:uppercase;color:var(--color-log-header-fg);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
     .filter((c) => visibleColKeys.has(c.key))
     .map((c) => html`<span class="log-${c.key}" data-col=${c.key}>${c.label}</span>`)}</div>`;
 }
@@ -132,6 +174,55 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
     <div class="mobile-pag-row-meta">
       <span class="rows-info">${totalRows} row${totalRows !== 1 ? "s" : ""}</span>
       <label class="logs-follow-toggle"><input type="checkbox" id="logs-follow-input" ?checked=${state.logs.followTail} @change=${logsSetFollow}><span>Follow</span></label>
+    </div>
+  </div>`;
+}
+
+function renderSessionGroup(g: SessionGroup, visibleColKeys: Set<string>, nowOffsetMs: number): TemplateResult {
+  const st = sessionGroupState(g);
+  const open = expandedSessions.has(g.key);
+  const ageMs = nowOffsetMs - g.lastActivityMs;
+  return html`<div class="logs-session ${open ? "open" : ""}" data-session=${g.key}>
+    <button
+      type="button"
+      class="logs-session-header logs-session--${st}"
+      @click=${() => onToggleSessionGroup(g.key)}
+      aria-expanded=${open ? "true" : "false"}
+      title=${g.key === NO_SESSION_KEY ? "Requests without a session fingerprint" : `Session ${g.key}`}
+    >
+      <span class="logs-session-caret">${icons.chevronRight()}</span>
+      <span class="logs-session-dot" aria-hidden="true"></span>
+      <span class="logs-session-id">${g.label}</span>
+      <span class="logs-session-meta">
+        ${g.total} req${g.total !== 1 ? "s" : ""}
+        ${g.inflightCount > 0 ? html`<span class="logs-session-inflight">${g.inflightCount} in flight</span>` : null}
+      </span>
+      <span class="logs-session-age">${formatRelativeAge(ageMs)}</span>
+    </button>
+    ${open ? html`<div class="logs-session-rows">
+      ${renderHeaderRow(visibleColKeys)}
+      ${repeat(g.attempts, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
+    </div>` : null}
+  </div>`;
+}
+
+function renderSessionsSection(visibleColKeys: Set<string>, nowOffsetMs: number): TemplateResult {
+  const groups = liveLogsStore.selectSessionGroups(matchesLogFilter);
+  if (sessionsAutoExpandPending && groups.length > 0) {
+    const newest = groups[0];
+    if (newest) expandedSessions.add(newest.key);
+    sessionsAutoExpandPending = false;
+  }
+  const inflightTotal = groups.reduce((n, g) => n + g.inflightCount, 0);
+  return html`<div class="logs-section logs-section-finished" id="logs-section-sessions">
+    <div class="logs-section-header">
+      <span class="logs-section-title">Sessions</span>
+      <span class="logs-section-count">${groups.length}${inflightTotal > 0 ? ` · ${inflightTotal} in flight` : ""}</span>
+    </div>
+    <div class="logs-scroll-area logs-scroll-area-finished logs-sessions-area">
+      ${groups.length === 0
+        ? html`<div class="empty logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No sessions matching current filter." : "No recent requests yet."}</div>`
+        : groups.map((g) => renderSessionGroup(g, visibleColKeys, nowOffsetMs))}
     </div>
   </div>`;
 }
@@ -164,8 +255,8 @@ function renderLogsView(): TemplateResult {
     });
 
   return html`
-    <div class="logs-header">
-      <div class="m-header-status-badges">
+    <div class="logs-control-deck" role="group" aria-label="Live log controls">
+      <div class="logs-deck-group logs-deck-group--state" role="group" aria-label="Connection and recording">
         <span id="logs-connection-status" class="logs-connection-badge disconnected" role="img" title="Disconnected" aria-label="Disconnected">
           <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="7" fill="currentColor" /></svg>
         </span>
@@ -173,16 +264,40 @@ function renderLogsView(): TemplateResult {
           <span class="logs-recording-dot" aria-hidden="true"></span>
           <span class="logs-recording-label">Record: <strong>OFF</strong></span>
         </button>
-        <select class="logs-status-filter" aria-label="Filter by status" .value=${filterStatus} @change=${(e: Event) => onSetStatusFilter((e.target as HTMLSelectElement).value)}>
-          <option value="all">All statuses</option>
-          <option value="inflight">In-flight</option>
-          <option value="2xx">2xx OK</option>
-          <option value="4xx">4xx Client</option>
-          <option value="5xx">5xx Server</option>
-          <option value="error">All Errors</option>
-        </select>
       </div>
-      <div class="logs-header-actions m-header-actions-row">
+      <div class="logs-deck-group logs-deck-group--viewmode" role="group" aria-label="Logs view mode">
+        <div class="logs-viewmode-toggle">
+          <button type="button" class=${logsViewMode === "classic" ? "active" : ""} @click=${() => onSetLogsViewMode("classic")} title="Flat list, newest first">Classic</button>
+          <button type="button" class=${logsViewMode === "sessions" ? "active" : ""} @click=${() => onSetLogsViewMode("sessions")} title="Group requests by session">Sessions</button>
+        </div>
+      </div>
+      <div class="logs-deck-group logs-deck-group--filters" role="group" aria-label="Log filters">
+        <div class="logs-search-box">
+          <span class="logs-search-icon">${icons.search()}</span>
+          <input type="search" class="logs-search-input" placeholder="Filter by model, provider, request id, trace..." .value=${filterSearch} @input=${onSearchInput} />
+          ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${() => { if (searchDebounceTimer) clearTimeout(searchDebounceTimer); filterSearch = ""; frozenLogsSnapshot = null; state.logs.page = 1; state.logs.followTail = true; requestUpdate(); }}>${icons.close()}</button>` : null}
+        </div>
+        <div class="logs-filter-pair">
+          <select class="logs-status-filter" aria-label="Filter by status" .value=${filterStatus} @change=${(e: Event) => onSetStatusFilter((e.target as HTMLSelectElement).value)}>
+            <option value="all">All statuses</option>
+            <option value="inflight">In-flight</option>
+            <option value="2xx">2xx OK</option>
+            <option value="4xx">4xx Client</option>
+            <option value="5xx">5xx Server</option>
+            <option value="error">All Errors</option>
+          </select>
+          ${activeKeyOptions.length > 0 || hasNoApiKeyRows ? html`
+            <select class="logs-key-filter" aria-label="Filter by API Key" .value=${filterApiKeyId} @change=${(e: Event) => onSetApiKeyFilter((e.target as HTMLSelectElement).value)}>
+              <option value="all">All API Keys (${activeKeyOptions.length})</option>
+              ${hasNoApiKeyRows ? html`<option value="none">No API Key</option>` : null}
+              ${activeKeyOptions.map((k) => html`
+                <option value=${String(k.id)}>${k.label}</option>
+              `)}
+            </select>
+          ` : null}
+        </div>
+      </div>
+      <div class="logs-header-actions" role="group" aria-label="Live log actions">
         <button type="button" class="btn btn-sm ${isPaused ? "btn-warn" : ""}" title=${isPaused ? "Resume live updates" : "Pause live updates"} @click=${() => { isPaused = !isPaused; requestUpdate(); }}>
           ${isPaused ? icons.play() : icons.pause()}<span class="logs-action-label">${isPaused ? "Resume" : "Pause"}</span>
         </button>
@@ -195,22 +310,7 @@ function renderLogsView(): TemplateResult {
         </div>
       </div>
     </div>
-    <div class="logs-filter-toolbar">
-      <div class="logs-search-box">
-        <span class="logs-search-icon">${icons.search()}</span>
-        <input type="search" class="logs-search-input" placeholder="Filter by model, provider, request id, trace..." .value=${filterSearch} @input=${onSearchInput} />
-        ${filterSearch ? html`<button type="button" class="logs-search-clear" @click=${() => { if (searchDebounceTimer) clearTimeout(searchDebounceTimer); filterSearch = ""; frozenLogsSnapshot = null; state.logs.page = 1; state.logs.followTail = true; requestUpdate(); }}>${icons.close()}</button>` : null}
-      </div>
-      ${activeKeyOptions.length > 0 || hasNoApiKeyRows ? html`
-        <select class="logs-key-filter" aria-label="Filter by API Key" .value=${filterApiKeyId} @change=${(e: Event) => onSetApiKeyFilter((e.target as HTMLSelectElement).value)}>
-          <option value="all">All API Keys (${activeKeyOptions.length})</option>
-          ${hasNoApiKeyRows ? html`<option value="none">No API Key</option>` : null}
-          ${activeKeyOptions.map((k) => html`
-            <option value=${String(k.id)}>${k.label}</option>
-          `)}
-        </select>
-      ` : null}
-    </div>
+
     <div class="logs" id="logs" @click=${(e: Event) => {
       const row = (e.target as Element | null)?.closest(".log-row[data-request-id]") as HTMLElement | null;
       if (!row) return;
@@ -220,6 +320,7 @@ function renderLogsView(): TemplateResult {
       const clicked = liveLogsStore.selectDetail(identity);
       if (clicked) void openLogDetail(clicked.rowId ? String(clicked.rowId) : "", clicked.requestId, clicked.traceId, clicked);
     }}>
+      ${logsViewMode === "sessions" ? renderSessionsSection(visibleColKeys, nowOffsetMs) : html`
       <div class="logs-section logs-section-inflight ${inflightRows.length === 0 ? "empty" : ""}" id="logs-section-inflight">
         <div class="logs-section-header"><span class="logs-section-title"><span class="logs-inflight-dot"></span> Requests in progress</span><span class="logs-section-count">${inflightRows.length}</span></div>
         <div class="logs-scroll-area logs-scroll-area-inflight" id="logs-scroll-area-inflight">
@@ -235,6 +336,7 @@ function renderLogsView(): TemplateResult {
         </div>
         ${renderPagination(totalFinished, totalP)}
       </div>
+    `}
     </div>`;
 }
 
@@ -322,6 +424,8 @@ export async function mountLogs(
   const container = (target instanceof HTMLElement) ? target : document.getElementById("main");
   if (!container) return;
   columnsMenuOpen = false;
+  logsViewMode = loadViewMode();
+  sessionsAutoExpandPending = logsViewMode === "sessions";
   if (!state.logs.visibleColumns) state.logs.visibleColumns = loadVisibleColumns();
   state.logs.page = 1; state.logs.followTail = true; frozenLogsSnapshot = null;
   const cleanupReactive = mountView(container, renderLogsView);
@@ -343,6 +447,7 @@ export async function mountLogs(
   }
   setMessageHandler(handleLogsMessage); connectLogsWebSocket();
   const onClockTick = () => {
+    if (!tileRootActive(document.querySelector('.tile-view[data-view="logs"]'))) return;
     requestUpdate();
   };
   clockStore.subscribe(onClockTick);

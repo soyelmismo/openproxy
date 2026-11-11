@@ -1,0 +1,127 @@
+/* Container query support for Config view in workspace tiles */
+@container tile-view (max-width: 650px) {
+  .config-card.card-timeouts-full {
+    grid-column: 1;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-card {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-group-grid,
+  .config-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Five timeout fields read better as two short columns than five
+     full-width rows; drop to one column only under 300px. */
+  .config-timeouts-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .config-field {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-input-group {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .config-field input,
+  .config-field select,
+  .config-field button {
+    width: 100%;
+    max-width: 100%;
+    min-height: 34px;
+    font-size: var(--fs-xs);
+    box-sizing: border-box;
+  }
+
+  .config-inline-setting {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .config-inline-action {
+    margin-left: auto;
+  }
+
+  .config-inline-action .config-input-group {
+    width: 90px;
+  }
+
+  .config-inline-action button {
+    min-height: 34px;
+    padding: 0 var(--space-2);
+  }
+
+  .config-card {
+    padding: 10px 12px;
+  }
+
+  .config-header-actions {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+    gap: var(--space-2);
+  }
+
+  .config-header-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@container tile-view (max-width: 520px) {
+  /* The full "live values" sentence stays in the title attribute; the
+     chip keeps the one-line status so the header stays compact. */
+  .config-banner .banner-text {
+    display: none;
+  }
+}
+
+@container tile-view (max-width: 380px) {
+  .config-inline-setting {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .config-inline-action {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
+  .config-inline-action .config-input-group {
+    flex: 1;
+    width: auto;
+  }
+}
+
+@container tile-view (max-width: 280px) {
+  .config-timeouts-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .config-card {
+    padding: 8px 8px;
+  }
+}

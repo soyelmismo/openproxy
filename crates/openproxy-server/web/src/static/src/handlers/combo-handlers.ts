@@ -15,6 +15,7 @@ import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
 import { mutateAndRefresh } from "../lib/mutate.js";
+import { beginButtonBusy, resolveBusyButton } from "../lib/button-busy.js";
 
 import { PRIORITY_MODE_TOOLTIPS, PRIORITY_MODE_LABELS, COOLDOWN_MODE_TOOLTIPS } from "../lib/constants.js";
 
@@ -247,13 +248,18 @@ export async function createCombo(e: Event, wrapper?: HTMLElement): Promise<void
   // POST /combos answers `{ "id": n }`, not a full Combo, so GET /combos is re-fetched into
   // `state.combos` BEFORE `requestUpdate()` (the grid renders only from that state). The modal
   // closes only after a successful POST; a failure keeps it open with the form intact.
-  await mutateAndRefresh({
-    apiCall: () => api("/combos", { method: "POST", body: JSON.stringify(body) }),
-    onSuccess: async () => {
-      if (wrapper) wrapper.remove(); else closeCreateCombo();
-      state.combos = (await api("/combos")) as Combo[];
-    },
-  });
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Creating…" });
+  try {
+    await mutateAndRefresh({
+      apiCall: () => api("/combos", { method: "POST", body: JSON.stringify(body) }),
+      onSuccess: async () => {
+        if (wrapper) wrapper.remove(); else closeCreateCombo();
+        state.combos = (await api("/combos")) as Combo[];
+      },
+    });
+  } finally {
+    busy.release();
+  }
 }
 
 export async function deleteCombo(id: number): Promise<void> {
@@ -417,14 +423,13 @@ export async function updateSelectionWindow(id: number, e: Event | null): Promis
   await updateNumericComboField(id, e, "selection_window_secs", "Window");
 }
 
-// testAllTargets receives (comboId, e); e.target is the clicked button, whose "Testing…"
-// state is toggled here. The original code used the non-standard `window.event` to find it.
+// testAllTargets receives (comboId, e); e is the click that started the run. The button is
+// resolved synchronously (before the first await) so lit's post-dispatch `currentTarget = null`
+// cannot lose it, then restored in `finally` — including on error and after the success
+// re-render replaced the node.
 export async function testAllTargets(comboId: number, e: Event | null): Promise<void> {
-  // Deliberately not mutateAndRefresh (Tier 3): this needs a per-request button
-  // disable/relabel lifecycle in a `finally` block, which the helper has no hook for.
-  const btn = e && e.target ? (e.target as HTMLElement).closest("button") : null;
-  const oldText = btn ? btn.textContent : null;
-  if (btn) { btn.disabled = true; btn.textContent = "Testing..."; }
+  // Deliberately not mutateAndRefresh (Tier 3): this needs a per-request busy lifecycle.
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Testing…" });
   try {
     const results = await api(`/combos/${comboId}/test-all`, { method: "POST" });
     state.comboTestResults[comboId] = Array.isArray(results) ? results : [];
@@ -432,7 +437,7 @@ export async function testAllTargets(comboId: number, e: Event | null): Promise<
   } catch (err: unknown) {
     showApiError(err, "Test all failed");
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = oldText || "Test all"; }
+    busy.release();
   }
 }
 

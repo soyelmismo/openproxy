@@ -9,6 +9,7 @@ import { mutateAndRefresh } from "../../lib/mutate.js";
 import { renderOpModal } from "../../components/render-op-modal.js";
 import { pollForDiscoveredModels } from "../../state/models-sync.js";
 import { requestUpdate } from "../../state/reactive.js";
+import { beginButtonBusy, resolveBusyButton } from "../../lib/button-busy.js";
 
 export function closeCreateAccount(): void {
   const root = document.getElementById("modal-root");
@@ -78,6 +79,7 @@ export async function updateAccountKey(id: number, e: Event, close?: () => void)
     const input = modal?.querySelector<HTMLInputElement>("#account-key");
     apiKey = input?.value.trim() || null;
   }
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Saving…" });
   try {
     await api("/accounts/" + id + "/api-key", {
       method: "PUT",
@@ -93,6 +95,8 @@ export async function updateAccountKey(id: number, e: Event, close?: () => void)
     }
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }
 

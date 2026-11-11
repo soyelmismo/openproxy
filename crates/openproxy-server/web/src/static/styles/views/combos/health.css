@@ -1,0 +1,24 @@
+/* Responsive mobile rules live in combos_mobile.css. */
+
+
+
+/* Combo health columns (list grid): a colored dot + the success rate, and the
+   average wait of a successful request. Both stay em dashes until the
+   /usage/by-combo aggregate lands, so the list never blocks on analytics. */
+.combo-health-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.combo-health-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.combo-health-cell.good { color: var(--color-success); font-weight: 600; }
+.combo-health-cell.warn { color: var(--color-warn); }
+.combo-health-cell.bad { color: var(--color-error); font-weight: 600; }
+.combo-time-ok { font-variant-numeric: tabular-nums; }

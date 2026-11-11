@@ -368,3 +368,116 @@ fn sync_and_upsert_preserves_manually_configured_model_type() {
         "embedding"
     );
 }
+
+/// Regression: models.dev's modalities must survive the hourly discovery tick.
+///
+/// The OpenAI-compatible discovery path fabricates modalities from the model
+/// name (`build_discovered_model_full`), and `execute_sync_transaction` used to
+/// take that guess over anything already stored. Since discovery runs *after*
+/// the periodic models.dev enrich, a model whose name carries no vision keyword
+/// lost its vision flag every tick: `step-5-preview` reports `["text"]` by
+/// inference while models.dev reports `["text","image","video"]`.
+#[test]
+fn models_dev_modalities_survive_the_discovery_tick() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("stepfun");
+    add_provider(&conn, "stepfun");
+
+    conn.execute_batch(
+        "CREATE TABLE model_capabilities_sync (
+             provider_id  TEXT NOT NULL,
+             model_id     TEXT NOT NULL,
+             vision       INTEGER,
+             modalities_input  TEXT,
+             modalities_output TEXT,
+             model_id_normalized TEXT,
+             PRIMARY KEY (provider_id, model_id)
+         );
+         INSERT INTO model_capabilities_sync
+             (provider_id, model_id, vision, modalities_input, modalities_output, model_id_normalized)
+         VALUES
+             ('stepfun', 'step-5-preview', 1, '[\"text\",\"image\",\"video\"]', '[\"text\"]', 'step-5-preview');",
+    )
+    .expect("sync table");
+
+    // The discovered row is exactly what `build_discovered_model_full` produces
+    // for an upstream that reports no modalities: a name-based guess.
+    let models = [minimal("step-5-preview")];
+    let diff = crate::models::sync::compute_diff(&conn, &provider, &models).expect("diff");
+    crate::models::sync::execute_sync_transaction(
+        &conn,
+        &provider,
+        &models,
+        &diff,
+        Duration::from_hours(1),
+    )
+    .expect("sync");
+
+    let (in_mods, caps): (Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT input_modalities_json, capabilities_json FROM models \
+             WHERE provider_id = 'stepfun' AND model_id = 'step-5-preview'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("query row");
+
+    let in_mods = in_mods.expect("modalities must not be null");
+    assert!(
+        in_mods.contains("image") && in_mods.contains("video"),
+        "models.dev modalities must win over the name-based guess, got {in_mods}"
+    );
+    let caps = caps.expect("capabilities must not be null");
+    assert!(
+        caps.contains("\"vision\":true") || caps.contains("\"vision\":1"),
+        "vision flag must be restored from models.dev, got {caps}"
+    );
+}
+
+/// A model models.dev does not cover keeps the pre-patch behaviour: the
+/// upstream's own declaration, or the inference when the upstream said nothing.
+#[test]
+fn uncovered_models_fall_back_to_discovery_metadata() {
+    let conn = fresh_db();
+    let provider = ProviderId::new("stepfun");
+    add_provider(&conn, "stepfun");
+
+    conn.execute_batch(
+        "CREATE TABLE model_capabilities_sync (
+             provider_id  TEXT NOT NULL,
+             model_id     TEXT NOT NULL,
+             vision       INTEGER,
+             modalities_input  TEXT,
+             modalities_output TEXT,
+             model_id_normalized TEXT,
+             PRIMARY KEY (provider_id, model_id)
+         );",
+    )
+    .expect("sync table");
+
+    let models = [minimal("step-3.5-flash")];
+    let diff = crate::models::sync::compute_diff(&conn, &provider, &models).expect("diff");
+    crate::models::sync::execute_sync_transaction(
+        &conn,
+        &provider,
+        &models,
+        &diff,
+        Duration::from_hours(1),
+    )
+    .expect("sync");
+
+    let in_mods: Option<String> = conn
+        .query_row(
+            "SELECT input_modalities_json FROM models \
+             WHERE provider_id = 'stepfun' AND model_id = 'step-3.5-flash'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("query row");
+
+    let in_mods = in_mods.expect("inference still fills modalities");
+    assert!(
+        !in_mods.contains("image"),
+        "uncovered model keeps the text-only inference, got {in_mods}"
+    );
+}

@@ -225,3 +225,84 @@ fn empty_database_never_panics() {
     );
     assert_eq!(out.ttft, Duration::from_secs(60));
 }
+
+// ----------
+// Learned idle-chunk budgets (same stage, gap distribution).
+// ----------
+
+fn seed_gaps(pool: &openproxy_db::DbPool, provider: &str, model_row: i64, gaps: &[i64]) {
+    let conn = pool.open_connection().expect("conn");
+    for gap in gaps {
+        conn.execute(
+            "INSERT INTO usage (request_id, trace_id, attempt, provider_id, upstream_model_id, \
+                 status_code, ttft_ms, model_row_id, max_chunk_gap_ms, avg_chunk_gap_ms, created_at) \
+             VALUES ('r', 't', 1, ?1, 'm', 200, 900, ?2, ?3, ?3/2, datetime('now'))",
+            rusqlite::params![provider, model_row, gap],
+        )
+        .unwrap();
+    }
+}
+
+fn stage_with_gaps(
+    tag: &str,
+    provider: &str,
+    row_id: i64,
+    gaps: &[i64],
+) -> (Pipeline, PipelineRequest) {
+    let pool =
+        openproxy_db::DbPool::test_pool_with_prefix(&format!("openproxy-{tag}")).expect("pool");
+    seed_gaps(&pool, provider, row_id, gaps);
+    let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().expect("master key"));
+    let mut config = test_utils::test_config(master_key);
+    config.defaults = stage_with_defaults();
+    let pipeline = test_utils::test_pipeline_with_pool(pool, config);
+    let conn = pipeline
+        .db_pool
+        .as_ref()
+        .expect("pipeline carries its pool")
+        .open_connection()
+        .expect("conn");
+    pipeline.latency_budget.warm_target(&conn, provider, row_id);
+    let (req, _tx) = test_utils::make_request(ComboId(1));
+    (pipeline, req)
+}
+
+/// Completed streams with steady 4s gaps teach the predictor a 10s gap
+/// budget (4s + margin 2s = 6s, floored): a stream that goes silent mid
+/// generation dies at 10s instead of 30s.
+#[test]
+fn applies_learned_idle_chunk_budget() {
+    let (pipeline, req) = stage_with_gaps("lb-gap", "gapprov", 11, &[4_000i64; 12]);
+    let out = apply_predictive_ttft_budget(
+        &pipeline,
+        &req,
+        "gapprov",
+        &make_target("gapprov", 11),
+        &make_model("gapprov", 11),
+        stage_with_defaults(),
+    );
+    assert_eq!(
+        out.idle_chunk,
+        Duration::from_secs(10),
+        "learned gap budget applied (floored to 10s)"
+    );
+}
+
+/// No gap telemetry: the resolved idle_chunk timeout is untouched.
+#[test]
+fn keeps_idle_chunk_timeout_without_gap_data() {
+    let (pipeline, req) = stage_with_gaps("lb-nogap", "nogapprov", 12, &[]);
+    let out = apply_predictive_ttft_budget(
+        &pipeline,
+        &req,
+        "nogapprov",
+        &make_target("nogapprov", 12),
+        &make_model("nogapprov", 12),
+        stage_with_defaults(),
+    );
+    assert_eq!(
+        out.idle_chunk,
+        Duration::from_secs(30),
+        "no gap data -> resolved timeout untouched"
+    );
+}

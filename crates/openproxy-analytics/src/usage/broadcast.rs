@@ -191,6 +191,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                     source: "live".into(),
                     endpoint_kind: event.endpoint_kind,
                     api_key_id: event.api_key_id,
+                    session_hash: event.session_hash,
                 },
             );
         }

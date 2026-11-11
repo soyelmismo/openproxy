@@ -317,119 +317,106 @@ export function getHeadersChipTitle(raw?: string | null): string {
 export function renderDetailHeader(provider: Provider): TemplateResult {
   const isDeletable = provider.metadata?.deletable ?? true;
   return html`
-    <div class="provider-detail-header${provider.active ? '' : ' inactive'}">
-      <div class="provider-detail-main">
-        <div class="provider-icon icon-large" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
-        <div class="provider-detail-info">
-          <div class="provider-detail-title-row">
-            <h2>
-              <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>
-              <small class="editable-pencil">${icons.pencil()}</small>
-            </h2>
-            <code class="provider-detail-id">${provider.id}</code>
-            ${provider.active ? html`` : html`<span class="chip inactive-chip">inactive</span>`}
-          </div>
-          <div class="meta provider-detail-meta">
-            <select
-              class="provider-format-select"
-              title="Provider schema / protocol (OpenAI Chat Completions, Responses, Anthropic Messages, Gemini, etc.)"
-              .value=${provider.format}
-              @change=${(e: Event) => onChangeProviderFormat(provider.id, e)}
-            >
-              ${(state.formats?.provider_formats ?? FALLBACK_PROVIDER_FORMATS).map(
-                (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${provider.format === fmt.id}>${fmt.id}</option>`
-              )}
-            </select>
-            <span class="chip auth-chip">${provider.auth_type}</span>
-            <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
-            <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
-            <span
-              class=${'chip stream-chip' + (provider.stream_mode === 'unary' ? ' warn' : provider.stream_mode === 'streaming' ? ' combo-chip' : '')}
-              title="Stream mode: auto, unary (forced non-streaming), streaming (forced SSE). Click to cycle."
-              style="cursor: pointer;"
-              @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)}
-            >
-              stream: ${provider.stream_mode || 'auto'}
-            </span>
-            <span
-              class=${'chip ttl-chip' + (provider.prompt_cache_ttl && provider.prompt_cache_ttl !== 'auto' ? ' combo-chip' : '')}
-              title="Prompt cache TTL: click to change"
-              style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; position: relative;"
-              @click=${(e: MouseEvent) => {
-                e.stopPropagation();
-                if (openTtlMenuProviderId === provider.id) {
-                  openTtlMenuProviderId = null;
-                  openTtlMenuPos = null;
-                } else {
-                  openTtlMenuProviderId = provider.id;
-                  const el = e.currentTarget as HTMLElement;
-                  const rect = el.getBoundingClientRect();
-                  const menuWidth = 200;
-                  const menuMaxHeight = 160;
-                  const margin = 8;
+    <div class="cx-config-toolbar" title="Provider controls and model sync settings">
+      <div class="cx-config-controls">
+        <select
+          class="provider-format-select"
+          title="Provider schema / protocol (OpenAI Chat Completions, Responses, Anthropic Messages, Gemini, etc.)"
+          aria-label="Provider format"
+          .value=${provider.format}
+          @change=${(e: Event) => onChangeProviderFormat(provider.id, e)}
+        >
+          ${(state.formats?.provider_formats ?? FALLBACK_PROVIDER_FORMATS).map(
+            (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${provider.format === fmt.id}>${fmt.id}</option>`
+          )}
+        </select>
+        <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
+        <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
+        <span
+          class=${'chip stream-chip' + (provider.stream_mode === 'unary' ? ' warn' : provider.stream_mode === 'streaming' ? ' combo-chip' : '')}
+          title="Stream mode: auto, unary (forced non-streaming), streaming (forced SSE). Click to cycle."
+          style="cursor: pointer;"
+          @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)}
+        >
+          stream: ${provider.stream_mode || 'auto'}
+        </span>
+        <span
+          class=${'chip ttl-chip' + (provider.prompt_cache_ttl && provider.prompt_cache_ttl !== 'auto' ? ' combo-chip' : '')}
+          title="Prompt cache TTL: click to change"
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; position: relative;"
+          @click=${(e: MouseEvent) => {
+            e.stopPropagation();
+            if (openTtlMenuProviderId === provider.id) {
+              openTtlMenuProviderId = null;
+              openTtlMenuPos = null;
+            } else {
+              openTtlMenuProviderId = provider.id;
+              const el = e.currentTarget as HTMLElement;
+              const rect = el.getBoundingClientRect();
+              const menuWidth = 200;
+              const menuMaxHeight = 160;
+              const margin = 8;
 
-                  let left = rect.left;
-                  if (left + menuWidth > window.innerWidth - margin) {
-                    left = Math.max(margin, window.innerWidth - menuWidth - margin);
-                  }
+              let left = rect.left;
+              if (left + menuWidth > window.innerWidth - margin) {
+                left = Math.max(margin, window.innerWidth - menuWidth - margin);
+              }
 
-                  let top = rect.bottom + 4;
-                  if (top + menuMaxHeight > window.innerHeight - margin) {
-                    const spaceAbove = rect.top - margin;
-                    if (spaceAbove > 100) {
-                      top = Math.max(margin, rect.top - menuMaxHeight - 4);
-                    }
-                  }
-                  openTtlMenuPos = { top, left };
+              let top = rect.bottom + 4;
+              if (top + menuMaxHeight > window.innerHeight - margin) {
+                const spaceAbove = rect.top - margin;
+                if (spaceAbove > 100) {
+                  top = Math.max(margin, rect.top - menuMaxHeight - 4);
                 }
+              }
+              openTtlMenuPos = { top, left };
+            }
+            requestUpdate();
+          }}
+        >
+          cache: ${provider.prompt_cache_ttl || 'auto'}
+          <small style="opacity: 0.7; font-size: 0.7em;">▾</small>
+        </span>
+        ${openTtlMenuProviderId === provider.id && openTtlMenuPos
+          ? html`
+            <div
+              class="target-accounts-backdrop"
+              @click=${(e: Event) => {
+                e.stopPropagation();
+                openTtlMenuProviderId = null;
+                openTtlMenuPos = null;
                 requestUpdate();
               }}
+            ></div>
+            <div
+              class="target-accounts-menu"
+              style="top:${openTtlMenuPos.top}px; left:${openTtlMenuPos.left}px; width: 220px;"
+              @click=${(e: Event) => e.stopPropagation()}
             >
-              cache: ${provider.prompt_cache_ttl || 'auto'}
-              <small style="opacity: 0.7; font-size: 0.7em;">▾</small>
-            </span>
-            ${openTtlMenuProviderId === provider.id && openTtlMenuPos
-              ? html`
-                <div
-                  class="target-accounts-backdrop"
-                  @click=${(e: Event) => {
-                    e.stopPropagation();
-                    openTtlMenuProviderId = null;
-                    openTtlMenuPos = null;
-                    requestUpdate();
-                  }}
-                ></div>
-                <div
-                  class="target-accounts-menu"
-                  style="top:${openTtlMenuPos.top}px; left:${openTtlMenuPos.left}px; width: 220px;"
-                  @click=${(e: Event) => e.stopPropagation()}
-                >
-                  ${getProviderTtlOptions(provider.format, provider.id).map(
-                    (opt) => html`
-                      <div
-                        class="target-accounts-item"
-                        style="padding: 6px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; font-weight: ${(provider.prompt_cache_ttl || 'auto') === opt.value ? '600' : 'normal'}; background: ${(provider.prompt_cache_ttl || 'auto') === opt.value ? 'var(--color-surface-hover, rgba(255,255,255,0.06))' : 'transparent'};"
-                        @click=${() => {
-                          openTtlMenuProviderId = null;
-                          openTtlMenuPos = null;
-                          void onChangePromptCacheTtl(provider.id, opt.value);
-                        }}
-                      >
-                        <span>${opt.label}</span>
-                        ${(provider.prompt_cache_ttl || 'auto') === opt.value ? html`<span style="color: var(--color-primary, #38bdf8)">✓</span>` : html``}
-                      </div>
-                    `
-                  )}
-                </div>
-              `
-              : html``}
-            ${provider.extra_headers_json
-              ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
-              : html``}
-          </div>
-        </div>
+              ${getProviderTtlOptions(provider.format, provider.id).map(
+                (opt) => html`
+                  <div
+                    class="target-accounts-item"
+                    style="padding: 6px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; font-weight: ${(provider.prompt_cache_ttl || 'auto') === opt.value ? '600' : 'normal'}; background: ${(provider.prompt_cache_ttl || 'auto') === opt.value ? 'var(--color-surface-hover, rgba(255,255,255,0.06))' : 'transparent'};"
+                    @click=${() => {
+                      openTtlMenuProviderId = null;
+                      openTtlMenuPos = null;
+                      void onChangePromptCacheTtl(provider.id, opt.value);
+                    }}
+                  >
+                    <span>${opt.label}</span>
+                    ${(provider.prompt_cache_ttl || 'auto') === opt.value ? html`<span style="color: var(--color-primary, #38bdf8)">✓</span>` : html``}
+                  </div>
+                `
+              )}
+            </div>
+          `
+          : html``}
+        ${provider.extra_headers_json
+          ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
+          : html``}
       </div>
-      <div class="actions provider-detail-actions">
+      <div class="cx-toolbar-actions provider-detail-actions">
         <button @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)} title="Cycle stream mode: auto -> unary -> streaming">
           ${icons.lightning()} Stream: ${provider.stream_mode || 'auto'}
         </button>
@@ -523,17 +510,21 @@ export function renderProviderDetail(): TemplateResult {
   ];
   return html`
     <div class="provider-detail-view">
-      <a href="#/providers" class="back-link">← ${t('providers.detail.back')}</a>
-      <header class="provider-summary">
-        <div class="provider-icon" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
-        <div class="provider-summary-info">
-          <h2>${provider.name}</h2>
-          <div class="provider-summary-meta"><code>${provider.id}</code><span>${provider.format}</span><span>${provider.auth_type}</span>
-            ${provider.active ? html`` : html`<span class="chip inactive-chip">${t('providers.list.card.inactive_suffix')}</span>`}
+      <div class="cx-detail-topbar">
+        <a href="#/providers" class="back-link cx-back-link">← ${t('providers.detail.back')}</a>
+        <header class="cx-provider-summary">
+          <div class="provider-icon" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
+          <div class="cx-provider-summary-info">
+            <h2>
+              <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>
+            </h2>
+            <div class="cx-provider-summary-meta"><code>${provider.id}</code><span>${provider.format}</span><span>${provider.auth_type}</span>
+              ${provider.active ? html`` : html`<span class="chip inactive-chip">${t('providers.list.card.inactive_suffix')}</span>`}
+            </div>
           </div>
-        </div>
-      </header>
-      <div class="provider-detail-tabs" role="tablist" aria-label=${provider.name}>
+        </header>
+      </div>
+      <div class="provider-detail-tabs cx-tabs" role="tablist" aria-label=${provider.name}>
         ${tabs.map(item => html`<button type="button" role="tab"
           id=${`provider-${provider.id}-tab-${item.id}`}
           aria-controls=${`provider-${provider.id}-panel-${item.id}`}

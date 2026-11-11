@@ -73,6 +73,7 @@ fn parse_exclude_list(raw: Option<&str>) -> Vec<String> {
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/summary", axum::routing::get(usage_summary))
+        .route("/quota", axum::routing::get(usage_quota))
         .route("/by-model", axum::routing::get(usage_by_model))
         .route("/by-provider", axum::routing::get(usage_by_provider))
         .route("/by-combo", axum::routing::get(usage_by_combo))
@@ -92,6 +93,26 @@ pub fn router() -> axum::Router<AppState> {
             "/recompute-costs",
             axum::routing::post(recompute_usage_costs),
         )
+}
+
+/// GET /admin/api/usage/quota — the caller's own dollar-quota status.
+/// Served to `analytics`-scoped keys (the guard above allows GET /usage/*),
+/// so a customer can see their 5h / weekly / monthly consumption and resets.
+pub async fn usage_quota(
+    State(s): State<AppState>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(key_id) = identity.as_ref().and_then(|ext| ext.0.key_id()) else {
+        // Dev bypass / master key: no per-key quota concept.
+        return Ok(Json(serde_json::json!({ "enabled": false })));
+    };
+    let status = s
+        .db_pool()
+        .spawn_read(move |r| openproxy_core::api_key_quotas::status(r, ApiKeyId(key_id)))
+        .await?;
+    Ok(Json(serde_json::to_value(status).map_err(|e| {
+        ApiError(CoreError::Internal(format!("quota status: {e}")))
+    })?))
 }
 
 macro_rules! analytics_handler {
@@ -242,12 +263,12 @@ pub async fn recompute_usage_costs(
     State(s): State<AppState>,
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if let Some(axum::Extension(ref id)) = identity {
-        if !id.has_manage_scope() {
-            return Err(ApiError(CoreError::Auth(
-                "forbidden: recomputing costs requires manage scope".into(),
-            )));
-        }
+    if let Some(axum::Extension(ref id)) = identity
+        && !id.has_manage_scope()
+    {
+        return Err(ApiError(CoreError::Auth(
+            "forbidden: recomputing costs requires manage scope".into(),
+        )));
     }
     let updated = s
         .db_pool()
@@ -264,13 +285,13 @@ pub async fn usage_recent(
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     Query(q): Query<RecentQuery>,
 ) -> Result<Json<Vec<openproxy_types::usage::RecentUsageRow>>, ApiError> {
-    if let Some(axum::Extension(ref id)) = identity {
-        if !id.has_manage_scope() {
-            // Analytics-only users are prohibited from watching the global request stream.
-            return Err(ApiError(CoreError::Auth(
-                "forbidden: global request log stream requires manage scope".into(),
-            )));
-        }
+    if let Some(axum::Extension(ref id)) = identity
+        && !id.has_manage_scope()
+    {
+        // Analytics-only users are prohibited from watching the global request stream.
+        return Err(ApiError(CoreError::Auth(
+            "forbidden: global request log stream requires manage scope".into(),
+        )));
     }
 
     crate::error::run_blocking(move || {

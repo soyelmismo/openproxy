@@ -1,0 +1,635 @@
+//! Engine construction and the SystemOne classify pipeline.
+
+use openproxy_types::{
+    error::CoreError,
+    systemone::{
+        SystemOneAnswer, SystemOneQuestion, SystemOneQuestionType, SystemOneRequest,
+        SystemOneResponse, SystemOneUsage,
+    },
+};
+use std::{collections::BTreeMap, ffi::CString};
+use tokenizers::Tokenizer;
+
+use super::config::LayaConfig;
+use super::paths::{resolve_config_path, resolve_model_path, resolve_tokenizer_path};
+use super::{SafeSession, ffi_error, laya_session_create, laya_session_run, validate_config};
+
+pub struct LayaEngine {
+    session: SafeSession,
+    tokenizer: Tokenizer,
+    pad_id: u32,
+    cls_id: u32,
+    sep_id: u32,
+    mask_id: u32,
+    config: LayaConfig,
+}
+
+pub(crate) fn load_engine(
+    model_path_opt: Option<&str>,
+    tokenizer_path_opt: Option<&str>,
+    config_path_opt: Option<&str>,
+    num_threads_opt: Option<usize>,
+) -> Result<LayaEngine, CoreError> {
+    let model_path = resolve_model_path(model_path_opt);
+    let tokenizer_path = resolve_tokenizer_path(tokenizer_path_opt);
+    let config_path = resolve_config_path(config_path_opt);
+
+    let num_threads = num_threads_opt
+        .or_else(|| {
+            std::env::var("OPENPROXY_LAYA_THREADS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+        })
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get().clamp(1, 4)));
+
+    tracing::info!(
+        model = %model_path,
+        tokenizer = %tokenizer_path,
+        threads = num_threads,
+        "Initializing Laya C FFI engine in isolated worker"
+    );
+
+    let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
+        CoreError::Internal(format!(
+            "Failed to load tokenizer from {tokenizer_path}: {e}"
+        ))
+    })?;
+
+    let pad_id = tokenizer.token_to_id("<pad>").unwrap_or(0);
+    let cls_id = tokenizer
+        .token_to_id("<bos>")
+        .or_else(|| tokenizer.token_to_id("[CLS]"))
+        .unwrap_or(2);
+    let sep_id = tokenizer
+        .token_to_id("<eos>")
+        .or_else(|| tokenizer.token_to_id("[SEP]"))
+        .unwrap_or(1);
+    let mask_id = tokenizer
+        .token_to_id("<mask >")
+        .or_else(|| tokenizer.token_to_id("<mask>"))
+        .unwrap_or(4);
+
+    let config: LayaConfig = if let Ok(content) = std::fs::read_to_string(&config_path) {
+        serde_json::from_str(&content)
+            .map_err(|e| CoreError::Validation(format!("Invalid Laya config: {e}")))?
+    } else {
+        LayaConfig::default()
+    };
+
+    validate_config(&config)?;
+    let num_threads = std::ffi::c_int::try_from(num_threads)
+        .ok()
+        .filter(|n| (1..=64).contains(n))
+        .ok_or_else(|| CoreError::Validation("Laya threads must be in 1..=64".into()))?;
+    let c_model_path = CString::new(model_path)
+        .map_err(|e| CoreError::Validation(format!("Invalid model path: {e}")))?;
+
+    let mut err_buf = vec![0u8; 1024];
+    let session_ptr = unsafe {
+        laya_session_create(
+            std::ptr::null(),
+            c_model_path.as_ptr(),
+            num_threads,
+            err_buf.as_mut_ptr().cast::<std::ffi::c_char>(),
+            err_buf.len(),
+        )
+    };
+
+    if session_ptr.is_null() {
+        let err_msg = ffi_error(&err_buf);
+        return Err(CoreError::Internal(format!(
+            "Failed to initialize Laya ONNX session: {err_msg}"
+        )));
+    }
+
+    Ok(LayaEngine {
+        session: SafeSession(session_ptr),
+        tokenizer,
+        pad_id,
+        cls_id,
+        sep_id,
+        mask_id,
+        config,
+    })
+}
+
+fn render_criterion(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        _ => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+pub(crate) fn render_options(q: &SystemOneQuestion) -> Vec<(String, String)> {
+    match q.question_type {
+        SystemOneQuestionType::Choice => {
+            if let Some(ref crit) = q.criteria
+                && let Some(obj) = crit.as_object()
+            {
+                return obj
+                    .iter()
+                    .map(|(k, v)| {
+                        let text = if v.is_null() || v.as_str().is_some_and(|s| s.is_empty()) {
+                            k.clone()
+                        } else {
+                            format!("{k}: {}", render_criterion(v))
+                        };
+                        (k.clone(), text)
+                    })
+                    .collect();
+            }
+            if let Some(ref opts) = q.options {
+                return opts.iter().map(|o| (o.clone(), o.clone())).collect();
+            }
+            vec![]
+        }
+        SystemOneQuestionType::Score => {
+            if let Some(ref crit) = q.criteria
+                && let Some(arr) = crit.as_array()
+            {
+                return arr
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        (
+                            format!("{i}"),
+                            format!("level {i}: {}", render_criterion(c)),
+                        )
+                    })
+                    .collect();
+            }
+            vec![]
+        }
+        SystemOneQuestionType::Noul => {
+            let (f_txt, t_txt) = if let Some(ref crit) = q.criteria {
+                let f = crit.get("false").map(render_criterion);
+                let t = crit.get("true").map(render_criterion);
+                (
+                    f.unwrap_or_else(|| "no, the statement does not hold".into()),
+                    t.unwrap_or_else(|| "yes, the statement holds".into()),
+                )
+            } else {
+                (
+                    "no, the statement does not hold".into(),
+                    "yes, the statement holds".into(),
+                )
+            };
+            vec![
+                ("false".into(), format!("false: {f_txt}")),
+                ("true".into(), format!("true: {t_txt}")),
+            ]
+        }
+    }
+}
+
+struct PreparedItem {
+    ids: Vec<i64>,
+    markers: Vec<i64>,
+    qtype: i64,
+    option_keys: Vec<String>,
+}
+
+impl LayaEngine {
+    fn tokenize_ids(&self, text: &str, limit: Option<usize>) -> Result<Vec<i64>, CoreError> {
+        let clean = text.replace("<mask >", " ");
+        let enc = self
+            .tokenizer
+            .encode(clean.as_str(), false)
+            .map_err(|e| CoreError::Internal(format!("Tokenizer encode error: {e}")))?;
+        let iter = enc.get_ids().iter().map(|&x| x as i64);
+        Ok(match limit {
+            Some(n) => iter.take(n).collect(),
+            None => iter.collect(),
+        })
+    }
+
+    fn build_sequence(
+        &self,
+        state_str: &str,
+        q: &SystemOneQuestion,
+    ) -> Result<PreparedItem, CoreError> {
+        let opts = render_options(q);
+        let qtype_code = match q.question_type {
+            SystemOneQuestionType::Choice => 0i64,
+            SystemOneQuestionType::Score => 1i64,
+            SystemOneQuestionType::Noul => 2i64,
+        };
+
+        let head_prompt = format!("{} question: {}", q.question_type.as_str(), q.instructions);
+        let mut head_ids = self.tokenize_ids(&head_prompt, None)?;
+
+        let mut opt_ids: Vec<Vec<i64>> = Vec::with_capacity(opts.len());
+        for (_, opt_text) in &opts {
+            let ids = self.tokenize_ids(&format!(" {opt_text}"), Some(48))?;
+            let mut full = Vec::with_capacity(ids.len() + 1);
+            full.push(self.mask_id as i64);
+            full.extend(ids);
+            opt_ids.push(full);
+        }
+
+        let total_opt_len: usize = opt_ids.iter().map(|o| o.len()).sum();
+        let mut opt_budget = self.config.head_max_len.saturating_sub(total_opt_len);
+        if opt_budget < 16 && !opt_ids.is_empty() {
+            let per = ((self.config.head_max_len.saturating_sub(16)) / opt_ids.len()).max(4);
+            for o in &mut opt_ids {
+                o.truncate(per);
+            }
+            let new_opt_len: usize = opt_ids.iter().map(|o| o.len()).sum();
+            opt_budget = self.config.head_max_len.saturating_sub(new_opt_len);
+        }
+
+        head_ids.truncate(opt_budget.max(8));
+
+        let mut ids: Vec<i64> = Vec::with_capacity(self.config.max_len);
+        ids.push(self.cls_id as i64);
+        ids.extend(head_ids);
+        ids.push(self.sep_id as i64);
+
+        let mut markers: Vec<i64> = Vec::with_capacity(opt_ids.len());
+        for o in opt_ids {
+            markers.push(ids.len() as i64);
+            ids.extend(o);
+        }
+        ids.push(self.sep_id as i64);
+
+        let room = self.config.max_len.saturating_sub(ids.len() + 1);
+        let st_ids = self.tokenize_ids(state_str, Some(room))?;
+
+        ids.extend(st_ids);
+        ids.push(self.sep_id as i64);
+        ids.truncate(self.config.max_len);
+
+        if markers.iter().any(|&m| m as usize >= self.config.max_len) {
+            return Err(CoreError::Validation(
+                "Laya options exceed the sequence budget".into(),
+            ));
+        }
+
+        Ok(PreparedItem {
+            ids,
+            markers,
+            qtype: qtype_code,
+            option_keys: opts.into_iter().map(|(k, _)| k).collect(),
+        })
+    }
+
+    pub fn classify(&self, req: &SystemOneRequest) -> Result<SystemOneResponse, CoreError> {
+        let q_keys: Vec<String> = req.questions.keys().cloned().collect();
+        if q_keys.is_empty() {
+            return Ok(SystemOneResponse {
+                model: Some("laya-inprocess".into()),
+                answers: BTreeMap::new(),
+                usage: Some(SystemOneUsage::default()),
+            });
+        }
+
+        let state_str = match &req.state {
+            serde_json::Value::String(s) => s.clone(),
+            other => serde_json::to_string(other).unwrap_or_default(),
+        };
+
+        let mut items = Vec::with_capacity(q_keys.len());
+        for key in &q_keys {
+            let q = &req.questions[key];
+            let item = self.build_sequence(&state_str, q)?;
+            items.push(item);
+        }
+
+        let out_logits = self.run_batch(&items)?;
+
+        let mut answers = BTreeMap::new();
+        for (r, key) in q_keys.into_iter().enumerate() {
+            let q = &req.questions[&key];
+            let item = &items[r];
+            let k = item.markers.len();
+            if k == 0 {
+                continue;
+            }
+            let marker_offset = r * max_markers_slice(&items);
+            let raw_logits = &out_logits[marker_offset..marker_offset + k];
+            Self::push_answer(&mut answers, &self.config, key, q, item, raw_logits);
+        }
+
+        let resp_model = req
+            .model
+            .clone()
+            .unwrap_or_else(|| "laya-multilingual".into());
+        Ok(SystemOneResponse {
+            model: Some(resp_model),
+            answers,
+            usage: Some(SystemOneUsage {
+                input_tokens: total_tokens_of(&items),
+                output_tokens: 0,
+                total_tokens: Some(total_tokens_of(&items)),
+            }),
+        })
+    }
+
+    /// Flatten `items` into the batch tensors, invoke the ONNX session, and
+    /// return the raw logits (one row of `max_markers` per question).
+    fn run_batch(&self, items: &[PreparedItem]) -> Result<Vec<f32>, CoreError> {
+        let batch_size = items.len() as i64;
+        let max_seq_len = items.iter().map(|it| it.ids.len()).max().unwrap_or(1) as i64;
+        let max_markers = items.iter().map(|it| it.markers.len()).max().unwrap_or(1) as i64;
+
+        let total_seq_elems = (batch_size * max_seq_len) as usize;
+        let total_marker_elems = (batch_size * max_markers) as usize;
+
+        let mut input_ids = vec![self.pad_id as i64; total_seq_elems];
+        let mut attention_mask = vec![0i64; total_seq_elems];
+        let mut marker_pos = vec![0i64; total_marker_elems];
+        let mut marker_mask = vec![0u8; total_marker_elems];
+        let mut qtype = vec![0i64; batch_size as usize];
+
+        for (i, it) in items.iter().enumerate() {
+            let seq_offset = i * (max_seq_len as usize);
+            for (j, &id) in it.ids.iter().enumerate() {
+                input_ids[seq_offset + j] = id;
+                attention_mask[seq_offset + j] = 1;
+            }
+
+            let marker_offset = i * (max_markers as usize);
+            for (j, &m) in it.markers.iter().enumerate() {
+                marker_pos[marker_offset + j] = m;
+                marker_mask[marker_offset + j] = 1;
+            }
+
+            qtype[i] = it.qtype;
+        }
+
+        let mut out_logits = vec![0.0f32; total_marker_elems];
+        let mut err_buf = vec![0u8; 1024];
+
+        let rc = unsafe {
+            laya_session_run(
+                self.session.0,
+                batch_size,
+                max_seq_len,
+                max_markers,
+                input_ids.as_ptr(),
+                attention_mask.as_ptr(),
+                marker_pos.as_ptr(),
+                marker_mask.as_ptr(),
+                qtype.as_ptr(),
+                out_logits.as_mut_ptr(),
+                err_buf.as_mut_ptr().cast::<std::ffi::c_char>(),
+                err_buf.len(),
+            )
+        };
+
+        if rc != 0 {
+            let err_msg = ffi_error(&err_buf);
+            return Err(CoreError::Internal(format!(
+                "Laya ONNX inference failed (rc={rc}): {err_msg}"
+            )));
+        }
+
+        if out_logits.iter().any(|v| !v.is_finite()) {
+            return Err(CoreError::Internal(
+                "Laya returned non-finite logits".into(),
+            ));
+        }
+        Ok(out_logits)
+    }
+
+    /// Softmax each marker row with its per-type/per-size temperature and push
+    /// the decoded answer into `answers`.
+    fn push_answer(
+        answers: &mut BTreeMap<String, SystemOneAnswer>,
+        config: &LayaConfig,
+        key: String,
+        q: &SystemOneQuestion,
+        item: &PreparedItem,
+        raw_logits: &[f32],
+    ) {
+        let k = item.markers.len();
+        let temp = Self::get_temperature(config, item.qtype, k);
+        let inv_temp = 1.0 / temp.max(1e-3);
+
+        let mut scaled: Vec<f32> = raw_logits.iter().map(|&x| x * inv_temp).collect();
+        let max_logit = scaled.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mut sum_exp = 0.0f32;
+        for x in &mut scaled {
+            *x = (*x - max_logit).exp();
+            sum_exp += *x;
+        }
+        let probs: Vec<f64> = scaled
+            .iter()
+            .map(|&x| ((x / sum_exp) as f64).clamp(0.0, 1.0))
+            .collect();
+
+        let conf = confidence_from_probs(&probs, k);
+
+        match q.question_type {
+            SystemOneQuestionType::Choice => {
+                let best_idx = probs
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map_or(0, |(idx, _)| idx);
+
+                let choice_name = item
+                    .option_keys
+                    .get(best_idx)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{best_idx}"));
+
+                let mut prob_map = BTreeMap::new();
+                for (idx, opt_name) in item.option_keys.iter().enumerate() {
+                    prob_map.insert(opt_name.clone(), round_4(probs[idx]));
+                }
+
+                answers.insert(
+                    key,
+                    SystemOneAnswer {
+                        question_type: SystemOneQuestionType::Choice,
+                        choice: Some(choice_name),
+                        confidence: Some(round_4(conf)),
+                        probabilities: Some(prob_map),
+                        ..Default::default()
+                    },
+                );
+            }
+            SystemOneQuestionType::Score => {
+                let score: f64 = probs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, &p)| (idx as f64) * p)
+                    .sum();
+
+                answers.insert(
+                    key,
+                    SystemOneAnswer {
+                        question_type: SystemOneQuestionType::Score,
+                        score: Some(round_4(score)),
+                        confidence: Some(round_4(conf)),
+                        ..Default::default()
+                    },
+                );
+            }
+            SystemOneQuestionType::Noul => {
+                let noul_prob = probs.get(1).copied().unwrap_or(0.0);
+                answers.insert(
+                    key,
+                    SystemOneAnswer {
+                        question_type: SystemOneQuestionType::Noul,
+                        noul: Some(round_4(noul_prob)),
+                        confidence: Some(round_4(conf)),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+
+    fn get_temperature(config: &LayaConfig, qtype: i64, k: usize) -> f32 {
+        let type_str = match qtype {
+            0 => "choice",
+            1 => "score",
+            _ => "noul",
+        };
+        let size_str = if k <= 2 {
+            "2"
+        } else if k <= 5 {
+            "3-5"
+        } else if k <= 10 {
+            "6-10"
+        } else {
+            "11+"
+        };
+        let bucket = format!("{type_str}:{size_str}");
+        if let Some(&t) = config.temperature_by_options.get(&bucket) {
+            return t;
+        }
+        config
+            .temperature
+            .get(qtype as usize)
+            .copied()
+            .unwrap_or(1.0)
+    }
+}
+
+fn max_markers_slice(items: &[PreparedItem]) -> usize {
+    items.iter().map(|it| it.markers.len()).max().unwrap_or(1)
+}
+
+fn total_tokens_of(items: &[PreparedItem]) -> u64 {
+    items.iter().map(|it| it.ids.len() as u64).sum()
+}
+
+pub(crate) fn confidence_from_probs(probs: &[f64], k: usize) -> f64 {
+    if k < 2 {
+        return 1.0;
+    }
+    let mut ent = 0.0;
+    for &p in probs.iter().take(k) {
+        let p_clamped = p.clamp(1e-12, 1.0);
+        ent -= p * p_clamped.ln();
+    }
+    let norm = (k as f64).ln();
+    (1.0 - (ent / norm)).clamp(0.0, 1.0)
+}
+
+fn round_4(val: f64) -> f64 {
+    (val * 10000.0).round() / 10000.0
+}
+
+// Manual profile harness: times the two hot phases of `classify` on the real
+// model so we can see where the ~200ms goes. Not part of `cargo test`; run it
+// explicitly with
+//   cargo test -p openproxy-adapters --release --features laya-engine \
+//     -- --ignored laya_profile_breakdown --nocapture
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn question(
+        ty: SystemOneQuestionType,
+        instructions: &str,
+        opts: Vec<String>,
+    ) -> SystemOneQuestion {
+        match ty {
+            SystemOneQuestionType::Choice => SystemOneQuestion {
+                question_type: ty,
+                instructions: instructions.into(),
+                criteria: None,
+                options: Some(opts),
+            },
+            SystemOneQuestionType::Score => SystemOneQuestion {
+                question_type: ty,
+                instructions: instructions.into(),
+                criteria: Some(serde_json::json!(opts)),
+                options: None,
+            },
+            SystemOneQuestionType::Noul => SystemOneQuestion {
+                question_type: ty,
+                instructions: instructions.into(),
+                criteria: None,
+                options: None,
+            },
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local Laya weights + ONNX runtime; profiling harness"]
+    fn laya_profile_breakdown() {
+        let engine = load_engine(None, None, None, None).expect("load engine");
+        let state_str = "User request: Can you help me optimize this database query for high throughput?\nCombo routing targets: [coding-expert, general-chat]";
+
+        let mut questions = std::collections::BTreeMap::new();
+        questions.insert(
+            "route".to_string(),
+            question(
+                SystemOneQuestionType::Choice,
+                "Select the optimal model category for this request",
+                vec!["coding-expert".into(), "general-chat".into()],
+            ),
+        );
+        questions.insert(
+            "complexity".to_string(),
+            question(
+                SystemOneQuestionType::Score,
+                "Rate the complexity of this request",
+                vec!["trivial".into(), "moderate".into(), "highly complex".into()],
+            ),
+        );
+        let req = SystemOneRequest {
+            state: serde_json::json!(state_str),
+            model: Some("laya-multilingual".into()),
+            questions,
+        };
+
+        // Warm-up
+        let _ = engine.classify(&req);
+
+        let q_keys: Vec<String> = req.questions.keys().cloned().collect();
+        const ITERS: u32 = 20;
+        let mut tok_ms = 0f64;
+        let mut ffi_ms = 0f64;
+        let mut seq_elems = 0usize;
+        for _ in 0..ITERS {
+            let t0 = Instant::now();
+            let mut items = Vec::with_capacity(q_keys.len());
+            for key in &q_keys {
+                items.push(
+                    engine
+                        .build_sequence(state_str, &req.questions[key])
+                        .unwrap(),
+                );
+            }
+            tok_ms += t0.elapsed().as_secs_f64() * 1000.0;
+            seq_elems = items.iter().map(|it| it.ids.len()).sum();
+
+            let t1 = Instant::now();
+            let _ = engine.run_batch(&items).unwrap();
+            ffi_ms += t1.elapsed().as_secs_f64() * 1000.0;
+        }
+        eprintln!(
+            "\n=== LAYA PROFILE ({ITERS} iters, seq_elems={seq_elems}) ===\n  build_sequence (tokenize):  {:>7.2} ms avg\n  run_batch      (ONNX FFI):   {:>7.2} ms avg\n  total classify:              {:>7.2} ms avg",
+            tok_ms / ITERS as f64,
+            ffi_ms / ITERS as f64,
+            (tok_ms + ffi_ms) / ITERS as f64,
+        );
+    }
+}

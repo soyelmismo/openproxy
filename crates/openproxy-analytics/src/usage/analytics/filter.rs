@@ -164,20 +164,18 @@ fn push_public_entity_filters(
     push_public_visibility(scope, clauses, params);
 }
 
-fn push_in_list(
-    sql: &mut String,
-    params: &mut Vec<Box<dyn ToSql>>,
-    col: &str,
-    values: &[String],
-) {
+fn push_in_list(sql: &mut String, params: &mut Vec<Box<dyn ToSql>>, col: &str, values: &[String]) {
     if values.is_empty() {
         return;
     }
-    let placeholders = std::iter::repeat("?")
-        .take(values.len())
+    let placeholders = std::iter::repeat_n("?", values.len())
         .collect::<Vec<_>>()
         .join(", ");
-    sql.push_str(&format!(" AND {col} IN ({placeholders})"));
+    sql.push_str(" AND ");
+    sql.push_str(col);
+    sql.push_str(" IN (");
+    sql.push_str(&placeholders);
+    sql.push(')');
     for v in values {
         params.push(Box::new(v.clone()));
     }
@@ -225,8 +223,7 @@ fn push_not_in(
     if values.is_empty() {
         return;
     }
-    let placeholders = std::iter::repeat("?")
-        .take(values.len())
+    let placeholders = std::iter::repeat_n("?", values.len())
         .collect::<Vec<_>>()
         .join(", ");
     clauses.push(format!("{col} NOT IN ({placeholders})"));

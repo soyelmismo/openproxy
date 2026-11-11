@@ -23,6 +23,20 @@ pub fn shannon_entropy(s: &str) -> f64 {
     entropy
 }
 
+/// `YYYY-MM-DD` anywhere in the token. Session, run and job ids carry one
+/// (`2026-01-15_101500-nightly-build`); a real secret never does.
+fn has_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 10
+        && b.windows(10).any(|w| {
+            w[4] == b'-'
+                && w[7] == b'-'
+                && w[..4].iter().all(u8::is_ascii_digit)
+                && w[5..7].iter().all(u8::is_ascii_digit)
+                && w[8..10].iter().all(u8::is_ascii_digit)
+        })
+}
+
 /// Validates whether an isolated candidate token possesses cryptographic entropy.
 pub fn is_high_entropy_secret(candidate: &str) -> bool {
     let len = candidate.len();
@@ -35,6 +49,16 @@ pub fn is_high_entropy_secret(candidate: &str) -> bool {
         return false;
     }
     if candidate.contains("__") {
+        return false;
+    }
+    if has_iso_date(candidate) {
+        return false;
+    }
+    // Git object ids (SHA-1 and SHA-256) are content addresses, not
+    // credentials: they appear in every diff and log the model has to reason
+    // about, and masking them hides the very reference under discussion.
+    let is_git_oid = matches!(len, 40 | 64) && candidate.bytes().all(|b| b.is_ascii_hexdigit());
+    if is_git_oid {
         return false;
     }
     let entropy = shannon_entropy(candidate);

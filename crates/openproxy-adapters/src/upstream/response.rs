@@ -97,6 +97,47 @@ impl http_body::Body for TransportBody {
 /// `last_chunk_at` on their own, starting the chunk-gap timer before any real
 /// token. Only the pipeline, which understands SSE semantics, can tell whether
 /// a chunk carried content.
+/// Measures inter-chunk gaps of a streaming body. Feeds the learned
+/// idle-chunk budget (`openproxy-pipeline::latency_budget::chunk_budget`):
+/// gaps that a stream actually survived are the honest sample of what
+/// `idle_chunk` needs, and the largest one is what the next budget must
+/// cover for the same target.
+///
+/// Gaps start at the second note: the first note only arms the clock. The
+/// final interval before EOF counts too, because the stream completed
+/// through it. Timed-out streams never reach the success path, so their
+/// telemetry is dropped by the caller — censored values never enter the
+/// distribution.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct ChunkGapTracker {
+    last_note_at: Option<Instant>,
+    max_gap_ms: u64,
+    total_gap_ms: u64,
+    gaps: u32,
+}
+
+impl ChunkGapTracker {
+    fn note(&mut self, now: Instant) {
+        if let Some(last) = self.last_note_at {
+            let gap_ms = now.saturating_duration_since(last).as_millis() as u64;
+            self.max_gap_ms = self.max_gap_ms.max(gap_ms);
+            self.total_gap_ms += gap_ms;
+            self.gaps += 1;
+        }
+        self.last_note_at = Some(now);
+    }
+
+    /// Largest survived gap (ms); `None` before the second note.
+    fn max_gap_ms(&self) -> Option<u64> {
+        (self.gaps > 0).then_some(self.max_gap_ms)
+    }
+
+    /// Mean survived gap (ms), integer division — telemetry only.
+    fn avg_gap_ms(&self) -> Option<u64> {
+        (self.gaps > 0).then(|| self.total_gap_ms / u64::from(self.gaps))
+    }
+}
+
 pub struct UpstreamBodyStream {
     #[cfg(feature = "upstream-hyper")]
     inner: Option<http_body_util::BodyStream<http_body_util::Limited<TransportBody>>>,
@@ -120,6 +161,8 @@ pub struct UpstreamBodyStream {
     /// Reusable `Sleep` behind `Pin<Box<_>>` for in-place reset without a
     /// timer-wheel register/deregister cycle per chunk.
     sleep: std::pin::Pin<Box<tokio::time::Sleep>>,
+    /// Inter-chunk gap telemetry for the learned idle-chunk budget.
+    gap_tracker: ChunkGapTracker,
 }
 
 impl UpstreamBodyStream {
@@ -159,6 +202,7 @@ impl UpstreamBodyStream {
             total_deadline,
             is_streaming,
             sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
+            gap_tracker: ChunkGapTracker::default(),
         }
     }
 
@@ -196,6 +240,7 @@ impl UpstreamBodyStream {
             total_deadline,
             is_streaming,
             sleep: Box::pin(tokio::time::sleep_until(initial_deadline.into())),
+            gap_tracker: ChunkGapTracker::default(),
         }
     }
 
@@ -392,7 +437,9 @@ impl UpstreamBodyStream {
     /// for Anthropic-shaped upstreams, or `choices[0].delta` with non-empty
     /// `content`, `tool_calls` or `reasoning_content` for OpenAI-shaped ones.
     pub fn note_content_chunk(&mut self) {
-        self.last_chunk_at = Some(Instant::now());
+        let now = Instant::now();
+        self.last_chunk_at = Some(now);
+        self.gap_tracker.note(now);
     }
 
     /// Mark verified generation progress without exposing model output.
@@ -400,7 +447,16 @@ impl UpstreamBodyStream {
     /// Switches from TTFT to the idle budget, never extending total or
     /// claiming that client-visible content has arrived.
     pub fn note_progress_chunk(&mut self) {
-        self.last_chunk_at = Some(Instant::now());
+        let now = Instant::now();
+        self.last_chunk_at = Some(now);
+        self.gap_tracker.note(now);
+    }
+
+    /// Inter-chunk gap telemetry snapshot `(max, mean)` in milliseconds for
+    /// the usage row. `None` while fewer than two content/progress notes
+    /// happened (single-chunk streams carry no measurable gap).
+    pub fn chunk_gap_telemetry(&self) -> (Option<u64>, Option<u64>) {
+        (self.gap_tracker.max_gap_ms(), self.gap_tracker.avg_gap_ms())
     }
 }
 
@@ -409,5 +465,58 @@ impl std::fmt::Debug for UpstreamBodyStream {
         f.debug_struct("UpstreamBodyStream")
             .field("cancelled", &self.cancel.is_cancelled())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod chunk_gap_tests {
+    use super::{ChunkGapTracker, Instant};
+    use std::time::Duration;
+
+    /// Synthetic timeline: offsets are relative, so `Instant` arithmetic
+    /// stays valid regardless of the platform's monotonic origin.
+    fn at(ms: u64) -> Instant {
+        Instant::now() + Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn no_telemetry_before_two_notes() {
+        let mut t = ChunkGapTracker::default();
+        assert_eq!(t.max_gap_ms(), None);
+        assert_eq!(t.avg_gap_ms(), None);
+        t.note(at(0));
+        // Single-chunk stream: still no measurable gap.
+        assert_eq!(t.max_gap_ms(), None);
+        assert_eq!(t.avg_gap_ms(), None);
+    }
+
+    #[test]
+    fn tracks_max_and_mean_of_survived_gaps() {
+        let mut t = ChunkGapTracker::default();
+        t.note(at(0));
+        t.note(at(8_000));
+        t.note(at(9_000));
+        assert_eq!(t.max_gap_ms(), Some(8_000));
+        assert_eq!(t.avg_gap_ms(), Some(4_500));
+    }
+
+    #[test]
+    fn later_longer_gap_becomes_the_max() {
+        let mut t = ChunkGapTracker::default();
+        t.note(at(0));
+        t.note(at(2_000));
+        t.note(at(12_000));
+        assert_eq!(t.max_gap_ms(), Some(10_000));
+        assert_eq!(t.avg_gap_ms(), Some(6_000));
+    }
+
+    #[test]
+    fn out_of_order_notes_collapse_to_zero() {
+        // saturating_duration_since never underflows; a backwards instant
+        // records a 0ms gap instead of panicking.
+        let mut t = ChunkGapTracker::default();
+        t.note(at(5_000));
+        t.note(at(1_000));
+        assert_eq!(t.max_gap_ms(), Some(0));
     }
 }

@@ -3,11 +3,13 @@
 // hyperparameters). All reads/writes go through the shared state reference.
 
 import { html, type TemplateResult } from 'lit-html';
+import { live } from 'lit-html/directives/live.js';
 import { t } from '../../i18n/index.js';
 import { state } from '../../state/index.js';
 import { showToast } from '../../components/toast.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { api } from '../../state/api.js';
+import { isFullAdmin } from '../../state/auth.js';
 import type { Model, Provider, Account } from '../../lib/types/api.js';
 import type { PlaygroundState } from './shared.js';
 import {
@@ -38,6 +40,8 @@ function getFilteredModels(st: PlaygroundState): Array<{ id: string; name: strin
       if (st.selectedProviderId) {
         return m.provider_id === st.selectedProviderId;
       }
+      // Tenant sessions have no provider catalog: every model is shown as-is.
+      if (providers.length === 0) return true;
       return !m.provider_id || activeProviderIds.has(m.provider_id);
     });
 
@@ -210,11 +214,12 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
         </div>
 
         <div class="playground-sidebar-body">
-          <!-- API Key Source -->
+          ${isFullAdmin() ? html`
+          <!-- API Key Source (admin-only: tenant keys use their session) -->
           <div class="field">
              <label class="field-label">${t('playground.sidebar.api_key_auth')}</label>
             <select
-              .value=${st.keySource === 'key' && st.selectedApiKeyId ? `key:${st.selectedApiKeyId}` : st.keySource}
+              .value=${live(st.keySource === 'key' && st.selectedApiKeyId ? `key:${st.selectedApiKeyId}` : st.keySource)}
               @change=${(e: Event) => {
                 const val = (e.target as HTMLSelectElement).value;
                 if (val.startsWith('key:')) {
@@ -231,15 +236,16 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                 requestUpdate();
               }}
             >
-               <option value="session">${t('playground.sidebar.session_token')}</option>
+               <option value="session" ?selected=${st.keySource === 'key' && st.selectedApiKeyId ? false : st.keySource === 'session'}>${t('playground.sidebar.session_token')}</option>
               ${apiKeys.map(
-                (k) => html`<option value="key:${k.id}">${k.label || 'API Key'} (${k.key_prefix}…)</option>`,
+                (k) => html`<option value="key:${k.id}" ?selected=${st.keySource === 'key' && String(st.selectedApiKeyId) === String(k.id)}>${k.label || 'API Key'} (${k.key_prefix}…)</option>`,
               )}
-              <option value="custom">Custom Bearer Key</option>
+              <option value="custom" ?selected=${st.keySource === 'custom'}>Custom Bearer Key</option>
             </select>
           </div>
+          ` : html``}
 
-          ${st.keySource === 'custom'
+          ${isFullAdmin() && st.keySource === 'custom'
             ? html`
                 <div class="field">
                   <label class="field-label">${t('playground.sidebar.custom_key')}</label>
@@ -255,11 +261,12 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
               `
             : html``}
 
-          <!-- Provider Selector -->
+          ${isFullAdmin() ? html`
+          <!-- Provider Selector (admin-only) -->
           <div class="field">
              <label class="field-label">${t('playground.sidebar.provider')}</label>
             <select
-              .value=${st.selectedProviderId}
+              .value=${live(st.selectedProviderId)}
               @change=${(e: Event) => {
                 st.selectedProviderId = (e.target as HTMLSelectElement).value;
                 if (st.selectedAccountId) {
@@ -275,35 +282,38 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                 requestUpdate();
               }}
             >
-               <option value="">${t('playground.sidebar.any_provider')}</option>
-              ${providers.filter((p) => p.active !== false).map((p) => html`<option value=${p.id}>${p.name || p.id}</option>`)}
+               <option value="" ?selected=${!st.selectedProviderId}>${t('playground.sidebar.any_provider')}</option>
+              ${providers.filter((p) => p.active !== false).map((p) => html`<option value=${p.id} ?selected=${st.selectedProviderId === p.id}>${p.name || p.id}</option>`)}
             </select>
           </div>
+          ` : html``}
 
+          ${isFullAdmin() ? html`
           <!-- Account Dropdown Select -->
           <div class="field">
              <label class="field-label">${t('playground.sidebar.account_routing')}</label>
             <select
-              .value=${st.selectedAccountId}
+              .value=${live(st.selectedAccountId)}
               @change=${(e: Event) => {
                 st.selectedAccountId = (e.target as HTMLSelectElement).value;
                 requestUpdate();
               }}
             >
-               <option value="">${t('playground.sidebar.auto_routing')}</option>
+               <option value="" ?selected=${!st.selectedAccountId}>${t('playground.sidebar.auto_routing')}</option>
               ${matchingAccounts.map(
-                (a) => html`<option value=${String(a.id)}>
+                (a) => html`<option value=${String(a.id)} ?selected=${st.selectedAccountId === String(a.id)}>
                   #${a.id} ${a.label ? `(${a.label})` : ''} — [${a.health_status}]
                 </option>`,
               )}
             </select>
           </div>
+          ` : html``}
 
           <!-- Model Target: Textual Search + Filtered Dropdown -->
           <div class="field">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                <label class="field-label" style="margin-bottom: 0;">${t('playground.sidebar.model_target')}</label>
-              ${st.selectedProviderId
+              ${isFullAdmin() && st.selectedProviderId
                 ? html`<button
                     class="btn-text-action"
                     @click=${async () => {
@@ -368,7 +378,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
               return html`
                 <select
                   class="playground-model-select"
-                  .value=${st.selectedModelId}
+                  .value=${live(st.selectedModelId)}
                   @change=${(e: Event) => {
                     const chosenId = (e.target as HTMLSelectElement).value;
                     st.selectedModelId = chosenId;
@@ -398,7 +408,7 @@ export function renderInspectorSidebar(st: PlaygroundState): TemplateResult {
                       </option>`
                     : displayedModels.map(
                         (m) =>
-                          html`<option value=${m.id}>
+                          html`<option value=${m.id} ?selected=${st.selectedModelId === m.id}>
                             ${m.provider ? `${m.provider} / ` : ''}${m.name}
                           </option>`,
                       )}

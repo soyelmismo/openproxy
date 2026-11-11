@@ -9,8 +9,12 @@ use openproxy_core::rate_limit::{
 use openproxy_types::ids::ComboTargetId;
 use serde_json::json;
 
-#[tokio::test]
-async fn test_tier3_combo_resolution_failover_cooldown() {
+#[test]
+fn test_tier3_combo_resolution_failover_cooldown() {
+    crate::run_with_big_stack(test_tier3_combo_resolution_failover_cooldown_body);
+}
+
+async fn test_tier3_combo_resolution_failover_cooldown_body() {
     let harness = TestHarness::new().await;
     let p2 = "mock-prov-failover-2";
     {
@@ -113,8 +117,12 @@ async fn test_tier3_combo_resolution_failover_cooldown() {
     assert_eq!(resp["choices"][0]["finish_reason"], "stop");
 }
 
-#[tokio::test]
-async fn test_tier3_sse_streaming_with_compression() {
+#[test]
+fn test_tier3_sse_streaming_with_compression() {
+    crate::run_with_big_stack(test_tier3_sse_streaming_with_compression_body);
+}
+
+async fn test_tier3_sse_streaming_with_compression_body() {
     let harness = TestHarness::new().await;
     harness
         .app_state
@@ -140,8 +148,12 @@ async fn test_tier3_sse_streaming_with_compression() {
         .set_compression_mode(openproxy_compression::CompressionMode::Off);
 }
 
-#[tokio::test]
-async fn test_tier3_bearer_auth_rate_limiting_usage() {
+#[test]
+fn test_tier3_bearer_auth_rate_limiting_usage() {
+    crate::run_with_big_stack(test_tier3_bearer_auth_rate_limiting_usage_body);
+}
+
+async fn test_tier3_bearer_auth_rate_limiting_usage_body() {
     let harness = TestHarness::new().await;
     let (status, _) = harness
         .client_chat_call("mock-gpt-4", "Tracking test", false)
@@ -157,8 +169,12 @@ async fn test_tier3_bearer_auth_rate_limiting_usage() {
     assert!(rate_limiter.check(key) && rate_limiter.check(key) && !rate_limiter.check(key));
 }
 
-#[tokio::test]
-async fn test_tier3_combo_round_robin_distribution() {
+#[test]
+fn test_tier3_combo_round_robin_distribution() {
+    crate::run_with_big_stack(test_tier3_combo_round_robin_distribution_body);
+}
+
+async fn test_tier3_combo_round_robin_distribution_body() {
     let harness = TestHarness::new().await;
     let (_, combo) = harness
         .admin_post(
@@ -191,8 +207,12 @@ async fn test_tier3_combo_round_robin_distribution() {
     assert!(harness.mock_handle.recorded_requests().len() >= 3);
 }
 
-#[tokio::test]
-async fn test_tier3_key_model_restrictions_with_combo() {
+#[test]
+fn test_tier3_key_model_restrictions_with_combo() {
+    crate::run_with_big_stack(test_tier3_key_model_restrictions_with_combo_body);
+}
+
+async fn test_tier3_key_model_restrictions_with_combo_body() {
     let harness = TestHarness::new().await;
     let (_, combo) = harness
         .admin_post(

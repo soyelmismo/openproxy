@@ -100,12 +100,12 @@ fn insert_usage_record(
                 stop_reason, compression_savings_pct, compression_techniques, \
                 client_response, prompt_tokens_estimated, completion_tokens_estimated, \
                 endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, \
-                was_winner, audio_ms, session_hash\
+                was_winner, audio_ms, session_hash, max_chunk_gap_ms, avg_chunk_gap_ms\
              ) VALUES (\
                 ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
                 ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-                ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45\
+                ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47\
              )",
             params![
                 request_id,
@@ -165,6 +165,8 @@ fn insert_usage_record(
                 i64::from(input.has_flag(USAGE_FLAG_CLIENT_RESPONSE)),
                 input.audio_ms.map(i64::from),
                 input.session_hash.map(|h| h as i64),
+                input.max_chunk_gap_ms.map(|g| g as i64),
+                input.avg_chunk_gap_ms.map(|g| g as i64),
             ],
         )
     };
@@ -290,6 +292,7 @@ pub fn record_row(
         endpoint_kind: input.endpoint_kind,
         api_key_id: input.api_key_id.map(|k| k.0),
         audio_ms: input.audio_ms,
+        session_hash: input.session_hash,
     };
 
     Ok((UsageId(rowid), row))
@@ -439,6 +442,7 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
     let pii_redacted: Option<String> = r.get(30)?;
     let api_key_id: Option<i64> = r.get(31)?;
     let audio_ms: Option<u32> = r.get(32)?;
+    let session_hash: Option<i64> = r.get(33)?;
 
     let flags = ((race_lost != 0) as u8 * USAGE_FLAG_RACE_LOST)
         | ((is_streaming != 0) as u8 * USAGE_FLAG_IS_STREAMING)
@@ -480,6 +484,7 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
         endpoint_kind: endpoint_kind_str.parse().unwrap_or_default(),
         api_key_id,
         audio_ms,
+        session_hash: session_hash.map(|v| v as u64),
     })
 }
 
@@ -488,7 +493,7 @@ const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream
     error_msg, race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at, \
     stop_reason, compression_savings_pct, compression_techniques, client_response, \
     prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url, \
-    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms";
+    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash";
 
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     let affected = conn
@@ -602,6 +607,8 @@ mod tests {
             flags,
             audio_ms: None,
             session_hash: None,
+            max_chunk_gap_ms: None,
+            avg_chunk_gap_ms: None,
         }
     }
 

@@ -50,7 +50,8 @@ export type RouteName =
   | "login"
   | "proxies"
   | "proxy-sources"
-  | "playground";
+  | "playground"
+  | "models";
 
 export type ViewMount = (ctx: string) => unknown;
 
@@ -95,6 +96,9 @@ const ROUTES: readonly Route[] = [
   { name: "proxy-sources", pattern: /^#?\/proxy-sources$/, mount: mountProxySources as ViewMount },
   { name: "playground", pattern: /^#?\/playground$/, mount: lazyMount(
     () => import('../views/playground/index.js'), 'mountPlayground',
+  ) },
+  { name: "models", pattern: /^#?\/models(?:\?.*)?$/, mount: lazyMount(
+    () => import('../views/models-catalog.js'), 'mountModelsCatalog',
   ) },
   // Its cleanup unsubscribes from the notifications store, so navigating
   // away does not leak the listener.
@@ -165,6 +169,11 @@ export async function mountRouteInto(route: string, target: HTMLElement): Promis
       if (target.isConnected) return mountPlayground(target);
       return;
     }
+    case 'models': {
+      const { mountModelsCatalog } = await import('../views/models-catalog.js');
+      if (target.isConnected) return mountModelsCatalog(target);
+      return;
+    }
     case 'login': return;
   }
 }
@@ -185,9 +194,13 @@ export function navigate(): void {
     location.hash = isFullAdmin() ? "#/" : "#/analytics";
     return;
   }
-  // Restricted tenant enforcement: non-admin keys can ONLY access the analytics view.
-  // Any attempt to navigate to #/keys, #/config, #/logs, #/debug-logs, etc. routes directly to #/analytics.
-  if (loggedIn && !isFullAdmin() && r.name !== "analytics") {
+  // Restricted tenant enforcement: non-admin keys get the analytics view, the
+  // client-facing models catalog and the playground (using their own session
+  // identity). Any admin-only route (keys, config, providers, …) redirects to
+  // #/analytics.
+  const tenantAllowed =
+    r.name === "analytics" || r.name === "models" || r.name === "playground";
+  if (loggedIn && !isFullAdmin() && !tenantAllowed) {
     location.hash = "#/analytics";
     return;
   }

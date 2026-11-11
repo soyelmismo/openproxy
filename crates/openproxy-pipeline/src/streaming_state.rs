@@ -41,6 +41,12 @@ pub(crate) struct StreamingState {
     /// Contadores metadata-only de razonamiento (hidden thinking). No
     /// alteran streaming: solo observan.
     pub reasoning_progress: reasoning_progress::ReasoningProgress,
+    /// Inter-chunk gap telemetry (max/mean, ms) captured when the stream
+    /// loop finishes successfully. Recorded on the usage row so the learned
+    /// idle-chunk budget (`latency_budget::chunk_budget`) sees only gaps
+    /// real streams survived. `None` for failed attempts and unary requests.
+    pub max_chunk_gap_ms: Option<u64>,
+    pub avg_chunk_gap_ms: Option<u64>,
     /// True una vez emitido el evento `info` de primera actividad de
     /// razonamiento (evita ruido: como máximo uno por request).
     reasoning_first_logged: bool,
@@ -100,6 +106,8 @@ impl StreamingState {
             pii_stage: None,
             tool_name_restore: None,
             reasoning_progress: reasoning_progress::ReasoningProgress::default(),
+            max_chunk_gap_ms: None,
+            avg_chunk_gap_ms: None,
             reasoning_first_logged: false,
             devin: Box::new(crate::sse::devin::DevinStreamState::default()),
             kiro: Box::new(crate::sse::kiro::KiroStreamState::default()),
@@ -120,6 +128,15 @@ impl StreamingState {
         let pipeline_result =
             crate::streaming::pipeline::run_pipeline(ctx, stream, sse_parser, &mut processor)
                 .await?;
+        // The stream ended without a timeout error (the `?` above propagates
+        // failures): every gap it carried was survived, so the telemetry is a
+        // valid sample for the learned idle-chunk budget. Failed streams and
+        // unary requests never populate these fields. Assign through
+        // `processor.state` — `processor` still borrows `self`.
+        (
+            processor.state.max_chunk_gap_ms,
+            processor.state.avg_chunk_gap_ms,
+        ) = stream.chunk_gap_telemetry();
         if let ChunkResult::Return(_) = pipeline_result {
             return Ok(pipeline_result);
         }

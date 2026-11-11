@@ -25,8 +25,14 @@ fn test_streaming_attached_cli_secret_restores_at_every_split() {
     }
     assert_eq!(session.restore_text(&redacted), original);
     let placeholder = session.forward.get("7").unwrap();
+    // A placeholder the redactor minted itself restores even when glued to
+    // identifiers on both sides (the Antseed slug incident, where
+    // `step-5-psec_x` reached the client and the agent copied it into a
+    // config): the 8-hex body cannot occur in natural text by accident, so a
+    // literal match is safe, and refusing it makes the original permanently
+    // unrestorable.
     let embedded = format!("prefix-p{placeholder}_suffix");
-    assert_eq!(session.restore_text(&embedded), embedded);
+    assert_eq!(session.restore_text(&embedded), "prefix-p7_suffix");
 }
 
 #[test]

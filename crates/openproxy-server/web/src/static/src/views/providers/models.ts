@@ -12,7 +12,7 @@ import { t } from '../../i18n/index.js';
 import { statusPillClass } from '../../lib/constants.js';
 import { formatContextBadge } from '../../lib/format.js';
 import { renderCapabilityBadges } from './shared.js';
-import { renderDataGrid, type GridColumn } from '../../components/data-grid.js';
+import { renderDataGrid, toggleGridRowExpansion, type GridColumn } from '../../components/data-grid.js';
 import type { Model, Provider } from '../../lib/types/api.js';
 import {
   getProviderUi,
@@ -26,6 +26,7 @@ import {
   onDeleteModel,
   onCopyUsageModel,
   onChangeModelType,
+  renderModelConfigDrawer,
 } from './models-row.js';
 import {
   onBulkToggleModels,
@@ -375,7 +376,7 @@ export function renderModelsSection(
           <div class="model-name-cell">
             <code
               class="model-usage-code"
-              title="Click to copy usage model"
+              title=${usageModel + ' · Click to copy usage model'}
               @click=${(e: Event) => {
                 e.stopPropagation();
                 void onCopyUsageModel(usageModel, e);
@@ -478,12 +479,17 @@ export function renderModelsSection(
               rowKey: (m) => m.row_id,
               rowClass: (m) => (m.active ? 'active' : 'inactive'),
               emptyMessage: 'No models match the filter.',
+              // a plain click on a model opens its full config drawer:
+              // format, client profile, modality, streaming, test harness
+              // target and delete — one row open at a time.
+              expandedRow: (m) => renderModelConfigDrawer(m),
               quickActions: () => [
                 { action: 'test', title: 'Test model', icon: icons.flask() },
                 { action: 'toggle', title: 'Toggle active', icon: icons.lightning() },
                 { action: 'delete', title: t('common.delete'), icon: icons.trash(), danger: true },
               ],
               menuItems: (m) => [
+                { action: 'configure', label: 'Configure model' },
                 { action: 'copy_usage', label: 'Copy usage model', shortcut: 'C' },
                 { action: 'test', label: 'Test model', shortcut: 'T' },
                 { action: 'toggle', label: m.active ? 'Disable model' : 'Enable model' },
@@ -494,14 +500,19 @@ export function renderModelsSection(
                 { separator: true },
                 { action: 'delete', label: t('common.delete'), shortcut: 'Supr', danger: true },
               ],
-              onAction: (m, action) => {
+              onAction: (m, action, rowEl) => {
                 switch (action) {
+                  case 'configure': {
+                    toggleGridRowExpansion(`provider-models-${provider.id}`, m.row_id);
+                    requestUpdate();
+                    return;
+                  }
                   case 'copy_usage': {
                     void navigator.clipboard?.writeText(`${m.provider_id}/${m.model_id}`);
                     showToast(t('grid.toast.copied'));
                     return;
                   }
-                  case 'test': return void onTestModel(m.row_id, null);
+                  case 'test': return void onTestModel(m.row_id, rowEl.querySelector<HTMLButtonElement>('[title="Test model"]'));
                   case 'toggle': return void onToggleModel(m.row_id, !m.active);
                   case 'tag_chat': {
                     const mockEvt = { target: { value: 'chat' } } as unknown as Event;

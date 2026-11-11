@@ -16,6 +16,7 @@
 
 import { html, nothing, type TemplateResult } from "lit-html";
 import { openContextMenu, closeContextMenu, type ContextMenuItem } from "./context-menu.js";
+import { computeGridTracks } from "./data-grid-layout.js";
 
 export interface GridQuickAction<T> {
   action: string;
@@ -84,6 +85,10 @@ export interface DataGridProps<T> {
   renameable?: (row: T) => string | null;
   onRename?: (row: T, value: string) => void;
   selectable?: boolean;
+  /** Expandable detail for a row (config drawer). One row open at a time;
+   *  a plain click toggles it, Escape closes. Clicks inside the drawer do
+   *  not re-toggle the row. */
+  expandedRow?: (row: T) => TemplateResult;
   bulkActions?: GridBulkAction<T>[];
   /** Label for the bulk bar's counter; defaults to "N selected". */
   bulkCountLabel?: (n: number) => string;
@@ -95,6 +100,10 @@ interface GridState {
   selected: Set<string>;
   editing: string | null;
   focused: string | null;
+  expanded: string | null;
+  /** Viewport point of the click that produced the current selection: the
+   *  bulk bar anchors there (fixed, so it survives scrolling). */
+  bulkAt: { x: number; y: number } | null;
 }
 
 const states = new Map<string, GridState>();
@@ -122,7 +131,7 @@ function observeGrid(root: HTMLElement): void {
 function stateFor(id: string): GridState {
   let s = states.get(id);
   if (!s) {
-    s = { selected: new Set(), editing: null, focused: null };
+    s = { selected: new Set(), editing: null, focused: null, expanded: null, bulkAt: null };
     states.set(id, s);
   }
   return s;
@@ -249,49 +258,20 @@ function flushMeasures(): void {
       naturalsCache.set(it.root, natural);
     }
     it.natural = natural;
-    it.avail = it.root.clientWidth;
+    const rowStyle = getComputedStyle(it.headEl);
+    it.avail = Math.max(0, it.headEl.clientWidth
+      - parseFloat(rowStyle.paddingLeft || "0")
+      - parseFloat(rowStyle.paddingRight || "0"));
   }
 
   // WRITE phase: templates + visibility diffs, no reads.
   for (const it of items) {
     const natural = it.natural!;
     const n = it.n;
-    // The quick-actions column is intrinsic: its buttons cannot shrink, so
-    // its floor is its own natural width, and it never folds.
-    const floor: number[] = natural.map((_, i) => Math.max(it.mins[i] ?? 0, 24));
-    const foldRank: number[] = natural.map((_, i) => it.folds[i] ?? 0);
-    if (it.root.querySelector(".dg-row .dg-actions")) {
-      floor[n - 1] = natural[n - 1]!;
-      foldRank[n - 1] = 0;
-    }
-
-    // Fold rank 1 first, 2 next, ... until what remains fits the tile with
-    // the elastic column at its floor. Pure arithmetic - no DOM inside.
-    const active: number[] = Array.from({ length: n }, (_, i) => i);
-    const needed = (list: number[]): number =>
-      list.reduce((a, i) => a + (i === it.elastic ? floor[i]! : natural[i]!), 0);
-    for (let guard = 0; guard < n; guard++) {
-      if (needed(active) <= it.avail) break;
-      let victim = -1, victimRank = Number.POSITIVE_INFINITY;
-      for (const i of active) {
-        if (i === it.elastic) continue;
-        const r = foldRank[i]!;
-        if (r > 0 && r < victimRank) { victimRank = r; victim = i; }
-      }
-      if (victim === -1) break;
-      active.splice(active.indexOf(victim), 1);
-    }
-
-    // Survivors to px (identical on every row, so headers and body share one
-    // grid mapping), the elastic column to minmax(floor, 1fr), folded columns
-    // to 0px tracks with visibility:hidden (auto-placement keeps the column
-    // mapping stable across re-renders). Written only when it differs.
-    const tpl = Array.from({ length: n }, (_, i) => {
-      if (!active.includes(i)) return "0px";
-      return i === it.elastic
-        ? `minmax(${Math.ceil(floor[i]!)}px, 1fr)`
-        : `${Math.ceil(natural[i]!)}px`;
-    });
+    const actions = it.root.querySelector(".dg-row .dg-actions") ? n - 1 : -1;
+    const { template: tplStr, active } = computeGridTracks(
+      natural, it.mins, it.folds, it.elastic, it.avail, actions,
+    );
     // Cell padding, quantized to steps so a pure width change does not
     // restyle every .dg-inner of a large grid on every drag frame.
     const pad = it.avail > 1000 ? "9px" : it.avail > 700 ? "7px" : it.avail > 450 ? "5px" : it.avail > 280 ? "3px" : "2px";
@@ -300,21 +280,20 @@ function flushMeasures(): void {
       it.root.style.setProperty("--dg-pad", pad);
       lastPadCache.set(it.root, pad);
     }
-    const tplStr = tpl.join(" ");
     if (it.root.style.getPropertyValue("--dg-cols") === tplStr) continue;
 
     it.root.style.setProperty("--dg-cols", tplStr);
     // Only cells whose column actually folded or unfolded get a write.
     const prev = lastActiveCols.get(it.root);
     for (let i = 0; i < n; i++) {
-      const on = active.includes(i);
+      const on = active[i]!;
       if (prev && prev[i] === on) continue;
       for (const cells of it.slides) {
         if (!cells[i]) continue;
         cells[i]!.style.visibility = on ? "" : "hidden";
       }
     }
-    lastActiveCols.set(it.root, Array.from({ length: n }, (_, i) => active.includes(i)));
+    lastActiveCols.set(it.root, active);
   }
 }
 
@@ -349,6 +328,7 @@ function prune<T>(props: DataGridProps<T>): void {
   for (const k of Array.from(s.selected)) if (!keys.has(k)) s.selected.delete(k);
   if (s.editing && !keys.has(s.editing)) s.editing = null;
   if (s.focused && !keys.has(s.focused)) s.focused = null;
+  if (s.expanded && !keys.has(s.expanded)) s.expanded = null;
 }
 
 function selectRange<T>(props: DataGridProps<T>, fromIdx: number, toIdx: number): void {
@@ -376,6 +356,7 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
     setTimeout(() => {
       const root = document.querySelector<HTMLElement>(`[data-grid-id="${props.id}"]`);
       if (!root || !root.isConnected) return;
+      observeGrid(root);
       const w = root.clientWidth, h = root.clientHeight;
       const last = lastRefresh.get(root);
       if (last && last.rows === rowsRef && last.w === w && last.h === h) return;
@@ -440,11 +421,20 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
             </div>`
           : nothing}
       </div>
+      ${s.expanded === key && props.expandedRow
+        ? html`<div class="dg-expand" role="region" data-expand-for=${key}>${props.expandedRow(row)}</div>`
+        : nothing}
     `;
   });
 
+  // Anchor the bulk bar where the selection happened; fixed positioning keeps
+  // it on screen while the page scrolls. Clamped so it never leaves the viewport.
+  const at = s.bulkAt;
+  const bulkPos = at
+    ? `left:${Math.min(Math.max(at.x, 8), window.innerWidth - 408)}px;top:${Math.min(Math.max(at.y + 14, 8), window.innerHeight - 46)}px`
+    : undefined;
   const bulk = s.selected.size > 0 && (props.bulkActions?.length ?? 0) > 0
-    ? html`<div class="dg-bulk" role="toolbar">
+    ? html`<div class="dg-bulk" role="toolbar" style=${bulkPos}>
         <span class="dg-bulk-n">${props.bulkCountLabel ? props.bulkCountLabel(s.selected.size) : `${s.selected.size} selected`}</span>
         ${props.bulkActions!.map((b) => html`
           <button type="button" class=${b.danger ? "danger" : ""} @click=${() => {
@@ -473,13 +463,19 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
         if (selectable && e.shiftKey && s.focused && s.focused !== key) {
           const from = rows.findIndex((r) => String(props.rowKey(r)) === s.focused);
           selectRange(props, from === -1 ? idx : from, idx);
+          if (s.selected.size > 0) s.bulkAt = { x: e.clientX, y: e.clientY };
         } else if (selectable && (e.ctrlKey || e.metaKey)) {
           s.selected.has(key) ? s.selected.delete(key) : s.selected.add(key);
           s.focused = key;
+          if (s.selected.size > 0) s.bulkAt = { x: e.clientX, y: e.clientY };
           props.__refresh?.();
         } else if (selectable) {
           if (s.selected.size === 1 && s.selected.has(key)) { s.selected.clear(); props.__refresh?.(); }
-          else { s.selected.clear(); s.selected.add(key); s.focused = key; props.__refresh?.(); }
+          else { s.selected.clear(); s.selected.add(key); s.focused = key; s.bulkAt = { x: e.clientX, y: e.clientY }; props.__refresh?.(); }
+          if (props.expandedRow) {
+            s.expanded = s.expanded === key ? null : key;
+            props.__refresh?.();
+          }
         }
       }}
       @dblclick=${(e: MouseEvent) => {
@@ -513,6 +509,14 @@ function rowElOf(e: Event): HTMLElement {
   return (e.currentTarget as HTMLElement);
 }
 
+/** Toggle a row's expanded drawer from outside the grid (context menu, view
+ *  button). The caller owns the re-render: follow with requestUpdate(). */
+export function toggleGridRowExpansion(gridId: string, rowKey: string | number): void {
+  const s = states.get(gridId);
+  if (!s) return;
+  s.expanded = s.expanded === String(rowKey) ? null : String(rowKey);
+}
+
 /** Post-render hook: sizes the grid from measured content. Call it inside a
  *  requestAnimationFrame after any render that changed rows or columns. */
 export function refreshDataGridLayout(gridId: string): void {
@@ -528,6 +532,7 @@ function onGridKeydown<T>(e: KeyboardEvent, props: DataGridProps<T>): void {
   if (e.key === "Escape") {
     closeContextMenu();
     s.selected.clear();
+    s.expanded = null;
     props.__refresh?.();
     return;
   }

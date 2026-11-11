@@ -1,0 +1,102 @@
+.config-entities-section {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.config-entities-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.config-entity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  height: 28px;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast), transform var(--t-fast);
+  user-select: none;
+}
+
+.config-entity-chip:hover {
+  background: var(--color-surface-soft);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.config-entity-chip:active {
+  transform: scale(0.97);
+}
+
+.config-entity-chip.active {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.config-entity-chip .chip-symbol {
+  font-weight: 700;
+  font-size: var(--fs-xs);
+}
+
+.config-maintenance-telemetry {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.config-maintenance-telemetry .telemetry-grid {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.config-maintenance-telemetry .telemetry-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.config-maintenance-telemetry .telemetry-label {
+  font-size: var(--fs-xs);
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.config-maintenance-telemetry .telemetry-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+}
+
+.config-maintenance-telemetry .telemetry-action button {
+  height: 32px;
+  padding: 0 0.85rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+

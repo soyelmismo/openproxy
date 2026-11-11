@@ -458,7 +458,6 @@ fn resolve_target_candidate_accounts(
     }
     let prioritized_accounts = fetch_accounts_by_health_priority(conn, provider_id)?;
     let candidate_accounts: Vec<AccountId> = match selected_accounts {
-        Some(allowed) if allowed.is_empty() => Vec::new(),
         Some(allowed) => prioritized_accounts
             .into_iter()
             .filter(|id| allowed.contains(id))

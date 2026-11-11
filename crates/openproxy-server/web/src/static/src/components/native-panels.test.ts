@@ -4,6 +4,8 @@ import { mountView, requestUpdate } from '../state/reactive.js';
 const { mount } = vi.hoisted(() => ({ mount: vi.fn() }));
 vi.mock('../state/router.js', () => ({ mountRouteInto: mount }));
 import { clearNativePanels, reconcileNativePanels } from './native-panels.js';
+const tile = (id: string, route: string): { id: string; route: string; rect: { x: number; y: number; w: number; h: number } } =>
+  ({ id, route, rect: { x: 0, y: 0, w: 3, h: 6 } });
 const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 afterEach(async () => { clearNativePanels(); await settle(); document.body.innerHTML = ''; mount.mockReset(); });
 function hosts(): HTMLElement {
@@ -14,11 +16,11 @@ describe('native panel ownership', () => {
   it('keeps live mounts on focus/layout paints and tears down only the changed target', async () => {
     const root = hosts(); const cleanup = vi.fn();
     mount.mockImplementation(async (_route, target) => { mountView(target, () => html`live`); return cleanup; });
-    reconcileNativePanels(root, [{ id: 'a', route: '#/providers' }, { id: 'b', route: '#/logs' }]);
+    reconcileNativePanels(root, [tile('a', '#/providers'), tile('b', '#/logs')]);
     await settle(); const logs = root.querySelector('[data-tile="b"] .tile-view');
-    reconcileNativePanels(root, [{ id: 'a', route: '#/providers' }, { id: 'b', route: '#/logs' }]);
+    reconcileNativePanels(root, [tile('a', '#/providers'), tile('b', '#/logs')]);
     expect(mount).toHaveBeenCalledTimes(2);
-    reconcileNativePanels(root, [{ id: 'a', route: '#/keys' }, { id: 'b', route: '#/logs' }]);
+    reconcileNativePanels(root, [tile('a', '#/keys'), tile('b', '#/logs')]);
     await settle();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(root.querySelector('[data-tile="b"] .tile-view')).toBe(logs);
@@ -28,9 +30,9 @@ describe('native panel ownership', () => {
     const root = hosts(); let release!: () => void; const cleanup = vi.fn();
     mount.mockImplementationOnce(async () => { await new Promise<void>(resolve => { release = resolve; }); return cleanup; });
     mount.mockResolvedValueOnce(() => {});
-    reconcileNativePanels(root, [{ id: 'a', route: '#/providers/first' }]); await settle();
+    reconcileNativePanels(root, [tile('a', '#/providers/first')]); await settle();
     const retired = root.querySelector('.tile-view')!;
-    reconcileNativePanels(root, [{ id: 'a', route: '#/providers/second' }]); await settle();
+    reconcileNativePanels(root, [tile('a', '#/providers/second')]); await settle();
     expect(retired.isConnected).toBe(false); expect(mount).toHaveBeenCalledTimes(1);
     release(); await settle();
     expect(cleanup).toHaveBeenCalledTimes(1); expect(mount).toHaveBeenCalledTimes(2);
@@ -41,7 +43,7 @@ describe('native panel ownership', () => {
       const cleanup = mountView(target, () => { renders++; return html`active`; });
       await new Promise<void>(resolve => { release = resolve; }); return cleanup;
     });
-    reconcileNativePanels(root, [{ id: 'a', route: '#/logs' }]); await settle();
+    reconcileNativePanels(root, [tile('a', '#/logs')]); await settle();
     clearNativePanels(); requestUpdate(); await settle();
     expect(renders).toBe(1); release(); await settle();
   });

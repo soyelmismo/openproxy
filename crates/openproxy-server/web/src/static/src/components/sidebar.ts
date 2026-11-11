@@ -21,7 +21,7 @@ import {
 // navigates to `#/login`, which the router's auth gate admits once `isLoggedIn()` is false.
 import { clearToken, isLoggedIn, isFullAdmin } from "../state/auth.js";
 import { disconnectLogsWebSocket } from "../state/ws.js";
-import { isPanelDocument } from "../state/workspace.js";
+import { isPanelDocument, routeMeta } from "../state/workspace.js";
 
 function mutableState() { return state; }
 
@@ -98,6 +98,15 @@ function applyActiveState(): void {
       aEl.removeAttribute("aria-current");
     }
   });
+  // Mobile bar: one header only. This runs on every hashchange, so the icon + label of
+  // the active view stay in sync here instead of on a per-tile header (desktop chrome).
+  const titleEl = sb.querySelector("#mobile-view-title");
+  if (titleEl) {
+    const key = routeMeta(location.hash || "#/").route.replace(/^#\/?/, "").split("/")[0] || "home";
+    const iconName = (key in NAV_ICONS ? key : null) as NavIconName | null;
+    const label = routeMeta(location.hash || "#/").label;
+    render(html`${iconName ? navIcon(iconName) : html``}<span class="mobile-view-label">${label}</span>`, titleEl as HTMLElement);
+  }
 }
 
 const STORAGE_KEY = "openproxy:sidebarCollapsed";
@@ -204,6 +213,7 @@ export function renderSidebar(): void {
       <div class="brand">
         <span>OpenProxy</span>
       </div>
+      <div class="mobile-view-title" id="mobile-view-title"></div>
       <div class="mobile-topbar-actions">
         <span class="health-dot ${dotClass}" title="Health: ${healthText}"></span>
         <button class="mobile-nav-toggle" type="button" data-action="toggleMobileNav"
@@ -235,6 +245,8 @@ export function renderSidebar(): void {
               <div class="sidebar-nav-group">
                 <div class="sidebar-nav-group-label" ?hidden=${collapsed}>Insights</div>
                 ${renderLink({ href: "#/analytics", icon: "analytics", label: "Analytics" }, collapsed)}
+                ${renderLink({ href: "#/models", icon: "combos", label: "Models" }, collapsed)}
+                ${renderLink({ href: "#/playground", icon: "playground", label: "Playground" }, collapsed)}
               </div>`
       }</nav>
       <div class="health">
@@ -247,10 +259,11 @@ export function renderSidebar(): void {
                 title=${collapsed ? "Expand sidebar" : "Collapse sidebar"}
                 aria-label=${collapsed ? "Expand sidebar" : "Collapse sidebar"}>${toggleIcon}</button>
         <span id="theme-toggle-slot"></span>
+      </div>
+      <div class="sidebar-logout-zone">
         <button class="sidebar-logout" type="button" data-action="logout"
                 title=${t("nav.logout")}
-                aria-label=${t("nav.logout")}
-                ?hidden=${collapsed}>${icons.logout()} ${t("nav.logout")}</button>
+                aria-label=${t("nav.logout")}>${icons.logout()}<span class="nav-label" ?hidden=${collapsed}>${t("nav.logout")}</span></button>
       </div>
     </div>
   `, sb as HTMLElement);

@@ -1,0 +1,59 @@
+
+.oauth-login-section { margin-bottom: var(--space-4); }
+.oauth-login-section h3 { margin-bottom: var(--space-2); font-size: var(--fs-lg); }
+.oauth-buttons { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+.device-code-flow {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.device-code-flow ol { margin: var(--space-2) 0; padding-left: var(--space-5); }
+.device-code-flow li { margin-bottom: var(--space-1); color: var(--color-text); }
+.device-code-flow .copy-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+  color: var(--color-primary);
+  letter-spacing: 0.05em;
+}
+.device-code-flow .polling-status {
+  color: var(--color-text-muted);
+  font-style: italic;
+  margin-top: var(--space-2);
+}
+
+.oauth-manual-card {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+}
+.oauth-manual-card h4 { margin: 0 0 var(--space-2); font-size: var(--fs-md); font-weight: 600; }
+.oauth-manual-card p  { font-size: var(--fs-sm); color: var(--color-text-muted); margin-bottom: var(--space-2); }
+.oauth-manual-url, .oauth-manual-input {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+.oauth-manual-url input,
+.oauth-manual-input input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: var(--space-2);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  min-width: 0;
+}
+.hint { font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: var(--space-1); }
+.btn-secondary {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+.btn-secondary:hover { background: var(--color-surface); color: var(--color-text); border-color: var(--color-border-soft); }

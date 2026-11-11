@@ -1,0 +1,93 @@
+/* Providers list toolbar — one 34px row: segmented status filter on the left,
+   refresh/add pinned right. The active tab stays transparent (ring + text
+   weight carry the state) so the tab reads as a segment, not a raised button. */
+.providers-toolbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: var(--space-3);
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--color-border-soft);
+  container-type: inline-size;
+}
+.providers-toolbar-filters {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.providers-toolbar .filter-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 0 1px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+.providers-toolbar .filter-tabs::-webkit-scrollbar { display: none; }
+.providers-toolbar .filter-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.providers-toolbar .filter-tab:hover { color: var(--color-text); }
+.providers-toolbar .filter-tab.active {
+  background: transparent;
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+.providers-toolbar .filter-tab-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+.providers-toolbar .filter-tab.active .filter-tab-count { color: var(--color-text); }
+.providers-toolbar .actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0 0 0 auto;
+  padding: 0;
+}
+.providers-toolbar .actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+@container (max-width: 560px) {
+  .providers-toolbar .actions button span { display: none; }
+  .providers-toolbar .actions button { width: 28px; padding: 0; }
+  .providers-toolbar .filter-tab { padding: 0 6px; }
+}

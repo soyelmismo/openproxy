@@ -8,6 +8,7 @@
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
+use crate::oauth::zai::exchange::{apply_autoclaw_identity_headers, strip_bearer};
 use crate::oauth::{DbRef, DeviceAuthorizationResponse, OAuthFlow, OAuthProvider, TokenResponse};
 use openproxy_adapters::upstream::{UpstreamClient, UpstreamRequest};
 use openproxy_db::secrets::MasterKey;
@@ -175,67 +176,67 @@ impl OAuthProvider for ZaiOAuthProvider {
                     .get("code")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(-1);
-                if code_num == 0 {
-                    if let Some(data) = json.get("data") {
-                        zcode_jwt = data
-                            .get("token")
-                            .and_then(serde_json::Value::as_str)
-                            .map(|s| s.trim().to_string());
+                if code_num == 0
+                    && let Some(data) = json.get("data")
+                {
+                    zcode_jwt = data
+                        .get("token")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string());
 
-                        zai_access_token = data
-                            .get("zai")
-                            .and_then(|z| z.get("access_token"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(|s| s.trim().to_string());
+                    zai_access_token = data
+                        .get("zai")
+                        .and_then(|z| z.get("access_token"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(|s| s.trim().to_string());
 
-                        let raw_expires_in = data
-                            .get("expires_in")
-                            .or_else(|| data.get("expiresIn"))
-                            .and_then(serde_json::Value::as_u64);
-                        let raw_expires_at = data
-                            .get("expires_at")
-                            .or_else(|| data.get("expiresAt"))
-                            .and_then(serde_json::Value::as_str);
-                        expires_in =
-                            crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
-                                .or(Some(86400 * 30));
+                    let raw_expires_in = data
+                        .get("expires_in")
+                        .or_else(|| data.get("expiresIn"))
+                        .and_then(serde_json::Value::as_u64);
+                    let raw_expires_at = data
+                        .get("expires_at")
+                        .or_else(|| data.get("expiresAt"))
+                        .and_then(serde_json::Value::as_str);
+                    expires_in =
+                        crate::oauth::util::parse_expires_in(raw_expires_in, raw_expires_at)
+                            .or(Some(86400 * 30));
 
-                        let user_val = data.get("user");
-                        user_id = user_val
-                            .and_then(|u| u.get("id").or_else(|| u.get("user_id")))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        name = user_val
-                            .and_then(|u| u.get("name").or_else(|| u.get("username")))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        email = user_val
-                            .and_then(|u| u.get("email"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
-                        avatar = user_val
-                            .and_then(|u| u.get("avatar"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToString::to_string);
+                    let user_val = data.get("user");
+                    user_id = user_val
+                        .and_then(|u| u.get("id").or_else(|| u.get("user_id")))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    name = user_val
+                        .and_then(|u| u.get("name").or_else(|| u.get("username")))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    email = user_val
+                        .and_then(|u| u.get("email"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                    avatar = user_val
+                        .and_then(|u| u.get("avatar"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
 
-                        business_access_token = match zai_access_token.as_deref() {
-                            Some(tok) => Self::exchange_business_token(upstream_client, tok)
-                                .await
-                                .ok(),
-                            None => None,
-                        };
+                    business_access_token = match zai_access_token.as_deref() {
+                        Some(tok) => Self::exchange_business_token(upstream_client, tok)
+                            .await
+                            .ok(),
+                        None => None,
+                    };
 
-                        api_key = match business_access_token.as_deref() {
-                            Some(tok) => {
-                                openproxy_adapters::adapters::zai::resolve_zai_api_key(
-                                    upstream_client,
-                                    tok,
-                                )
-                                .await
-                            }
-                            None => None,
-                        };
-                    }
+                    api_key = match business_access_token.as_deref() {
+                        Some(tok) => {
+                            openproxy_adapters::adapters::zai::resolve_zai_api_key(
+                                upstream_client,
+                                tok,
+                            )
+                            .await
+                        }
+                        None => None,
+                    };
                 }
             }
         }
@@ -276,32 +277,29 @@ impl OAuthProvider for ZaiOAuthProvider {
 
             if let Ok((_status, ac_bytes)) =
                 crate::oauth::call_oauth(upstream_client, req_ac, "autoclaw oauth login").await
+                && let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes)
+                && let Some(ac_data) = ac_json.get("data")
+                && ac_json.get("code").and_then(serde_json::Value::as_i64) == Some(0)
             {
-                if let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes) {
-                    if ac_json.get("code").and_then(serde_json::Value::as_i64) == Some(0) {
-                        if let Some(ac_data) = ac_json.get("data") {
-                            autoclaw_access_token = ac_data
-                                .get("access_token")
-                                .and_then(serde_json::Value::as_str)
-                                .map(|s| s.trim().to_string());
-                            autoclaw_refresh_token = ac_data
-                                .get("refresh_token")
-                                .and_then(serde_json::Value::as_str)
-                                .map(|s| s.trim().to_string());
-                            if user_id.is_none() {
-                                user_id = ac_data
-                                    .get("user_id")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(ToString::to_string);
-                            }
-                            if name.is_none() {
-                                name = ac_data
-                                    .get("user_name")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(ToString::to_string);
-                            }
-                        }
-                    }
+                autoclaw_access_token = ac_data
+                    .get("access_token")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| s.trim().to_string());
+                autoclaw_refresh_token = ac_data
+                    .get("refresh_token")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| s.trim().to_string());
+                if user_id.is_none() {
+                    user_id = ac_data
+                        .get("user_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
+                }
+                if name.is_none() {
+                    name = ac_data
+                        .get("user_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string);
                 }
             }
         }
@@ -351,7 +349,92 @@ impl OAuthProvider for ZaiOAuthProvider {
             id_token,
         })
     }
+    async fn post_exchange(
+        &self,
+        account_id: AccountId,
+        db_pool: &Arc<openproxy_db::DbPool>,
+        master_key: &MasterKey,
+        _upstream: &Arc<UpstreamClient>,
+    ) -> Result<()> {
+        const WRITER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+        let pool = Arc::clone(db_pool);
+        let read_master_key = master_key.clone();
 
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.try_writer_for(WRITER_LOCK_TIMEOUT).ok_or_else(|| {
+                CoreError::Internal(format!(
+                    "zai post_exchange: writer lock not acquired within {WRITER_LOCK_TIMEOUT:?}"
+                ))
+            })?;
+
+            let meta_raw: Option<String> = conn
+                .query_row(
+                    "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+                    rusqlite::params![account_id.0],
+                    |row| row.get(0),
+                )
+                .ok()
+                .flatten();
+
+            // The blob is stored encrypted by store_oauth_tokens, so decrypt
+            // before parsing. The fallback keeps blobs written by older paths
+            // (plain JSON) working.
+            let meta = meta_raw
+                .as_deref()
+                .and_then(|raw| {
+                    openproxy_db::accounts::decrypt_oauth_provider_specific(
+                        Some(raw),
+                        &read_master_key,
+                    )
+                })
+                .and_then(|plain| serde_json::from_str::<ZaiAccountMeta>(&plain).ok());
+
+            if let Some(meta) = meta {
+                // The email is the label users recognize. A credential blob may
+                // only carry a numeric user id or a display name, so only treat
+                // an email-looking value as one.
+                let email = meta
+                    .email
+                    .clone()
+                    .filter(|e| e.contains('@') && !e.trim().is_empty());
+
+                if let Some(ident) = meta
+                    .name
+                    .or(meta.email)
+                    .or(meta.user_id)
+                    .filter(|s| !s.trim().is_empty())
+                {
+                    let label = format!("Z.ai ({ident})");
+                    let _ = conn.execute(
+                        "UPDATE accounts SET label = COALESCE(NULLIF(label, ''), ?1) WHERE id = ?2",
+                        rusqlite::params![label, account_id.0],
+                    );
+                }
+
+                if let Some(email) = email {
+                    // Backfill the email column, and replace labels generated by
+                    // older zai logins ("AutoClaw (...)" / "Z.ai (...)") with the
+                    // address itself. Hand-written labels are left alone.
+                    let _ = conn.execute(
+                        "UPDATE accounts SET \
+                             email = COALESCE(NULLIF(email, ''), ?1), \
+                             label = CASE \
+                                 WHEN label IS NULL OR TRIM(label) = '' \
+                                      OR label LIKE 'AutoClaw (%' OR label LIKE 'Z.ai (%' \
+                                 THEN ?1 ELSE label END \
+                         WHERE id = ?2",
+                        rusqlite::params![email, account_id.0],
+                    );
+                }
+            }
+
+            Ok::<(), CoreError>(())
+        })
+        .await
+        .map_err(|e| CoreError::Internal(format!("zai post_exchange spawn join error: {e}")))??;
+
+        Ok(())
+    }
     fn request_device_code(
         &self,
         _upstream_client: &Arc<UpstreamClient>,
@@ -399,7 +482,7 @@ impl OAuthProvider for ZaiOAuthProvider {
         _account_id: AccountId,
         _db: DbRef<'_>,
     ) -> Result<TokenResponse> {
-        let raw_refresh = strip_bearer(&refresh_token).ok_or_else(|| {
+        let raw_refresh = strip_bearer(refresh_token).ok_or_else(|| {
             CoreError::Validation("zai refresh: no AutoClaw refresh token stored".into())
         })?;
 
@@ -580,278 +663,10 @@ impl OAuthProvider for ZaiOAuthProvider {
                 .filter(|e| e.contains('@'))
         })
     }
-
-    async fn post_exchange(
-        &self,
-        account_id: AccountId,
-        db_pool: &Arc<openproxy_db::DbPool>,
-        master_key: &MasterKey,
-        _upstream: &Arc<UpstreamClient>,
-    ) -> Result<()> {
-        const WRITER_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-        let pool = Arc::clone(db_pool);
-        let read_master_key = master_key.clone();
-
-        tokio::task::spawn_blocking(move || {
-            let conn = pool.try_writer_for(WRITER_LOCK_TIMEOUT).ok_or_else(|| {
-                CoreError::Internal(format!(
-                    "zai post_exchange: writer lock not acquired within {WRITER_LOCK_TIMEOUT:?}"
-                ))
-            })?;
-
-            let meta_raw: Option<String> = conn
-                .query_row(
-                    "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
-                    rusqlite::params![account_id.0],
-                    |row| row.get(0),
-                )
-                .ok()
-                .flatten();
-
-            // The blob is stored encrypted by store_oauth_tokens, so decrypt
-            // before parsing. The fallback keeps blobs written by older paths
-            // (plain JSON) working.
-            let meta = meta_raw
-                .as_deref()
-                .and_then(|raw| {
-                    openproxy_db::accounts::decrypt_oauth_provider_specific(
-                        Some(raw),
-                        &read_master_key,
-                    )
-                })
-                .and_then(|plain| serde_json::from_str::<ZaiAccountMeta>(&plain).ok());
-
-            if let Some(meta) = meta {
-                // The email is the label users recognize. A credential blob may
-                // only carry a numeric user id or a display name, so only treat
-                // an email-looking value as one.
-                let email = meta
-                    .email
-                    .clone()
-                    .filter(|e| e.contains('@') && !e.trim().is_empty());
-
-                if let Some(ident) = meta
-                    .name
-                    .or(meta.email)
-                    .or(meta.user_id)
-                    .filter(|s| !s.trim().is_empty())
-                {
-                    let label = format!("Z.ai ({ident})");
-                    let _ = conn.execute(
-                        "UPDATE accounts SET label = COALESCE(NULLIF(label, ''), ?1) WHERE id = ?2",
-                        rusqlite::params![label, account_id.0],
-                    );
-                }
-
-                if let Some(email) = email {
-                    // Backfill the email column, and replace labels generated by
-                    // older zai logins ("AutoClaw (...)" / "Z.ai (...)") with the
-                    // address itself. Hand-written labels are left alone.
-                    let _ = conn.execute(
-                        "UPDATE accounts SET \
-                             email = COALESCE(NULLIF(email, ''), ?1), \
-                             label = CASE \
-                                 WHEN label IS NULL OR TRIM(label) = '' \
-                                      OR label LIKE 'AutoClaw (%' OR label LIKE 'Z.ai (%' \
-                                 THEN ?1 ELSE label END \
-                         WHERE id = ?2",
-                        rusqlite::params![email, account_id.0],
-                    );
-                }
-            }
-
-            Ok::<(), CoreError>(())
-        })
-        .await
-        .map_err(|e| CoreError::Internal(format!("zai post_exchange spawn join error: {e}")))??;
-
-        Ok(())
-    }
 }
 
-/// Product identity headers the AutoClaw identity gateway requires.
-///
-/// `X-Auth-Sign` is an MD5 over `appId & timestamp & appKey`, exactly as the
-/// official client computes it. A stale timestamp or a wrong signature is
-/// rejected with `400002 Middleware sign error`, so both are minted together
-/// here and nowhere else.
-fn apply_autoclaw_identity_headers(req: &mut openproxy_adapters::upstream::UpstreamRequest) {
-    let timestamp = openproxy_types::now_unix_secs_str();
-    let sign = crate::oauth::minimax::md5::md5_hex(format!(
-        "{AUTOCLAW_APP_ID}&{timestamp}&{AUTOCLAW_APP_KEY}"
-    ));
-    for (name, value) in [
-        ("x-product", "autoclaw".to_string()),
-        ("x-version", AUTOCLAW_APP_VERSION.to_string()),
-        ("x-tm", "linux".to_string()),
-        ("x-channel", "official".to_string()),
-        ("x-auth-appid", AUTOCLAW_APP_ID.to_string()),
-        ("x-auth-timestamp", timestamp),
-        ("x-auth-sign", sign),
-        ("x-lang", "zh-CN".to_string()),
-    ] {
-        if let (Ok(name), Ok(value)) = (
-            http::HeaderName::try_from(name),
-            http::HeaderValue::from_str(&value),
-        ) {
-            req.headers.insert(name, value);
-        }
-    }
-}
-
-/// Strip the `Bearer ` prefix the gateway stores its JWTs with.
-fn strip_bearer(token: &str) -> Option<&str> {
-    let trimmed = token.trim();
-    let stripped = trimmed
-        .strip_prefix("Bearer ")
-        .or_else(|| trimmed.strip_prefix("bearer "))
-        .unwrap_or(trimmed)
-        .trim();
-    (!stripped.is_empty()).then_some(stripped)
-}
-
-impl ZaiOAuthProvider {
-    async fn exchange_business_token(
-        upstream_client: &Arc<UpstreamClient>,
-        zai_access_token: &str,
-    ) -> Result<String> {
-        let body = serde_json::json!({
-            "token": zai_access_token
-        });
-        let body_bytes =
-            serde_json::to_vec(&body).map_err(|e| CoreError::Validation(e.to_string()))?;
-
-        let mut req = UpstreamRequest::post_json(
-            ZAI_DEFAULT_BUSINESS_LOGIN_URL,
-            bytes::Bytes::from(body_bytes),
-        )
-        .with_accept_json();
-        req.headers.insert(
-            http::header::CONTENT_TYPE,
-            http::HeaderValue::from_static("application/json"),
-        );
-
-        let (status, resp_bytes) =
-            crate::oauth::call_oauth(upstream_client, req, "zai business login").await?;
-
-        if !status.is_success() {
-            return Err(CoreError::UpstreamConnection(format!(
-                "business login status: {}",
-                status.as_u16()
-            )));
-        }
-
-        let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
-            .map_err(|e| CoreError::Parse(format!("zai business login parse: {e}")))?;
-
-        let tok = json
-            .get("data")
-            .and_then(|d| d.get("access_token").or_else(|| d.get("accessToken")))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| CoreError::Parse("missing business access_token".into()))?
-            .trim()
-            .to_string();
-
-        Ok(tok)
-    }
-}
+pub(crate) mod exchange;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_zai_build_auth_url() {
-        let provider = ZaiOAuthProvider::new();
-        assert_eq!(provider.name(), "zai");
-        assert_eq!(provider.aliases(), &["zcode", "z.ai"]);
-        assert_eq!(provider.flow(), OAuthFlow::AuthorizationCode);
-
-        let (url, verifier, redirect, state) = provider
-            .build_auth_url("https://zcode.z.ai/app/oauth/login?redirect=zcode%3A%2F%2Foauth%2Fcallback&app_version=3.14.0")
-            .await
-            .expect("build auth url");
-
-        assert_eq!(verifier, state);
-        assert!(!state.is_empty());
-        assert_eq!(redirect, ZAI_REDIRECT_URI);
-        assert!(url.starts_with(ZAI_DEFAULT_AUTHORIZE_URL));
-        assert!(url.contains("client_id=client_P8X5CMWmlaRO9gyO-KSqtg"));
-        assert!(url.contains("response_type=code"));
-        assert!(url.contains(&format!("state={state}")));
-    }
-
-    #[test]
-    fn test_zai_metadata_and_email_extraction() {
-        let provider = ZaiOAuthProvider::new();
-        let meta = ZaiAccountMeta {
-            autoclaw_access_token: None,
-            autoclaw_refresh_token: None,
-            zcode_jwt_token: Some("zcode.jwt.mock".into()),
-            zai_access_token: Some("zai.at.mock".into()),
-            business_access_token: Some("biz.mock".into()),
-            api_key: Some("mock.api.key".into()),
-            user_id: Some("u-12345".into()),
-            name: Some("ZCodeUser".into()),
-            email: Some("dev@example.com".into()),
-            avatar: None,
-        };
-
-        let id_token = serde_json::to_string(&meta).unwrap();
-        let token = TokenResponse {
-            access_token: "zcode.jwt.mock".into(),
-            token_type: "Bearer".into(),
-            expires_in: Some(3600),
-            refresh_token: None,
-            scope: None,
-            id_token: Some(id_token.clone()),
-        };
-
-        assert_eq!(
-            provider.provider_specific_from_token(&token).as_deref(),
-            Some(id_token.as_str())
-        );
-        assert_eq!(
-            provider.email_from_token(&token).as_deref(),
-            Some("dev@example.com")
-        );
-    }
-    #[test]
-    fn test_zai_email_from_access_token_jti_fallback() {
-        use base64::Engine;
-
-        let provider = ZaiOAuthProvider::new();
-        let jwt = |jti: &str| {
-            let b64 = |bytes: &[u8]| {
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-            };
-            format!(
-                "{}.{}.{}",
-                b64(br#"{"alg":"HS256"}"#),
-                b64(format!(r#"{{"user_id":189807,"jti":"{jti}"}}"#).as_bytes()),
-                "sig",
-            )
-        };
-
-        // AutoClaw carries the account's address in `jti`.
-        let token = TokenResponse {
-            access_token: jwt("t2297973@gmail.com"),
-            token_type: "bearer".into(),
-            expires_in: Some(86400),
-            refresh_token: None,
-            scope: None,
-            id_token: None,
-        };
-        assert_eq!(
-            provider.email_from_token(&token).as_deref(),
-            Some("t2297973@gmail.com")
-        );
-
-        // A non-email jti (or no jti at all) must not become the email.
-        let token = TokenResponse {
-            access_token: jwt("b1b01c10-91dc-4a25-9d32-d17b5f5bbd9b"),
-            ..token
-        };
-        assert_eq!(provider.email_from_token(&token), None);
-    }
-}
+#[path = "zai/tests.rs"]
+mod tests;

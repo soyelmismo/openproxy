@@ -1,0 +1,517 @@
+/* compact-entity-headers.css — dense, stable toolbars for list and detail views.
+   Scope: every rule is namespaced under .cx-* classes (or a .cx-* compound on
+   an existing element). Nothing here styles a bare view selector, so other
+   screens are untouched. Tokens only — no new colors, radii or shadows. */
+
+/* ── Shared toolbar ─────────────────────────────────────────────────────── */
+
+.cx-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  min-height: 34px;
+  margin: 0 0 var(--space-3);
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--color-border-soft);
+  /* Disclosure panels hang off the toolbar, not off their trigger: a trigger
+     near the left edge used to push a 340px panel past the tile's left side. */
+  position: relative;
+}
+
+.cx-toolbar > h2.view-identity {
+  margin: 0;
+  font-size: var(--fs-lg);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.cx-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.cx-toolbar-actions button,
+.cx-toolbar-actions .btn {
+  min-height: 28px;
+  padding: 3px 9px;
+  font-size: var(--fs-xs);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* Secondary options live behind a compact disclosure, never as a second row. */
+
+.cx-details {
+  position: static;
+  flex: 0 0 auto;
+}
+
+.cx-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cx-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cx-details > summary::after {
+  content: "▾";
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.cx-details > summary:hover,
+.cx-details[open] > summary {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.cx-details-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* The tile, not the browser viewport, bounds a disclosure panel: sizing it
+     against 100vw pushed the search box off a narrow pane's left edge. */
+  width: min(340px, calc(100cqw - 24px));
+  max-width: calc(100cqw - 24px);
+  padding: 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.cx-details-panel input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+}
+
+/* ── Proxies: KPI strip + filter bar ───────────────────────────────────── */
+
+.cx-kpi-strip {
+  display: flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0 0 var(--space-3);
+  padding: 2px 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+}
+
+.cx-kpi {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 12px;
+}
+
+.cx-kpi + .cx-kpi {
+  border-left: 1px solid var(--color-border-soft);
+}
+
+.cx-kpi-label {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.cx-kpi-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.cx-kpi-success .cx-kpi-value {
+  color: var(--color-success);
+}
+
+.cx-kpi-error .cx-kpi-value {
+  color: var(--color-error);
+}
+
+.cx-filterbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 var(--space-3);
+}
+
+.cx-filter-search {
+  flex: 1 1 160px;
+  min-width: 0;
+  height: 30px;
+  padding: 2px 8px;
+  font-size: var(--fs-sm);
+}
+
+.cx-filter-selects {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cx-filter-selects select {
+  flex: 1 1 110px;
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  padding: 2px 6px;
+  font-size: var(--fs-xs);
+}
+
+@container tile-view (max-width: 560px) {
+  .cx-filter-search {
+    flex-basis: 100%;
+  }
+
+  .cx-filter-selects {
+    flex-basis: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  }
+
+  .cx-filter-selects select {
+    width: 100%;
+  }
+}
+
+@container tile-view (max-width: 380px) {
+  .cx-kpi {
+    flex: 1 1 50%;
+    padding: 3px 8px;
+  }
+
+  .cx-kpi + .cx-kpi {
+    border-left: 0;
+  }
+}
+
+/* ── Debug logs: one toolbar, no stacked labels ────────────────────────── */
+
+.cx-debug-toolbar {
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.cx-debug-levels {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.cx-level-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cx-level-check input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.cx-debug-toolbar .debug-level-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.cx-debug-toolbar .debug-level-pill.level-error {
+  color: var(--color-error);
+  background: var(--color-error-soft);
+}
+
+.cx-debug-toolbar .debug-level-pill.level-warn {
+  color: var(--color-warn);
+  background: var(--color-warn-soft);
+}
+
+.cx-debug-toolbar .debug-level-pill.level-info {
+  color: var(--color-info);
+  background: var(--color-info-soft);
+}
+
+.cx-debug-toolbar .debug-level-pill.level-debug {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+}
+
+.cx-debug-field {
+  display: block;
+  flex: 0 1 132px;
+  min-width: 0;
+}
+
+.cx-debug-field input {
+  width: 100%;
+  height: 28px;
+  padding: 2px 8px;
+  font-size: var(--fs-xs);
+}
+
+.cx-debug-buffer {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+@container tile-view (max-width: 620px) {
+  .cx-debug-field {
+    flex: 1 1 120px;
+  }
+
+  .cx-debug-buffer {
+    order: 9;
+  }
+}
+
+/* ── Provider detail: back link + summary in one row, flat tabs ────────── */
+
+.cx-detail-topbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 0 0 10px;
+  min-width: 0;
+}
+
+.cx-back-link {
+  margin: 0;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.cx-provider-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cx-provider-summary .provider-icon {
+  flex: 0 0 auto;
+}
+
+.cx-provider-summary-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cx-provider-summary-info h2 {
+  margin: 0;
+  font-size: var(--fs-md);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.cx-provider-summary-info h2 .editable {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--color-border-soft);
+}
+
+.cx-provider-summary-info h2 .editable:hover {
+  color: var(--color-primary);
+}
+
+.cx-provider-summary-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.cx-provider-summary-meta code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 4px;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-sm);
+}
+
+.provider-detail-tabs.cx-tabs {
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.provider-detail-tabs.cx-tabs [role="tab"] {
+  padding: 6px 9px;
+  font-size: var(--fs-xs);
+}
+
+.provider-detail-tabs.cx-tabs [aria-selected="true"] {
+  border-bottom-color: var(--color-primary);
+}
+
+.provider-detail-tabs.cx-tabs .tab-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+/* Config tab: controls without a second identity block. */
+
+.cx-config-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 0 0 8px;
+  margin: 0 0 10px;
+  border-bottom: 1px solid var(--color-border-soft);
+  min-width: 0;
+}
+
+.cx-config-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cx-config-controls .meta-link {
+  max-width: min(100%, 320px);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.cx-config-controls .chip {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+@container provider-detail (max-width: 560px) {
+  .cx-config-toolbar {
+    align-items: flex-start;
+  }
+
+  .cx-config-toolbar > .cx-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
+/* ── Key detail: entity heading + inline property strip ────────────────── */
+
+.cx-key-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0 0 10px;
+  min-width: 0;
+}
+
+.cx-key-header h1 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  line-height: 1.2;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cx-key-usage {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 3px 10px;
+  font-size: var(--fs-xs);
+}
+
+.cx-key-summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0 0 var(--space-3);
+  padding: 8px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+}
+
+.cx-key-summary > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cx-key-summary dt {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.cx-key-summary dd {
+  margin: 0;
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+@container tile-view (max-width: 480px) {
+  .cx-key-summary {
+    gap: 3px 14px;
+  }
+
+  .cx-key-usage {
+    margin-left: 0;
+  }
+}

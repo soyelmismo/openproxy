@@ -226,3 +226,163 @@ fn test_deterministic_compact_secret_placeholders() {
         s2.get_or_create_placeholder(PiiEntity::Secret, proj_key)
     );
 }
+
+/// A credential-shaped value that is a variable bound in the same payload is
+/// a reference, not a secret. Redacting it renames the variable and breaks
+/// every read of it: in a real session `RT_RAW` became `sec_1f689c8a` inside
+/// a Python script, and the agent copied the placeholder into the assignment.
+#[test]
+fn test_labeled_value_that_is_an_assigned_variable_is_not_a_secret() {
+    let engine = PiiEngine::new(&PiiEntity::ALL);
+    let mut session = PiiSession::new(true);
+    let script = "RT_RAW = sys.stdin.readline().strip()\n\
+                  AT_RAW = sys.stdin.readline().strip()\n\
+                  RT = RT_RAW[7:].strip() if RT_RAW.lower().startswith(\"bearer \") else RT_RAW\n\
+                  VARIANTS = [\n\
+                  \x20   (\"A raw+dev\", {\"refresh_token\": RT, \"source_id\": \"autoclaw\"}),\n\
+                  \x20   (\"C bearer\", {\"refresh_token\": RT_RAW, \"source_id\": \"autoclaw\"}),\n\
+                  ]\n\
+                  print(\"rt len raw:\", len(RT), flush=True)\n";
+    let red = engine.redact_text(script, &mut session);
+    // The variables survive verbatim: the script must still run.
+    assert_eq!(red, script);
+    assert!(session.is_empty());
+
+    // Control: a literal credential behind the same label is still redacted,
+    // and the roundtrip returns the original.
+    let mut control = PiiSession::new(true);
+    let payload = "RT_RAW = sys.stdin.readline().strip()\n\
+                   payload = {\"refresh_token\": \"a1b2c3d4e5f6a7b8\", \"source_id\": \"autoclaw\"}\n";
+    let red_control = engine.redact_text(payload, &mut control);
+    assert!(red_control.contains("RT_RAW = sys.stdin.readline().strip()"));
+    assert!(!red_control.contains("a1b2c3d4e5f6a7b8"));
+    assert_eq!(control.restore_text(&red_control), payload);
+}
+
+/// The same rule for URL query parameters and CLI flags: `?token={var}` and
+/// `-p{var}` read a variable, they do not carry a credential.
+#[test]
+fn test_variable_reference_in_url_param_and_cli_flag_is_not_a_secret() {
+    let engine = PiiEngine::new(&PiiEntity::ALL);
+    let mut session = PiiSession::new(true);
+    let script = "session_token = fetch_token()\n\
+                  url = f\"https://api.example.com/v1?token={session_token}\"\n\
+                  deploy = \"cargo run -p\" + openproxy_server\n\
+                  openproxy_server = \"openproxy-server\"\n";
+    let red = engine.redact_text(script, &mut session);
+    assert!(red.contains("?token={session_token}"));
+    assert!(red.contains("-p\" + openproxy_server"));
+    assert_eq!(session.restore_text(&red), script);
+}
+
+/// Shell spellings of the same idea: `$VAR`, `${VAR}` and an `sshpass -p$VAR`
+/// read a variable. Masking any of them breaks the command, which is how a
+/// real session ended up running `sshpass -psec_86019c-p0`.
+#[test]
+fn test_shell_variable_spellings_and_sshpass_are_not_secrets() {
+    let engine = PiiEngine::new(&PiiEntity::ALL);
+    let mut session = PiiSession::new(true);
+    let script = concat!(
+        "SSH_PASS = os.environ[\"SSH_PASS\"]\n",
+        "cmd = \"sshpass -p$SSH_PASS ssh rot@10.0.0.1\"\n",
+        "cmd2 = \"sshpass -p${SSH_PASS} ssh rot@10.0.0.1\"\n",
+    );
+    let red = engine.redact_text(script, &mut session);
+    assert!(
+        red.contains("-p$SSH_PASS"),
+        "shell variable was masked: {red}"
+    );
+    assert!(
+        red.contains("-p${SSH_PASS}"),
+        "braced variable was masked: {red}"
+    );
+    assert!(
+        !red.contains("sec_"),
+        "a variable was masked as a secret: {red}"
+    );
+    assert_eq!(session.restore_text(&red), script);
+}
+
+/// Real incident (Antseed session, 2026-11-08): the CLI flag regex read the
+/// `-p` inside `step-5-preview` as a flag and redacted the word `review`,
+/// turning every model slug into `step-5-psec_0b3dd3a1`. The agent then
+/// wrote that placeholder into its pricing config and the network answered
+/// `not_found`. A bare lowercase word behind `-p` is a slug fragment, not a
+/// credential, and the payload must roundtrip untouched.
+#[test]
+fn test_cli_flag_inside_slug_word_is_not_a_secret() {
+    let engine = PiiEngine::new(&PiiEntity::ALL);
+    let mut session = PiiSession::new(true);
+    let payload = "eventos en slugs -preview (todo el historial): 78\n\
+                   buyer f93b22eaed x75 | in mediana: 12\n\
+                   claves -preview en config: step-5-preview, minimax-m3-preview,\n\
+                   minimax-m3.1-flash-preview, gemini-3.5-flash-lite-preview";
+    let red = engine.redact_text(payload, &mut session);
+    assert_eq!(red, payload, "slug fragments were redacted: {red}");
+    assert!(session.is_empty());
+    assert_eq!(session.restore_text(&red), payload);
+}
+
+/// The restore stage must not demand token boundaries around placeholders
+/// the redactor minted itself: the forward pass can leave them glued to
+/// identifiers on either side, and a boundary check makes the original
+/// permanently unrestorable (the failure that corrupted the session
+/// history). Human-authored placeholders keep their boundaries.
+#[test]
+fn test_glued_secret_placeholder_restores_without_token_boundaries() {
+    let mut session = PiiSession::new(true);
+    let original = "a1b2c3d4e5f6a7b8";
+    let ph = session.get_or_create_placeholder(PiiEntity::Secret, original);
+    assert_eq!(
+        session.restore_text(&format!("step-5-p{ph}")),
+        format!("step-5-p{original}")
+    );
+    assert_eq!(
+        session.restore_text(&format!("{ph}_receipts")),
+        format!("{original}_receipts")
+    );
+    assert_eq!(
+        session.restore_text(&format!("id_{ph}status")),
+        format!("id_{original}status")
+    );
+    assert_eq!(
+        session.restore_text(&format!("x{ph}")),
+        format!("x{original}")
+    );
+}
+
+/// The incident reached the client through the streaming stage, so the same
+/// glued placeholder split across two SSE frames must restore there too.
+#[test]
+fn test_streaming_restore_of_glued_placeholder_across_frames() {
+    use std::collections::HashMap;
+
+    let mut session = PiiSession::new(true);
+    let original = "a1b2c3d4e5f6a7b8";
+    let ph = session.get_or_create_placeholder(PiiEntity::Secret, original);
+    let mapping: HashMap<String, String> = [
+        (ph.clone(), original.to_string()),
+        (format!("-p{ph}"), format!("-p{original}")),
+    ]
+    .into_iter()
+    .collect();
+
+    let mut stage = PiiRestorationStage::from_mapping(mapping);
+    let (head, tail) = ph.split_at(ph.len() / 2);
+    let frame1 =
+        format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"step-5-p{head}\"}}}}]}}\n\n");
+    let frame2 = format!("data: {{\"choices\":[{{\"delta\":{{\"content\":\"{tail}\"}}}}]}}\n\n");
+    // The replacer conservatively buffers a trailing token-shaped candidate
+    // until end of stream; the [DONE] frame flushes it.
+    let out = stage.process_frame(&frame1)
+        + &stage.process_frame(&frame2)
+        + &stage.process_frame("data: [DONE]\n\n");
+    assert!(
+        out.contains(original),
+        "glued placeholder not restored across frames: {out}"
+    );
+    assert!(
+        !out.contains("sec_"),
+        "placeholder survived the stream: {out}"
+    );
+}

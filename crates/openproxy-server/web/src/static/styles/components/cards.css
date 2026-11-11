@@ -118,7 +118,8 @@
   margin-bottom: var(--space-3);
   flex-wrap: wrap;
 }
-.filter-bar input[type="text"] { flex: 1; min-width: 200px; }
+.filter-bar input[type="text"] { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+.filter-bar > * { min-width: 0; max-width: 100%; }
 .filter-bar .filter-info { font-size: var(--fs-xs); color: var(--color-text-muted); }
 
 .combo-card {

@@ -11,3 +11,5 @@
 @import url("./components.css");
 @import url("./views.css");
 @import url("./workspace.css");
+@import url("./components/compact-entity-headers.css");
+@import url("./components/workspace-chrome.css");

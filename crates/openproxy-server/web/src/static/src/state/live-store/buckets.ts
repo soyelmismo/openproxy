@@ -51,18 +51,39 @@ function bucketIndexFromNow(windowSecs: number, totalBuckets: number): number {
   return ((Math.floor(nowSec / windowSecs) % totalBuckets) + totalBuckets) % totalBuckets;
 }
 
-function incrementBucket(b: Bucket, row: RecentUsageRow): void {
+// A winner is republished with the same ID after client_response is set.
+// Deduplicate only final statuses, not attempts, and retain IDs for the longest
+// bucket horizon so delayed/repeated broadcasts cannot count a response twice.
+const clientResponseIds = new Map<string, number>();
+const CLIENT_RESPONSE_RETENTION_MS = WINDOW_1M * 60 * 1000;
+
+function countClientResponse(row: RecentUsageRow): boolean {
+  if (row.client_response !== true || row.status_code < 200) return false;
+  const now = Date.now();
+  for (const [id, seenAt] of clientResponseIds) {
+    if (now - seenAt < CLIENT_RESPONSE_RETENTION_MS) break;
+    clientResponseIds.delete(id);
+  }
+  const id = row.id > 0 ? `row:${row.id}` : `trace:${row.trace_id || row.request_id}`;
+  if (clientResponseIds.has(id)) return false;
+  clientResponseIds.set(id, now);
+  return true;
+}
+
+function incrementBucket(b: Bucket, row: RecentUsageRow, clientResponse: boolean): void {
   b.count++;
   const isSuccess = row.status_code >= 200 && row.status_code < 400;
   if (isSuccess) {
     b.tokens_in += row.prompt_tokens ?? 0;
     b.tokens_out += row.completion_tokens ?? 0;
     b.cost_usd += row.cost_usd ?? 0;
-    b.status_2xx++;
-  } else if (row.status_code >= 400 && row.status_code < 500) {
-    b.status_4xx++;
-  } else if (row.status_code >= 500) {
-    b.status_5xx++;
+  }
+  // Success-rate KPI and its sparkline describe client-visible outcomes only.
+  // Keep attempt throughput, token/cost accounting and race diagnostics intact.
+  if (clientResponse) {
+    if (isSuccess) b.status_2xx++;
+    else if (row.status_code < 500) b.status_4xx++;
+    else b.status_5xx++;
   }
   if (b.latencies.length < MAX_LATENCIES_PER_BUCKET) {
     b.latencies.push(row.total_ms || 0);
@@ -90,9 +111,10 @@ export function writeRowToBuckets(row: RecentUsageRow): void {
     resetBucketInPlace(buckets1m[idx1m]!);
     lastBucket1m = idx1m;
   }
-  incrementBucket(buckets1s[idx1s]!, row);
-  incrementBucket(buckets5s[idx5s]!, row);
-  incrementBucket(buckets1m[idx1m]!, row);
+  const clientResponse = countClientResponse(row);
+  incrementBucket(buckets1s[idx1s]!, row, clientResponse);
+  incrementBucket(buckets5s[idx5s]!, row, clientResponse);
+  incrementBucket(buckets1m[idx1m]!, row, clientResponse);
 }
 
 export interface WindowBuckets {

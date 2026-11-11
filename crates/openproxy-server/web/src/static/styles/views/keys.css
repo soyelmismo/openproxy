@@ -458,3 +458,99 @@
     height: 24px;
   }
 }
+
+
+/* ── Key detail: header strip, summary chips, pinned action bar ──────────
+   Scoped with `.key-detail` (0,2,0) so these rules win over the shared
+   entity-header block in components/compact-entity-headers.css regardless
+   of import order. */
+
+.key-detail .cx-key-header {
+  margin-bottom: var(--space-2);
+  gap: var(--space-1) var(--space-3);
+}
+.key-detail .cx-key-header h1 { font-size: var(--fs-lg); }
+
+/* Four facts as one strip of label/value cells; the dividers replace the
+   boxed per-item cards, so the strip is one row on desktop and two on a
+   phone instead of three. */
+.key-detail .cx-key-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--space-3);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+}
+.key-detail .cx-key-summary > .cx-key-stat {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 2px var(--space-2);
+}
+/* No vertical dividers: the strip wraps, so a border-left would draw a
+   stray rule at the start of the second row. Spacing separates the cells. */
+.key-detail .cx-key-summary .cx-key-stat dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.key-detail .cx-key-summary .cx-key-stat dd {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.key-detail .cx-key-stat--prefix dd code {
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+}
+.key-detail .cx-key-stat--status.is-active dd { color: var(--color-success); }
+.key-detail .cx-key-stat--status.is-inactive dd { color: var(--color-text-muted); }
+.key-detail .cx-key-stat--status.is-revoked dd { color: var(--color-error); }
+
+/* Narrow tiles: a 2x2 stat grid instead of a ragged wrap of four cells. */
+@container tile-view (max-width: 500px) {
+  .key-detail .cx-key-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px var(--space-2);
+  }
+}
+
+/* The action bar stays visible while the form scrolls in the tile; a tight
+   padding keeps it from eating a full row of the viewport. */
+.key-detail .key-properties-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: var(--space-3);
+  padding: var(--space-2) 0;
+  gap: var(--space-2);
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border-soft);
+}
+.key-detail .key-properties-footer button { min-height: 32px; }
+
+@container tile-view (max-width: 420px) {
+  .key-detail .cx-key-summary > .cx-key-stat { padding: 2px var(--space-1); }
+  .key-detail .cx-key-summary { gap: 2px var(--space-2); }
+}
+
+/* A sticky bar only earns its keep when the form is taller than the pane. In a
+   narrow tile it floats over the last field and swallows the "Pick models"
+   link, so it becomes a plain block that the layout reserves room for. */
+@container tile-view (max-width: 480px) {
+  .key-detail .key-properties-footer {
+    position: static;
+    bottom: auto;
+    margin-top: var(--space-3);
+    padding-top: var(--space-2);
+  }
+}

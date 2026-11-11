@@ -146,6 +146,9 @@ fn update_inflight_attempt(
     {
         item.upstream_model_id = m.to_owned();
     }
+    if event.session_hash.is_some() {
+        item.session_hash = event.session_hash;
+    }
     if event.endpoint_kind.is_some() {
         item.endpoint_kind = event.endpoint_kind;
     }
@@ -214,6 +217,7 @@ fn publish_stage_global(event: openproxy_types::usage::StageEvent) {
                     row_id: None,
                     source: "live".into(),
                     endpoint_kind: event.endpoint_kind,
+                    session_hash: event.session_hash,
                     api_key_id: event.api_key_id,
                 },
             );

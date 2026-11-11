@@ -24,13 +24,14 @@ import {
   renderAllowedCombosChips,
   getAvailableProviders,
 } from "../components/model-picker.js";
-import type { Model, Provider, ApiKeyId } from "../lib/types/api.js";
+import type { Model, Provider, ApiKeyId, KeyQuotaCaps } from "../lib/types/api.js";
 import { ensureCombosLoaded } from "../state/models-sync.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
 import { mutateAndRefresh } from "../lib/mutate.js";
+import { beginButtonBusy, resolveBusyButton } from "../lib/button-busy.js";
 
 interface KeyRow {
   id: ApiKeyId;
@@ -55,6 +56,8 @@ interface KeyBody {
   blacklisted_models: string[] | null;
   only_whitelisted: boolean;
   expires_at: string | null;
+  /** Dollar quotas. `null` = remove/unlimited; object = upsert caps. */
+  quota?: KeyQuotaCaps | null;
 }
 
 interface KeyPlaintextResponse {
@@ -102,7 +105,7 @@ function onAddWhitelistProvider(e: Event): void {
   select.value = "";
 }
 
-function addCustomBlacklistedModel(): void {
+export function addCustomBlacklistedModel(): void {
   const customInput = document.getElementById("key-bl-models-custom") as HTMLInputElement | null;
   if (!customInput || !customInput.value.trim()) return;
   const pattern = customInput.value.trim();
@@ -118,9 +121,22 @@ function addCustomBlacklistedModel(): void {
   renderBlacklistedModelsChips();
 }
 
-export function keyFormTemplate({ mode, key, wrapper, inline = false, onSubmit, onCancel }: {
+/** Enable/disable the sibling dollar amount when a quota window is toggled. */
+function onQuotaToggle(e: Event): void {
+  const target = e.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  const row = target.closest(".key-form-inline-row");
+  const amount = row?.querySelector('input[type="number"]') as HTMLInputElement | null;
+  if (!amount) return;
+  amount.disabled = !target.checked;
+  if (!target.checked) amount.value = "";
+}
+
+export function keyFormTemplate({ mode, key, quota, wrapper, inline = false, onSubmit, onCancel }: {
   mode: "create" | "edit";
   key?: KeyRow;
+  /** Existing dollar-quota caps (edit mode prefill); null = unlimited. */
+  quota?: KeyQuotaCaps | null;
   wrapper: HTMLElement;
   inline?: boolean;
   onSubmit?: (e: Event) => void;
@@ -129,6 +145,12 @@ export function keyFormTemplate({ mode, key, wrapper, inline = false, onSubmit, 
   const isEdit = mode === "edit" && key;
   const labelVal = isEdit ? (key!.label || "") : "";
   const scopes: string[] = isEdit ? (key!.scopes || []) : ["chat"];
+  const fiveHourOn = !!(quota && quota.five_hour_usd_cap !== null && quota.five_hour_usd_cap !== undefined);
+  const weekOn = !!(quota && quota.weekly_usd_cap !== null && quota.weekly_usd_cap !== undefined);
+  const monthOn = !!(quota && quota.monthly_usd_cap !== null && quota.monthly_usd_cap !== undefined);
+  const fiveHourVal = fiveHourOn ? String(quota!.five_hour_usd_cap) : "";
+  const weekVal = weekOn ? String(quota!.weekly_usd_cap) : "";
+  const monthVal = monthOn ? String(quota!.monthly_usd_cap) : "";
   let allowedModelsValue = "";
   if (isEdit && Array.isArray(key!.allowed_models)) {
     allowedModelsValue = key!.allowed_models.length === 0 ? " " : key!.allowed_models.join(",");
@@ -162,108 +184,197 @@ export function keyFormTemplate({ mode, key, wrapper, inline = false, onSubmit, 
   };
   const cancel = (): void => { if (onCancel) onCancel(); else wrapper.remove(); };
   return html`
-    <div class=${inline ? "key-properties-form" : "modal-bg"}
+    <div class=${inline ? "key-properties-form key-form" : "modal-bg"}
          @click=${(e: Event) => { if (!inline && e.target === e.currentTarget) cancel(); }}>
-      <div class=${inline ? "key-properties-content" : "modal"}>
+      <div class=${inline ? "key-properties-content key-form-inline" : "modal modal-key-editor"}>
         ${inline ? html`` : html`<div class="modal-header">
           <h2>${title}</h2>
           <button type="button" class="close-btn" @click=${cancel} aria-label="Close">&times;</button>
         </div>`}
-        <form @submit=${submitHandler}>
-          <div class=${inline ? "key-properties-fields" : "modal-body"}>
-            <div class="field">
-              <label for="key-label">Label</label>
-              <input id="key-label" name="label" type="text" placeholder="my-app" .value=${labelVal} required>
-            </div>
-            <div class="field">
-              <span class="field-label">Scopes</span>
-              <div class="scopes-list">
-                <label class="scope-card">
+        <form class="key-form" @submit=${submitHandler}>
+          <div class=${inline ? "key-properties-fields key-form-body" : "modal-body key-form-body"}>
+            <section class="key-form-section" aria-labelledby="key-section-identity">
+              <div class="key-form-section-head">
+                ${inline
+                  ? html`<h2 class="key-form-section-title" id="key-section-identity">Identity</h2>`
+                  : html`<h3 class="key-form-section-title" id="key-section-identity">Identity</h3>`}
+                <p class="key-form-section-hint">Name and lifetime</p>
+              </div>
+              <div class="key-form-grid key-form-grid--identity">
+                <div class="field">
+                  <label for="key-label">Label</label>
+                  <input id="key-label" name="label" type="text" placeholder="my-app" .value=${labelVal} required>
+                </div>
+                <div class="field">
+                  <label for="key-expires-amount">Expires in</label>
+                  <div class="expiry-row">
+                    <input id="key-expires-amount" type="number" name="expires_amount" min="1" max="999" placeholder="30"
+                           .value=${expiryAmountVal}
+                           ?disabled=${!isEdit || !expiresAt}>
+                    <select name="expires_unit" @change=${toggleExpiryAmount}>
+                      <option value="days" ?selected=${!!(isEdit && expiresAt)}>days</option>
+                      <option value="months" ?selected=${!isEdit || !expiresAt}>months</option>
+                      <option value="years">years</option>
+                      <option value="never" ?selected=${!isEdit || !expiresAt}>never</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </section>
+            <section class="key-form-section" aria-labelledby="key-section-scopes">
+              <div class="key-form-section-head">
+                ${inline
+                  ? html`<h2 class="key-form-section-title" id="key-section-scopes">Scopes</h2>`
+                  : html`<h3 class="key-form-section-title" id="key-section-scopes">Scopes</h3>`}
+                <p class="key-form-section-hint">At least one</p>
+              </div>
+              <div class="scopes-list" role="group" aria-labelledby="key-section-scopes">
+                <label class="scope-card" title="Can use /v1/chat/completions">
                   <input type="checkbox" name="scopes" value="chat" .checked=${scopes.includes("chat")}>
                   <span class="scope-name">chat</span>
-                  <span class="scope-desc">Can use /v1/chat/completions</span>
+                  <span class="scope-desc">Chat completions</span>
                 </label>
-                <label class="scope-card">
+                <label class="scope-card" title="Can open the dashboard: analytics of this key's own data, read-only (no manage, no logs)">
                   <input type="checkbox" name="scopes" value="analytics" .checked=${scopes.includes("analytics")}>
                   <span class="scope-name">analytics</span>
-                  <span class="scope-desc">Can open the dashboard: analytics of this key's own data, read-only (no manage, no logs)</span>
+                  <span class="scope-desc">Dashboard · read-only</span>
                 </label>
-                <label class="scope-card">
+                <label class="scope-card" title="Can use /admin/* (CRUD providers, accounts, etc.)">
                   <input type="checkbox" name="scopes" value="manage" .checked=${scopes.includes("manage")}>
                   <span class="scope-name">manage</span>
-                  <span class="scope-desc">Can use /admin/* (CRUD providers, accounts, etc.)</span>
+                  <span class="scope-desc">Admin CRUD</span>
                 </label>
-                <label class="scope-card">
+                <label class="scope-card" title="Legacy alias of analytics: read-only usage endpoints (GET only)">
                   <input type="checkbox" name="scopes" value="read" .checked=${scopes.includes("read")}>
                   <span class="scope-name">read</span>
-                  <span class="scope-desc">Legacy alias of analytics: read-only usage endpoints (GET only)</span>
+                  <span class="scope-desc">Legacy read-only</span>
                 </label>
               </div>
-            </div>
-            <div class="field">
-              <span class="field-label">Allowed models (empty = all)</span>
-              <div class="model-picker-display" id="model-picker-display">
-                <span class="muted">Loading...</span>
+            </section>
+            <section class="key-form-section" aria-labelledby="key-section-model-access">
+              <div class="key-form-section-head">
+                ${inline
+                  ? html`<h2 class="key-form-section-title" id="key-section-model-access">Model access</h2>`
+                  : html`<h3 class="key-form-section-title" id="key-section-model-access">Model access</h3>`}
+                <p class="key-form-section-hint">Limit what this key can call</p>
               </div>
-              <input type="hidden" name="allowed_models" .value=${allowedModelsValue}>
-              <label class="scope-card" style="margin-top:8px;">
-                <input type="checkbox" name="only_whitelisted" .checked=${onlyWhitelisted}>
-                <span class="scope-name">Only these models</span>
-                <span class="scope-desc">Restrict this key to the models selected above. Leave off to keep the list additive (the blacklists below still apply).</span>
-              </label>
-            </div>
-            <div class="field">
-              <span class="field-label">Allowed combos (empty = all)</span>
-              <div class="model-picker-display" id="allowed-combos-display">
-                <span class="muted">Loading...</span>
+              <div class="key-form-grid key-form-grid--access">
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Allowed models</span>
+                    <span class="key-form-field-note">empty = all</span>
+                  </div>
+                  <div class="model-picker-display" id="model-picker-display"></div>
+                  <input type="hidden" name="allowed_models" .value=${allowedModelsValue}>
+                  <label class="scope-card key-form-toggle" title="Restrict this key to the models selected above. Leave off to keep the list additive (the blacklists below still apply).">
+                    <input type="checkbox" name="only_whitelisted" .checked=${onlyWhitelisted}>
+                    <span class="scope-name">Only these models</span>
+                    <span class="scope-desc">strict mode</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Allowed combos</span>
+                    <span class="key-form-field-note">empty = all</span>
+                  </div>
+                  <div class="model-picker-display" id="allowed-combos-display"></div>
+                  <input type="hidden" name="allowed_combos" .value=${allowedCombosValue}>
+                </div>
               </div>
-              <input type="hidden" name="allowed_combos" .value=${allowedCombosValue}>
-            </div>
-            <div class="field">
-              <span class="field-label">Whitelisted providers (empty = all)</span>
-              <div style="display:flex;gap:8px;margin-bottom:6px;">
-                <select id="quick-wl-provider-select" style="flex:1;" @change=${onAddWhitelistProvider}>
-                  <option value="">-- Add provider to whitelist --</option>
-                  ${availableProviders.map((p) => html`<option value="${p}">${p}</option>`)}
-                </select>
+            </section>
+            <section class="key-form-section" aria-labelledby="key-section-restrictions">
+              <div class="key-form-section-head">
+                ${inline
+                  ? html`<h2 class="key-form-section-title" id="key-section-restrictions">Restrictions</h2>`
+                  : html`<h3 class="key-form-section-title" id="key-section-restrictions">Restrictions</h3>`}
+                <p class="key-form-section-hint">Optional · comma-separated</p>
               </div>
-              <input id="key-allowed-providers" name="allowed_providers" type="text" placeholder="e.g. xkiro, openai (comma-separated)" .value=${allowedProvidersVal}>
-            </div>
-            <div class="field">
-              <span class="field-label">Blacklisted providers</span>
-              <div style="display:flex;gap:8px;margin-bottom:6px;">
-                <select id="quick-bl-provider-select" style="flex:1;" @change=${onAddBlacklistProvider}>
-                  <option value="">-- Add provider to blacklist --</option>
-                  ${availableProviders.map((p) => html`<option value="${p}">${p}</option>`)}
-                </select>
+              <div class="key-form-grid key-form-grid--restrictions">
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Allowed providers</span>
+                    <span class="key-form-field-note">empty = all</span>
+                  </div>
+                  <select id="quick-wl-provider-select" aria-label="Add provider to the allowlist" @change=${onAddWhitelistProvider}>
+                    <option value="">Add provider…</option>
+                    ${availableProviders.map((p) => html`<option value="${p}">${p}</option>`)}
+                  </select>
+                  <input id="key-allowed-providers" name="allowed_providers" type="text" placeholder="xkiro, openai" .value=${allowedProvidersVal}>
+                </div>
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Blocked providers</span>
+                    <span class="key-form-field-note">empty = none</span>
+                  </div>
+                  <select id="quick-bl-provider-select" aria-label="Add provider to the blocklist" @change=${onAddBlacklistProvider}>
+                    <option value="">Block provider…</option>
+                    ${availableProviders.map((p) => html`<option value="${p}">${p}</option>`)}
+                  </select>
+                  <input id="key-bl-providers" name="blacklisted_providers" type="text" placeholder="openai, groq" .value=${blProvidersVal}>
+                </div>
+                <div class="field key-form-field--wide">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Blocked model patterns</span>
+                    <span class="key-form-field-note">wildcards ok</span>
+                  </div>
+                  <div class="model-picker-display" id="blacklisted-models-display"></div>
+                  <input type="hidden" name="blacklisted_models" .value=${blModelsVal}>
+                  <div class="key-form-inline-row">
+                    <input id="key-bl-models-custom" placeholder="gpt-4*, *-preview">
+                    <button type="button" class="small" @click=${addCustomBlacklistedModel}>+ Add</button>
+                  </div>
+                </div>
               </div>
-              <input id="key-bl-providers" name="blacklisted_providers" type="text" placeholder="e.g. openai, groq (comma-separated)" .value=${blProvidersVal}>
-            </div>
-            <div class="field">
-              <span class="field-label">Blacklisted models</span>
-              <div class="model-picker-display" id="blacklisted-models-display" style="margin-bottom:6px;">
-                <span class="muted">Loading...</span>
+            </section>
+            <section class="key-form-section" aria-labelledby="key-section-quotas">
+              <div class="key-form-section-head">
+                ${inline
+                  ? html`<h2 class="key-form-section-title" id="key-section-quotas">Dollar quotas</h2>`
+                  : html`<h3 class="key-form-section-title" id="key-section-quotas">Dollar quotas</h3>`}
+                <p class="key-form-section-hint">Metered at official model prices · off = unlimited</p>
               </div>
-              <input type="hidden" name="blacklisted_models" .value=${blModelsVal}>
-              <div style="display:flex;gap:8px;">
-                <input id="key-bl-models-custom" placeholder="Type pattern/wildcard (e.g. gpt-4*, *-preview)..." style="flex:1;">
-                <button type="button" class="small" @click=${addCustomBlacklistedModel}>+ Add</button>
+              <div class="key-form-grid key-form-grid--restrictions">
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Rolling 5 hours</span>
+                    <span class="key-form-field-note">burst guard</span>
+                  </div>
+                  <div class="key-form-inline-row">
+                    <label class="scope-card key-form-toggle">
+                      <input type="checkbox" name="quota_5h_enabled" .checked=${fiveHourOn} @change=${onQuotaToggle}>
+                      <span class="scope-name">Enable</span>
+                    </label>
+                    <input name="quota_5h_usd" type="number" min="0" step="0.01" placeholder="1.00" .value=${fiveHourVal} ?disabled=${!fiveHourOn}>
+                  </div>
+                </div>
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Weekly</span>
+                    <span class="key-form-field-note">resets Mon 00:00 UTC</span>
+                  </div>
+                  <div class="key-form-inline-row">
+                    <label class="scope-card key-form-toggle">
+                      <input type="checkbox" name="quota_week_enabled" .checked=${weekOn} @change=${onQuotaToggle}>
+                      <span class="scope-name">Enable</span>
+                    </label>
+                    <input name="quota_week_usd" type="number" min="0" step="0.01" placeholder="5.00" .value=${weekVal} ?disabled=${!weekOn}>
+                  </div>
+                </div>
+                <div class="field">
+                  <div class="key-form-field-head">
+                    <span class="field-label">Monthly</span>
+                    <span class="key-form-field-note">resets 1st 00:00 UTC</span>
+                  </div>
+                  <div class="key-form-inline-row">
+                    <label class="scope-card key-form-toggle">
+                      <input type="checkbox" name="quota_month_enabled" .checked=${monthOn} @change=${onQuotaToggle}>
+                      <span class="scope-name">Enable</span>
+                    </label>
+                    <input name="quota_month_usd" type="number" min="0" step="0.01" placeholder="25.00" .value=${monthVal} ?disabled=${!monthOn}>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="field">
-              <label for="key-expires-amount">Expires in</label>
-              <div class="expiry-row">
-                <input id="key-expires-amount" type="number" name="expires_amount" min="1" max="999" placeholder="30"
-                       .value=${expiryAmountVal}
-                       ?disabled=${!isEdit || !expiresAt}>
-                <select name="expires_unit" @change=${toggleExpiryAmount}>
-                  <option value="days" ?selected=${!!(isEdit && expiresAt)}>days</option>
-                  <option value="months" ?selected=${!isEdit || !expiresAt}>months</option>
-                  <option value="years">years</option>
-                  <option value="never" ?selected=${!isEdit || !expiresAt}>never</option>
-                </select>
-              </div>
-            </div>
+            </section>
           </div>
           <div class=${inline ? "key-properties-footer" : "modal-footer"}>
             <button type="button" @click=${cancel}>Cancel</button>
@@ -407,6 +518,33 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
   // additive semantics as the default.
   const onlyWhitelistedEl = form.querySelector<HTMLInputElement>('input[name="only_whitelisted"]');
   const onlyWhitelisted = onlyWhitelistedEl ? onlyWhitelistedEl.checked : false;
+  // Dollar quotas: an enabled window with a positive amount contributes its
+  // cap; everything else sends `null` (disabled). All disabled → `null`
+  // (remove caps → unlimited).
+  let quotaValid = true;
+  const quotaNum = (enabledName: string, amountName: string): number | null => {
+    const enabledEl = form.querySelector<HTMLInputElement>(`input[name="${enabledName}"]`);
+    if (!enabledEl || !enabledEl.checked) return null;
+    const amountEl = form.querySelector<HTMLInputElement>(`input[name="${amountName}"]`);
+    const v = amountEl ? parseFloat(amountEl.value) : NaN;
+    if (!Number.isFinite(v) || v <= 0) {
+      showToast("Quota amounts must be positive numbers.", "error");
+      quotaValid = false;
+      return null;
+    }
+    return v;
+  };
+  const fiveHourUsd = quotaNum("quota_5h_enabled", "quota_5h_usd");
+  const weeklyUsd = quotaNum("quota_week_enabled", "quota_week_usd");
+  const monthlyUsd = quotaNum("quota_month_enabled", "quota_month_usd");
+  if (!quotaValid) return null;
+  const quota = (monthlyUsd === null && weeklyUsd === null && fiveHourUsd === null)
+    ? null
+    : {
+        monthly_usd_cap: monthlyUsd,
+        weekly_usd_cap: weeklyUsd,
+        five_hour_usd_cap: fiveHourUsd,
+      };
   return {
     label,
     scopes,
@@ -417,6 +555,7 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
     blacklisted_models: blacklistedModels,
     only_whitelisted: onlyWhitelisted,
     expires_at: expiresAt,
+    quota,
   };
 }
 
@@ -425,6 +564,7 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildKeyBodyFromForm(target);
   if (!body) return;
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Creating…" });
   try {
     const result = await api("/keys", { method: "POST", body: JSON.stringify(body) }) as KeyPlaintextResponse;
     if (wrapper) wrapper.remove();
@@ -437,6 +577,8 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }
 
@@ -445,6 +587,7 @@ export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Pr
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildKeyBodyFromForm(target);
   if (!body) return;
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Saving…" });
   try {
     await api("/keys/" + id, { method: "PATCH", body: JSON.stringify(body) });
     if (wrapper) wrapper.remove();
@@ -453,6 +596,8 @@ export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Pr
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }
 

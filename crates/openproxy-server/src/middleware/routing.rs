@@ -214,13 +214,19 @@ fn filter_combo_targets_by_auth(
     targets: &mut Vec<ComboTarget>,
     auth: &ValidatedApiToken,
 ) -> Result<(), ApiError> {
-    let is_synthetic_direct = combo_id.0 == openproxy_core::routing::SYNTHETIC_COMBO_ID;
-    let is_whitelisted_combo = auth.key.allowed_combos.as_deref().is_some_and(|ac| {
-        !ac.is_empty() && ac.contains(&combo_id.0)
-    });
+    let is_whitelisted_combo = auth
+        .key
+        .allowed_combos
+        .as_deref()
+        .is_some_and(|ac| !ac.is_empty() && ac.contains(&combo_id.0));
 
     let r = state.db_pool().reader();
     targets.retain(|target| {
+        // `allowed_models` is additive and overrides BOTH the model and the
+        // provider blacklists (see `ApiKey::is_model_allowed`), so the provider
+        // blacklist must not gate here before that allowlist has been
+        // consulted — doing so silently blocked explicitly-opened models
+        // whenever they arrived through a combo instead of a direct call.
         let model_allowed = target
             .model_row_id
             .and_then(|row_id| {
@@ -229,13 +235,6 @@ fn filter_combo_targets_by_auth(
                     .flatten()
             })
             .map(|m| auth.is_model_allowed(m.model_id.as_str(), Some(target.provider_id.as_str())));
-
-        let prov_blacklisted = auth.key.blacklisted_providers.as_deref().is_some_and(|bp| {
-            bp.iter().any(|p| p == target.provider_id.as_str() || p == "*")
-        });
-        if prov_blacklisted {
-            return false;
-        }
 
         // If the combo itself was explicitly whitelisted on this key, its member targets
         // are allowed to route to their respective providers even if allowed_providers
@@ -246,7 +245,16 @@ fn filter_combo_targets_by_auth(
 
         match model_allowed {
             Some(allowed) => allowed,
-            None => auth.is_provider_allowed(target.provider_id.as_str()),
+            // No resolvable model row: the allowlist cannot be evaluated, so
+            // fall back to the provider rules and still honour the blacklist.
+            None => {
+                let prov_blacklisted =
+                    auth.key.blacklisted_providers.as_deref().is_some_and(|bp| {
+                        bp.iter()
+                            .any(|p| p == target.provider_id.as_str() || p == "*")
+                    });
+                !prov_blacklisted && auth.is_provider_allowed(target.provider_id.as_str())
+            }
         }
     });
 
@@ -270,7 +278,9 @@ fn apply_auth_restrictions_to_plan(
         return Ok(false);
     };
 
-    if combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID && !auth.is_combo_allowed(combo_id.0) {
+    if combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
+        && !auth.is_combo_allowed(combo_id.0)
+    {
         return Err(ApiError(CoreError::Auth(
             "combo not allowed for this key".to_string(),
         )));
@@ -432,6 +442,8 @@ async fn record_model_not_found_usage_row(
         flags: USAGE_FLAG_CLIENT_RESPONSE,
         audio_ms: None,
         session_hash: None,
+        max_chunk_gap_ms: None,
+        avg_chunk_gap_ms: None,
     };
     if let Err(error) = state
         .enqueue_usage(openproxy_pipeline::worker::BackgroundJob::RecordUsage(

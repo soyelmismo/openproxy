@@ -35,7 +35,7 @@ const DEFAULT_CONTEXT_LENGTH: i64 = 128_000;
 /// 8 192, the conservative Claude / GPT-4-class cap.
 const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 8_192;
 
-fn filter_models_for_key(
+pub(crate) fn filter_models_for_key(
     rows: Vec<models::Model>,
     key: Option<&openproxy_core::api_keys::ApiKey>,
 ) -> Vec<models::Model> {
@@ -48,7 +48,7 @@ fn filter_models_for_key(
     }
 }
 
-fn filter_combos_for_key(
+pub(crate) fn filter_combos_for_key(
     combos: Vec<openproxy_types::Combo>,
     key: Option<&openproxy_core::api_keys::ApiKey>,
 ) -> Vec<openproxy_types::Combo> {
@@ -232,7 +232,7 @@ fn build_supported_parameters(caps: &capabilities::ModelCapabilities) -> Vec<&'s
 
 /// Project a combo into a synthetic catalog entry shaped like `build_model_entry`
 /// so the catalog stays homogeneous. Capabilities are populated from its effective targets.
-fn build_combo_entry(
+pub(crate) fn build_combo_entry(
     c: &openproxy_types::Combo,
     id_override: Option<&str>,
     effective_context_window: Option<i64>,
@@ -301,7 +301,7 @@ fn parse_modalities_json_or(
 /// Project one `core::models::Model` row to the enriched OpenAI-shape JSON the
 /// public endpoint returns. Split out of the handler so it is unit-testable
 /// without an axum router.
-fn build_model_entry(m: &models::Model) -> serde_json::Value {
+pub(crate) fn build_model_entry(m: &models::Model) -> serde_json::Value {
     let model_id = m.model_id.as_str();
     let provider_id = m.provider_id.as_str();
     let full_id = format!("{provider_id}/{model_id}");

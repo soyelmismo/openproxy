@@ -5,4 +5,6 @@
 @import url("./components/badges.css");
 @import url("./components/modals.css");
 @import url("./components/cards.css");
+@import url("./components/toasts.css");
 @import url("./components/server-reconnect.css");
+@import url("./components/key-form.css");

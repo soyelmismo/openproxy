@@ -213,7 +213,7 @@ function formatKeyStatus(k: ApiKeyRow) {
 function renderKeys(): TemplateResult {
   if (loadError) {
     return html`
-      <div class="page-header"><h2>${t("keys.list.heading")}</h2>
+      <div class="page-header"><h2 class="view-identity">${t("keys.list.heading")}</h2>
         <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} ${t("keys.list.btn.create")}</button></div>
       </div>
       <div class="banner banner-error">${loadError}</div>
@@ -316,7 +316,7 @@ function renderKeys(): TemplateResult {
         })}
       `;
   return html`
-    <div class="page-header"><h2>${t("keys.list.heading")}</h2>
+    <div class="page-header"><h2 class="view-identity">${t("keys.list.heading")}</h2>
       <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} ${t("keys.list.btn.create")}</button></div>
     </div>
     ${body}

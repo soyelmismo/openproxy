@@ -1,15 +1,16 @@
 //! Secret and API key candidate extraction.
 
 use openproxy_types::config::PiiEntity;
+use std::collections::HashSet;
 use std::ops::Range;
 
 use super::super::protected::is_in_protected_range;
 use super::super::regexes::{
-    REGEX_DSN_PASSWORD, REGEX_NATIONAL_ID_CL, REGEX_NATIONAL_ID_ES, REGEX_NATIONAL_ID_US,
-    REGEX_SECRET_AI_CLOUD_PLATFORMS, REGEX_SECRET_ANTHROPIC, REGEX_SECRET_AWS,
-    REGEX_SECRET_BASIC_AUTH, REGEX_SECRET_BEARER, REGEX_SECRET_CLI_FLAGS, REGEX_SECRET_CLOUDFLARE,
-    REGEX_SECRET_GITHUB, REGEX_SECRET_GOOGLE, REGEX_SECRET_HIGH_ENTROPY, REGEX_SECRET_JWT,
-    REGEX_SECRET_LABELED, REGEX_SECRET_OPENAI, REGEX_SECRET_PASSWORD_HASH,
+    REGEX_CODE_ASSIGNMENT, REGEX_DSN_PASSWORD, REGEX_NATIONAL_ID_CL, REGEX_NATIONAL_ID_ES,
+    REGEX_NATIONAL_ID_US, REGEX_SECRET_AI_CLOUD_PLATFORMS, REGEX_SECRET_ANTHROPIC,
+    REGEX_SECRET_AWS, REGEX_SECRET_BASIC_AUTH, REGEX_SECRET_BEARER, REGEX_SECRET_CLI_FLAGS,
+    REGEX_SECRET_CLOUDFLARE, REGEX_SECRET_GITHUB, REGEX_SECRET_GOOGLE, REGEX_SECRET_HIGH_ENTROPY,
+    REGEX_SECRET_JWT, REGEX_SECRET_LABELED, REGEX_SECRET_OPENAI, REGEX_SECRET_PASSWORD_HASH,
     REGEX_SECRET_PLATFORM_ID, REGEX_SECRET_PRIVATE_KEY_PEM, REGEX_SECRET_SLACK,
     REGEX_SECRET_SSHPASS, REGEX_SECRET_TELEGRAM, REGEX_URI_USERINFO_PASSWORD,
     REGEX_URL_SENSITIVE_PARAM,
@@ -20,11 +21,64 @@ use super::super::validators::{
 };
 use super::Candidate;
 
+/// Names bound by an assignment in the same payload. A credential-shaped
+/// value that is one of them is a variable reference, not a secret: masking
+/// it renames the variable and breaks every read of it.
+fn assigned_identifiers(text: &str) -> HashSet<&str> {
+    REGEX_CODE_ASSIGNMENT
+        .captures_iter(text)
+        .filter_map(|cap| cap.get(1))
+        .map(|m| m.as_str())
+        .collect()
+}
+
+/// True when the value reads a variable bound in this payload, in any of the
+/// spellings code uses: bare `token`, shell `$token`, template `${token}`.
+fn is_variable_reference(val: &str, bound: &HashSet<&str>) -> bool {
+    if bound.contains(val) {
+        return true;
+    }
+    let stripped = val
+        .trim_start_matches('$')
+        .trim_start_matches('{')
+        .trim_end_matches('}');
+    !stripped.is_empty() && bound.contains(stripped)
+}
+
+/// A value immediately followed by `[` or `(` is the head of a code
+/// expression, not a credential: `os.environ["SSH_PASS"]` and
+/// `get_secret()` both end their readable token right where the call starts.
+/// Masking that token renames part of the expression and breaks the code.
+fn is_code_expression(text: &str, value_end: usize) -> bool {
+    matches!(text.as_bytes().get(value_end), Some(b'[' | b'('))
+}
+
+/// Cargo and npm package or crate names passed to `-p` / `-u` flags:
+/// lowercase identifiers joined by `-` or `_` (`openproxy-server`,
+/// `openproxy_pipeline`). They are not credentials, and masking them hides
+/// the very command the model has to reason about.
+fn is_package_name(val: &str) -> bool {
+    !val.is_empty()
+        && val
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+        && (val.contains('-') || val.contains('_'))
+}
+
+/// A lowercase-only word (`review`, `preview`) is a slug fragment or a flag
+/// value, not a credential: `step-5-preview` contains `-p` + `review`, and
+/// masking that fragment renames every slug built on the word. Real CLI
+/// passwords carry digits, uppercase or specials.
+fn is_plain_lowercase_word(val: &str) -> bool {
+    !val.is_empty() && val.bytes().all(|b| b.is_ascii_lowercase())
+}
+
 pub(crate) fn collect_secret_candidates<'a>(
     text: &'a str,
     syntax_protected: &[Range<usize>],
     candidates: &mut Vec<Candidate<'a>>,
 ) {
+    let bound_names = assigned_identifiers(text);
     for cap in REGEX_SECRET_BEARER.captures_iter(text) {
         if let Some(m) = cap.get(1) {
             let start = m.start();
@@ -161,6 +215,12 @@ pub(crate) fn collect_secret_candidates<'a>(
             }
         }
 
+        // The value is a variable bound in this same payload (`RT_RAW`), not
+        // a credential. Masking it renames the variable everywhere it is read.
+        if is_variable_reference(trimmed_val, &bound_names) || is_code_expression(text, val_m.end())
+        {
+            continue;
+        }
         if trimmed_val.len() >= 4 && is_valid_secret_value(key_str, trimmed_val) {
             let start = val_m.start();
             let end = start + trimmed_val.len();
@@ -178,6 +238,12 @@ pub(crate) fn collect_secret_candidates<'a>(
         if let Some(val_m) = cap.get(1) {
             let val = val_m.as_str();
             let trimmed_val = val.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
+            // `?token={session_token}` reads a variable, not a credential.
+            if is_variable_reference(trimmed_val, &bound_names)
+                || is_code_expression(text, val_m.end())
+            {
+                continue;
+            }
             let start = val_m.start();
             let end = start + trimmed_val.len();
             if trimmed_val.len() >= 6
@@ -305,6 +371,20 @@ pub(crate) fn collect_secret_candidates<'a>(
             let start = m.start();
             let end = m.end();
             let val = m.as_str();
+            // `-p openproxy-server` is a package name, not a credential:
+            // lowercase identifiers joined by separators carry no secret.
+            if is_package_name(val) || is_variable_reference(val, &bound_names) {
+                continue;
+            }
+            // Group 1 is the bare `-p` flag; group 2 is `-u user:pass`, where
+            // the `user:` context makes a credential explicit. A bare
+            // lowercase word behind `-p` is a slug fragment
+            // (`step-5-preview` = `-p` + `review`), unless it is quoted:
+            // `-p'apipassword'` is an explicit credential.
+            let quoted = m.start() > 0 && matches!(text.as_bytes()[m.start() - 1], b'\'' | b'"');
+            if cap.get(1).is_some() && !quoted && is_plain_lowercase_word(val) {
+                continue;
+            }
             if is_valid_secret_value("-p", val)
                 && !is_in_protected_range(syntax_protected, start, end)
             {
@@ -323,6 +403,10 @@ pub(crate) fn collect_secret_candidates<'a>(
             let start = m.start();
             let end = m.end();
             let val = m.as_str();
+            // `sshpass -p$SSH_PASS` reads a variable, not a credential.
+            if is_variable_reference(val, &bound_names) {
+                continue;
+            }
             if !val.is_empty()
                 && is_valid_secret_value("-p_sshpass", val)
                 && !is_in_protected_range(syntax_protected, start, end)

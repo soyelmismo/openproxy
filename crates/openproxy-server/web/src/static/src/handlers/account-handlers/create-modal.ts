@@ -11,6 +11,7 @@ import {
   type ParsedKeyEntry,
 } from "./validation.js";
 import { closeCreateAccount } from "./operations.js";
+import { busySpinnerTemplate } from "../../lib/button-busy.js";
 import {
   createOAuthTabHandler,
   type OAuthTabHandler,
@@ -320,6 +321,7 @@ export function showCreateAccount(providerId: string): void {
             <button
               type="button"
               class="primary"
+              aria-busy=${isSubmitting ? "true" : "false"}
               ?disabled=${isSubmitting || (activeTab === "bulk" && parsedKeys.length === 0)}
               @click=${async (e: Event) => {
                 e.preventDefault();
@@ -335,10 +337,11 @@ export function showCreateAccount(providerId: string): void {
                   }
                 } finally {
                   isSubmitting = false;
+                  if (!closed) renderModal();
                 }
               }}
             >
-              ${activeTab === "bulk" && parsedKeys.length > 0
+              ${isSubmitting ? html`${busySpinnerTemplate()}<span class="button-busy-label">Creating…</span>` : activeTab === "bulk" && parsedKeys.length > 0
                 ? `Create (${parsedKeys.length} accounts)`
                 : "Create"}
             </button>

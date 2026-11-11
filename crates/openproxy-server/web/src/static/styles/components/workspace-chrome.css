@@ -1,0 +1,262 @@
+/* Desktop application chrome: identity belongs to the panel, controls to the task.
+   Explicit opt-in avoids hiding entity names, section headings or alerts. */
+.tile-view .view-identity {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.tile-view .page-header {
+  align-items: center;
+  gap: 6px 10px;
+  padding: 0;
+  margin-bottom: 8px;
+  min-height: 32px;
+}
+.tile-view .page-header:has(> .view-identity:only-child),
+.tile-view .page-header:has(> .analytics-title-wrap:only-child > .view-identity:only-child) {
+  min-height: 0;
+  height: 0;
+  margin: 0;
+  padding: 0;
+}
+.tile-view .page-header > .actions {
+  display: flex;
+  flex-flow: row wrap;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.tile-view .page-header .actions > * { min-width: 0; max-width: 100%; }
+.tile-view .page-header .actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+.tile-view .page-header .actions button svg { flex-shrink: 0; }
+.tile-view .home-header {
+  flex-direction: row;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+}
+.home-header-text { flex-direction: row; align-items: center; gap: 8px; }
+.home-live-status { display: inline-flex; align-items: center; gap: 7px; color: var(--color-text-muted); font-size: var(--fs-xs); }
+.tile-view .home-header-actions { min-width: 0; flex-shrink: 1; margin-left: auto; }
+.tile-view .home-window-btn { min-height: 30px; padding: 4px 9px; }
+.tile-view .home-dashboard { gap: 12px; padding: 0; max-width: none; }
+.tile-view .home-card-heading { align-items: center; padding: 8px 10px; gap: 8px; }
+.tile-view .home-card-heading h3 { font-size: var(--fs-sm); }
+.tile-view .providers-toolbar { gap: 8px; margin-bottom: 8px; }
+.tile-view .cx-proxies-toolbar,
+.tile-view .cx-kpi-strip,
+.tile-view .cx-filterbar { margin-bottom: 8px; }
+.tile-view .providers-toolbar-filters { flex: 1 1 auto; }
+.tile-view .providers-toolbar .actions { margin-left: auto; }
+
+/* One bar, three groups: state | filters | actions. Every control is the same
+   28px tall so the deck lines up with the toolbars above and below it, and the
+   filters absorb spare width. Hairline dividers mark the group boundaries in
+   the single-row form; they are dropped when the groups stack. */
+.logs-control-deck {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  flex: none;
+  padding: 2px 6px;
+  margin-bottom: 8px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.logs-control-deck > * + * {
+  border-left: 1px solid var(--color-border-soft);
+  padding-left: 6px;
+}
+.logs-control-deck .logs-deck-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+/* State pair: connection badge + record toggle, never split apart. */
+.logs-control-deck .logs-deck-group--state { flex: 0 0 auto; }
+.logs-control-deck .logs-deck-group--filters { flex: 1 1 auto; }
+.logs-control-deck .logs-header-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: 0;
+}
+.logs-control-deck .logs-filter-pair {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.logs-control-deck .logs-search-box { flex: 1 1 150px; min-width: 70px; height: 28px; }
+.logs-control-deck .logs-key-filter { flex: 0 1 auto; min-width: 0; max-width: 150px; }
+.logs-control-deck .logs-status-filter { flex: 0 1 auto; min-width: 0; max-width: 120px; padding: 0 6px; }
+.logs-control-deck .logs-header-actions button,
+.logs-control-deck .logs-status-filter,
+.logs-control-deck .logs-key-filter {
+  width: auto;
+  height: 28px;
+  min-height: 28px;
+  font-size: var(--fs-xs);
+}
+.logs-control-deck .logs-header-actions button { padding: 0 7px; }
+.logs-control-deck .logs-recording-toggle { height: 28px; min-height: 28px; padding: 0 8px; }
+.logs-control-deck .logs-connection-badge { flex: none; }
+
+/* The record label is redundant with the dot's colour and its tooltip, so it
+   is the first thing to go — it buys the filters 60px before anything wraps. */
+@container tile-view (max-width: 760px) {
+  .logs-control-deck .logs-recording-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .logs-control-deck .logs-recording-toggle { padding: 0 7px; gap: 0; }
+}
+/* Below this the three groups cannot share a line without clipping the selects,
+   so the filter group takes a line of its own — still one bar, still two rows
+   at most, and every control keeps its full size. */
+@container tile-view (max-width: 560px) {
+  .logs-control-deck { flex-wrap: wrap; row-gap: 4px; }
+  .logs-control-deck .logs-deck-group--state { order: 1; }
+  .logs-control-deck .logs-header-actions {
+    order: 2;
+    margin-left: auto;
+    border-left: 0;
+    padding-left: 0;
+  }
+  .logs-control-deck .logs-deck-group--filters {
+    order: 3;
+    flex: 1 1 100%;
+    border-left: 0;
+    padding-left: 0;
+    padding-top: 4px;
+    border-top: 1px solid var(--color-border-soft);
+  }
+  .logs-control-deck .logs-search-box { flex: 1 1 auto; min-width: 110px; }
+  .logs-control-deck .logs-key-filter { max-width: 170px; }
+}
+@container tile-view (max-width: 420px) {
+  .logs-control-deck .logs-key-filter { max-width: 122px; }
+  .logs-control-deck .logs-status-filter { max-width: 96px; }
+}
+@container tile-view (max-width: 380px) {
+  .logs-control-deck .logs-search-box { min-width: 80px; }
+  .logs-control-deck .logs-key-filter { max-width: 104px; }
+}
+
+@container tile-view (max-width: 280px) {
+  .logs-control-deck .logs-deck-group--filters { flex-wrap: wrap; }
+  .logs-control-deck .logs-search-box { flex: 1 1 100%; min-width: 0; }
+  .logs-control-deck .logs-filter-pair { flex: 1 1 100%; flex-wrap: wrap; }
+  .logs-control-deck :is(.logs-key-filter, .logs-status-filter) {
+    flex: 1 1 100%;
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+/* Filter captions stay beside their controls, never as a second header tier.
+   The tile, not the browser viewport, determines available working width. */
+.tile-view .analytics-dashboard { padding: 0; gap: 10px; }
+.tile-view .analytics-toolbar { padding: 6px; gap: 6px; }
+.tile-view .analytics-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tile-view .analytics-filter-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: 1 1 150px;
+  min-width: 140px;
+  gap: 5px;
+  overflow: visible;
+}
+.tile-view .analytics-filter-field > span { flex: none; white-space: nowrap; }
+.tile-view .analytics-filter-field .filter-dropdown {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  height: 32px;
+  min-height: 32px;
+}
+.tile-view .analytics-range-row { align-items: center; flex-flow: row wrap; gap: 4px 6px; }
+.tile-view .analytics-range-row .preset-selector { flex-wrap: wrap; gap: 4px; min-width: 0; }
+.tile-view .analytics-range-row .preset-btn { height: 30px; padding: 3px 7px; }
+.tile-view .analytics-clear-btn { width: auto; margin: 0 0 0 auto; }
+
+/* Short tiles reclaim chrome and rhythm, never shrink text or hit targets. */
+.tile-content.is-short .tile-view { --space-5: 12px; --space-6: 14px; }
+.context-header { padding: 9px 10px; }
+.context-header small { margin-top: 2px; }
+.context-panel-list { padding-bottom: 8px; }
+.context-resources { padding-top: 9px; }
+.workspace-status { padding: 3px 10px; }
+
+@container tile-view (max-width: 700px) {
+  .logs-control-deck .logs-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .logs-control-deck .logs-header-actions button { position: relative; min-width: 32px; }
+}
+/* The embedded phone shell has no tile container to measure, so the same
+   icon-only actions rule is keyed on the viewport there. */
+@media (max-width: 700px) {
+  .logs-control-deck .logs-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .logs-control-deck .logs-header-actions button { position: relative; min-width: 32px; }
+}
+@container tile-view (max-width: 420px) {
+  .tile-view .home-window-btn { padding-inline: 7px; }
+}
+@media (pointer: coarse) {
+  .tile-view .page-header .actions button,
+  .logs-control-deck .logs-header-actions button,
+  .logs-control-deck .logs-status-filter,
+  .logs-control-deck .logs-key-filter,
+  .logs-control-deck .logs-search-box { min-height: 40px; height: 40px; }
+}

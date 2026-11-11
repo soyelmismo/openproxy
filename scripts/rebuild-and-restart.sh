@@ -153,6 +153,24 @@ log "is-active: openproxy=$svc_active"
 
 [[ "$svc_active" == "active" ]] || die "openproxy no quedó active (=$svc_active). Revisa: journalctl -u openproxy -n 50"
 
+# Sonda de disponibilidad HTTP: asegura que el puerto 8787 esté activo y sirva el dashboard
+log "verificando respuesta HTTP del dashboard admin (/admin)..."
+ready=0
+for i in {1..30}; do
+  http_code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/admin || true)
+  if [[ "$http_code" == "200" || "$http_code" == "307" ]]; then
+    ready=1
+    log "dashboard admin respondiendo (HTTP $http_code en intento $i)"
+    break
+  fi
+  sleep 0.5
+done
+
+if [[ "$ready" -ne 1 ]]; then
+  sudo journalctl -u openproxy -n 50 --no-pager
+  die "el dashboard admin no respondió en http://127.0.0.1:8787/admin tras 15 segundos"
+fi
+
 # Warmup Laya worker in background so the first client request hits a warm model
 (
   sleep 1

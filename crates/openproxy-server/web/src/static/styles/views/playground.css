@@ -179,6 +179,31 @@
   }
 }
 
+/* Split-panel tiles: a 760px tile still fits two columns, but the main
+   column collapses to a sliver. Collapse the inspector below the studio
+   as soon as the tile can no longer give the composer ~560px. */
+@container tile-view (max-width: 960px) {
+  .playground-studio-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+  .playground-inspector-sidebar {
+    width: 100%;
+    position: static;
+    border-left: none;
+    border-top: var(--border-w) var(--border-style) var(--color-border);
+    padding-top: var(--space-3);
+  }
+  .playground-studio-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .playground-segmented-control {
+    flex-wrap: wrap;
+  }
+}
+
 .playground-main-area {
   min-width: 0;
 }
@@ -425,6 +450,8 @@
 }
 .playground-composer-footer {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   justify-content: space-between;
   align-items: center;
   margin-top: var(--space-2);

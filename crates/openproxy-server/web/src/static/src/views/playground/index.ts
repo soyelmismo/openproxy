@@ -18,6 +18,7 @@ import {
   bindPlaygroundState,
 } from './shared.js';
 import { executeRequest } from './dispatcher.js';
+import { isFullAdmin } from '../../state/auth.js';
 import { renderStudioHeader } from './studio-header.js';
 import { renderChatWorkspace } from './chat.js';
 import { renderImageStudioWorkspace } from './image.js';
@@ -224,12 +225,54 @@ export async function mountPlayground(
   const cleanup = await createView(
     renderPlayground,
     async () => {
+      // Tenant (non-admin) sessions can only load the model list: the admin
+      // catalogs (providers/combos/keys/accounts) 403 for them. Their
+      // playground runs with routing defaults (any provider, auto routing,
+      // session identity) and the admin-only inspector fields stay hidden.
+      const admin = isFullAdmin();
+      // Tenant keys read the key-filtered catalog (same view as /v1/models,
+      // plus pricing) and get it normalized to the admin Model shape.
+      const toTenantModel = (e: Record<string, unknown>): Model => {
+        const id = String(e['id'] ?? '');
+        const slash = id.indexOf('/');
+        const isVirtual = slash <= 0;
+        const provider = slash > 0 ? id.slice(0, slash) : '';
+        const bare = slash > 0 ? id.slice(slash + 1) : id;
+        const caps = (e['capabilities'] && typeof e['capabilities'] === 'object')
+          ? e['capabilities'] as Record<string, boolean>
+          : {};
+        const enabled = Object.entries(caps).filter(([, v]) => v === true).map(([k]) => k);
+        return {
+          row_id: -1,
+          provider_id: isVirtual ? '' : provider,
+          model_id: bare,
+          display_name: (e['display_name'] as string | null) ?? id,
+          target_format: 'openai',
+          discovered_at: (e['created'] as string) ?? '',
+          expires_at: null,
+          timeout_overrides_json: null,
+          active: true,
+          last_test_status: null,
+          last_test_at: null,
+          custom: false,
+          context_length: (e['context_length'] as number | null) ?? null,
+          max_output_tokens: (e['max_output_tokens'] as number | null) ?? null,
+          capabilities_json: JSON.stringify(enabled),
+          family: (e['family'] as string | null) ?? null,
+          model_type: (e['type'] as string) || 'chat',
+          input_modalities_json: JSON.stringify((e['input_modalities'] as string[]) ?? []),
+          output_modalities_json: JSON.stringify((e['output_modalities'] as string[]) ?? []),
+        } as unknown as Model;
+      };
       const [models, providers, combos, keys, accounts] = await Promise.all([
-        api('/models') as Promise<Model[]>,
-        (state.providers.length === 0 ? api('/providers') : Promise.resolve(state.providers)) as Promise<Provider[]>,
-        (state.combos.length === 0 ? api('/combos') : Promise.resolve(state.combos)) as Promise<Combo[]>,
-        (state.apiKeys.length === 0 ? api('/keys') : Promise.resolve(state.apiKeys)) as Promise<typeof state.apiKeys>,
-        (state.accounts.length === 0 ? api('/accounts') : Promise.resolve(state.accounts)) as Promise<Account[]>,
+        admin
+          ? api('/models') as Promise<Model[]>
+          : (api('/models/catalog') as Promise<{ data: Record<string, unknown>[] }>)
+              .then((r) => (Array.isArray(r?.data) ? r.data : [])).then((rows) => rows.map(toTenantModel)),
+        admin && state.providers.length === 0 ? api('/providers') as Promise<Provider[]> : Promise.resolve(state.providers),
+        admin && state.combos.length === 0 ? api('/combos') as Promise<Combo[]> : Promise.resolve(state.combos),
+        admin && state.apiKeys.length === 0 ? api('/keys') as Promise<typeof state.apiKeys> : Promise.resolve(state.apiKeys),
+        admin && state.accounts.length === 0 ? api('/accounts') as Promise<Account[]> : Promise.resolve(state.accounts),
       ]);
       state.models = models;
       state.modelsComplete = true;
@@ -237,6 +280,15 @@ export async function mountPlayground(
       state.combos = combos;
       state.apiKeys = keys;
       state.accounts = accounts;
+
+      // Never let restored admin-only selections leak into a tenant session.
+      if (!admin) {
+        stateInternal.keySource = 'session';
+        stateInternal.selectedApiKeyId = null;
+        stateInternal.selectedApiKeyPrefix = '';
+        stateInternal.selectedProviderId = '';
+        stateInternal.selectedAccountId = '';
+      }
 
       if (handoffApplied) {
         // The payload's model must survive ensureDefaultModel, which would

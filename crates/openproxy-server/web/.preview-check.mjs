@@ -1,0 +1,12 @@
+import { chromium } from '@playwright/test';
+const p = await chromium.launch().then(b => b.newPage());
+const errs = [];
+p.on('response', r => { if (r.url().includes('/admin/') && r.status() >= 400) errs.push([r.url().slice(-40), r.status()]); });
+await p.goto('http://100.103.80.69:5173/admin/#/providers', { waitUntil: 'networkidle', timeout: 25000 }).catch(e => console.log('goto:', e.message));
+const tiles = await p.locator('.workspace-tile').count();
+const seams = await p.locator('.workspace-seam').count();
+const gridH = await p.locator('.workspace-grid').evaluate(el => el.getBoundingClientRect().height).catch(() => -1);
+const sidebar = await p.locator('#workspace-context').count();
+const toolbar = await p.locator('.workspace-toolbar').count();
+console.log(JSON.stringify({ tiles, seams, gridH, sidebar, toolbar, bad: errs.slice(0, 5) }));
+await p.context().close();

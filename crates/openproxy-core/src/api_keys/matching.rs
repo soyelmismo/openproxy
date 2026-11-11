@@ -49,6 +49,19 @@ fn is_provider_in_allowlist(allowed: Option<&[String]>, provider: Option<&str>) 
     }
 }
 
+/// Strict-mode gate for `allowed_providers`: a non-empty list grants models
+/// from the listed providers (or `*`); an absent or empty list grants
+/// nothing — in strict mode an empty allowlist denies everything.
+fn is_provider_strictly_allowed(allowed: Option<&[String]>, provider: Option<&str>) -> bool {
+    match allowed {
+        Some(list) if !list.is_empty() => match provider {
+            Some(p) => list.iter().any(|a| a == p || a == "*"),
+            None => false,
+        },
+        _ => false,
+    }
+}
+
 fn is_model_blocked_by_blacklist(
     blacklisted_models: Option<&[String]>,
     model: &str,
@@ -98,12 +111,29 @@ impl ApiKey {
                     .any(|m| model_matches_pattern(m, model, bare_model, full_id.as_deref()))
         });
 
-        // Strict mode flips the allowlist into the outer gate: only the listed
-        // models are reachable, and the model blacklist keeps subtracting from
-        // that set (an empty allowlist denies everything). The provider
-        // blacklist is subsumed — a non-listed model is already denied.
+        // Strict mode flips the allowlists into the outer gate: a model is
+        // reachable when it matches a non-empty `allowed_models` entry OR its
+        // provider matches a non-empty `allowed_providers` entry (either
+        // list, when non-empty, grants access; both empty denies everything).
+        // Both blacklists keep subtracting from that set.
         if self.only_whitelisted {
-            return explicitly_allowed && !is_model_blacklisted;
+            let model_gate = explicitly_allowed;
+            let provider_gate =
+                is_provider_strictly_allowed(self.allowed_providers.as_deref(), provider_id)
+                    || is_provider_strictly_allowed(
+                        self.allowed_providers.as_deref(),
+                        prov_from_model,
+                    );
+            if !model_gate && !provider_gate {
+                return false;
+            }
+            let prov_blacklisted =
+                is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+                    || is_provider_blacklisted(
+                        self.blacklisted_providers.as_deref(),
+                        prov_from_model,
+                    );
+            return !is_model_blacklisted && !prov_blacklisted;
         }
 
         // Combos are virtual routing targets, not raw provider models.
@@ -130,16 +160,15 @@ impl ApiKey {
         // from those providers are allowed by default (unless explicitly whitelisted above).
         // Blacklisted providers filter: if blacklisted_providers is set, models from
         // those providers are denied.
-        let is_blacklisted = is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
-            || is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model);
+        let is_blacklisted =
+            is_provider_blacklisted(self.blacklisted_providers.as_deref(), provider_id)
+                || is_provider_blacklisted(self.blacklisted_providers.as_deref(), prov_from_model);
         if is_blacklisted {
             return false;
         }
 
-        let is_in_allowlist = is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
-            || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model);
-
-        is_in_allowlist
+        is_provider_in_allowlist(self.allowed_providers.as_deref(), provider_id)
+            || is_provider_in_allowlist(self.allowed_providers.as_deref(), prov_from_model)
     }
 
     /// Returns whether the specified provider is permitted by this key.

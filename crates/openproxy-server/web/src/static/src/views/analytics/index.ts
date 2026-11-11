@@ -42,6 +42,7 @@ import {
 import {
   createAnalyticsCharts,
   destroyAnalyticsCharts,
+  ensureAnalyticsChartsAlive,
   refreshAnalyticsChartTheme,
   renderAnalyticsToolbar,
   renderRankMetricSwitch,
@@ -61,6 +62,9 @@ import type {
   ByProviderRow,
   ByStatusRow,
   ErrorRow,
+  KeyQuotaListItem,
+  KeyQuotaResponse,
+  KeyQuotaStatus,
   MonthlyByProviderRow,
   Provider,
   UsageSummary,
@@ -91,6 +95,165 @@ function renderMetrics(): TemplateResult {
     ${metric(t("analytics.metric.avg_ttft"), fmtDuration(summary.avg_ttft_ms), `${fmtDuration(summary.avg_total_ms)} ${t("analytics.metric.avg_total")}`)}
     ${metric(t("analytics.metric.p95_latency"), fmtDuration(p95Total), `${fmtNumber(latency?.samples ?? 0)} ${t("analytics.metric.successful_samples")}`)}
   </div>`;
+}
+
+// ── Dollar-quota panel (5h / weekly / monthly) ─────────────────────
+
+// Client portal: own-key status from `/usage/quota` (null while loading or on failure).
+let quotaStatus: KeyQuotaStatus | null = null;
+// Admin: keys with a quota row (labels) + the live spend of the picked key.
+let adminQuotaKeys: KeyQuotaListItem[] | null = null;
+let adminQuota: KeyQuotaResponse | null = null;
+let adminQuotaKeyId: number | null = null;
+let countdownTimer: number | null = null;
+
+async function loadQuotaStatus(): Promise<void> {
+  try {
+    quotaStatus = await api("/usage/quota") as KeyQuotaStatus;
+  } catch {
+    quotaStatus = null;
+  }
+  requestUpdate();
+}
+
+/** Admin: keys that carry a quota row. Labels only — the picked key always
+ *  comes from the toolbar filter, never auto-selected here. */
+async function loadAdminQuotaKeys(): Promise<void> {
+  try {
+    const resp = await api("/keys/quotas") as { quotas: KeyQuotaListItem[] };
+    adminQuotaKeys = resp.quotas ?? [];
+  } catch {
+    adminQuotaKeys = [];
+  }
+  requestUpdate();
+}
+
+/** Fetch (admin-only) the live quota status of one key. */
+async function loadAdminKeyQuota(keyId: number): Promise<void> {
+  adminQuotaKeyId = keyId;
+  try {
+    adminQuota = await api(`/keys/${keyId}/quota`) as KeyQuotaResponse;
+  } catch {
+    adminQuota = null;
+  }
+  requestUpdate();
+}
+
+// SQLite UTC "YYYY-MM-DD HH:MM:SS" and ISO stamps both parse here.
+function parseQuotaTs(ts: string | null | undefined): Date | null {
+  if (!ts) return null;
+  const iso = ts.includes("T") ? ts : `${ts.replace(" ", "T")}Z`;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatCountdown(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const parts: string[] = [];
+  if (d > 0) parts.push(`${d}d`);
+  if (d > 0 || h > 0) parts.push(`${h}h`);
+  if (d > 0 || h > 0 || m > 0) parts.push(`${m}m`);
+  parts.push(`${s % 60}s`);
+  return parts.join(" ");
+}
+
+function countdownText(targetIso: string): string {
+  const d = new Date(targetIso);
+  if (Number.isNaN(d.getTime())) return "";
+  const diff = d.getTime() - Date.now();
+  return diff <= 0 ? "resetting…" : `resets in ${formatCountdown(diff)}`;
+}
+
+/** Live-tick every countdown hint in the panel (1s DOM updates, no re-render). */
+function startCountdownTicker(): void {
+  if (countdownTimer !== null) return;
+  const tick = (): void => {
+    document.querySelectorAll<HTMLElement>("[data-quota-countdown]").forEach((el) => {
+      const attr = el.dataset["quotaCountdown"];
+      if (attr) el.textContent = countdownText(attr);
+    });
+  };
+  tick();
+  countdownTimer = window.setInterval(tick, 1000);
+}
+
+function stopCountdownTicker(): void {
+  if (countdownTimer !== null) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+}
+
+interface AnalyticsQuotaWindow {
+  title: string;
+  cap: number | null;
+  spent: number;
+  /** ISO instant the window resets; null = no scheduled reset. */
+  targetIso: string | null;
+  /** Rolling window: capacity frees itself as old usage ages out. */
+  rolling: boolean;
+}
+
+// Provider-style quota window: percentage + usage bar + live countdown.
+function quotaWindowHtml(w: AnalyticsQuotaWindow): TemplateResult {
+  const pct = w.cap && w.cap > 0 ? Math.round((w.spent / w.cap) * 100) : null;
+  const color = pct == null ? "" : pct > 80 ? "danger" : pct > 50 ? "warn" : "ok";
+  const numberClass = pct != null && pct >= 100 ? "used" : pct != null && pct > 80 ? "warn" : "available";
+  const target = w.targetIso ? parseQuotaTs(w.targetIso) : null;
+  const targetIso = target ? target.toISOString() : "";
+  const staticHint = pct == null ? "window off" : w.rolling ? "rolling window" : "next window";
+  return html`<div class="quota-window">
+    <div class="quota-window-header">
+      <span class="quota-window-title">${w.title}</span>
+      <span class="quota-window-numbers ${numberClass}">${pct == null ? "∞" : `${pct}%`}</span>
+    </div>
+    <div class="quota-bar mini ${color}">
+      <div class="quota-bar-track" role="meter" aria-label="${w.title}" aria-valuenow="${pct ?? 0}" aria-valuemin="0" aria-valuemax="100">
+        <div class="quota-bar-fill" style="width: ${pct == null ? 0 : Math.min(100, Math.max(0, pct))}%"></div>
+      </div>
+    </div>
+    <small class="quota-window-hint" data-quota-countdown="${targetIso}">${targetIso ? countdownText(targetIso) : staticHint}</small>
+  </div>`;
+}
+
+function quotaWindowList(spend: KeyQuotaStatus): TemplateResult[] {
+  const fiveOldest = parseQuotaTs(spend.five_hours.oldest_spend_at);
+  const fiveTarget = fiveOldest ? new Date(fiveOldest.getTime() + 5 * 60 * 60 * 1000).toISOString() : null;
+  return [
+    quotaWindowHtml({ title: "5h Window", cap: spend.five_hours.cap_usd, spent: spend.five_hours.spent_usd, targetIso: fiveTarget, rolling: true }),
+    quotaWindowHtml({ title: "Weekly Window", cap: spend.week.cap_usd, spent: spend.week.spent_usd, targetIso: spend.week.resets_at, rolling: false }),
+    quotaWindowHtml({ title: "Monthly Window", cap: spend.month.cap_usd, spent: spend.month.spent_usd, targetIso: spend.month.resets_at, rolling: false }),
+  ];
+}
+
+function quotaPanelCard(label: string | null, spend: KeyQuotaStatus, tabs: TemplateResult | null): TemplateResult {
+  startCountdownTicker();
+  return html`<section class="card analytics-quota-card">
+    <div class="analytics-card-heading"><div><h3>Dollar quotas</h3><p>${label ? `${label} · ` : ""}percent of each window cap · time to reset</p></div></div>
+    ${tabs}
+    <div class="family-quota-grid">
+      ${quotaWindowList(spend)}
+    </div>
+  </section>`;
+}
+
+function renderQuotaPanel(): TemplateResult {
+  if (isFullAdmin()) {
+    // Admin: ONLY show the panel for the API key explicitly picked in the
+    // toolbar filter. No auto-selection, no key tabs — the picker IS the
+    // selection. Nothing selected = nothing rendered.
+    if (adminQuotaKeyId === null) return html``;
+    if (adminQuota === null || adminQuota.api_key_id !== adminQuotaKeyId) return html``;
+    if (!adminQuota.enabled) return html`<p class="empty">This key has no dollar quotas (unlimited).</p>`;
+    const label = adminQuotaKeys?.find((r) => r.api_key_id === adminQuotaKeyId)?.label ?? null;
+    return quotaPanelCard(label, adminQuota.spend, null);
+  }
+
+  if (!quotaStatus || !quotaStatus.enabled) return html``;
+  return quotaPanelCard(null, quotaStatus, null);
 }
 
 // ── Ranking list (used by model + provider strips) ──────────────────
@@ -264,6 +427,7 @@ function renderBody(): TemplateResult {
   return html`
     ${nullPricingBanner}
     ${renderMetrics()}
+    ${renderQuotaPanel()}
     <div class="analytics-primary-grid">
       <section class="card analytics-trend-card">
         <div class="analytics-card-heading"><div><h3>${t("analytics.chart.daily_usage")}</h3><p>${t("analytics.chart.daily_usage.subtitle")}</p></div></div>
@@ -298,11 +462,19 @@ function renderBody(): TemplateResult {
 }
 
 function renderAnalytics(): TemplateResult {
+  // Post-commit self-heal: if this re-render removed the uPlot canvas from
+  // its container (lit re-created the chart div), rebuild it. Runs after the
+  // render() call in mountView commits, before the browser paints.
+  queueMicrotask(() => {
+    if (mountedEl?.isConnected) ensureAnalyticsChartsAlive();
+  });
   const { preset, providerId, apiKeyId, modelId } = parseHashParams();
   return html`
     <div class="analytics-dashboard">
       <div class="page-header analytics-header">
-        <div><span class="page-eyebrow">${t("nav.analytics")}</span><h2>${t("analytics.title")}</h2><p>${t("analytics.subtitle")}</p></div>
+        <div class="analytics-title-wrap">
+          <h2 class="view-identity" title=${t("analytics.subtitle")}>${t("analytics.title")}</h2>
+        </div>
       </div>
       ${renderAnalyticsToolbar(providerId, apiKeyId, modelId, preset)}
       ${renderBody()}
@@ -335,11 +507,13 @@ export async function mountAnalytics(
     cleanupReactive();
     mountedEl = null;
     return () => {
+      stopCountdownTicker();
       destroyAnalyticsCharts();
       document.removeEventListener("themechange", refreshAnalyticsChartTheme);
     };
   }
   return () => {
+    stopCountdownTicker();
     destroyAnalyticsCharts();
     document.removeEventListener("themechange", refreshAnalyticsChartTheme);
     cleanupReactive();
@@ -425,6 +599,26 @@ async function fetchAndApply(
 
     if (providersResp) state.providers = providersResp;
     if (apiKeysResp) state.apiKeys = apiKeysResp as typeof state.apiKeys;
+
+    // Dollar quotas: clients read their own status; admins get the picked
+    // key's live spend. No picker selection = no panel at all.
+    if (isFullAdmin()) {
+      const selectedKeyId = apiKeyId ? Number(apiKeyId) : NaN;
+      void loadAdminQuotaKeys();
+      if (Number.isNaN(selectedKeyId)) {
+        adminQuotaKeyId = null;
+        adminQuota = null;
+      } else if (adminQuotaKeyId !== selectedKeyId) {
+        void loadAdminKeyQuota(selectedKeyId);
+      }
+    } else {
+      void loadQuotaStatus();
+      if (adminQuotaKeys !== null) {
+        adminQuotaKeys = null;
+        adminQuota = null;
+        adminQuotaKeyId = null;
+      }
+    }
 
     requestUpdate();
     // rAF runs after the `requestUpdate()` re-render paints, so the chart

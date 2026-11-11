@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  liveLogsStore, MAX_STORED_ROWS, type AttemptEventPayload, type AttemptState,
+  liveLogsStore, MAX_STORED_ROWS, sessionGroupState, formatSessionLabel, NO_SESSION_KEY,
+  type AttemptEventPayload, type AttemptState,
 } from "./live-logs-store.js";
 import * as apiModule from "../lib/api.js";
 import type { RecentUsageRow, StageEvent } from "../lib/types/api.js";
@@ -29,7 +30,7 @@ const makeSnapshotAttempt = (o: Partial<AttemptState> = {}): AttemptState => ({
   updatedAtMs: 1_000, stage: "streaming", stageSeq: 3, stageRank: 3,
   elapsedMsAtEvent: 0, connectMs: null, ttftMs: null, statusCode: null,
   terminal: false, terminalKind: null, error: null, rowId: null, row: null,
-  source: "snapshot", endpointKind: null, apiKeyId: null, ...o,
+  source: "snapshot", endpointKind: null, apiKeyId: null, sessionHash: null, ...o,
 });
 
 const makeStageEvent = (o: Partial<StageEvent> = {}): StageEvent => ({
@@ -512,5 +513,51 @@ describe("liveLogsStore inflight expiry (fake timers)", () => {
 
     expect(liveLogsStore.selectActiveApiKeyIds()).toEqual(new Set([42]));
     expect(liveLogsStore.hasNoApiKeyAttempts()).toBe(false);
+  });
+});
+
+describe("liveLogsStore session grouping", () => {
+  it("groups attempts by session_hash, sorts groups by recent activity, and buckets unhashed rows", () => {
+    resetStore();
+    // Session A: finished at t=2000 (older activity)
+    dispatchAttemptEvent(1, makeEvent({ attempt_key: "tr-a1", request_id: "req-a1", trace_id: "tr-a1", stage: "completed", event_time: 2000, started_at: 1000, stage_seq: 9999, stage_rank: 4, terminal: true, session_hash: "12345" }));
+    // Session B: finished at t=3000 (newest activity -> first group)
+    dispatchAttemptEvent(2, makeEvent({ attempt_key: "tr-b1", request_id: "req-b1", trace_id: "tr-b1", stage: "completed", event_time: 3000, started_at: 2500, stage_seq: 9999, stage_rank: 4, terminal: true, session_hash: "99999" }));
+    // No session: standalone attempt
+    dispatchAttemptEvent(3, makeEvent({ attempt_key: "tr-x1", request_id: "req-x1", trace_id: "tr-x1", stage: "streaming", event_time: 2500, started_at: 2400, stage_seq: 2, stage_rank: 3, terminal: false }));
+
+    const groups = liveLogsStore.selectSessionGroups();
+    expect(groups.map((g) => g.key)).toEqual(["99999", NO_SESSION_KEY, "12345"]);
+    expect(groups[0]?.total).toBe(1);
+    const noSession = groups.find((g) => g.key === NO_SESSION_KEY);
+    expect(noSession?.attempts[0]?.attemptKey).toBe("tr-x1");
+    expect(noSession?.inflightCount).toBe(1);
+    // Label: low 8 hex digits of the u64 fingerprint (99999 = 0x1869F)
+    expect(groups[0]?.label).toBe("…0001869F");
+    expect(formatSessionLabel("12345")).toMatch(/^…[0-9A-F]{8}$/);
+    expect(formatSessionLabel(NO_SESSION_KEY)).toBe("No session");
+  });
+
+  it("sessionGroupState: pending wins, then the last finished attempt decides", () => {
+    resetStore();
+    // Group pending: one inflight attempt
+    dispatchAttemptEvent(1, makeEvent({ attempt_key: "tr-p1", request_id: "req-p1", trace_id: "tr-p1", stage: "streaming", event_time: 1000, started_at: 900, stage_seq: 2, stage_rank: 3, terminal: false, session_hash: "11" }));
+    // Group error: finished with 500 (older), then 200 (newest -> decides ok)... and a pending one to prove pending wins
+    dispatchAttemptEvent(2, makeEvent({ attempt_key: "tr-e1", request_id: "req-e1", trace_id: "tr-e1", stage: "failed", status_code: 500, event_time: 1100, started_at: 1000, stage_seq: 3, stage_rank: 4, terminal: false, session_hash: "22" }));
+    dispatchAttemptEvent(3, makeEvent({ attempt_key: "tr-e2", request_id: "req-e2", trace_id: "tr-e2", stage: "streaming", event_time: 1200, started_at: 1150, stage_seq: 2, stage_rank: 3, terminal: false, session_hash: "22" }));
+    // Group ok: single 200
+    dispatchAttemptEvent(4, makeEvent({ attempt_key: "tr-o1", request_id: "req-o1", trace_id: "tr-o1", stage: "completed", status_code: 200, event_time: 1300, started_at: 1200, stage_seq: 9999, stage_rank: 4, terminal: true, session_hash: "33" }));
+
+    const byKey = new Map(liveLogsStore.selectSessionGroups().map((g) => [g.key, g]));
+    expect(byKey.get("11") && sessionGroupState(byKey.get("11")!)).toBe("pending");
+    expect(byKey.get("22") && sessionGroupState(byKey.get("22")!)).toBe("pending");
+    expect(byKey.get("33") && sessionGroupState(byKey.get("33")!)).toBe("ok");
+  });
+
+  it("a finished 5xx decays the group to error state once nothing is in flight", () => {
+    resetStore();
+    dispatchAttemptEvent(1, makeEvent({ attempt_key: "tr-f1", request_id: "req-f1", trace_id: "tr-f1", stage: "failed", status_code: 502, error: "bad gateway", event_time: 1000, started_at: 900, stage_seq: 3, stage_rank: 4, terminal: false, session_hash: "44" }));
+    const g = liveLogsStore.selectSessionGroups().find((x) => x.key === "44");
+    expect(g && sessionGroupState(g)).toBe("error");
   });
 });

@@ -296,13 +296,13 @@
 .account-drag-handle { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 26px; height: 26px; margin-top: 1px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); cursor: grab; touch-action: none; }
 .account-drag-handle:hover, .account-drag-handle:focus-visible { color: var(--color-text); background: var(--color-surface-2); }
 .account-drag-handle:active { cursor: grabbing; }
-.account-identity { min-width: 0; }
+.account-identity { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; }
 .account-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.account-name-editor { display: inline-flex; min-width: 0; max-width: 100%; }
+.account-name-editor { display: inline-flex; flex: 1; min-width: 0; max-width: 100%; }
 .account-name-button { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 1px 2px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); font-size: var(--fs-sm); cursor: text; }
 .account-name-button:hover, .account-name-button:focus-visible { background: var(--color-surface-2); }
 .account-name-button svg { flex-shrink: 0; width: 12px; height: 12px; opacity: 0.55; }
-.account-name-text { min-width: 0; overflow-wrap: anywhere; }
+.account-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-row-paused .account-name-text { color: var(--color-text-muted); }
 .account-name-input { width: min(100%, 260px); min-width: 0; padding: 2px 6px; border: 1px solid var(--color-primary); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); font-size: var(--fs-sm); }
 .account-pause { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 24px; height: 24px; padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); }
@@ -390,6 +390,11 @@ body.account-drag-active .account-drag-handle { cursor: grabbing; }
 @container provider-detail (max-width: 420px) {
   .account-heading { grid-template-columns: auto minmax(0, 1fr); gap: 4px 8px; }
   .account-health-select { grid-column: 2; justify-self: start; margin-top: 2px; }
+  .provider-detail-tabs { flex-wrap: wrap; overflow-x: visible; }
+  .provider-detail-tabs [role="tab"] { flex: 1 0 auto; }
+  .provider-detail-view .section-header > div:last-child { width: 100%; }
+  .provider-detail-view .section-header button { min-height: 28px; padding: 4px 8px; font-size: var(--fs-xs); }
+  .family-tabs { flex-wrap: wrap; gap: 4px 10px; }
   .provider-detail-view .provider-entry.account-card-row { gap: 5px; }
   .provider-detail-view .account-card-row .provider-entry-actions,
   .provider-detail-view .account-card-row .provider-entry-quota { margin-left: 34px; }

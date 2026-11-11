@@ -1,0 +1,259 @@
+/* Key editor — one form shared by the create/edit modal and the inline
+   key-detail view. Four task sections (identity → scopes → model access →
+   restrictions) render as dense rows: a title + hint header line, then a
+   grid that only gains columns when the container is wide enough. Every
+   long explanation lives in a `title` attribute or a short right-aligned
+   note, so controls stay one line tall.
+
+   Loaded from components.css after cards.css/modals.css. The inline host
+   still carries `.key-properties-fields` from workspace.css, so the
+   two-class rule below replaces its outer auto-fit grid without editing
+   that file. */
+
+.key-form-body {
+  container-type: inline-size;
+  container-name: key-form;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.key-properties-fields.key-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding-bottom: 0;
+}
+
+/* ── Sections ─────────────────────────────────────────────────────────── */
+
+.key-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 0 var(--space-2);
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.key-form-section + .key-form-section { padding-top: var(--space-2); }
+.key-form-section:last-child { padding-bottom: 0; border-bottom: 0; }
+
+.key-form-section-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+/* Uppercase + tracking turns the title into a block label: it separates the
+   four tasks without spending a full line on a heading. */
+.key-form-section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+.key-form-section-hint {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
+  color: var(--color-text-muted);
+}
+
+/* ── Fields ───────────────────────────────────────────────────────────── */
+
+.key-form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2) var(--space-4);
+  min-width: 0;
+}
+.key-form-grid > .field { margin: 0; min-width: 0; gap: var(--space-1); }
+
+.key-form .field label,
+.key-form .field .field-label {
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+
+.key-form-field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.key-form-field-note {
+  flex: none;
+  font-size: var(--fs-2xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* ── Scopes + toggles: one dense row per option ───────────────────────── */
+
+.key-form .scopes-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+}
+.key-form .scope-card {
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.key-form .scope-card input[type="checkbox"] { margin: 0; }
+.key-form .scope-card .scope-name {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+}
+.key-form .scope-card .scope-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
+  /* On a checked card the primary-soft background drops muted text below
+     AA at 10px; full text colour at 70% keeps it legible in both themes. */
+  color: var(--color-text);
+  opacity: 0.7;
+}
+.key-form .key-form-toggle { margin-top: 0; }
+
+/* ── Model pickers ────────────────────────────────────────────────────── */
+
+.key-form .model-picker-display {
+  align-content: center;
+  min-height: 30px;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  padding-right: 4.6rem;
+  border-radius: var(--radius-sm);
+}
+.key-form .model-picker-display > button.link-btn {
+  top: 50%;
+  transform: translateY(-50%);
+  right: var(--space-2);
+  font-size: var(--fs-xs);
+}
+.key-form .model-chip {
+  padding: 0.05rem 0.4rem;
+  font-size: var(--fs-2xs);
+}
+
+.key-form .expiry-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.key-form .field .expiry-row input {
+  flex: 0 0 84px;
+  width: 84px;
+}
+.key-form .field .expiry-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* A disabled amount is noise next to "never": the unit select carries
+   the state, so hide the dead input in both hosts. */
+.key-form .expiry-row input:disabled { display: none; }
+
+.key-form .field > select { width: 100%; }
+
+.key-form-inline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.key-form-inline-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.key-form-inline-row button { flex: none; }
+
+/* ── Modal shell ──────────────────────────────────────────────────────── */
+
+.modal.modal-key-editor {
+  min-width: 0;
+  max-width: min(960px, 100%);
+}
+.modal-key-editor > form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.modal-key-editor > form > .key-form-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+.modal-key-editor > .modal-header,
+.modal-key-editor > form > .modal-footer { flex: none; }
+
+/* ── Container queries: columns only when the host can hold them ──────── */
+
+/* Allow/block sit side by side even in a phone-width tile: two short
+   controls read faster than three stacked blocks, and the model-pattern
+   field keeps the full width. */
+@container key-form (min-width: 340px) {
+  .key-form-grid--restrictions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .key-form-field--wide { grid-column: 1 / -1; }
+}
+
+/* Label and expiry are short: pair them as soon as the host clears ~380px. */
+@container key-form (min-width: 380px) {
+  .key-form-grid--identity {
+    grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.8fr);
+  }
+}
+
+@container key-form (min-width: 400px) {
+  .key-form .scopes-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container key-form (min-width: 460px) {
+  .key-form-grid--access {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Wide hosts (modal, maximized tile): the four scopes fit on one row. */
+@container key-form (min-width: 900px) {
+  .key-form .scopes-list { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+@container key-form (min-width: 760px) {
+  /* Wide hosts: the quick-add select and the comma list share one row. */
+  .key-form-grid--restrictions > .field:not(.key-form-field--wide) {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    align-items: end;
+    column-gap: var(--space-2);
+  }
+  .key-form-grid--restrictions > .field:not(.key-form-field--wide) > .key-form-field-head {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 768px) {
+  .modal.modal-key-editor { max-width: 100%; }
+  .modal-key-editor > form > .key-form-body { padding: var(--space-3); }
+}

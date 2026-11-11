@@ -1,0 +1,77 @@
+[
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 205.4,
+    "error": "The response did not complete (length).",
+    "preview": "",
+    "id": 14394926,
+    "model_id": "deepseek-v-4.1-flash-1017"
+  },
+  {
+    "status": "VERIFIED",
+    "prediction": "deepseek-v4-pro-0813",
+    "family": "deepseek",
+    "score": 3.468,
+    "numbers_parsed": 327,
+    "ttft_s": 98.6,
+    "tps": 66.5,
+    "duration_s": 115.43,
+    "error": null,
+    "id": 14394928,
+    "model_id": "deepseek-v4.1-flash-1017"
+  },
+  {
+    "status": "VERIFIED",
+    "prediction": "mimo-v2.5-pro",
+    "family": "mimo",
+    "score": 2.097,
+    "numbers_parsed": 302,
+    "ttft_s": 50.55,
+    "tps": 137.8,
+    "duration_s": 62.06,
+    "error": null,
+    "id": 14394942,
+    "model_id": "nemotron-3.5-super"
+  },
+  {
+    "status": "VERIFIED",
+    "prediction": "deepseek-v3.2",
+    "family": "deepseek",
+    "score": 2.498,
+    "numbers_parsed": 292,
+    "ttft_s": 9.39,
+    "tps": 81.4,
+    "duration_s": 23.02,
+    "error": null,
+    "id": 14394945,
+    "model_id": "solar-mini4"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 182.21,
+    "error": "Upstream error: upstream error: status=504 provider=tiprouter model=S5 body=upstream phase `headers` timed out after 60177ms (config: ttft_ms)",
+    "preview": "",
+    "id": 14950148,
+    "model_id": "S5"
+  },
+  {
+    "status": "REJECTED_OR_INSUFFICIENT",
+    "prediction": null,
+    "family": null,
+    "score": null,
+    "numbers_parsed": 0,
+    "duration_s": 98.14,
+    "error": "Upstream error: upstream error: status=401 provider=tiprouter model=solar-pro4 body={\"error\":{\"origin\":\"upstream\",\"code\":\"authentication_failed\",\"requestId\":\"90887e69-149c-4820-ab7a-9b619e584c11\",\"message\":\"TipRouter could not authenticate with the AI provider. Please try again. (request 90887e69-149c-4820-ab7a-9b619e584c11)\",\"details\":{\"providerStatus\":401,\"upstreamMessageAsIs\":true,\"credentialEvidence\":true}}}",
+    "preview": "",
+    "id": 15120564,
+    "model_id": "solar-pro4"
+  }
+]

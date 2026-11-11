@@ -1,0 +1,119 @@
+/* Live log deck groups (layout lives in workspace-chrome.css, keyed on the
+   tile). These are the pieces that stay identical wherever the group sits. */
+.logs-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.logs-header-actions .btn,
+.logs-header-actions .logs-columns-toggle {
+  height: 26px;
+  box-sizing: border-box;
+}
+.logs-action-label {
+  white-space: nowrap;
+}
+
+/* Live logs filter group */
+.logs-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 240px;
+  min-width: 200px;
+  height: 26px;
+  box-sizing: border-box;
+}
+.logs-search-icon {
+  position: absolute;
+  left: 0.65rem;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  pointer-events: none;
+  z-index: 1;
+}
+.logs-search-icon .icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: middle;
+}
+.logs-search-input {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 1.8rem 0 2rem;
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  line-height: normal;
+}
+.logs-search-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-soft);
+}
+.logs-search-input::-webkit-search-decoration,
+.logs-search-input::-webkit-search-cancel-button,
+.logs-search-input::-webkit-search-results-button,
+.logs-search-input::-webkit-search-results-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+.logs-search-clear {
+  position: absolute;
+  right: 0.45rem;
+  top: 0;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+  width: 18px;
+  height: 100%;
+  font-size: var(--fs-xs);
+  z-index: 1;
+}
+.logs-search-clear:hover {
+  color: var(--color-text);
+}
+.logs-search-clear .icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+}
+.logs-key-filter,
+.logs-status-filter {
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 0.65rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  max-width: 200px;
+}
+.logs-key-filter:focus,
+.logs-status-filter:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
+  border-color: var(--color-primary);
+  box-shadow: none;
+}
+
+

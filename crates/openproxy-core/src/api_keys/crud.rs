@@ -232,16 +232,31 @@ fn serialize_update_field<T: serde::Serialize>(
     }
 }
 
-fn build_update_json_clauses(
+/// The six JSON column families an `api_keys` update can touch: the scopes
+/// overwrite (optional, always `SET`) plus five `UpdateField` columns whose
+/// ignore/reset/set semantics drive both the SET list and the bind order.
+struct JsonUpdateFields {
     scopes_json: Option<String>,
     allowed_models_json: UpdateField<String>,
     allowed_combos_json: UpdateField<String>,
     blacklisted_providers_json: UpdateField<String>,
     allowed_providers_json: UpdateField<String>,
     blacklisted_models_json: UpdateField<String>,
+}
+
+fn build_update_json_clauses(
+    fields: JsonUpdateFields,
     sets: &mut Vec<&'static str>,
     bound: &mut Vec<Box<dyn rusqlite::ToSql>>,
 ) {
+    let JsonUpdateFields {
+        scopes_json,
+        allowed_models_json,
+        allowed_combos_json,
+        blacklisted_providers_json,
+        allowed_providers_json,
+        blacklisted_models_json,
+    } = fields;
     if let Some(s) = scopes_json {
         sets.push("scopes_json = ?");
         bound.push(Box::new(s));
@@ -342,12 +357,14 @@ pub fn update(conn: &Connection, id: ApiKeyId, params: UpdateParams<'_>) -> Resu
     let mut bound = Vec::new();
     build_update_scalar_clauses(params, &mut sets, &mut bound);
     build_update_json_clauses(
-        scopes_json,
-        allowed_models_json,
-        allowed_combos_json,
-        blacklisted_providers_json,
-        allowed_providers_json,
-        blacklisted_models_json,
+        JsonUpdateFields {
+            scopes_json,
+            allowed_models_json,
+            allowed_combos_json,
+            blacklisted_providers_json,
+            allowed_providers_json,
+            blacklisted_models_json,
+        },
         &mut sets,
         &mut bound,
     );

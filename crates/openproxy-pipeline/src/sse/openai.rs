@@ -7,42 +7,48 @@ use serde_json::Value;
 
 /// Extracts chunk metadata only. serde skips the fields the proxy does not
 /// need (`delta.content`, `tool_calls`) without allocating them, which is
-/// cheaper than parsing into `Value` per chunk.
+/// cheaper than parsing into `Value` per chunk. `usage` stays as raw
+/// `Value`: free-tier gateways mix OpenAI and Anthropic-style token names
+/// (`prompt_tokens` next to `input_tokens`) in one usage object, which
+/// serde's derive rejects as `duplicate field`.
 #[derive(serde::Deserialize)]
 struct OpenAiSseProbe {
     #[serde(default)]
-    usage: Option<OpenAiUsageProbe>,
+    usage: Option<Value>,
     #[serde(default)]
     choices: Option<Vec<OpenAiChoiceProbe>>,
 }
 
-#[derive(serde::Deserialize)]
-struct OpenAiUsageProbe {
-    #[serde(alias = "input_tokens")]
-    prompt_tokens: Option<u64>,
-    #[serde(alias = "output_tokens")]
-    completion_tokens: Option<u64>,
-    total_tokens: Option<u64>,
-    #[serde(default, alias = "prompt_token_details")]
-    prompt_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
-    #[serde(default, alias = "input_token_details")]
-    input_tokens_details: Option<OpenAiPromptTokensDetailsProbe>,
-    #[serde(default)]
-    prompt_cache_hit_tokens: Option<u64>,
-    #[serde(default, alias = "cached_prompt_tokens")]
-    cached_tokens: Option<u64>,
-    #[serde(default, alias = "cache_read_tokens")]
-    cache_read_input_tokens: Option<u64>,
+/// First key in `keys` present in `obj` as `u64`. Canonical OpenAI names
+/// take precedence over their Anthropic-style aliases; literal duplicate
+/// keys were already collapsed to the last occurrence by the `Value` parse.
+fn usage_u64(obj: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|k| obj.get(k).and_then(Value::as_u64))
 }
 
-#[derive(serde::Deserialize)]
-struct OpenAiPromptTokensDetailsProbe {
-    #[serde(default, alias = "cached_prompt_tokens")]
-    cached_tokens: Option<u64>,
-    #[serde(default, alias = "cache_read_tokens")]
-    cache_read_input_tokens: Option<u64>,
-    #[serde(default)]
-    prompt_cache_hit_tokens: Option<u64>,
+const USAGE_DETAILS_KEYS: [&str; 4] = [
+    "prompt_tokens_details",
+    "prompt_token_details",
+    "input_tokens_details",
+    "input_token_details",
+];
+const USAGE_CACHED_KEYS: [&str; 5] = [
+    "cached_tokens",
+    "cached_prompt_tokens",
+    "cache_read_input_tokens",
+    "cache_read_tokens",
+    "prompt_cache_hit_tokens",
+];
+
+/// Cached tokens from the usage details object, whichever naming style the
+/// gateway picked.
+fn usage_cached_tokens(usage: &Value) -> Option<u64> {
+    USAGE_DETAILS_KEYS.iter().find_map(|dk| {
+        let details = usage.get(dk)?;
+        USAGE_CACHED_KEYS
+            .iter()
+            .find_map(|ck| details.get(ck).and_then(Value::as_u64))
+    })
 }
 
 #[derive(serde::Deserialize)]
@@ -93,30 +99,25 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
     let probe: OpenAiSseProbe = parse_provider_json(payload, "openai")?;
 
     let usage = probe.usage.map(|u| {
-        let cached = u
-            .prompt_tokens_details
-            .as_ref()
-            .and_then(|d| {
-                d.cached_tokens
-                    .or(d.cache_read_input_tokens)
-                    .or(d.prompt_cache_hit_tokens)
-            })
+        let cached = usage_cached_tokens(&u)
             .or_else(|| {
-                u.input_tokens_details.as_ref().and_then(|d| {
-                    d.cached_tokens
-                        .or(d.cache_read_input_tokens)
-                        .or(d.prompt_cache_hit_tokens)
-                })
+                usage_u64(
+                    &u,
+                    &[
+                        "prompt_cache_hit_tokens",
+                        "cached_tokens",
+                        "cached_prompt_tokens",
+                        "cache_read_input_tokens",
+                        "cache_read_tokens",
+                    ],
+                )
             })
-            .or(u.prompt_cache_hit_tokens)
-            .or(u.cached_tokens)
-            .or(u.cache_read_input_tokens)
             .and_then(|c| u32::try_from(c).ok());
 
         build_openai_usage(
-            u.prompt_tokens,
-            u.completion_tokens,
-            u.total_tokens,
+            usage_u64(&u, &["prompt_tokens", "input_tokens"]),
+            usage_u64(&u, &["completion_tokens", "output_tokens"]),
+            usage_u64(&u, &["total_tokens"]),
             cached.map(|c| PromptTokensDetails {
                 cached_tokens: Some(c),
             }),
@@ -341,5 +342,34 @@ mod tests {
                 .and_then(|d| d.cached_tokens),
             Some(5120)
         );
+    }
+
+    #[test]
+    fn openai_usage_accepts_mixed_openai_and_anthropic_style_keys() {
+        // Free-tier gateways emit both naming styles in one usage object;
+        // serde's derive rejects the pair as `duplicate field`.
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":1200,"input_tokens":1200,"completion_tokens":300,"output_tokens":300,"total_tokens":1500}}"#;
+        let chunk = parse_openai_sse_line(line).unwrap().unwrap();
+        let usage = chunk.usage.expect("usage should be parsed");
+        assert_eq!(usage.prompt_tokens, 1200);
+        assert_eq!(usage.completion_tokens, 300);
+        assert_eq!(usage.total_tokens, 1500);
+    }
+
+    #[test]
+    fn openai_usage_duplicate_key_collapses_to_last() {
+        let line = r#"data: {"choices":[],"usage":{"prompt_tokens":900,"prompt_tokens":1200,"completion_tokens":300,"total_tokens":1500}}"#;
+        let chunk = parse_openai_sse_line(line).unwrap().unwrap();
+        let usage = chunk.usage.expect("usage should be parsed");
+        assert_eq!(usage.prompt_tokens, 1200);
+    }
+
+    #[test]
+    fn openai_chunk_duplicate_top_level_keys_collapse() {
+        let line =
+            r#"data: {"usage":{"prompt_tokens":1},"usage":{"prompt_tokens":2},"choices":[]}"#;
+        let chunk = parse_openai_sse_line(line).unwrap().unwrap();
+        let usage = chunk.usage.expect("usage should be parsed");
+        assert_eq!(usage.prompt_tokens, 2);
     }
 }

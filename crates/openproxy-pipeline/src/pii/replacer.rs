@@ -12,6 +12,40 @@ fn is_token_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
+/// Placeholders the redactor minted itself (`{prefix}` + 8 lowercase hex, per
+/// `get_or_create_placeholder`'s SECRET_PREFIX_MAP, plus the attached CLI
+/// alias `-p` + placeholder) are unique fixed-width strings that cannot occur
+/// in natural text by accident. For them the token boundaries that protect
+/// human-authored placeholders must be skipped: the forward pass can leave
+/// them glued to identifiers (`step-5-psec_x` inside a model slug,
+/// `sec_x_receipts` as a table name), and a boundary check would make those
+/// originals permanently unrestorable.
+#[inline]
+fn is_synthetic_secret_placeholder(pat: &str) -> bool {
+    let body = pat.strip_prefix("-p").unwrap_or(pat);
+    for prefix in [
+        "sec_",
+        "sk-proj-",
+        "sk-",
+        "op_live_",
+        "op_test_",
+        "mcp_live_",
+        "mcp_test_",
+        "ghp_",
+        "gho_",
+        "xoxb_",
+        "Bearer sec_",
+    ] {
+        if let Some(hex) = body.strip_prefix(prefix)
+            && hex.len() == 8
+            && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn json_escape_string(s: &str) -> String {
     let Ok(json) = serde_json::to_string(s) else {
         return s.to_string();
@@ -182,9 +216,10 @@ impl StreamingWindowReplacer {
                 self.last_char
             };
 
+            let synthetic = is_synthetic_secret_placeholder(pat);
             let pat_starts_token =
                 pat.starts_with(is_token_char) || pat.starts_with('+') || pat.starts_with("-p");
-            if pat_starts_token && prev_char.is_some_and(is_token_char) {
+            if !synthetic && pat_starts_token && prev_char.is_some_and(is_token_char) {
                 continue;
             }
             let contact = contact_kind(pat);
@@ -209,7 +244,7 @@ impl StreamingWindowReplacer {
             } else {
                 let next_char = input[mat_end..].chars().next();
                 let pat_ends_token = pat.ends_with(is_token_char);
-                if pat_ends_token && next_char.is_some_and(is_token_char) {
+                if !synthetic && pat_ends_token && next_char.is_some_and(is_token_char) {
                     continue;
                 }
                 if let Some(kind) = contact {

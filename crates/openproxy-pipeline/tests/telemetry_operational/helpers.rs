@@ -101,6 +101,8 @@ pub fn sample_usage_input(request_id: RequestId, seed: u64) -> UsageInput {
         flags: USAGE_FLAG_CLIENT_RESPONSE | USAGE_FLAG_STREAM_COMPLETE,
         audio_ms: None,
         session_hash: None,
+        max_chunk_gap_ms: None,
+        avg_chunk_gap_ms: None,
     }
 }
 

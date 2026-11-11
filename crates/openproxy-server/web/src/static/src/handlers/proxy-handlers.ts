@@ -8,6 +8,7 @@ import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
 import { showConfirm } from "../lib/show-confirm.js";
 import { t } from "../i18n/index.js";
+import { beginButtonBusy, resolveBusyButton } from "../lib/button-busy.js";
 
 export async function reloadProxies(queryParams?: Record<string, string | number | undefined>): Promise<void> {
   try {
@@ -82,15 +83,18 @@ export async function testProxy(id: string): Promise<void> {
   }
 }
 
-export async function testAllProxies(): Promise<void> {
+export async function testAllProxies(e?: Event | null): Promise<void> {
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Testing…" });
   try {
     await api("/proxies/test-all", { method: "POST" });
     showToast(t("proxies.toast.test_all_started"), "info");
     setTimeout(() => {
       void reloadProxies();
     }, 4000);
-  } catch (e: unknown) {
-    showApiError(e, "Test All failed");
+  } catch (err: unknown) {
+    showApiError(err, "Test All failed");
+  } finally {
+    busy.release();
   }
 }
 
@@ -255,6 +259,7 @@ export async function createCustomProxy(e: Event, wrapper: HTMLElement): Promise
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildCustomProxyBodyFromForm(target);
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Adding…" });
   try {
     await api("/proxies", { method: "POST", body: JSON.stringify(body) });
     showToast(
@@ -265,5 +270,7 @@ export async function createCustomProxy(e: Event, wrapper: HTMLElement): Promise
     await reloadProxies();
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }

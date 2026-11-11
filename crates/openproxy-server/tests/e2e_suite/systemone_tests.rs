@@ -8,8 +8,12 @@ use openproxy_core::usage;
 use serde_json::json;
 use std::time::Duration;
 
-#[tokio::test]
-async fn test_systemone_direct_call_success_and_records_usage() {
+#[test]
+fn test_systemone_direct_call_success_and_records_usage() {
+    crate::run_with_big_stack(test_systemone_direct_call_success_and_records_usage_body);
+}
+
+async fn test_systemone_direct_call_success_and_records_usage_body() {
     let harness = TestHarness::new().await;
 
     {
@@ -76,8 +80,12 @@ async fn test_systemone_direct_call_success_and_records_usage() {
     assert_eq!(last.completion_tokens, Some(5));
 }
 
-#[tokio::test]
-async fn test_systemone_missing_auth_returns_unauthorized() {
+#[test]
+fn test_systemone_missing_auth_returns_unauthorized() {
+    crate::run_with_big_stack(test_systemone_missing_auth_returns_unauthorized_body);
+}
+
+async fn test_systemone_missing_auth_returns_unauthorized_body() {
     let harness = TestHarness::new().await;
 
     let payload = json!({
@@ -103,8 +111,12 @@ async fn test_systemone_missing_auth_returns_unauthorized() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_systemone_upstream_error_handling() {
+#[test]
+fn test_systemone_upstream_error_handling() {
+    crate::run_with_big_stack(test_systemone_upstream_error_handling_body);
+}
+
+async fn test_systemone_upstream_error_handling_body() {
     let harness = TestHarness::new().await;
 
     {
@@ -149,8 +161,12 @@ async fn test_systemone_upstream_error_handling() {
     harness.mock_handle.clear_error();
 }
 
-#[tokio::test]
-async fn test_combo_decision_routing_simple_vs_complex() {
+#[test]
+fn test_combo_decision_routing_simple_vs_complex() {
+    crate::run_with_big_stack(test_combo_decision_routing_simple_vs_complex_body);
+}
+
+async fn test_combo_decision_routing_simple_vs_complex_body() {
     let harness = TestHarness::new().await;
 
     {
@@ -295,8 +311,12 @@ async fn test_combo_decision_routing_simple_vs_complex() {
     );
 }
 
-#[tokio::test]
-async fn test_combo_decision_fallback_on_timeout() {
+#[test]
+fn test_combo_decision_fallback_on_timeout() {
+    crate::run_with_big_stack(test_combo_decision_fallback_on_timeout_body);
+}
+
+async fn test_combo_decision_fallback_on_timeout_body() {
     let harness = TestHarness::new().await;
 
     {
@@ -375,8 +395,12 @@ async fn test_combo_decision_fallback_on_timeout() {
     harness.mock_handle.clear_delay();
 }
 
-#[tokio::test]
-async fn test_admin_model_tester_decision_model() {
+#[test]
+fn test_admin_model_tester_decision_model() {
+    crate::run_with_big_stack(test_admin_model_tester_decision_model_body);
+}
+
+async fn test_admin_model_tester_decision_model_body() {
     let harness = TestHarness::new().await;
 
     let model_row_id = {
@@ -427,8 +451,12 @@ async fn test_admin_model_tester_decision_model() {
     assert_eq!(sys_req.body["model"], "jev-test-model");
 }
 
-#[tokio::test]
-async fn test_admin_model_tester_rejects_empty_dummy_completion() {
+#[test]
+fn test_admin_model_tester_rejects_empty_dummy_completion() {
+    crate::run_with_big_stack(test_admin_model_tester_rejects_empty_dummy_completion_body);
+}
+
+async fn test_admin_model_tester_rejects_empty_dummy_completion_body() {
     let harness = TestHarness::new().await;
 
     // Create a chat model
@@ -480,7 +508,11 @@ async fn test_admin_model_tester_rejects_empty_dummy_completion() {
         .admin_post(&format!("/admin/api/models/{model_row_id}/test"), json!({}))
         .await;
 
-    assert_eq!(status, StatusCode::OK, "HTTP call itself returns 200 JSON wrapper");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "HTTP call itself returns 200 JSON wrapper"
+    );
     assert_eq!(
         resp["status"], 502,
         "test result status must be 502 due to dummy empty tokens: {resp}"
@@ -494,8 +526,14 @@ async fn test_admin_model_tester_rejects_empty_dummy_completion() {
     );
 }
 
-#[tokio::test]
-async fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
+#[test]
+fn test_systemone_routing_supports_provider_prefixed_and_combo_models() {
+    crate::run_with_big_stack(
+        test_systemone_routing_supports_provider_prefixed_and_combo_models_body,
+    );
+}
+
+async fn test_systemone_routing_supports_provider_prefixed_and_combo_models_body() {
     let harness = TestHarness::new().await;
 
     let _model_row_id = {

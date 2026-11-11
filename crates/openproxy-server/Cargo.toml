@@ -124,6 +124,16 @@ hyper-util = { workspace = true, features = ["tokio", "server-auto", "service"] 
 tower = { workspace = true, features = ["util"] }
 
 [dev-dependencies]
+# Test-only: the SSRF address filter in openproxy-adapters blocks the
+# loopback/Tailscale addresses the mock upstreams in this crate's tests bind to.
+# `cfg!(test)` inside openproxy-adapters is false when it is compiled as a
+# dependency, so the bypass has to be propagated from here as a dev-dependency
+# feature. Cargo unifies these features with the `[dependencies]` entry for test
+# builds only — release builds never pull dev-dependencies, so production keeps
+# the SSRF filter on. This is why the bypass is NOT done by mutating the
+# OPENPROXY_ALLOW_PRIVATE_UPSTREAMS env var: that is unsound under concurrent
+# async tests.
+openproxy-adapters = { path = "../openproxy-adapters", features = ["ssrf-bypass"] }
 # Reuse the workspace HTTP client for the isolated load generator.
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 # TLS+h2 mock upstream for the benchmark harness (bench only).

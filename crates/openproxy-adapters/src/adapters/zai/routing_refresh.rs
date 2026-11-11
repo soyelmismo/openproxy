@@ -67,15 +67,13 @@ pub async fn refresh_zai_account_quota(
                 .iter_mut()
                 .filter(|p| p.source == QuotaSource::AutoclawStarter)
             {
-                if let Some(prev_pools) = previous.pools.as_deref() {
-                    if let Some(prev_pool) = prev_pools
+                if let Some(prev_pools) = previous.pools.as_deref()
+                    && let Some(prev_pool) = prev_pools
                         .iter()
                         .find(|p| p.source == QuotaSource::AutoclawStarter)
-                    {
-                        if !prev_pool.model_ids.is_empty() {
-                            fresh_pool.model_ids.retain(|m| prev_pool.matches_model(m));
-                        }
-                    }
+                    && !prev_pool.model_ids.is_empty()
+                {
+                    fresh_pool.model_ids.retain(|m| prev_pool.matches_model(m));
                 }
             }
         }

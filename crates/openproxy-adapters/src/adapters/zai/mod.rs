@@ -108,19 +108,11 @@ impl ProviderAdapter for ZaiAdapter {
         let _ = (target_format, model, account);
         // If the body is being sent as an OpenAI completions request to AutoClaw:
         crate::adapters::traits::patch_json_request_body(body, |obj| {
-            if let Some(m) = obj.get("model").and_then(|v| v.as_str()) {
-                let m_lower = m.to_ascii_lowercase();
-                if m_lower.contains("flash") {
-                    obj.insert(
-                        "model".to_string(),
-                        serde_json::Value::String("zai_glm-5.3-flash".into()),
-                    );
-                } else {
-                    obj.insert(
-                        "model".to_string(),
-                        serde_json::Value::String("zai_glm-5.3-flash".into()),
-                    );
-                }
+            if obj.get("model").is_some() {
+                obj.insert(
+                    "model".to_string(),
+                    serde_json::Value::String("zai_glm-5.3-flash".into()),
+                );
             }
         })
     }
@@ -167,7 +159,7 @@ impl ProviderAdapter for ZaiAdapter {
             let app_id = "100003";
             let app_key = "6c79a4059ae078650bc7886b627cf9f9";
             let now = openproxy_types::now_unix_secs_str();
-            let sign = md5::md5::md5_hex(format!("{app_id}&{now}&{app_key}"));
+            let sign = md5::md5_hex(format!("{app_id}&{now}&{app_key}"));
             headers.push(("X-Auth-Appid".into(), app_id.into()));
             headers.push(("x-auth-appid".into(), app_id.into()));
             headers.push(("X-Auth-TimeStamp".into(), now.clone()));
@@ -196,33 +188,25 @@ impl ProviderAdapter for ZaiAdapter {
                 if let Some(max_tok) = obj.remove("max_tokens") {
                     obj.insert("max_completion_tokens".to_string(), max_tok);
                 }
-                if let Some(m) = obj.get("model").and_then(|v| v.as_str()) {
-                    let m_lower = m.to_ascii_lowercase();
-                    if m_lower.contains("flash") {
-                        obj.insert(
-                            "model".to_string(),
-                            serde_json::Value::String("zai_glm-5.3-flash".into()),
-                        );
-                    } else {
-                        obj.insert(
-                            "model".to_string(),
-                            serde_json::Value::String("zai_glm-5.3-flash".into()),
-                        );
-                    }
+                if obj.get("model").is_some() {
+                    obj.insert(
+                        "model".to_string(),
+                        serde_json::Value::String("zai_glm-5.3-flash".into()),
+                    );
                 }
                 if let Some(messages) = obj.get_mut("messages").and_then(|v| v.as_array_mut()) {
                     let mut orig_sys_instructions = Vec::new();
 
                     for msg in messages.iter_mut() {
-                        if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
-                            if let Some(c) = msg.get("content").and_then(|v| v.as_str()) {
-                                let trimmed = c.trim();
-                                if !trimmed.is_empty()
-                                    && trimmed != REQUIRED_PREFIX
-                                    && !trimmed.starts_with(REQUIRED_PREFIX)
-                                {
-                                    orig_sys_instructions.push(trimmed.to_string());
-                                }
+                        if msg.get("role").and_then(|r| r.as_str()) == Some("system")
+                            && let Some(c) = msg.get("content").and_then(|v| v.as_str())
+                        {
+                            let trimmed = c.trim();
+                            if !trimmed.is_empty()
+                                && trimmed != REQUIRED_PREFIX
+                                && !trimmed.starts_with(REQUIRED_PREFIX)
+                            {
+                                orig_sys_instructions.push(trimmed.to_string());
                             }
                         }
                     }
@@ -240,12 +224,11 @@ impl ProviderAdapter for ZaiAdapter {
                             .iter_mut()
                             .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
                         {
-                            if let Some(content) = first_user.get_mut("content") {
-                                if let Some(orig_u) = content.as_str() {
-                                    *content = serde_json::Value::String(format!(
-                                        "{sys_block}\n\n{orig_u}"
-                                    ));
-                                }
+                            if let Some(content) = first_user.get_mut("content")
+                                && let Some(orig_u) = content.as_str()
+                            {
+                                *content =
+                                    serde_json::Value::String(format!("{sys_block}\n\n{orig_u}"));
                             }
                         } else {
                             messages.insert(
@@ -273,8 +256,8 @@ impl ProviderAdapter for ZaiAdapter {
             for (k, v) in headers.iter_mut() {
                 if k.eq_ignore_ascii_case("x-authorization") || k.eq_ignore_ascii_case("x-api-key")
                 {
-                    while v.starts_with("Bearer Bearer ") {
-                        *v = v.strip_prefix("Bearer ").unwrap().to_string();
+                    while let Some(stripped) = v.strip_prefix("Bearer Bearer ") {
+                        *v = stripped.to_string();
                     }
                 }
             }

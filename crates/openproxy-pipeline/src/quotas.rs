@@ -240,9 +240,9 @@ pub fn evaluate_account_quota(
         // sources. Otherwise a depleted cached pool permanently retires a
         // newly renewed entitlement before its balance can ever be read.
         let counters_stale = pools.iter().any(|pool| {
-            pool.last_fetched_at
-                .parse::<u64>()
-                .map_or(true, |fetched| fetched > now || now.saturating_sub(fetched) > 60)
+            pool.last_fetched_at.parse::<u64>().map_or(true, |fetched| {
+                fetched > now || now.saturating_sub(fetched) > 60
+            })
         });
         if !any_pool_could_serve && !counters_stale {
             return QuotaStatus::Exhausted;

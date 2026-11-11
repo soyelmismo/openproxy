@@ -48,6 +48,7 @@ pub(crate) fn fresh_db() -> Connection {
                  output_modalities_json TEXT,
                  model_id_normalized    TEXT,
                  manually_disabled_at   TEXT,
+                 client_profile         TEXT,
                  UNIQUE(provider_id, model_id),
                  CHECK (target_format IN ('openai', 'anthropic', 'gemini', 'responses'))
              );

@@ -1,0 +1,70 @@
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+/* Provider DataGrid dense table styling */
+.providers-table .dg-row {
+  height: auto;
+  min-height: 32px;
+  padding-block: 4px;
+}
+.providers-table .dg-row > .dg-col:first-child > .dg-inner {
+  display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  white-space: normal;
+}
+.providers-table .provider-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.providers-table .provider-icon-wrapper {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.providers-table .provider-name-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+  text-decoration: none;
+}
+.providers-table .provider-name-text:hover {
+  text-decoration: underline;
+  color: var(--color-primary);
+}
+.providers-table .provider-country-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.providers-table .dg-row.inactive {
+  opacity: 0.6;
+}
+.providers-table .provider-quota-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.providers-table .provider-quota-badge.quota-ok {
+  color: var(--color-success);
+}
+.providers-table .provider-quota-badge.quota-warn {
+  color: var(--color-warn);
+}
+.providers-table .provider-quota-badge.quota-danger {
+  color: var(--color-error);
+}
+

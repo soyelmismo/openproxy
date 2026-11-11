@@ -1,0 +1,171 @@
+
+/* Combos table and sections */
+.combos-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.combos-section .section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.combos-section .section-header h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.combos-view-container {
+  container: combos-view / inline-size;
+  min-width: 0;
+  width: 100%;
+}
+
+/* One toolbar, one line. The title yields its slot to the controls when the
+   tile is narrow, the selects cap their width, and the create button keeps
+   only its icon there. Nothing stacks: every control is a sibling in the
+   same flex row. */
+.combos-page-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  min-width: 0;
+}
+
+/* Search and filters share one 30px baseline so the toolbar reads as a single
+   line rather than three heights. */
+.combos-page-header .combos-search-input {
+  height: 30px;
+  box-sizing: border-box;
+}
+
+.combos-count-badge {
+  flex: none;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.combos-header-actions {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.combos-filter-select {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 132px;
+  height: 30px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+}
+
+.combo-create-btn {
+  flex: none;
+  min-height: 30px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+/* notifications.css ships a global `.tile-view .page-header .actions > *` rule
+   that forces `flex: 1 1 118px` on every header control. Restore natural widths
+   for this toolbar only: the search field is the one element allowed to grow,
+   so the filters stay side by side instead of ballooning into their own rows. */
+.tile-view .page-header .actions.combos-header-actions {
+  min-width: 0;
+  width: auto;
+  flex-wrap: nowrap;
+}
+
+.tile-view .page-header .actions.combos-header-actions > * {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.tile-view .page-header .actions.combos-header-actions > .combos-search-wrap {
+  flex: 1 1 120px;
+  min-width: 80px;
+  max-width: none;
+  margin-bottom: 0;
+}
+
+.tile-view .page-header .actions.combos-header-actions > .combos-filter-select {
+  flex: 0 1 auto;
+  max-width: 132px;
+}
+
+/* Narrow tiles: drop the count badge and fold the create action to its icon
+   so search, filters and the action share a single line. */
+@container combos-view (max-width: 640px) {
+  /* The identity is already a screen-reader-only label inside a tile
+     (workspace-chrome.css); keep the row to controls only. */
+  .combos-count-badge {
+    display: none;
+  }
+
+  .tile-view .page-header .actions.combos-header-actions > .combos-search-wrap {
+    flex: 1 1 auto;
+    min-width: 70px;
+    max-width: none;
+  }
+
+  .combos-search-input {
+    width: 100%;
+  }
+
+  .tile-view .page-header .actions.combos-header-actions > .combos-filter-select {
+    flex: 0 0 auto;
+    width: 104px;
+    max-width: 104px;
+    text-overflow: ellipsis;
+    padding-right: 4px;
+  }
+
+  .tile-view .page-header .actions .combo-create-btn {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    min-height: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .combo-create-btn .combo-create-label {
+    display: none;
+  }
+}
+
+/* Very narrow tiles: retain usable controls and wrap instead of overflowing. */
+@container combos-view (max-width: 400px) {
+  .tile-view .page-header .actions.combos-header-actions { flex-wrap: wrap; }
+  .tile-view .page-header .actions.combos-header-actions > .combos-search-wrap { flex-basis: 100%; }
+  .tile-view .page-header .actions.combos-header-actions > .combos-filter-select {
+    flex: 1 1 70px;
+    width: 70px;
+    max-width: none;
+  }
+
+  .tile-view .page-header .actions.combos-header-actions > .combos-search-wrap {
+    min-width: 50px;
+  }
+}

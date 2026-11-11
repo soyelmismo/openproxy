@@ -479,6 +479,75 @@ fn test_parse_codebuddy_resource_quota_with_bonus_and_free() {
     assert_eq!(m3.remaining_fraction, 1.0);
 }
 
+/// Regression: `Response.Data.TotalDosage` is the REMAINING balance, not the
+/// total capacity. Payload captured live from account 1562, which holds three
+/// packs (250 + 100 + 30 = 380 credits) with 199 spent and 180 remaining.
+/// Treating TotalDosage as the capacity reports used 199 against limit 180,
+/// which reads as overdrawn and gets the account skipped upstream.
+#[test]
+fn test_parse_codebuddy_resource_quota_total_dosage_is_remaining_not_capacity() {
+    let val = serde_json::json!({
+        "code": 0,
+        "msg": "OK",
+        "data": {
+            "Response": {
+                "Data": {
+                    "TotalCount": 3,
+                    "TotalDosage": 180,
+                    "Accounts": [
+                        {
+                            "PackageCode": "TCACA_code_006_DbXS0lrypC",
+                            "PackageName": "Bonus Pack",
+                            "CapacitySize": 250,
+                            "CapacityRemain": 50,
+                            "CapacityUsed": 199,
+                            "CycleStartTime": "2026-10-29 22:53:45",
+                            "CycleEndTime": "2026-11-29 22:53:44",
+                            "Status": 0
+                        },
+                        {
+                            "PackageCode": "TCACA_code_035_ArVxJcGDsm",
+                            "PackageName": "Free Plan Subscription",
+                            "CapacitySize": 100,
+                            "CapacityRemain": 100,
+                            "CapacityUsed": 0,
+                            "CycleStartTime": "2026-11-01 00:00:00",
+                            "CycleEndTime": "2026-11-30 23:59:59",
+                            "Status": 0
+                        },
+                        {
+                            "PackageCode": "TCACA_code_007_nzdH5h4Nl0",
+                            "PackageName": "Bonus Pack",
+                            "CapacitySize": 30,
+                            "CapacityRemain": 30,
+                            "CapacityUsed": 0,
+                            "CycleStartTime": "2026-10-29 22:53:45",
+                            "CycleEndTime": "2026-11-29 22:53:44",
+                            "Status": 0
+                        }
+                    ]
+                }
+            }
+        }
+    });
+
+    let quota = parse_codebuddy_resource_quota_at(&val, 1794030000).expect("parsed resource quota");
+
+    assert_eq!(quota.session_limit, Some(380));
+    assert_eq!(quota.session_used, Some(199));
+
+    let details = quota.model_details.unwrap();
+    let m3 = details.iter().find(|d| d.model_id == "minimax-m3").unwrap();
+    // 380 / 0.25 = 1520 calls available, 199 / 0.25 = 796 spent.
+    assert_eq!(m3.session_limit, 1520);
+    assert_eq!(m3.session_used, 796);
+    assert!(
+        m3.remaining_fraction > 0.4,
+        "account must not read as overdrawn, got remaining_fraction={}",
+        m3.remaining_fraction
+    );
+}
+
 #[test]
 fn test_parse_codebuddy_resource_quota_summary_fallback() {
     let val = serde_json::json!({

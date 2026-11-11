@@ -8,8 +8,9 @@ import { api } from "../../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
 import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel, Provider } from "../../lib/types/api.js";
 import { showToast } from "../../components/toast.js";
-import { ensureModalRoot, showApiError } from "../../lib/ui-utils.js";
+import { ensureModalRoot, flashButton, showApiError } from "../../lib/ui-utils.js";
 import { invalidateSubCombo } from "../../views/combos/subcombo-group.js";
+import { beginButtonBusy, resolveBusyButton, withButtonBusy } from "../../lib/button-busy.js";
 
 // Local helper type for the model shape this modal deals with.
 type ModelWithFallbacks = Model & { id?: string; owned_by?: string };
@@ -155,15 +156,29 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[], initialPriority
           <button type="button" class="small model-test-btn" title="Test this model" @click=${async (e: Event) => {
             e.preventDefault();
             e.stopPropagation();
-            const btn = e.target as HTMLButtonElement;
-            btn.disabled = true;
-            btn.textContent = "...";
+            // Capture the button before the first await: lit nulls `currentTarget` after dispatch.
+            const btn = e.currentTarget as HTMLButtonElement;
+            const originalHtml = btn.innerHTML;
+            const busy = beginButtonBusy(btn, { label: "Testing…" });
+            let flash: { text: string; color: string } | null = null;
             try {
               const result = await api(`/models/${rowId}/test`, { method: "POST" }) as { status: number; elapsed_ms?: number };
-              btn.textContent = result.status >= 200 && result.status < 300 ? "OK" : "ERR";
-              btn.style.color = result.status >= 200 && result.status < 300 ? "var(--color-success)" : "var(--color-error)";
-            } catch { btn.textContent = "ERR"; btn.style.color = "var(--color-error)"; }
-            setTimeout(() => { btn.disabled = false; btn.textContent = "Test"; btn.style.color = ""; }, 3000);
+              flash = result.status >= 200 && result.status < 300
+                ? { text: "OK", color: "var(--color-success)" }
+                : { text: "ERR", color: "var(--color-error)" };
+            } catch {
+              flash = { text: "ERR", color: "var(--color-error)" };
+            } finally {
+              busy.release();
+              if (flash) {
+                flashButton(btn, flash.text, flash.color);
+                btn.disabled = true;
+                setTimeout(() => {
+                  btn.disabled = false;
+                  if (btn.isConnected) btn.innerHTML = originalHtml;
+                }, 3000);
+              }
+            }
           }}>Test</button>
         </label>
         <div class="model-checkbox-controls"
@@ -497,6 +512,12 @@ export function buildSubComboTargetBodyFromForm(form: HTMLFormElement) {
 export async function addTarget(comboId: number, e: Event, wrapper?: HTMLElement): Promise<void> {
   const target = e.target;
   if (!(target instanceof HTMLFormElement)) return;
+  await withButtonBusy(resolveBusyButton(e), { label: "Adding…" }, () =>
+    addTargetInner(comboId, target, wrapper),
+  );
+}
+
+async function addTargetInner(comboId: number, target: HTMLFormElement, wrapper?: HTMLElement): Promise<void> {
   const checked = document.querySelector('input[name="target_kind"]:checked') as HTMLInputElement | null;
   const kind = checked ? checked.value : "";
 

@@ -1,0 +1,68 @@
+
+@media (max-width: 1024px) {
+  .analytics-primary-grid { grid-template-columns: minmax(0, 1fr); }
+  .analytics-status-legend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 var(--space-4); }
+}
+@media (max-width: 768px) {
+  .analytics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-insight-grid { grid-template-columns: minmax(0, 1fr); }
+  .analytics-filter-field { flex: 1 1 190px; }
+  .analytics-range-row { align-items: flex-start; flex-direction: column; }
+  .analytics-range-row .preset-selector { width: 100%; }
+  .analytics-chart-container { height: 280px; }
+}
+@media (max-width: 640px) {
+  .analytics-dashboard { gap: var(--space-4); }
+  .analytics-metrics { grid-template-columns: 1fr; gap: var(--space-2); }
+  .analytics-metric-card { padding: var(--space-2); }
+  .analytics-clear-btn { width: 100%; margin-left: 0; }
+  .analytics-status-legend { display: flex; }
+  .analytics-throughput-foot { align-items: flex-start; flex-wrap: wrap; }
+  .analytics-throughput-foot span { width: 100%; }
+  .analytics-chart-container { height: 250px; }
+  .analytics-details > summary { align-items: flex-start; flex-direction: column; }
+  .analytics-details > summary::after { position: absolute; right: var(--space-4); }
+}
+
+/* Tile-width variants. The media queries above answer the viewport (mobile
+   panel); these answer the TILE: the workspace can shrink the analytics tile
+   to a phone-width pane on any screen, and at that width it must stack like
+   the mobile layout does. Same thresholds as the media block. */
+@container (max-width: 1024px) {
+  .analytics-primary-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 768px) {
+  .analytics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-insight-grid { grid-template-columns: minmax(0, 1fr); }
+  /* A 575px tile is a split pane on a wide screen: the viewport media
+     query never fires, so wrap the range presets here instead of
+     letting them scroll out of the toolbar. */
+  .analytics-toolbar { padding: var(--space-2); gap: var(--space-2); }
+  .analytics-filter-row { gap: var(--space-2); }
+  .analytics-filter-field { flex: 1 1 150px; min-width: 140px; }
+  .analytics-range-row { align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+  .analytics-range-row .preset-selector {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: visible;
+  }
+  .analytics-range-row .preset-btn {
+    flex: 0 0 auto;
+    min-width: 0;
+    height: 26px;
+    padding: 0 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+@container (max-width: 640px) {
+  .analytics-metric-card { padding: var(--space-2); }
+  .analytics-status-legend { display: flex; }
+  .analytics-chart-container { height: 250px; }
+}
+@container (max-width: 400px) {
+  .analytics-metrics { grid-template-columns: 1fr; gap: var(--space-2); }
+}

@@ -1,0 +1,86 @@
+{
+  "provider": "nocta",
+  "audited_at": "2026-11-06T10:05:00Z",
+  "summary": {
+    "total": 10,
+    "verified": 3,
+    "deactivated": 7
+  },
+  "models": [
+    {
+      "model_id": "step-3.7-flash",
+      "status": "VERIFIED",
+      "active": true,
+      "numbers_extracted": 322,
+      "detected_model": "step-5-preview",
+      "family": "Step",
+      "score": 3.738,
+      "ttft_ms": 11330.0,
+      "tps": 137.9
+    },
+    {
+      "model_id": "step-3.5-flash-2603",
+      "status": "VERIFIED",
+      "active": true,
+      "numbers_extracted": 322,
+      "detected_model": "glm-5.2",
+      "family": "GLM",
+      "score": 1.836,
+      "ttft_ms": 8219.5,
+      "tps": 183.0
+    },
+    {
+      "model_id": "DeepSeek-V4.1-Flash",
+      "status": "VERIFIED",
+      "active": true,
+      "numbers_extracted": 318,
+      "detected_model": "deepseek-v4.1-flash",
+      "family": "DeepSeek",
+      "score": 3.528,
+      "ttft_ms": 18708.9,
+      "tps": 737.2
+    },
+    {
+      "model_id": "step-5-preview",
+      "status": "FAILED",
+      "active": false,
+      "reason": "upstream error 502 / upstream connection lost"
+    },
+    {
+      "model_id": "qwen3.8-27b",
+      "status": "FAILED",
+      "active": false,
+      "reason": "upstream timeout 504 (headers timed out after 20s)"
+    },
+    {
+      "model_id": "MiniMax-M2.7",
+      "status": "FAILED",
+      "active": false,
+      "reason": "429 rate limited / 502 connection lost"
+    },
+    {
+      "model_id": "DeepSeek-V4.1-Flash-Uncensored",
+      "status": "FAILED",
+      "active": false,
+      "reason": "429 rate limited upstream"
+    },
+    {
+      "model_id": "Solar Pro 4 Uncen VIP",
+      "status": "FAILED",
+      "active": false,
+      "reason": "429 rate limited upstream"
+    },
+    {
+      "model_id": "GLM-5.3-Flash",
+      "status": "FAILED",
+      "active": false,
+      "reason": "timeout upstream"
+    },
+    {
+      "model_id": "DeepSeek-V4.1-Flash-1017",
+      "status": "FAILED",
+      "active": false,
+      "reason": "timeout upstream"
+    }
+  ]
+}

@@ -260,7 +260,11 @@ function renderRow(r: NotificationRow): TemplateResult {
   const unread = isUnread(r);
   const draggable = isRowDraggable(r);
   const deletable = isDeletable(r);
-  const rowClasses = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "");
+  // Long messages (URLs, JSON payloads, upstream error dumps) get a two-line clamp instead of a
+  // single ellipsised line, so the failure reason stays readable on touch devices where the
+  // `title` tooltip is unavailable.
+  const longBody = body.length > 96 || /https?:\/\/|[{}\[\]]/.test(body);
+  const rowClasses = "notification-card" + (unread ? " unread" : "") + (draggable ? " draggable" : "") + (longBody ? " notification-card--long" : "");
   const rowStyle = `--card-accent: ${cardColor};${iconColorVar ? ` --icon-color: ${iconColorVar};` : ""}`;
   const pId = payloadProviderId(r);
   const mId = payloadModelId(r);
@@ -276,6 +280,7 @@ function renderRow(r: NotificationRow): TemplateResult {
       class=${rowClasses}
       data-id=${String(r.id)}
       style=${rowStyle}
+      role="listitem"
       draggable=${draggable ? "true" : "false"}
       tabindex="0"
       @dragstart=${dragStart}
@@ -294,19 +299,19 @@ function renderRow(r: NotificationRow): TemplateResult {
     >
     <div class="notification-card-icon" style=${rowStyle} aria-hidden="true">${icon}</div>
     <div class="notification-card-body">
-      <div class="notification-card-text" title=${body}>${body}</div>
+      <div class=${"notification-card-text" + (longBody ? " notification-card-text--wrap" : "")} title=${body}>${body}</div>
       <div class="notification-card-meta">
         <span class="notification-card-kind">${notificationKindLabel(r)}</span>
         ${ago ? html`<span class="notification-card-ago">${ago}</span>` : nothing}
         ${unread ? html`<span class="notification-card-unread-dot" title=${t("common.unread")} aria-label=${t("common.unread")}></span>` : nothing}
       </div>
-      <div class="notification-card-actions">
-        ${pId ? html`<button class="small notification-qa" title=${t("notifications.action.view_provider")} @click=${() => { void markAsRead(r.id); location.hash = "#/providers/" + encodeURIComponent(pId); }}>${icons.eye()}</button>` : nothing}
-        ${DRAGGABLE_KINDS.has(r.kind) && pId && mId ? html`<button class="small notification-qa" title=${t("notifications.action.add_to_combo")} @click=${() => openOverlay({ notification_id: r.id, provider_id: pId, model_id: mId }, true)}>${icons.plus()}</button>` : nothing}
-        ${unread ? html`<button class="small notification-qa" title=${t("notifications.action.mark_read")} @click=${() => { void markAsRead(r.id); }}>${icons.check()}</button>` : nothing}
-        <button class="small danger notification-qa" title=${t("notifications.action.dismiss")} @click=${() => { void archive(r.id); }}>${icons.close()}</button>
-        ${deletable ? html`<button class="small danger notification-qa" title=${t("notifications.action.delete")} @click=${() => { void onDelete(r); }}>${icons.trash()}</button>` : nothing}
-      </div>
+    </div>
+    <div class="notification-card-actions">
+      ${pId ? html`<button class="small notification-qa" title=${t("notifications.action.view_provider")} aria-label=${t("notifications.action.view_provider")} @click=${() => { void markAsRead(r.id); location.hash = "#/providers/" + encodeURIComponent(pId); }}>${icons.eye()}</button>` : nothing}
+      ${DRAGGABLE_KINDS.has(r.kind) && pId && mId ? html`<button class="small notification-qa" title=${t("notifications.action.add_to_combo")} aria-label=${t("notifications.action.add_to_combo")} @click=${() => openOverlay({ notification_id: r.id, provider_id: pId, model_id: mId }, true)}>${icons.plus()}</button>` : nothing}
+      ${unread ? html`<button class="small notification-qa" title=${t("notifications.action.mark_read")} aria-label=${t("notifications.action.mark_read")} @click=${() => { void markAsRead(r.id); }}>${icons.check()}</button>` : nothing}
+      <button class="small danger notification-qa" title=${t("notifications.action.dismiss")} aria-label=${t("notifications.action.dismiss")} @click=${() => { void archive(r.id); }}>${icons.close()}</button>
+      ${deletable ? html`<button class="small danger notification-qa" title=${t("notifications.action.delete")} aria-label=${t("notifications.action.delete")} @click=${() => { void onDelete(r); }}>${icons.trash()}</button>` : nothing}
     </div>
   </div>`;
 }
@@ -316,7 +321,7 @@ function renderHeader(): TemplateResult {
   const providers = availableProviders();
   return html`<div class="page-header">
     <div class="page-header-title">
-      <h2>${t("notifications.title")}</h2>
+      <h2 class="view-identity">${t("notifications.title")}</h2>
       <span class="badge ${unread > 0 ? "badge-error" : "badge-info"}">${unread > 0 ? t("notifications.unread_count", { count: unread }) : t("notifications.no_unread")}</span>
     </div>
     <div class="actions">
@@ -344,7 +349,7 @@ function renderList(): TemplateResult {
   if (filtered.length === 0) {
     return html`${noUnread}<div class="notification-empty"><div class="notification-empty-icon" aria-hidden="true">${icons.search()}</div><p>${t("common.empty")}</p>${hasMore ? html`<button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>${isLoadingMore ? t("common.loading") : t("notifications.load_more")}</button>` : nothing}</div>`;
   }
-  return html`${noUnread}<div class="notification-list">${filtered.map(renderRow)}</div>${hasMore ? html`<div style="display:flex;justify-content:center;margin:var(--space-4, 1rem) 0;"><button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>${isLoadingMore ? t("common.loading") : t("notifications.load_more")}</button></div>` : nothing}`;
+  return html`${noUnread}<div class="notification-list" role="list">${filtered.map(renderRow)}</div>${hasMore ? html`<div style="display:flex;justify-content:center;margin:var(--space-4, 1rem) 0;"><button class="small" ?disabled=${isLoadingMore} @click=${() => { void loadMore(); }}>${isLoadingMore ? t("common.loading") : t("notifications.load_more")}</button></div>` : nothing}`;
 }
 
 export function renderView(): TemplateResult { return html`${renderHeader()}${renderList()}`; }

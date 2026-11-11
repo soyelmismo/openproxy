@@ -12,6 +12,7 @@ import { ensureModalRoot, showApiError } from "../../lib/ui-utils.js";
 import { showConfirm, showPrompt } from "../../lib/show-confirm.js";
 import { showToast } from "../../components/toast.js";
 import { extractApiErrorMessage } from "../../lib/escape.js";
+import { beginButtonBusy, resolveBusyButton } from "../../lib/button-busy.js";
 
 interface RefreshResult {
   models_refreshed?: number;
@@ -20,13 +21,7 @@ interface RefreshResult {
 
 // POST /admin/providers/:id/refresh — re-discover the model list for one provider.
 export async function refreshProvider(providerId: string, e: Event | null): Promise<void> {
-  const target = e && e.target && e.target instanceof HTMLButtonElement ? e.target : null;
-  const btn: HTMLButtonElement | null = target;
-  const original = btn ? btn.textContent : null;
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Refreshing...";
-  }
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Refreshing…" });
   try {
     const result = (await api(
       "/providers/" + encodeURIComponent(providerId) + "/refresh",
@@ -45,15 +40,13 @@ export async function refreshProvider(providerId: string, e: Event | null): Prom
   } catch (err: unknown) {
     showApiError(err, "Error");
   } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = original;
-    }
+    busy.release();
   }
 }
 
 // Walk every provider and POST to its /refresh endpoint.
-export async function refreshAllProviders(): Promise<void> {
+export async function refreshAllProviders(e?: Event | null): Promise<void> {
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Refreshing…" });
   try {
     const providers = await api("/providers") as Array<{ id: string }>;
     for (const p of providers) {
@@ -69,6 +62,8 @@ export async function refreshAllProviders(): Promise<void> {
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }
 
@@ -196,6 +191,7 @@ export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<v
   if (typeof extraHeaders === "string" && extraHeaders.trim() === "") {
     delete entries["extra_headers_json"];
   }
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: "Creating…" });
   try {
     await api("/providers", {
       method: "POST",
@@ -206,6 +202,8 @@ export async function createProvider(e: Event, wrapper?: HTMLElement): Promise<v
     navigate();
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }
 
@@ -347,7 +345,7 @@ export async function editProviderEndpointPrompt(providerId: string, currentBase
 
 // ── Bulk toggle (enable/disable all non-custom models) ─────────────────────
 
-export async function bulkToggleModels(providerId: string, active: boolean): Promise<void> {
+export async function bulkToggleModels(providerId: string, active: boolean, e?: Event | null): Promise<void> {
   const models = (state.models || []).filter((m) => m.provider_id === providerId);
   const customCount = models.filter((m) => m.custom).length;
   const toToggleCount = models.filter((m) => !m.custom && m.active !== active).length;
@@ -363,6 +361,7 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
     message: msg,
     confirmLabel: active ? "Enable" : "Disable",
   }))) return;
+  const busy = beginButtonBusy(resolveBusyButton(e), { label: active ? "Enabling…" : "Disabling…" });
   try {
     await api("/models/bulk-toggle", {
       method: "POST",
@@ -376,5 +375,7 @@ export async function bulkToggleModels(providerId: string, active: boolean): Pro
     updateFilterTabCounts(providerId, allProviderModels);
   } catch (err: unknown) {
     showApiError(err, "Error");
+  } finally {
+    busy.release();
   }
 }

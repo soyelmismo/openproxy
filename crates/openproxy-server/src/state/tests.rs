@@ -484,6 +484,8 @@ fn make_test_usage_input(request_id: RequestId) -> UsageInput {
         flags: 0,
         audio_ms: None,
         session_hash: None,
+        max_chunk_gap_ms: None,
+        avg_chunk_gap_ms: None,
     }
 }
 

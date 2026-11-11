@@ -196,30 +196,45 @@ function cooldownModeOptions(selected: CooldownMode): TemplateResult {
 
 function renderPriorityModeBar(combo: Combo): TemplateResult {
   const pm = priorityModeOf(combo);
-  let params = html``;
+  return html`<div class="combo-settings-bar combo-settings-field">
+    <span class="combo-field-label"><abbr title=${PRIORITY_MODE_TOOLTIPS[pm]}>${t("combos.detail.priority_mode")}</abbr></span>
+    <select aria-label=${t("combos.detail.priority_mode")} @change=${(e: Event) => patchCombo(detailComboId!, { priority_mode: (e.target as HTMLSelectElement).value })}>${priorityModeOptions(pm)}</select>
+  </div>`;
+}
+
+function renderPriorityModeParams(combo: Combo): TemplateResult {
+  const pm = priorityModeOf(combo);
+  let body: TemplateResult | null = null;
   if (pm === "lkgp") {
-    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body"><label><abbr title=${PARAM_TOOLTIPS.exploration_rate}>Exploration Rate</abbr><input type="number" min="0" max="1" step="0.05" .value=${combo.lkgp_exploration_rate != null ? String(combo.lkgp_exploration_rate) : ""} placeholder="0.1" @change=${(e: Event) => onFloatInput("lkgp_exploration_rate", e)} class="cw-input"></label></div></details>`;
+    body = html`<label><abbr title=${PARAM_TOOLTIPS.exploration_rate}>Exploration Rate</abbr><input type="number" min="0" max="1" step="0.05" .value=${combo.lkgp_exploration_rate != null ? String(combo.lkgp_exploration_rate) : ""} placeholder="0.1" @change=${(e: Event) => onFloatInput("lkgp_exploration_rate", e)} class="cw-input"></label>`;
   } else if (pm === "least_used" || pm === "p2c") {
-    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body"><label><abbr title=${PARAM_TOOLTIPS.window_secs}>Window (s)</abbr><input type="number" min="1" .value=${combo.selection_window_secs != null ? String(combo.selection_window_secs) : ""} placeholder="3600" @change=${(e: Event) => onNumInput("selection_window_secs", e)} class="cw-input"></label></div></details>`;
+    body = html`<label><abbr title=${PARAM_TOOLTIPS.window_secs}>Window (s)</abbr><input type="number" min="1" .value=${combo.selection_window_secs != null ? String(combo.selection_window_secs) : ""} placeholder="3600" @change=${(e: Event) => onNumInput("selection_window_secs", e)} class="cw-input"></label>`;
   } else if (pm === "weighted") {
-    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body"><span class="muted">${t("combos.detail.weighted_hint")}</span></div></details>`;
+    body = html`<span class="muted">${t("combos.detail.weighted_hint")}</span>`;
   } else if (pm === "decision") {
-    params = html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
+    body = html`
       <label><abbr title="System One model used for real-time prompt classification and routing (e.g., jev-latest, laya)">Decision Model</abbr><input type="text" .value=${combo.decision_model || ""} placeholder="jev-latest" @change=${(e: Event) => patchCombo(detailComboId!, { decision_model: (e.target as HTMLInputElement).value.trim() || null })} class="cw-input"></label>
-      <label><abbr title="Timeout in milliseconds for the System One routing call before falling back to default priority">Timeout (ms)</abbr><input type="number" min="10" .value=${combo.decision_timeout_ms != null ? String(combo.decision_timeout_ms) : ""} placeholder="150" @change=${(e: Event) => onNumInput("decision_timeout_ms", e)} class="cw-input"></label>
-    </div></details>`;
+      <label><abbr title="Timeout in milliseconds for the System One routing call before falling back to default priority">Timeout (ms)</abbr><input type="number" min="10" .value=${combo.decision_timeout_ms != null ? String(combo.decision_timeout_ms) : ""} placeholder="150" @change=${(e: Event) => onNumInput("decision_timeout_ms", e)} class="cw-input"></label>`;
   }
-  return html`<div class="combo-settings-bar"><label><abbr title=${PRIORITY_MODE_TOOLTIPS[pm]}>${t("combos.detail.priority_mode")}</abbr><select @change=${(e: Event) => patchCombo(detailComboId!, { priority_mode: (e.target as HTMLSelectElement).value })}>${priorityModeOptions(pm)}</select></label>${params}</div>`;
+  if (!body) return html``;
+  return html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">${body}</div></details>`;
 }
 
 function renderCooldownBar(combo: Combo): TemplateResult {
   const cm = cooldownModeOf(combo);
-  const params = cm === "exponential" ? html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
+  return html`<div class="combo-settings-bar combo-settings-field">
+    <span class="combo-field-label"><abbr title=${COOLDOWN_MODE_TOOLTIPS[cm]}>${t("combos.detail.cooldown_mode")}</abbr></span>
+    <select aria-label=${t("combos.detail.cooldown_mode")} @change=${(e: Event) => patchCombo(detailComboId!, { cooldown_mode: (e.target as HTMLSelectElement).value })}>${cooldownModeOptions(cm)}</select>
+  </div>`;
+}
+
+function renderCooldownParams(combo: Combo): TemplateResult {
+  if (cooldownModeOf(combo) !== "exponential") return html``;
+  return html`<details class="combo-mode-params" open><summary>${t("combos.detail.parameters")}</summary><div class="combo-mode-params-body">
     <label><abbr title=${PARAM_TOOLTIPS.base_secs}>Base (s)</abbr><input type="number" min="1" .value=${combo.cooldown_base_secs != null ? String(combo.cooldown_base_secs) : ""} placeholder="60" @change=${(e: Event) => onNumInput("cooldown_base_secs", e)} class="cw-input"></label>
     <label><abbr title=${PARAM_TOOLTIPS.factor}>Factor</abbr><input type="number" min="2" .value=${combo.cooldown_factor != null ? String(combo.cooldown_factor) : ""} placeholder="2" @change=${(e: Event) => onNumInput("cooldown_factor", e)} class="cw-input"></label>
     <label><abbr title=${PARAM_TOOLTIPS.max_secs}>Max (s)</abbr><input type="number" min="1" .value=${combo.cooldown_max_secs != null ? String(combo.cooldown_max_secs) : ""} placeholder="3600" @change=${(e: Event) => onNumInput("cooldown_max_secs", e)} class="cw-input"></label>
-  </div></details>` : html``;
-  return html`<div class="combo-settings-bar"><label><abbr title=${COOLDOWN_MODE_TOOLTIPS[cm]}>${t("combos.detail.cooldown_mode")}</abbr><select @change=${(e: Event) => patchCombo(detailComboId!, { cooldown_mode: (e.target as HTMLSelectElement).value })}>${cooldownModeOptions(cm)}</select></label>${params}</div>`;
+  </div></details>`;
 }
 
 function renderModalityGateBar(combo: Combo): TemplateResult {
@@ -229,11 +244,14 @@ function renderModalityGateBar(combo: Combo): TemplateResult {
     const next = raw === "on" ? true : raw === "off" ? false : null;
     void patchCombo(detailComboId!, { modality_gate: next });
   };
-  return html`<div class="combo-settings-bar"><label><abbr title=${t("combos.detail.modality_gate_hint")}>${t("combos.detail.modality_gate")}</abbr><select @change=${onSelect}>
-    <option value="" ?selected=${value === ""}>${t("combos.detail.modality_gate_inherit")}</option>
-    <option value="on" ?selected=${value === "on"}>${t("combos.detail.modality_gate_on")}</option>
-    <option value="off" ?selected=${value === "off"}>${t("combos.detail.modality_gate_off")}</option>
-  </select></label></div>`;
+  return html`<div class="combo-settings-bar combo-settings-field">
+    <span class="combo-field-label"><abbr title=${t("combos.detail.modality_gate_hint")}>${t("combos.detail.modality_gate")}</abbr></span>
+    <select aria-label=${t("combos.detail.modality_gate")} @change=${onSelect}>
+      <option value="" ?selected=${value === ""}>${t("combos.detail.modality_gate_inherit")}</option>
+      <option value="on" ?selected=${value === "on"}>${t("combos.detail.modality_gate_on")}</option>
+      <option value="off" ?selected=${value === "off"}>${t("combos.detail.modality_gate_off")}</option>
+    </select>
+  </div>`;
 }
 
 function renderSanitizeResponseBar(combo: Combo): TemplateResult {
@@ -253,18 +271,18 @@ function renderSanitizeResponseBar(combo: Combo): TemplateResult {
       (e.target as HTMLInputElement).blur();
     }
   };
-  return html`<div class="combo-settings-bar" style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap;">
-    <label><abbr title=${t("combos.detail.sanitize_response_hint")}>${t("combos.detail.sanitize_response")}</abbr><select @change=${onSelect}>
+  return html`<div class="combo-settings-bar combo-settings-field">
+    <span class="combo-field-label"><abbr title=${t("combos.detail.sanitize_response_hint")}>${t("combos.detail.sanitize_response")}</abbr></span>
+    <select aria-label=${t("combos.detail.sanitize_response")} @change=${onSelect}>
       <option value="" ?selected=${value === "" || value === "off"}>${t("combos.detail.sanitize_response_off")}</option>
       <option value="on" ?selected=${value === "on"}>${t("combos.detail.sanitize_response_on")}</option>
-    </select></label>
+    </select>
     ${isSanitizeOn ? html`
-      <label style="display:flex;align-items:center;gap:0.4rem;">
+      <label class="combo-field-subfield">
         <abbr title=${t("combos.detail.real_model_id_hint")}>${t("combos.detail.real_model_id")}</abbr>
         <input
           type="text"
-          class="input"
-          style="width: 220px; padding: 0.2rem 0.5rem; font-size: 0.85rem;"
+          class="input real-model-input"
           placeholder=${t("combos.detail.real_model_id_placeholder")}
           .value=${combo.real_model_id ?? ""}
           @blur=${onRealModelBlur}
@@ -761,24 +779,13 @@ function renderComboDetail(): TemplateResult {
   const cds = targets.filter((t) => t.in_cooldown);
   const weightTh = showWeight ? html`<th><abbr title=${PARAM_TOOLTIPS.weight}>${t("combos.detail.col.weight")}</abbr></th>` : html``;
 
+  const pmHasParams = pm === "lkgp" || pm === "least_used" || pm === "p2c" || pm === "weighted" || pm === "decision";
+  const cdHasParams = cooldownModeOf(combo) === "exponential";
+
   return html`
     <div class="combo-detail-header-card">
-      <div class="combo-header-nav-row">
-        <a href="#/combos" class="back-link">${icons.arrowLeft()} ${t("combos.detail.back")}</a>
-        <div class="combo-header-quick-actions">
-          <button type="button" class="button small secondary combo-rename-btn" @click=${onRenameCombo} title="${t("combos.detail.rename_tooltip", { defaultValue: "Rename combo" })}">
-            ${icons.pencil()} <span>${t("combos.detail.rename", { defaultValue: "Rename" })}</span>
-          </button>
-          <button type="button" class="button small secondary" @click=${onCloneCombo} title="${t("combos.detail.clone_tooltip", { defaultValue: "Clone combo" })}">
-            ${icons.copy()} <span>Clone</span>
-          </button>
-          <button type="button" class="button small danger" @click=${onDeleteCombo} title="${t("combos.detail.delete_tooltip", { defaultValue: "Delete combo" })}">
-            ${icons.trash()} <span>${t("combos.detail.delete")}</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="combo-header-main-row">
+      <div class="combo-header-top-row">
+        <a href="#/combos" class="back-link combo-back-link" title=${t("combos.detail.back")}>${icons.arrowLeft()} <span class="combo-back-label">${t("combos.detail.back")}</span></a>
         <div class="combo-header-identity">
           <div class="combo-title-wrap">
             <h2 class="combo-header-title">${combo.name}</h2>
@@ -792,47 +799,66 @@ function renderComboDetail(): TemplateResult {
             <span class="subcombo-meta-pill info" title="Targets configured">${targets.length} ${targets.length === 1 ? "target" : "targets"}</span>
           </div>
         </div>
-
-        <div class="combo-header-controls-card">
-          <div class="combo-control-group">
-            <span class="combo-control-label">${t("combos.detail.strategy")}</span>
-            <select class="combo-strategy-select" .value=${combo.strategy} @change=${(e: Event) => patchCombo(detailComboId!, { strategy: (e.target as HTMLSelectElement).value })}>
-              ${["priority", "round_robin", "shuffle"].map((s) => html`<option value=${s} ?selected=${combo.strategy === s}>${s}</option>`)}
-            </select>
-          </div>
-
-          <div class="combo-control-divider"></div>
-
-          <div class="combo-control-group">
-            <span class="combo-control-label">${t("combos.detail.race_size")}</span>
-            <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${(e: Event) => {
-              const val = parseInt((e.target as HTMLInputElement).value, 10);
-              if (Number.isFinite(val) && val >= 1 && val <= 8) patchCombo(detailComboId!, { race_size: val });
-            }} class="race-input" title="Parallel race attempts (1-8)">
-          </div>
-
-          <div class="combo-control-divider"></div>
-
-          <label class="combo-toggle-control" title=${t("combos.detail.predictive_rl_hint")}>
-            <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${(e: Event) => patchCombo(detailComboId!, { preventive_rate_limit: (e.target as HTMLInputElement).checked })}>
-            <span class="combo-toggle-icon">${icons.lightning()}</span>
-            <span class="combo-toggle-label">${t("combos.detail.predictive_rl")}</span>
-          </label>
+        <div class="combo-header-quick-actions">
+          <button type="button" class="button small secondary combo-rename-btn" @click=${onRenameCombo} title="${t("combos.detail.rename_tooltip", { defaultValue: "Rename combo" })}" aria-label="${t("combos.detail.rename", { defaultValue: "Rename" })}">
+            ${icons.pencil()} <span>${t("combos.detail.rename", { defaultValue: "Rename" })}</span>
+          </button>
+          <button type="button" class="button small secondary" @click=${onCloneCombo} title="${t("combos.detail.clone_tooltip", { defaultValue: "Clone combo" })}" aria-label="Clone">
+            ${icons.copy()} <span>Clone</span>
+          </button>
+          <button type="button" class="button small danger" @click=${onDeleteCombo} title="${t("combos.detail.delete_tooltip", { defaultValue: "Delete combo" })}" aria-label="${t("combos.detail.delete")}">
+            ${icons.trash()} <span>${t("combos.detail.delete")}</span>
+          </button>
         </div>
+      </div>
+
+      <div class="combo-header-controls-card">
+        <div class="combo-control-group">
+          <span class="combo-control-label">${t("combos.detail.strategy")}</span>
+          <select class="combo-strategy-select" aria-label=${t("combos.detail.strategy")} .value=${combo.strategy} @change=${(e: Event) => patchCombo(detailComboId!, { strategy: (e.target as HTMLSelectElement).value })}>
+            ${["priority", "round_robin", "shuffle"].map((s) => html`<option value=${s} ?selected=${combo.strategy === s}>${s}</option>`)}
+          </select>
+        </div>
+
+        <div class="combo-control-divider"></div>
+
+        <div class="combo-control-group">
+          <span class="combo-control-label">${t("combos.detail.race_size")}</span>
+          <input type="number" min="1" max="8" .value=${String(combo.race_size)} @change=${(e: Event) => {
+            const val = parseInt((e.target as HTMLInputElement).value, 10);
+            if (Number.isFinite(val) && val >= 1 && val <= 8) patchCombo(detailComboId!, { race_size: val });
+          }} class="race-input" aria-label=${t("combos.detail.race_size")} title="Parallel race attempts (1-8)">
+        </div>
+
+        <div class="combo-control-divider"></div>
+
+        <label class="combo-toggle-control" title=${t("combos.detail.predictive_rl_hint")}>
+          <input type="checkbox" ?checked=${combo.preventive_rate_limit ?? false} @change=${(e: Event) => patchCombo(detailComboId!, { preventive_rate_limit: (e.target as HTMLInputElement).checked })}>
+          <span class="combo-toggle-icon">${icons.lightning()}</span>
+          <span class="combo-toggle-label">${t("combos.detail.predictive_rl")}</span>
+        </label>
       </div>
     </div>
     <div class="combo-settings-grid">
-      <div class="combo-context-window-bar"><label>${t("combos.detail.context_window")}
-        <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
-        <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })} · ${t("combos.detail.effective", { value: effectiveCwLabel })}</span></div>
-      <div class="combo-context-window-bar"><label>${t("combos.detail.max_output_tokens")}
-        <input type="number" min="1" placeholder="auto (${autoMotLabel})" .value=${overrideMot != null ? String(overrideMot) : ""} @change=${(e: Event) => onNumInput("max_output_tokens", e)} class="cw-input" title=${t("combos.detail.override_hint")}></label>
-        <span class="cw-hint">${t("combos.detail.auto", { value: autoMotLabel })} · ${t("combos.detail.effective", { value: effectiveMotLabel })}</span></div>
+      <div class="combo-settings-bar combo-settings-field combo-context-window-bar">
+        <span class="combo-field-label"><abbr title=${t("combos.detail.override_hint")}>${t("combos.detail.context_window")}</abbr></span>
+        <input type="number" min="1" placeholder="auto (${autoCwLabel})" .value=${overrideCw != null ? String(overrideCw) : ""} @change=${(e: Event) => onNumInput("context_window", e)} class="cw-input" aria-label=${t("combos.detail.context_window")} title=${t("combos.detail.override_hint")}>
+        <span class="cw-hint">${t("combos.detail.auto", { value: autoCwLabel })} · ${t("combos.detail.effective", { value: effectiveCwLabel })}</span>
+      </div>
+      <div class="combo-settings-bar combo-settings-field combo-context-window-bar">
+        <span class="combo-field-label"><abbr title=${t("combos.detail.override_hint")}>${t("combos.detail.max_output_tokens")}</abbr></span>
+        <input type="number" min="1" placeholder="auto (${autoMotLabel})" .value=${overrideMot != null ? String(overrideMot) : ""} @change=${(e: Event) => onNumInput("max_output_tokens", e)} class="cw-input" aria-label=${t("combos.detail.max_output_tokens")} title=${t("combos.detail.override_hint")}>
+        <span class="cw-hint">${t("combos.detail.auto", { value: autoMotLabel })} · ${t("combos.detail.effective", { value: effectiveMotLabel })}</span>
+      </div>
       ${renderPriorityModeBar(combo)}
       ${renderCooldownBar(combo)}
       ${renderModalityGateBar(combo)}
       ${renderSanitizeResponseBar(combo)}
     </div>
+    ${(pmHasParams || cdHasParams) ? html`<div class="combo-settings-params">
+      ${pmHasParams ? renderPriorityModeParams(combo) : html``}
+      ${cdHasParams ? renderCooldownParams(combo) : html``}
+    </div>` : html``}
     ${cds.length > 0 ? html`<div class="cooldown-banner">${icons.pause()} ${t("combos.detail.cooldown_banner", { count: cds.length, total: targets.length })}</div>` : html``}
     <section class="detail-section"><div class="section-header"><h3>${t("combos.detail.targets_heading", { count: targets.length })}</h3>
       <div class="actions"><button @click=${(e: Event) => detailComboId && testAllTargets(detailComboId, e)}>${icons.flask()} ${t("combos.detail.test_all")}</button><button class="primary" @click=${() => showAddTarget(combo.id)}>${icons.plus()} ${t("combos.detail.add_target")}</button></div></div>

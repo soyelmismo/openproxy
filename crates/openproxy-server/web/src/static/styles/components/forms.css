@@ -37,6 +37,7 @@ button.small { padding: 0.2rem 0.5rem; font-size: var(--fs-xs); }
   text-decoration: none;
   white-space: nowrap;
   user-select: none;
+  max-width: 100%;
 }
 .btn:hover:not(:disabled) {
   background: var(--color-surface-soft);
@@ -49,9 +50,9 @@ button.small { padding: 0.2rem 0.5rem; font-size: var(--fs-xs); }
 .btn-sm {
   padding: 0.25rem 0.55rem;
   font-size: var(--fs-xs);
-  height: 28px;
+  min-height: 28px;
   box-sizing: border-box;
-  line-height: 1;
+  line-height: 1.25;
 }
 .btn-warn {
   background: var(--color-warn-soft);
@@ -88,7 +89,7 @@ button.close-btn {
   flex-shrink: 0;
 }
 
-.field { margin-bottom: var(--space-4); display: flex; flex-direction: column; gap: var(--space-1); }
+.field { margin-bottom: var(--space-4); min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .field select, .field input:not([type="checkbox"]):not([type="radio"]) {
   width: 100%;
   box-sizing: border-box;
@@ -98,7 +99,9 @@ button.close-btn {
   font-weight: 600;
   color: var(--color-text-muted);
 }
-.field small { color: var(--color-text-muted); font-size: var(--fs-xs); }
+.field small { color: var(--color-text-muted); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.field input, .field select, .field textarea { min-width: 0; max-width: 100%; }
+.field textarea { width: 100%; resize: vertical; }
 .radio-group { display: flex; gap: var(--space-3); flex-wrap: wrap; }
 
 .theme-toggle {
@@ -223,6 +226,8 @@ body.sidebar-collapsed .sidebar-toggle { text-align: center; }
   display: inline-flex;
   gap: var(--space-1);
   align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 button.secondary {
@@ -243,4 +248,10 @@ button.success {
   overflow: hidden;
   clip: rect(0,0,0,0);
   border: 0;
+}
+
+/* A narrow pane cannot honour nowrap on a long label: wrapping keeps the
+   control inside the tile instead of pushing it past the right edge. */
+@container tile-view (max-width: 340px) {
+  .tile-view .btn { white-space: normal; text-align: center; }
 }

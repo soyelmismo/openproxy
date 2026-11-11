@@ -315,14 +315,14 @@ pub async fn redeem_codex_account_reset(
     let (success, message) = match outcome {
         CodexResetOutcome::Reset => {
             // Trigger automatic quota refresh so UI and DB get the fresh limit immediately!
-            let _ = crate::quota_sync::refresh_single_account_quota(
+            let _ = Box::pin(crate::quota_sync::refresh_single_account_quota(
                 account_id,
                 db_pool,
                 master_key,
                 &["codex"],
                 upstream_client,
                 oauth_registry,
-            )
+            ))
             .await;
             (
                 true,
@@ -330,14 +330,14 @@ pub async fn redeem_codex_account_reset(
             )
         }
         CodexResetOutcome::AlreadyRedeemed => {
-            let _ = crate::quota_sync::refresh_single_account_quota(
+            let _ = Box::pin(crate::quota_sync::refresh_single_account_quota(
                 account_id,
                 db_pool,
                 master_key,
                 &["codex"],
                 upstream_client,
                 oauth_registry,
-            )
+            ))
             .await;
             (
                 true,

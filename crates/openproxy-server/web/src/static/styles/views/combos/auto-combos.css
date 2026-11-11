@@ -1,0 +1,50 @@
+
+.auto-combos-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+.auto-combos-accordion {
+  width: 100%;
+}
+
+.auto-combos-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-2);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease;
+}
+
+.auto-combos-summary:hover {
+  background: var(--color-surface-hover, rgba(0, 0, 0, 0.04));
+}
+
+.auto-combos-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.auto-combos-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  width: 16px;
+  height: 16px;
+}
+
+.auto-combos-hint {
+  font-size: var(--fs-xs);
+}
+
+.auto-combos-content {
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}

@@ -1,0 +1,152 @@
+
+/* GLOBAL `.uplot` SIZE OVERRIDE — fixes the resize feedback loop.
+   uPlot's own CSS (injected at runtime by `injectUplotCss()` in
+   components/uplot-chart.ts) sets `.uplot { width: min-content }`.
+   That `min-content` is the root cause of the chart-grows-without-bound
+   bug: the `.uplot` div shrinks to its canvas's inline width, the
+   canvas's CSS `width: 100%` then resolves against that same size, and
+   any drift between what `setSize()` set and what `clientWidth` reports
+   next frame is amplified by the grid cell's own min-content sizing,
+   pushing the cell wider on each observer fire until the layout
+   overflows.
+
+   The fix pins `.uplot` to its parent's content box with `!important`,
+   which beats uPlot's own `min-content` rule of equal specificity.
+   `.uplot canvas` is left alone: uPlot's `setSize()` writes inline
+   `width`/`height` there, and inline styles without `!important` would
+   override any CSS rule, so the canvas keeps uPlot's pixel dimensions
+   and the div stops feeding back off them. The `!important` is safe
+   because no project code writes inline `width`/`height` on `.uplot`
+   itself, and uPlot's `min-content` carries no `!important`. */
+.uplot {
+  width: 100% !important;
+  height: 100% !important;
+  position: relative;
+  /* Clips the transient overflow before resizeChart() runs on the next
+     frame. Without it a canvas created at 600px default width inside a
+     400px container overflows, the parent grid cell grows,
+     ResizeObserver fires with the larger width, and the chart drifts
+     wider. */
+  overflow: hidden !important;
+}
+
+/* uPlot's default CSS sets a transparent background and gray grid.
+   These rules swap in the project's border/text tokens and set colors
+   and fonts only; sizing belongs to the global `.uplot` rule above. */
+.home-chart-container .uplot {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+.home-kpi-spark .uplot {
+  /* Sizing comes from the global `.uplot` rule above. */
+}
+.home-chart-container .u-axis,
+.home-kpi-spark .u-axis {
+  stroke: var(--color-border);
+}
+.home-chart-container .u-label {
+  fill: var(--color-text-muted);
+}
+
+/* uPlot chart grid + race stat blocks, mirroring the home
+   dashboard's chart-card styling. 2 columns on desktop, 1 on mobile;
+   `.analytics-chart-span-2` spans both columns (daily-usage
+   time-series and the race-outcomes row). */
+.analytics-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.analytics-chart-span-2 {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.analytics-chart-card {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.analytics-chart-card > .card-title {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+  font-family: var(--font-display);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.analytics-chart-card > .card-subtitle {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+}
+.analytics-chart-container {
+  height: 220px;
+  width: 100%;
+  padding: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  /* `overflow: hidden` clips the transient canvas overflow that
+     precedes `resizeChart()` on the next frame. */
+}
+
+/* uPlot token overrides, scoped to the analytics container so both
+   views share the same look. Sizing belongs to the global `.uplot`
+   rule above. Do not re-add width/height here: uPlot's `setSize()`
+   writes inline styles on the canvas, and inline beats CSS when
+   neither carries !important. */
+.analytics-chart-container .uplot {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+.analytics-chart-container .u-axis {
+  stroke: var(--color-border);
+}
+.analytics-chart-container .u-label {
+  fill: var(--color-text-muted);
+}
+
+.home-chart-container .u-legend,
+.analytics-chart-container .u-legend {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  left: 50%;
+  width: auto;
+  max-width: calc(100% - 88px);
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  transform: translateX(-50%);
+  overflow: hidden;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-muted);
+  font: var(--fs-xs) var(--font-mono);
+  white-space: nowrap;
+}
+.home-chart-container .u-legend tr,
+.analytics-chart-container .u-legend tr { margin-right: var(--space-2); }
+.home-chart-container .u-legend tr:last-child,
+.analytics-chart-container .u-legend tr:last-child { margin-right: 0; }
+.home-chart-container .u-legend .u-series:first-child,
+.analytics-chart-container .u-legend .u-series:first-child { display: none; }
+.home-chart-container .u-legend th,
+.home-chart-container .u-legend td,
+.analytics-chart-container .u-legend th,
+.analytics-chart-container .u-legend td {
+  padding: 0.1rem 0.15rem;
+  border: 0;
+  background: transparent;
+  font-size: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.home-chart-container .u-legend .u-value,
+.analytics-chart-container .u-legend .u-value { color: var(--color-text); font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; }
+.home-chart-container .u-legend .u-marker,
+.analytics-chart-container .u-legend .u-marker { border-radius: var(--radius-pill); }

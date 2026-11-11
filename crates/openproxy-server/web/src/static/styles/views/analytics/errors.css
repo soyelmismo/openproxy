@@ -1,0 +1,133 @@
+
+/* Recent errors table styling: 32px rows, mono IDs, right-aligned action */
+.analytics-errors-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.analytics-errors-table th,
+.analytics-errors-table td {
+  height: 34px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  font-size: var(--fs-xs);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.analytics-errors-table th {
+  height: 28px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+}
+.analytics-errors-table tbody tr:hover {
+  background: var(--color-surface-hover);
+}
+.analytics-errors-table th.col-err-time,
+.analytics-errors-table td.col-err-time {
+  width: 120px;
+}
+.analytics-errors-table time {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.analytics-errors-table th.col-err-provider,
+.analytics-errors-table td.col-err-provider {
+  width: 130px;
+}
+.analytics-errors-table th.col-err-status,
+.analytics-errors-table td.col-err-status {
+  width: 80px;
+}
+.analytics-errors-table td.col-err-status .status-pill {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+}
+.analytics-errors-table th.col-err-msg,
+.analytics-errors-table td.col-err-msg {
+  max-width: 320px;
+}
+.analytics-err-text {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+/* Below the table's comfortable width an ellipsised error message hides the
+   one thing the operator opened this table for. Wrap it instead. */
+@container tile-view (max-width: 760px) {
+  .analytics-errors-table td.col-err-msg { max-width: none; }
+  .analytics-err-text {
+    display: block;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+  }
+  .analytics-trace-code { overflow-wrap: anywhere; }
+}
+@container tile-view (max-width: 380px) {
+  /* Two columns leave ~50px for the name; stack them and give it the row. */
+  .analytics-ranking-main {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .analytics-ranking-copy { grid-column: 1 / -1; }
+  .analytics-ranking-name,
+  .analytics-ranking-context {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  .analytics-ranking-value {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+  }
+}
+.analytics-trace-code {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+.analytics-errors-table th.col-err-action,
+.analytics-errors-table td.col-err-action {
+  width: 70px;
+  text-align: right;
+}
+.analytics-error-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-link);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-decoration: none;
+  transition: all var(--t-fast);
+}
+.analytics-error-link:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+}

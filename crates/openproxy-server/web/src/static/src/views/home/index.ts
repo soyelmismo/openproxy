@@ -61,10 +61,9 @@ function renderHome(): TemplateResult {
   return html`
     <div class="home-dashboard">
       <div class="page-header home-header">
-        <div class="home-header-text">
-          <span class="page-eyebrow">${t("common.realtime")}</span>
-          <h2>${t("home.title")}${renderConnectionDot(conn)}</h2>
-          <p class="home-subtitle muted">${t("home.subtitle")}</p>
+        <div class="home-header-text" title=${t("home.subtitle")}>
+          <h2 class="view-identity">${t("home.title")}</h2>
+          <span class="home-live-status">${renderConnectionDot(conn)}${t("common.realtime")}</span>
         </div>
         <div class="home-header-actions">${renderWindowSelector(windowSecs, onWindowChange)}</div>
       </div>

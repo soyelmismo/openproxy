@@ -1,0 +1,83 @@
+
+.view-config {
+  width: 100%;
+  max-width: 100%;
+}
+
+.config-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  flex-wrap: wrap;
+}
+
+.config-banner {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  margin: 0;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border-soft);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.config-banner.banner-info {
+  border-left: 3px solid var(--color-warn);
+}
+
+.config-banner.banner-success {
+  border-left: 3px solid var(--color-success);
+}
+
+.config-banner .banner-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-warn);
+  flex-shrink: 0;
+}
+
+.config-banner.banner-success .banner-status-dot {
+  background: var(--color-success);
+}
+
+.config-banner .banner-title {
+  color: var(--color-text);
+  font-weight: 600;
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+}
+
+.config-banner .banner-text {
+  min-width: 0;
+  max-width: 100%;
+  /* Two clamped lines instead of a capped one-liner: the sentence reports
+     live values, and an ellipsis hides exactly what the operator came to read.
+     Wide tiles still collapse it to one line for a compact header. */
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+@container tile-view (min-width: 1100px) {
+  .config-banner .banner-text {
+    display: block;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+  }
+}
+

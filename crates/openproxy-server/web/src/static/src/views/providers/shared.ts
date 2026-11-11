@@ -230,20 +230,40 @@ export function renderProviderIcon(p: Provider, size?: 'small' | 'large'): Templ
   `;
 }
 
-//
-// Renders the vision/tools/reasoning/… badges parsed from a model's
-// `capabilities_json` (raw JSON string or pre-parsed object; bad input
-// renders as an em-dash instead of throwing). Unlike the simpler variant in
-// components/model-table.ts, this one also surfaces the non-chat
-// `modelType` badge.
+/**
+ * Capability icons: shape + color + native title tooltip. Replaces the text
+ * chips that ate the row width and clipped in narrow tiles (user comment on
+ * the antigravity detail list). Paths are static lucide-style strokes.
+ */
+type CapIcon = { d: string; circles?: [number, number, number][]; label: string; cls: string };
+const CAP_ICONS: Record<string, CapIcon> = {
+  unary:     { d: "M7.5 7.5h9v9h-9z", label: "Unary (non-streaming)", cls: "cap-ic-unary" },
+  stream:    { d: "M22 12h-4l-3 9L9 3l-3 9H2", label: "Streaming (SSE)", cls: "cap-ic-stream" },
+  vision:    { d: "M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z", circles: [[12, 12, 2.5]], label: "Vision (images)", cls: "cap-ic-vision" },
+  tools:     { d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z", label: "Tool calling", cls: "cap-ic-tools" },
+  reasoning: { d: "M9 18h6M10 22h4M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3A6.64 6.64 0 0 1 8.91 14", label: "Reasoning", cls: "cap-ic-reasoning" },
+  thinking:  { d: "M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z", label: "Thinking (extended)", cls: "cap-ic-thinking" },
+  json:      { d: "M16 18l6-6-6-6M8 6l-6 6 6 6", label: "Structured output (JSON)", cls: "cap-ic-json" },
+  attach:    { d: "m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48", label: "Attachments", cls: "cap-ic-attach" },
+  decisions: { d: "M6 3v9M18 9a9 9 0 0 1-9 9", circles: [[18, 6, 3], [6, 18, 3]], label: "Decisions", cls: "cap-ic-decisions" },
+};
+
+function capIcon(cap: CapIcon): TemplateResult {
+  return html`<span class="cap-ic ${cap.cls}" title=${cap.label} aria-label=${cap.label}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d=${cap.d}/>
+      ${cap.circles?.map(([cx, cy, r]) => html`<circle cx=${cx} cy=${cy} r=${r}/>`)}
+    </svg>
+  </span>`;
+}
 
 export function renderCapabilityBadges(
   json: string | null | undefined,
   modelType?: string | null,
 ): TemplateResult {
-  const badges: TemplateResult[] = [];
+  const icons: TemplateResult[] = [];
   if (modelType && modelType !== 'chat') {
-    badges.push(html`<span class="cap-badge">${modelType}</span>`);
+    icons.push(html`<span class="cap-badge">${modelType}</span>`);
   }
   if (json != null) {
     let caps: unknown;
@@ -251,24 +271,23 @@ export function renderCapabilityBadges(
       try {
         caps = JSON.parse(json) as unknown;
       } catch {
-        // fall through with caps = undefined; renderCapabilityBadges handles
-        // both null and undefined below.
+        // fall through with caps = undefined; handled below.
       }
     } else {
       caps = json;
     }
     if (caps && typeof caps === 'object') {
       const c = caps as Record<string, unknown>;
-      if (c['streaming'] === false) badges.push(html`<span class="cap-badge warn" title="Forced unary (non-streaming)">unary</span>`);
-      if (c['streaming'] === true) badges.push(html`<span class="cap-badge" title="Forced streaming (SSE)">stream</span>`);
-      if (c['vision']) badges.push(html`<span class="cap-badge">vision</span>`);
-      if (c['tool_calling']) badges.push(html`<span class="cap-badge">tools</span>`);
-      if (c['reasoning']) badges.push(html`<span class="cap-badge">reasoning</span>`);
-      if (c['thinking']) badges.push(html`<span class="cap-badge">thinking</span>`);
-      if (c['structured_output']) badges.push(html`<span class="cap-badge">json</span>`);
-      if (c['attachment']) badges.push(html`<span class="cap-badge">attach</span>`);
-      if (c['decisions']) badges.push(html`<span class="cap-badge">decisions</span>`);
+      if (c['streaming'] === false) icons.push(capIcon(CAP_ICONS['unary']!));
+      if (c['streaming'] === true) icons.push(capIcon(CAP_ICONS['stream']!));
+      if (c['vision']) icons.push(capIcon(CAP_ICONS['vision']!));
+      if (c['tool_calling']) icons.push(capIcon(CAP_ICONS['tools']!));
+      if (c['reasoning']) icons.push(capIcon(CAP_ICONS['reasoning']!));
+      if (c['thinking']) icons.push(capIcon(CAP_ICONS['thinking']!));
+      if (c['structured_output']) icons.push(capIcon(CAP_ICONS['json']!));
+      if (c['attachment']) icons.push(capIcon(CAP_ICONS['attach']!));
+      if (c['decisions']) icons.push(capIcon(CAP_ICONS['decisions']!));
     }
   }
-  return badges.length > 0 ? html`${badges}` : html`<span class="muted">—</span>`;
+  return icons.length > 0 ? html`<span class="caps-row">${icons}</span>` : html`<span class="muted">—</span>`;
 }

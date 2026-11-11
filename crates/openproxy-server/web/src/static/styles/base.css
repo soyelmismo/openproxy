@@ -69,6 +69,13 @@ code, pre, kbd, samp {
   font-size: 0.92em;
 }
 
+/* `small` is `0.833em` by default, so it compounds down to 9.5px inside dense
+   table cells and becomes unreadable. Ten pixels is the floor: below that the
+   type stops being legible on a 1x display. */
+small {
+  font-size: max(10px, 0.833em);
+}
+
 kbd {
   font-size: var(--fs-xs);
   padding: 2px 6px;
@@ -79,6 +86,10 @@ kbd {
 }
 
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
   font-family: var(--font-sans);
   font-size: var(--fs-sm);
   cursor: pointer;
@@ -99,6 +110,25 @@ button:active:not(:disabled) {
   transition-timing-function: var(--t-spring);
 }
 button:disabled { cursor: not-allowed; opacity: 0.45; }
+/* Pending is informative, not unavailable: keep its label and progress legible. */
+button[aria-busy="true"] { cursor: progress; opacity: 1; }
+/* Busy contract from lib/button-busy.ts: spinner + label replace innerHTML,
+   so the wrapper must reserve exact space and not grow the button. */
+.button-busy-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 14px;
+  block-size: 14px;
+  flex: 0 0 14px;
+  margin-inline-end: 0.35em;
+  vertical-align: -2px;
+}
+.button-busy-spinner-icon { display: block; inline-size: 14px; block-size: 14px; }
+.button-busy-spinner-icon.animate-spin { animation: button-busy-spin 1s linear infinite; }
+.button-busy-label { line-height: 1; white-space: nowrap; }
+@keyframes button-busy-spin { to { transform: rotate(360deg); } }
+button > svg, .btn > svg { flex: 0 0 auto; overflow: visible; }
 button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 input, select, textarea {
@@ -110,7 +140,16 @@ input, select, textarea {
   border-radius: var(--radius-sm);
   padding: 0.4rem 0.6rem;
   box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+/* File pickers ignore `width`, so only a hard cap keeps them inside a card. */
+input[type="file"] {
+  max-width: 100%;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  font-size: var(--fs-xs);
 }
 select {
   cursor: pointer;

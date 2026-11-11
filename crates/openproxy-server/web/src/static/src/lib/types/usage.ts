@@ -17,6 +17,8 @@ export interface StageEvent {
   compression_techniques: string | null;
   pii_redacted?: string | null;
   endpoint_kind?: string;
+  /** Session fingerprint as a decimal string; absent when the request carried no session identity. */
+  session_hash?: string | null;
   api_key_id?: number | null;
 }
 
@@ -170,8 +172,53 @@ export interface RecentUsageRow {
   proxy_status: string | null;
   is_proxy_rotated: boolean;
   endpoint_kind?: string;
+  /** Session fingerprint as a decimal string; absent when the request carried no session identity. */
+  session_hash?: string | null;
   api_key_id?: number | null;
   /** Audio duration in milliseconds; set only on transcription rows. */
   audio_ms?: number | null;
   created_at: string;
+}
+
+// ── Per-key dollar quotas (5h / weekly / monthly windows) ────────────
+
+export interface QuotaWindowStatus {
+  /** `null` = this window has no limit (disabled). */
+  cap_usd: number | null;
+  /** Spend at official model prices inside the window. */
+  spent_usd: number;
+  /** Fixed windows: ISO instant when the window resets. Rolling 5h: null. */
+  resets_at: string | null;
+  /** Rolling 5h only: oldest spend still inside the window. */
+  oldest_spend_at: string | null;
+}
+
+export interface KeyQuotaStatus {
+  /** `false` = the key has no quota row (unlimited). */
+  enabled: boolean;
+  month: QuotaWindowStatus;
+  week: QuotaWindowStatus;
+  five_hours: QuotaWindowStatus;
+}
+
+export interface KeyQuotaCaps {
+  monthly_usd_cap: number | null;
+  weekly_usd_cap: number | null;
+  five_hour_usd_cap: number | null;
+}
+
+/** GET /keys/:id/quota response. */
+export interface KeyQuotaResponse {
+  api_key_id: number;
+  enabled: boolean;
+  caps: KeyQuotaCaps | null;
+  spend: KeyQuotaStatus;
+}
+/** Row of `GET /keys/quotas`: every key that carries a quota row. */
+export interface KeyQuotaListItem {
+  api_key_id: number;
+  label: string | null;
+  monthly_usd_cap: number | null;
+  weekly_usd_cap: number | null;
+  five_hour_usd_cap: number | null;
 }

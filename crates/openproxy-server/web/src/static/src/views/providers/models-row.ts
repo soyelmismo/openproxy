@@ -7,7 +7,8 @@ import { state } from '../../state/index.js';
 import { api } from '../../state/api.js';
 import { requestUpdate } from '../../state/reactive.js';
 import { showToast } from '../../components/toast.js';
-import { flashButton, showApiError } from '../../lib/ui-utils.js';
+import { showApiError } from '../../lib/ui-utils.js';
+import { beginButtonBusy, resolveBusyButton } from '../../lib/button-busy.js';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import { showConfirm } from '../../lib/show-confirm.js';
 import { icons } from '../../lib/icons.js';
@@ -116,14 +117,15 @@ export async function onToggleModel(rowId: number, newActive: boolean): Promise<
   }
 }
 
-export async function onTestModel(rowId: number, e: Event | null): Promise<void> {
-  const btn = (e && e.target instanceof HTMLButtonElement
-    ? e.target
-    : null) as HTMLButtonElement | null;
-  if (!btn) return;
-  const oldText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = 'Testing...';
+// Guard by row as well as button: the context menu and quick action share a request.
+const modelTestsInFlight = new Set<number>();
+
+export async function onTestModel(rowId: number, source: Event | HTMLButtonElement | null): Promise<void> {
+  if (modelTestsInFlight.has(rowId)) return;
+  const btn = source instanceof HTMLButtonElement ? source : source ? resolveBusyButton(source) : null;
+  const busy = beginButtonBusy(btn, { label: 'Testing…' });
+  modelTestsInFlight.add(rowId);
+  showToast('Testing model…', 'info');
 
   const accountSelect =
     (document.getElementById(`test-account-${rowId}`) ||
@@ -153,22 +155,17 @@ export async function onTestModel(rowId: number, e: Event | null): Promise<void>
       m.last_test_status = result.status;
       m.last_test_at = new Date().toISOString();
     }
-    if (result.status >= 200 && result.status < 300) {
-      flashButton(btn, '✓', '#a6e3a1');
-    } else if (result.status === 0) {
-      flashButton(btn, '✗ net', '#f38ba8');
-    } else {
-      flashButton(btn, '✗ ' + result.status, '#f38ba8');
-    }
+    const ok = result.status >= 200 && result.status < 300;
+    showToast(
+      `Test ${result.status === 0 ? 'network error' : result.status} · ${result.elapsed_ms} ms`,
+      ok ? 'success' : 'error',
+    );
     requestUpdate();
   } catch (err: unknown) {
-    flashButton(btn, '✗', '#f38ba8');
     showApiError(err, 'Test failed');
   } finally {
-    setTimeout(() => {
-      btn.disabled = false;
-      btn.textContent = oldText;
-    }, 1500);
+    modelTestsInFlight.delete(rowId);
+    busy.release();
   }
 }
 
@@ -205,6 +202,126 @@ export async function onCopyUsageModel(text: string, e: Event): Promise<void> {
 }
 
 
+/** The full per-model config drawer: protocol & routing (format, client
+ *  profile, modality, streaming), test harness target (account, proxy) and the
+ *  footer actions. Shared by the provider list cards and the detail grid's
+ *  expandable rows. */
+export function renderModelConfigDrawer(m: Model): TemplateResult {
+  const providerAccounts = (state.accounts || []).filter(
+    (a) => a.provider_id === m.provider_id,
+  );
+  const aliveProxies = (state.proxies || []).filter(
+    (p) => p.status === 'alive',
+  );
+
+  let modelStreaming: boolean | undefined = undefined;
+  if (m.capabilities_json) {
+    try {
+      const parsed = JSON.parse(m.capabilities_json) as Record<string, unknown>;
+      if (typeof parsed['streaming'] === 'boolean') modelStreaming = parsed['streaming'];
+    } catch {}
+  }
+
+  return html`
+    <!-- Panel 1: Protocol & Routing Config (Structure D) -->
+    <div class="model-config-panel">
+      <div class="model-config-title">Protocol & Routing Config</div>
+      <div class="model-config-grid">
+        <label>
+          <span>${t('providers.detail.entry.format')}</span>
+          <select
+            class="model-format-select"
+            title="Model target format / wire protocol"
+            .value=${m.target_format || 'openai'}
+            @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
+          >
+            ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
+              (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
+            )}
+          </select>
+        </label>
+
+        <label>
+          <span>Client Profile</span>
+          ${renderClientProfileSelect({
+            className: 'model-format-select',
+            value: m.client_profile,
+            allowInherit: false,
+            noneLabel: 'None (direct / default)',
+            onChange: (newProfile) => onChangeModelClientProfile(m.row_id, newProfile),
+          })}
+        </label>
+
+        <label>
+          <span>${t('providers.detail.entry.modality')}</span>
+          <select
+            class="model-type-select"
+            title="Model modality / type (Chat, Image, Embedding, Audio, Rerank, Decision)"
+            .value=${m.model_type || 'chat'}
+            @change=${(e: Event) => onChangeModelType(m.row_id, e)}
+          >
+            <option value="chat" ?selected=${!m.model_type || m.model_type === 'chat'}>Chat</option>
+            <option value="image" ?selected=${m.model_type === 'image'}>Image</option>
+            <option value="embedding" ?selected=${m.model_type === 'embedding'}>Embedding</option>
+            <option value="audio" ?selected=${m.model_type === 'audio'}>Audio</option>
+            <option value="rerank" ?selected=${m.model_type === 'rerank'}>Rerank</option>
+            <option value="decision" ?selected=${m.model_type === 'decision'}>Decision</option>
+          </select>
+        </label>
+
+        <label>
+          <span>${t('providers.detail.entry.stream')}</span>
+          <select
+            class="model-type-select"
+            title="Stream override: auto (provider default), unary (forced non-streaming), stream (forced SSE)"
+            @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
+          >
+            <option value="auto" ?selected=${modelStreaming === undefined}>auto stream</option>
+            <option value="unary" ?selected=${modelStreaming === false}>unary</option>
+            <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <!-- Panel 2: Live Test Harness Target (Structure D) -->
+    <div class="model-config-panel">
+      <div class="model-config-title">Test Harness Target</div>
+      <div class="model-config-grid">
+        <label>
+          <span>${t('providers.detail.entry.account')}</span>
+          <select id=${`test-account-${m.row_id}`} class="model-account-select">
+            <option value="">(Default Account)</option>
+            ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
+          </select>
+        </label>
+
+        <label>
+          <span>${t('providers.detail.entry.proxy')}</span>
+          <select id=${`test-proxy-${m.row_id}`} class="model-proxy-select">
+            <option value="">(No Proxy)</option>
+            ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <!-- Footer Actions (Structure D) -->
+    <div class="model-config-footer">
+      <div class="model-config-footer-left">
+        ${m.family ? html`<span>Family: <code>${m.family}</code></span>` : html``}
+      </div>
+      <div class="model-config-footer-right">
+        <button
+          class="small danger"
+          @click=${() => onDeleteModel(m.row_id)}
+          title="Delete model"
+        >${icons.close()} Delete</button>
+      </div>
+    </div>
+  `;
+}
+
 export function renderModelRow(m: Model): TemplateResult {
   const isSelected: boolean = (state.selectedModels as Set<number>).has(
     m.row_id,
@@ -214,22 +331,7 @@ export function renderModelRow(m: Model): TemplateResult {
       ? html`<span class=${'status-pill ' + statusPillClass(m.last_test_status)} title=${m.last_test_at || ''}>${String(m.last_test_status)}</span>`
       : html`<span class="muted" title="never">never</span>`;
 
-  const providerAccounts = (state.accounts || []).filter(
-    (a) => a.provider_id === m.provider_id,
-  );
-  const aliveProxies = (state.proxies || []).filter(
-    (p) => p.status === 'alive',
-  );
-
   const usageModel = `${m.provider_id}/${m.model_id}`;
-
-  let modelStreaming: boolean | undefined = undefined;
-  if (m.capabilities_json) {
-    try {
-      const parsed = JSON.parse(m.capabilities_json) as Record<string, unknown>;
-      if (typeof parsed['streaming'] === 'boolean') modelStreaming = parsed['streaming'];
-    } catch {}
-  }
 
   const selectAria = `${t('providers.detail.entry.select')} ${usageModel}`;
 
@@ -305,104 +407,7 @@ export function renderModelRow(m: Model): TemplateResult {
         <span class="model-entry-chevron" aria-hidden="true">${icons.chevronRight()}</span>
       </summary>
 
-      <div class="model-entry-drawer">
-        <!-- Panel 1: Protocol & Routing Config (Structure D) -->
-        <div class="model-config-panel">
-          <div class="model-config-title">Protocol & Routing Config</div>
-          <div class="model-config-grid">
-            <label>
-              <span>${t('providers.detail.entry.format')}</span>
-              <select
-                class="model-format-select"
-                title="Model target format / wire protocol"
-                .value=${m.target_format || 'openai'}
-                @change=${(e: Event) => onChangeModelFormat(m.row_id, e)}
-              >
-                ${(state.formats?.target_formats ?? FALLBACK_TARGET_FORMATS).map(
-                  (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${(m.target_format || 'openai') === fmt.id}>${fmt.id}</option>`
-                )}
-              </select>
-            </label>
-
-            <label>
-              <span>Client Profile</span>
-              ${renderClientProfileSelect({
-                className: 'model-format-select',
-                value: m.client_profile,
-                allowInherit: false,
-                noneLabel: 'None (direct / default)',
-                onChange: (newProfile) => onChangeModelClientProfile(m.row_id, newProfile),
-              })}
-            </label>
-
-            <label>
-              <span>${t('providers.detail.entry.modality')}</span>
-              <select
-                class="model-type-select"
-                title="Model modality / type (Chat, Image, Embedding, Audio, Rerank, Decision)"
-                .value=${m.model_type || 'chat'}
-                @change=${(e: Event) => onChangeModelType(m.row_id, e)}
-              >
-                <option value="chat" ?selected=${!m.model_type || m.model_type === 'chat'}>Chat</option>
-                <option value="image" ?selected=${m.model_type === 'image'}>Image</option>
-                <option value="embedding" ?selected=${m.model_type === 'embedding'}>Embedding</option>
-                <option value="audio" ?selected=${m.model_type === 'audio'}>Audio</option>
-                <option value="rerank" ?selected=${m.model_type === 'rerank'}>Rerank</option>
-                <option value="decision" ?selected=${m.model_type === 'decision'}>Decision</option>
-              </select>
-            </label>
-
-            <label>
-              <span>${t('providers.detail.entry.stream')}</span>
-              <select
-                class="model-type-select"
-                title="Stream override: auto (provider default), unary (forced non-streaming), stream (forced SSE)"
-                @change=${(e: Event) => onChangeModelStreaming(m.row_id, e)}
-              >
-                <option value="auto" ?selected=${modelStreaming === undefined}>auto stream</option>
-                <option value="unary" ?selected=${modelStreaming === false}>unary</option>
-                <option value="streaming" ?selected=${modelStreaming === true}>stream</option>
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <!-- Panel 2: Live Test Harness Target (Structure D) -->
-        <div class="model-config-panel">
-          <div class="model-config-title">Test Harness Target</div>
-          <div class="model-config-grid">
-            <label>
-              <span>${t('providers.detail.entry.account')}</span>
-              <select id=${`test-account-${m.row_id}`} class="model-account-select">
-                <option value="">(Default Account)</option>
-                ${providerAccounts.map((a) => html`<option value=${a.id}>${a.label || `Account #${a.id}`}</option>`)}
-              </select>
-            </label>
-
-            <label>
-              <span>${t('providers.detail.entry.proxy')}</span>
-              <select id=${`test-proxy-${m.row_id}`} class="model-proxy-select">
-                <option value="">(No Proxy)</option>
-                ${aliveProxies.map((p) => html`<option value=${p.id}>${p.host}:${p.port} (${p.latency_ms || '?'}ms)</option>`)}
-              </select>
-            </label>
-          </div>
-        </div>
-
-        <!-- Footer Actions (Structure D) -->
-        <div class="model-config-footer">
-          <div class="model-config-footer-left">
-            ${m.family ? html`<span>Family: <code>${m.family}</code></span>` : html``}
-          </div>
-          <div class="model-config-footer-right">
-            <button
-              class="small danger"
-              @click=${() => onDeleteModel(m.row_id)}
-              title="Delete model"
-            >${icons.close()} Delete</button>
-          </div>
-        </div>
-      </div>
+      <div class="model-entry-drawer">${renderModelConfigDrawer(m)}</div>
     </details>
   </article>`;
 }

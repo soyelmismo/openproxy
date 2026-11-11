@@ -1,0 +1,81 @@
+
+/* The "Columns ▾" button lives in the logs header and opens a
+ * popover with one checkbox per column. The wrapper establishes the
+ * positioning context for the absolutely positioned menu, which stays
+ * hidden until `.open` (toggled by the toggleColumnsMenu handler in
+ * views/logs.js). The menu is anchored to the wrapper's right edge, not
+ * its left: the button is the last control in the header, so opening
+ * rightward pushes the menu past the tile, and .tile-view clips it. */
+.columns-menu-wrapper {
+  position: relative;
+  display: inline-block;
+  z-index: 100;
+}
+.logs-columns-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  height: 28px;
+  box-sizing: border-box;
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  color: var(--color-text);
+  cursor: pointer;
+  transition: background var(--t-fast);
+  white-space: nowrap;
+}
+.logs-columns-toggle:hover { background: var(--color-surface); }
+.logs-columns-toggle[aria-expanded="true"] {
+  background: var(--color-surface);
+  border-color: var(--color-primary);
+}
+.logs-columns-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7em;
+}
+.logs-columns-caret .icon {
+  margin-top: 1px;
+}
+.columns-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: auto;
+  z-index: 1000;
+  display: none;
+  min-width: 160px;
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  font-size: var(--fs-xs);
+  font-family: var(--font-sans);
+}
+.columns-menu.open { display: block; }
+.columns-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.3rem;
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text);
+}
+.columns-menu-item input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+}
+.log-phase--idle         { background: var(--color-surface-2); color: var(--color-text-muted); }
+

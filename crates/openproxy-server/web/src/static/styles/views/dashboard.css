@@ -623,3 +623,119 @@
     font-weight: 600;
   }
 }
+
+/* Tile-width variants: the workspace can shrink Home to a split pane on a
+   wide screen, where the viewport media queries above never fire. */
+@container tile-view (max-width: 900px) {
+  .home-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-charts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .home-race-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+  }
+  .home-chart-container {
+    height: 230px;
+  }
+}
+
+@container tile-view (max-width: 720px) {
+  .home-activity-card {
+    padding: 10px;
+    box-sizing: border-box;
+  }
+  .home-activity-header {
+    display: none;
+  }
+  .home-desktop-cells {
+    display: none;
+  }
+  .home-mobile-card {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 3px;
+  }
+  .home-activity-row {
+    flex-direction: column;
+    align-items: stretch;
+    height: auto;
+    padding: 8px 10px;
+    gap: 3px;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .home-m-line-1,
+  .home-m-line-2 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+  }
+  .home-activity-model-prov {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-xs);
+  }
+  .home-activity-tokens {
+    min-width: 4.8rem;
+    text-align: right;
+  }
+  .home-activity-latency {
+    min-width: 3.6rem;
+    text-align: right;
+  }
+}
+
+/* The KPI grid used to answer only to the viewport, so a 250px workspace pane
+   still asked for three columns and ellipsised every label. It follows the
+   tile now, like every other list in the dashboard. */
+@container tile-view (max-width: 560px) {
+  .home-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .home-kpi-label,
+  .home-kpi-meta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  .home-kpi-meta { min-height: 0; }
+}
+
+@container tile-view (max-width: 340px) {
+  .home-kpi-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .home-kpi-value {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    font-size: var(--fs-xl);
+  }
+}
+
+/* The activity model column keeps its name instead of hiding it behind an
+   ellipsis as soon as the tile leaves full width. */
+@container tile-view (max-width: 840px) {
+  .home-activity-model {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+  .home-activity-model-prov {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+}

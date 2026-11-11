@@ -1,0 +1,101 @@
+
+.analytics-details { overflow: hidden; border: 1px solid var(--color-border-soft); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-sm); }
+.analytics-details > summary { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4); cursor: pointer; list-style: none; }
+.analytics-details > summary::-webkit-details-marker { display: none; }
+.analytics-details > summary::after { content: "+"; margin-left: auto; color: var(--color-text-muted); font: var(--fs-xl) var(--font-mono); }
+.analytics-details[open] > summary::after { content: "−"; }
+.analytics-details > summary span { font-weight: 700; }
+.analytics-details > summary small { color: var(--color-text-muted); }
+.analytics-details-body { padding: 0 var(--space-4) var(--space-1); border-top: 1px solid var(--color-border-soft); }
+.analytics-data-card { min-width: 0; padding: 0; overflow: hidden; }
+.analytics-details-body .analytics-data-card { margin-top: var(--space-4); border-color: var(--color-border-soft); box-shadow: none; }
+.analytics-data-card > .dg-wrap { margin: 0 var(--space-4) var(--space-4); }
+.analytics-table-wrap { max-width: 100%; overflow-x: auto; }
+.analytics-data-card > .analytics-table-wrap { padding: 0 var(--space-4) var(--space-4); }
+.analytics-data-card > .empty { padding: 0 var(--space-4) var(--space-4); }
+.analytics-table-wrap th,
+.analytics-table-wrap td { white-space: nowrap; }
+.analytics-table-wrap td.num,
+.analytics-table-wrap th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.analytics-model-cell { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Grid cells inside by-model and by-provider DataGrid */
+.analytics-by-model-grid .dg-col,
+.analytics-by-provider-grid .dg-col {
+  min-width: 0;
+}
+.analytics-provider-cell {
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.analytics-model-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.analytics-compress-good {
+  color: var(--color-success);
+}
+.analytics-cost-cell {
+  font-weight: 600;
+}
+
+/* DataGrid numeric cell helper: tabular nums, right aligned */
+.dg-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  text-align: right;
+  width: 100%;
+}
+.dg-col:has(.dg-num) .dg-inner {
+  justify-content: flex-end;
+}
+
+/* Monthly Matrix — 32px row density and aligned headers */
+.monthly-matrix {
+  width: 100%;
+  border-collapse: collapse;
+}
+.monthly-matrix th,
+.monthly-matrix td {
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 var(--space-3);
+  font-size: var(--fs-xs);
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+.monthly-matrix th {
+  height: 28px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border);
+}
+.monthly-matrix th.col-provider,
+.monthly-matrix td.col-provider {
+  text-align: left;
+}
+.monthly-matrix th.num,
+.monthly-matrix td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.monthly-matrix tfoot th {
+  height: 32px;
+  border-top: var(--border-w-2) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  font-weight: 700;
+  color: var(--color-text);
+}

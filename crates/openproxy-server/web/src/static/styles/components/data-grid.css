@@ -205,6 +205,22 @@
   background: color-mix(in oklab, var(--color-error) 14%, transparent);
 }
 
+/* Expandable row drawer (one open at a time, toggled by a plain row click).
+ * Sits between rows as a full-width block: the row grid keeps --dg-cols, this
+ * one ignores it. In ultra-narrow tiles the drawer's own auto-fit grid wraps
+ * every field onto its own line, so nothing is squeezed. */
+.dg-expand {
+  padding: 10px 12px;
+  margin: 0;
+  background: var(--color-bg);
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.dg-expand > * { min-width: 0; }
+
 .dg-empty {
   padding: 18px 12px;
   font-size: var(--fs-sm);
@@ -215,9 +231,13 @@
 /* Selection bulk bar — floats over the top-right of the list so it is
    reachable without scrolling to the bottom. */
 .dg-bulk {
-  position: absolute;
+  /* Fixed to the viewport and anchored where the selection was made, so it
+     stays on screen while scrolling (falls back to the top-right corner for
+     keyboard-driven selections with no recorded pointer position). */
+  position: fixed;
   top: 34px;
   right: 10px;
+  max-width: min(92vw, 480px);
   display: flex;
   align-items: center;
   gap: 6px;

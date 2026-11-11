@@ -285,35 +285,31 @@ pub(super) async fn run_target_with_retries(
         // the resolved ceiling) and note the cut so the very next budget of
         // this target relaxes geometrically (correction 1). Global timeouts
         // (ms == ceiling) keep the stock retry behaviour untouched.
-        if let CoreError::UpstreamTimeout { phase, ms } = e {
-            if phase == "headers" {
-                if let Some(ceiling_ms) = ctx.ttft_ceiling_ms {
-                    if (*ms as u64) < ceiling_ms {
-                        let session_hash =
-                            crate::session_affinity::SessionAffinityRegistry::extract_session_hash(
-                                &ctx.req,
-                            );
-                        ctx.pipeline.latency_budget.note_censored(
-                            target.target.provider_id.as_str(),
-                            target.model.row_id,
-                            session_hash,
-                            *ms,
-                        );
-                        if let Some(to) = ctx.resolved_timeouts.as_mut() {
-                            let relaxed = ((*ms as f64) * 1.5) as u64;
-                            let next = relaxed.max(to.ttft.as_millis() as u64).min(ceiling_ms);
-                            to.ttft = std::time::Duration::from_millis(next);
-                            tracing::debug!(
-                                target_id = target.target.id.0,
-                                provider = %target.target.provider_id,
-                                cut_ms = ms,
-                                next_ttft_ms = next,
-                                ceiling_ms,
-                                "predictive ttft cut: retrying same target with relaxed budget"
-                            );
-                        }
-                    }
-                }
+        if let CoreError::UpstreamTimeout { phase, ms } = e
+            && is_predictive_ttft_cut(phase)
+            && let Some(ceiling_ms) = ctx.ttft_ceiling_ms
+            && *ms < ceiling_ms
+        {
+            let session_hash =
+                crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req);
+            ctx.pipeline.latency_budget.note_censored(
+                target.target.provider_id.as_str(),
+                target.model.row_id,
+                session_hash,
+                *ms,
+            );
+            if let Some(to) = ctx.resolved_timeouts.as_mut() {
+                let relaxed = ((*ms as f64) * 1.5) as u64;
+                let next = relaxed.max(to.ttft.as_millis() as u64).min(ceiling_ms);
+                to.ttft = std::time::Duration::from_millis(next);
+                tracing::debug!(
+                    target_id = target.target.id.0,
+                    provider = %target.target.provider_id,
+                    cut_ms = ms,
+                    next_ttft_ms = next,
+                    ceiling_ms,
+                    "predictive ttft cut: retrying same target with relaxed budget"
+                );
             }
         }
         match perform_retry_iteration(ctx, combo, target, &mut state, e, overall_attempt).await {
@@ -341,4 +337,50 @@ pub(super) async fn run_target_with_retries(
         total_targets,
     )
     .await
+}
+
+/// Whether a `CoreError::UpstreamTimeout` phase is a predictive-TTFT cut.
+///
+/// The streaming path renames the `Headers` phase to its config hint (`ttft`,
+/// see `streaming::pipeline::map_upstream_stream_error`), while the unary path
+/// keeps the phase name (`headers`, `dispatcher::unary`). Both must feed the
+/// anti-starvation relax: gating on `"headers"` alone left the whole
+/// predictive machinery dead for streaming traffic, which is essentially all
+/// chat traffic.
+pub(super) fn is_predictive_ttft_cut(phase: &str) -> bool {
+    phase == "ttft" || phase == "headers"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_predictive_ttft_cut;
+
+    #[test]
+    fn streaming_ttft_cuts_are_recognized() {
+        // `map_upstream_stream_error` renames Headers → "ttft".
+        assert!(is_predictive_ttft_cut("ttft"));
+    }
+
+    #[test]
+    fn unary_headers_cuts_are_recognized() {
+        assert!(is_predictive_ttft_cut("headers"));
+    }
+
+    #[test]
+    fn other_phases_are_not_ttft_cuts() {
+        // The idle-chunk phase has its own budget path; dns/dial/tls/write
+        // and the total ceiling are global timeouts, never relaxed.
+        for phase in [
+            "dns",
+            "dial",
+            "tls",
+            "write",
+            "body",
+            "total",
+            "idle_chunk",
+            "",
+        ] {
+            assert!(!is_predictive_ttft_cut(phase), "{phase}");
+        }
+    }
 }

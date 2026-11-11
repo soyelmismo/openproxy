@@ -174,7 +174,7 @@ pub async fn resolve_test_credentials(
     // the caller did not restrict the set, which is the case for an ad-hoc test
     // of a model row and for a combo target that carries no restriction.
     let candidates = allowed_accounts.map_or_else(
-        || accounts_list.iter().cloned().collect::<Vec<_>>(),
+        || accounts_list.to_vec(),
         |allowed| {
             accounts_list
                 .iter()
@@ -183,7 +183,8 @@ pub async fn resolve_test_credentials(
                 .collect::<Vec<_>>()
         },
     );
-    let resolved_aid = account_id.or_else(|| select_account_candidate(&candidates, model.model_id.as_str()));
+    let resolved_aid =
+        account_id.or_else(|| select_account_candidate(&candidates, model.model_id.as_str()));
     if resolved_aid.is_none() && !candidates.is_empty() {
         return Err(test_error_result(
             model_row_id,

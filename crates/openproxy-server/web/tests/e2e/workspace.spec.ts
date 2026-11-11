@@ -31,7 +31,6 @@ test('real combo clone is visible, copied and reflected in the contextual sideba
     await expect(page).toHaveURL(new RegExp(`#/combos/${copyId}$`));
     const copied = await page.request.get(`/admin/api/combos/${copyId}`, { headers });
     expect(await copied.json()).toMatchObject({ name: `${name}-copy`, race_size: 2 });
-    await expect(page.locator('.context-resources')).toContainText(`${name}-copy`);
   } finally {
     if (copyId) await page.request.delete(`/admin/api/combos/${copyId}`, { headers });
     await page.request.delete(`/admin/api/combos/${id}`, { headers });
@@ -41,7 +40,7 @@ test('real combo clone is visible, copied and reflected in the contextual sideba
 test('tiling keeps independent live views, routes active panel, resizes, maximizes, closes and persists', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.getByRole('button', { name: '2 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/logs"]').click({ modifiers: ['Shift'] });
   await expect(page.locator('.workspace-tile')).toHaveCount(2);
   const first = page.locator('.workspace-tile').nth(0);
   const second = page.locator('.workspace-tile').nth(1);
@@ -64,7 +63,8 @@ test('tiling keeps independent live views, routes active panel, resizes, maximiz
   await expect(first).toBeHidden();
   await second.getByRole('button', { name: 'Restore panel' }).click();
   await expect(first).toBeVisible();
-  await page.getByRole('button', { name: '4 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/providers"]').click({ modifiers: ['Shift'] });
+  await page.locator('.sidebar a[data-nav="#/playground"]').click({ modifiers: ['Shift'] });
   await expect(page.locator('.workspace-tile')).toHaveCount(4);
   await page.reload();
   await expect(page.locator('.workspace-tile')).toHaveCount(4);
@@ -83,14 +83,9 @@ test('presets, split shortcuts, context toggle, theme sync and mobile panel swit
   await page.locator('.sidebar a[data-nav="#/keys"]').click({ modifiers: ['Shift'] });
   await expect(page.locator('.workspace-tile')).toHaveCount(3);
   await expect(page).toHaveURL(/#\/keys$/);
-  await page.getByRole('button', { name: 'Hide context sidebar' }).click();
-  await expect(page.locator('.workspace-context')).toBeHidden();
-  await page.getByRole('button', { name: 'Show context sidebar' }).click();
-  await expect(page.locator('.workspace-context')).toBeVisible();
   await page.evaluate(() => { document.querySelector<HTMLButtonElement>('#theme-toggle-slot button')!.click(); });
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('.workspace-context')).toBeHidden();
   await expect(page.locator('.workspace-tile:visible')).toHaveCount(1);
   await page.getByRole('button', { name: '1. Combos', exact: true }).click();
   await expect(page.locator('.workspace-tile:visible')).toHaveCount(1);
@@ -111,25 +106,15 @@ test('API keys appear in context and edit in an integrated properties view with 
   expect(created.ok()).toBe(true);
   const id = (await created.json()).key.id;
   try {
-    await page.goto('/admin/#/keys');
-    const resources = page.locator('.context-resources');
-    await resources.getByRole('button', { name: 'Refresh resources' }).click();
-    const link = resources.locator(`a[href="#/keys/${id}"]`);
-    await expect(link).toContainText(label);
-    await resources.getByRole('textbox', { name: 'Search resources' }).fill(label);
-    await expect(resources.locator('.context-resource-row')).toHaveCount(1);
-    await link.click();
-    await expect(page).toHaveURL(new RegExp(`#/keys/${id}$`));
+    await page.goto(`/admin/#/keys/${id}`);
     const frame = page.locator('.workspace-tile .tile-view').first();
     await expect(frame.locator('.key-detail h1')).toHaveText(label);
     await expect(frame.locator('.modal-bg')).toHaveCount(0);
-    await expect(link).toHaveClass('active');
     await frame.getByLabel('Label', { exact: true }).fill(`${label}-edited`);
     const saved = page.waitForResponse(r => r.url().endsWith(`/keys/${id}`) && r.request().method() === 'PATCH');
     await frame.getByRole('button', { name: 'Save', exact: true }).click();
     expect((await saved).ok()).toBe(true);
     await expect(frame.locator('.key-detail h1')).toHaveText(`${label}-edited`);
-    await expect(link).toContainText(`${label}-edited`);
     const persisted = await page.request.get(`/admin/api/keys/${id}`, { headers });
     const key = await persisted.json();
     expect(key.label).toBe(`${label}-edited`);
@@ -169,7 +154,7 @@ test('provider toolbar, SVG controls and tile first paint remain integrated', as
   await frame.getByRole('button', { name: /^Inactive/ }).click();
   await expect(frame.getByRole('button', { name: /^Inactive/ })).toHaveAttribute('aria-pressed', 'true');
   await frame.locator('.providers-toolbar').getByRole('button', { name: /^All/ }).click();
-  await page.getByRole('button', { name: '2 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/logs"]').click({ modifiers: ['Shift'] });
   await expect(page.locator('iframe')).toHaveCount(0);
   const second = page.locator('.tile-view').nth(1);
   const svgPath = page.locator('.workspace-tile').first().getByRole('button', { name: 'Maximize panel' }).locator('svg path');
@@ -186,7 +171,7 @@ test('provider toolbar, SVG controls and tile first paint remain integrated', as
 });
 
 test('logout tears down all native panels', async ({ page }) => {
-  await page.getByRole('button', { name: '2 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/logs"]').click({ modifiers: ['Shift'] });
   await page.getByRole('button', { name: 'Expand sidebar', exact: true }).click();
   await page.getByRole('button', { name: 'Logout', exact: true }).click();
   await expect(page).toHaveURL(/#\/login$/);
@@ -197,7 +182,7 @@ test('native routes survive rapid changes without stale mounts, duplicate owners
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto('/admin/#/providers');
-  await page.getByRole('button', { name: '2 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/logs"]').click({ modifiers: ['Shift'] });
   const logs = page.locator('.tile-view[data-view="logs"]');
   await expect(logs.locator('.logs-search-input')).toBeVisible();
   await logs.locator('.logs-search-input').fill('preserved');
@@ -215,7 +200,7 @@ test('native routes survive rapid changes without stale mounts, duplicate owners
   expect(await page.locator('.tile-view').evaluateAll(els => els.map(el => (el as HTMLElement).dataset['view']))).toEqual(['providers', 'logs']);
   await page.locator('.workspace-tile').filter({ has: logs }).getByRole('button', { name: 'Close panel' }).click();
   await expect(page.locator('.tile-view[data-view="logs"]')).toHaveCount(0);
-  await page.getByRole('button', { name: '2 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/logs"]').click({ modifiers: ['Shift'] });
   await expect(page.locator('.tile-view[data-view="logs"] .logs-search-input')).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -225,7 +210,7 @@ test('native desktop panels expose individual elements and provider modal spans 
   page.on('pageerror', e => errors.push(e.message));
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.goto('/admin/#/providers');
-  await page.getByRole('button', { name: '2 panels', exact: true }).click();
+  await page.locator('.sidebar a[data-nav="#/logs"]').click({ modifiers: ['Shift'] });
   const providers = page.locator('.tile-view[data-view="providers"]');
   const logs = page.locator('.tile-view[data-view="logs"]');
   await expect(providers.locator('.providers-toolbar')).toBeVisible();

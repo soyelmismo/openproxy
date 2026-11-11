@@ -250,13 +250,20 @@ pub(crate) fn parse_sse_data_or_done(line: &str) -> SseDataOrDone<'_> {
 
 /// Deserialize an SSE payload as JSON, returning
 /// `CoreError::Parse("<provider> sse json: ...")`.
+///
+/// Goes through `serde_json::Value` first so literal duplicate object keys
+/// collapse (last one wins) instead of tripping serde's `duplicate field`
+/// check. Free-tier gateways emit malformed usage blocks; the proxy must
+/// tolerate upstream variance (the raw payload is forwarded untouched).
 #[inline]
 pub(crate) fn parse_provider_json<T, S>(payload: S, provider: &str) -> Result<T>
 where
     T: for<'de> serde::Deserialize<'de>,
     S: AsRef<str>,
 {
-    serde_json::from_str(payload.as_ref()).ctx_parse(format!("{provider} sse json"))
+    let value: Value =
+        serde_json::from_str(payload.as_ref()).ctx_parse(format!("{provider} sse json"))?;
+    serde_json::from_value(value).ctx_parse(format!("{provider} sse json"))
 }
 
 /// Build `OpenAIUsage` from `Option<u64>` token counts, applying the

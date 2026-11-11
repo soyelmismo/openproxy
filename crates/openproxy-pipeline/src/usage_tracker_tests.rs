@@ -1,6 +1,7 @@
 use super::*;
 use openproxy_types::OpenAIRequest;
 use openproxy_types::combos::{Combo, ComboTarget};
+use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ComboId, RequestId, TraceId};
 use std::sync::Arc;
 
@@ -10,41 +11,7 @@ fn make_test_builder<'a>(
     target: &'a ComboTarget,
 ) -> UsageRecordBuilder<'a> {
     let (_tx, rx) = tokio::sync::watch::channel(None);
-    let req = PipelineRequest {
-        request_id: RequestId::new(),
-        trace_id: TraceId::new(),
-        combo_id: ComboId(1),
-        openai_request: Arc::new(OpenAIRequest {
-            model: "test-model".into(),
-            messages: vec![],
-            stream: false,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            top_k: None,
-            user: None,
-            extra: serde_json::Map::new(),
-        }),
-        client_disconnected: rx,
-        stream_sink: None,
-        api_key_id: None,
-        combo_override: None,
-        targets_override: None,
-        request_headers: std::collections::BTreeMap::new(),
-        request_body_json: None,
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-        compressed_messages: Arc::new(std::sync::OnceLock::new()),
-        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
-        pii_session: Arc::new(parking_lot::Mutex::new(None)),
-        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
-        proxy_override: None,
-        pinned_adapters: Default::default(),
-    };
+    let req = test_pipeline_request("test-model", vec![], rx);
     UsageRecordBuilder::new(tracker, req, combo, target)
 }
 
@@ -86,6 +53,51 @@ fn make_test_tracker() -> UsageTracker {
         cooldown_factor: 2,
         repo: Arc::clone(&repo) as Arc<dyn crate::repository::PipelineRepository>,
         coordinator: None,
+    }
+}
+
+/// Canonical test `PipelineRequest`: the boilerplate every site shares,
+/// parameterised over the three things tests vary (model, messages and the
+/// disconnect watch receiver).
+fn test_pipeline_request(
+    model: &str,
+    messages: Vec<openproxy_types::OpenAIMessage>,
+    client_disconnected: tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>,
+) -> PipelineRequest {
+    PipelineRequest {
+        request_id: RequestId::new(),
+        trace_id: TraceId::new(),
+        combo_id: ComboId(1),
+        openai_request: Arc::new(OpenAIRequest {
+            model: model.into(),
+            messages,
+            stream: false,
+            temperature: None,
+            max_tokens: None,
+            top_p: None,
+            stop: None,
+            tools: None,
+            tool_choice: None,
+            top_k: None,
+            user: None,
+            extra: serde_json::Map::new(),
+        }),
+        client_disconnected,
+        stream_sink: None,
+        api_key_id: None,
+        combo_override: None,
+        targets_override: None,
+        request_headers: std::collections::BTreeMap::new(),
+        request_body_json: None,
+        race_cancelled: false,
+        race_cancel: None,
+        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
+        compressed_messages: Arc::new(std::sync::OnceLock::new()),
+        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
+        pii_session: Arc::new(parking_lot::Mutex::new(None)),
+        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
+        proxy_override: None,
+        pinned_adapters: Default::default(),
     }
 }
 
@@ -205,102 +217,42 @@ async fn test_concurrent_compression_stats_isolation() {
     // Request 1: compressible (> 1000 chars with multiple redundant spaces)
     let compressible_content = "hello   world   this   is   a   test   ".repeat(50);
     let (_tx1, rx1) = tokio::sync::watch::channel(None);
-    let req1 = PipelineRequest {
-        request_id: RequestId::new(),
-        trace_id: TraceId::new(),
-        combo_id: ComboId(1),
-        openai_request: Arc::new(OpenAIRequest {
-            model: "model-compressible".into(),
-            messages: vec![openproxy_types::OpenAIMessage {
-                role: "user".into(),
-                content: Some(serde_json::Value::String(compressible_content)),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                extra: serde_json::Map::new(),
-            }],
-            stream: false,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            top_k: None,
-            user: None,
+    let req1 = test_pipeline_request(
+        "model-compressible",
+        vec![openproxy_types::OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::Value::String(compressible_content)),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
             extra: serde_json::Map::new(),
-        }),
-        client_disconnected: rx1,
-        stream_sink: None,
-        api_key_id: None,
-        combo_override: None,
-        targets_override: None,
-        request_headers: std::collections::BTreeMap::new(),
-        request_body_json: None,
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-        compressed_messages: Arc::new(std::sync::OnceLock::new()),
-        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
-        pii_session: Arc::new(parking_lot::Mutex::new(None)),
-        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
-        proxy_override: None,
-        pinned_adapters: Default::default(),
-    };
+        }],
+        rx1,
+    );
 
     // Request 2: uncompressible (short message < 1000 chars)
     let (_tx2, rx2) = tokio::sync::watch::channel(None);
-    let req2 = PipelineRequest {
-        request_id: RequestId::new(),
-        trace_id: TraceId::new(),
-        combo_id: ComboId(1),
-        openai_request: Arc::new(OpenAIRequest {
-            model: "model-uncompressed".into(),
-            messages: vec![openproxy_types::OpenAIMessage {
-                role: "user".into(),
-                content: Some(serde_json::Value::String("short text".into())),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                extra: serde_json::Map::new(),
-            }],
-            stream: false,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            top_k: None,
-            user: None,
+    let req2 = test_pipeline_request(
+        "model-uncompressed",
+        vec![openproxy_types::OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::Value::String("short text".into())),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
             extra: serde_json::Map::new(),
-        }),
-        client_disconnected: rx2,
-        stream_sink: None,
-        api_key_id: None,
-        combo_override: None,
-        targets_override: None,
-        request_headers: std::collections::BTreeMap::new(),
-        request_body_json: None,
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-        compressed_messages: Arc::new(std::sync::OnceLock::new()),
-        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
-        pii_session: Arc::new(parking_lot::Mutex::new(None)),
-        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
-        proxy_override: None,
-        pinned_adapters: Default::default(),
-    };
+        }],
+        rx2,
+    );
 
     let ctx1 = crate::context::PipelineContext::new(req1.clone(), pipeline.clone());
     let ctx2 = crate::context::PipelineContext::new(req2.clone(), pipeline.clone());
 
     let task1 = tokio::spawn(async move {
-        crate::stages::target::prepare_messages_for_formatting(&ctx1);
+        crate::stages::target::prefix::prepare_messages_for_formatting(&ctx1);
     });
     let task2 = tokio::spawn(async move {
-        crate::stages::target::prepare_messages_for_formatting(&ctx2);
+        crate::stages::target::prefix::prepare_messages_for_formatting(&ctx2);
     });
 
     let (res1, res2) = tokio::join!(task1, task2);
@@ -422,7 +374,7 @@ async fn test_high_concurrency_compression_stats_isolation() {
         reqs.push((is_compressible, req));
 
         tasks.push(tokio::spawn(async move {
-            crate::stages::target::prepare_messages_for_formatting(&ctx);
+            crate::stages::target::prefix::prepare_messages_for_formatting(&ctx);
         }));
     }
 
@@ -486,44 +438,10 @@ async fn test_compression_stats_empty_requests() {
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
     let (_tx, rx) = tokio::sync::watch::channel(None);
-    let req = PipelineRequest {
-        request_id: RequestId::new(),
-        trace_id: TraceId::new(),
-        combo_id: ComboId(1),
-        openai_request: Arc::new(OpenAIRequest {
-            model: "test-model".into(),
-            messages: vec![],
-            stream: false,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            top_k: None,
-            user: None,
-            extra: serde_json::Map::new(),
-        }),
-        client_disconnected: rx,
-        stream_sink: None,
-        api_key_id: None,
-        combo_override: None,
-        targets_override: None,
-        request_headers: std::collections::BTreeMap::new(),
-        request_body_json: None,
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-        compressed_messages: Arc::new(std::sync::OnceLock::new()),
-        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
-        pii_session: Arc::new(parking_lot::Mutex::new(None)),
-        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
-        proxy_override: None,
-        pinned_adapters: Default::default(),
-    };
+    let req = test_pipeline_request("test-model", vec![], rx);
 
     let ctx = crate::context::PipelineContext::new(req.clone(), pipeline);
-    let prepared = crate::stages::target::prepare_messages_for_formatting(&ctx);
+    let prepared = crate::stages::target::prefix::prepare_messages_for_formatting(&ctx);
     assert!(prepared.is_empty(), "prepared messages must be empty");
 
     let guard = req.compression_stats.lock();
@@ -570,52 +488,22 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
 
     let (_tx, rx) = tokio::sync::watch::channel(None);
     let compressible_content = "hello   world   this   is   a   test   ".repeat(50);
-    let req = PipelineRequest {
-        request_id: RequestId::new(),
-        trace_id: TraceId::new(),
-        combo_id: ComboId(1),
-        openai_request: Arc::new(OpenAIRequest {
-            model: "test-model".into(),
-            messages: vec![openproxy_types::OpenAIMessage {
-                role: "user".into(),
-                content: Some(serde_json::Value::String(compressible_content)),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
-                extra: serde_json::Map::new(),
-            }],
-            stream: false,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            top_k: None,
-            user: None,
+    let req = test_pipeline_request(
+        "test-model",
+        vec![openproxy_types::OpenAIMessage {
+            role: "user".into(),
+            content: Some(serde_json::Value::String(compressible_content)),
+            name: None,
+            tool_calls: None,
+            tool_call_id: None,
             extra: serde_json::Map::new(),
-        }),
-        client_disconnected: rx,
-        stream_sink: None,
-        api_key_id: None,
-        combo_override: None,
-        targets_override: None,
-        request_headers: std::collections::BTreeMap::new(),
-        request_body_json: None,
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-        compressed_messages: Arc::new(std::sync::OnceLock::new()),
-        active_system_prefix: Arc::new(parking_lot::Mutex::new(None)),
-        pii_session: Arc::new(parking_lot::Mutex::new(None)),
-        compression_stats: Arc::new(parking_lot::Mutex::new(None)),
-        proxy_override: None,
-        pinned_adapters: Default::default(),
-    };
+        }],
+        rx,
+    );
 
     // Attempt 1: Prepares messages, encounters failure
     let ctx1 = crate::context::PipelineContext::new(req.clone(), pipeline.clone());
-    let _ = crate::stages::target::prepare_messages_for_formatting(&ctx1);
+    let _ = crate::stages::target::prefix::prepare_messages_for_formatting(&ctx1);
     {
         let guard = req.compression_stats.lock();
         assert!(guard.is_some(), "attempt 1 must populate compression_stats");
@@ -635,7 +523,7 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
     // Attempt 2 (Retry on next target with cloned request)
     let cloned_req = req;
     let ctx2 = crate::context::PipelineContext::new(cloned_req.clone(), pipeline);
-    let _ = crate::stages::target::prepare_messages_for_formatting(&ctx2);
+    let _ = crate::stages::target::prefix::prepare_messages_for_formatting(&ctx2);
 
     // Verify stats were preserved across retry without re-allocating or zeroing
     {

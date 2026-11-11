@@ -13,8 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-#[tokio::test]
-async fn test_tier2_payload_exceeding_32mb_rejected() {
+#[test]
+fn test_tier2_payload_exceeding_32mb_rejected() {
+    crate::run_with_big_stack(test_tier2_payload_exceeding_32mb_rejected_body);
+}
+
+async fn test_tier2_payload_exceeding_32mb_rejected_body() {
     let harness = TestHarness::new().await;
     let req = harness.client_request(
         Method::POST,
@@ -25,16 +29,24 @@ async fn test_tier2_payload_exceeding_32mb_rejected() {
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
-#[tokio::test]
-async fn test_tier2_empty_payload_chat_rejected() {
+#[test]
+fn test_tier2_empty_payload_chat_rejected() {
+    crate::run_with_big_stack(test_tier2_empty_payload_chat_rejected_body);
+}
+
+async fn test_tier2_empty_payload_chat_rejected_body() {
     let harness = TestHarness::new().await;
     let req = harness.client_request(Method::POST, "/v1/chat/completions", Body::empty());
     let (status, _, _) = harness.oneshot(req).await;
     assert!(status.is_client_error() || status.is_server_error());
 }
 
-#[tokio::test]
-async fn test_tier2_malformed_json_rejected() {
+#[test]
+fn test_tier2_malformed_json_rejected() {
+    crate::run_with_big_stack(test_tier2_malformed_json_rejected_body);
+}
+
+async fn test_tier2_malformed_json_rejected_body() {
     let harness = TestHarness::new().await;
     let req = harness.client_request(
         Method::POST,
@@ -45,8 +57,12 @@ async fn test_tier2_malformed_json_rejected() {
     assert!(status.is_client_error() || status.is_server_error());
 }
 
-#[tokio::test]
-async fn test_tier2_empty_messages_array_handled() {
+#[test]
+fn test_tier2_empty_messages_array_handled() {
+    crate::run_with_big_stack(test_tier2_empty_messages_array_handled_body);
+}
+
+async fn test_tier2_empty_messages_array_handled_body() {
     let harness = TestHarness::new().await;
     let (status, _, _) = harness
         .client_chat_raw(json!({"model": "mock-gpt-4", "messages": []}))
@@ -54,15 +70,23 @@ async fn test_tier2_empty_messages_array_handled() {
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
-async fn test_tier2_large_valid_payload_accepted() {
+#[test]
+fn test_tier2_large_valid_payload_accepted() {
+    crate::run_with_big_stack(test_tier2_large_valid_payload_accepted_body);
+}
+
+async fn test_tier2_large_valid_payload_accepted_body() {
     let harness = TestHarness::new().await;
     let (status, _, _) = harness.client_chat_raw(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "A".repeat(500 * 1024)}], "stream": false})).await;
     assert_eq!(status, StatusCode::OK);
 }
 
-#[tokio::test]
-async fn test_tier2_auth_missing_token_when_keys_exist() {
+#[test]
+fn test_tier2_auth_missing_token_when_keys_exist() {
+    crate::run_with_big_stack(test_tier2_auth_missing_token_when_keys_exist_body);
+}
+
+async fn test_tier2_auth_missing_token_when_keys_exist_body() {
     let harness = TestHarness::new().await;
     let req = Request::builder()
         .method(Method::POST)
@@ -77,16 +101,24 @@ async fn test_tier2_auth_missing_token_when_keys_exist() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_tier2_auth_invalid_bearer_token() {
+#[test]
+fn test_tier2_auth_invalid_bearer_token() {
+    crate::run_with_big_stack(test_tier2_auth_invalid_bearer_token_body);
+}
+
+async fn test_tier2_auth_invalid_bearer_token_body() {
     let harness = TestHarness::new().await;
     let req = Request::builder().method(Method::POST).uri("/v1/chat/completions").header(header::AUTHORIZATION, "Bearer invalid_secret_token_12345").header(header::CONTENT_TYPE, "application/json").body(Body::from(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Invalid auth"}]}).to_string())).unwrap();
     let (status, _, _) = harness.oneshot(req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_tier2_auth_manage_scope_required_for_admin() {
+#[test]
+fn test_tier2_auth_manage_scope_required_for_admin() {
+    crate::run_with_big_stack(test_tier2_auth_manage_scope_required_for_admin_body);
+}
+
+async fn test_tier2_auth_manage_scope_required_for_admin_body() {
     let harness = TestHarness::new().await;
     let req = Request::builder()
         .method(Method::GET)
@@ -101,8 +133,12 @@ async fn test_tier2_auth_manage_scope_required_for_admin() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_tier2_auth_revoked_key_rejected() {
+#[test]
+fn test_tier2_auth_revoked_key_rejected() {
+    crate::run_with_big_stack(test_tier2_auth_revoked_key_rejected_body);
+}
+
+async fn test_tier2_auth_revoked_key_rejected_body() {
     let harness = TestHarness::new().await;
     let (_, new_key) = harness
         .admin_post(
@@ -135,8 +171,12 @@ async fn test_tier2_auth_revoked_key_rejected() {
     assert_eq!(harness.oneshot(req2).await.0, StatusCode::UNAUTHORIZED);
 }
 
-#[tokio::test]
-async fn test_tier2_auth_public_endpoints_exempt() {
+#[test]
+fn test_tier2_auth_public_endpoints_exempt() {
+    crate::run_with_big_stack(test_tier2_auth_public_endpoints_exempt_body);
+}
+
+async fn test_tier2_auth_public_endpoints_exempt_body() {
     let harness = TestHarness::new().await;
     let req_v1 = Request::builder()
         .method(Method::GET)
@@ -188,8 +228,12 @@ impl http_body::Body for OkBody {
     }
 }
 
-#[tokio::test]
-async fn test_tier2_disconnect_cancel_watch_fires_on_drop() {
+#[test]
+fn test_tier2_disconnect_cancel_watch_fires_on_drop() {
+    crate::run_with_big_stack(test_tier2_disconnect_cancel_watch_fires_on_drop_body);
+}
+
+async fn test_tier2_disconnect_cancel_watch_fires_on_drop_body() {
     let (tx, rx) = new_cancel_pair();
     let fired = Arc::new(AtomicBool::new(false));
     let mut body = DisconnectBody::new(ErrBody, tx, Arc::clone(&fired));
@@ -203,8 +247,12 @@ async fn test_tier2_disconnect_cancel_watch_fires_on_drop() {
     );
 }
 
-#[tokio::test]
-async fn test_tier2_disconnect_normal_completion_no_cancel() {
+#[test]
+fn test_tier2_disconnect_normal_completion_no_cancel() {
+    crate::run_with_big_stack(test_tier2_disconnect_normal_completion_no_cancel_body);
+}
+
+async fn test_tier2_disconnect_normal_completion_no_cancel_body() {
     let (tx, rx) = new_cancel_pair();
     let fired = Arc::new(AtomicBool::new(false));
     let mut body = DisconnectBody::new(OkBody { done: false }, tx, Arc::clone(&fired));
@@ -225,16 +273,24 @@ async fn test_tier2_disconnect_normal_completion_no_cancel() {
     );
 }
 
-#[tokio::test]
-async fn test_tier2_disconnect_cancellation_token_link() {
+#[test]
+fn test_tier2_disconnect_cancellation_token_link() {
+    crate::run_with_big_stack(test_tier2_disconnect_cancellation_token_link_body);
+}
+
+async fn test_tier2_disconnect_cancellation_token_link_body() {
     let cancel = CancellationToken::new();
     assert!(!cancel.is_cancelled());
     cancel.cancel();
     assert!(cancel.is_cancelled());
 }
 
-#[tokio::test]
-async fn test_tier2_disconnect_half_close_detection() {
+#[test]
+fn test_tier2_disconnect_half_close_detection() {
+    crate::run_with_big_stack(test_tier2_disconnect_half_close_detection_body);
+}
+
+async fn test_tier2_disconnect_half_close_detection_body() {
     let (tx, rx) = new_cancel_pair();
     let fired = Arc::new(AtomicBool::new(false));
     let mut body = DisconnectBody::new(ErrBody, tx, Arc::clone(&fired));
@@ -244,8 +300,12 @@ async fn test_tier2_disconnect_half_close_detection() {
     assert!(rx.borrow().is_some());
 }
 
-#[tokio::test]
-async fn test_tier2_disconnect_aborted_upstream_stops_tokens() {
+#[test]
+fn test_tier2_disconnect_aborted_upstream_stops_tokens() {
+    crate::run_with_big_stack(test_tier2_disconnect_aborted_upstream_stops_tokens_body);
+}
+
+async fn test_tier2_disconnect_aborted_upstream_stops_tokens_body() {
     let harness = TestHarness::new().await;
     harness.mock_handle.set_delay(Duration::from_millis(50));
     let cancel = CancellationToken::new();
@@ -265,8 +325,12 @@ async fn test_tier2_disconnect_aborted_upstream_stops_tokens() {
     harness.mock_handle.clear_delay();
 }
 
-#[tokio::test]
-async fn test_tier2_timeout_upstream_delay_exceeds_budget() {
+#[test]
+fn test_tier2_timeout_upstream_delay_exceeds_budget() {
+    crate::run_with_big_stack(test_tier2_timeout_upstream_delay_exceeds_budget_body);
+}
+
+async fn test_tier2_timeout_upstream_delay_exceeds_budget_body() {
     let harness = TestHarness::new().await;
     harness.mock_handle.set_delay(Duration::from_secs(3));
     let mut req = harness.client_request(Method::POST, "/v1/chat/completions", Body::from(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Timeout test"}], "stream": false}).to_string()));
@@ -281,8 +345,12 @@ async fn test_tier2_timeout_upstream_delay_exceeds_budget() {
     );
 }
 
-#[tokio::test]
-async fn test_tier2_retry_on_500_switches_target() {
+#[test]
+fn test_tier2_retry_on_500_switches_target() {
+    crate::run_with_big_stack(test_tier2_retry_on_500_switches_target_body);
+}
+
+async fn test_tier2_retry_on_500_switches_target_body() {
     let harness = TestHarness::new().await;
     let p2_id = "mock-prov-2";
     {
@@ -377,8 +445,12 @@ async fn test_tier2_retry_on_500_switches_target() {
     assert_eq!(resp["choices"][0]["finish_reason"], "stop");
 }
 
-#[tokio::test]
-async fn test_tier2_non_retryable_400_fails_fast() {
+#[test]
+fn test_tier2_non_retryable_400_fails_fast() {
+    crate::run_with_big_stack(test_tier2_non_retryable_400_fails_fast_body);
+}
+
+async fn test_tier2_non_retryable_400_fails_fast_body() {
     let harness = TestHarness::new().await;
     harness.mock_handle.set_error(
         StatusCode::BAD_REQUEST,
@@ -391,8 +463,12 @@ async fn test_tier2_non_retryable_400_fails_fast() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
-#[tokio::test]
-async fn test_tier2_exhausted_retries_returns_upstream_error() {
+#[test]
+fn test_tier2_exhausted_retries_returns_upstream_error() {
+    crate::run_with_big_stack(test_tier2_exhausted_retries_returns_upstream_error_body);
+}
+
+async fn test_tier2_exhausted_retries_returns_upstream_error_body() {
     let harness = TestHarness::new().await;
     harness.mock_handle.set_error(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -405,8 +481,12 @@ async fn test_tier2_exhausted_retries_returns_upstream_error() {
     assert!(status.is_server_error());
 }
 
-#[tokio::test]
-async fn test_tier2_circuit_breaker_tripping() {
+#[test]
+fn test_tier2_circuit_breaker_tripping() {
+    crate::run_with_big_stack(test_tier2_circuit_breaker_tripping_body);
+}
+
+async fn test_tier2_circuit_breaker_tripping_body() {
     let harness = TestHarness::new().await;
     let cb = harness.app_state.circuit_breaker();
     let key = openproxy_pipeline::circuit_breaker::CircuitBreakerKey::Account(
@@ -430,8 +510,12 @@ async fn test_tier2_circuit_breaker_tripping() {
     );
 }
 
-#[tokio::test]
-async fn test_tier2_routing_with_provider_and_account_headers() {
+#[test]
+fn test_tier2_routing_with_provider_and_account_headers() {
+    crate::run_with_big_stack(test_tier2_routing_with_provider_and_account_headers_body);
+}
+
+async fn test_tier2_routing_with_provider_and_account_headers_body() {
     let harness = TestHarness::new().await;
     let req = Request::builder()
         .method(Method::POST)
@@ -458,8 +542,12 @@ async fn test_tier2_routing_with_provider_and_account_headers() {
     assert_eq!(resp["object"], "chat.completion");
 }
 
-#[tokio::test]
-async fn test_tier2_admin_key_simulation_header() {
+#[test]
+fn test_tier2_admin_key_simulation_header() {
+    crate::run_with_big_stack(test_tier2_admin_key_simulation_header_body);
+}
+
+async fn test_tier2_admin_key_simulation_header_body() {
     let harness = TestHarness::new().await;
     let req = Request::builder()
         .method(Method::POST)

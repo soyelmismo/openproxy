@@ -1,0 +1,189 @@
+/* Column widths and alignment (desktop) */
+.log-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  background: var(--color-bg);
+  color: var(--color-text);
+  border: 0;
+  border-bottom: var(--border-w) var(--border-style) var(--color-border-soft);
+  padding: 0.4rem var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+
+.logs-scroll-area [data-key] {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+}
+
+.log-row:hover { background: var(--color-surface-2); }
+.log-row:active { transform: translateY(1px); }
+.log-row.streaming { border-left: 3px solid var(--color-success); }
+.log-row.error { background: var(--color-error-soft); }
+.log-row.error:hover { background: var(--color-error-soft); }
+.log-row.processing { background: var(--color-warn-soft); }
+.log-row.processing:hover { background: var(--color-warn-soft); }
+.log-row.loser { opacity: 0.65; }
+.log-row.predict-skipped { opacity: 0.55; background: var(--color-surface-2); }
+.log-row.predict-skipped:hover { opacity: 0.85; background: var(--color-surface-2); }
+.log-status--skipped { color: var(--color-text-muted); font-weight: 500; text-transform: uppercase; font-size: var(--fs-xs); }
+
+.log-row > span {
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-row .log-time {
+  flex: 0 0 170px;
+  width: 170px;
+  min-width: 170px;
+  max-width: 170px;
+  color: var(--color-text-muted);
+}
+
+.log-row .log-phase {
+  flex: 0 0 155px;
+  width: 155px;
+  min-width: 155px;
+  max-width: 155px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.log-row .log-phase .log-phase-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.log-row .log-type {
+  flex: 0 0 78px;
+  width: 78px;
+  min-width: 78px;
+  max-width: 78px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.log-row .log-client {
+  flex: 0 0 44px;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.log-row .log-status {
+  flex: 0 0 58px;
+  width: 58px;
+  min-width: 58px;
+  max-width: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-weight: 600;
+}
+
+.log-row .log-provider {
+  flex: 1 1 120px;
+  width: auto;
+  min-width: 110px;
+  max-width: 170px;
+}
+
+.log-row .log-model {
+  flex: 2.5 1 200px;
+  width: auto;
+  min-width: 180px;
+  max-width: none;
+}
+
+.log-row .log-tokens {
+  flex: 0 0 115px;
+  width: 115px;
+  min-width: 115px;
+  max-width: 115px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.log-row .log-latency {
+  flex: 0 0 75px;
+  width: 75px;
+  min-width: 75px;
+  max-width: 75px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.log-row .log-cost {
+  flex: 0 0 70px;
+  width: 70px;
+  min-width: 70px;
+  max-width: 70px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-primary);
+}
+
+.log-row .log-cache {
+  flex: 0 0 82px;
+  width: 82px;
+  min-width: 82px;
+  max-width: 82px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.log-row .log-compression {
+  flex: 0 0 80px;
+  width: 80px;
+  min-width: 80px;
+  max-width: 80px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-success, #22c55e);
+  font-size: max(10px, 0.85em);
+}
+.log-row .log-compression--none { color: var(--color-text-muted); font-weight: 400; }
+
+/* The row badges were sized by an inline 0.72rem (~9.3px) in the component,
+   which no stylesheet floor could reach. Size lives here now, floored at the
+   readable minimum, and applies in both the table row and the mobile card. */
+.log-cache,
+.log-cost,
+.log-compression {
+  font-size: max(10px, 0.78em);
+  line-height: 1.25;
+}
+

@@ -1,5 +1,6 @@
 use crate::{error::ApiError, state::AppState};
 use axum::{extract::State, http::HeaderMap};
+use openproxy_core::api_key_quotas;
 use openproxy_core::api_keys::{self as core_api_keys, ApiKey};
 use openproxy_types::{CoreError, ids::ApiKeyId};
 use std::sync::Arc;
@@ -40,58 +41,6 @@ impl ValidatedApiToken {
     }
 }
 
-fn pattern_matches(spec: &str, candidate: &str) -> bool {
-    if spec == "*" || spec == candidate {
-        return true;
-    }
-    if spec
-        .strip_suffix('*')
-        .is_some_and(|p| candidate.starts_with(p))
-    {
-        return true;
-    }
-    let Some(suffix) = spec.strip_prefix('*') else {
-        return false;
-    };
-    candidate.ends_with(suffix)
-}
-
-fn matches_any_model_pattern(
-    pattern: &str,
-    model: &str,
-    bare_model: &str,
-    full_id: Option<&str>,
-) -> bool {
-    if pattern_matches(pattern, model) {
-        return true;
-    }
-    if pattern_matches(pattern, bare_model) {
-        return true;
-    }
-    let Some(f) = full_id else {
-        return false;
-    };
-    pattern_matches(pattern, f)
-}
-
-fn is_provider_blacklisted(
-    blacklisted_provs: &[String],
-    provider_id: Option<&str>,
-    prov_from_model: Option<&str>,
-) -> bool {
-    if let Some(p) = provider_id
-        && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
-    {
-        return true;
-    }
-    if let Some(p) = prov_from_model
-        && blacklisted_provs.iter().any(|bp| bp == p || bp == "*")
-    {
-        return true;
-    }
-    false
-}
-
 fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("authorization")
@@ -127,6 +76,37 @@ async fn check_anonymous_fallback(state: &AppState) -> Result<Option<ValidatedAp
 }
 
 /// Resolve the caller from the `Authorization` header.
+/// Reject the request with 429 when the key already spent its dollar cap in
+/// any enabled quota window. Keys without a quota row pass untouched.
+async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), ApiError> {
+    let violation = state
+        .db_pool()
+        .spawn_read(move |r| api_key_quotas::check(r, key_id))
+        .await
+        .map_err(|e| {
+            tracing::error!(%e, "db error checking api key quota");
+            ApiError(CoreError::Internal("quota check failed".into()))
+        })?;
+    let Some(violation) = violation else {
+        return Ok(());
+    };
+    tracing::warn!(
+        key_id = key_id.0,
+        window = violation.window,
+        spent = violation.spent_usd,
+        cap = violation.cap_usd,
+        "api key quota exceeded"
+    );
+    Err(ApiError(CoreError::QuotaExceeded {
+        window: violation.window.to_string(),
+        spent_usd: violation.spent_usd,
+        cap_usd: violation.cap_usd,
+        resets_at: violation
+            .resets_at
+            .unwrap_or_else(|| "rolling window".into()),
+    }))
+}
+
 pub(crate) async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
@@ -169,16 +149,20 @@ pub(crate) async fn authenticate(
 
         validate_key_record(&target_key, "chat")?;
 
-        return Ok(Some(ValidatedApiToken {
+        let token = ValidatedApiToken {
             key_id: target_key.id,
             key: Arc::new(target_key),
-        }));
+        };
+        enforce_key_quota(state, token.key_id).await?;
+        return Ok(Some(token));
     }
 
-    Ok(Some(ValidatedApiToken {
+    let token = ValidatedApiToken {
         key_id: key.id,
         key,
-    }))
+    };
+    enforce_key_quota(state, token.key_id).await?;
+    Ok(Some(token))
 }
 
 pub(crate) fn validate_key_record_any_scope(

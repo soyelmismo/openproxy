@@ -60,9 +60,7 @@ pub struct AuthMeResponse {
 pub async fn auth_me(
     identity: Option<axum::Extension<AdminIdentity>>,
 ) -> Result<axum::Json<AuthMeResponse>, ApiError> {
-    let id = identity
-        .as_ref()
-        .map(|axum::Extension(i)| i);
+    let id = identity.as_ref().map(|axum::Extension(i)| i);
 
     match id {
         Some(identity) => match &identity.key {
@@ -282,12 +280,7 @@ pub(crate) async fn authenticate_admin_ws(
 
     let key = match (extract_bearer_token(headers)?, ticket) {
         (Some(token), _) => {
-            crate::middleware::auth::verify_key_credentials(
-                state,
-                token,
-                "manage",
-            )
-            .await?
+            crate::middleware::auth::verify_key_credentials(state, token, "manage").await?
         }
         (None, Some(t)) if !t.is_empty() => authenticate_ws_ticket(state, t).await?,
         _ => {
@@ -337,6 +330,8 @@ pub async fn admin_auth_middleware(
             //   - GET /auth/me (or /admin/api/auth/me) (introspect own key & scopes)
             //   - GET /formats (or /admin/api/formats) (read-only wire format metadata)
             //   - GET /usage/* (or /admin/api/usage/*) (read-only usage analytics)
+            //   - GET /models/catalog (key-filtered catalog + pricing; same view
+            //     the key already gets from `GET /v1/models`, read-only)
             // Every other endpoint (config, keys, proxies, providers, combos, debug, logs,
             // notifications, backup, etc.) or mutating method is rejected with 403 Forbidden.
             if !identity.has_manage_scope() {
@@ -350,6 +345,7 @@ pub async fn admin_auth_middleware(
                 let is_allowed_analytics_call = method == axum::http::Method::GET
                     && (stripped_path == "/auth/me"
                         || stripped_path == "/formats"
+                        || stripped_path == "/models/catalog"
                         || stripped_path.starts_with("/usage/"));
 
                 if !is_allowed_analytics_call {

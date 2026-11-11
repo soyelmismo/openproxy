@@ -1,0 +1,86 @@
+
+/* CHARTS — SVG chart components, KPI tiles, filter dropdowns,
+   analytics layout */
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  font-family: var(--font-mono);
+}
+.chart-svg text {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.chart-axis-label {
+  font-size: 10px;
+  fill: var(--color-text-muted);
+}
+.chart-empty {
+  padding: var(--space-8);
+  text-align: center;
+  font-size: var(--fs-sm);
+}
+
+.kpi-tile {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.kpi-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+}
+.kpi-value {
+  font-size: var(--fs-2xl);
+  font-weight: bold;
+  font-family: var(--font-mono);
+  line-height: var(--lh-tight);
+}
+.kpi-sub {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.kpi-trend-up { color: var(--color-success); }
+.kpi-trend-down { color: var(--color-error); }
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.analytics-filters {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  margin-bottom: var(--space-3);
+}
+.filter-dropdown {
+  padding: 0.35rem 0.6rem;
+  border: var(--border-w) var(--border-style) var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+  cursor: pointer;
+  min-width: 140px;
+}
+.filter-dropdown:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
+  border-color: var(--color-primary);
+}
+

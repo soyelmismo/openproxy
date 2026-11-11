@@ -287,6 +287,7 @@ export function renderProvidersGrid(): TemplateResult {
           </span>
           <a
             class="provider-name-text"
+            title=${p.name}
             href="#/providers/${encodeURIComponent(p.id)}"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
@@ -294,7 +295,6 @@ export function renderProvidersGrid(): TemplateResult {
           >
             ${p.name}
           </a>
-          <code class="provider-id-code">${p.id}</code>
           ${p.active ? html`` : html`<small class="dg-dim">${t("providers.list.card.inactive_suffix")}</small>`}
         </div>
       `,
@@ -477,7 +477,8 @@ export function renderProvidersGrid(): TemplateResult {
             aria-pressed=${currentFilter === 'all'}
             @click=${() => onUpdateListFilter('all')}
           >
-            ${t("providers.list.filter.all")} (${list.length})
+            <span class="filter-tab-label">${t("providers.list.filter.all")}</span>
+            <span class="filter-tab-count">(${list.length})</span>
           </button>
           <button
             type="button"
@@ -485,7 +486,8 @@ export function renderProvidersGrid(): TemplateResult {
             aria-pressed=${currentFilter === 'active'}
             @click=${() => onUpdateListFilter('active')}
           >
-            ${t("providers.list.filter.active")} (${activeCount})
+            <span class="filter-tab-label">${t("providers.list.filter.active")}</span>
+            <span class="filter-tab-count">(${activeCount})</span>
           </button>
           <button
             type="button"
@@ -493,7 +495,8 @@ export function renderProvidersGrid(): TemplateResult {
             aria-pressed=${currentFilter === 'inactive'}
             @click=${() => onUpdateListFilter('inactive')}
           >
-            ${t("providers.list.filter.inactive")} (${inactiveCount})
+            <span class="filter-tab-label">${t("providers.list.filter.inactive")}</span>
+            <span class="filter-tab-count">(${inactiveCount})</span>
           </button>
         </div>
       </div>

@@ -36,6 +36,61 @@ export interface AttemptState {
   source: "live" | "snapshot" | "db";
   endpointKind: string | null;
   apiKeyId: number | null;
+  /** Session fingerprint (decimal string) grouping this attempt in the sessions view. */
+  sessionHash: string | null;
+}
+
+/** Bucket key for attempts that carry no session fingerprint. */
+export const NO_SESSION_KEY = "__none__";
+
+export interface SessionGroup {
+  /** Session fingerprint (decimal string), or `NO_SESSION_KEY`. */
+  key: string;
+  /** Short display label, e.g. `0x9f3a21bc…` or `No session`. */
+  label: string;
+  attempts: AttemptState[];
+  inflightCount: number;
+  lastFinished: AttemptState | null;
+  /** Max `updatedAtMs` across the group's attempts (recency sort key). */
+  lastActivityMs: number;
+  total: number;
+}
+
+export type SessionGroupState = "pending" | "ok" | "error" | "neutral";
+
+/**
+ * Color state of a session header: any in-flight attempt wins (pending),
+ * otherwise the last finished attempt decides (ok / error / neutral for
+ * cancelled or predict-skipped rows).
+ */
+export function sessionGroupState(g: SessionGroup): SessionGroupState {
+  if (g.inflightCount > 0) return "pending";
+  const last = g.lastFinished;
+  if (!last) return "neutral";
+  if (
+    last.terminalKind === "cancelled" ||
+    last.terminalKind === "predict_skipped" ||
+    last.statusCode === 0
+  ) {
+    return "neutral";
+  }
+  if (last.statusCode != null && last.statusCode >= 400) return "error";
+  if (last.statusCode != null && last.statusCode < 300) return "ok";
+  if (last.error) return "error";
+  return "neutral";
+}
+
+/** Short display label for a session bucket key. */
+export function formatSessionLabel(key: string): string {
+  if (key === NO_SESSION_KEY) return "No session";
+  try {
+    // Low 8 hex digits of the u64 fingerprint (high digits are usually zero,
+    // so truncating from the left would collapse distinct sessions).
+    const hex = BigInt(key).toString(16).toUpperCase().padStart(8, "0");
+    return `…${hex.slice(-8)}`;
+  } catch {
+    return key.slice(0, 10);
+  }
 }
 
 export type LiveLogEnvelopeV2 =
@@ -65,6 +120,7 @@ export interface AttemptEventPayload {
   upstream_model_id?: string;
   endpoint_kind?: string;
   api_key_id?: number;
+  session_hash?: string | null;
 }
 
 const STAGE_RANK = {
@@ -240,6 +296,7 @@ class LiveLogsStore {
         row: null,  // Server never sends row data in snapshot attempts
         source: "snapshot",
         endpointKind: raw.endpointKind ?? (("endpoint_kind" in raw ? (raw as Record<string, unknown>)["endpoint_kind"] as string : null)) ?? null,
+        sessionHash: raw.sessionHash ?? null,
         apiKeyId: raw.apiKeyId ?? (("api_key_id" in raw ? (raw as Record<string, unknown>)["api_key_id"] as number : null)) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
@@ -284,6 +341,7 @@ class LiveLogsStore {
         if (raw.statusCode != null) existing.statusCode = raw.statusCode;
         if (raw.error != null) existing.error = raw.error;
         if (raw.endpointKind != null) existing.endpointKind = raw.endpointKind;
+        if (raw.sessionHash != null) existing.sessionHash = raw.sessionHash;
         if (raw.apiKeyId != null) existing.apiKeyId = raw.apiKeyId;
         else if ("api_key_id" in raw && (raw as Record<string, unknown>)["api_key_id"] != null) {
           existing.apiKeyId = (raw as Record<string, unknown>)["api_key_id"] as number;
@@ -313,6 +371,7 @@ class LiveLogsStore {
         row: null,
         source: "snapshot",
         endpointKind: raw.endpointKind ?? (("endpoint_kind" in raw ? (raw as Record<string, unknown>)["endpoint_kind"] as string : null)) ?? null,
+        sessionHash: raw.sessionHash ?? null,
         apiKeyId: raw.apiKeyId ?? (("api_key_id" in raw ? (raw as Record<string, unknown>)["api_key_id"] as number : null)) ?? null,
       };
       insertionOrder.set(a, ++insertionCounter);
@@ -393,6 +452,7 @@ class LiveLogsStore {
       row: null,
       source: "live",
       endpointKind: event.endpoint_kind ?? null,
+      sessionHash: event.session_hash ?? null,
       apiKeyId: event.api_key_id ?? null,
     };
 
@@ -413,6 +473,7 @@ class LiveLogsStore {
       if (event.endpoint_kind) {
         a.endpointKind = event.endpoint_kind;
       }
+      if (event.session_hash) a.sessionHash = event.session_hash;
       if (event.api_key_id != null) {
         a.apiKeyId = event.api_key_id;
       }
@@ -488,6 +549,7 @@ class LiveLogsStore {
         row,
         source: "db",
         endpointKind: row.endpoint_kind || null,
+        sessionHash: row.session_hash ?? null,
         apiKeyId: row.api_key_id ?? null,
       };
     } else {
@@ -503,6 +565,7 @@ class LiveLogsStore {
       a.elapsedMsAtEvent = row.total_ms;
       a.source = "db";
       if (row.endpoint_kind) a.endpointKind = row.endpoint_kind;
+      if (row.session_hash) a.sessionHash = row.session_hash;
       if (row.api_key_id != null) a.apiKeyId = row.api_key_id;
       if (row.upstream_model_id !== undefined) a.upstreamModelId = row.upstream_model_id || "";
       if (row.provider_id !== undefined) a.providerId = row.provider_id || "";
@@ -672,6 +735,51 @@ class LiveLogsStore {
     }
     arr.sort((a, b) => this.stableSortFinished(a, b));
     return arr;
+  }
+
+  /**
+   * Group attempts (optionally pre-filtered) into session buckets keyed by
+   * their session fingerprint. Attempts without one land in a single
+   * `NO_SESSION_KEY` bucket so embeddings/audio one-offs don't flood the
+   * list with single-row groups. Groups sort by most recent activity; rows
+   * inside a group put in-flight attempts first (newest start), then
+   * finished attempts by completion time.
+   */
+  public selectSessionGroups(filter?: (a: AttemptState) => boolean): SessionGroup[] {
+    const byKey = new Map<string, SessionGroup>();
+    for (const a of this.attemptsByKey.values()) {
+      if (filter && !filter(a)) continue;
+      const key = a.sessionHash || NO_SESSION_KEY;
+      let g = byKey.get(key);
+      if (!g) {
+        g = {
+          key,
+          label: formatSessionLabel(key),
+          attempts: [],
+          inflightCount: 0,
+          lastFinished: null,
+          lastActivityMs: 0,
+          total: 0,
+        };
+        byKey.set(key, g);
+      }
+      g.attempts.push(a);
+      g.total++;
+      if (!a.terminal) g.inflightCount++;
+      if (a.updatedAtMs > g.lastActivityMs) g.lastActivityMs = a.updatedAtMs;
+      if (a.terminal && (!g.lastFinished || a.updatedAtMs > g.lastFinished.updatedAtMs)) {
+        g.lastFinished = a;
+      }
+    }
+    const groups = Array.from(byKey.values());
+    for (const g of groups) {
+      g.attempts.sort((a, b) => {
+        if (a.terminal !== b.terminal) return a.terminal ? 1 : -1;
+        return a.terminal ? this.stableSortFinished(a, b) : this.stableSort(a, b);
+      });
+    }
+    groups.sort((x, y) => y.lastActivityMs - x.lastActivityMs);
+    return groups;
   }
 
   public selectActiveApiKeyIds(): Set<number> {

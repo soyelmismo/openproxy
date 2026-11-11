@@ -223,7 +223,7 @@ async function pollNow(): Promise<void> {
 function renderLevelChecks(): TemplateResult {
   return html`${LEVELS.map((lvl: string) => {
     const id: string = `debug-level-filter-${lvl.toLowerCase()}`;
-    return html`<label class="debug-level-check" style="display:inline-flex;align-items:center;gap:0.25rem;margin-right:0.5rem;cursor:pointer;">
+    return html`<label class="debug-level-check cx-level-check" title="Filter ${lvl} entries">
       <input type="checkbox" id=${id} class="debug-level-filter" value=${lvl} ?checked=${filterLevels.has(lvl)} @change=${(e: Event) => onLevelToggle(lvl, e)}>
       <span class="debug-level-pill level-${lvl.toLowerCase()}">${lvl}</span>
     </label>`;
@@ -298,25 +298,21 @@ function renderDebugLogs(): TemplateResult {
     : "No debug log entries yet.";
 
   return html`
-    <div class="page-header"><h2>Debug Logs</h2>
-      <div class="actions">
-        <span class="debug-buffer-indicator" id="debug-buffer-indicator" style="font-size:0.85rem;color:var(--color-text-muted);margin-right:0.5rem;font-family:var(--font-mono);">Buffer: ${lastTotalInBuffer} / ${BUFFER_CAPACITY}</span>
+    <div class="cx-toolbar cx-debug-toolbar" title="Live tail of the server debug ring buffer" aria-description="Live tail of the server debug ring buffer">
+      <h2 class="view-identity">Debug Logs</h2>
+      <div class="cx-debug-levels" role="group" aria-label="Filter by level">${renderLevelChecks()}</div>
+      <label class="cx-debug-field">
+        <span class="sr-only">Request ID</span>
+        <input type="text" id="debug-filter-request-id" placeholder="Request ID" autocomplete="off" @change=${onRidChange}>
+      </label>
+      <label class="cx-debug-field">
+        <span class="sr-only">Trace ID</span>
+        <input type="text" id="debug-filter-trace-id" placeholder="Trace ID" autocomplete="off" @change=${onTidChange}>
+      </label>
+      <span class="debug-buffer-indicator cx-debug-buffer" id="debug-buffer-indicator" title="Server ring buffer usage">Buffer: ${lastTotalInBuffer} / ${BUFFER_CAPACITY}</span>
+      <div class="cx-toolbar-actions">
         <button type="button" class="link" title="Copy all visible entries as Markdown to the clipboard" @click=${onCopyAll}>${icons.copy()} Copy all</button>
-        <button type="button" class="link" title="Clear the in-memory debug log ring buffer on the server" style="margin-left:0.5rem;" @click=${onClear}>${icons.trash()} Clear</button>
-      </div>
-    </div>
-    <div class="debug-filters" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-end;padding:0.5rem 0 1rem;border-bottom:1px solid var(--color-border-soft);margin-bottom:0.5rem;">
-      <div class="debug-filter-group" style="display:flex;flex-direction:column;gap:0.25rem;">
-        <span class="debug-filter-label" style="font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);">Level</span>
-        <div>${renderLevelChecks()}</div>
-      </div>
-      <div class="debug-filter-group" style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="debug-filter-label" for="debug-filter-request-id" style="font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);">Request ID</label>
-        <input type="text" id="debug-filter-request-id" placeholder="req-abc123" autocomplete="off" style="padding:0.25rem 0.5rem;border:1px solid var(--color-border-soft);min-width:12rem;background:var(--color-surface);color:var(--color-text);" @change=${onRidChange}>
-      </div>
-      <div class="debug-filter-group" style="display:flex;flex-direction:column;gap:0.25rem;">
-        <label class="debug-filter-label" for="debug-filter-trace-id" style="font-size:0.72rem;text-transform:uppercase;color:var(--color-text-muted);">Trace ID</label>
-        <input type="text" id="debug-filter-trace-id" placeholder="tr-def456" autocomplete="off" style="padding:0.25rem 0.5rem;border:1px solid var(--color-border-soft);min-width:12rem;background:var(--color-surface);color:var(--color-text);" @change=${onTidChange}>
+        <button type="button" class="link" title="Clear the in-memory debug log ring buffer on the server" @click=${onClear}>${icons.trash()} Clear</button>
       </div>
     </div>
     ${renderDataGrid<DebugLogEntry>({

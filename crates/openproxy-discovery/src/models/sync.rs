@@ -68,6 +68,84 @@ pub fn compute_diff<'a>(
 pub type SyncNotificationItem = (i64, &'static str, serde_json::Value);
 pub type SyncTransactionResult = (UpsertResult, Vec<SyncNotificationItem>);
 
+/// Curated metadata for one model, as models.dev knows it.
+///
+/// Every field is optional: a provider models.dev does not cover simply has no
+/// row, and then discovery falls back to what the upstream declared and finally
+/// to the name-based inference, exactly as before.
+struct ModelsDevMeta {
+    modalities_input: Option<String>,
+    modalities_output: Option<String>,
+    /// `Some(true)` / `Some(false)` when models.dev states a verdict; `None`
+    /// when it does not cover the model.
+    vision: Option<bool>,
+}
+
+/// Read the `model_capabilities_sync` row for this provider/model pair.
+///
+/// Matches the enrich's own resolution order: the provider's own row first,
+/// then any row sharing the normalized id. Returns `Ok(None)` when models.dev
+/// has nothing to say, and degrades to `None` if the table is absent
+/// (fresh databases, tests) instead of failing the whole discovery tick.
+fn load_models_dev_meta(
+    tx: &rusqlite::Transaction,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<ModelsDevMeta> {
+    let table_present: bool = tx
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master \
+             WHERE type = 'table' AND name = 'model_capabilities_sync'",
+            [],
+            |r| r.get::<_, i64>(0).map(|n| n != 0),
+        )
+        .unwrap_or(false);
+    if !table_present {
+        return None;
+    }
+
+    let normalized = crate::model_normalize::normalize_model_id(model_id);
+    tx.query_row(
+        "SELECT modalities_input, modalities_output, vision \
+             FROM model_capabilities_sync \
+             WHERE provider_id = ?1 AND model_id = ?2 \
+             UNION ALL \
+             SELECT modalities_input, modalities_output, vision \
+             FROM model_capabilities_sync \
+             WHERE model_id_normalized = ?3 AND modalities_input IS NOT NULL \
+               AND NOT EXISTS (SELECT 1 FROM model_capabilities_sync x \
+                                WHERE x.provider_id = ?1 AND x.model_id = ?2) \
+             LIMIT 1",
+        rusqlite::params![provider_id, model_id, normalized],
+        map_models_dev_meta,
+    )
+    .ok()
+}
+
+fn map_models_dev_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModelsDevMeta> {
+    Ok(ModelsDevMeta {
+        modalities_input: row.get(0)?,
+        modalities_output: row.get(1)?,
+        vision: row.get::<_, Option<i64>>(2)?.map(|v| v != 0),
+    })
+}
+
+/// Apply models.dev's vision verdict on top of the capabilities discovery
+/// derived, without inventing the other flags.
+///
+/// A `None` verdict leaves the discovered value untouched — that is the
+/// pre-patch behaviour, and the safe one: only a model models.dev actually
+/// covers gets corrected.
+fn merge_capabilities(
+    mut caps: openproxy_types::ModelCapabilities,
+    vision: Option<bool>,
+) -> openproxy_types::ModelCapabilities {
+    if let Some(v) = vision {
+        caps.vision = Some(v);
+    }
+    caps
+}
+
 pub fn execute_sync_transaction(
     conn: &Connection,
     provider: &ProviderId,
@@ -98,23 +176,43 @@ pub fn execute_sync_transaction(
 
             for d in discovered {
                 let model_id_str = d.model_id.as_str();
-                let caps = d.capabilities.clone().unwrap_or_else(|| {
-                    openproxy_types::capabilities::infer_capabilities(model_id_str)
-                });
+                // models.dev is the curated authority on what a model accepts.
+                // The OpenAI-compatible discovery path fabricates modalities
+                // from the model name (`build_discovered_model_full`), and this
+                // hourly tick runs *after* the periodic models.dev enrich, so a
+                // name-based guess would otherwise overwrite the real value:
+                // `step-5-preview` has no vision keyword in its name, the
+                // inference answers `["text"]`, and vision is silently lost.
+                // An explicit upstream declaration still wins over models.dev.
+                let dev = load_models_dev_meta(&tx, provider.as_str(), model_id_str);
+                let caps = merge_capabilities(
+                    d.capabilities.clone().unwrap_or_else(|| {
+                        openproxy_types::capabilities::infer_capabilities(model_id_str)
+                    }),
+                    dev.as_ref().and_then(|m| m.vision),
+                );
                 let caps_json = caps.to_json();
-                let input_mods_json = d
-                    .input_modalities
+                let input_mods_json = dev
                     .as_ref()
-                    .and_then(|v| serde_json::to_string(v).ok())
+                    .and_then(|m| m.modalities_input.clone())
+                    .or_else(|| {
+                        d.input_modalities
+                            .as_ref()
+                            .and_then(|v| serde_json::to_string(v).ok())
+                    })
                     .or_else(|| {
                         Some(openproxy_types::capabilities::infer_input_modalities_json(
                             model_id_str,
                         ))
                     });
-                let output_mods_json = d
-                    .output_modalities
+                let output_mods_json = dev
                     .as_ref()
-                    .and_then(|v| serde_json::to_string(v).ok())
+                    .and_then(|m| m.modalities_output.clone())
+                    .or_else(|| {
+                        d.output_modalities
+                            .as_ref()
+                            .and_then(|v| serde_json::to_string(v).ok())
+                    })
                     .or_else(|| {
                         Some(openproxy_types::capabilities::infer_output_modalities_json(
                             model_id_str,

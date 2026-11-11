@@ -1,0 +1,224 @@
+/* Viewport lock and internal scroll (full-height table) */
+#main:has(#logs),
+#main:has(.logs),
+body[data-view="logs"] #main {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-bottom: 0.5rem;
+}
+
+#logs, .logs {
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+  overflow: hidden;
+}
+
+.logs-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.logs-section:last-child {
+  border-bottom: none;
+  flex: 1;
+}
+
+.logs-section-inflight {
+  flex-shrink: 0;
+  max-height: 240px;
+}
+
+.logs-section-finished {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.logs-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.75rem;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.logs-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-main, inherit);
+}
+
+.logs-inflight-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  display: inline-block;
+}
+
+.logs-section-count {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.logs-scroll-area {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.logs-pagination {
+  flex-shrink: 0;
+  margin-top: auto;
+}
+
+
+/* ── View mode toggle (Classic | Sessions) ─────────────────────────── */
+.logs-viewmode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.logs-viewmode-toggle button {
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 0.28rem 0.75rem;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.logs-viewmode-toggle button:hover { color: var(--color-text); }
+
+.logs-viewmode-toggle button.active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* ── Sessions view ─────────────────────────────────────────────────── */
+.logs-sessions-area { overflow-x: hidden; }
+
+.logs-session { margin: 0.4rem 0.5rem; }
+
+.logs-session-header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  background: var(--color-log-header-bg);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-text-muted);
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-text);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.logs-session-header:hover { border-color: var(--color-text-muted); background: var(--color-surface-hover); }
+
+.logs-session-caret { display: inline-flex; color: var(--color-text-muted); transition: transform 120ms ease; }
+.logs-session.open .logs-session-caret { transform: rotate(90deg); }
+
+.logs-session-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+}
+
+/* State colors on the collapsible bar: pending (in-flight) wins, then the
+   last finished attempt decides ok / error; cancelled+skipped stay neutral. */
+.logs-session--pending { border-left-color: var(--color-status-warn); }
+.logs-session--pending .logs-session-dot { background: var(--color-status-warn); animation: logs-session-pulse 1.6s ease-in-out infinite; }
+.logs-session--pending .logs-session-inflight { color: var(--color-status-warn); }
+
+.logs-session--ok { border-left-color: var(--color-status-ok); }
+.logs-session--ok .logs-session-dot { background: var(--color-status-ok); }
+
+.logs-session--error { border-left-color: var(--color-status-err); }
+.logs-session--error .logs-session-dot { background: var(--color-status-err); }
+
+@keyframes logs-session-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.logs-session-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex: none;
+}
+
+.logs-session-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  min-width: 0;
+}
+
+.logs-session-inflight {
+  padding: 0.05rem 0.4rem;
+  border-radius: 8px;
+  border: 1px solid currentColor;
+  font-weight: 600;
+}
+
+.logs-session-age {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  flex: none;
+}
+
+.logs-session-rows {
+  margin-top: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  overflow: hidden;
+}

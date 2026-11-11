@@ -28,7 +28,10 @@
   flex-direction: column;
   overflow: hidden;
 }
-.modal > .modal-body { overflow-y: auto; min-height: 0; flex: 1; }
+.modal > .modal-body,
+.modal > form > .modal-body { overflow-y: auto; min-height: 0; flex: 1; }
+.modal > form { display: flex; flex-direction: column; min-height: 0; }
+.modal > form > .modal-footer { flex: none; }
 .modal > .modal-header,
 .modal > .modal-footer { flex: none; }
 .modal-header {

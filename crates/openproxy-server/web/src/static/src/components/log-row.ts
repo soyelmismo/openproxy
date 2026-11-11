@@ -192,12 +192,12 @@ function buildMobileCardView(
     const promptTokens = row.prompt_tokens ?? 0;
     const pctVal = promptTokens > 0 ? Math.min(100, (row.cached_tokens / promptTokens) * 100) : 0;
     const pctStr = pctVal > 0 && pctVal < 1 ? pctVal.toFixed(1) : Math.round(pctVal).toString();
-    extraBadge = html`<span class="log-cache" style="color: var(--color-success); font-size: 0.72rem;" title="${formatContext(row.cached_tokens)} / ${formatContext(promptTokens)} tokens cached (${pctVal.toFixed(1)}%)">${icons.target()} ${pctStr}%</span>`;
+    extraBadge = html`<span class="log-cache" style="color: var(--color-success)" title="${formatContext(row.cached_tokens)} / ${formatContext(promptTokens)} tokens cached (${pctVal.toFixed(1)}%)">${icons.target()} ${pctStr}%</span>`;
   } else if (row && row.compression_savings_pct != null && row.compression_savings_pct > 0) {
     const pct = row.compression_savings_pct < 1 ? row.compression_savings_pct.toFixed(2) : Math.round(row.compression_savings_pct).toString();
-    extraBadge = html`<span class="log-compression" style="color: var(--color-success); font-size: 0.72rem;">${icons.lightning()} ${pct}%</span>`;
+    extraBadge = html`<span class="log-compression" style="color: var(--color-success)">${icons.lightning()} ${pct}%</span>`;
   } else if (row && row.cost_usd != null && row.cost_usd > 0) {
-    extraBadge = html`<span class="log-cost" style="color: var(--color-primary); font-size: 0.72rem;">$${row.cost_usd.toFixed(4)}</span>`;
+    extraBadge = html`<span class="log-cost" style="color: var(--color-primary)">$${row.cost_usd.toFixed(4)}</span>`;
   }
 
   const pii = row?.pii_redacted;

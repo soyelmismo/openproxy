@@ -292,6 +292,7 @@ async fn execute_single_target_step(
             trace_id: skip_trace_id,
             stage: "predict_skipped",
             elapsed_ms: 0,
+            session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&ctx.req),
             provider_id: target.target.provider_id.0.as_str(),
             upstream_model_id: target.model.model_id.0.as_str(),
             error: "predictive rate limit: skipped to avoid 429",

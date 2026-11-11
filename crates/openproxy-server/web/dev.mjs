@@ -8,9 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const host = process.env.DEV_HOST || '127.0.0.1';
+// Bind to the host's CURRENT Tailscale address. It was hardcoded to 127.0.0.1
+// and the sidecar died the day Tailscale renumbered the interface: the esbuild
+// serve call threw ERR_ADDRESS_NOT_AVAILABLE at startup.
+const { execFileSync } = await import('node:child_process');
+const tailscaleIp = (() => {
+  try { return execFileSync('tailscale', ['ip', '-4'], { encoding: 'utf8' }).trim().split('\n')[0]?.trim(); }
+  catch { return null; }
+})();
+const host = process.env.DEV_HOST || tailscaleIp || '127.0.0.1';
 const port = Number(process.env.DEV_PORT || 5173);
-const backend = new URL(process.env.DEV_BACKEND || 'http://127.0.0.1:8791');
+const backend = new URL(process.env.DEV_BACKEND || 'http://127.0.0.1:8787');
 if (backend.protocol !== 'http:') throw new Error('DEV_BACKEND must use HTTP on a trusted local interface');
 const ctx = await context({
   entryPoints: { app: join(root, 'src/static/src/app.ts'), 'theme-init': join(root, 'src/static/src/theme-init.ts'), styles: join(root, 'src/static/styles/index.css') },
@@ -19,6 +27,9 @@ const ctx = await context({
   sourcemap: true, external: ['/admin/*'], logLevel: 'info',
 });
 await ctx.watch();
+// esbuild assets are only reached through this process's proxy, so loopback is
+// enough; binding the Tailscale address here made every asset request 502 when
+// the interface renumbered.
 const assets = await ctx.serve({ host: '127.0.0.1', port: 0, servedir: join(root, '.dev-dist') });
 const allowedHosts = new Set([`${host}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`]);
 const liveReload = `<script type="module">const events = new EventSource('/esbuild'); events.addEventListener('change', () => { if (window === window.top) location.reload(); });</script>`;

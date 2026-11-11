@@ -1,0 +1,165 @@
+/* Toasts — transient status messages.
+   Loaded after components/cards.css (which still owns the legacy toast block) so these rules
+   are the authoritative presentation: bounded stack, readable severity on both themes,
+   URL/JSON wrapping with a scroll cap, and a real 24px dismiss target. */
+
+.toast-container {
+  position: fixed;
+  right: max(var(--space-6), env(safe-area-inset-right));
+  bottom: max(var(--space-6), env(safe-area-inset-bottom));
+  left: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: var(--z-toast);
+  pointer-events: none;
+  width: min(420px, calc(100vw - 2 * var(--space-6)));
+  max-width: 420px;
+  max-height: min(60dvh, 520px);
+  align-items: stretch;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar-thumb) transparent;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.45;
+  pointer-events: auto;
+  transform: translateY(6px) scale(0.98);
+  opacity: 0;
+  transition: transform var(--t-base), opacity var(--t-base);
+  border: var(--border-w) var(--border-style) var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.toast.show {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+
+.toast-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 18px;
+  color: var(--toast-tone, currentColor);
+}
+
+.toast-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.toast-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* URLs and JSON blobs wrap instead of forcing a horizontal scroll or a viewport-wide card. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  /* Cap pathological payloads at ~5 lines; the rest is reachable by scrolling the message. */
+  max-height: 7.5em;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar-thumb) transparent;
+}
+
+.toast-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  margin: -2px -4px -2px 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  opacity: 0.75;
+  cursor: pointer;
+  transition: opacity var(--t-fast), background var(--t-fast);
+}
+
+.toast-close svg {
+  width: 13px;
+  height: 13px;
+}
+
+.toast-close:hover {
+  opacity: 1;
+  background: color-mix(in oklab, currentColor 14%, transparent);
+}
+
+.toast-close:focus-visible {
+  opacity: 1;
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+
+/* Severity palette: the surface stays soft, while the text is mixed toward the theme's own
+   foreground so success/warning keep ≥4.5:1 on the light theme (they were 3.7:1 / 3.3:1). */
+.toast-success {
+  --toast-tone: var(--color-success);
+  background: var(--color-success-soft);
+  border-color: color-mix(in oklab, var(--color-success) 55%, var(--color-border));
+  color: color-mix(in oklab, var(--color-success) 70%, var(--color-text));
+}
+.toast-error {
+  --toast-tone: var(--color-error);
+  background: var(--color-error-soft);
+  border-color: color-mix(in oklab, var(--color-error) 55%, var(--color-border));
+  color: color-mix(in oklab, var(--color-error) 70%, var(--color-text));
+}
+.toast-info {
+  --toast-tone: var(--color-info);
+  background: var(--color-info-soft);
+  border-color: color-mix(in oklab, var(--color-info) 55%, var(--color-border));
+  color: color-mix(in oklab, var(--color-info) 70%, var(--color-text));
+}
+.toast-warning,
+.toast-warn {
+  --toast-tone: var(--color-warn);
+  background: var(--color-warn-soft);
+  border-color: color-mix(in oklab, var(--color-warn) 55%, var(--color-border));
+  color: color-mix(in oklab, var(--color-warn) 70%, var(--color-text));
+}
+
+@media (max-width: 768px) {
+  .toast-container {
+    left: max(var(--space-3), env(safe-area-inset-left));
+    right: max(var(--space-3), env(safe-area-inset-right));
+    bottom: max(var(--space-3), env(safe-area-inset-bottom));
+    width: auto;
+    max-width: none;
+    /* Leave the lower half of a phone screen for the page's own controls. */
+    max-height: min(50dvh, 360px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    transform: none;
+    transition: opacity var(--t-fast);
+  }
+}

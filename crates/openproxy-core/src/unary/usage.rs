@@ -227,6 +227,8 @@ fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
         cached_tokens: None,
         connect_ms: None,
         ttft_ms: None,
+        max_chunk_gap_ms: None,
+        avg_chunk_gap_ms: None,
         total_ms: args.total_ms,
         status_code: args.status_code,
         error_msg: args.error_msg.clone(),

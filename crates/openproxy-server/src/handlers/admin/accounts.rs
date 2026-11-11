@@ -271,14 +271,14 @@ pub async fn refresh_account_quota(
             .map(|a| a.id().as_str())
             .collect();
 
-        let q_opt = openproxy_core::quota_sync::refresh_single_account_quota(
+        let q_opt = Box::pin(openproxy_core::quota_sync::refresh_single_account_quota(
             account_id,
             s.db_pool(),
             s.master_key(),
             &supported_providers,
             s.upstream_client(),
             &s.oauth_provider_registry(),
-        )
+        ))
         .await?;
 
         if let Some(q) = q_opt {

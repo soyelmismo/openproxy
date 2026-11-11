@@ -2,6 +2,7 @@ use super::super::target_headers::*;
 use super::*;
 use crate::error_classification::{UpstreamErrorClass, is_hard_skip_error};
 use crate::retry::RetryPolicy;
+use crate::stages::target_breaker::{mark_live_limited_inner, should_mark_live_limited};
 use openproxy_db::DbPool;
 use openproxy_types::CoreError;
 use openproxy_types::ids::{AccountId, ModelId};

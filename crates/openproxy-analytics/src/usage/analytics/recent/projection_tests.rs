@@ -40,6 +40,7 @@ const EXPECTED_COLUMNS: [&str; 38] = [
     "pii_redacted",
     "api_key_id",
     "audio_ms",
+    "session_hash",
 ];
 
 #[test]
@@ -52,7 +53,7 @@ fn test_projection_column_contract() {
     ];
     for sql in queries {
         let stmt = conn.prepare(sql).unwrap();
-        assert_eq!(stmt.column_count(), 38);
+        assert_eq!(stmt.column_count(), 39);
         assert_eq!(stmt.column_names(), EXPECTED_COLUMNS);
     }
 }

@@ -240,37 +240,33 @@ export function renderCombosList(): TemplateResult {
   return html`
     <div class="combos-view-container">
       <div class="page-header combos-page-header">
-        <div class="header-title-wrap">
-          <h2>${t("combos.grid.title")}</h2>
+        <h2 class="view-identity">${t("combos.grid.title")}</h2>
+        <div class="actions combos-header-actions">
+          <div class="combos-search-wrap">
+            <input
+              type="search"
+              class="cw-input combos-search-input"
+              placeholder="Filter combos (e.g. nerd, gemma)..."
+              .value=${comboSearchQuery}
+              @input=${onComboSearch}>
+          </div>
+          ${uniqueStrategies.length > 1 ? html`
+            <select class="combos-filter-select" .value=${comboStrategyFilter} @change=${onStrategyFilterChange} title="Filter by Strategy">
+              <option value="all">All Strategies</option>
+              ${uniqueStrategies.map((s) => html`<option value=${s} ?selected=${comboStrategyFilter === s}>${s}</option>`)}
+            </select>
+          ` : ""}
+          ${uniquePriorityModes.length > 1 ? html`
+            <select class="combos-filter-select" .value=${comboPriorityModeFilter} @change=${onPriorityModeFilterChange} title="Filter by Priority Mode">
+              <option value="all">All Modes</option>
+              ${uniquePriorityModes.map((pm) => html`<option value=${pm} ?selected=${comboPriorityModeFilter === pm}>${PRIORITY_MODE_LABELS[pm] || pm}</option>`)}
+            </select>
+          ` : ""}
           <span class="muted combos-count-badge">
             ${isFiltered ? `${filteredCustom.length} / ${list.length}` : `${list.length}`} total
           </span>
-        </div>
-        <div class="actions combos-header-actions">
-          <div class="combos-filter-bar">
-            <div class="combos-search-wrap">
-              <input
-                type="search"
-                class="cw-input combos-search-input"
-                placeholder="Filter combos (e.g. nerd, gemma)..."
-                .value=${comboSearchQuery}
-                @input=${onComboSearch}>
-            </div>
-            ${uniqueStrategies.length > 1 ? html`
-              <select class="combos-filter-select" .value=${comboStrategyFilter} @change=${onStrategyFilterChange} title="Filter by Strategy">
-                <option value="all">All Strategies</option>
-                ${uniqueStrategies.map((s) => html`<option value=${s} ?selected=${comboStrategyFilter === s}>${s}</option>`)}
-              </select>
-            ` : ""}
-            ${uniquePriorityModes.length > 1 ? html`
-              <select class="combos-filter-select" .value=${comboPriorityModeFilter} @change=${onPriorityModeFilterChange} title="Filter by Priority Mode">
-                <option value="all">All Modes</option>
-                ${uniquePriorityModes.map((pm) => html`<option value=${pm} ?selected=${comboPriorityModeFilter === pm}>${PRIORITY_MODE_LABELS[pm] || pm}</option>`)}
-              </select>
-            ` : ""}
-          </div>
           <button class="primary combo-create-btn" @click=${() => showCreateCombo()}>
-            ${icons.plus()} ${t("combos.grid.create")}
+            ${icons.plus()} <span class="combo-create-label">${t("combos.grid.create")}</span>
           </button>
         </div>
       </div>

@@ -56,6 +56,15 @@
   box-sizing: border-box;
   transition: background var(--t-fast);
   cursor: default;
+  min-width: 0;
+}
+
+/* Long messages (URLs, JSON dumps) keep the same row rhythm but grow to two clamped lines. */
+.notification-card--long {
+  height: auto;
+  min-height: 32px;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
 .notification-card:last-child {
@@ -115,12 +124,27 @@
 
 .notification-card-text {
   font-size: var(--fs-xs);
+  line-height: 1.4;
   color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* URLs / JSON: wrap at any character and clamp to two lines instead of truncating a failure
+   reason into an ellipsis that touch users cannot reveal. */
+.notification-card-text--wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-overflow: clip;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
 }
 
 .notification-card-meta {
@@ -132,6 +156,8 @@
   flex-wrap: nowrap;
   flex: 0 0 auto;
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .notification-card-kind {
@@ -139,8 +165,18 @@
   letter-spacing: 0.04em;
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--card-accent, var(--color-text-muted));
-  font-weight: 600;
+  line-height: 1.3;
+  /* Chip instead of bare colored text: the severity hue stays recognisable while the mixed
+     foreground keeps ≥4.5:1 on both themes. */
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, var(--card-accent, var(--color-text-muted)) 14%, transparent);
+  color: color-mix(in oklab, var(--card-accent, var(--color-text-muted)) 68%, var(--color-text));
+  font-weight: 700;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .notification-card-ago {
@@ -158,13 +194,16 @@
   flex: 0 0 auto;
 }
 
-/* Quick Actions: ghost icon buttons revealing on hover/focus */
+/* Quick Actions: ghost icon buttons revealing on hover/focus. Fixed 24px hit targets keep the
+   action rail aligned regardless of how many actions a row carries. */
 .notification-card-actions {
   display: inline-flex;
   gap: 2px;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: nowrap;
   margin-top: 0;
+  margin-left: auto;
   padding-top: 0;
   flex: 0 0 auto;
 }
@@ -175,6 +214,7 @@
   justify-content: center;
   width: 24px;
   height: 24px;
+  min-width: 24px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -201,27 +241,125 @@
   color: var(--color-text);
 }
 
+.notification-qa:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
 .notification-qa.danger:hover {
   color: var(--color-error);
   background: color-mix(in oklab, var(--color-error) 14%, transparent);
 }
 
-/* Mobile (≤640px): keep legible if narrow, allow vertical wrap */
+/* Mobile (≤640px): a 3-column grid keeps the icon, message and action rail on one compact
+   row. The message clamps to two lines and the metadata drops to its own line inside the
+   body column — no full-width action row, no 100px-tall empty card. */
 @media (max-width: 640px) {
   .notification-card {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas: "icon body actions";
+    align-items: center;
     height: auto;
-    min-height: 36px;
-    padding: 6px 10px;
-    flex-wrap: wrap;
+    min-height: 44px;
+    padding: 6px 8px 6px 10px;
+    column-gap: 8px;
+    row-gap: 0;
+    flex-wrap: nowrap;
+  }
+  .notification-card-icon {
+    grid-area: icon;
+    align-self: start;
+    margin-top: 3px;
   }
   .notification-card-body {
+    grid-area: body;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    min-width: 0;
+  }
+  .notification-card-text,
+  .notification-card-text--wrap {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    text-overflow: clip;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .notification-card-meta {
     flex-wrap: wrap;
+    white-space: normal;
+    overflow: visible;
+    gap: 3px 8px;
+  }
+  .notification-card-kind {
+    max-width: 100%;
   }
   .notification-card-actions {
-    margin-left: auto;
+    grid-area: actions;
+    align-self: center;
+    margin-left: 0;
   }
   .notification-qa {
     opacity: 1;
+  }
+}
+
+@media (max-width: 640px) {
+  #main .page-header .actions,
+  .tile-view .page-header .actions {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+    min-width: 0;
+    gap: 6px;
+  }
+  #main .page-header .actions > *,
+  .tile-view .page-header .actions > * {
+    flex: 1 1 118px;
+    width: auto;
+    min-width: 0;
+  }
+  #main .page-header-title,
+  .tile-view .page-header-title {
+    flex: 0 0 auto;
+  }
+  #main .notification-filter,
+  .tile-view .notification-filter {
+    flex: initial;
+    min-width: 0;
+    max-width: 100%;
+  }
+  #main .page-header .actions button,
+  .tile-view .page-header .actions button {
+    padding-inline: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 380px) {
+  .notification-card {
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    column-gap: 6px;
+    padding-left: 8px;
+  }
+  .notification-qa {
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+  }
+  .notification-qa svg {
+    width: 12px;
+    height: 12px;
   }
 }
 .notification-empty {
@@ -430,65 +568,161 @@
   }
 }
 
-/* Container query support for Notifications in narrow workspace tiles */
+/* Container query support for Notifications in narrow workspace tiles (2/3/4-up).
+   Same compact 3-column grid as the phone breakpoint: icon + clamped message + right-aligned
+   action rail. Tiles keep the dense row rhythm instead of stacking full-width action bars. */
 @container tile-view (max-width: 600px) {
+  .tile-view .page-header .actions {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 260px;
+    gap: 6px;
+  }
+
+  .tile-view .page-header .actions > * {
+    flex: 1 1 118px;
+    width: auto;
+    min-width: 0;
+  }
+
+  .tile-view .page-header-title {
+    flex: 0 0 auto;
+  }
+
+  .tile-view .notification-filter {
+    flex: initial;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .tile-view .page-header .actions button {
+    padding-inline: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .notification-card {
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 8px 10px;
-    gap: var(--space-2);
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    grid-template-areas: "icon body actions";
+    align-items: center;
+    height: auto;
+    min-height: 40px;
+    padding: 5px 8px 5px 10px;
+    column-gap: 8px;
+    row-gap: 0;
+    flex-wrap: nowrap;
+  }
+
+  .notification-card-icon {
+    grid-area: icon;
+    align-self: start;
+    margin-top: 2px;
   }
 
   .notification-card-body {
+    grid-area: body;
     flex-direction: column;
     align-items: stretch;
-    width: 100%;
-    gap: var(--space-1);
+    gap: 2px;
+    width: auto;
+    min-width: 0;
   }
 
-  .notification-card-text {
-    width: 100%;
+  .notification-card-text,
+  .notification-card-text--wrap {
+    width: auto;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    text-overflow: clip;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
   }
 
   .notification-card-meta {
     white-space: normal;
     flex-wrap: wrap;
     font-size: 11px;
-    gap: 4px;
+    gap: 3px 8px;
+    overflow: visible;
   }
 
   .notification-card-actions {
-    flex-wrap: wrap;
-    width: 100%;
-    border-top: 1px dashed var(--color-border-soft);
-    padding-top: 6px;
-    margin-top: 4px;
-    gap: 4px;
+    grid-area: actions;
+    align-self: center;
+    flex-wrap: nowrap;
+    width: auto;
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 0;
+    margin-left: 0;
+    gap: 2px;
   }
 
   .notification-card-actions button {
-    flex: 1 1 auto;
+    flex: 0 0 24px;
     justify-content: center;
-    height: 26px;
+    height: 24px;
     font-size: 11px;
-    padding: 0 6px;
+    padding: 0;
+    opacity: 1;
   }
 }
 
-@container tile-view (max-width: 280px) {
+@container tile-view (max-width: 340px) {
   .notification-card {
-    padding: 6px 8px;
-    gap: 4px;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    column-gap: 6px;
+    padding-left: 8px;
   }
 
   .notification-card-actions {
-    flex-direction: column;
-    width: 100%;
+    gap: 0;
   }
 
   .notification-card-actions button {
-    width: 100%;
-    height: 24px;
-    font-size: 10px;
+    flex: 0 0 22px;
+    width: 22px;
+    height: 22px;
+    min-width: 22px;
+  }
+
+  .notification-card-actions button svg {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+/* The two-line clamp above was gated on a viewport media query, so a 760px
+   workspace pane inside a wide window kept a single truncated line. The card
+   follows its container now. */
+@container tile-view (max-width: 760px) {
+  .notification-card-text {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    text-overflow: clip;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+}
+
+@container tile-view (max-width: 340px) {
+  .notification-card-kind {
+    max-width: 100%;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
   }
 }
