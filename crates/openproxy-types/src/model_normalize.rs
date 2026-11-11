@@ -294,4 +294,35 @@ mod tests {
         );
         assert_eq!(normalize_model_id("provider/model-v2:free"), "model");
     }
+
+    #[test]
+    fn test_strip_dynamic_suffixes_edge_cases() {
+        // strip_date_suffix: YYYY-MM-DD
+        assert_eq!(strip_date_suffix("gpt-4-2024-04-09"), Some("gpt-4"));
+        assert_eq!(strip_date_suffix("gpt-2024-4-9"), None);
+        assert_eq!(strip_date_suffix("gpt-2024-aa-bb"), None);
+        assert_eq!(strip_date_suffix("short-date"), None);
+
+        // strip_4digit_suffix: -YYMM or -NNNN
+        assert_eq!(
+            strip_4digit_suffix("mistral-large-2407"),
+            Some("mistral-large")
+        );
+        assert_eq!(strip_4digit_suffix("model-abcd"), None);
+        assert_eq!(strip_4digit_suffix("m-123"), None);
+        assert_eq!(strip_4digit_suffix("m-12345"), None);
+
+        // strip_version_suffix: -v<digits>
+        assert_eq!(
+            strip_version_suffix("deepseek-chat-v1"),
+            Some("deepseek-chat")
+        );
+        assert_eq!(
+            strip_version_suffix("deepseek-chat-v23"),
+            Some("deepseek-chat")
+        );
+        assert_eq!(strip_version_suffix("deepseek-chat-v"), None);
+        assert_eq!(strip_version_suffix("deepseek-chat-va"), None);
+        assert_eq!(strip_version_suffix("nov-version"), None);
+    }
 }
