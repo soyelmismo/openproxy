@@ -87,6 +87,37 @@ impl BackgroundService for MiniMaxCheckinService {
     }
 }
 
+/// Background daemon for the AutoClaw (Z.ai) daily credit claim.
+///
+/// Unlike the quota-sync hook, this service claims for EVERY zai OAuth
+/// account — active, paused, or Unhealthy — and recovers expired tokens by
+/// refresh instead of dropping the account.
+pub struct AutoClawCheckinService {
+    pub db_pool: Arc<DbPool>,
+    pub upstream_client: Arc<UpstreamClient>,
+    pub master_key: Arc<MasterKey>,
+    pub oauth_provider_registry: Arc<OAuthProviderRegistry>,
+}
+
+impl BackgroundService for AutoClawCheckinService {
+    fn name(&self) -> &'static str {
+        "autoclaw_checkin"
+    }
+
+    async fn run(&self, cancel: CancellationToken) {
+        with_core_cancellation(cancel, |core_cancel| {
+            openproxy_core::autoclaw_checkin::run_autoclaw_checkin_scheduler(
+                Arc::clone(&self.db_pool),
+                Arc::clone(&self.upstream_client),
+                Arc::clone(&self.master_key),
+                Arc::clone(&self.oauth_provider_registry),
+                core_cancel,
+            )
+        })
+        .await;
+    }
+}
+
 pub struct SmartWarmupService {
     pub db_pool: Arc<DbPool>,
     pub config: AppConfig,

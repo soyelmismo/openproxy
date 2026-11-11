@@ -131,6 +131,13 @@ pub(crate) fn spawn_background_tasks(
         master_key: Arc::clone(&master_key),
     });
 
+    supervisor.spawn(crate::background::AutoClawCheckinService {
+        db_pool: Arc::clone(&db_pool),
+        upstream_client: Arc::clone(&upstream_client),
+        master_key: Arc::clone(&master_key),
+        oauth_provider_registry: Arc::clone(&oauth_provider_registry),
+    });
+
     supervisor.spawn(crate::background::FreeProxiesSyncService {
         db_pool: Arc::clone(&db_pool),
     });
