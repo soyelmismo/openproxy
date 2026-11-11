@@ -517,6 +517,19 @@ describe("liveLogsStore inflight expiry (fake timers)", () => {
 });
 
 describe("liveLogsStore session grouping", () => {
+  it("legacy stage events pass session_hash through the normalizer (in-flight sessions group correctly)", () => {
+    resetStore();
+    liveLogsStore.dispatch({
+      type: "stage",
+      data: { request_id: "req-s1", trace_id: "tr-s1", stage: "streaming", elapsed_ms: 120, session_hash: "12345" },
+    });
+    const a = liveLogsStore.attemptsByKey.get("tr-s1");
+    expect(a).toBeTruthy();
+    expect(a?.sessionHash).toBe("12345");
+    const g = liveLogsStore.selectSessionGroups().find((x) => x.key === "12345");
+    expect(g?.inflightCount).toBe(1);
+  });
+
   it("groups attempts by session_hash, sorts groups by recent activity, and buckets unhashed rows", () => {
     resetStore();
     // Session A: finished at t=2000 (older activity)

@@ -61,6 +61,8 @@ type LogsViewMode = "classic" | "sessions";
 const LOGS_VIEW_MODE_STORAGE_KEY = "openproxy:logs:viewMode";
 let logsViewMode: LogsViewMode = "classic";
 const expandedSessions = new Set<string>();
+const SESSION_PAGE_SIZE = 10;
+const sessionPages = new Map<string, number>();
 let sessionsAutoExpandPending = false;
 
 function loadViewMode(): LogsViewMode {
@@ -82,6 +84,12 @@ function onSetLogsViewMode(mode: LogsViewMode): void {
 function onToggleSessionGroup(key: string): void {
   if (expandedSessions.has(key)) expandedSessions.delete(key);
   else expandedSessions.add(key);
+  requestUpdate();
+}
+
+function onSessionPage(key: string, delta: number): void {
+  const next = Math.max(0, (sessionPages.get(key) ?? 0) + delta);
+  sessionPages.set(key, next);
   requestUpdate();
 }
 
@@ -178,6 +186,24 @@ function renderPagination(totalRows: number, totalP: number): TemplateResult {
   </div>`;
 }
 
+function renderSessionGroupRows(g: SessionGroup, visibleColKeys: Set<string>, nowOffsetMs: number): TemplateResult {
+  const total = g.attempts.length;
+  const totalPages = Math.max(1, Math.ceil(total / SESSION_PAGE_SIZE));
+  const page = Math.min(sessionPages.get(g.key) ?? 0, totalPages - 1);
+  const start = page * SESSION_PAGE_SIZE;
+  const rows = g.attempts.slice(start, start + SESSION_PAGE_SIZE);
+  return html`
+    ${renderHeaderRow(visibleColKeys)}
+    ${repeat(rows, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
+    ${totalPages > 1 ? html`<div class="logs-session-pager">
+      <span class="logs-session-pager-range">${start + 1}–${start + rows.length} de ${total}</span>
+      <button type="button" ?disabled=${page === 0} @click=${() => onSessionPage(g.key, -1)} title="Más recientes" aria-label="Página anterior">${icons.chevronLeft()}</button>
+      <span class="logs-session-pager-pos">${page + 1}/${totalPages}</span>
+      <button type="button" ?disabled=${page >= totalPages - 1} @click=${() => onSessionPage(g.key, 1)} title="Más antiguas" aria-label="Página siguiente">${icons.chevronRight()}</button>
+    </div>` : null}
+  `;
+}
+
 function renderSessionGroup(g: SessionGroup, visibleColKeys: Set<string>, nowOffsetMs: number): TemplateResult {
   const st = sessionGroupState(g);
   const open = expandedSessions.has(g.key);
@@ -199,10 +225,7 @@ function renderSessionGroup(g: SessionGroup, visibleColKeys: Set<string>, nowOff
       </span>
       <span class="logs-session-age">${formatRelativeAge(ageMs)}</span>
     </button>
-    ${open ? html`<div class="logs-session-rows">
-      ${renderHeaderRow(visibleColKeys)}
-      ${repeat(g.attempts, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
-    </div>` : null}
+    ${open ? html`<div class="logs-session-rows">${renderSessionGroupRows(g, visibleColKeys, nowOffsetMs)}</div>` : null}
   </div>`;
 }
 

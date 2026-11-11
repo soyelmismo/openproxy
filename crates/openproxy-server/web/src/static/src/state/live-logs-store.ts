@@ -627,6 +627,7 @@ class LiveLogsStore {
       if (d.provider_id) event.provider_id = d.provider_id;
       if (d.upstream_model_id) event.upstream_model_id = d.upstream_model_id;
       if (d.endpoint_kind) event.endpoint_kind = d.endpoint_kind;
+      if (d.session_hash) event.session_hash = d.session_hash;
       if (d.api_key_id != null) event.api_key_id = d.api_key_id;
 
       return {

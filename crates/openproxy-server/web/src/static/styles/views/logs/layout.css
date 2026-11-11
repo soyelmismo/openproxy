@@ -222,3 +222,28 @@ body[data-view="logs"] #main {
   border-radius: 8px;
   overflow: hidden;
 }
+
+.logs-session-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+}
+
+.logs-session-pager button {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  padding: 0.15rem 0.3rem;
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.logs-session-pager button:not(:disabled):hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.logs-session-pager button:disabled { opacity: 0.4; cursor: default; }
