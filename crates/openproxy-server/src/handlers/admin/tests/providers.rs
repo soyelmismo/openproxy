@@ -39,10 +39,9 @@ async fn test_run_test_for_model_cancellation() {
     let (tx, rx) = tokio::sync::watch::channel::<Option<openproxy_types::CancelReason>>(None);
     tx.send(Some(openproxy_types::CancelReason::ClientDisconnected))
         .unwrap();
-    let attribution =
-        crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, None)
-            .await
-            .unwrap();
+    let attribution = crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, None)
+        .await
+        .unwrap();
     let (r, _) = run_test_for_model(
         &state,
         model_row_id,
@@ -385,8 +384,9 @@ async fn resolve_tester_api_key_id_is_idempotent_and_caller_wins() {
     assert_eq!(first, second);
 
     // With a caller identity (admin manage key): the caller wins.
-    let caller = crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, Some(4242))
-        .await
-        .unwrap();
+    let caller =
+        crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, Some(4242))
+            .await
+            .unwrap();
     assert_eq!(caller, openproxy_types::ids::ApiKeyId(4242));
 }

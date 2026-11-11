@@ -595,9 +595,15 @@ mod tests {
         t2.cooldown_reason = Some("test cooldown".into());
 
         let targets = vec![t1, t2];
-        let results = run_fan_out_combo_tests(&state, 10, targets, Some(tx.subscribe()), openproxy_types::ids::ApiKeyId(10))
-            .await
-            .expect("fan out failed");
+        let results = run_fan_out_combo_tests(
+            &state,
+            10,
+            targets,
+            Some(tx.subscribe()),
+            openproxy_types::ids::ApiKeyId(10),
+        )
+        .await
+        .expect("fan out failed");
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["target_id"], 101);
