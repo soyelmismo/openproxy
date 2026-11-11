@@ -149,16 +149,17 @@ describe("keyFormTemplate structure", () => {
     expect((form.elements.namedItem("allowed_combos") as HTMLInputElement).value).toBe(" ");
   });
 
-  it("groups fields into four labelled task sections in reading order", () => {
+  it("groups fields into five labelled task sections in reading order", () => {
     const form = formOf(mountCreate());
     const sections = [...form.querySelectorAll<HTMLElement>("section.key-form-section")];
-    expect(sections).toHaveLength(4);
+    expect(sections).toHaveLength(5);
 
     const expected = [
       ["key-section-identity", "Identity"],
       ["key-section-scopes", "Scopes"],
       ["key-section-model-access", "Model access"],
       ["key-section-restrictions", "Restrictions"],
+      ["key-section-quota", "Quota & limits"],
     ];
     sections.forEach((section, index) => {
       const entry = expected[index];
@@ -210,7 +211,7 @@ describe("keyFormTemplate structure", () => {
     }
     // Each scope/toggle card label wraps exactly one labelable control.
     const wrapping = [...form.querySelectorAll("label.scope-card")];
-    expect(wrapping).toHaveLength(5);
+    expect(wrapping).toHaveLength(8);
     for (const label of wrapping) {
       expect(label.querySelectorAll("input, select, textarea, button")).toHaveLength(1);
     }
@@ -236,7 +237,7 @@ describe("keyFormTemplate structure", () => {
   it("keeps help text out of the controls: one short hint per section, detail in title", () => {
     const form = formOf(mountCreate());
     const hints = [...form.querySelectorAll<HTMLElement>(".key-form-section-hint")];
-    expect(hints).toHaveLength(4);
+    expect(hints).toHaveLength(5);
     for (const hint of hints) {
       expect(hint.textContent!.trim().length).toBeLessThanOrEqual(40);
       expect(hint.closest(".field"), "hint inside a control").toBeNull();
@@ -246,7 +247,7 @@ describe("keyFormTemplate structure", () => {
     for (const note of notes) expect(note.textContent!.trim().length).toBeLessThanOrEqual(20);
     // The full explanation lives in a tooltip, not in a paragraph inside a control.
     const titled = [...form.querySelectorAll("label.scope-card[title]")];
-    expect(titled).toHaveLength(5);
+    expect(titled).toHaveLength(8);
     for (const el of titled) expect(el.getAttribute("title")!.length).toBeGreaterThan(20);
   });
 
@@ -299,6 +300,6 @@ describe("keyFormTemplate structure", () => {
     expect(host.querySelector(".modal-footer")).toBeNull();
     // The inline view sits under the page h1, so its sections are h2.
     expect([...host.querySelectorAll(".key-form-section-title")].map((el) => el.tagName))
-      .toEqual(["H2", "H2", "H2", "H2"]);
+      .toEqual(["H2", "H2", "H2", "H2", "H2"]);
   });
 });

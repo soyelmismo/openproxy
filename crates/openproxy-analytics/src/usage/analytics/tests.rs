@@ -55,11 +55,11 @@ fn map_usage_row_basic() {
             race_total, race_attempts, is_streaming, stream_complete, race_lost,
             created_at, stop_reason, compression_savings_pct, compression_techniques,
             client_response, prompt_tokens_estimated, completion_tokens_estimated,
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms)
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                  ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
+                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
         rusqlite::params![
             42i64,
             "req-abc",
