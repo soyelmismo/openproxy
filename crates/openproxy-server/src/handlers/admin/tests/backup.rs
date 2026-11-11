@@ -329,7 +329,7 @@ async fn test_backup_endpoints_reject_read_only_scope() {
         ),
     ));
 
-    // 1. Calling export with read-only key must be rejected (401)
+    // 1. Calling export with read-only key must be rejected (403)
     let req = Request::builder()
         .method("GET")
         .uri("/admin/api/backup/export")
@@ -338,9 +338,9 @@ async fn test_backup_endpoints_reject_read_only_scope() {
         .unwrap();
 
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 
-    // 2. Calling restore with read-only key must also be rejected (401)
+    // 2. Calling restore with read-only key must also be rejected (403)
     let req = Request::builder()
         .method("POST")
         .uri("/admin/api/backup/restore")
@@ -350,5 +350,5 @@ async fn test_backup_endpoints_reject_read_only_scope() {
         .unwrap();
 
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }

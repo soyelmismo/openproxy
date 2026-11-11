@@ -324,45 +324,33 @@ pub async fn admin_auth_middleware(
         Ok(identity) => {
             state.admin_limiter().record_success(client_ip_for_throttle);
 
-            // Scope-based endpoint authorization guard:
-            // Keys with "manage" (or dev bypass) can access every endpoint.
-            // Keys with only "analytics" (or "read") are restricted strictly to:
-            //   - GET /auth/me (or /admin/api/auth/me) (introspect own key & scopes)
-            //   - GET /formats (or /admin/api/formats) (read-only wire format metadata)
-            //   - GET /usage/* (or /admin/api/usage/*) (read-only usage analytics)
-            //   - GET /models/catalog (key-filtered catalog + pricing; same view
-            //     the key already gets from `GET /v1/models`, read-only)
-            // Every other endpoint (config, keys, proxies, providers, combos, debug, logs,
-            // notifications, backup, etc.) or mutating method is rejected with 403 Forbidden.
+            // Scope-based endpoint authorization guard: the panel (served at
+            // /admin and, through the nginx /tokens/ prefix strip, at
+            // /tokens/admin) is OPERATOR-ONLY. Every key without "manage" (or
+            // dev bypass) is rejected outright — read-only analytics included:
+            // user keys are for the /v1 gateway and the anonymous checkout,
+            // never for this surface.
             if !identity.has_manage_scope() {
                 let path = req.uri().path();
                 let method = req.method();
-                let stripped_path = path
-                    .strip_prefix("/admin/api")
-                    .or_else(|| path.strip_prefix("/api"))
-                    .unwrap_or(path);
-
-                let is_allowed_analytics_call = method == axum::http::Method::GET
-                    && (stripped_path == "/auth/me"
-                        || stripped_path == "/formats"
-                        || stripped_path == "/models/catalog"
-                        || stripped_path.starts_with("/usage/"));
-
-                if !is_allowed_analytics_call {
-                    tracing::warn!(
-                        target: "openproxy::security::audit",
-                        key_id = identity.key_id(),
-                        ip = identity.client_ip().map(|a| a.to_string()),
-                        path = %path,
-                        stripped_path = %stripped_path,
-                        method = %method,
-                        "forbidden admin access: key lacks manage scope"
-                    );
-                    return crate::error::ApiError(openproxy_types::CoreError::Auth(
-                        "forbidden: api key lacks manage scope".into(),
-                    ))
+                tracing::warn!(
+                    target: "openproxy::security::audit",
+                    key_id = identity.key_id(),
+                    ip = identity.client_ip().map(|a| a.to_string()),
+                    path = %path,
+                    method = %method,
+                    "forbidden admin access: key lacks manage scope"
+                );
+                return (
+                    axum::http::StatusCode::FORBIDDEN,
+                    axum::Json(serde_json::json!({
+                        "error": {
+                            "code": "forbidden",
+                            "message": "forbidden: api key lacks manage scope"
+                        }
+                    })),
+                )
                     .into_response();
-                }
             }
 
             req.extensions_mut().insert(identity);
