@@ -1,7 +1,7 @@
 use super::*;
 use openproxy_types::CoreError;
 
-const EXPECTED_COLUMNS: [&str; 38] = [
+const EXPECTED_COLUMNS: [&str; 39] = [
     "id",
     "request_id",
     "trace_id",
