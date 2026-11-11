@@ -11,6 +11,7 @@
 // sets the token optimistically before the call.
 
 import { state } from "../state/index.js";
+import { PROXY_PREFIX } from "../state/proxy-prefix.js";
 import { getToken, clearToken } from "../state/auth.js";
 import type { DebugLogsResponse } from "./types/api.js";
 import type { FormatsMetadata } from "./types/common.js";
@@ -29,7 +30,7 @@ export async function api(path: string, opts: ApiOptions = {}): Promise<unknown>
     : { "Content-Type": "application/json" };
   const init: RequestInit = { method: opts.method || "GET", headers };
   if (opts.body) init.body = opts.body;
-  const r: Response = await fetch("/admin/api" + path, init);
+  const r: Response = await fetch(PROXY_PREFIX + "/admin/api" + path, init);
 
   if (!r.ok) {
     const txt: string = await r.text();

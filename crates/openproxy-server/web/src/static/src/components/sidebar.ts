@@ -25,7 +25,7 @@ import { isPanelDocument, routeMeta } from "../state/workspace.js";
 
 function mutableState() { return state; }
 
-type NavIconName = "home" | "providers" | "combos" | "keys" | "playground" | "analytics" | "logs" | "debug-logs" | "config" | "notifications" | "proxies" | "proxy-sources";
+type NavIconName = "credits" | "home" | "providers" | "combos" | "keys" | "playground" | "analytics" | "logs" | "debug-logs" | "config" | "notifications" | "proxies" | "proxy-sources";
 
 interface SidebarLink {
   href: string;
@@ -38,6 +38,7 @@ interface SidebarGroup { label: string; links: SidebarLink[]; }
 
 /** Nav glyphs come from `lib/icons.ts` ("Navigation (sidebar)") so the sidebar has no inline SVG. */
 const NAV_ICONS: Record<NavIconName, (cls?: string) => TemplateResult> = {
+  credits: icons.navCredits,
   home: icons.navHome,
   providers: icons.navProviders,
   combos: icons.navCombos,
@@ -64,6 +65,7 @@ const GROUPS: readonly SidebarGroup[] = [
     { href: "#/providers", icon: "providers", label: "Providers" },
     { href: "#/combos", icon: "combos", label: "Combos" },
     { href: "#/keys", icon: "keys", label: "API Keys" },
+    { href: "#/credits", icon: "credits", label: "Credits" },
     { href: "#/playground", icon: "playground", label: "Playground" },
     { href: "#/proxies", icon: "proxies", label: "Free Proxies" },
     { href: "#/proxy-sources", icon: "proxy-sources", label: "Proxy Sources" },

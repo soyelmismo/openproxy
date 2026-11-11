@@ -7,6 +7,7 @@ use std::time::Duration;
 
 mod claude_profile;
 pub mod client_contract;
+pub mod credits_watcher;
 mod codebuddy_contract;
 pub mod runner;
 pub mod supervisor;

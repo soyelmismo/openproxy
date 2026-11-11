@@ -216,6 +216,31 @@ impl AppState {
         self.inflight_limiter.as_ref()
     }
 
+    /// Live per-key concurrency cap.
+    pub fn max_concurrent_per_key(&self) -> usize {
+        self.inflight_limiter.max_concurrent_per_key()
+    }
+
+    /// Live proxy-wide concurrency cap.
+    pub fn max_concurrent_global(&self) -> usize {
+        self.inflight_limiter.max_concurrent_global()
+    }
+
+    /// Requests currently in flight across every key.
+    pub fn global_in_flight(&self) -> usize {
+        self.inflight_limiter.global_active()
+    }
+
+    /// Retune the per-key concurrency cap without a restart.
+    pub fn set_max_concurrent_per_key(&self, max: usize) {
+        self.inflight_limiter.set_max_concurrent_per_key(max);
+    }
+
+    /// Retune the proxy-wide concurrency cap without a restart.
+    pub fn set_max_concurrent_global(&self, max: usize) {
+        self.inflight_limiter.set_max_concurrent_global(max);
+    }
+
     /// Admin auth throttle + per-key WS stream cap (OP-27).
     pub fn admin_limiter(&self) -> &crate::handlers::admin::auth::AdminAuthLimiter {
         self.admin_limiter.as_ref()
@@ -499,6 +524,12 @@ impl AppState {
         }
         if let Ok(Some(notif)) = db::app_config::load_notifications_enabled_from_db(conn) {
             self.set_notifications_enabled(notif);
+        }
+        if let Ok(Some(max)) = db::app_config::load_max_concurrent_per_key_from_db(conn) {
+            self.set_max_concurrent_per_key(max);
+        }
+        if let Ok(Some(max)) = db::app_config::load_max_concurrent_global_from_db(conn) {
+            self.set_max_concurrent_global(max);
         }
     }
 }

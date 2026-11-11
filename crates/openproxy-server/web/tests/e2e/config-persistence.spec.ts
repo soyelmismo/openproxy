@@ -93,3 +93,91 @@ test('rejects a negative Recording TTL at the real backend without persisting it
   await expect(input).toHaveValue(String(originalValue));
   expect(await readRecordingTtl(page)).toBe(originalValue);
 });
+
+// --- Concurrency caps: live-tunable pair, applied from the next request -----
+
+const concurrencyEndpoint = '/admin/api/config/concurrency';
+
+async function readConcurrency(page: import('@playwright/test').Page): Promise<{
+  max_concurrent_per_key: number;
+  max_concurrent_global: number;
+}> {
+  const response = await page.request.get(concurrencyEndpoint, {
+    headers: adminAuthHeaders(),
+  });
+  expect(response.ok()).toBe(true);
+  const body = await response.json() as {
+    max_concurrent_per_key?: unknown;
+    max_concurrent_global?: unknown;
+  };
+  expect(typeof body.max_concurrent_per_key).toBe('number');
+  expect(typeof body.max_concurrent_global).toBe('number');
+  return {
+    max_concurrent_per_key: body.max_concurrent_per_key as number,
+    max_concurrent_global: body.max_concurrent_global as number,
+  };
+}
+
+test('persists the Concurrency caps through the real UI and admin API', async ({ page }) => {
+  await page.goto('/#/config');
+
+  const perKey = page.locator('input[name="max_concurrent_per_key"]');
+  await expect(perKey).toBeVisible();
+  const original = await readConcurrency(page);
+  // The shipped defaults: a small fairness bound per key, a wide proxy ceiling.
+  expect(original.max_concurrent_per_key).toBe(10);
+  expect(original.max_concurrent_global).toBe(512);
+
+  const updatedPerKey = 12;
+  try {
+    await perKey.fill(String(updatedPerKey));
+
+    const saveResponse = page.waitForResponse((response) =>
+      response.url().endsWith(concurrencyEndpoint)
+      && response.request().method() === 'PUT'
+      && response.status() >= 200
+      && response.status() < 300,
+    );
+    await perKey.press('Enter');
+    const response = await saveResponse;
+    expect(await response.json()).toMatchObject({
+      max_concurrent_per_key: updatedPerKey,
+      applies_to: 'next_request',
+    });
+
+    await page.reload();
+    await expect(perKey).toHaveValue(String(updatedPerKey));
+    expect((await readConcurrency(page)).max_concurrent_per_key).toBe(updatedPerKey);
+  } finally {
+    const restoreResponse = await page.request.put(concurrencyEndpoint, {
+      headers: adminAuthHeaders(),
+      data: {
+        max_concurrent_per_key: original.max_concurrent_per_key,
+        max_concurrent_global: original.max_concurrent_global,
+      },
+    });
+    expect(restoreResponse.status()).toBeGreaterThanOrEqual(200);
+    expect(restoreResponse.status()).toBeLessThan(300);
+  }
+});
+
+test('rejects a per-key cap above the global cap at the real backend', async ({ page }) => {
+  await page.goto('/#/config');
+  const original = await readConcurrency(page);
+
+  const response = await page.request.put(concurrencyEndpoint, {
+    headers: adminAuthHeaders(),
+    data: {
+      max_concurrent_per_key: original.max_concurrent_global + 1,
+      max_concurrent_global: original.max_concurrent_global,
+    },
+  });
+  expect(response.status()).toBeGreaterThanOrEqual(400);
+  expect(response.status()).toBeLessThan(500);
+
+  // Nothing was persisted by the refused write, and the UI still shows the
+  // live values served by GET /admin/api/config/concurrency.
+  expect(await readConcurrency(page)).toEqual(original);
+  await expect(page.locator('input[name="max_concurrent_per_key"]'))
+    .toHaveValue(String(original.max_concurrent_per_key));
+});

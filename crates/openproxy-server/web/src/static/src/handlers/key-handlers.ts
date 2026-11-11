@@ -326,12 +326,12 @@ export function keyFormTemplate({ mode, key, quota, wrapper, inline = false, onS
                 </div>
               </div>
             </section>
-            <section class="key-form-section" aria-labelledby="key-section-quotas">
+            <section class="key-form-section" aria-labelledby="key-section-quota">
               <div class="key-form-section-head">
                 ${inline
-                  ? html`<h2 class="key-form-section-title" id="key-section-quotas">Dollar quotas</h2>`
-                  : html`<h3 class="key-form-section-title" id="key-section-quotas">Dollar quotas</h3>`}
-                <p class="key-form-section-hint">Metered at official model prices · off = unlimited</p>
+                  ? html`<h2 class="key-form-section-title" id="key-section-quota">Quota &amp; limits</h2>`
+                  : html`<h3 class="key-form-section-title" id="key-section-quota">Quota &amp; limits</h3>`}
+                <p class="key-form-section-hint">Metered at official prices</p>
               </div>
               <div class="key-form-grid key-form-grid--restrictions">
                 <div class="field">
@@ -340,7 +340,7 @@ export function keyFormTemplate({ mode, key, quota, wrapper, inline = false, onS
                     <span class="key-form-field-note">burst guard</span>
                   </div>
                   <div class="key-form-inline-row">
-                    <label class="scope-card key-form-toggle">
+                    <label class="scope-card key-form-toggle" title="Turn the 5-hour dollar cap on or off">
                       <input type="checkbox" name="quota_5h_enabled" .checked=${fiveHourOn} @change=${onQuotaToggle}>
                       <span class="scope-name">Enable</span>
                     </label>
@@ -353,7 +353,7 @@ export function keyFormTemplate({ mode, key, quota, wrapper, inline = false, onS
                     <span class="key-form-field-note">resets Mon 00:00 UTC</span>
                   </div>
                   <div class="key-form-inline-row">
-                    <label class="scope-card key-form-toggle">
+                    <label class="scope-card key-form-toggle" title="Turn the weekly dollar cap on or off">
                       <input type="checkbox" name="quota_week_enabled" .checked=${weekOn} @change=${onQuotaToggle}>
                       <span class="scope-name">Enable</span>
                     </label>
@@ -366,7 +366,7 @@ export function keyFormTemplate({ mode, key, quota, wrapper, inline = false, onS
                     <span class="key-form-field-note">resets 1st 00:00 UTC</span>
                   </div>
                   <div class="key-form-inline-row">
-                    <label class="scope-card key-form-toggle">
+                    <label class="scope-card key-form-toggle" title="Turn the monthly dollar cap on or off">
                       <input type="checkbox" name="quota_month_enabled" .checked=${monthOn} @change=${onQuotaToggle}>
                       <span class="scope-name">Enable</span>
                     </label>

@@ -88,6 +88,35 @@ async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), Api
     }))
 }
 
+/// Reject the request with 402 when the key is credit-based (carries at
+/// least one ledger entry) and its effective prepaid balance is zero.
+/// Keys without ledger rows are not governed by the balance system.
+async fn enforce_key_balance(state: &AppState, key_id: ApiKeyId) -> Result<(), ApiError> {
+    let outcome = state
+        .db_pool()
+        .spawn_read(move |r| {
+            if !openproxy_db::credits_ledger::is_credit_based(r, key_id.0)? {
+                return Ok(None);
+            }
+            openproxy_db::credits_ledger::balance_units(r, key_id.0).map(Some)
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!(%e, "db error checking credit balance");
+            ApiError(CoreError::Internal("credit balance check failed".into()))
+        })?;
+    let Some(balance_units) = outcome else {
+        return Ok(());
+    };
+    if balance_units > 0 {
+        return Ok(());
+    }
+    tracing::warn!(key_id = key_id.0, "credit balance exhausted");
+    Err(ApiError(CoreError::InsufficientCredits {
+        balance_usd: 0.0,
+    }))
+}
+
 pub(crate) async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
@@ -143,6 +172,7 @@ pub(crate) async fn authenticate(
             key: Arc::new(target_key),
         };
         enforce_key_quota(state, token.key_id).await?;
+        enforce_key_balance(state, token.key_id).await?;
         return Ok(Some(token));
     }
 
@@ -151,6 +181,7 @@ pub(crate) async fn authenticate(
         key,
     };
     enforce_key_quota(state, token.key_id).await?;
+    enforce_key_balance(state, token.key_id).await?;
     Ok(Some(token))
 }
 

@@ -116,6 +116,21 @@ pub(crate) fn spawn_background_tasks(
         });
     }
 
+    // Credits: on-chain watcher + expiry/self-audit. Only when credits are
+    // configured (None = credits disabled entirely).
+    if let Some(credits_config) = config.credits.clone() {
+        supervisor.spawn(crate::background::credits_watcher::CreditsWatcherService {
+            db_pool: Arc::clone(&db_pool),
+            config: credits_config,
+            master_key: Arc::clone(&master_key),
+            upstream_client: Arc::clone(&upstream_client),
+        });
+        supervisor.spawn(crate::background::credits_watcher::CreditsExpiryService {
+            db_pool: Arc::clone(&db_pool),
+            interval: std::time::Duration::from_mins(1),
+        });
+    }
+
     supervisor.spawn(crate::background::QuotaSyncService {
         db_pool: Arc::clone(&db_pool),
         config,

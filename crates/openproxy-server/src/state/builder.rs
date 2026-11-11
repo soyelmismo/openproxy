@@ -24,6 +24,9 @@ impl AppState {
         let mut idle_chunk_retryable = db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT;
         let mut compression_mode = openproxy_compression::CompressionMode::Off;
         let mut notifications_enabled = db::app_config::NOTIFICATIONS_ENABLED_DEFAULT;
+        let mut max_concurrent_per_key =
+            openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY;
+        let mut max_concurrent_global = openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_GLOBAL;
 
         run_database_maintenance(
             &mut db_pool.writer(),
@@ -32,6 +35,8 @@ impl AppState {
             &mut idle_chunk_retryable,
             &mut compression_mode,
             &mut notifications_enabled,
+            &mut max_concurrent_per_key,
+            &mut max_concurrent_global,
         )?;
 
         let usage_tx = usage::init_usage_broadcast();
@@ -111,9 +116,15 @@ impl AppState {
         let rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter> = Arc::new(
             openproxy_core::rate_limit::SlidingWindowRateLimiter::new(rate_limiter_config),
         );
-        let inflight_limiter = Arc::new(openproxy_core::rate_limit::InFlightLimiter::new(
-            openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
-        ));
+        let inflight_limiter = Arc::new(
+            openproxy_core::rate_limit::InFlightLimiter::with_global_limit(
+                max_concurrent_per_key,
+                max_concurrent_global,
+            ),
+        );
+        // The persisted overrides (if any) are applied by
+        // `AppState::reload_runtime_config` once the DB is open, so a live
+        // retune survives a restart without editing config.toml.
         spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());
@@ -246,9 +257,15 @@ impl AppState {
         let rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter> = Arc::new(
             openproxy_core::rate_limit::SlidingWindowRateLimiter::new(rate_limiter_config),
         );
-        let inflight_limiter = Arc::new(openproxy_core::rate_limit::InFlightLimiter::new(
-            openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
-        ));
+        let inflight_limiter = Arc::new(
+            openproxy_core::rate_limit::InFlightLimiter::with_global_limit(
+                openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY,
+                openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_GLOBAL,
+            ),
+        );
+        // The persisted overrides (if any) are applied by
+        // `AppState::reload_runtime_config` once the DB is open, so a live
+        // retune survives a restart without editing config.toml.
         spawn_rate_limiter_cleanup(&supervisor, Arc::clone(&rate_limiter));
 
         let selection_registry = Arc::new(openproxy_types::SelectionRegistry::new());

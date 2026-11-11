@@ -111,6 +111,9 @@ pub enum CoreError {
         resets_at: String,
     },
 
+    #[error("insufficient credits: balance_usd={balance_usd:.4}")]
+    InsufficientCredits { balance_usd: f64 },
+
     #[error("parse error: {0}")]
     Parse(String),
 
@@ -306,6 +309,7 @@ impl CoreError {
             | CoreError::NotFound { .. } => 404,
             CoreError::RateLimited { .. } => 429,
             CoreError::QuotaExceeded { .. } => 429,
+            CoreError::InsufficientCredits { .. } => 402,
             CoreError::UpstreamError { status, .. } => *status,
             CoreError::UpstreamTimeout { .. } => 529,
             CoreError::UpstreamConnection(_) | CoreError::NoHealthyTargets(_) => 502,
@@ -338,6 +342,7 @@ impl CoreError {
             CoreError::UpstreamError { .. } => "upstream_error",
             CoreError::RateLimited { .. } => "rate_limited",
             CoreError::QuotaExceeded { .. } => "quota_exceeded",
+            CoreError::InsufficientCredits { .. } => "insufficient_credits",
             CoreError::Parse(_) => "parse_error",
             CoreError::Cancelled(r) => r.as_str(),
             CoreError::RaceLost => "race_lost",

@@ -379,3 +379,191 @@ fn exhausted_model_detail_reports_exhausted_without_aggregates() {
         QuotaStatus::Exhausted
     );
 }
+
+// ==== Z.ai: the account must be skipped, not dispatched, once no pool can
+// serve the model. The runner-up failure mode was dispatch + validation
+// ("no active AutoClaw, ZCode Starter, or Coding Plan quota authorizes model"),
+// one wasted attempt per request.
+
+/// AutoClaw-only account: the promotional bucket is the only real credential,
+/// ZCode and Coding Plan carry the "not configured" configuration error that
+/// every real AutoClaw account has.
+fn make_zai_account(autoclaw_pool: openproxy_types::quota::QuotaPool) -> Account {
+    use openproxy_types::quota::{QuotaPool, QuotaPoolStatus, QuotaSource};
+
+    let now = openproxy_types::now_unix_secs_str();
+    let missing = |id: &str, source: QuotaSource, err: &str, fetched: &str| QuotaPool {
+        id: id.into(),
+        source,
+        plan_name: None,
+        status: QuotaPoolStatus::Unavailable,
+        unit: "token".into(),
+        used: None,
+        limit: None,
+        remaining: None,
+        reset_at: None,
+        expires_at: None,
+        starts_at: None,
+        model_ids: Vec::new(),
+        model_details: None,
+        fetch_error: Some(err.into()),
+        last_fetched_at: fetched.into(),
+    };
+
+    let mut acc = make_test_account(None);
+    acc.provider_id = ProviderId("zai".into());
+    acc.quota_pools = Some(
+        vec![
+            autoclaw_pool,
+            missing(
+                "zcode-starter",
+                QuotaSource::ZcodeStarter,
+                "ZCode OAuth credential is not configured for this account",
+                &now,
+            ),
+            missing(
+                "coding-plan",
+                QuotaSource::CodingPlan,
+                "Coding Plan credential is missing; subscription could not be verified",
+                &now,
+            ),
+        ]
+        .into_boxed_slice(),
+    );
+    acc
+}
+
+fn autoclaw_pool(
+    status: openproxy_types::quota::QuotaPoolStatus,
+    remaining: Option<i64>,
+    model_ids: Vec<&str>,
+    fetched: &str,
+) -> openproxy_types::quota::QuotaPool {
+    openproxy_types::quota::QuotaPool {
+        id: "autoclaw-starter".into(),
+        source: openproxy_types::quota::QuotaSource::AutoclawStarter,
+        plan_name: Some("AutoClaw Promotional Credits".into()),
+        status,
+        unit: "points".into(),
+        used: None,
+        limit: remaining,
+        remaining,
+        reset_at: None,
+        expires_at: None,
+        starts_at: None,
+        model_ids: model_ids.iter().map(|m| (*m).to_string()).collect(),
+        model_details: None,
+        fetch_error: None,
+        last_fetched_at: fetched.into(),
+    }
+}
+
+const AUTO_CLAW_MODELS: [&str; 4] = ["GLM-5.3-Flash", "GLM-5.3", "GLM-5.2", "GLM-5-Turbo"];
+
+#[test]
+fn zai_drained_wallet_skips_the_account() {
+    // Wallet spent to zero: the only real entitlement has no budget left.
+    let now = openproxy_types::now_unix_secs_str();
+    let acc = make_zai_account(autoclaw_pool(
+        openproxy_types::quota::QuotaPoolStatus::Exhausted,
+        Some(0),
+        AUTO_CLAW_MODELS.to_vec(),
+        &now,
+    ));
+
+    assert_eq!(
+        evaluate_account_quota(true, 10, &acc, &["GLM-5.3"]),
+        QuotaStatus::Exhausted,
+        "a drained AutoClaw wallet must be skipped, not dispatched"
+    );
+}
+
+#[test]
+fn zai_per_model_exclusion_skips_only_that_model() {
+    // The 810000 path removed GLM-5.3 from the pool's model_ids while the
+    // wallet still holds points for Flash/5.2/Turbo.
+    let now = openproxy_types::now_unix_secs_str();
+    let acc = make_zai_account(autoclaw_pool(
+        openproxy_types::quota::QuotaPoolStatus::Active,
+        Some(2_672),
+        vec!["GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"],
+        &now,
+    ));
+
+    assert_eq!(
+        evaluate_account_quota(true, 10, &acc, &["GLM-5.3"]),
+        QuotaStatus::Exhausted,
+        "the excluded model must not be dispatched to this account"
+    );
+    assert_eq!(
+        evaluate_account_quota(true, 10, &acc, &["GLM-5.3-Flash"]),
+        QuotaStatus::Available,
+        "the models still authorized by the pool must keep working"
+    );
+}
+
+#[test]
+fn zai_per_model_exclusion_survives_stale_counters() {
+    // Freshness used to be an escape hatch: a snapshot older than 60 s kept
+    // the account Available even though no pool could serve the model, which
+    // is how 126 validation failures landed on account 1576 in 68 s.
+    let stale = (openproxy_types::now_unix_secs_str()
+        .parse::<u64>()
+        .unwrap_or(0)
+        .saturating_sub(3_600))
+    .to_string();
+    let acc = make_zai_account(autoclaw_pool(
+        openproxy_types::quota::QuotaPoolStatus::Active,
+        Some(2_672),
+        vec!["GLM-5.3-Flash", "GLM-5.2", "GLM-5-Turbo"],
+        &stale,
+    ));
+
+    assert_eq!(
+        evaluate_account_quota(true, 10, &acc, &["GLM-5.3"]),
+        QuotaStatus::Exhausted,
+        "an old snapshot must not resurrect a model no pool can serve"
+    );
+}
+
+#[test]
+fn zai_unreadable_pool_keeps_account_available_for_route_prep() {
+    // A transiently unreadable entitlement is genuine uncertainty, not a
+    // negative verdict: route preparation must get the chance to refresh it.
+    let now = openproxy_types::now_unix_secs_str();
+    let mut acc = make_zai_account(autoclaw_pool(
+        openproxy_types::quota::QuotaPoolStatus::Exhausted,
+        Some(0),
+        AUTO_CLAW_MODELS.to_vec(),
+        &now,
+    ));
+    if let Some(pools) = acc.quota_pools.as_deref_mut() {
+        pools[1].status = openproxy_types::quota::QuotaPoolStatus::Unavailable;
+        pools[1].fetch_error =
+            Some("Selected quota inference failed (HTTP 502); balance requires refresh".into());
+        pools[1].model_ids = AUTO_CLAW_MODELS.iter().map(|m| (*m).to_string()).collect();
+    }
+
+    assert_eq!(
+        evaluate_account_quota(true, 10, &acc, &["GLM-5.3"]),
+        QuotaStatus::Available,
+        "an unreadable pool must keep the account in play for a refresh"
+    );
+}
+
+#[test]
+fn zai_model_no_pool_authorizes_is_skipped() {
+    let now = openproxy_types::now_unix_secs_str();
+    let acc = make_zai_account(autoclaw_pool(
+        openproxy_types::quota::QuotaPoolStatus::Active,
+        Some(2_672),
+        vec!["GLM-5.3-Flash"],
+        &now,
+    ));
+
+    assert_eq!(
+        evaluate_account_quota(true, 10, &acc, &["GLM-4.6"]),
+        QuotaStatus::Exhausted,
+        "a model no pool authorizes must not reach the provider at all"
+    );
+}

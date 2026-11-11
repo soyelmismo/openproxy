@@ -232,19 +232,35 @@ pub fn evaluate_account_quota(
         // Only the first retires the account; the second must stay Available
         // so route preparation can refresh both sources and keep the locally
         // read balance alive (see `zai_remaining_fraction`).
+        //
+        // The gate is the pool's own state, not snapshot freshness. A pool
+        // whose state is *genuinely unknown* — Unavailable, or a fetch_error
+        // that is not a missing credential — may come back usable after a
+        // refresh, so the account stays available for route preparation to
+        // resolve. Every other verdict is definitive: exhausted/absent/expired
+        // pools, per-model exclusions (the AutoClaw 810000 "free quota used
+        // up" path removes the model from `model_ids`) and missing-credential
+        // pools are server-confirmed or configuration facts that no refresh
+        // can flip. Dispatching to such an account only burns a network
+        // refresh and dies in `select_zai_inference_source` with "no active
+        // AutoClaw, ZCode Starter, or Coding Plan quota authorizes model" —
+        // one wasted attempt per request (observed: 126 consecutive
+        // validation failures on account 1576 within 68 s). A re-granted
+        // entitlement (e.g. the daily AutoClaw claim) re-activates the
+        // account through the background quota sync's snapshot refresh, which
+        // runs for every zai account regardless of balance, not through
+        // dispatch.
         let model = candidates.first().copied().unwrap_or_default();
-        let any_pool_could_serve = pools
-            .iter()
-            .any(|p| !p.is_missing_credential() && !p.is_known_ineligible_for_model(now, model));
-        // Stale counters must reach route preparation, which refreshes both
-        // sources. Otherwise a depleted cached pool permanently retires a
-        // newly renewed entitlement before its balance can ever be read.
-        let counters_stale = pools.iter().any(|pool| {
-            pool.last_fetched_at.parse::<u64>().map_or(true, |fetched| {
-                fetched > now || now.saturating_sub(fetched) > 60
-            })
+        let any_pool_may_serve = pools.iter().any(|p| {
+            let applies_to_model = p.matches_model(model)
+                || (p.source != openproxy_types::quota::QuotaSource::CodingPlan
+                    && p.model_ids.is_empty());
+            applies_to_model
+                && !p.is_missing_credential()
+                && (p.fetch_error.is_some()
+                    || p.status == openproxy_types::quota::QuotaPoolStatus::Unavailable)
         });
-        if !any_pool_could_serve && !counters_stale {
+        if !any_pool_may_serve {
             return QuotaStatus::Exhausted;
         }
         return QuotaStatus::Available;

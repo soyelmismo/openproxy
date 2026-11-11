@@ -23,6 +23,9 @@ let livePiiEntities: string[] = ["email", "phone", "ip", "credit_card", "secret"
 let liveNotificationsEnabled = true;
 let liveModalityRoutingEnabled = true;
 let liveModalityRoutingFallback = true;
+let liveMaxConcurrentPerKey = 10;
+let liveMaxConcurrentGlobal = 512;
+let liveInFlight = 0;
 
 function normalizePiiEntity(e: string): string {
   if (e === "card") return "credit_card";
@@ -48,6 +51,9 @@ export function applyServerConfig(payload: ConfigPayload): void {
   liveNotificationsEnabled = payload.notifications_enabled ?? true;
   liveModalityRoutingEnabled = payload.modality_routing?.enabled ?? true;
   liveModalityRoutingFallback = payload.modality_routing?.fallback_to_text_only ?? true;
+  liveMaxConcurrentPerKey = payload.max_concurrent_per_key ?? 10;
+  liveMaxConcurrentGlobal = payload.max_concurrent_global ?? 512;
+  liveInFlight = payload.in_flight ?? 0;
 }
 
 async function putConfig(endpoint: string, body: unknown, toastMsg: string): Promise<boolean> {
@@ -107,6 +113,15 @@ async function patchPiiConfig(update: { pii_enabled?: boolean; pii_reversible?: 
   const body = { pii_enabled: update.pii_enabled ?? livePiiEnabled, pii_reversible: update.pii_reversible ?? livePiiReversible, pii_redact_logs: update.pii_redact_logs ?? livePiiRedactLogs, pii_entities: update.pii_entities ?? livePiiEntities };
   const ok = await putConfig("/config/pii", body, t("config.pii.toast.updated"));
   if (ok) { const cfg = getConfig(); if (cfg) { cfg.pii = body; Object.assign(cfg, body); } }
+  return ok;
+}
+
+async function patchConcurrency(perKey: number, global: number): Promise<boolean> {
+  const ok = await putConfig("/config/concurrency", { max_concurrent_per_key: perKey, max_concurrent_global: global }, t("config.concurrency.toast.updated"));
+  if (ok) {
+    const cfg = getConfig();
+    if (cfg) { cfg.max_concurrent_per_key = perKey; cfg.max_concurrent_global = global; }
+  }
   return ok;
 }
 
@@ -345,4 +360,43 @@ export function renderPiiCard(): TemplateResult {
       </div>
     </div>
   `);
+}
+
+export function renderConcurrencyCard(): TemplateResult {
+  return card(t("config.concurrency.title"), html`
+    <p class="muted">${unsafeHTML(t("config.concurrency.description"))}</p>
+    <div class="config-grid">
+      ${renderField(
+        t("config.concurrency.per_key"),
+        "max_concurrent_per_key",
+        liveMaxConcurrentPerKey,
+        t("config.concurrency.per_key_help"),
+        async (e: Event) => {
+          if (e.type === "input") return;
+          const n = validateNonNegInt((e.target as HTMLInputElement).value.trim(), "max_concurrent_per_key");
+          if (n == null || n < 1) { requestUpdate(); return; }
+          if (n > liveMaxConcurrentGlobal) { showToast(t("config.concurrency.per_key_above_global"), "error"); requestUpdate(); return; }
+          const prev = liveMaxConcurrentPerKey; liveMaxConcurrentPerKey = n;
+          if (!await patchConcurrency(n, liveMaxConcurrentGlobal)) liveMaxConcurrentPerKey = prev;
+        },
+        { editable: true, step: 1, unit: "req" },
+      )}
+      ${renderField(
+        t("config.concurrency.global"),
+        "max_concurrent_global",
+        liveMaxConcurrentGlobal,
+        t("config.concurrency.global_help"),
+        async (e: Event) => {
+          if (e.type === "input") return;
+          const n = validateNonNegInt((e.target as HTMLInputElement).value.trim(), "max_concurrent_global");
+          if (n == null || n < 1) { requestUpdate(); return; }
+          if (n < liveMaxConcurrentPerKey) { showToast(t("config.concurrency.global_below_per_key"), "error"); requestUpdate(); return; }
+          const prev = liveMaxConcurrentGlobal; liveMaxConcurrentGlobal = n;
+          if (!await patchConcurrency(liveMaxConcurrentPerKey, n)) liveMaxConcurrentGlobal = prev;
+        },
+        { editable: true, step: 16, unit: "req" },
+      )}
+    </div>
+    <p class="config-help">${t("config.concurrency.in_flight", { value: String(liveInFlight) })}</p>
+  `, "card-concurrency");
 }

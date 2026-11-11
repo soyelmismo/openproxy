@@ -58,6 +58,12 @@ export interface ConfigPayload {
   } | null;
   /** W3: global notifications master switch (top-level in the payload). */
   notifications_enabled?: boolean | null;
+  /** Per-key concurrent-request cap (fairness bound). */
+  max_concurrent_per_key?: number | null;
+  /** Proxy-wide concurrent-request cap (memory/socket guard). */
+  max_concurrent_global?: number | null;
+  /** Live count of requests in flight across every key. */
+  in_flight?: number | null;
   pii_enabled?: boolean | null;
   pii_reversible?: boolean | null;
   pii_redact_logs?: boolean | null;

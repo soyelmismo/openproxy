@@ -29,6 +29,12 @@ pub struct RuntimeConfigResponse {
     /// When false, notification inserts and broadcasts are globally suppressed.
     /// Default true.
     pub notifications_enabled: bool,
+    /// Per-key concurrent-request cap (fairness bound).
+    pub max_concurrent_per_key: usize,
+    /// Proxy-wide concurrent-request cap (memory/socket guard).
+    pub max_concurrent_global: usize,
+    /// Live count of requests in flight across every key.
+    pub in_flight: usize,
 }
 
 pub fn router() -> axum::Router<AppState> {
@@ -64,6 +70,10 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/notifications-enabled",
             axum::routing::put(put_notifications_enabled),
+        )
+        .route(
+            "/concurrency",
+            axum::routing::get(get_concurrency_caps).put(put_concurrency_caps),
         )
         .route("/vacuum-status", axum::routing::get(get_vacuum_status))
         .route("/backfill-status", axum::routing::get(get_backfill_status))
@@ -117,6 +127,9 @@ pub async fn get_runtime_config(
         pii,
         modality_routing: s.modality_routing(),
         notifications_enabled: s.notifications_enabled(),
+        max_concurrent_per_key: s.max_concurrent_per_key(),
+        max_concurrent_global: s.max_concurrent_global(),
+        in_flight: s.global_in_flight(),
     }))
 }
 
@@ -402,3 +415,73 @@ runtime_config_put!(
         }),
     }
 );
+
+/// `GET /admin/api/config/concurrency` — live concurrency caps + occupancy.
+pub async fn get_concurrency_caps(
+    State(s): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(serde_json::json!({
+        "max_concurrent_per_key": s.max_concurrent_per_key(),
+        "max_concurrent_global": s.max_concurrent_global(),
+        "in_flight": s.global_in_flight(),
+    })))
+}
+
+/// `PUT /admin/api/config/concurrency`
+///
+/// Retunes the two concurrency ceilings without a restart. Both are guards
+/// against resource exhaustion, not quotas: the per-key cap keeps one client
+/// from monopolising the pool, the global cap bounds total memory/sockets.
+/// In-flight requests keep their slot; the new caps apply to the next acquire.
+pub async fn put_concurrency_caps(
+    State(s): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let per_key = body
+        .get("max_concurrent_per_key")
+        .and_then(serde_json::Value::as_u64);
+    let global = body
+        .get("max_concurrent_global")
+        .and_then(serde_json::Value::as_u64);
+    if per_key.is_none() && global.is_none() {
+        return Err(ApiError(CoreError::Validation(
+            "provide 'max_concurrent_per_key' and/or 'max_concurrent_global'".into(),
+        )));
+    }
+    let per_key = per_key.map(|v| v as usize).unwrap_or(s.max_concurrent_per_key());
+    let global = global
+        .map(|v| v as usize)
+        .unwrap_or(s.max_concurrent_global());
+    if per_key == 0 || global == 0 {
+        return Err(ApiError(CoreError::Validation(
+            "concurrency caps must be at least 1".into(),
+        )));
+    }
+    if per_key > global {
+        return Err(ApiError(CoreError::Validation(format!(
+            "'max_concurrent_per_key' ({per_key}) cannot exceed 'max_concurrent_global' ({global})"
+        ))));
+    }
+    crate::error::run_blocking(move || {
+        {
+            let w = s.db_pool().writer();
+            let now = chrono::Utc::now().timestamp();
+            core_db::app_config::save_max_concurrent_per_key_to_db(&w, per_key, now)?;
+            core_db::app_config::save_max_concurrent_global_to_db(&w, global, now)?;
+        }
+        tracing::info!(
+            max_concurrent_per_key = per_key,
+            max_concurrent_global = global,
+            "updated concurrency caps via admin API"
+        );
+        s.set_max_concurrent_per_key(per_key);
+        s.set_max_concurrent_global(global);
+        Ok(Json(serde_json::json!({
+            "max_concurrent_per_key": per_key,
+            "max_concurrent_global": global,
+            "in_flight": s.global_in_flight(),
+            "applies_to": "next_request",
+        })))
+    })
+    .await
+}

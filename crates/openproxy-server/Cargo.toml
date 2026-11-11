@@ -115,6 +115,7 @@ libmimalloc-sys = { workspace = true }
 # as a closure parameter). Previously it was only a dev-dependency (for
 # tests), but the retry helper needs it at build time.
 rusqlite = { workspace = true }
+qrcode = { workspace = true }
 tower-http = { workspace = true }
 thiserror.workspace = true
 # Manual accept loop in main.rs (OP-13): axum::serve does not expose

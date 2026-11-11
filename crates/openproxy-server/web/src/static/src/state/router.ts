@@ -51,7 +51,8 @@ export type RouteName =
   | "proxies"
   | "proxy-sources"
   | "playground"
-  | "models";
+  | "models"
+  | "credits";
 
 export type ViewMount = (ctx: string) => unknown;
 
@@ -73,6 +74,9 @@ const ROUTES: readonly Route[] = [
   { name: "combos", pattern: /^#?\/combos$/, mount: mountCombos as ViewMount },
   { name: "combo-detail", pattern: /^#?\/combos\/(\d+)$/, mount: ((ctx: string) => mountCombos({ detailId: parseInt(ctx, 10) })) as ViewMount },
   { name: "keys", pattern: /^#?\/keys$/, mount: mountKeys as ViewMount },
+  { name: "credits", pattern: /^#?\/credits$/, mount: lazyMount(
+    () => import('../views/credits.js'), 'mountCredits',
+  ) },
   { name: "key-detail", pattern: /^#?\/keys\/(\d+)$/, mount: ((ctx: string) => mountKeyDetail(parseInt(ctx, 10))) as ViewMount },
   { name: "key-usage", pattern: /^#?\/keys\/(\d+)\/usage$/, mount: ((ctx: string) => mountKeyUsage(parseInt(ctx, 10))) as ViewMount },
   // `?range=<preset>` in the hash keeps the selected range across a refresh.

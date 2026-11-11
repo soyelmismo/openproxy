@@ -2,6 +2,7 @@
 // routing lives in views/logs.js.
 
 import { state } from "./index.js";
+import { PROXY_PREFIX } from "./proxy-prefix.js";
 import { LOGS_WS_RECONNECT_DELAYS } from "../lib/constants.js";
 import type { StageEvent } from "../lib/types/api.js";
 import { dispatchWs } from "./ws-bus.js";
@@ -24,8 +25,8 @@ export function subscribeLogsStatus(fn: (status: LogsStatus) => void): () => voi
 /** Base URL of the live-logs WebSocket (no credentials). */
 export function logsWsUrl(): string {
   const scheme: "ws:" | "wss:" = location.protocol === "https:" ? "wss:" : "ws:";
-  // Served by the openproxy server itself at `/admin/ws`.
-  return `${scheme}//${location.host}/admin/ws`;
+  // Served by the openproxy server itself at `/admin/ws`, behind any proxy prefix.
+  return `${scheme}//${location.host}${PROXY_PREFIX}/admin/ws`;
 }
 
 /** WebSocket URL carrying a single-use handshake ticket.

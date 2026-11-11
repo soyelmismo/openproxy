@@ -145,6 +145,9 @@ pub struct AppConfig {
     pub pii: PiiConfig,
     #[serde(default)]
     pub modality_routing: ModalityRoutingConfig,
+    /// On-chain credit top-ups (Base USDC). None disables the credits system.
+    #[serde(default)]
+    pub credits: Option<openproxy_types::config::CreditsConfig>,
 }
 
 impl AppConfig {

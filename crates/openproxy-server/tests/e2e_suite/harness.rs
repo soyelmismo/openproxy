@@ -437,6 +437,20 @@ impl TestHarness {
 
         let mut app_config = AppConfig::default();
         app_config.server.allow_anonymous = false;
+        // Credits gateway enabled for every e2e test: the checkout routes and
+        // the admin credits section are exercisable. The watcher is never
+        // spawned here; tests that need it drive `tick()` against their own
+        // mock JSON-RPC server (no real chain, no real money).
+        app_config.credits = Some(openproxy_types::config::CreditsConfig {
+            rpc_url: String::from("http://127.0.0.1:1"),
+            usdc_address: String::from("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"),
+            collector_address: String::from("0x12c7ab78f21ba0253a21d34a0151d44ddb824950"),
+            payment_window_minutes: 15,
+            scan_interval_secs: 5,
+            min_topup_usd: 1.0,
+            ttl_days: vec![7, 15, 30],
+            chain_id: 8453,
+        });
         let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
         let app_state = AppState::for_test(
             app_config,
@@ -555,6 +569,21 @@ impl TestHarness {
             .header(header::CONTENT_TYPE, "application/json")
             .body(body.into())
             .expect("build admin request")
+    }
+
+    /// Request to the public (unauthenticated) surface: checkout gateway.
+    pub fn public_request<T: Into<Body>>(
+        &self,
+        method: Method,
+        uri: &str,
+        body: T,
+    ) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body.into())
+            .expect("build public request")
     }
 
     pub fn client_request<T: Into<Body>>(

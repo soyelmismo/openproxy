@@ -503,6 +503,19 @@ pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_typ
         )
         .map_err(crate::error::map_db_error_ctx("mark_client_response"))?;
 
+    // Billable instant: the response reached the client. Consume the prepaid
+    // balance (best-effort — see `record_spend_best_effort`).
+    if affected > 0
+        && let Ok((key_id, cost_units)) = conn.query_row(
+            "SELECT api_key_id, CAST(ROUND(cost_usd * 1000000) AS INTEGER) FROM usage \
+             WHERE id = ?1 AND client_response = 1 AND cost_usd > 0 AND api_key_id IS NOT NULL",
+            params![row_id.0],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+    {
+        crate::credits_ledger::record_spend_best_effort(conn, key_id, cost_units);
+    }
+
     if affected > 0
         && let Ok(mut stmt) = conn.prepare(&format!(
             "SELECT {RECENT_USAGE_COLS} FROM usage WHERE id = ?1"
@@ -526,6 +539,19 @@ pub fn mark_winner_usage_row(
             params![request_id, attempt, target_id.0],
         )
         .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
+
+    // Billable instant: consume the prepaid balance (best-effort).
+    if affected > 0
+        && let Ok((key_id, cost_units)) = conn.query_row(
+            "SELECT api_key_id, CAST(ROUND(cost_usd * 1000000) AS INTEGER) FROM usage \
+             WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 \
+               AND client_response = 1 AND cost_usd > 0 AND api_key_id IS NOT NULL",
+            params![request_id, attempt, target_id.0],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+    {
+        crate::credits_ledger::record_spend_best_effort(conn, key_id, cost_units);
+    }
 
     if affected > 0
         && let Ok(mut stmt) = conn.prepare(&format!(

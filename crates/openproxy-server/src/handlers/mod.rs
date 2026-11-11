@@ -22,6 +22,8 @@ macro_rules! call_unary_executor {
 }
 
 pub mod admin;
+pub mod credits_gateway;
+pub mod credits_qr;
 pub mod audio;
 pub mod chat;
 pub mod embeddings;
@@ -74,7 +76,8 @@ pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
         .merge(tokenize::router(state))
         .nest("/chat", chat::router(state))
         .nest("/audio", audio::router(state))
-        .nest("/images", images::router(state));
+        .nest("/images", images::router(state))
+        .nest("/credits", credits_gateway::router());
 
     axum::Router::new().nest("/v1", v1_routes)
 }

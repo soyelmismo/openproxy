@@ -6,6 +6,12 @@ bind = "127.0.0.1:8787"
 # Optional isolated admin listener. Omit to keep API + dashboard on bind.
 # admin_bind = "127.0.0.1:8788"
 request_max_body_bytes = 33554432  # enforced request body limit (default 32 MiB)
+# Requests per minute per API key / client IP (default 1000). This is a
+# per-key ceiling, not a global one: a fleet of clients does not share it.
+# rate_limit_requests_per_minute = 1000
+# Concurrency caps are NOT set here: they are live-tunable from the dashboard
+# (Config → Concurrency) and persisted in the `app_config` table. Defaults are
+# 10 in-flight requests per key and 512 proxy-wide.
 # Trusted proxy IPs/CIDRs authorised to set X-Forwarded-For / X-Real-IP /
 # RFC 7239 Forwarded. Loopback is NOT trusted by default (security: if you
 # run openproxy behind nginx on 127.0.0.1 you MUST list 127.0.0.1 / ::1 here

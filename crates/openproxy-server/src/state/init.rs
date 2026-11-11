@@ -30,6 +30,8 @@ pub(crate) fn run_database_maintenance(
     idle_chunk_retryable: &mut bool,
     compression_mode: &mut openproxy_compression::CompressionMode,
     notifications_enabled: &mut bool,
+    max_concurrent_per_key: &mut usize,
+    max_concurrent_global: &mut usize,
 ) -> anyhow::Result<()> {
     openproxy_db::migrations::run(w)?;
     load_persisted_config_overrides(
@@ -39,6 +41,8 @@ pub(crate) fn run_database_maintenance(
         idle_chunk_retryable,
         compression_mode,
         notifications_enabled,
+        max_concurrent_per_key,
+        max_concurrent_global,
     )?;
     Ok(())
 }
@@ -138,6 +142,8 @@ fn load_persisted_config_overrides(
     idle_chunk_retryable: &mut bool,
     compression_mode: &mut openproxy_compression::CompressionMode,
     notifications_enabled: &mut bool,
+    max_concurrent_per_key: &mut usize,
+    max_concurrent_global: &mut usize,
 ) -> anyhow::Result<()> {
     load_persisted_timeouts(w, config)?;
     load_persisted_runtime_flags(
@@ -147,6 +153,28 @@ fn load_persisted_config_overrides(
         notifications_enabled,
     )?;
     load_persisted_compression_and_quota(w, config, compression_mode)?;
+    load_persisted_concurrency_caps(w, max_concurrent_per_key, max_concurrent_global)?;
+    Ok(())
+}
+
+/// Hydrate the live-tunable concurrency caps. Absent rows keep the compiled
+/// defaults (10 per key / 512 global).
+fn load_persisted_concurrency_caps(
+    w: &WriterGuard<'_>,
+    max_concurrent_per_key: &mut usize,
+    max_concurrent_global: &mut usize,
+) -> anyhow::Result<()> {
+    if let Some(v) = openproxy_db::app_config::load_max_concurrent_per_key_from_db(w)? {
+        *max_concurrent_per_key = v;
+    }
+    if let Some(v) = openproxy_db::app_config::load_max_concurrent_global_from_db(w)? {
+        *max_concurrent_global = v;
+    }
+    tracing::info!(
+        max_concurrent_per_key = *max_concurrent_per_key,
+        max_concurrent_global = *max_concurrent_global,
+        "loaded concurrency caps from app_config (defaults 10 per key / 512 global)"
+    );
     Ok(())
 }
 

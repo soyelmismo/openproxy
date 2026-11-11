@@ -11,6 +11,7 @@ pub mod migrations;
 pub mod accounts;
 pub mod cooldowns;
 pub mod cost;
+pub mod credits_ledger;
 pub mod pricing;
 pub mod providers;
 pub mod secrets;

@@ -41,6 +41,7 @@ parking_lot = { version = "0.12", features = ["arc_lock"] }
 rand = "0.10"
 aes-gcm = "0.11"
 base64 = "0.23"
+qrcode = { version = "0.14", default-features = false }
 tdigest = "1.0.0"
 dashmap = "6"
 toml = "1.1"

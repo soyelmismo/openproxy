@@ -32,6 +32,7 @@ pub mod api_key_quotas;
 pub mod api_keys;
 pub mod backup;
 pub mod bootstrap;
+pub mod credits;
 
 pub mod discovery_scheduler;
 pub mod free_proxies;

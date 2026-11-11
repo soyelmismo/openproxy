@@ -6,6 +6,7 @@ pub mod auth;
 pub mod backup;
 pub mod combo_targets;
 pub mod combos;
+pub mod credits;
 pub mod debug;
 pub mod helpers;
 pub mod model_tester;
@@ -48,6 +49,7 @@ pub fn admin_api_routes() -> axum::Router<AppState> {
         .nest("/proxy-sources", proxy_sources::router())
         .nest("/notifications", notifications::router())
         .nest("/oauth", oauth::router())
+        .nest("/credits", credits::router())
         .route("/auth/me", axum::routing::get(auth::auth_me))
         .route("/formats", axum::routing::get(get_formats))
         .route("/ws-ticket", axum::routing::post(usage_ws::issue_ws_ticket))

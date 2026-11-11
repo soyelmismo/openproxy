@@ -926,5 +926,15 @@
   "combos.list.col_ok_time": "Avg ok",
   "combos.list.health_tooltip": "{{requests}} requests · {{errors}} client errors · {{attempts}} attempts/req",
   "combos.list.no_traffic": "no traffic",
-  "workspace.resize_panel": "Resize panel"
+  "workspace.resize_panel": "Resize panel",
+  "config.concurrency.title": "Concurrency",
+  "config.concurrency.description": "Live ceilings on simultaneously in-flight requests. The per-key cap stops one client from monopolising the pool; the global cap bounds total memory and upstream sockets. Both apply from the next request — no restart.",
+  "config.concurrency.per_key": "Per key",
+  "config.concurrency.per_key_help": "Max concurrent requests for a single API key or client IP.",
+  "config.concurrency.global": "Global",
+  "config.concurrency.global_help": "Max concurrent requests across the whole proxy, all keys combined.",
+  "config.concurrency.in_flight": "Currently in flight: {{value}}",
+  "config.concurrency.toast.updated": "Concurrency caps updated",
+  "config.concurrency.per_key_above_global": "Per-key cap cannot exceed the global cap",
+  "config.concurrency.global_below_per_key": "Global cap cannot be lower than the per-key cap"
 }

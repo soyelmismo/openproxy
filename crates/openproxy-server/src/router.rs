@@ -67,6 +67,7 @@ pub fn build_admin_listener_router(state: AppState) -> Router {
 fn public_routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/health", get(health))
+        .route("/checkout", get(admin_ui::checkout_html))
         .merge(handlers::public_api_routes(state))
 }
 

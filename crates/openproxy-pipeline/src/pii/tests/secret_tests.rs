@@ -2,6 +2,22 @@ use super::super::*;
 use openproxy_types::config::PiiEntity;
 
 #[test]
+fn test_module_path_with_key_word_is_not_a_secret() {
+    // Session 20261110_224747_dd8331: a rustc error mentioning
+    // `openproxy_core::api_keys::CreateApiKeyInput` had the type path
+    // `:CreateApiKeyInput` redacted as a secret value behind the `api_keys`
+    // module name. The agent saw its own broken input and the compile error
+    // became undecipherable.
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+    let payload = "  --> crates/openproxy-server/src/handlers/admin/model_tester/mod.rs:51:41\n   |\n51 |                 openproxy_core::api_keys::CreateApiKeyInput {\n   |                                         ^\nhelp: use a double colon instead\n";
+    let red = engine.redact_text(payload, &mut session);
+    assert!(!red.contains("sec_"), "redacted: {red}");
+    assert!(red.contains("api_keys::CreateApiKeyInput"));
+    assert_eq!(session.restore_text(&red), payload);
+}
+
+#[test]
 fn test_secrets_and_api_keys_redaction() {
     let engine = PiiEngine::new(&[PiiEntity::Secret]);
     let mut session = PiiSession::new(true);

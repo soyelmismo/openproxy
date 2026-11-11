@@ -53,6 +53,16 @@ fn is_code_expression(text: &str, value_end: usize) -> bool {
     matches!(text.as_bytes().get(value_end), Some(b'[' | b'('))
 }
 
+/// A value that begins with `:` or contains `::` is a module path fragment
+/// (`api_keys::CreateApiKeyInput`), not a credential. The labeled regex can
+/// split a type path at its first colon (`api_keys:` + `:CreateApiKeyInput`),
+/// and masking the type fragment renames the path in compiler errors and in
+/// the code the model has to read or write. A `:` mid-value (`a:b`) stays
+/// allowed: real credentials occasionally contain one.
+fn is_module_path(val: &str) -> bool {
+    val.starts_with(':') || val.contains("::")
+}
+
 /// Cargo and npm package or crate names passed to `-p` / `-u` flags:
 /// lowercase identifiers joined by `-` or `_` (`openproxy-server`,
 /// `openproxy_pipeline`). They are not credentials, and masking them hides
@@ -217,7 +227,9 @@ pub(crate) fn collect_secret_candidates<'a>(
 
         // The value is a variable bound in this same payload (`RT_RAW`), not
         // a credential. Masking it renames the variable everywhere it is read.
-        if is_variable_reference(trimmed_val, &bound_names) || is_code_expression(text, val_m.end())
+        if is_variable_reference(trimmed_val, &bound_names)
+            || is_code_expression(text, val_m.end())
+            || is_module_path(trimmed_val)
         {
             continue;
         }
@@ -241,6 +253,7 @@ pub(crate) fn collect_secret_candidates<'a>(
             // `?token={session_token}` reads a variable, not a credential.
             if is_variable_reference(trimmed_val, &bound_names)
                 || is_code_expression(text, val_m.end())
+                || is_module_path(trimmed_val)
             {
                 continue;
             }

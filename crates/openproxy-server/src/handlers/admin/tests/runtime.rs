@@ -1,5 +1,8 @@
 use super::common::*;
-use crate::handlers::admin::runtime::{get_recording_ttl, put_recording_ttl, put_runtime_timeouts};
+use crate::handlers::admin::runtime::{
+    get_concurrency_caps, get_recording_ttl, put_concurrency_caps, put_recording_ttl,
+    put_runtime_timeouts,
+};
 use futures::FutureExt;
 
 #[tokio::test]
@@ -452,4 +455,110 @@ async fn get_formats_returns_descriptors() {
             .iter()
             .any(|f| f["id"] == "mixed" && f["default_target_format"] == "openai")
     );
+}
+
+#[tokio::test]
+async fn put_concurrency_caps_updates_live_state_and_persists() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+    let app = Router::new()
+        .route(
+            "/admin/config/concurrency",
+            get(get_concurrency_caps).put(put_concurrency_caps),
+        )
+        .with_state(state.clone());
+
+    // Defaults are the fairness/memory pair.
+    let (status, parsed) = test_req(
+        &app,
+        "GET",
+        "/admin/config/concurrency",
+        Some(&plaintext),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(parsed["max_concurrent_per_key"], 10);
+    assert_eq!(parsed["max_concurrent_global"], 512);
+
+    let (status, parsed) = test_req(
+        &app,
+        "PUT",
+        "/admin/config/concurrency",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "max_concurrent_per_key": 24_i64,
+            "max_concurrent_global": 768_i64,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(parsed["max_concurrent_per_key"], 24);
+    assert_eq!(parsed["max_concurrent_global"], 768);
+
+    // Live state flipped without a restart.
+    assert_eq!(state.max_concurrent_per_key(), 24);
+    assert_eq!(state.max_concurrent_global(), 768);
+
+    // Both rows persisted for the next boot.
+    let (pk, glob): (String, String) = state.db_pool().with_conn(|c| {
+        let pk: String = c
+            .query_row(
+                "SELECT value FROM app_config WHERE key = 'max_concurrent_per_key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let glob: String = c
+            .query_row(
+                "SELECT value FROM app_config WHERE key = 'max_concurrent_global'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (pk, glob)
+    });
+    assert_eq!(serde_json::from_str::<usize>(&pk).unwrap(), 24);
+    assert_eq!(serde_json::from_str::<usize>(&glob).unwrap(), 768);
+}
+
+#[tokio::test]
+async fn put_concurrency_caps_rejects_per_key_above_global() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+    let app = Router::new()
+        .route("/admin/config/concurrency", put(put_concurrency_caps))
+        .with_state(state);
+
+    let (status, _) = test_req(
+        &app,
+        "PUT",
+        "/admin/config/concurrency",
+        Some(&plaintext),
+        Some(serde_json::json!({
+            "max_concurrent_per_key": 100_i64,
+            "max_concurrent_global": 10_i64,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn put_concurrency_caps_rejects_zero() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+    let app = Router::new()
+        .route("/admin/config/concurrency", put(put_concurrency_caps))
+        .with_state(state);
+
+    let (status, _) = test_req(
+        &app,
+        "PUT",
+        "/admin/config/concurrency",
+        Some(&plaintext),
+        Some(serde_json::json!({ "max_concurrent_per_key": 0_i64 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

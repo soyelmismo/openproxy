@@ -13,10 +13,14 @@ import {
 } from "./shared.js";
 import {
   applyServerConfig,
-  renderCompressionCard, renderIdleChunkCard, renderModalityCard, renderNotificationsCard,
+  renderCompressionCard, renderConcurrencyCard, renderIdleChunkCard, renderModalityCard, renderNotificationsCard,
   renderPiiCard, renderQuotaCard, renderRecordingTtlCard, renderTimeoutsCard,
 } from "./editable-cards.js";
 import { loadMaintenanceState, pollVacuumStatus, renderMaintenanceCard } from "./maintenance.js";
+import {
+  loadCreditsGatewayState,
+  renderCreditsGatewayCard,
+} from "./credits-gateway.js";
 import { tileRootActive } from "../../lib/tile-active.js";
 import { renderBackupCard } from "./backup.js";
 
@@ -102,6 +106,7 @@ function renderConfig(): TemplateResult {
         <section class="config-group config-group-limits">
           <div class="config-group-grid">
             ${renderTimeoutsCard()}
+            ${renderConcurrencyCard()}
           </div>
         </section>
         <section class="config-group config-group-response">
@@ -121,6 +126,7 @@ function renderConfig(): TemplateResult {
           <div class="config-group-grid">
             ${renderQuotaCard()}
             ${renderPiiCard()}
+            ${renderCreditsGatewayCard()}
           </div>
         </section>
         <section class="config-group config-group-data">
@@ -167,6 +173,7 @@ export async function mountConfig(
       setConfig(payload);
       applyServerConfig(payload);
       await loadMaintenanceState();
+      await loadCreditsGatewayState();
       // 5s poll so the button reflects a completing VACUUM. Hibernated while
       // another tile is maximized: the poll ticks, but does nothing.
       if (vacuumPollHandle) clearInterval(vacuumPollHandle);

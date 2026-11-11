@@ -8,6 +8,7 @@
 //! - Tier 3: Cross-Feature Combinations (Combos, Failover, Cooldown, Streaming, Auth, Usage)
 //! - Tier 4: Real-World Application Scenarios (Multi-turn conversations, Discovery sync, Multi-client analytics, Races, Admin lifecycle)
 
+pub mod credits_tests;
 pub mod harness;
 pub mod systemone_tests;
 pub mod tier1_features;

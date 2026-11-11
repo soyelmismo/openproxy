@@ -72,11 +72,20 @@ pub async fn rate_limit_middleware(
         }));
     }
 
-    // Per-key concurrency cap (OP-03): rejects instead of letting a single key
-    // accumulate an unbounded number of concurrent requests / SSE streams.
+    // Concurrency caps (OP-03): a proxy-wide ceiling plus a small per-key
+    // fairness bound, so one client cannot monopolise the global pool.
     let Some(guard) = state.inflight_limiter().try_acquire(rl_key) else {
+        // Report which ceiling refused the slot: a per-key refusal means
+        // "this client is too busy", a global one means "the proxy is full".
+        let per_key_full =
+            state.inflight_limiter().active(rl_key) >= state.max_concurrent_per_key();
+        let provider = if per_key_full {
+            "concurrency_limiter_per_key"
+        } else {
+            "concurrency_limiter_global"
+        };
         return Err(ApiError(CoreError::RateLimited {
-            provider: "concurrency_limiter".into(),
+            provider: provider.into(),
             retry_after_ms: 1_000,
             is_proxy_rotated: false,
         }));

@@ -162,7 +162,19 @@ impl RateLimiter for SlidingWindowRateLimiter {
 /// *starts*, so a key could otherwise hold an unbounded number of concurrent
 /// requests — each retaining a parsed body, channels and an upstream
 /// connection for up to the 300 s SSE stream lifetime.
-pub const DEFAULT_MAX_CONCURRENT_PER_KEY: usize = 64;
+///
+/// The per-key cap is a fairness bound, not a memory guard: it stops one
+/// client from monopolising the global pool. It is deliberately small so a
+/// single key cannot crowd out everyone else.
+pub const DEFAULT_MAX_CONCURRENT_PER_KEY: usize = 10;
+
+/// Default cap on concurrently in-flight requests across the whole proxy.
+///
+/// This is the memory/socket guard: every in-flight request retains a parsed
+/// body, channels and (for streaming) an upstream connection for up to the
+/// 300 s SSE lifetime. Sized so a burst of a few hundred concurrent clients
+/// is served rather than dropped.
+pub const DEFAULT_MAX_CONCURRENT_GLOBAL: usize = 512;
 
 /// Tracks the number of concurrently in-flight requests per
 /// [`RateLimitKey`].
@@ -172,19 +184,29 @@ pub const DEFAULT_MAX_CONCURRENT_PER_KEY: usize = 64;
 /// `InFlightBody` wrapper in the server crate), which is what bounds
 /// long-lived SSE streams.
 pub struct InFlightLimiter {
-    max: usize,
+    /// Live per-key cap. Atomic so the admin API can retune it without a
+    /// restart and without tearing down the in-flight counters (a rebuild
+    /// would silently release every held slot).
+    max_per_key: std::sync::atomic::AtomicUsize,
+    /// Live proxy-wide cap across every key.
+    max_global: std::sync::atomic::AtomicUsize,
     in_flight: Arc<DashMap<RateLimitKey, usize>>,
+    /// Total in-flight requests across all keys.
+    global: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Releases one in-flight slot when dropped.
 pub struct InFlightGuard {
     key: RateLimitKey,
     in_flight: Arc<DashMap<RateLimitKey, usize>>,
+    global: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
         use dashmap::mapref::entry::Entry;
+        self.global
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         match self.in_flight.entry(self.key) {
             Entry::Occupied(mut o) => {
                 if *o.get() <= 1 {
@@ -200,10 +222,51 @@ impl Drop for InFlightGuard {
 
 impl InFlightLimiter {
     pub fn new(max_concurrent_per_key: usize) -> Self {
+        Self::with_global_limit(max_concurrent_per_key, DEFAULT_MAX_CONCURRENT_GLOBAL)
+    }
+
+    /// Construct with explicit per-key and proxy-wide caps.
+    pub fn with_global_limit(max_concurrent_per_key: usize, max_concurrent_global: usize) -> Self {
         Self {
-            max: max_concurrent_per_key.max(1),
+            max_per_key: std::sync::atomic::AtomicUsize::new(max_concurrent_per_key.max(1)),
+            max_global: std::sync::atomic::AtomicUsize::new(max_concurrent_global.max(1)),
             in_flight: Arc::new(DashMap::new()),
+            global: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
+    }
+
+    /// Current per-key concurrency cap.
+    pub fn max_concurrent_per_key(&self) -> usize {
+        self.max_per_key.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Current proxy-wide concurrency cap.
+    pub fn max_concurrent_global(&self) -> usize {
+        self.max_global.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Total requests currently in flight across every key.
+    pub fn global_active(&self) -> usize {
+        self.global.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Retune the per-key cap live. In-flight counters are preserved, so
+    /// requests already holding a slot keep it; the new cap applies to the
+    /// next `try_acquire`. Lowering it below the current in-flight count does
+    /// not evict anything — it just refuses new slots until the count drains.
+    pub fn set_max_concurrent_per_key(&self, max_concurrent_per_key: usize) {
+        self.max_per_key.store(
+            max_concurrent_per_key.max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// Retune the proxy-wide cap live (same semantics as the per-key setter).
+    pub fn set_max_concurrent_global(&self, max_concurrent_global: usize) {
+        self.max_global.store(
+            max_concurrent_global.max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     /// Number of requests currently in flight for `key`.
@@ -215,6 +278,15 @@ impl InFlightLimiter {
     /// holds `max_concurrent_per_key` requests.
     pub fn try_acquire(&self, key: RateLimitKey) -> Option<InFlightGuard> {
         use dashmap::mapref::entry::Entry;
+        use std::sync::atomic::Ordering;
+        let max = self.max_per_key.load(Ordering::Relaxed);
+        let global_max = self.max_global.load(Ordering::Relaxed);
+
+        // Proxy-wide guard first: no key may push the process past this
+        // ceiling, however many keys are active.
+        if self.global.load(Ordering::Relaxed) >= global_max {
+            return None;
+        }
         // Hard cap on distinct keys to bound memory under a spoofed-IP flood.
         // Security: previously this called `clear()` on overflow, which would
         // drop the in-flight counters for ALL keys, letting a key that had
@@ -226,21 +298,25 @@ impl InFlightLimiter {
         }
         match self.in_flight.entry(key) {
             Entry::Occupied(mut o) => {
-                if *o.get() >= self.max {
+                if *o.get() >= max {
                     None
                 } else {
                     *o.get_mut() += 1;
+                    self.global.fetch_add(1, Ordering::Relaxed);
                     Some(InFlightGuard {
                         key,
                         in_flight: Arc::clone(&self.in_flight),
+                        global: Arc::clone(&self.global),
                     })
                 }
             }
             Entry::Vacant(v) => {
                 v.insert(1);
+                self.global.fetch_add(1, Ordering::Relaxed);
                 Some(InFlightGuard {
                     key,
                     in_flight: Arc::clone(&self.in_flight),
+                    global: Arc::clone(&self.global),
                 })
             }
         }
@@ -250,6 +326,63 @@ impl InFlightLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_cap_refuses_once_the_proxy_is_full() {
+        // 5 slots per key but only 3 proxy-wide: the global ceiling must win.
+        let limiter = InFlightLimiter::with_global_limit(5, 3);
+        let a = RateLimitKey::Key(ApiKeyId(1));
+        let b = RateLimitKey::Key(ApiKeyId(2));
+
+        let g1 = limiter.try_acquire(a).expect("1st");
+        let _g2 = limiter.try_acquire(b).expect("2nd (other key)");
+        let _g3 = limiter.try_acquire(a).expect("3rd");
+        assert_eq!(limiter.global_active(), 3);
+        // Global is full even though neither key is at its per-key cap.
+        assert!(limiter.try_acquire(b).is_none(), "global ceiling blocks");
+        assert!(limiter.try_acquire(a).is_none(), "global ceiling blocks");
+
+        drop(g1);
+        assert_eq!(limiter.global_active(), 2);
+        let _g4 = limiter.try_acquire(b).expect("slot freed proxy-wide");
+        assert_eq!(limiter.global_active(), 3);
+    }
+
+    #[test]
+    fn per_key_cap_is_fairness_not_a_global_lock() {
+        // 2 per key, 10 global: one busy key cannot starve another.
+        let limiter = InFlightLimiter::with_global_limit(2, 10);
+        let a = RateLimitKey::Key(ApiKeyId(1));
+        let b = RateLimitKey::Key(ApiKeyId(2));
+
+        let _a1 = limiter.try_acquire(a).expect("a1");
+        let _a2 = limiter.try_acquire(a).expect("a2");
+        assert!(limiter.try_acquire(a).is_none(), "a is at its own cap");
+        // b is unaffected.
+        let _b1 = limiter.try_acquire(b).expect("b1 while a is saturated");
+        assert_eq!(limiter.global_active(), 3);
+    }
+
+    #[test]
+    fn caps_are_retunable_live_without_dropping_in_flight() {
+        let limiter = InFlightLimiter::with_global_limit(2, 4);
+        let key = RateLimitKey::Key(ApiKeyId(9));
+        let held = limiter.try_acquire(key).expect("held slot");
+
+        limiter.set_max_concurrent_per_key(1);
+        limiter.set_max_concurrent_global(1);
+        assert_eq!(limiter.max_concurrent_per_key(), 1);
+        assert_eq!(limiter.max_concurrent_global(), 1);
+        // The already-held slot survives; new ones are refused.
+        assert_eq!(limiter.global_active(), 1);
+        assert!(limiter.try_acquire(key).is_none());
+
+        drop(held);
+        assert_eq!(limiter.global_active(), 0);
+        limiter.set_max_concurrent_per_key(8);
+        limiter.set_max_concurrent_global(16);
+        let _again = limiter.try_acquire(key).expect("after raising the caps");
+    }
 
     #[test]
     fn inflight_limiter_caps_concurrency_and_releases() {

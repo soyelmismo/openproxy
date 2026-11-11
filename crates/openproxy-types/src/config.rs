@@ -30,7 +30,56 @@ pub struct ServerConfig {
     pub allow_anonymous: bool,
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+    /// Prepaid credits (top-up with on-chain USDC, expiring balance).
+    /// Absent or `watch: false` disables the on-chain watcher; the REST
+    /// surface reports `disabled`.
+    #[serde(default)]
+    pub credits: Option<CreditsConfig>,
 }
+
+/// Single-address USDC top-up funnel (Base L2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsConfig {
+    /// JSON-RPC endpoint of a Base node used to watch incoming transfers.
+    pub rpc_url: String,
+    /// USDC token contract on Base (`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`).
+    pub usdc_address: String,
+    /// The single collector address every top-up is sent to (the funnel).
+    pub collector_address: String,
+    /// Payment window of an order, in minutes (TipRouter-style: 15).
+    #[serde(default = "default_payment_window_minutes")]
+    pub payment_window_minutes: u32,
+    /// Watcher poll interval in seconds.
+    #[serde(default = "default_scan_interval_secs")]
+    pub scan_interval_secs: u64,
+    /// Smallest top-up accepted, in USD.
+    #[serde(default = "default_min_topup_usd")]
+    pub min_topup_usd: f64,
+    /// Allowed balance lifetimes for a top-up, in days.
+    #[serde(default = "default_ttl_days")]
+    pub ttl_days: Vec<u32>,
+    /// EVM chain id of the network the collector lives on (Base = 8453).
+    #[serde(default = "default_chain_id")]
+    pub chain_id: u64,
+}
+
+fn default_chain_id() -> u64 {
+    8453
+}
+
+fn default_payment_window_minutes() -> u32 {
+    15
+}
+fn default_scan_interval_secs() -> u64 {
+    5
+}
+fn default_min_topup_usd() -> f64 {
+    0.5
+}
+fn default_ttl_days() -> Vec<u32> {
+    vec![7, 15, 30]
+}
+
 
 fn default_rate_limit_requests() -> u32 {
     1000
@@ -58,6 +107,7 @@ impl Default for ServerConfig {
             rate_limit_requests_per_minute: 1000,
             allow_anonymous: false,
             trusted_proxies: Vec::new(),
+            credits: None,
         }
     }
 }

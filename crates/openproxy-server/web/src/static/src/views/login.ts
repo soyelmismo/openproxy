@@ -9,6 +9,7 @@
 // views/config.ts; the dashboard has no `lit` dependency.
 
 import { html, type TemplateResult } from "lit-html";
+import { PROXY_PREFIX } from "../state/proxy-prefix.js";
 import { setToken, clearToken, setProfile, type UserSessionProfile } from "../state/auth.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
@@ -127,6 +128,9 @@ function renderLogin(): TemplateResult {
           >${submitting ? "…" : submitLabel}</button>
         </form>
         <p class="muted login-help">${helpText}</p>
+        <p class="muted" style="font-size:12px;margin:8px 0 0">
+          No key yet? <a href=${PROXY_PREFIX + "/checkout"} style="color:var(--accent)">Buy credits and get one</a> — pays with USDC on Base.
+        </p>
       </section>
     </div>
   `;

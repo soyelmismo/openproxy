@@ -60,6 +60,12 @@
 //!    `step-5-psec_x` and `sec_x_receipts` came back unrestorable because
 //!    the token boundary meant to protect human-authored placeholders
 //!    rejected the synthetic ones too.
+//! 9. A labeled value that begins with `:` or contains `::` is a module path
+//!    fragment, not a credential: the labeled regex split
+//!    `openproxy_core::api_keys::CreateApiKeyInput` at its first colon and
+//!    redacted the type fragment behind the `api_keys` module name, breaking
+//!    a rustc error the agent had to read (and the edits the agent copied
+//!    from it). A single `:` mid-value stays allowed.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

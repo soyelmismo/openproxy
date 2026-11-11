@@ -79,6 +79,13 @@ pub async fn callback_html() -> Html<&'static str> {
     Html(include_str!("../web/src/static/callback.html"))
 }
 
+/// Public checkout page for the credits gateway (anonymous key purchase).
+/// No admin session required: everything it does goes through the public
+/// `/v1/credits/*` surface.
+pub async fn checkout_html() -> Html<&'static str> {
+    Html(include_str!("../web/src/static/checkout.html"))
+}
+
 /// Serve a static asset from the embedded `src/static/` tree.
 ///
 /// The router mounts this handler as the `fallback` for `/admin/*`,

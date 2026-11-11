@@ -23,6 +23,8 @@ pub const QUOTA_PROTECTION_KEY: &str = "quota_protection";
 
 /// Key under which the `idle_chunk_retryable` flag is stored.
 pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
+/// Credits payment gateway master switch (admin-toggled at runtime).
+pub const CREDITS_GATEWAY_ENABLED_KEY: &str = "credits_gateway_enabled";
 
 /// Key under which the input-modality routing config is stored.
 pub const MODALITY_ROUTING_KEY: &str = "modality_routing";
@@ -36,6 +38,12 @@ pub const PII_ENTITIES_KEY: &str = "pii_entities";
 
 /// Default value for `idle_chunk_retryable` (false = current behavior).
 pub const IDLE_CHUNK_RETRYABLE_DEFAULT: bool = openproxy_types::IDLE_CHUNK_RETRYABLE_DEFAULT;
+
+/// Key under which the per-key concurrent-request cap is stored.
+pub const MAX_CONCURRENT_PER_KEY_KEY: &str = "max_concurrent_per_key";
+
+/// Key under which the proxy-wide concurrent-request cap is stored.
+pub const MAX_CONCURRENT_GLOBAL_KEY: &str = "max_concurrent_global";
 
 pub const PROXY_TEST_URL_KEY: &str = "proxy_test_url";
 pub const PROXY_TEST_URL_DEFAULT: &str = "https://cloudflare.com/cdn-cgi/trace";
@@ -150,8 +158,14 @@ app_config_kv! {
 app_config_kv! {
     /// `idle_chunk_retryable` flag.
     load_idle_chunk_retryable_from_db, save_idle_chunk_retryable_to_db, IDLE_CHUNK_RETRYABLE_KEY, bool;
+    /// Credits payment gateway master switch (buying new plans / top-ups).
+    load_credits_gateway_enabled_from_db, save_credits_gateway_enabled_to_db, CREDITS_GATEWAY_ENABLED_KEY, bool;
     /// Recording TTL in seconds.
     load_recording_ttl_from_db, save_recording_ttl_to_db, RECORDING_TTL_KEY, i64;
+    /// Per-key concurrent-request cap (live-tunable fairness bound).
+    load_max_concurrent_per_key_from_db, save_max_concurrent_per_key_to_db, MAX_CONCURRENT_PER_KEY_KEY, usize;
+    /// Proxy-wide concurrent-request cap (live-tunable memory/socket guard).
+    load_max_concurrent_global_from_db, save_max_concurrent_global_to_db, MAX_CONCURRENT_GLOBAL_KEY, usize;
 }
 
 pub fn load_pii_config_from_db(conn: &Connection) -> Result<Option<PiiConfig>> {

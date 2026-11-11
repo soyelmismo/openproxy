@@ -375,6 +375,13 @@ fn usable_fraction(pool: &QuotaPool) -> f64 {
 ///   budget left (exhausted, absent or expired).
 /// * `None` — nothing usable or known: only unavailable pools, or pools that
 ///   never mention `model`.
+///
+/// `None` is not a zero and not a free pass either. The routing decision for
+/// `None` lives in `openproxy_pipeline::quotas::evaluate_account_quota`, which
+/// distinguishes genuine uncertainty (an Unavailable pool without a missing
+/// credential may come back usable after a refresh) from definitive
+/// negatives (exhausted/absent/per-model-excluded/missing-credential pools),
+/// and retires the account only in the second case.
 pub fn zai_remaining_fraction(pools: &[QuotaPool], model: &str, now_secs: u64) -> Option<f64> {
     for source in [
         QuotaSource::AutoclawStarter,
