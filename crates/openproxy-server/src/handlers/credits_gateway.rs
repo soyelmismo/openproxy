@@ -72,6 +72,12 @@ struct PackageOffer {
     base_units: i64,
     ttl_days: i64,
     label: String,
+    /// Balance credited on payment (leverage). Absent == 1:1 (credit == price).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credit_usd: Option<f64>,
+    /// Tier name when the package is tied to one (display only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tier: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +114,15 @@ async fn packages(State(state): State<AppState>) -> Response {
         .await
         .unwrap_or_default();
     let buying_open = gateway_enabled(&state).await;
+    // Tier names for the display (one read; a package without tier shows none).
+    let tier_names: std::collections::HashMap<i64, String> = state
+        .db_pool()
+        .spawn_read(openproxy_core::credits::tiers::list)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|t| (t.id, t.name))
+        .collect();
     let packages: Vec<PackageOffer> = if table_pkgs.is_empty() {
         [5.0_f64, 10.0, 25.0, 50.0, 100.0]
             .into_iter()
@@ -119,6 +134,8 @@ async fn packages(State(state): State<AppState>) -> Response {
                     base_units,
                     ttl_days: i64::from(*cfg.ttl_days.first().unwrap_or(&15)),
                     label: format!("${usd:.0}"),
+                    credit_usd: None,
+                    tier: None,
                 })
             })
             .collect()
@@ -132,6 +149,8 @@ async fn packages(State(state): State<AppState>) -> Response {
                     .unwrap_or_default(),
                 ttl_days: p.ttl_days,
                 label: p.name.clone(),
+                credit_usd: p.credit_usd,
+                tier: p.tier_id.and_then(|tid| tier_names.get(&tid).cloned()),
             })
             .collect()
     };
@@ -168,6 +187,10 @@ struct CheckoutResponse {
     status: String,
     usd: f64,
     base_usd: f64,
+    /// Balance credited when the payment lands (leveraged packages credit
+    /// more than the charge). Absent == 1:1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credit_usd: Option<f64>,
     amount_units: i64,
     amount_display: String,
     chain_id: u64,
@@ -294,6 +317,13 @@ async fn create_checkout(
         base_usd: openproxy_core::credits::units_to_usd_str(order.base_units)
             .parse::<f64>()
             .unwrap_or(0.0),
+        credit_usd: if order.credit_units != order.base_units {
+            openproxy_core::credits::units_to_usd_str(order.credit_units)
+                .parse::<f64>()
+                .ok()
+        } else {
+            None
+        },
         amount_units: order.amount_units,
         amount_display: openproxy_core::credits::units_to_usd_str(order.amount_units),
         chain_id: cfg.chain_id,
@@ -488,7 +518,6 @@ async fn me_transactions(
         .unwrap_or(100)
         .clamp(1, 1000);
     let kid = key_id.0;
-    let chain_id = state.config().credits.as_ref().map_or(8453, |c| c.chain_id);
     match state
         .db_pool()
         .spawn_read(move |w| openproxy_db::credits_ledger::list_transactions(w, kid, limit))

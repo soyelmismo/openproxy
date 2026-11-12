@@ -75,7 +75,7 @@ const ROUTES: readonly Route[] = [
   { name: "combo-detail", pattern: /^#?\/combos\/(\d+)$/, mount: ((ctx: string) => mountCombos({ detailId: parseInt(ctx, 10) })) as ViewMount },
   { name: "keys", pattern: /^#?\/keys$/, mount: mountKeys as ViewMount },
   { name: "credits", pattern: /^#?\/credits$/, mount: lazyMount(
-    () => import('../views/credits.js'), 'mountCredits',
+    () => import('../views/credits/index.js'), 'mountCredits',
   ) },
   { name: "key-detail", pattern: /^#?\/keys\/(\d+)$/, mount: ((ctx: string) => mountKeyDetail(parseInt(ctx, 10))) as ViewMount },
   { name: "key-usage", pattern: /^#?\/keys\/(\d+)\/usage$/, mount: ((ctx: string) => mountKeyUsage(parseInt(ctx, 10))) as ViewMount },
@@ -148,7 +148,7 @@ export async function mountRouteInto(route: string, target: HTMLElement): Promis
     case 'combos': case 'combo-detail': return mountCombos(parsed.name === 'combo-detail' ? { detailId: Number(parsed.context) } : {}, target);
     case 'keys': return mountKeys(target);
     case 'credits': {
-      const { mountCredits } = await import('../views/credits.js');
+      const { mountCredits } = await import('../views/credits/index.js');
       if (target.isConnected) return mountCredits(target);
       return;
     }

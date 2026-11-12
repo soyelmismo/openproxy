@@ -29,6 +29,11 @@ pub struct CreditPackage {
     pub ttl_days: i64,
     pub config: Option<PackageConfig>,
     pub active: bool,
+    /// Balance actually credited when paid. `None` credits `price_usd`
+    /// (the legacy 1:1 funnel); `Some(30.0)` on a $5 package is 6x leverage.
+    pub credit_usd: Option<f64>,
+    /// Tier whose key-shaping applies on payment (wins over `config` gaps).
+    pub tier_id: Option<i64>,
 }
 
 fn row_to_pkg(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditPackage> {
@@ -40,6 +45,8 @@ fn row_to_pkg(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditPackage> {
         ttl_days: row.get(3)?,
         config: config_json.and_then(|j| serde_json::from_str(&j).ok()),
         active: row.get::<_, i64>(5)? != 0,
+        credit_usd: row.get(6)?,
+        tier_id: row.get(7)?,
     })
 }
 
@@ -50,7 +57,7 @@ fn row_to_pkg(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditPackage> {
 pub fn list(conn: &Connection) -> openproxy_types::Result<Vec<CreditPackage>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, price_usd, ttl_days, config_json, active \
+            "SELECT id, name, price_usd, ttl_days, config_json, active, credit_usd, tier_id \
              FROM credit_packages ORDER BY active DESC, price_usd ASC",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -68,7 +75,7 @@ pub fn list(conn: &Connection) -> openproxy_types::Result<Vec<CreditPackage>> {
 pub fn list_active(conn: &Connection) -> openproxy_types::Result<Vec<CreditPackage>> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, price_usd, ttl_days, config_json, active \
+            "SELECT id, name, price_usd, ttl_days, config_json, active, credit_usd, tier_id \
              FROM credit_packages WHERE active = 1 ORDER BY price_usd ASC",
         )
         .map_err(openproxy_db::error::map_db_error)?;
@@ -89,10 +96,19 @@ pub fn create(
     price_usd: f64,
     ttl_days: i64,
     config: Option<&PackageConfig>,
+    credit_usd: Option<f64>,
+    tier_id: Option<i64>,
 ) -> openproxy_types::Result<CreditPackage> {
     if price_usd <= 0.0 || !price_usd.is_finite() {
         return Err(openproxy_types::CoreError::Validation(
             "price_usd must be positive".into(),
+        ));
+    }
+    if let Some(c) = credit_usd
+        && (c <= 0.0 || !c.is_finite())
+    {
+        return Err(openproxy_types::CoreError::Validation(
+            "credit_usd must be positive".into(),
         ));
     }
     if ttl_days <= 0 {
@@ -100,11 +116,18 @@ pub fn create(
             "ttl_days must be positive".into(),
         ));
     }
+    if let Some(tid) = tier_id
+        && crate::credits::tiers::get(conn, tid)?.is_none()
+    {
+        return Err(openproxy_types::CoreError::Validation(format!(
+            "tier {tid} does not exist"
+        )));
+    }
     let config_json = config.map(|c| serde_json::to_string(c).unwrap_or_default());
     conn.execute(
-        "INSERT INTO credit_packages (name, price_usd, ttl_days, config_json) \
-         VALUES (?1, ?2, ?3, ?4)",
-        params![name, price_usd, ttl_days, config_json],
+        "INSERT INTO credit_packages (name, price_usd, ttl_days, config_json, credit_usd, tier_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![name, price_usd, ttl_days, config_json, credit_usd, tier_id],
     )
     .map_err(openproxy_db::error::map_db_error)?;
     let id = conn.last_insert_rowid();
@@ -115,6 +138,8 @@ pub fn create(
         ttl_days,
         config: config.cloned(),
         active: true,
+        credit_usd,
+        tier_id,
     })
 }
 
@@ -129,6 +154,8 @@ pub fn update(
     ttl_days: Option<i64>,
     config: Option<&PackageConfig>,
     active: Option<bool>,
+    credit_usd: Option<Option<f64>>,
+    tier_id: Option<Option<i64>>,
 ) -> openproxy_types::Result<()> {
     if let Some(p) = price_usd {
         conn.execute(
@@ -152,6 +179,36 @@ pub fn update(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
+    // Double-Option: outer = "touch this field", inner = the value (an inner
+    // None clears it, e.g. dropping the leverage back to 1:1).
+    if let Some(cu) = credit_usd {
+        if let Some(v) = cu
+            && (v <= 0.0 || !v.is_finite())
+        {
+            return Err(openproxy_types::CoreError::Validation(
+                "credit_usd must be positive".into(),
+            ));
+        }
+        conn.execute(
+            "UPDATE credit_packages SET credit_usd = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![cu, id],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
+    if let Some(tid) = tier_id {
+        if let Some(t) = tid
+            && crate::credits::tiers::get(conn, t)?.is_none()
+        {
+            return Err(openproxy_types::CoreError::Validation(format!(
+                "tier {t} does not exist"
+            )));
+        }
+        conn.execute(
+            "UPDATE credit_packages SET tier_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![tid, id],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
     if let Some(a) = active {
         conn.execute(
             "UPDATE credit_packages SET active = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -168,7 +225,7 @@ pub fn update(
 /// Propagates DB failures.
 pub fn get(conn: &Connection, id: i64) -> openproxy_types::Result<Option<CreditPackage>> {
     conn.query_row(
-        "SELECT id, name, price_usd, ttl_days, config_json, active \
+        "SELECT id, name, price_usd, ttl_days, config_json, active, credit_usd, tier_id \
          FROM credit_packages WHERE id = ?1",
         params![id],
         row_to_pkg,
@@ -234,4 +291,61 @@ pub fn apply_to_key(
         .map_err(openproxy_db::error::map_db_error)?;
     }
     Ok(())
+}
+
+/// Effective key-shaping of a purchase: the tier is the access contract, the
+/// package's own legacy `config_json` only fills fields the tier left unset
+/// (`None`). A package without tier keeps the pure legacy behaviour.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn resolved_config(
+    conn: &Connection,
+    pkg: &CreditPackage,
+) -> openproxy_types::Result<Option<PackageConfig>> {
+    let Some(tid) = pkg.tier_id else {
+        return Ok(pkg.config.clone());
+    };
+    let Some(tier) = crate::credits::tiers::get(conn, tid)? else {
+        // Tier deleted out from under the package: fall back to the package's
+        // own config so a paid order still shapes the key deterministically.
+        return Ok(pkg.config.clone());
+    };
+    let t = &tier.config;
+    let pc = pkg.config.as_ref();
+    // Money invariant, at the resolution point: when the tier carries an
+    // allowlist the merged config carries the hard gate, whichever apply
+    // path (tiers:: or packages::apply_to_key) consumes it.
+    let tier_gate = t
+        .only_whitelisted
+        .or(if t.allowed_models.is_some() { Some(true) } else { None });
+    let merged = PackageConfig {
+        monthly_usd_cap: t.monthly_usd_cap.or(pc.and_then(|c| c.monthly_usd_cap)),
+        weekly_usd_cap: t.weekly_usd_cap.or(pc.and_then(|c| c.weekly_usd_cap)),
+        five_hour_usd_cap: t
+            .five_hour_usd_cap
+            .or(pc.and_then(|c| c.five_hour_usd_cap)),
+        allowed_models: t
+            .allowed_models
+            .clone()
+            .or_else(|| pc.and_then(|c| c.allowed_models.clone())),
+        allowed_providers: t
+            .allowed_providers
+            .clone()
+            .or_else(|| pc.and_then(|c| c.allowed_providers.clone())),
+        allowed_combos: t
+            .allowed_combos
+            .clone()
+            .or_else(|| pc.and_then(|c| c.allowed_combos.clone())),
+        only_whitelisted: tier_gate.or(pc.and_then(|c| c.only_whitelisted)),
+    };
+    Ok(Some(merged))
+}
+
+/// Micro-USDC credited when a package payment clears: the leverage point.
+/// `None` credit_usd keeps the legacy credit == price behaviour.
+#[must_use]
+pub fn credit_units_of(pkg: &CreditPackage) -> i64 {
+    let usd = pkg.credit_usd.unwrap_or(pkg.price_usd);
+    (usd * f64::from(crate::credits::UNITS_PER_USD as u32)).round() as i64
 }

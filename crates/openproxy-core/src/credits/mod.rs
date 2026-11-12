@@ -24,11 +24,13 @@
 pub mod ledger;
 pub mod matcher;
 pub mod orders;
+pub mod tiers;
 
 pub use ledger::{BalanceView, ExpiringLot, SpendOutcome, TxRow};
 pub mod packages;
 pub use matcher::{PaymentOutcome, apply_payment};
 pub use packages::{CreditPackage, PackageConfig};
+pub use tiers::{CreditTier, TierConfig};
 pub use orders::{CreditOrder, create_order, expire_stale_orders, get_order};
 
 /// Micro-USDC units in one whole USD.

@@ -77,9 +77,18 @@ pub fn apply_payment(
     }
 
     // 2. Find the live order advertising exactly this amount.
-    let order: Option<(i64, String, Option<i64>, i64, i64, Option<i64>)> = conn
+    let order: Option<(
+        i64,
+        String,
+        Option<i64>,
+        i64,
+        i64,
+        Option<i64>,
+        i64,
+    )> = conn
         .query_row(
-            "SELECT id, order_code, api_key_id, base_units, ttl_days, package_id \
+            "SELECT id, order_code, api_key_id, base_units, ttl_days, package_id, \
+             COALESCE(credit_units, base_units) \
              FROM credit_orders \
              WHERE amount_units = ?1 AND status IN ('pending', 'expired') \
                AND expires_at > datetime('now', '-10 minutes')",
@@ -92,11 +101,14 @@ pub fn apply_payment(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )
         .ok();
-    let Some((order_id, order_code, api_key_id, base_units, ttl_days, package_id)) = order else {
+    let Some((order_id, order_code, api_key_id, _base_units, ttl_days, package_id, credit_units)) =
+        order
+    else {
         tracing::warn!(
             %tx_hash,
             amount_units,
@@ -159,16 +171,17 @@ pub fn apply_payment(
     }
     let key_id = ApiKeyId(final_key_id);
 
-    // 5. Credit the balance.
-    crate::credits::ledger::credit_topup(conn, key_id, order_id, base_units, ttl_days, tx_hash)?;
+    // 5. Credit the balance. A leveraged package credits more than it charged
+    //    (credit_units > amount minus jitter); free amounts credit 1:1.
+    crate::credits::ledger::credit_topup(conn, key_id, order_id, credit_units, ttl_days, tx_hash)?;
 
-    // 5b. Package preset: copy-paste its key-shaping config onto the buyer's
-    //     key (quota caps + allowlists). A payment that bought a preset must
-    //     leave the key shaped exactly like the preset.
+    // 5b. Shaping contract: a package tied to a tier applies the tier's
+    //     allowlists + quota caps; a legacy package applies its own config.
+    //     Either way the paid order must leave the key shaped like the preset.
     if let Some(pkg_id) = package_id {
         if let Some(pkg) = crate::credits::packages::get(conn, pkg_id)? {
-            if let Some(cfg) = &pkg.config {
-                crate::credits::packages::apply_to_key(conn, key_id, cfg)?;
+            if let Some(cfg) = crate::credits::packages::resolved_config(conn, &pkg)? {
+                crate::credits::packages::apply_to_key(conn, key_id, &cfg)?;
             }
         }
     }
@@ -176,14 +189,15 @@ pub fn apply_payment(
     tracing::info!(
         %tx_hash,
         order_code = %order_code,
-        credited_units = base_units,
+        credited_units = credit_units,
+        charged_units = amount_units,
         key_id = final_key_id,
         "top-up credited"
     );
     Ok(PaymentOutcome::Credited {
         order_code,
         api_key_id: final_key_id,
-        credited_units: base_units,
+        credited_units: credit_units,
         minted_key,
     })
 }

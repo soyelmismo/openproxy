@@ -25,7 +25,9 @@ const JITTER_SPACE: i64 = 1_000_000;
 const MAX_JITTER_ATTEMPTS: usize = 64;
 
 /// One checkout. `amount_units` is what the buyer must send exactly;
-/// `base_units` is what gets credited (amount minus jitter).
+/// `base_units` is what gets credited (amount minus jitter). A package
+/// payment may credit more than it charges (leveraged credit): `credit_units`
+/// carries the credited amount when it differs from `base_units`.
 #[derive(Debug, Clone, Serialize)]
 pub struct CreditOrder {
     pub id: i64,
@@ -34,6 +36,7 @@ pub struct CreditOrder {
     pub payer_email: Option<String>,
     pub amount_units: i64,
     pub base_units: i64,
+    pub credit_units: i64,
     pub ttl_days: i64,
     pub status: String,
     pub tx_hash: Option<String>,
@@ -58,13 +61,15 @@ fn gen_order_code() -> String {
 }
 
 fn row_to_order(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditOrder> {
+    let base_units: i64 = row.get(5)?;
     Ok(CreditOrder {
         id: row.get(0)?,
         order_code: row.get(1)?,
         api_key_id: row.get(2)?,
         payer_email: row.get(3)?,
         amount_units: row.get(4)?,
-        base_units: row.get(5)?,
+        base_units,
+        credit_units: row.get::<_, Option<i64>>(14)?.unwrap_or(base_units),
         ttl_days: row.get(6)?,
         status: row.get(7)?,
         tx_hash: row.get(8)?,
@@ -77,7 +82,8 @@ fn row_to_order(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditOrder> {
 }
 
 const ORDER_COLS: &str = "id, order_code, api_key_id, payer_email, amount_units, base_units, \
-     ttl_days, status, tx_hash, block_number, key_revealed, created_at, expires_at, paid_at";
+     ttl_days, status, tx_hash, block_number, key_revealed, created_at, expires_at, paid_at, \
+     credit_units";
 
 fn is_unique_violation(err: &rusqlite::Error) -> bool {
     matches!(err.sqlite_error_code(), Some(ErrorCode::ConstraintViolation))
@@ -116,13 +122,22 @@ pub fn create_order(
     for _ in 0..MAX_JITTER_ATTEMPTS {
         let jitter = rand::rng().random_range(0..JITTER_SPACE);
         let amount_units = base_units + jitter;
+        // A leveraged package credits more than it charges; the package row
+        // is the single source of truth for both sides of the funnel.
+        let credit_units = match package_id {
+            Some(pid) => match crate::credits::packages::get(conn, pid)? {
+                Some(p) => crate::credits::packages::credit_units_of(&p),
+                None => base_units,
+            },
+            None => base_units,
+        };
         let code = gen_order_code();
         let res = conn.execute(
             "INSERT INTO credit_orders \
                  (order_code, api_key_id, payer_email, amount_units, base_units, ttl_days, \
-                  status, expires_at, package_id) \
+                  status, expires_at, package_id, credit_units) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', \
-                     datetime('now', ?7), ?8)",
+                     datetime('now', ?7), ?8, ?9)",
             params![
                 code,
                 api_key_id.map(|k| k.0),
@@ -132,6 +147,7 @@ pub fn create_order(
                 ttl_days,
                 format!("+{PAYMENT_WINDOW_SECS} seconds"),
                 package_id,
+                credit_units,
             ],
         );
         match res {

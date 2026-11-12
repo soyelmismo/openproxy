@@ -30,6 +30,12 @@ pub fn router() -> Router<AppState> {
             "/packages/{id}",
             axum::routing::patch(update_package).delete(delete_package),
         )
+        // Tier presets: the access contract (models + quotas) packages point at.
+        .route("/tiers", get(list_tiers).post(create_tier))
+        .route(
+            "/tiers/{id}",
+            axum::routing::patch(update_tier).delete(delete_tier),
+        )
         .route("/orders", get(list_orders))
         // Runtime master switch for the payment gateway (Config toggle).
         .route("/gateway", get(gateway_status).post(set_gateway))
@@ -215,8 +221,11 @@ async fn transactions(
 
 #[derive(Debug, Deserialize)]
 struct TopUpRequest {
-    usd: f64,
-    ttl_days: i64,
+    /// Package purchase: price/credit/ttl all come from the preset.
+    package_id: Option<i64>,
+    /// Legacy free-amount purchase (whole USD, validated against config).
+    usd: Option<f64>,
+    ttl_days: Option<i64>,
 }
 
 async fn create_topup(
@@ -242,26 +251,55 @@ async fn create_topup(
             "no session key: use ?key_id= or the public checkout",
         );
     };
-    if !cfg.ttl_days.contains(&(req.ttl_days as u32)) {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "invalid_ttl",
-            &format!("ttl_days must be one of {:?}", cfg.ttl_days),
-        );
-    }
-    let base_units = match usd_to_base_units(req.usd) {
-        Some(u) if u as f64 >= cfg.min_topup_usd * f64::from(openproxy_core::credits::UNITS_PER_USD as u32) => u,
-        _ => {
+    // Package purchase: charge the preset price; the order derives the
+    // credited amount (credit_usd, the leverage point) from the package.
+    let (base_units, ttl_days, package_id) = if let Some(pid) = req.package_id {
+        let Some(pkg) = state
+            .db_pool()
+            .spawn_read(move |r| openproxy_core::credits::packages::get(r, pid))
+            .await
+            .ok()
+            .flatten()
+        else {
+            return err(StatusCode::NOT_FOUND, "unknown_package", "unknown package");
+        };
+        if !pkg.active {
+            return err(StatusCode::BAD_REQUEST, "inactive_package", "package is not active");
+        }
+        let charge =
+            (pkg.price_usd * f64::from(openproxy_core::credits::UNITS_PER_USD as u32)).round() as i64;
+        (charge, pkg.ttl_days, Some(pkg.id))
+    } else {
+        // Legacy free-amount purchase: whole dollars against the config.
+        let Some(usd) = req.usd else {
             return err(
                 StatusCode::BAD_REQUEST,
-                "invalid_amount",
-                &format!("amount must be a whole number of USD >= {}", cfg.min_topup_usd),
+                "invalid_request",
+                "specify package_id or usd+ttl_days",
             );
+        };
+        let ttl = req.ttl_days.unwrap_or(15);
+        if !cfg.ttl_days.contains(&(ttl as u32)) {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "invalid_ttl",
+                &format!("ttl_days must be one of {:?}", cfg.ttl_days),
+            );
+        }
+        match usd_to_base_units(usd) {
+            Some(u) if u as f64 >= cfg.min_topup_usd * f64::from(openproxy_core::credits::UNITS_PER_USD as u32) => (u, ttl, None),
+            _ => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_amount",
+                    &format!("amount must be a whole number of USD >= {}", cfg.min_topup_usd),
+                );
+            }
         }
     };
     let created = state
         .db_pool()
-        .spawn_write(move |w| create_order(w, Some(key_id), None, base_units, req.ttl_days, None))
+        .spawn_write(move |w| create_order(w, Some(key_id), None, base_units, ttl_days, package_id))
         .await;
     match created {
         Ok(o) => {
@@ -290,6 +328,8 @@ async fn create_topup(
                 "status": o.status,
                 "amount_units": o.amount_units,
                 "amount_display": openproxy_core::credits::units_to_usd_str(o.amount_units),
+                "credit_units": o.credit_units,
+                "credit_display": openproxy_core::credits::units_to_usd_str(o.credit_units),
                 "chain_id": cfg.chain_id,
                 "usdc_address": cfg.usdc_address,
                 "collector_address": cfg.collector_address,
@@ -358,6 +398,10 @@ struct CreatePackageRequest {
     price_usd: f64,
     ttl_days: i64,
     config: Option<openproxy_core::credits::PackageConfig>,
+    /// Balance credited on payment (leverage). `None` credits `price_usd`.
+    credit_usd: Option<f64>,
+    /// Tier whose allowlists + quota caps apply on payment.
+    tier_id: Option<i64>,
 }
 
 async fn create_package(
@@ -369,7 +413,15 @@ async fn create_package(
         return err(StatusCode::BAD_REQUEST, "invalid_name", "name is required");
     }
     match state.db_pool().spawn_write(move |w| {
-        openproxy_core::credits::packages::create(w, &name, req.price_usd, req.ttl_days, req.config.as_ref())
+        openproxy_core::credits::packages::create(
+            w,
+            &name,
+            req.price_usd,
+            req.ttl_days,
+            req.config.as_ref(),
+            req.credit_usd,
+            req.tier_id,
+        )
     }).await {
         Ok(pkg) => (StatusCode::CREATED, Json(pkg)).into_response(),
         Err(e) => err(StatusCode::BAD_REQUEST, "package_failed", &format!("{e}")),
@@ -382,6 +434,9 @@ struct UpdatePackageRequest {
     ttl_days: Option<i64>,
     config: Option<openproxy_core::credits::PackageConfig>,
     active: Option<bool>,
+    /// Outer = touch, inner = value (`None` clears the leverage).
+    credit_usd: Option<Option<f64>>,
+    tier_id: Option<Option<i64>>,
 }
 
 async fn update_package(
@@ -390,7 +445,16 @@ async fn update_package(
     Json(req): Json<UpdatePackageRequest>,
 ) -> Response {
     let res = state.db_pool().spawn_write(move |w| {
-        openproxy_core::credits::packages::update(w, id, req.price_usd, req.ttl_days, req.config.as_ref(), req.active)
+        openproxy_core::credits::packages::update(
+            w,
+            id,
+            req.price_usd,
+            req.ttl_days,
+            req.config.as_ref(),
+            req.active,
+            req.credit_usd,
+            req.tier_id,
+        )
     }).await;
     match res {
         Ok(()) => Json(json!({"ok": true})).into_response(),
@@ -400,11 +464,88 @@ async fn update_package(
 
 async fn delete_package(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     let res = state.db_pool().spawn_write(move |w| {
-        openproxy_core::credits::packages::update(w, id, None, None, None, Some(false))
+        openproxy_core::credits::packages::update(w, id, None, None, None, Some(false), None, None)
     }).await;
     match res {
         Ok(()) => Json(json!({"ok": true})).into_response(),
         Err(e) => err(StatusCode::BAD_REQUEST, "package_failed", &format!("{e}")),
+    }
+}
+
+// ── tier presets (the access contract packages point at) ────────────
+
+async fn list_tiers(State(state): State<AppState>) -> Response {
+    match state
+        .db_pool()
+        .spawn_read(openproxy_core::credits::tiers::list)
+        .await
+    {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "tiers_failed", &format!("{e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct TierRequest {
+    name: String,
+    config: openproxy_core::credits::TierConfig,
+}
+
+async fn create_tier(
+    State(state): State<AppState>,
+    Json(req): Json<TierRequest>,
+) -> Response {
+    match state
+        .db_pool()
+        .spawn_write(move |w| openproxy_core::credits::tiers::create(w, &req.name, &req.config))
+        .await
+    {
+        Ok(tier) => (StatusCode::CREATED, Json(tier)).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, "tier_failed", &format!("{e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateTierRequest {
+    name: Option<String>,
+    config: Option<openproxy_core::credits::TierConfig>,
+    active: Option<bool>,
+}
+
+async fn update_tier(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<UpdateTierRequest>,
+) -> Response {
+    let res = state
+        .db_pool()
+        .spawn_write(move |w| {
+            openproxy_core::credits::tiers::update(
+                w,
+                id,
+                req.name.as_deref(),
+                req.config.as_ref(),
+                req.active,
+            )
+        })
+        .await;
+    match res {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, "tier_failed", &format!("{e}")),
+    }
+}
+
+async fn delete_tier(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    match state
+        .db_pool()
+        .spawn_write(move |w| openproxy_core::credits::tiers::delete(w, id))
+        .await
+    {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, "tier_failed", &format!("{e}")),
     }
 }
 
@@ -424,7 +565,7 @@ async fn list_orders(
         .spawn_read(move |r| {
             let mut stmt = r.prepare(
                 "SELECT id, order_code, api_key_id, amount_units, base_units, ttl_days, status, \
-                 tx_hash, package_id, created_at, paid_at FROM credit_orders \
+                 tx_hash, package_id, created_at, paid_at, credit_units FROM credit_orders \
                  ORDER BY id DESC LIMIT ?1",
             ).map_err(openproxy_db::error::map_db_error)?;
             let rows = stmt.query_map(rusqlite::params![limit], |row| {
@@ -440,6 +581,7 @@ async fn list_orders(
                     "package_id": row.get::<_, Option<i64>>(8)?,
                     "created_at": row.get::<_, String>(9)?,
                     "paid_at": row.get::<_, Option<String>>(10)?,
+                    "credit_units": row.get::<_, Option<i64>>(11)?.unwrap_or(row.get::<_, i64>(4)?),
                 }))
             }).map_err(openproxy_db::error::map_db_error)?;
             let vals: Vec<_> = rows.collect::<Result<_, _>>().map_err(openproxy_db::error::map_db_error)?;

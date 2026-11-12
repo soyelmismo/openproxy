@@ -22,6 +22,7 @@ export const VIEWS = [
   { route: "#/providers", label: "Providers", group: "Routing" },
   { route: "#/combos", label: "Combos", group: "Routing" },
   { route: "#/keys", label: "API Keys", group: "Access & network" },
+  { route: "#/credits", label: "Credits", group: "Access & network" },
   { route: "#/proxies", label: "Free Proxies", group: "Access & network" },
   { route: "#/proxy-sources", label: "Proxy Sources", group: "Access & network" },
   { route: "#/logs", label: "Live Logs", group: "Observability" },
@@ -57,7 +58,7 @@ function tile(route: string): Tile {
 }
 export function safeRoute(value: unknown): value is string {
   return typeof value === "string" && value.length <= 2048 &&
-    /^#\/(?:$|providers(?:\/[^?#]+)?$|combos(?:\/\d+)?$|keys(?:\/\d+(?:\/usage)?)?$|(?:analytics|logs)(?:\?[^#]*)?$|(?:debug-logs|config|notifications|proxies|proxy-sources|playground|models)(?:\?[^#]*)?$)/.test(value);
+    /^#\/(?:$|providers(?:\/[^?#]+)?$|combos(?:\/\d+)?$|keys(?:\/\d+(?:\/usage)?)?$|(?:analytics|logs|credits)(?:\?[^#]*)?$|(?:debug-logs|config|notifications|proxies|proxy-sources|playground|models)(?:\?[^#]*)?$)/.test(value);
 }
 export function routeMeta(route: string): { route: string; label: string; group: string } {
   return VIEWS.find(v => v.route !== "#/" && (route === v.route || route.startsWith(v.route + "/") || route.startsWith(v.route + "?"))) ?? VIEWS[0]!;

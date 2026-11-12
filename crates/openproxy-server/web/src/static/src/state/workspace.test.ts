@@ -8,7 +8,7 @@ describe("workspace state", () => {
     expect(activeTile(s).route).toBe("#/combos/42");
   });
   it("validates routes before persistence or frame navigation", () => {
-    for (const route of ["#/", "#/providers/a%20b", "#/combos/2", "#/keys/3", "#/keys/3/usage", "#/logs?range=24h", "#/playground"]) expect(safeRoute(route)).toBe(true);
+    for (const route of ["#/", "#/credits", "#/providers/a%20b", "#/combos/2", "#/keys/3", "#/keys/3/usage", "#/logs?range=24h", "#/playground"]) expect(safeRoute(route)).toBe(true);
     for (const route of ["javascript:alert(1)", "https://evil.test/", "#/login", "#/providers/x?token=a", "#/combos/NaN", "#/unknown"]) expect(safeRoute(route)).toBe(false);
   });
   it("grows to six panels and focuses an already open view without duplication", () => {

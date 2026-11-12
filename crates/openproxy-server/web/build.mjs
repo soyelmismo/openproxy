@@ -30,6 +30,24 @@ const options = {
   logLevel: 'info',
 };
 
+// Public checkout page: TS source (fragmented under src/checkout/) →
+// classic-script IIFE at the path the server serves
+// (`include_str!("../web/src/static/checkout.js")`, no-store).
+// Lives OUTSIDE dist/ on purpose: the checkout must not ride the SPA's
+// hashed-chunk cache dance — it is money surface, always fresh, always
+// typechecked like the rest of the dashboard now.
+const checkoutOptions = {
+  entryPoints: [join(srcDir, 'checkout', 'main.ts')],
+  bundle: true,
+  format: 'iife',
+  target: 'es2022',
+  outfile: join(__dirname, 'src', 'static', 'checkout.js'),
+  sourcemap: process.argv.includes('--sourcemap'),
+  minify: !isWatch,
+  legalComments: 'eof',
+  logLevel: 'info',
+};
+
 const stylesDir = join(__dirname, 'src', 'static', 'styles');
 const cssOptions = {
   entryPoints: [join(stylesDir, 'index.css')],
@@ -42,11 +60,12 @@ const cssOptions = {
 };
 
 if (isWatch) {
-  const [jsCtx, cssCtx] = await Promise.all([
+  const [jsCtx, cssCtx, checkoutCtx] = await Promise.all([
     context(options),
     context(cssOptions),
+    context(checkoutOptions),
   ]);
-  await Promise.all([jsCtx.watch(), cssCtx.watch()]);
+  await Promise.all([jsCtx.watch(), cssCtx.watch(), checkoutCtx.watch()]);
   console.log('Watching for changes...');
 } else {
   // Limpiar chunks y bundles viejos para evitar que rust-embed infle el binario
@@ -57,6 +76,7 @@ if (isWatch) {
   await Promise.all([
     build(options),
     build(cssOptions),
+    build(checkoutOptions),
   ]);
   console.log('Build complete: ' + outDir);
 }

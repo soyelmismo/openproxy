@@ -527,3 +527,131 @@ fn session_order_credits_the_existing_key_without_minting() {
         .expect("count");
     assert_eq!(key_count, 1, "no extra key created");
 }
+
+// ── tiers + leveraged packages ──────────────────────────────────────
+
+fn tier_config(models: &[&str], monthly: f64) -> crate::credits::TierConfig {
+    crate::credits::TierConfig {
+        monthly_usd_cap: Some(monthly),
+        weekly_usd_cap: None,
+        five_hour_usd_cap: None,
+        allowed_models: Some(models.iter().map(|m| m.to_string()).collect()),
+        allowed_providers: None,
+        allowed_combos: None,
+        only_whitelisted: None,
+    }
+}
+
+#[test]
+fn tier_crud_and_apply_forces_the_whitelist_gate() {
+    let conn = test_conn();
+    let key = seed_key(&conn, "tiered");
+
+    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-a", "m-b"], 30.0))
+        .expect("create tier");
+    assert_eq!(t.package_count, 0);
+    assert!(t.active);
+
+    // Validation: blank name rejected, duplicate rejected by UNIQUE.
+    assert!(crate::credits::tiers::create(&conn, "  ", &tier_config(&["m"], 1.0)).is_err());
+    assert!(crate::credits::tiers::create(&conn, "flash", &tier_config(&["m"], 1.0)).is_err());
+
+    crate::credits::tiers::apply_to_key(&conn, key, &t.config).expect("apply");
+    let models: String = conn
+        .query_row("SELECT allowed_models_json FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .expect("models");
+    assert_eq!(models, r#"["m-a","m-b"]"#);
+    let gate: i64 = conn
+        .query_row("SELECT only_whitelisted FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .expect("gate");
+    // Money invariant: an allowlist is a hard gate, not advisory.
+    assert_eq!(gate, 1, "allowlist must force only_whitelisted");
+    let caps = crate::api_key_quotas::get_caps(&conn, key).expect("caps").expect("caps row");
+    assert_eq!(caps.monthly_usd_cap, Some(30.0));
+
+    // Update replaces the payload wholesale.
+    crate::credits::tiers::update(&conn, t.id, Some("flash2"), Some(&tier_config(&["m-c"], 40.0)), Some(false))
+        .expect("update");
+    let t2 = crate::credits::tiers::get(&conn, t.id).expect("get").expect("tier");
+    assert_eq!(t2.name, "flash2");
+    assert!(!t2.active);
+    assert_eq!(t2.config.allowed_models.as_deref(), Some(&["m-c".to_string()][..]));
+
+    // Unused tier deletes cleanly.
+    crate::credits::tiers::delete(&conn, t.id).expect("delete");
+    assert!(crate::credits::tiers::get(&conn, t.id).expect("get").is_none());
+}
+
+#[test]
+fn leveraged_package_charges_less_than_it_credits() {
+    let conn = test_conn();
+    let key = seed_key(&conn, "lev");
+    let mk = mk();
+
+    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-1"], 25.0))
+        .expect("tier");
+    let pkg = crate::credits::packages::create(&conn, "5x6", 1.0, 7, None, Some(6.0), Some(t.id))
+        .expect("package");
+
+    // The buyer is charged the PRICE (whole dollar + jitter); the order
+    // records the CREDIT (6x) for the matcher to pay out.
+    let order = orders::create_order(&conn, Some(key), None, 1 * USD, pkg.ttl_days, Some(pkg.id))
+        .expect("order");
+    assert_eq!(order.credit_units, 6 * USD, "credit_units must carry the leverage");
+    assert!(order.amount_units >= 1 * USD && order.amount_units < 2 * USD);
+
+    let outcome = matcher::apply_payment(&conn, &mk, "0xlev", 0, 1, order.amount_units, None)
+        .expect("apply");
+    let credited = match outcome {
+        PaymentOutcome::Credited { credited_units, .. } => credited_units,
+        other => panic!("expected credited, got {other:?}"),
+    };
+    assert_eq!(credited, 6 * USD, "the balance must be the leveraged credit");
+
+    // The tier shaping landed on the key together with the credit.
+    let models: String = conn
+        .query_row("SELECT allowed_models_json FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .expect("models");
+    assert_eq!(models, r#"["m-1"]"#);
+    let gate: i64 = conn
+        .query_row("SELECT only_whitelisted FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .expect("gate");
+    assert_eq!(gate, 1);
+    let caps = crate::api_key_quotas::get_caps(&conn, key).expect("caps").expect("caps row");
+    assert_eq!(caps.monthly_usd_cap, Some(25.0));
+}
+
+#[test]
+fn tier_config_wins_over_legacy_package_config_gaps() {
+    let conn = test_conn();
+    let t = crate::credits::tiers::create(&conn, "gate", &tier_config(&["tier-model"], 30.0))
+        .expect("tier");
+
+    // Legacy package config: an old monthly cap that the tier replaces.
+    let legacy = crate::credits::PackageConfig {
+        monthly_usd_cap: Some(100.0),
+        weekly_usd_cap: None,
+        five_hour_usd_cap: None,
+        allowed_models: Some(vec!["legacy-model".to_string()]),
+        allowed_providers: None,
+        allowed_combos: None,
+        only_whitelisted: None,
+    };
+    let pkg = crate::credits::packages::create(&conn, "mixed", 5.0, 15, Some(&legacy), None, Some(t.id))
+        .expect("package");
+    let resolved = crate::credits::packages::resolved_config(&conn, &pkg)
+        .expect("resolve")
+        .expect("config");
+    // Tier is the access contract: its models + caps win.
+    assert_eq!(resolved.allowed_models.as_deref(), Some(&["tier-model".to_string()][..]));
+    assert_eq!(resolved.monthly_usd_cap, Some(30.0));
+
+    // Package without tier keeps the pure legacy behaviour.
+    let plain = crate::credits::packages::create(&conn, "legacy", 5.0, 15, Some(&legacy), None, None)
+        .expect("package");
+    let resolved = crate::credits::packages::resolved_config(&conn, &plain)
+        .expect("resolve")
+        .expect("config");
+    assert_eq!(resolved.allowed_models.as_deref(), Some(&["legacy-model".to_string()][..]));
+    assert_eq!(resolved.monthly_usd_cap, Some(100.0));
+}
