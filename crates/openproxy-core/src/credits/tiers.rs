@@ -143,19 +143,27 @@ pub fn create(
 ) -> openproxy_types::Result<CreditTier> {
     let name = validate_name(name)?;
     let cfg = sanitize(config);
+    // The admin UI sends ONE merged selection; combo entries (`combo:` prefix
+    // or names matching a live combo row) must land in combos_json or the
+    // routing gate never matches them. Store a canonical row.
+    let (models, combos) = crate::credits::packages::partition_names(
+        conn,
+        cfg.allowed_models.as_ref(),
+        cfg.allowed_combos.as_ref(),
+    )?;
     conn.execute(
         "INSERT INTO credit_tiers (name, models_json, providers_json, combos_json, \
              only_whitelisted, monthly_usd_cap, weekly_usd_cap, five_hour_usd_cap) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             name,
-            cfg.allowed_models
+            models
                 .as_ref()
                 .map(|v| serde_json::to_string(v).unwrap_or_default()),
             cfg.allowed_providers
                 .as_ref()
                 .map(|v| serde_json::to_string(v).unwrap_or_default()),
-            cfg.allowed_combos
+            combos
                 .as_ref()
                 .map(|v| serde_json::to_string(v).unwrap_or_default()),
             cfg.only_whitelisted.map(i64::from),
@@ -193,18 +201,25 @@ pub fn update(
     }
     if let Some(c) = config {
         let cfg = sanitize(c);
+        // Same canonical partition as create: combo names into combos_json,
+        // model ids into models_json (see the create path for the why).
+        let (models, combos) = crate::credits::packages::partition_names(
+            conn,
+            cfg.allowed_models.as_ref(),
+            cfg.allowed_combos.as_ref(),
+        )?;
         conn.execute(
             "UPDATE credit_tiers SET models_json = ?1, providers_json = ?2, combos_json = ?3, \
                  only_whitelisted = ?4, monthly_usd_cap = ?5, weekly_usd_cap = ?6, \
                  five_hour_usd_cap = ?7, updated_at = datetime('now') WHERE id = ?8",
             params![
-                cfg.allowed_models
+                models
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_default()),
                 cfg.allowed_providers
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_default()),
-                cfg.allowed_combos
+                combos
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_default()),
                 cfg.only_whitelisted.map(i64::from),
@@ -283,7 +298,15 @@ pub fn apply_to_key(
     };
     crate::api_key_quotas::upsert(conn, key_id, &caps)?;
 
-    if let Some(models) = &config.allowed_models {
+    // Combo entries may ride in allowed_models (merged admin selection);
+    // partition before writing, and store combo ids — the shape the routing
+    // gate consumes (`is_combo_allowed`).
+    let (models, combos) = crate::credits::packages::partition_names(
+        conn,
+        config.allowed_models.as_ref(),
+        config.allowed_combos.as_ref(),
+    )?;
+    if let Some(models) = &models {
         conn.execute(
             "UPDATE api_keys SET allowed_models_json = ?1 WHERE id = ?2",
             params![serde_json::to_string(models).unwrap_or_default(), key_id.0],
@@ -300,20 +323,18 @@ pub fn apply_to_key(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
-    if let Some(combos) = &config.allowed_combos {
+    if let Some(combos) = &combos {
+        let ids = crate::credits::packages::resolve_combo_ids(conn, combos)?;
         conn.execute(
             "UPDATE api_keys SET allowed_combos_json = ?1 WHERE id = ?2",
-            params![serde_json::to_string(combos).unwrap_or_default(), key_id.0],
+            params![ids, key_id.0],
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
+    let allowlist_present = models.is_some() || combos.is_some();
     let forced_gate = config
         .only_whitelisted
-        .or(if config.allowed_models.is_some() {
-            Some(true)
-        } else {
-            None
-        });
+        .or(if allowlist_present { Some(true) } else { None });
     if let Some(only) = forced_gate {
         conn.execute(
             "UPDATE api_keys SET only_whitelisted = ?1 WHERE id = ?2",

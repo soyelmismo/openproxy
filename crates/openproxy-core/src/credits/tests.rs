@@ -583,6 +583,53 @@ fn tier_crud_and_apply_forces_the_whitelist_gate() {
 }
 
 #[test]
+fn tier_allowlist_partitions_combos_from_models() {
+    let conn = test_conn();
+    let key = seed_key(&conn, "part");
+
+    // A live combo row — the bare-name detection target.
+    conn.execute(
+        "INSERT INTO combos (name, strategy) VALUES ('autos', 'priority')",
+        [],
+    )
+    .expect("combo row");
+
+    // The admin UI sends ONE merged selection: `combo:autos` rides inside
+    // allowed_models. The stored tier must end up canonical: models in
+    // models_json, combo NAMES in combos_json, never a combo in models.
+    let t = crate::credits::tiers::create(
+        &conn,
+        "mixed",
+        &crate::credits::TierConfig {
+            allowed_models: Some(vec!["combo:autos".into(), "deepseek-v4.1-flash".into()]),
+            allowed_combos: None,
+            ..tier_config(&["deepseek-v4.1-flash"], 10.0)
+        },
+    )
+    .expect("create mixed tier");
+    let row_models: String = conn
+        .query_row("SELECT models_json FROM credit_tiers WHERE id = ?1", [t.id], |r| r.get(0))
+        .expect("row models");
+    let row_combos: String = conn
+        .query_row("SELECT combos_json FROM credit_tiers WHERE id = ?1", [t.id], |r| r.get(0))
+        .expect("row combos");
+    assert_eq!(row_models, r#"["deepseek-v4.1-flash"]"#, "combo must leave models_json");
+    assert_eq!(row_combos, r#"["autos"]"#, "combo name must land in combos_json");
+
+    // Applying to a key resolves the combo NAME to the numeric id the
+    // routing gate consumes, and the allowlist still forces the hard gate.
+    crate::credits::tiers::apply_to_key(&conn, key, &t.config).expect("apply");
+    let key_combos: String = conn
+        .query_row("SELECT allowed_combos_json FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .expect("key combos");
+    assert_eq!(key_combos, "[1]", "combo name must resolve to its numeric id");
+    let gate: i64 = conn
+        .query_row("SELECT only_whitelisted FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .expect("gate");
+    assert_eq!(gate, 1, "allowlist must force only_whitelisted");
+}
+
+#[test]
 fn leveraged_package_charges_less_than_it_credits() {
     let conn = test_conn();
     let key = seed_key(&conn, "lev");

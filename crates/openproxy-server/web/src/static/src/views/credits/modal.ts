@@ -65,10 +65,14 @@ export function openModal(title: string, body: TemplateResult): ModalHandle {
   return handle;
 }
 
-/** Refocus an input inside the repainted body (keeps caret at the end). */
+/** Refocus an input inside the repainted body (keeps caret at the end).
+ *  The view can be mounted twice (shell + workspace tile), so the first
+ *  getElementById hit may be a hidden copy whose focus() is a no-op —
+ *  prefer the first VISIBLE element with that id. */
 export function refocusInput(id: string): void {
   requestAnimationFrame(() => {
-    const el = document.getElementById(id) as HTMLInputElement | null;
+    const els = [...document.querySelectorAll(`#${id}`)] as HTMLInputElement[];
+    const el = els.find((e) => e.offsetParent !== null) ?? els[0];
     if (!el) return;
     el.focus();
     const end = el.value.length;

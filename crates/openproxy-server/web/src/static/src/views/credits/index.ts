@@ -23,37 +23,54 @@ async function loadPackages(): Promise<PackagesResponse> {
 }
 
 async function loadData(): Promise<CreditsData> {
-  // The admin-only ledger queries run solely for operator sessions: a client
-  // (analytics/read) key would otherwise hit 403s on every view mount.
-  // Orders live in their own module (search + pagination); only its first
-  // page is primed here so the table renders with data.
-  const adminExtras: Promise<[AdminPackage[], AdminTier[], void]> = isFullAdmin()
-    ? Promise.all([
-        api("/credits/packages").catch(() => [] as AdminPackage[]),
-        api("/credits/tiers").catch(() => [] as AdminTier[]),
-        ensureOrdersLoaded(),
-      ]) as Promise<[AdminPackage[], AdminTier[], void]>
-    : Promise.resolve([[], [], undefined]);
-  const [balance, transactions, quota, packages, [adminPackages, adminTiers]] =
-    await Promise.all([
-      api("/credits/balance"),
-      api("/credits/transactions?limit=100"),
-      api("/credits/quota"),
-      loadPackages(),
-      adminExtras,
-    ]);
+  // Admin sessions get ONLY the management data: balance/top-up/quota/tx
+  // history are consumer surfaces, pure noise here (and their endpoints run
+  // against the operator key pointlessly). Orders live in their own module
+  // (search + pagination); only its first page is primed so the table
+  // renders with data.
+  if (isFullAdmin()) {
+    const pkgsP = api("/credits/packages").catch(() => [] as AdminPackage[]);
+    const tiersP = api("/credits/tiers").catch(() => [] as AdminTier[]);
+    const [adminPackages, adminTiers] = await Promise.all([pkgsP, tiersP, ensureOrdersLoaded()]);
+    return { transactions: [], adminPackages, adminTiers } as CreditsData;
+  }
+  const [balance, transactions, quota, packages] = await Promise.all([
+    api("/credits/balance"),
+    api("/credits/transactions?limit=100"),
+    api("/credits/quota"),
+    loadPackages(),
+  ]);
   return {
     balance, transactions, quota, packages,
-    adminPackages: adminPackages as AdminPackage[],
-    adminTiers: adminTiers as AdminTier[],
+    adminPackages: [], adminTiers: [],
   } as CreditsData;
 }
 
-function renderAdmin(data: CreditsData): TemplateResult {
-  return html`${renderTiers(data)} ${renderPackages(data)} ${renderOrders()}`;
+function render(data: CreditsData): TemplateResult {
+  if (isFullAdmin()) return renderAdminView(data);
+  return renderClientView(data);
 }
 
-function render(data: CreditsData): TemplateResult {
+/** Admin surface: management only, full width, nothing consumer-ish. */
+function renderAdminView(data: CreditsData): TemplateResult {
+  return html`
+    <div class="page" style="max-width:none">
+      <h2 style="margin:0 0 4px">Credits</h2>
+      <p style="color:var(--color-text-muted);font-size:13px;margin:0 0 16px">
+        Tiers, packages and the order ledger. Consumer surfaces (balance, top-up,
+        quota) live on client keys, not here.
+      </p>
+      ${renderTiers(data)}
+      ${renderPackages(data)}
+      ${renderOrders()}
+    </div>
+  `;
+}
+
+function renderClientView(data: CreditsData): TemplateResult {
+  if (!data.balance || !data.quota || !data.packages) {
+    return html`<div class="page" style="max-width:760px"></div>`;
+  }
   const b = data.balance;
   const disabled = !data.packages.enabled;
   return html`
@@ -128,7 +145,6 @@ function render(data: CreditsData): TemplateResult {
           </table>`}
         </div>
       </section>
-      ${isFullAdmin() ? renderAdmin(data) : html``}
     </div>
   `;
 }

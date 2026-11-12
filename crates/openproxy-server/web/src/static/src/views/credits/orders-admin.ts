@@ -2,12 +2,20 @@
 // every checkout with its charged vs credited split and chain pointer.
 //
 // Server-side search + pagination: the ledger can grow past any client-side
-// slice, so `q` / `limit` / `offset` hit GET /credits/orders and only the
-// table body re-renders per interaction (the search input keeps its focus).
+// slice, so `q` / `limit` / `offset` hit GET /credits/orders.
+//
+// RENDERING CONTRACT (root-cause rule, applies platform-wide): this section
+// is rendered by the PARENT template — no nested litRender into a root div.
+// The nested pattern breaks when the outer view instance is torn down (lit
+// cleans the tree and the nested part becomes a zombie: handlers dead,
+// content cleared). Interactions update module state and requestRefresh();
+// the view re-renders through the one lit instance that owns the DOM.
 
-import { html, render as litRender, type TemplateResult } from "lit-html";
+import { html, type TemplateResult } from "lit-html";
 import { api } from "../../state/api.js";
 import { showToast } from "../../components/toast.js";
+import { requestRefresh } from "./shared.js";
+import { refocusInput } from "./modal.js";
 import type { AdminOrder, OrdersPage } from "./types.js";
 
 const PAGE_SIZE = 25;
@@ -17,9 +25,12 @@ let page: OrdersPage | null = null;
 let loading = false;
 let debounce: ReturnType<typeof setTimeout> | null = null;
 
+export async function ensureOrdersLoaded(): Promise<void> {
+  if (page == null && !loading) await load();
+}
+
 async function load(): Promise<void> {
   loading = true;
-  paint();
   try {
     const qs = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
     if (query.trim()) qs.set("q", query.trim());
@@ -29,13 +40,10 @@ async function load(): Promise<void> {
     page = page ?? { orders: [], total: 0 };
   } finally {
     loading = false;
-    paint();
+    requestRefresh();
+    // The refresh re-renders the section (and the input): keep the caret.
+    refocusInput("orders-search");
   }
-}
-
-/** First load before the view renders (loader phase). */
-export async function ensureOrdersLoaded(): Promise<void> {
-  if (page == null && !loading) await load();
 }
 
 function onSearch(v: string): void {
@@ -98,16 +106,7 @@ function rowsTable(): TemplateResult {
     </div>`;
 }
 
-function paint(): void {
-  const el = document.getElementById("credits-orders-root");
-  if (el) litRender(rowsTable(), el);
-}
-
 export function renderOrders(): TemplateResult {
-  // The root starts EMPTY: painting rowsTable() inside it makes the module
-  // render() append a second tbody next to the parent template's copy.
-  // The microtask paints once the outer template is committed to the DOM.
-  queueMicrotask(() => paint());
   return html`
     <section class="card" style="margin-top:16px">
       <div class="card-title">Orders (every checkout)</div>
@@ -121,7 +120,7 @@ export function renderOrders(): TemplateResult {
                      @click=${() => { query = ""; offset = 0; void load(); }}>clear</button>`
             : null}
         </div>
-        <div id="credits-orders-root"></div>
+        <div style="overflow-x:auto">${rowsTable()}</div>
       </div>
     </section>`;
 }

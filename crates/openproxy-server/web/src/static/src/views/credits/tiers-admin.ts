@@ -23,6 +23,9 @@ const PAGE_SIZE = 60;
 let kindFilter: "all" | "model" | "combo" = "all";
 let handle: ModalHandle | null = null;
 
+/** Display id: combos lose their `combo:` prefix (the badge already says it). */
+const disp = (id: string): string => (id.startsWith("combo:") ? id.slice(6) : id);
+
 function syncScalars(): void {
   if (!tierDraft) return;
   const name = (document.getElementById("tier-name") as HTMLInputElement | null)?.value ?? tierDraft.name;
@@ -84,13 +87,19 @@ async function saveTier(): Promise<void> {
     showToast("a tier without models leaves the key unrestricted — pick at least one", "error");
     return;
   }
+  // Split the merged selection: catalog combo ids are always `combo:<name>`
+  // (models never carry the prefix), so the tier API gets clean fields.
+  const comboNames = d.models
+    .filter((m) => m.startsWith("combo:"))
+    .map((m) => m.slice("combo:".length));
+  const models = d.models.filter((m) => !m.startsWith("combo:"));
   const config = {
     monthly_usd_cap: Number.isFinite(monthly) ? monthly : null,
     weekly_usd_cap: Number.isFinite(weekly) ? weekly : null,
     five_hour_usd_cap: Number.isFinite(fiveHour) ? fiveHour : null,
-    allowed_models: d.models,
+    allowed_models: models,
     allowed_providers: null,
-    allowed_combos: null,
+    allowed_combos: comboNames.length > 0 ? comboNames : null,
     only_whitelisted: true,
   };
   try {
@@ -152,7 +161,7 @@ function body(): TemplateResult {
         ? html`<span style="font-size:11px;color:var(--color-text-muted)">none yet</span>`
         : d.models.map((m) => html`
           <span style="font-size:11px;background:var(--color-border);border-radius:20px;padding:2px 10px;white-space:nowrap">
-            ${m} <a style="cursor:pointer;margin-left:4px" @click=${() => toggleDraftModel(m)}>×</a>
+            ${disp(m)} <a style="cursor:pointer;margin-left:4px" @click=${() => toggleDraftModel(m)}>×</a>
           </span>`)}
     </div>
 
@@ -188,7 +197,7 @@ function body(): TemplateResult {
           : shown.map((m) => html`
             <label style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 8px;cursor:pointer;${m.active ? "" : "opacity:.55"}">
               <input type="checkbox" ?checked=${selected.has(m.id)} @change=${() => toggleDraftModel(m.id)}>
-              <span style="font-family:monospace">${m.id}</span>
+              <span style="font-family:monospace">${disp(m.id)}</span>
               ${m.kind === "combo"
                 ? html`<span style="font-size:10px;border:1px solid var(--color-primary);border-radius:10px;padding:0 6px;color:var(--color-primary)">combo</span>`
                 : null}
@@ -225,7 +234,10 @@ function openTierEditor(tier: AdminTier | null): void {
     : {
         id: tier.id,
         name: tier.name,
-        models: tier.config.allowed_models ?? [],
+        models: [
+          ...(tier.config.allowed_models ?? []),
+          ...(tier.config.allowed_combos ?? []).map((c) => (c.startsWith("combo:") ? c : `combo:${c}`)),
+        ],
         monthly: tier.config.monthly_usd_cap == null ? "" : String(tier.config.monthly_usd_cap),
         weekly: tier.config.weekly_usd_cap == null ? "" : String(tier.config.weekly_usd_cap),
         fiveHour: tier.config.five_hour_usd_cap == null ? "" : String(tier.config.five_hour_usd_cap),
@@ -264,6 +276,7 @@ export function renderTiers(data: CreditsData): TemplateResult {
         ${data.adminTiers.length === 0
           ? html`<div style="color:var(--color-text-muted)">No tiers yet — create one to gate a package.</div>`
           : html`
+        <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="color:var(--color-text-muted);font-size:11px;text-align:left">
             <th style="padding:4px 8px 4px 0">Name</th><th style="padding:4px 8px">Models</th>
@@ -274,12 +287,12 @@ export function renderTiers(data: CreditsData): TemplateResult {
             ${data.adminTiers.map((t) => html`
             <tr style="border-top:1px solid var(--color-border)">
               <td style="padding:6px 8px 6px 0;font-weight:600">${t.name}</td>
-              <td style="padding:6px 8px;max-width:260px">
-                ${t.config.allowed_models == null
+              <td style="padding:6px 8px;max-width:300px">
+                ${t.config.allowed_models == null && t.config.allowed_combos == null
                   ? html`<span style="color:var(--color-warn)">unrestricted</span>`
-                  : html`<span style="color:var(--color-text-muted)">${t.config.allowed_models.length} model(s)</span>
-                      <div style="font-size:10px;color:var(--color-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px">
-                        ${t.config.allowed_models.join(", ")}</div>`}
+                  : html`<span style="color:var(--color-text-muted)">${t.config.allowed_models?.length ?? 0} model(s) · ${t.config.allowed_combos?.length ?? 0} combo(s)</span>
+                      <div style="font-size:10px;color:var(--color-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px">
+                        ${(t.config.allowed_models ?? []).map(disp).join(", ")}</div>`}
               </td>
               <td style="padding:6px 8px;color:var(--color-text-muted);font-size:12px">
                 ${t.config.monthly_usd_cap ?? "∞"} / ${t.config.weekly_usd_cap ?? "∞"} / ${t.config.five_hour_usd_cap ?? "∞"}
@@ -293,7 +306,8 @@ export function renderTiers(data: CreditsData): TemplateResult {
               </td>
             </tr>`)}
           </tbody>
-        </table>`}
+        </table>
+        </div>`}
         <div style="margin-top:12px">
           <button class="primary" @click=${() => openTierEditor(null)}>New tier</button>
         </div>

@@ -262,10 +262,15 @@ pub fn apply_to_key(
         };
         crate::api_key_quotas::upsert(conn, key_id, &caps)?;
     }
-    if let Some(models) = &config.allowed_models {
+    let (models_json, combos_json) = allowlist_payload(
+        conn,
+        config.allowed_models.as_ref(),
+        config.allowed_combos.as_ref(),
+    )?;
+    if let Some(payload) = models_json {
         conn.execute(
             "UPDATE api_keys SET allowed_models_json = ?1 WHERE id = ?2",
-            params![serde_json::to_string(models).unwrap_or_default(), key_id.0],
+            params![payload, key_id.0],
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
@@ -276,10 +281,10 @@ pub fn apply_to_key(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
-    if let Some(combos) = &config.allowed_combos {
+    if let Some(payload) = combos_json {
         conn.execute(
             "UPDATE api_keys SET allowed_combos_json = ?1 WHERE id = ?2",
-            params![serde_json::to_string(combos).unwrap_or_default(), key_id.0],
+            params![payload, key_id.0],
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
@@ -291,6 +296,142 @@ pub fn apply_to_key(
         .map_err(openproxy_db::error::map_db_error)?;
     }
     Ok(())
+}
+
+/// Resolve combo names to the numeric combo ids the routing layer consumes
+/// (`api_keys.allowed_combos_json` feeds `is_combo_allowed`). Names without a
+/// live combo row are dropped: a stale entry must never lock a key out of
+/// everything else.
+pub(crate) fn resolve_combo_ids(
+    conn: &Connection,
+    names: &[String],
+) -> openproxy_types::Result<String> {
+    if names.is_empty() {
+        return Ok("[]".into());
+    }
+    let mut ids: Vec<i64> = Vec::new();
+    let mut stmt = conn
+        .prepare("SELECT id FROM combos WHERE name = ?1 LIMIT 1")
+        .map_err(openproxy_db::error::map_db_error)?;
+    for name in names {
+        if let Ok(id) = stmt.query_row(params![name], |r| r.get::<_, i64>(0)) {
+            ids.push(id);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into()))
+}
+
+/// Partition a tier's combined allowlist into the two wire shapes the routing
+/// layer consumes: plain entries are model ids (`allowed_models_json`, what
+/// `is_model_allowed` checks) and `combo:<name>` entries (or bare combo names)
+/// resolve to numeric combo ids (`allowed_combos_json`, what `is_combo_allowed`
+/// checks). `None` inputs yield `None` payloads (leave the column untouched).
+///
+/// # Errors
+/// DB failures while resolving combo ids.
+fn allowlist_payload(
+    conn: &Connection,
+    models: Option<&Vec<String>>,
+    combos: Option<&Vec<String>>,
+) -> openproxy_types::Result<(Option<String>, Option<String>)> {
+    let mut model_ids: Vec<String> = Vec::new();
+    let mut combo_names: Vec<String> = Vec::new();
+    if let Some(ms) = models {
+        for e in ms {
+            if let Some(name) = e.strip_prefix("combo:") {
+                if !name.is_empty() {
+                    combo_names.push(name.to_string());
+                }
+            } else {
+                model_ids.push(e.clone());
+            }
+        }
+    }
+    if let Some(cs) = combos {
+        for e in cs {
+            let name = e.strip_prefix("combo:").unwrap_or(e);
+            if !name.is_empty() {
+                combo_names.push(name.to_string());
+            }
+        }
+    }
+    let models_json = models
+        .map(|_| serde_json::to_string(&model_ids).unwrap_or_else(|_| "[]".into()));
+    let combos_json = if models.is_some() || combos.is_some() {
+        Some(resolve_combo_ids(conn, &combo_names)?)
+    } else {
+        None
+    };
+    Ok((models_json, combos_json))
+}
+
+/// Split a combined allowlist into (model ids, combo names) at NAME level.
+/// The admin UI sends one merged selection; entries with the `combo:` prefix
+/// — and bare names matching a live combo row — are combo names, everything
+/// else stays a model id. Used to store a canonical tier row: the propagation
+/// layer resolves these names to numeric ids per key.
+///
+/// # Errors
+/// Propagates DB failures.
+pub(crate) fn partition_names(
+    conn: &Connection,
+    models: Option<&Vec<String>>,
+    combos: Option<&Vec<String>>,
+) -> openproxy_types::Result<(Option<Vec<String>>, Option<Vec<String>>)> {
+    match (models, combos) {
+        (None, None) => return Ok((None, None)),
+        _ => {}
+    }
+    let mut model_ids: Vec<String> = Vec::new();
+    let mut combo_names: Vec<String> = Vec::new();
+    let mut is_combo_name = |conn: &Connection, entry: &str| -> openproxy_types::Result<bool> {
+        if let Some(name) = entry.strip_prefix("combo:") {
+            return Ok(!name.is_empty());
+        }
+        let mut stmt = conn
+            .prepare("SELECT 1 FROM combos WHERE name = ?1")
+            .map_err(openproxy_db::error::map_db_error)?;
+        let found = stmt
+            .query_row(params![entry], |_| Ok(()))
+            .optional()
+            .map_err(openproxy_db::error::map_db_error)?;
+        Ok(found.is_some())
+    };
+    if let Some(ms) = models {
+        for e in ms {
+            if is_combo_name(conn, e)? {
+                if let Some(name) = e.strip_prefix("combo:") {
+                    combo_names.push(name.to_string());
+                } else {
+                    combo_names.push(e.clone());
+                }
+            } else {
+                model_ids.push(e.clone());
+            }
+        }
+    }
+    if let Some(cs) = combos {
+        for e in cs {
+            if let Some(name) = e.strip_prefix("combo:") {
+                if !name.is_empty() {
+                    combo_names.push(name.to_string());
+                }
+            } else {
+                combo_names.push(e.clone());
+            }
+        }
+    }
+    combo_names.sort();
+    combo_names.dedup();
+    let models_out = models.map(|_| model_ids);
+    let combos_out = if combo_names.is_empty() {
+        None
+    } else {
+        Some(combo_names)
+    };
+    Ok((models_out, combos_out))
 }
 
 /// Persist which tier a leveraged key inherited. This link (not the copied
@@ -319,9 +460,13 @@ pub fn set_key_tier(
 #[must_use]
 pub fn tier_own_config(tier: &crate::credits::tiers::CreditTier) -> PackageConfig {
     let t = &tier.config;
-    let gate = t
-        .only_whitelisted
-        .or(if t.allowed_models.is_some() { Some(true) } else { None });
+    // Propagation always writes a definite strict-mode flag: an unrestricted
+    // tier must CLEAR only_whitelisted (a stale 1 with cleared allowlists
+    // denies every request).
+    let gate = Some(
+        t.only_whitelisted
+            .unwrap_or_else(|| t.allowed_models.is_some() || t.allowed_providers.is_some()),
+    );
     PackageConfig {
         monthly_usd_cap: t.monthly_usd_cap,
         weekly_usd_cap: t.weekly_usd_cap,
@@ -385,10 +530,24 @@ pub fn apply_to_key_forced(
         five_hour_usd_cap: config.five_hour_usd_cap,
     };
     crate::api_key_quotas::upsert(conn, key_id, &caps)?;
-    if let Some(models) = &config.allowed_models {
+    let (models_json, combos_json) = allowlist_payload(
+        conn,
+        config.allowed_models.as_ref(),
+        config.allowed_combos.as_ref(),
+    )?;
+    if let Some(payload) = models_json {
         conn.execute(
             "UPDATE api_keys SET allowed_models_json = ?1 WHERE id = ?2",
-            params![serde_json::to_string(models).unwrap_or_default(), key_id.0],
+            params![payload, key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    } else {
+        // Unrestricted tier: the tier owns the truth, so the inherited
+        // allowlist is cleared, not preserved (a stale list + strict mode
+        // would lock the key out of everything).
+        conn.execute(
+            "UPDATE api_keys SET allowed_models_json = NULL WHERE id = ?1",
+            params![key_id.0],
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
@@ -399,10 +558,16 @@ pub fn apply_to_key_forced(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
-    if let Some(combos) = &config.allowed_combos {
+    if let Some(payload) = combos_json {
         conn.execute(
             "UPDATE api_keys SET allowed_combos_json = ?1 WHERE id = ?2",
-            params![serde_json::to_string(combos).unwrap_or_default(), key_id.0],
+            params![payload, key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    } else {
+        conn.execute(
+            "UPDATE api_keys SET allowed_combos_json = NULL WHERE id = ?1",
+            params![key_id.0],
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }

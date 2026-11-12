@@ -30,17 +30,19 @@ async function createTopup(): Promise<void> {
 }
 
 export function renderTopupPanel(data: CreditsData): TemplateResult {
+  const packages = data.packages;
+  if (!packages) return html``;
   return html`
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">Top up with USDC on Base</div>
       <div class="card-body">
         ${activeOrder == null
           ? html`
-            ${(data.packages.offers ?? []).length === 0
+            ${(packages.offers ?? []).length === 0
               ? html`<div style="color:var(--muted);font-size:13px">No packages available yet.</div>`
               : html`
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">
-              ${data.packages.offers.map((o) => html`
+              ${packages.offers.map((o) => html`
                 <label style="display:block;border:1px solid ${selectedPackageId === o.package_id ? "var(--accent,#6366f1)" : "var(--border,#232a3d)"};border-radius:10px;padding:10px 12px;cursor:pointer">
                   <input type="radio" name="topup-pkg" style="display:none"
                          value=${o.package_id ?? 0}

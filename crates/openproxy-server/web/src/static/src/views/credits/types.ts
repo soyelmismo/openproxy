@@ -142,10 +142,11 @@ export interface TierDraft {
 }
 
 export interface CreditsData {
-  balance: Balance;
+  /** Consumer surfaces — absent on the admin-only view (noise there). */
+  balance?: Balance;
+  quota?: QuotaStatus;
+  packages?: PackagesResponse;
   transactions: TxRow[];
-  quota: QuotaStatus;
-  packages: PackagesResponse;
   adminPackages: AdminPackage[];
   adminTiers: AdminTier[];
 }

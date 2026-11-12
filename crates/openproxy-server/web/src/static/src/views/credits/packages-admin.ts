@@ -162,6 +162,7 @@ export function renderPackages(data: CreditsData): TemplateResult {
         ${data.adminPackages.length === 0
           ? html`<div style="color:var(--color-text-muted)">No packages yet.</div>`
           : html`
+        <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="color:var(--color-text-muted);font-size:11px;text-align:left">
             <th style="padding:4px 8px 4px 0">Name</th><th style="padding:4px 8px">Price</th>
@@ -190,7 +191,8 @@ export function renderPackages(data: CreditsData): TemplateResult {
             </tr>`;
             })}
           </tbody>
-        </table>`}
+        </table>
+        </div>`}
         <div style="margin-top:12px">
           <button class="primary" @click=${() => openEditor(null, data.adminTiers)}>New package</button>
         </div>

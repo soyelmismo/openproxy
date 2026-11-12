@@ -574,6 +574,45 @@ mod tests {
     }
 
     #[test]
+    fn resolve_prefers_direct_model_over_same_named_combo() {
+        // A combo may share its name with a live model id: resolution stays
+        // deterministic — the direct model wins the bare name, and the combo
+        // stays reachable through the explicit `combo:` prefix.
+        let (pool, _path) = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "openrouter");
+        seed_healthy_account(&conn, "openrouter");
+        let model_row = seed_model(&conn, "openrouter", "deepseek-v4.1-flash");
+        let combo_id =
+            combos::create_combo(&conn, "deepseek-v4.1-flash", Strategy::Priority, 1)
+                .expect("same-name combo is allowed (uniqueness is per-table)");
+
+        let plan = resolve(&conn, "deepseek-v4.1-flash").expect("resolve");
+        match &plan {
+            RoutingPlan::Combo { targets, .. } => {
+                assert_eq!(
+                    targets[0].model_row_id,
+                    Some(model_row),
+                    "the model wins the bare name"
+                );
+            }
+            other => panic!("expected the direct model plan, got {other:?}"),
+        }
+
+        let plan = resolve(&conn, "combo:deepseek-v4.1-flash").expect("resolve");
+        let RoutingPlan::Combo {
+            combo_id: got,
+            combo_name,
+            ..
+        } = plan
+        else {
+            panic!("expected the named combo via prefix, got {plan:?}");
+        };
+        assert_eq!(got, combo_id);
+        assert_eq!(combo_name, "deepseek-v4.1-flash");
+    }
+
+    #[test]
     fn resolve_not_found() {
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
