@@ -13,6 +13,8 @@ export interface PlanOffer {
   ttl_days: number;
   /** Model ids the plan unlocks (display only). */
   models: string[];
+  /** Combo ids the plan unlocks (display names, no `combo:` prefix). */
+  combos: string[];
 }
 
 export interface PlansResponse {

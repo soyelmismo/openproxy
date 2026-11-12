@@ -1,10 +1,10 @@
 // checkout/mykey.ts — the "My key" tab: balance, lots, history and top-up
 // authenticated with the buyer's own key (Bearer, `chat` scope).
 
-import { $, hide, show } from "./dom.js";
+import { $, err, hide, show } from "./dom.js";
 import { getAuth, getJson, postJson, type BalanceResponse, type CheckoutOrder, type TxRow } from "./api.js";
 import { renderPayStep, startCountdown, startPolling } from "./pay-step.js";
-import { parseSelection } from "./catalog.js";
+import { parseSelection, selectedPlanValue } from "./catalog.js";
 
 function keyOf(): string {
   return ($<HTMLInputElement>("mykey")).value.trim();
@@ -58,7 +58,12 @@ export function initMyKey(): void {
     const key = keyOf();
     const errEl = $("mykey-err");
     errEl.classList.add("hidden");
-    const payload = parseSelection(String($<HTMLSelectElement>("my-usd").value));
+    const selection = selectedPlanValue("my-usd");
+    if (!selection) {
+      err("mykey-err", "Pick a plan first.");
+      return;
+    }
+    const payload = parseSelection(selection);
     postJson<CheckoutOrder>("v1/credits/me/topup", payload, {
       Authorization: "Bearer " + key,
     })

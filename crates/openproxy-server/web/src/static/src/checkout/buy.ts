@@ -4,14 +4,19 @@
 import { $, err, hide, show } from "./dom.js";
 import { postJson, type CheckoutOrder } from "./api.js";
 import { renderPayStep, startCountdown, startPolling, currentOrder } from "./pay-step.js";
-import { parseSelection } from "./catalog.js";
+import { parseSelection, selectedPlanValue } from "./catalog.js";
 
 export function initBuy(): void {
   $("create").addEventListener("click", function (this: HTMLButtonElement) {
     const btn = this;
+    const selection = selectedPlanValue("usd");
+    if (!selection) {
+      err("buy-err", "Pick a plan first.");
+      return;
+    }
     btn.disabled = true;
     const body = {
-      ...parseSelection(String($<HTMLSelectElement>("usd").value)),
+      ...parseSelection(selection),
       mint_new_key: true,
     };
     postJson<CheckoutOrder>("v1/credits/order", body)

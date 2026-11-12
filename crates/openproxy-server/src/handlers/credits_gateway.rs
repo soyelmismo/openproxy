@@ -66,7 +66,8 @@ fn gateway_error(status: StatusCode, code: &str, message: &str) -> Response {
 
 /// A purchasable plan: the tier IS the product (000115). `usd` is what the
 /// buyer pays, `credit_usd` the leveraged balance they get (absent == 1:1),
-/// `ttl_days` how long the credited balance lives.
+/// `ttl_days` how long the credited balance lives. `models` + `combos` are
+/// the display names of everything the plan unlocks.
 #[derive(Debug, Serialize)]
 struct PlanOffer {
     tier_id: i64,
@@ -76,6 +77,7 @@ struct PlanOffer {
     credit_usd: Option<f64>,
     ttl_days: i64,
     models: Vec<String>,
+    combos: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,6 +110,14 @@ async fn plans(State(state): State<AppState>) -> Response {
             credit_usd: t.credit_usd,
             ttl_days: t.ttl_days,
             models: t.config.allowed_models.clone().unwrap_or_default(),
+            combos: t
+                .config
+                .allowed_combos
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| c.strip_prefix("combo:").unwrap_or(&c).to_string())
+                .collect(),
         })
         .collect();
     Json(PlansResponse {
