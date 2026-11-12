@@ -129,6 +129,11 @@ pub(crate) fn spawn_background_tasks(
             db_pool: Arc::clone(&db_pool),
             interval: std::time::Duration::from_mins(1),
         });
+        // Maintenance sweep: keys idle for 6 months are deleted daily.
+        supervisor.spawn(crate::background::credits_watcher::CreditsSweepService {
+            db_pool: Arc::clone(&db_pool),
+            interval: std::time::Duration::from_hours(24),
+        });
     }
 
     supervisor.spawn(crate::background::QuotaSyncService {

@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::handlers::credits_qr;
 use crate::state::AppState;
-use openproxy_core::credits::{UNITS_PER_USD, create_order, get_order, usd_to_base_units};
+use openproxy_core::credits::{create_order, get_order};
 use openproxy_core::credits::matcher::reveal_minted_key;
 use openproxy_types::ids::ApiKeyId;
 
@@ -44,7 +44,7 @@ async fn gateway_enabled(state: &AppState) -> bool {
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/packages", get(packages))
+        .route("/plans", get(plans))
         .route("/order", post(create_checkout))
         .route("/order/{code}", get(order_status))
         .route("/order/{code}/reveal", post(reveal_key))
@@ -64,105 +64,55 @@ fn gateway_error(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
-/// What a checkout costs and what the buyer gets.
+/// A purchasable plan: the tier IS the product (000115). `usd` is what the
+/// buyer pays, `credit_usd` the leveraged balance they get (absent == 1:1),
+/// `ttl_days` how long the credited balance lives.
 #[derive(Debug, Serialize)]
-struct PackageOffer {
-    package_id: Option<i64>,
+struct PlanOffer {
+    tier_id: i64,
+    name: String,
     usd: f64,
-    base_units: i64,
-    ttl_days: i64,
-    label: String,
-    /// Balance credited on payment (leverage). Absent == 1:1 (credit == price).
     #[serde(skip_serializing_if = "Option::is_none")]
     credit_usd: Option<f64>,
-    /// Tier name when the package is tied to one (display only).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tier: Option<String>,
+    ttl_days: i64,
+    models: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-struct PackagesResponse {
+struct PlansResponse {
     enabled: bool,
-    chain_id: u64,
-    usdc_address: String,
-    collector_address: String,
-    payment_window_minutes: u32,
-    min_topup_usd: f64,
-    ttl_days: Vec<u32>,
-    packages: Vec<PackageOffer>,
+    plans: Vec<PlanOffer>,
 }
 
-async fn packages(State(state): State<AppState>) -> Response {
-    let Some(cfg) = state.config().credits.clone() else {
-        return Json(PackagesResponse {
+async fn plans(State(state): State<AppState>) -> Response {
+    if state.config().credits.is_none() {
+        return Json(PlansResponse {
             enabled: false,
-            chain_id: 8453,
-            usdc_address: String::new(),
-            collector_address: String::new(),
-            payment_window_minutes: 15,
-            min_topup_usd: 0.0,
-            ttl_days: vec![],
-            packages: vec![],
+            plans: vec![],
         })
         .into_response();
-    };
-    // Admin-defined presets first; the flat dollar amounts are the fallback
-    // when no package has been configured yet.
-    let table_pkgs = state
-        .db_pool()
-        .spawn_read(openproxy_core::credits::packages::list_active)
-        .await
-        .unwrap_or_default();
+    }
     let buying_open = gateway_enabled(&state).await;
-    // Tier names for the display (one read; a package without tier shows none).
-    let tier_names: std::collections::HashMap<i64, String> = state
+    let tiers = state
         .db_pool()
         .spawn_read(openproxy_core::credits::tiers::list)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| (t.id, t.name))
+        .unwrap_or_default();
+    let plans: Vec<PlanOffer> = tiers
+        .iter()
+        .filter(|t| t.sellable())
+        .map(|t| PlanOffer {
+            tier_id: t.id,
+            name: t.name.clone(),
+            usd: t.price_usd.unwrap_or_default(),
+            credit_usd: t.credit_usd,
+            ttl_days: t.ttl_days,
+            models: t.config.allowed_models.clone().unwrap_or_default(),
+        })
         .collect();
-    let packages: Vec<PackageOffer> = if table_pkgs.is_empty() {
-        [5.0_f64, 10.0, 25.0, 50.0, 100.0]
-            .into_iter()
-            .filter(|usd| *usd >= cfg.min_topup_usd)
-            .filter_map(|usd| {
-                usd_to_base_units(usd).map(|base_units| PackageOffer {
-                    package_id: None,
-                    usd,
-                    base_units,
-                    ttl_days: i64::from(*cfg.ttl_days.first().unwrap_or(&15)),
-                    label: format!("${usd:.0}"),
-                    credit_usd: None,
-                    tier: None,
-                })
-            })
-            .collect()
-    } else {
-        table_pkgs
-            .iter()
-            .map(|p| PackageOffer {
-                package_id: Some(p.id),
-                usd: p.price_usd,
-                base_units: openproxy_core::credits::usd_to_base_units(p.price_usd)
-                    .unwrap_or_default(),
-                ttl_days: p.ttl_days,
-                label: p.name.clone(),
-                credit_usd: p.credit_usd,
-                tier: p.tier_id.and_then(|tid| tier_names.get(&tid).cloned()),
-            })
-            .collect()
-    };
-    Json(PackagesResponse {
+    Json(PlansResponse {
         enabled: buying_open,
-        chain_id: cfg.chain_id,
-        usdc_address: cfg.usdc_address.clone(),
-        collector_address: cfg.collector_address.clone(),
-        payment_window_minutes: cfg.payment_window_minutes,
-        min_topup_usd: cfg.min_topup_usd,
-        ttl_days: cfg.ttl_days.clone(),
-        packages,
+        plans,
     })
     .into_response()
 }
@@ -172,11 +122,10 @@ async fn packages(State(state): State<AppState>) -> Response {
 /// `mint_new_key: true` buys an anonymous key (the key is revealed once the
 /// payment lands). `key_id` tops up an existing key instead. Exactly one of
 /// the two must be given, and the wallet pays the jittered exact amount.
+/// Every checkout buys a specific plan (tier).
 #[derive(Debug, Deserialize)]
 struct CreateOrderRequest {
-    usd: Option<f64>,
-    ttl_days: Option<i64>,
-    package_id: Option<i64>,
+    tier_id: Option<i64>,
     mint_new_key: Option<bool>,
     key_id: Option<i64>,
 }
@@ -221,52 +170,33 @@ async fn create_checkout(
             "the payment gateway is temporarily closed by the operator",
         );
     }
-    // A package buy takes its price and lifetime straight from the preset;
-    // a free-amount buy validates usd/ttl against the server config.
-    let (base_units, ttl_days, package_id) = if let Some(pid) = req.package_id {
-        let Some(pkg) = state
-            .db_pool()
-            .spawn_read(move |r| openproxy_core::credits::packages::get(r, pid))
-            .await
-            .ok()
-            .flatten()
-        else {
-            return gateway_error(StatusCode::NOT_FOUND, "unknown_package", "unknown package");
-        };
-        if !pkg.active {
-            return gateway_error(StatusCode::BAD_REQUEST, "inactive_package", "package is not active");
-        }
-        let base = (pkg.price_usd * f64::from(openproxy_core::credits::UNITS_PER_USD as u32))
-            .round() as i64;
-        (base, pkg.ttl_days, Some(pkg.id))
-    } else {
-        let Some(usd) = req.usd else {
-            return gateway_error(StatusCode::BAD_REQUEST, "invalid_amount", "specify package_id or usd");
-        };
-        let ttl = req.ttl_days.unwrap_or(15);
-        match usd_to_base_units(usd) {
-            Some(u) if u as f64 >= cfg.min_topup_usd * UNITS_PER_USD as f64 => {
-                if !cfg.ttl_days.contains(&(ttl as u32)) {
-                    return gateway_error(
-                        StatusCode::BAD_REQUEST,
-                        "invalid_ttl",
-                        &format!("ttl_days must be one of {:?}", cfg.ttl_days),
-                    );
-                }
-                (u, ttl, None)
-            }
-            _ => {
-                return gateway_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_amount",
-                    &format!(
-                        "amount must be a whole number of USD >= {} (no fractions: the jitter owns the cents)",
-                        cfg.min_topup_usd
-                    ),
-                );
-            }
-        }
+    // A plan buy takes its price and lifetime straight from the tier; the
+    // tier must be active and carry a price (drafts are not sellable).
+    let Some(tid) = req.tier_id else {
+        return gateway_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_target",
+            "specify tier_id (every checkout buys a plan)",
+        );
     };
+    let Some(tier) = state
+        .db_pool()
+        .spawn_read(move |r| openproxy_core::credits::tiers::get(r, tid))
+        .await
+        .ok()
+        .flatten()
+    else {
+        return gateway_error(StatusCode::NOT_FOUND, "unknown_plan", "unknown plan");
+    };
+    if !tier.active {
+        return gateway_error(StatusCode::BAD_REQUEST, "inactive_plan", "plan is not active");
+    }
+    let Some(price) = tier.price_usd else {
+        return gateway_error(StatusCode::BAD_REQUEST, "not_sellable", "plan has no price");
+    };
+    let base_units = (price * f64::from(openproxy_core::credits::UNITS_PER_USD as u32)).round() as i64;
+    let ttl_days = tier.ttl_days;
+    let tier_id = tier.id;
     // Exactly one target: mint a new anonymous key, or top one up.
     let api_key_id = match (req.mint_new_key.unwrap_or(false), req.key_id) {
         (true, None) => None,
@@ -280,7 +210,7 @@ async fn create_checkout(
         }
     };
     let created = state.db_pool().spawn_write({
-        move |w| create_order(w, api_key_id, None, base_units, ttl_days, package_id)
+        move |w| create_order(w, api_key_id, None, base_units, ttl_days, Some(tier_id))
     });
     let order = match created.await {
         Ok(o) => o,
@@ -313,7 +243,7 @@ async fn create_checkout(
     Json(CheckoutResponse {
         order_code: order.order_code,
         status: order.status,
-        usd: req.usd.unwrap_or(0.0),
+        usd: price,
         base_usd: openproxy_core::credits::units_to_usd_str(order.base_units)
             .parse::<f64>()
             .unwrap_or(0.0),

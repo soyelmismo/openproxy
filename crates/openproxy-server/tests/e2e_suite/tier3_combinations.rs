@@ -235,10 +235,19 @@ async fn test_tier3_key_model_restrictions_with_combo_body() {
         )
         .await;
 
-    let (_, key_res) = harness
-        .admin_post(
-            "/admin/api/keys",
-            json!({"label": "disallowed-combo-key", "scopes": ["chat"], "allowed_combos": [99999]}),
+    // A second combo gives the allowlist a non-empty combo set that does
+    // NOT include restricted-combo: the key is shaped through a plan, and
+    // the routing gate denies any combo outside that list.
+    let _ = harness
+        .admin_post("/admin/api/combos", json!({"name": "allowed-combo", "strategy": "priority"}))
+        .await;
+    let key_res = harness
+        .create_key_with_tier(
+            "disallowed-combo-key",
+            openproxy_core::credits::TierConfig {
+                allowed_combos: Some(vec!["allowed-combo".to_string()]),
+                ..Default::default()
+            },
         )
         .await;
     let plaintext = key_res["plaintext"].as_str().unwrap();

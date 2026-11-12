@@ -71,7 +71,7 @@ function rowsTable(): TemplateResult {
         <th style="padding:4px 8px 4px 0">Code</th><th style="padding:4px 8px">Date</th>
         <th style="padding:4px 8px">Key</th><th style="padding:4px 8px">Payer</th>
         <th style="padding:4px 8px">Charged</th><th style="padding:4px 8px">Credited</th>
-        <th style="padding:4px 8px">Pkg</th><th style="padding:4px 8px">Status</th>
+        <th style="padding:4px 8px">Plan</th><th style="padding:4px 8px">Status</th>
         <th style="padding:4px 0 4px 8px">Chain</th>
       </tr></thead>
       <tbody>
@@ -83,7 +83,7 @@ function rowsTable(): TemplateResult {
           <td style="padding:6px 8px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${o.payer_email ?? "—"}</td>
           <td style="padding:6px 8px">$${(o.base_units / 1_000_000).toFixed(2)}</td>
           <td style="padding:6px 8px">$${(o.credit_units / 1_000_000).toFixed(2)}</td>
-          <td style="padding:6px 8px">${o.package_id ?? "—"}</td>
+          <td style="padding:6px 8px">${o.tier_name ?? "—"}</td>
           <td style="padding:6px 8px">${o.status}</td>
           <td style="padding:6px 0 6px 8px">
             ${o.tx_hash == null

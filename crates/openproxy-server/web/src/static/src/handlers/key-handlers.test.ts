@@ -21,8 +21,8 @@ function makeKeyForm(fields: {
   blModels?: string;
   expiresAmount?: string;
   expiresUnit?: string;
-  onlyWhitelisted?: boolean;
-  allowedCombos?: string;
+  tierId?: string;
+  adjustUsd?: string;
 } = {}): HTMLFormElement {
   const form = document.createElement("form");
   const append = (name: string, value: string, tag: "input" | "select" = "input", type = "text"): void => {
@@ -53,14 +53,12 @@ function makeKeyForm(fields: {
   };
   if (fields.label !== undefined) append("label", fields.label);
   for (const scope of fields.scopes ?? []) checkbox("scopes", scope, true);
-  if (fields.allowedModels !== undefined) append("allowed_models", fields.allowedModels, "input", "hidden");
-  if (fields.allowedCombos !== undefined) append("allowed_combos", fields.allowedCombos, "input", "hidden");
   if (fields.blProviders !== undefined) append("blacklisted_providers", fields.blProviders);
-  if (fields.allowedProviders !== undefined) append("allowed_providers", fields.allowedProviders);
   if (fields.blModels !== undefined) append("blacklisted_models", fields.blModels, "input", "hidden");
   if (fields.expiresAmount !== undefined) append("expires_amount", fields.expiresAmount, "input", "number");
   if (fields.expiresUnit !== undefined) append("expires_unit", fields.expiresUnit, "select");
-  if (fields.onlyWhitelisted !== undefined) checkbox("only_whitelisted", "1", fields.onlyWhitelisted);
+  if (fields.tierId !== undefined) append("tier_id", fields.tierId, "select");
+  if (fields.adjustUsd !== undefined) append("adjust_usd", fields.adjustUsd, "input", "number");
   document.body.appendChild(form);
   return form;
 }
@@ -92,26 +90,34 @@ describe("buildKeyBodyFromForm", () => {
     expect(body).not.toBeNull();
     expect(body?.label).toBeNull();          // empty label → null
     expect(body?.scopes).toEqual(["chat"]);
-    expect(body?.allowed_models).toBeNull(); // "" → null (no touch)
-    expect(body?.allowed_combos).toBeNull();
     expect(body?.blacklisted_providers).toBeNull();
-    expect(body?.allowed_providers).toBeNull();
     expect(body?.blacklisted_models).toBeNull();
     expect(body?.expires_at).toBeNull();     // "never" default
+    // No plan picker in the minimal form: no tier field sent at all.
+    expect("tier_id" in (body ?? {})).toBe(false);
+    expect("adjust_units" in (body ?? {})).toBe(false);
   });
 
-  it("encodes ' ' (single space) in allowed_models as an explicit empty list", () => {
-    const form = track(makeKeyForm({ scopes: ["read"], allowedModels: " " }));
+  it("omits tier_id when the picker keeps the current plan", () => {
+    const form = track(makeKeyForm({ scopes: ["chat"], tierId: "" }));
     const body = buildKeyBodyFromForm(form);
-    expect(body?.allowed_models).toEqual([]);
+    expect("tier_id" in (body ?? {})).toBe(false);
   });
 
-  it("parses allowed_combos correctly from comma-separated string or ' '", () => {
-    const formWithCombos = track(makeKeyForm({ scopes: ["chat"], allowedCombos: "1, 2, 3" }));
-    expect(buildKeyBodyFromForm(formWithCombos)?.allowed_combos).toEqual([1, 2, 3]);
+  it("sends tier_id: null to detach and a number to link", () => {
+    const detach = track(makeKeyForm({ scopes: ["chat"], tierId: "0" }));
+    expect(buildKeyBodyFromForm(detach)?.tier_id).toBeNull();
 
-    const formEmptyCombos = track(makeKeyForm({ scopes: ["chat"], allowedCombos: " " }));
-    expect(buildKeyBodyFromForm(formEmptyCombos)?.allowed_combos).toEqual([]);
+    const link = track(makeKeyForm({ scopes: ["chat"], tierId: "42" }));
+    expect(buildKeyBodyFromForm(link)?.tier_id).toBe(42);
+  });
+
+  it("converts a signed USD adjustment to units and rejects zero", () => {
+    const form = track(makeKeyForm({ scopes: ["chat"], adjustUsd: "-1.50" }));
+    expect(buildKeyBodyFromForm(form)?.adjust_units).toBe(-1_500_000);
+
+    const zero = track(makeKeyForm({ scopes: ["chat"], adjustUsd: "0" }));
+    expect(buildKeyBodyFromForm(zero)).toBeNull();
   });
 
   it("splits and trims a comma-separated blacklist, dropping empty items", () => {
@@ -123,23 +129,7 @@ describe("buildKeyBodyFromForm", () => {
     }));
     const body = buildKeyBodyFromForm(form);
     expect(body?.blacklisted_providers).toEqual(["openai", "groq"]);
-    expect(body?.allowed_providers).toEqual(["xkiro", "antseed"]);
     expect(body?.blacklisted_models).toEqual(["gpt-4*", "*-preview"]);
-  });
-
-  it("defaults only_whitelisted to false when the checkbox is absent", () => {
-    const form = track(makeKeyForm({ scopes: ["chat"] }));
-    const body = buildKeyBodyFromForm(form);
-    // Forms rendered before the field existed never send it, which must keep
-    // the additive semantics rather than silently flipping to strict mode.
-    expect(body?.only_whitelisted).toBe(false);
-  });
-
-  it("reads only_whitelisted from the checkbox state", () => {
-    const off = track(makeKeyForm({ scopes: ["chat"], onlyWhitelisted: false }));
-    expect(buildKeyBodyFromForm(off)?.only_whitelisted).toBe(false);
-    const on = track(makeKeyForm({ scopes: ["chat"], onlyWhitelisted: true }));
-    expect(buildKeyBodyFromForm(on)?.only_whitelisted).toBe(true);
   });
 
   it("returns null expires_at when amount is blank even with unit=days", () => {

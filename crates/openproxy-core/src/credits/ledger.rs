@@ -10,7 +10,7 @@
 
 use crate::error::Result;
 use openproxy_types::ids::ApiKeyId;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
 use crate::credits::UNITS_PER_USD;

@@ -3,12 +3,11 @@ import { html, render } from "lit-html";
 import { api } from "../state/api.js";
 import { state } from "../state/index.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
-import { ensureCombosLoaded } from "../state/models-sync.js";
-import { keyFormTemplate, buildKeyBodyFromForm } from "../handlers/key-handlers.js";
-import { renderAllowedModelsChips, renderBlacklistedModelsChips, renderAllowedCombosChips } from "../components/model-picker.js";
+import { keyFormTemplate, buildKeyBodyFromForm, type TierOption } from "../handlers/key-handlers.js";
+import { renderBlacklistedModelsChips } from "../components/model-picker.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
-import type { ApiKey, KeyQuotaResponse, Model, Provider } from "../lib/types/api.js";
+import type { ApiKey, Provider } from "../lib/types/api.js";
 
 export async function mountKeyDetail(
   id: number,
@@ -21,15 +20,10 @@ export async function mountKeyDetail(
   let cleanup = (): void => {};
   render(html`<p role="status">${t("workspace.loading")}</p>`, container);
   try {
-    const [loaded, quotaResp] = await Promise.all([
+    const [loaded, tiers] = await Promise.all([
       api(`/keys/${id}`) as Promise<ApiKey>,
-      api(`/keys/${id}/quota`) as Promise<KeyQuotaResponse>,
-      state.modelsComplete ? Promise.resolve() : api("/models").then(models => {
-        state.models = models as Model[];
-        state.modelsComplete = true;
-      }),
+      api("/credits/tiers").catch(() => []) as Promise<TierOption[]>,
       state.providers.length ? Promise.resolve() : api("/providers").then(providers => { state.providers = providers as Provider[]; }),
-      ensureCombosLoaded(),
     ]);
     if (disposed || !container.isConnected) return () => {};
     let key = loaded;
@@ -85,11 +79,9 @@ export async function mountKeyDetail(
         <div class="cx-key-stat"><dt>${t("keys.detail.created")}</dt><dd title=${fullDate(key.created_at)}>${shortDate(key.created_at)}</dd></div>
         <div class="cx-key-stat"><dt>${t("keys.detail.last_used")}</dt><dd title=${fullDate(key.last_used_at)}>${shortDate(key.last_used_at)}</dd></div>
       </dl>
-      ${keyFormTemplate({ mode: "edit", key, quota: quotaResp ? (quotaResp.caps ?? null) : null, wrapper: container, inline: true, onSubmit: event => { void save(event); }, onCancel: () => { location.hash = "#/keys"; } })}
+      ${keyFormTemplate({ mode: "edit", key, tiers, wrapper: container, inline: true, onSubmit: event => { void save(event); }, onCancel: () => { location.hash = "#/keys"; } })}
     </section>`);
-    renderAllowedModelsChips();
     renderBlacklistedModelsChips();
-    renderAllowedCombosChips();
     const form = container.querySelector("form");
     if (form) expiryBaseline = expiryValues(form);
   } catch (error: unknown) {

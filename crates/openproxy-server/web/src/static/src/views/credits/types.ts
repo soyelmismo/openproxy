@@ -1,5 +1,5 @@
 // views/credits/types.ts — wire shapes of the credits surface.
-// Mirrors handlers/admin/credits.rs + credits_gateway.rs + core packages/tiers.
+// Mirrors handlers/admin/credits.rs + credits_gateway.rs + core credits/tiers.
 
 export interface LotView {
   remaining_usd: string;
@@ -38,32 +38,19 @@ export interface QuotaStatus {
   five_hours: QuotaWindow;
 }
 
-/** Public `/v1/credits/packages` payload (checkout + panel top-up). */
-export interface PackageOffer {
-  package_id: number | null;
-  usd: number;
-  ttl_days: number;
-  label: string;
-  credit_usd?: number;
-  tier?: string;
-}
-
-export interface PackagesResponse {
-  enabled: boolean;
-  ttl_days: number[];
-  min_topup_usd: number;
-  offers: PackageOffer[];
-}
-
-export interface AdminPackage {
-  id: number;
+/** Public `/v1/credits/plans` offer (checkout + panel top-up). */
+export interface PlanOffer {
+  tier_id: number;
   name: string;
-  price_usd: number;
+  usd: number;
+  credit_usd?: number;
   ttl_days: number;
-  config: Record<string, unknown> | null;
-  active: boolean;
-  credit_usd: number | null;
-  tier_id: number | null;
+  models: string[];
+}
+
+export interface PlansResponse {
+  enabled: boolean;
+  plans: PlanOffer[];
 }
 
 export interface AdminTierConfig {
@@ -81,7 +68,10 @@ export interface AdminTier {
   name: string;
   config: AdminTierConfig;
   active: boolean;
-  package_count: number;
+  /** Plan commerce: what the buyer pays / gets / how long it lives. */
+  price_usd: number | null;
+  credit_usd: number | null;
+  ttl_days: number;
   /** Live keys inheriting this tier (an edit re-shapes exactly these). */
   key_count: number;
 }
@@ -95,7 +85,8 @@ export interface AdminOrder {
   ttl_days: number;
   status: string;
   tx_hash: string | null;
-  package_id: number | null;
+  tier_id: number | null;
+  tier_name: string | null;
   created_at: string;
   paid_at: string | null;
   credit_units: number;
@@ -139,14 +130,17 @@ export interface TierDraft {
   weekly: string;
   fiveHour: string;
   active: boolean;
+  /** Plan commerce (blank = draft, not listed for sale). */
+  price: string;
+  credit: string;
+  ttlDays: string;
 }
 
 export interface CreditsData {
   /** Consumer surfaces — absent on the admin-only view (noise there). */
   balance?: Balance;
   quota?: QuotaStatus;
-  packages?: PackagesResponse;
+  plans?: PlansResponse;
   transactions: TxRow[];
-  adminPackages: AdminPackage[];
   adminTiers: AdminTier[];
 }

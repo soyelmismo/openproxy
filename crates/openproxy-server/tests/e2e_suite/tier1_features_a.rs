@@ -165,13 +165,15 @@ async fn test_tier1_models_list_key_scoped_filtering_body() {
     // `allowed_models` is additive: it grants access to the named models on
     // top of the default-permit catalog, never hides the rest. The key must
     // therefore still see the whole catalog, including its whitelisted model.
-    let (status, new_key) = harness
-        .admin_post(
-            "/admin/api/keys",
-            json!({"label": "scoped-key", "scopes": ["chat"], "allowed_models": ["mock-gpt-4"]}),
+    let new_key = harness
+        .create_key_with_tier(
+            "scoped-key",
+            openproxy_core::credits::TierConfig {
+                allowed_models: Some(vec!["mock-gpt-4".to_string()]),
+                ..Default::default()
+            },
         )
         .await;
-    assert_eq!(status, StatusCode::OK);
     let plaintext = new_key["plaintext"].as_str().unwrap();
     let req = Request::builder()
         .method(Method::GET)
@@ -193,6 +195,7 @@ async fn test_tier1_models_list_key_scoped_filtering_body() {
     );
     // Filtering still applies via blacklists: a key that blacklists
     // mock-embed must not see it.
+    // Blacklists are key-level subtractions (not plan privileges): set at create.
     let (status, bl_key) = harness
         .admin_post(
             "/admin/api/keys",

@@ -1,23 +1,23 @@
 // checkout/api.ts — wire shapes + fetch helpers of the public checkout.
 //
-// Mirrors `credits_gateway.rs` (PackagesResponse / CheckoutResponse /
+// Mirrors `credits_gateway.rs` (PlansResponse / CheckoutResponse /
 // OrderStatus / ledger rows). Money surface: keep the types tight.
 
-export interface PackageOffer {
-  package_id: number | null;
+export interface PlanOffer {
+  tier_id: number;
+  name: string;
   usd: number;
-  ttl_days: number;
-  label: string;
   /** Balance credited on payment (leverage). Absent == 1:1. */
   credit_usd?: number;
-  /** Tier name when the package is tied to one (display only). */
-  tier?: string;
+  /** Plan lifetime: the credited balance expires this many days after payment. */
+  ttl_days: number;
+  /** Model ids the plan unlocks (display only). */
+  models: string[];
 }
 
-export interface PackagesResponse {
+export interface PlansResponse {
   enabled: boolean;
-  ttl_days: number[];
-  packages: PackageOffer[];
+  plans: PlanOffer[];
 }
 
 export interface CheckoutOrder {

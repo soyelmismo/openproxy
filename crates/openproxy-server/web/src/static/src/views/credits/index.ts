@@ -1,5 +1,5 @@
-// views/credits/index.ts — prepaid credits surface: balance, package top-up,
-// history, quota; plus the admin management (tiers, packages, orders).
+// views/credits/index.ts — prepaid credits surface: balance, plan top-up,
+// history, quota; plus the admin management (plans, orders).
 //
 // Checkout logic mirrors web/src/static/checkout.html: the order status is
 // polled on the public `/v1/credits/order/{code}` endpoint, so the poll keeps
@@ -13,13 +13,12 @@ import { bindRefresh, setTopupOpen, stopTimers, topupOpen, setActiveOrder, reque
 import { quotaBar } from "./quota.js";
 import { renderTopupPanel } from "./topup.js";
 import { renderTiers } from "./tiers-admin.js";
-import { renderPackages } from "./packages-admin.js";
 import { renderOrders, ensureOrdersLoaded } from "./orders-admin.js";
-import type { AdminPackage, AdminTier, CreditsData, PackagesResponse } from "./types.js";
+import type { AdminTier, CreditsData, PlansResponse } from "./types.js";
 
-async function loadPackages(): Promise<PackagesResponse> {
-  const res = await fetch("/v1/credits/packages", { headers: { Accept: "application/json" } });
-  return (await res.json()) as PackagesResponse;
+async function loadPlans(): Promise<PlansResponse> {
+  const res = await fetch("/v1/credits/plans", { headers: { Accept: "application/json" } });
+  return (await res.json()) as PlansResponse;
 }
 
 async function loadData(): Promise<CreditsData> {
@@ -29,20 +28,19 @@ async function loadData(): Promise<CreditsData> {
   // (search + pagination); only its first page is primed so the table
   // renders with data.
   if (isFullAdmin()) {
-    const pkgsP = api("/credits/packages").catch(() => [] as AdminPackage[]);
     const tiersP = api("/credits/tiers").catch(() => [] as AdminTier[]);
-    const [adminPackages, adminTiers] = await Promise.all([pkgsP, tiersP, ensureOrdersLoaded()]);
-    return { transactions: [], adminPackages, adminTiers } as CreditsData;
+    const [adminTiers] = await Promise.all([tiersP, ensureOrdersLoaded()]);
+    return { transactions: [], adminTiers } as CreditsData;
   }
-  const [balance, transactions, quota, packages] = await Promise.all([
+  const [balance, transactions, quota, plans] = await Promise.all([
     api("/credits/balance"),
     api("/credits/transactions?limit=100"),
     api("/credits/quota"),
-    loadPackages(),
+    loadPlans(),
   ]);
   return {
-    balance, transactions, quota, packages,
-    adminPackages: [], adminTiers: [],
+    balance, transactions, quota, plans,
+    adminTiers: [],
   } as CreditsData;
 }
 
@@ -57,27 +55,26 @@ function renderAdminView(data: CreditsData): TemplateResult {
     <div class="page" style="max-width:none">
       <h2 style="margin:0 0 4px">Credits</h2>
       <p style="color:var(--color-text-muted);font-size:13px;margin:0 0 16px">
-        Tiers, packages and the order ledger. Consumer surfaces (balance, top-up,
+        Plans and the order ledger. Consumer surfaces (balance, top-up,
         quota) live on client keys, not here.
       </p>
       ${renderTiers(data)}
-      ${renderPackages(data)}
       ${renderOrders()}
     </div>
   `;
 }
 
 function renderClientView(data: CreditsData): TemplateResult {
-  if (!data.balance || !data.quota || !data.packages) {
+  if (!data.balance || !data.quota || !data.plans) {
     return html`<div class="page" style="max-width:760px"></div>`;
   }
   const b = data.balance;
-  const disabled = !data.packages.enabled;
+  const disabled = !data.plans.enabled || data.plans.plans.length === 0;
   return html`
     <div class="page" style="max-width:760px">
       <h2 style="margin:0 0 4px">Credits</h2>
       <p style="color:var(--muted);font-size:13px;margin:0 0 20px">
-        Prepaid balance funded with USDC on Base. Lots spend FIFO — soonest expiry first. No refunds.
+        Prepaid balance funded with USDC on Base. Plans set the credit, the models and the lifetime. No refunds.
       </p>
 
       <div class="card" style="margin-bottom:16px">

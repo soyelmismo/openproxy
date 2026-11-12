@@ -12,10 +12,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::state::AppState;
-use openproxy_core::credits::{create_order, usd_to_base_units};
+use openproxy_core::credits::create_order;
 use openproxy_types::ids::ApiKeyId;
 
 pub fn router() -> Router<AppState> {
@@ -24,13 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/transactions", get(transactions))
         .route("/topup", post(create_topup))
         .route("/quota", get(quota_status))
-        // Admin management: package presets and the order ledger.
-        .route("/packages", get(list_packages).post(create_package))
-        .route(
-            "/packages/{id}",
-            axum::routing::patch(update_package).delete(delete_package),
-        )
-        // Tier presets: the access contract (models + quotas) packages point at.
+        // Plans (tiers) and the order ledger — credit packages are gone.
         .route("/tiers", get(list_tiers).post(create_tier))
         .route(
             "/tiers/{id}",
@@ -224,11 +217,8 @@ async fn transactions(
 
 #[derive(Debug, Deserialize)]
 struct TopUpRequest {
-    /// Package purchase: price/credit/ttl all come from the preset.
-    package_id: Option<i64>,
-    /// Legacy free-amount purchase (whole USD, validated against config).
-    usd: Option<f64>,
-    ttl_days: Option<i64>,
+    /// Every checkout buys a plan (tier): price/credit/ttl come from the tier.
+    tier_id: i64,
 }
 
 async fn create_topup(
@@ -254,55 +244,30 @@ async fn create_topup(
             "no session key: use ?key_id= or the public checkout",
         );
     };
-    // Package purchase: charge the preset price; the order derives the
-    // credited amount (credit_usd, the leverage point) from the package.
-    let (base_units, ttl_days, package_id) = if let Some(pid) = req.package_id {
-        let Some(pkg) = state
-            .db_pool()
-            .spawn_read(move |r| openproxy_core::credits::packages::get(r, pid))
-            .await
-            .ok()
-            .flatten()
-        else {
-            return err(StatusCode::NOT_FOUND, "unknown_package", "unknown package");
-        };
-        if !pkg.active {
-            return err(StatusCode::BAD_REQUEST, "inactive_package", "package is not active");
-        }
-        let charge =
-            (pkg.price_usd * f64::from(openproxy_core::credits::UNITS_PER_USD as u32)).round() as i64;
-        (charge, pkg.ttl_days, Some(pkg.id))
-    } else {
-        // Legacy free-amount purchase: whole dollars against the config.
-        let Some(usd) = req.usd else {
-            return err(
-                StatusCode::BAD_REQUEST,
-                "invalid_request",
-                "specify package_id or usd+ttl_days",
-            );
-        };
-        let ttl = req.ttl_days.unwrap_or(15);
-        if !cfg.ttl_days.contains(&(ttl as u32)) {
-            return err(
-                StatusCode::BAD_REQUEST,
-                "invalid_ttl",
-                &format!("ttl_days must be one of {:?}", cfg.ttl_days),
-            );
-        }
-        match usd_to_base_units(usd) {
-            Some(u) if u as f64 >= cfg.min_topup_usd * f64::from(openproxy_core::credits::UNITS_PER_USD as u32) => (u, ttl, None),
-            _ => {
-                return err(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_amount",
-                    &format!("amount must be a whole number of USD >= {}", cfg.min_topup_usd),
-                );
-            }
-        }
+    // Plan purchase: charge the tier price; the order derives the credited
+    // amount (credit_usd, the leverage point) and the lifetime from the tier.
+    let Some(tier) = state
+        .db_pool()
+        .spawn_read(move |r| openproxy_core::credits::tiers::get(r, req.tier_id))
+        .await
+        .ok()
+        .flatten()
+    else {
+        return err(StatusCode::NOT_FOUND, "unknown_plan", "unknown plan");
     };
+    if !tier.active {
+        return err(StatusCode::BAD_REQUEST, "inactive_plan", "plan is not active");
+    }
+    let Some(price) = tier.price_usd else {
+        return err(StatusCode::BAD_REQUEST, "not_sellable", "plan has no price");
+    };
+    let base_units =
+        (price * f64::from(openproxy_core::credits::UNITS_PER_USD as u32)).round() as i64;
+    let ttl_days = tier.ttl_days;
+    let tier_id = tier.id;
     let created = state
         .db_pool()
-        .spawn_write(move |w| create_order(w, Some(key_id), None, base_units, ttl_days, package_id))
+        .spawn_write(move |w| create_order(w, Some(key_id), None, base_units, ttl_days, Some(tier_id)))
         .await;
     match created {
         Ok(o) => {
@@ -382,111 +347,6 @@ async fn quota_status(
     }
 }
 
-// ── package presets (admin-defined, copy-paste on purchase) ─────────
-
-async fn list_packages(State(state): State<AppState>) -> Response {
-    match state
-        .db_pool()
-        .spawn_read(openproxy_core::credits::packages::list)
-        .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "packages_failed", &format!("{e}")),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct CreatePackageRequest {
-    name: String,
-    price_usd: f64,
-    ttl_days: i64,
-    config: Option<openproxy_core::credits::PackageConfig>,
-    /// Balance credited on payment (leverage). `None` credits `price_usd`.
-    credit_usd: Option<f64>,
-    /// Tier whose allowlists + quota caps apply on payment.
-    tier_id: Option<i64>,
-}
-
-async fn create_package(
-    State(state): State<AppState>,
-    Json(req): Json<CreatePackageRequest>,
-) -> Response {
-    let name = req.name.trim().to_string();
-    if name.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "invalid_name", "name is required");
-    }
-    match state.db_pool().spawn_write(move |w| {
-        openproxy_core::credits::packages::create(
-            w,
-            &name,
-            req.price_usd,
-            req.ttl_days,
-            req.config.as_ref(),
-            req.credit_usd,
-            req.tier_id,
-        )
-    }).await {
-        Ok(pkg) => (StatusCode::CREATED, Json(pkg)).into_response(),
-        Err(e) => err(StatusCode::BAD_REQUEST, "package_failed", &format!("{e}")),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct UpdatePackageRequest {
-    price_usd: Option<f64>,
-    ttl_days: Option<i64>,
-    config: Option<openproxy_core::credits::PackageConfig>,
-    active: Option<bool>,
-    /// Outer = touch, inner = value (`None` clears the leverage).
-    #[serde(default, deserialize_with = "double_option")]
-    credit_usd: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "double_option")]
-    tier_id: Option<Option<i64>>,
-}
-
-/// Distinguish `"field": null` (Some(None) → clear) from an absent field
-/// (None → leave as-is). Plain `Option<Option<T>>` maps both to None.
-fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    T: Deserialize<'de>,
-    D: serde::Deserializer<'de>,
-{
-    Option::<T>::deserialize(de).map(Some)
-}
-
-async fn update_package(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    Json(req): Json<UpdatePackageRequest>,
-) -> Response {
-    let res = state.db_pool().spawn_write(move |w| {
-        openproxy_core::credits::packages::update(
-            w,
-            id,
-            req.price_usd,
-            req.ttl_days,
-            req.config.as_ref(),
-            req.active,
-            req.credit_usd,
-            req.tier_id,
-        )
-    }).await;
-    match res {
-        Ok(()) => Json(json!({"ok": true})).into_response(),
-        Err(e) => err(StatusCode::BAD_REQUEST, "package_failed", &format!("{e}")),
-    }
-}
-
-async fn delete_package(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
-    let res = state.db_pool().spawn_write(move |w| {
-        openproxy_core::credits::packages::update(w, id, None, None, None, Some(false), None, None)
-    }).await;
-    match res {
-        Ok(()) => Json(json!({"ok": true})).into_response(),
-        Err(e) => err(StatusCode::BAD_REQUEST, "package_failed", &format!("{e}")),
-    }
-}
-
 // ── tier presets (the access contract packages point at) ────────────
 
 async fn list_tiers(State(state): State<AppState>) -> Response {
@@ -504,15 +364,27 @@ async fn list_tiers(State(state): State<AppState>) -> Response {
 struct TierRequest {
     name: String,
     config: openproxy_core::credits::TierConfig,
+    /// Plan half (000115): price/credit/lifetime of the sellable plan.
+    price_usd: Option<f64>,
+    credit_usd: Option<f64>,
+    #[serde(default)]
+    ttl_days: i64,
 }
 
 async fn create_tier(
     State(state): State<AppState>,
     Json(req): Json<TierRequest>,
 ) -> Response {
+    let plan = openproxy_core::credits::PlanCommerce {
+        price_usd: req.price_usd,
+        credit_usd: req.credit_usd,
+        ttl_days: req.ttl_days,
+    };
     match state
         .db_pool()
-        .spawn_write(move |w| openproxy_core::credits::tiers::create(w, &req.name, &req.config))
+        .spawn_write(move |w| {
+            openproxy_core::credits::tiers::create(w, &req.name, &req.config, &plan)
+        })
         .await
     {
         Ok(tier) => (StatusCode::CREATED, Json(tier)).into_response(),
@@ -525,6 +397,10 @@ struct UpdateTierRequest {
     name: Option<String>,
     config: Option<openproxy_core::credits::TierConfig>,
     active: Option<bool>,
+    /// Plan half; the admin UI always sends it complete (like `config`).
+    price_usd: Option<Option<f64>>,
+    credit_usd: Option<Option<f64>>,
+    ttl_days: Option<i64>,
 }
 
 async fn update_tier(
@@ -532,6 +408,14 @@ async fn update_tier(
     Path(id): Path<i64>,
     Json(req): Json<UpdateTierRequest>,
 ) -> Response {
+    // Same convention as `UpdatePackageRequest`: touching a plan field is
+    // explicit — an absent field leaves it alone, a `null` field clears it.
+    let plan = req.price_usd.is_some() || req.credit_usd.is_some() || req.ttl_days.is_some();
+    let commerce = openproxy_core::credits::PlanCommerce {
+        price_usd: req.price_usd.flatten(),
+        credit_usd: req.credit_usd.flatten(),
+        ttl_days: req.ttl_days.unwrap_or(30),
+    };
     let res = state
         .db_pool()
         .spawn_write(move |w| {
@@ -541,6 +425,7 @@ async fn update_tier(
                 req.name.as_deref(),
                 req.config.as_ref(),
                 req.active,
+                if plan { Some(&commerce) } else { None },
             )
         })
         .await;
@@ -601,14 +486,18 @@ async fn list_orders(
                 .map_err(openproxy_db::error::map_db_error)?
             };
             let sql = if q.is_empty() {
-                "SELECT id, order_code, api_key_id, amount_units, base_units, ttl_days, status, \
-                 tx_hash, package_id, created_at, paid_at, credit_units, payer_email \
-                 FROM credit_orders ORDER BY id DESC LIMIT ?1 OFFSET ?2".to_string()
+                "SELECT o.id, o.order_code, o.api_key_id, o.amount_units, o.base_units, o.ttl_days, \
+                 o.status, o.tx_hash, o.tier_id, t.name, o.created_at, o.paid_at, o.credit_units, \
+                 o.payer_email \
+                 FROM credit_orders o LEFT JOIN credit_tiers t ON t.id = o.tier_id \
+                 ORDER BY o.id DESC LIMIT ?1 OFFSET ?2".to_string()
             } else {
                 format!(
-                    "SELECT id, order_code, api_key_id, amount_units, base_units, ttl_days, status, \
-                     tx_hash, package_id, created_at, paid_at, credit_units, payer_email \
-                     FROM credit_orders{where_clause} ORDER BY id DESC LIMIT ?3 OFFSET ?4"
+                    "SELECT o.id, o.order_code, o.api_key_id, o.amount_units, o.base_units, o.ttl_days, \
+                     o.status, o.tx_hash, o.tier_id, t.name, o.created_at, o.paid_at, o.credit_units, \
+                     o.payer_email \
+                     FROM credit_orders o LEFT JOIN credit_tiers t ON t.id = o.tier_id{where_clause} \
+                     ORDER BY o.id DESC LIMIT ?3 OFFSET ?4"
                 )
             };
             let mut stmt = r.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
@@ -622,11 +511,12 @@ async fn list_orders(
                     "ttl_days": row.get::<_, i64>(5)?,
                     "status": row.get::<_, String>(6)?,
                     "tx_hash": row.get::<_, Option<String>>(7)?,
-                    "package_id": row.get::<_, Option<i64>>(8)?,
-                    "created_at": row.get::<_, String>(9)?,
-                    "paid_at": row.get::<_, Option<String>>(10)?,
-                    "credit_units": row.get::<_, Option<i64>>(11)?.unwrap_or(row.get::<_, i64>(4)?),
-                    "payer_email": row.get::<_, Option<String>>(12)?,
+                    "tier_id": row.get::<_, Option<i64>>(8)?,
+                    "tier_name": row.get::<_, Option<String>>(9)?,
+                    "created_at": row.get::<_, String>(10)?,
+                    "paid_at": row.get::<_, Option<String>>(11)?,
+                    "credit_units": row.get::<_, Option<i64>>(12)?.unwrap_or(row.get::<_, i64>(4)?),
+                    "payer_email": row.get::<_, Option<String>>(13)?,
                 }))
             };
             let rows: Vec<serde_json::Value> = if q.is_empty() {

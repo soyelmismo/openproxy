@@ -232,8 +232,10 @@ async fn test_tier4_scenario_full_admin_lifecycle_body() {
         StatusCode::OK
     );
 
-    let (st4, k_res) = harness.admin_post("/admin/api/keys", json!({"label": "Customer Team Key", "scopes": ["chat"], "allowed_models": ["lifecycle-combo", "lifecycle-gpt"]})).await;
-    assert_eq!(st4, StatusCode::OK);
+    let k_res = harness.create_key_with_tier("Customer Team Key", openproxy_core::credits::TierConfig {
+    allowed_models: Some(vec!["lifecycle-combo".to_string(), "lifecycle-gpt".to_string()]),
+    ..Default::default()
+}).await;
     let customer_key = k_res["plaintext"].as_str().unwrap();
     let customer_key_id = k_res["key"]["id"].as_i64().unwrap();
 

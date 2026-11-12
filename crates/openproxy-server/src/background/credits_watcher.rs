@@ -394,6 +394,50 @@ impl crate::background::BackgroundService for CreditsExpiryService {
     }
 }
 
+/// Maintenance sweep: fully delete API keys idle for
+/// [`SWEEP_IDLE_MONTHS`](openproxy_core::credits::sweep::SWEEP_IDLE_MONTHS).
+/// Runs once a day; keys with a positive balance are swept too — a dead key
+/// must not keep a balance on the books.
+pub struct CreditsSweepService {
+    pub db_pool: Arc<DbPool>,
+    pub interval: std::time::Duration,
+}
+
+impl crate::background::BackgroundService for CreditsSweepService {
+    fn name(&self) -> &'static str {
+        "credits_sweep"
+    }
+
+    async fn run(&self, cancel: openproxy_adapters::upstream::CancellationToken) {
+        let mut ticker = tokio::time::interval(self.interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = ticker.tick() => {
+                    let pool = Arc::clone(&self.db_pool);
+                    match pool.spawn_write(|w| {
+                        openproxy_core::credits::sweep::sweep_idle_keys(w, 500)
+                    }).await {
+                        Ok(swept) => {
+                            if !swept.is_empty() {
+                                let dead_units: i64 = swept.iter().map(|k| k.balance_units).sum();
+                                tracing::info!(
+                                    swept = swept.len(),
+                                    dead_balance_units = dead_units,
+                                    ids = ?swept.iter().map(|k| k.id).collect::<Vec<_>>(),
+                                    "swept idle api keys"
+                                );
+                            }
+                        }
+                        Err(e) => tracing::warn!(error = %e, "credits sweep tick failed"),
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

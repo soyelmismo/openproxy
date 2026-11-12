@@ -7,7 +7,6 @@
 
 use crate::error::Result;
 use openproxy_types::ids::ApiKeyId;
-use rand::Rng;
 use rand::RngExt;
 use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 use serde::Serialize;
@@ -101,13 +100,14 @@ pub fn create_order(
     payer_email: Option<&str>,
     base_units: i64,
     ttl_days: i64,
-    package_id: Option<i64>,
+    tier_id: Option<i64>,
 ) -> Result<CreditOrder> {
-    // Free-amount checkouts must be whole USD (the jitter owns the cents).
-    // Package prices may carry cents: amounts stay unique because matching is
+    // Plan prices may carry cents: amounts stay unique because matching is
     // exact per order and the live-order index enforces one order per amount.
+    // Free-amount checkouts (no tier) must be whole USD (the jitter owns the
+    // cents).
     let whole_ok = base_units % crate::credits::UNITS_PER_USD == 0;
-    if base_units <= 0 || (!whole_ok && package_id.is_none()) {
+    if base_units <= 0 || (!whole_ok && tier_id.is_none()) {
         return Err(crate::error::CoreError::Validation(format!(
             "base amount must be a whole number of USD in micro units, got {base_units}"
         )));
@@ -122,11 +122,20 @@ pub fn create_order(
     for _ in 0..MAX_JITTER_ATTEMPTS {
         let jitter = rand::rng().random_range(0..JITTER_SPACE);
         let amount_units = base_units + jitter;
-        // A leveraged package credits more than it charges; the package row
-        // is the single source of truth for both sides of the funnel.
-        let credit_units = match package_id {
-            Some(pid) => match crate::credits::packages::get(conn, pid)? {
-                Some(p) => crate::credits::packages::credit_units_of(&p),
+        // A leveraged plan credits more than it charges; the tier row is the
+        // single source of truth for both sides of the funnel.
+        let credit_units = match tier_id {
+            Some(tid) => match crate::credits::tiers::get(conn, tid)? {
+                Some(t) => t
+                    .credit_usd
+                    .and_then(|c| {
+                        if c.is_finite() && c > 0.0 {
+                            Some((c * f64::from(crate::credits::UNITS_PER_USD as u32)).round() as i64)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(base_units),
                 None => base_units,
             },
             None => base_units,
@@ -135,7 +144,7 @@ pub fn create_order(
         let res = conn.execute(
             "INSERT INTO credit_orders \
                  (order_code, api_key_id, payer_email, amount_units, base_units, ttl_days, \
-                  status, expires_at, package_id, credit_units) \
+                  status, expires_at, tier_id, credit_units) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', \
                      datetime('now', ?7), ?8, ?9)",
             params![
@@ -146,7 +155,7 @@ pub fn create_order(
                 base_units,
                 ttl_days,
                 format!("+{PAYMENT_WINDOW_SECS} seconds"),
-                package_id,
+                tier_id,
                 credit_units,
             ],
         );

@@ -618,6 +618,47 @@ impl TestHarness {
             .await
     }
 
+    /// Create a plain admin key and shape it through a plan tier. Direct
+    /// key shaping is plan territory now: tests must go through the tier.
+    pub async fn create_key_with_tier(
+        &self,
+        label: &str,
+        config: openproxy_core::credits::TierConfig,
+    ) -> Value {
+        let (status, key) = self
+            .admin_post(
+                "/admin/api/keys",
+                json!({"label": label, "scopes": ["chat"]}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "create key: {key}");
+        let key_id = key["key"]["id"].as_i64().expect("key id");
+        let tier_name = format!("tier-{label}");
+        self.db_pool
+            .spawn_write(move |w| {
+                let tier = openproxy_core::credits::tiers::create(
+                    w,
+                    &tier_name,
+                    &config,
+                    &openproxy_core::credits::PlanCommerce {
+                        price_usd: None,
+                        credit_usd: None,
+                        ttl_days: 30,
+                    },
+                )?;
+                openproxy_core::credits::tiers::apply_to_key(
+                    w,
+                    openproxy_types::ids::ApiKeyId(key_id),
+                    &tier.config,
+                )
+            })
+            .await
+            .expect("tier link");
+        // The apply bypassed the admin HTTP surface: drop the cached key.
+        self.app_state.invalidate_api_key_cache(None);
+        key
+    }
+
     pub async fn client_chat_call(
         &self,
         model: &str,

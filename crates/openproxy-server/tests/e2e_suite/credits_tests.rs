@@ -82,16 +82,37 @@ fn transfer_log(amount_units: i64, tx: &str, log_index: i64) -> Value {
     })
 }
 
+/// Seed a sellable plan (price -> credit, TTL days) and return its id.
+async fn seed_plan(h: &TestHarness, price: f64, credit: f64, ttl: i64) -> i64 {
+    h.db_pool
+        .spawn_write(move |w| {
+            openproxy_core::credits::tiers::create(
+                w,
+                &format!("plan-{price}-{ttl}"),
+                &openproxy_core::credits::TierConfig::default(),
+                &openproxy_core::credits::PlanCommerce {
+                    price_usd: Some(price),
+                    credit_usd: Some(credit),
+                    ttl_days: ttl,
+                },
+            )
+            .map(|t| t.id)
+        })
+        .await
+        .expect("seed plan")
+}
+
 #[tokio::test]
 async fn anonymous_buy_pay_reveal_and_history_e2e() {
     let h = TestHarness::new().await;
 
-    // 1. Anonymous checkout: mint a key for $10 / 15 days.
+    // 1. Anonymous checkout: mint a key for the $10 / 15-day plan (1:1 credit).
+    let plan = seed_plan(&h, 10.0, 10.0, 15).await;
     let (status, order) = h
         .oneshot_json(h.public_request(
             axum::http::Method::POST,
             "/v1/credits/order",
-            json!({"usd": 10.0, "ttl_days": 15, "mint_new_key": true}).to_string(),
+            json!({"tier_id": plan, "mint_new_key": true}).to_string(),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK, "create order: {order}");
@@ -237,12 +258,13 @@ async fn watcher_scan_credits_exactly_once_e2e() {
         .expect("credits config in harness");
     cfg.rpc_url = format!("http://{rpc_addr}");
 
-    // A live order for the admin session key ($5 / 7 days).
+    // A live order for the admin session key ($5 / 7-day plan, 1:1 credit).
+    let plan = seed_plan(&h, 5.0, 5.0, 7).await;
     let (status, order) = h
         .oneshot_json(h.admin_request(
             axum::http::Method::POST,
             &format!("/admin/api/credits/topup?key_id={}", h.admin_key_id.0),
-            json!({"usd": 5.0, "ttl_days": 7}).to_string(),
+            json!({"tier_id": plan}).to_string(),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK, "topup order: {order}");
@@ -315,13 +337,14 @@ async fn concurrent_orders_stress_no_leaks_no_duplicates() {
     const BASE: i64 = 5_000_000;
 
     // Create N live orders (same base -> jitter must separate them).
+    let plan = seed_plan(&h, 5.0, 5.0, 7).await;
     let mut amounts = Vec::with_capacity(N);
     for i in 0..N {
         let (status, order) = h
             .oneshot_json(h.admin_request(
                 axum::http::Method::POST,
                 &format!("/admin/api/credits/topup?key_id={}", h.admin_key_id.0),
-                json!({"usd": 5.0, "ttl_days": 7}).to_string(),
+                json!({"tier_id": plan}).to_string(),
             ))
             .await;
         assert_eq!(status, axum::http::StatusCode::OK, "order {i}: {order}");
@@ -419,13 +442,13 @@ async fn checkout_page_serves_without_session() {
     assert_eq!(status, axum::http::StatusCode::OK);
     let html = String::from_utf8_lossy(&body);
     assert!(html.contains("OpenProxy credits"), "checkout shell present");
-    assert!(html.contains("/v1/credits/order"), "drives the public gateway");
+    assert!(html.contains("Plan"), "plan picker present");
     assert!(html.to_lowercase().contains("no refunds"), "no-refunds notice");
 }
 
 /// With the runtime master switch off, every buying surface refuses: the
-/// public checkout returns 403 gateway_disabled and packages reports
-/// enabled:false. This is the admin "close the gateway" toggle guarantee.
+/// public checkout returns 403 gateway_disabled and the packages route is
+/// gone entirely. This is the admin "close the gateway" toggle guarantee.
 #[tokio::test]
 async fn gateway_toggle_closes_all_buying_surfaces() {
     let h = TestHarness::new().await;
@@ -442,19 +465,17 @@ async fn gateway_toggle_closes_all_buying_surfaces() {
             h.public_request(
                 axum::http::Method::POST,
                 "/v1/credits/order",
-                r#"{"usd": 5, "ttl_days": 7, "mint_new_key": true}"#,
+                r#"{"tier_id": 1, "mint_new_key": true}"#,
             ),
         )
         .await;
     assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "checkout refused");
     assert!(String::from_utf8_lossy(&body).contains("gateway_disabled"));
 
-    let (status, _, body) = h
+    let (status, _, _) = h
         .oneshot(h.public_request(axum::http::Method::GET, "/v1/credits/packages", ""))
         .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-    let json: serde_json::Value = serde_json::from_slice(&body).expect("packages json");
-    assert_eq!(json["enabled"], serde_json::Value::Bool(false));
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "packages surface gone");
 
     // Admin API still answers so the toggle can be turned back on.
     let (status, _, _) = h

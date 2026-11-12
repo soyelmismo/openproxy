@@ -15,14 +15,14 @@ type KeyRow = NonNullable<Parameters<typeof keyFormTemplate>[0]["key"]>;
 function mountCreate(inline = false): HTMLElement {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  render(keyFormTemplate({ mode: "create", wrapper: host, inline }), host);
+  render(keyFormTemplate({ mode: "create", tiers: [], wrapper: host, inline }), host);
   return host;
 }
 
 function mountEdit(key: KeyRow, inline = false): HTMLElement {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  render(keyFormTemplate({ mode: "edit", key, wrapper: host, inline }), host);
+  render(keyFormTemplate({ mode: "edit", key, tiers: [], wrapper: host, inline }), host);
   return host;
 }
 
@@ -35,10 +35,7 @@ function formOf(host: HTMLElement): HTMLFormElement {
 const FIELD_NAMES = [
   "label",
   "scopes",
-  "allowed_models",
-  "allowed_combos",
-  "only_whitelisted",
-  "allowed_providers",
+  "tier_id",
   "blacklisted_providers",
   "blacklisted_models",
   "expires_amount",
@@ -69,10 +66,11 @@ describe("keyFormTemplate structure", () => {
     expect((label as HTMLInputElement).required).toBe(true);
     expect((label as HTMLInputElement).value).toBe("");
 
-    expect((form.elements.namedItem("allowed_models") as HTMLInputElement).value).toBe("");
-    expect((form.elements.namedItem("allowed_combos") as HTMLInputElement).value).toBe("");
     expect((form.elements.namedItem("blacklisted_models") as HTMLInputElement).value).toBe("");
-    expect((form.elements.namedItem("only_whitelisted") as HTMLInputElement).checked).toBe(false);
+    // The plan picker defaults to "keep current" / no plan on create.
+    const tier = form.elements.namedItem("tier_id") as HTMLSelectElement;
+    expect(tier.value).toBe("");
+    expect([...tier.options].map((o) => o.value)).toEqual(["", "0"]);
 
     const amount = form.elements.namedItem("expires_amount") as HTMLInputElement;
     expect(amount.type).toBe("number");
@@ -90,20 +88,15 @@ describe("keyFormTemplate structure", () => {
     const ids = [
       "key-label",
       "key-expires-amount",
-      "model-picker-display",
-      "allowed-combos-display",
       "blacklisted-models-display",
-      "key-allowed-providers",
       "key-bl-providers",
       "key-bl-models-custom",
-      "quick-wl-provider-select",
       "quick-bl-provider-select",
     ];
     for (const id of ids) {
       expect(form.querySelector(`#${id}`), id).not.toBeNull();
     }
     expect(form.querySelector("#key-label")?.getAttribute("name")).toBe("label");
-    expect(form.querySelector("#key-allowed-providers")?.getAttribute("name")).toBe("allowed_providers");
     expect(form.querySelector("#key-bl-providers")?.getAttribute("name")).toBe("blacklisted_providers");
   });
 
@@ -113,53 +106,33 @@ describe("keyFormTemplate structure", () => {
       id: 7,
       label: "prod",
       scopes: ["chat", "manage"],
-      allowed_models: ["gpt-4o", "claude-3"],
-      allowed_combos: [1, 2],
+      tier_id: 3,
       blacklisted_providers: ["openai", "groq"],
-      allowed_providers: ["xkiro"],
       blacklisted_models: ["gpt-4*", "*-preview"],
-      only_whitelisted: true,
       expires_at: future,
     }));
 
     expect((form.elements.namedItem("label") as HTMLInputElement).value).toBe("prod");
     expect([...form.querySelectorAll<HTMLInputElement>('input[name="scopes"]:checked')].map((i) => i.value))
       .toEqual(["chat", "manage"]);
-    expect((form.elements.namedItem("allowed_models") as HTMLInputElement).value).toBe("gpt-4o,claude-3");
-    expect((form.elements.namedItem("allowed_combos") as HTMLInputElement).value).toBe("1,2");
-    expect((form.elements.namedItem("allowed_providers") as HTMLInputElement).value).toBe("xkiro");
     expect((form.elements.namedItem("blacklisted_providers") as HTMLInputElement).value).toBe("openai, groq");
     expect((form.elements.namedItem("blacklisted_models") as HTMLInputElement).value).toBe("gpt-4*,*-preview");
-    expect((form.elements.namedItem("only_whitelisted") as HTMLInputElement).checked).toBe(true);
     expect((form.elements.namedItem("expires_amount") as HTMLInputElement).value).toBe("10");
     expect((form.elements.namedItem("expires_amount") as HTMLInputElement).disabled).toBe(false);
     expect((form.elements.namedItem("expires_unit") as HTMLSelectElement).value).toBe("days");
     expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.textContent).toBe("Save");
   });
 
-  it("keeps the explicit empty-list sentinel (single space) for empty arrays", () => {
-    const form = formOf(mountEdit({
-      id: 8,
-      scopes: ["chat"],
-      allowed_models: [],
-      allowed_combos: [],
-      expires_at: null,
-    }));
-    expect((form.elements.namedItem("allowed_models") as HTMLInputElement).value).toBe(" ");
-    expect((form.elements.namedItem("allowed_combos") as HTMLInputElement).value).toBe(" ");
-  });
-
-  it("groups fields into five labelled task sections in reading order", () => {
+  it("groups fields into four labelled task sections in reading order", () => {
     const form = formOf(mountCreate());
     const sections = [...form.querySelectorAll<HTMLElement>("section.key-form-section")];
-    expect(sections).toHaveLength(5);
+    expect(sections).toHaveLength(4);
 
     const expected = [
       ["key-section-identity", "Identity"],
       ["key-section-scopes", "Scopes"],
-      ["key-section-model-access", "Model access"],
+      ["key-section-plan", "Plan"],
       ["key-section-restrictions", "Restrictions"],
-      ["key-section-quota", "Quota & limits"],
     ];
     sections.forEach((section, index) => {
       const entry = expected[index];
@@ -178,12 +151,13 @@ describe("keyFormTemplate structure", () => {
         expect(control.closest("section.key-form-section"), `${name} outside a section`).not.toBeNull();
       }
     }
-    // Identity owns label + expiry; access owns both model fields; restrictions
-    // owns both provider lists + blacklisted models.
+    // Identity owns label + expiry; scopes owns the scope cards; plan owns the
+    // tier picker (the tier carries access + caps); restrictions owns the two
+    // remaining per-key subtractive lists.
     expect(sections[0]?.querySelectorAll('[name="label"], [name="expires_amount"], [name="expires_unit"]')).toHaveLength(3);
     expect(sections[1]?.querySelectorAll('input[name="scopes"]')).toHaveLength(4);
-    expect(sections[2]?.querySelectorAll('[name="allowed_models"], [name="allowed_combos"], [name="only_whitelisted"]')).toHaveLength(3);
-    expect(sections[3]?.querySelectorAll('[name="allowed_providers"], [name="blacklisted_providers"], [name="blacklisted_models"]')).toHaveLength(3);
+    expect(sections[2]?.querySelectorAll('select[name="tier_id"]')).toHaveLength(1);
+    expect(sections[3]?.querySelectorAll('[name="blacklisted_providers"], [name="blacklisted_models"]')).toHaveLength(2);
   });
 
   it("never emits invalid nesting", () => {
@@ -211,7 +185,7 @@ describe("keyFormTemplate structure", () => {
     }
     // Each scope/toggle card label wraps exactly one labelable control.
     const wrapping = [...form.querySelectorAll("label.scope-card")];
-    expect(wrapping).toHaveLength(8);
+    expect(wrapping).toHaveLength(4);
     for (const label of wrapping) {
       expect(label.querySelectorAll("input, select, textarea, button")).toHaveLength(1);
     }
@@ -222,9 +196,9 @@ describe("keyFormTemplate structure", () => {
     }
   });
 
-  it("leaves the picker slots empty so the chip renderers own their content", () => {
+  it("leaves the blacklist picker slot empty so the chip renderer owns its content", () => {
     const form = formOf(mountCreate());
-    for (const id of ["model-picker-display", "allowed-combos-display", "blacklisted-models-display"]) {
+    for (const id of ["blacklisted-models-display"]) {
       const slot = form.querySelector(`#${id}`);
       expect(slot, id).not.toBeNull();
       expect(slot!.childElementCount, id).toBe(0);
@@ -237,35 +211,32 @@ describe("keyFormTemplate structure", () => {
   it("keeps help text out of the controls: one short hint per section, detail in title", () => {
     const form = formOf(mountCreate());
     const hints = [...form.querySelectorAll<HTMLElement>(".key-form-section-hint")];
-    expect(hints).toHaveLength(5);
+    expect(hints).toHaveLength(4);
     for (const hint of hints) {
       expect(hint.textContent!.trim().length).toBeLessThanOrEqual(40);
       expect(hint.closest(".field"), "hint inside a control").toBeNull();
     }
     const notes = [...form.querySelectorAll<HTMLElement>(".key-form-field-note")];
-    expect(notes.length).toBeGreaterThanOrEqual(5);
+    expect(notes.length).toBeGreaterThanOrEqual(3);
     for (const note of notes) expect(note.textContent!.trim().length).toBeLessThanOrEqual(20);
     // The full explanation lives in a tooltip, not in a paragraph inside a control.
     const titled = [...form.querySelectorAll("label.scope-card[title]")];
-    expect(titled).toHaveLength(8);
+    expect(titled).toHaveLength(4);
     for (const el of titled) expect(el.getAttribute("title")!.length).toBeGreaterThan(20);
   });
 
-  it("pairs the provider lists and gives the model-pattern field the full row", () => {
+  it("keeps the blocked-provider quick-add and gives model patterns the full row", () => {
     const grid = formOf(mountCreate()).querySelector(".key-form-grid--restrictions");
     expect(grid).not.toBeNull();
     const fields = [...grid!.querySelectorAll(":scope > .field")];
-    expect(fields).toHaveLength(3);
+    expect(fields).toHaveLength(2);
     expect(fields.map((field) => field.querySelector(".field-label")?.textContent)).toEqual([
-      "Allowed providers",
       "Blocked providers",
       "Blocked model patterns",
     ]);
     const wide = grid!.querySelectorAll(".field.key-form-field--wide");
     expect(wide).toHaveLength(1);
     expect(wide[0]!.querySelector('[name="blacklisted_models"]')).not.toBeNull();
-    // The quick-add selects keep their ids for the provider handlers.
-    expect(grid!.querySelector("#quick-wl-provider-select")?.getAttribute("aria-label")).toContain("allowlist");
     expect(grid!.querySelector("#quick-bl-provider-select")?.getAttribute("aria-label")).toContain("blocklist");
   });
 
@@ -300,6 +271,6 @@ describe("keyFormTemplate structure", () => {
     expect(host.querySelector(".modal-footer")).toBeNull();
     // The inline view sits under the page h1, so its sections are h2.
     expect([...host.querySelectorAll(".key-form-section-title")].map((el) => el.tagName))
-      .toEqual(["H2", "H2", "H2", "H2", "H2"]);
+      .toEqual(["H2", "H2", "H2", "H2"]);
   });
 });

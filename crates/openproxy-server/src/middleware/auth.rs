@@ -328,7 +328,19 @@ pub(crate) async fn authenticate_and_authorize_model(
 ) -> Result<Option<ApiKeyId>, ApiError> {
     let auth_result = authenticate(state, headers).await?;
 
+    let combo_plan = verify_combo_authorization(state, auth_result.as_ref(), model_name).await?;
+    // A combo that passed the key's combo allowlist (`is_combo_allowed`) is
+    // authorized as a combo: the model-name gate does not apply to it. A
+    // combo name will generally not match the plan's model allowlist even
+    // when the combo itself is explicitly allowed.
+    let combo_allowed = matches!(
+        combo_plan,
+        Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. })
+            if combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
+    );
+
     if let Some(token) = &auth_result
+        && !combo_allowed
         && !token.is_model_allowed(model_name, None)
     {
         return Err(ApiError(CoreError::Auth(format!(
@@ -336,7 +348,6 @@ pub(crate) async fn authenticate_and_authorize_model(
         ))));
     }
 
-    verify_combo_authorization(state, auth_result.as_ref(), model_name).await?;
     Ok(auth_result.as_ref().map(|r| r.key_id))
 }
 
@@ -442,14 +453,20 @@ pub async fn auth_middleware(
             )));
         }
 
-        if !token.is_model_allowed(requested_model, None) {
+        // A combo that passed the key's combo allowlist (`is_combo_allowed`)
+        // is authorized as a combo: the model-name gate does not apply to it.
+        pre_resolved_plan =
+            verify_combo_authorization(&state, Some(token), requested_model).await?;
+        let combo_allowed = matches!(
+            pre_resolved_plan,
+            Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. })
+                if combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
+        );
+        if !combo_allowed && !token.is_model_allowed(requested_model, None) {
             return Err(ApiError(CoreError::Auth(format!(
                 "model '{requested_model}' not allowed or blacklisted for this key"
             ))));
         }
-
-        pre_resolved_plan =
-            verify_combo_authorization(&state, Some(token), requested_model).await?;
     }
 
     if let Some(plan) = pre_resolved_plan {

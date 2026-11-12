@@ -87,7 +87,7 @@ pub fn apply_payment(
         i64,
     )> = conn
         .query_row(
-            "SELECT id, order_code, api_key_id, base_units, ttl_days, package_id, \
+            "SELECT id, order_code, api_key_id, base_units, ttl_days, tier_id, \
              COALESCE(credit_units, base_units) \
              FROM credit_orders \
              WHERE amount_units = ?1 AND status IN ('pending', 'expired') \
@@ -106,7 +106,7 @@ pub fn apply_payment(
             },
         )
         .ok();
-    let Some((order_id, order_code, api_key_id, _base_units, ttl_days, package_id, credit_units)) =
+    let Some((order_id, order_code, api_key_id, _base_units, ttl_days, tier_id, credit_units)) =
         order
     else {
         tracing::warn!(
@@ -141,7 +141,7 @@ pub fn apply_payment(
     //    encrypted at rest (reveal-once, survives restarts) and the order
     //    moves to `minted`; session-bound orders just credit the tenant key.
     let mut minted_key: Option<String> = None;
-    let mut final_key_id = api_key_id.unwrap_or(0);
+    let final_key_id;
     match api_key_id {
         Some(existing) => final_key_id = existing,
         None => {
@@ -171,20 +171,18 @@ pub fn apply_payment(
     }
     let key_id = ApiKeyId(final_key_id);
 
-    // 5. Credit the balance. A leveraged package credits more than it charged
-    //    (credit_units > amount minus jitter); free amounts credit 1:1.
+    // 5. Credit the balance. A leveraged plan credits more than it charged
+    //    (credit_units > amount minus jitter); 1:1 plans credit the price.
     crate::credits::ledger::credit_topup(conn, key_id, order_id, credit_units, ttl_days, tx_hash)?;
 
-    // 5b. Shaping contract: a package tied to a tier applies the tier's
-    //     allowlists + quota caps; a legacy package applies its own config.
-    //     Either way the paid order must leave the key shaped like the preset.
-    if let Some(pkg_id) = package_id {
-        if let Some(pkg) = crate::credits::packages::get(conn, pkg_id)? {
-            if let Some(cfg) = crate::credits::packages::resolved_config(conn, &pkg)? {
-                crate::credits::packages::apply_to_key(conn, key_id, &cfg)?;
-            }
-            // Live link: future tier edits propagate to this key.
-            crate::credits::packages::set_key_tier(conn, key_id, pkg.tier_id)?;
+    // 5b. Shaping contract: a plan purchase applies the tier's allowlists +
+    //     quota caps and LINKS the key to the tier (future plan edits
+    //     propagate to every linked key). The paid order must leave the key
+    //     shaped exactly like the plan that was bought.
+    if let Some(tier_id) = tier_id {
+        if let Some(tier) = crate::credits::tiers::get(conn, tier_id)? {
+            crate::credits::tiers::apply_to_key(conn, key_id, &tier.config)?;
+            crate::credits::tiers::set_key_tier(conn, key_id, Some(tier.id))?;
         }
     }
 

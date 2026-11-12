@@ -1,7 +1,7 @@
 // views/credits/tiers-admin.ts — tier management (admin only).
 //
 // A tier is the access contract: models + quota caps a leveraged key gets
-// when a package tied to it is paid. It is also the SINGLE SOURCE OF TRUTH:
+// when the plan tied to it is bought. It is also the SINGLE SOURCE OF TRUTH:
 // editing a tier re-shapes every key linked to it (backend propagation).
 //
 // The editor is a modal with a searchable, paged multi-select over the full
@@ -32,7 +32,10 @@ function syncScalars(): void {
   const monthly = (document.getElementById("tier-monthly") as HTMLInputElement | null)?.value ?? tierDraft.monthly;
   const weekly = (document.getElementById("tier-weekly") as HTMLInputElement | null)?.value ?? tierDraft.weekly;
   const fiveHour = (document.getElementById("tier-fivehour") as HTMLInputElement | null)?.value ?? tierDraft.fiveHour;
-  setTierDraft({ ...tierDraft, name, monthly, weekly, fiveHour });
+  const price = (document.getElementById("tier-price") as HTMLInputElement | null)?.value ?? tierDraft.price;
+  const credit = (document.getElementById("tier-credit") as HTMLInputElement | null)?.value ?? tierDraft.credit;
+  const ttlDays = (document.getElementById("tier-ttl") as HTMLInputElement | null)?.value ?? tierDraft.ttlDays;
+  setTierDraft({ ...tierDraft, name, monthly, weekly, fiveHour, price, credit, ttlDays });
 }
 
 function filtered(): CatalogModel[] {
@@ -79,12 +82,27 @@ async function saveTier(): Promise<void> {
   const monthly = parseFloat(d.monthly);
   const weekly = parseFloat(d.weekly);
   const fiveHour = parseFloat(d.fiveHour);
+  const price = parseFloat(d.price);
+  const credit = parseFloat(d.credit);
+  const ttlDays = parseInt(d.ttlDays, 10);
   if (!name) {
     showToast("tier name is required", "error");
     return;
   }
   if (d.models.length === 0) {
     showToast("a tier without models leaves the key unrestricted — pick at least one", "error");
+    return;
+  }
+  if (d.price.trim() !== "" && (!Number.isFinite(price) || price <= 0)) {
+    showToast("price must be a positive number (blank = draft plan)", "error");
+    return;
+  }
+  if (d.credit.trim() !== "" && (!Number.isFinite(credit) || credit <= 0)) {
+    showToast("credit must be a positive number (blank = 1:1 with the price)", "error");
+    return;
+  }
+  if (!Number.isFinite(ttlDays) || ttlDays < 1) {
+    showToast("TTL must be at least 1 day", "error");
     return;
   }
   // Split the merged selection: catalog combo ids are always `combo:<name>`
@@ -102,16 +120,21 @@ async function saveTier(): Promise<void> {
     allowed_combos: comboNames.length > 0 ? comboNames : null,
     only_whitelisted: true,
   };
+  const plan = {
+    price_usd: Number.isFinite(price) && price > 0 ? price : null,
+    credit_usd: Number.isFinite(credit) && credit > 0 ? credit : null,
+    ttl_days: ttlDays,
+  };
   try {
     if (d.id == null) {
-      await api("/credits/tiers", { method: "POST", body: JSON.stringify({ name, config }) });
-      showToast("tier created", "success");
+      await api("/credits/tiers", { method: "POST", body: JSON.stringify({ name, config, ...plan }) });
+      showToast("plan created", "success");
     } else {
       await api(`/credits/tiers/${d.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ name, config, active: d.active }),
+        body: JSON.stringify({ name, config, active: d.active, ...plan }),
       });
-      showToast("tier saved — linked keys re-shaped", "success");
+      showToast("plan saved — linked keys re-shaped", "success");
     }
     handle?.close();
     setTierDraft(null);
@@ -141,6 +164,15 @@ function body(): TemplateResult {
       <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Name</label>
         <input id="tier-name" .value=${d.name} placeholder="e.g. Flash" style="max-width:170px"
                @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, name: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Price USD</label>
+        <input id="tier-price" .value=${d.price} placeholder="draft" style="max-width:90px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, price: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Credit USD</label>
+        <input id="tier-credit" .value=${d.credit} placeholder="1:1" style="max-width:90px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, credit: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">TTL days</label>
+        <input id="tier-ttl" .value=${d.ttlDays} placeholder="30" style="max-width:70px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, ttlDays: (e.target as HTMLInputElement).value }); }}></div>
       <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Monthly cap USD</label>
         <input id="tier-monthly" .value=${d.monthly} placeholder="none" style="max-width:100px"
                @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, monthly: (e.target as HTMLInputElement).value }); }}></div>
@@ -223,14 +255,14 @@ function body(): TemplateResult {
       <button class="secondary" @click=${() => closeEditor()}>Cancel</button>
     </div>
     <div style="font-size:11px;color:var(--color-text-muted);margin-top:8px">
-      An allowlist forces only_whitelisted on the buyer's key: the leveraged credit can only reach these models.
+      A plan is the product: price, credit (leverage), TTL days. Its allowlist forces only_whitelisted on the buyer's key: the credit can only reach these models. Blank price = draft (not for sale).
       Saving an existing tier re-shapes every linked key immediately.
     </div>`;
 }
 
 function openTierEditor(tier: AdminTier | null): void {
   setTierDraft(tier == null
-    ? { id: null, name: "", models: [], monthly: "", weekly: "", fiveHour: "", active: true }
+    ? { id: null, name: "", models: [], monthly: "", weekly: "", fiveHour: "", active: true, price: "", credit: "", ttlDays: "30" }
     : {
         id: tier.id,
         name: tier.name,
@@ -242,6 +274,9 @@ function openTierEditor(tier: AdminTier | null): void {
         weekly: tier.config.weekly_usd_cap == null ? "" : String(tier.config.weekly_usd_cap),
         fiveHour: tier.config.five_hour_usd_cap == null ? "" : String(tier.config.five_hour_usd_cap),
         active: tier.active,
+        price: tier.price_usd == null ? "" : String(tier.price_usd),
+        credit: tier.credit_usd == null ? "" : String(tier.credit_usd),
+        ttlDays: String(tier.ttl_days ?? 30),
       });
   resetTierCatalogBrowser();
   kindFilter = "all";
@@ -274,7 +309,7 @@ export function renderTiers(data: CreditsData): TemplateResult {
       <div class="card-title">Tiers (access contracts: models + quota caps)</div>
       <div class="card-body" style="font-size:13px">
         ${data.adminTiers.length === 0
-          ? html`<div style="color:var(--color-text-muted)">No tiers yet — create one to gate a package.</div>`
+          ? html`<div style="color:var(--color-text-muted)">No plans yet — create one to sell it.</div>`
           : html`
         <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
@@ -297,7 +332,7 @@ export function renderTiers(data: CreditsData): TemplateResult {
               <td style="padding:6px 8px;color:var(--color-text-muted);font-size:12px">
                 ${t.config.monthly_usd_cap ?? "∞"} / ${t.config.weekly_usd_cap ?? "∞"} / ${t.config.five_hour_usd_cap ?? "∞"}
               </td>
-              <td style="padding:6px 8px">${t.package_count} pkg · ${t.key_count} keys</td>
+              <td style="padding:6px 8px">${t.price_usd != null ? `$${t.price_usd}` : "draft"} · ${t.key_count} keys</td>
               <td style="padding:6px 8px">${t.active ? "yes" : "no"}</td>
               <td style="padding:6px 0 6px 8px;white-space:nowrap">
                 <button class="secondary" style="padding:2px 8px" @click=${() => openTierEditor(t)}>edit</button>

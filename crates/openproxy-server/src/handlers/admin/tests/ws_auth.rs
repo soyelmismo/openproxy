@@ -344,9 +344,7 @@ async fn analytics_scope_gets_client_allowlist_only() {
     for (method, uri) in [
         ("GET", "/admin/api/keys"),
         ("GET", "/admin/api/config"),
-        ("GET", "/admin/api/credits/packages"),
         ("GET", "/admin/api/credits/orders"),
-        ("POST", "/admin/api/credits/packages"),
         ("POST", "/admin/api/ws-ticket"),
     ] {
         let resp = app

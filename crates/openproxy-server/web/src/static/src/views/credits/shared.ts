@@ -12,7 +12,7 @@ import type { CatalogModel, Order, TierDraft } from "./types.js";
 // ── module state ────────────────────────────────────────────────────
 export let topupOpen = false;
 export let activeOrder: Order | null = null;
-export let selectedPackageId: number | null = null;
+export let selectedPlanId: number | null = null;
 export let tierDraft: TierDraft | null = null;
 export let catalogModels: CatalogModel[] | null = null;
 // Tier editor catalog browser state: kept module-scoped so the searchable,
@@ -42,8 +42,8 @@ export function setTopupOpen(v: boolean): void {
 export function setActiveOrder(v: Order | null): void {
   activeOrder = v;
 }
-export function setSelectedPackageId(v: number | null): void {
-  selectedPackageId = v;
+export function setSelectedPlanId(v: number | null): void {
+  selectedPlanId = v;
 }
 export function setTierDraft(v: TierDraft | null): void {
   tierDraft = v;

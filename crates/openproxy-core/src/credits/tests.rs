@@ -8,7 +8,7 @@
 //! 4. Expiry kills the remaining balance with no refund.
 //! 5. Anonymous reveal happens exactly once.
 
-use super::*;
+use rusqlite::params;
 use crate::credits::ledger::{self, record_spend};
 use crate::credits::matcher::{self, PaymentOutcome};
 use crate::credits::orders;
@@ -542,19 +542,37 @@ fn tier_config(models: &[&str], monthly: f64) -> crate::credits::TierConfig {
     }
 }
 
+/// Sellable plan commerce: what the buyer pays, what they get, how long it lives.
+fn plan(price: f64, credit: f64, ttl: i64) -> crate::credits::PlanCommerce {
+    crate::credits::PlanCommerce {
+        price_usd: Some(price),
+        credit_usd: Some(credit),
+        ttl_days: ttl,
+    }
+}
+
+/// A draft plan (no price): not listed for sale.
+fn draft_plan() -> crate::credits::PlanCommerce {
+    crate::credits::PlanCommerce {
+        price_usd: None,
+        credit_usd: None,
+        ttl_days: 30,
+    }
+}
+
 #[test]
 fn tier_crud_and_apply_forces_the_whitelist_gate() {
     let conn = test_conn();
     let key = seed_key(&conn, "tiered");
 
-    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-a", "m-b"], 30.0))
+    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-a", "m-b"], 30.0), &draft_plan())
         .expect("create tier");
-    assert_eq!(t.package_count, 0);
+    assert_eq!(t.key_count, 0);
     assert!(t.active);
 
     // Validation: blank name rejected, duplicate rejected by UNIQUE.
-    assert!(crate::credits::tiers::create(&conn, "  ", &tier_config(&["m"], 1.0)).is_err());
-    assert!(crate::credits::tiers::create(&conn, "flash", &tier_config(&["m"], 1.0)).is_err());
+    assert!(crate::credits::tiers::create(&conn, "  ", &tier_config(&["m"], 1.0), &draft_plan()).is_err());
+    assert!(crate::credits::tiers::create(&conn, "flash", &tier_config(&["m"], 1.0), &draft_plan()).is_err());
 
     crate::credits::tiers::apply_to_key(&conn, key, &t.config).expect("apply");
     let models: String = conn
@@ -570,7 +588,7 @@ fn tier_crud_and_apply_forces_the_whitelist_gate() {
     assert_eq!(caps.monthly_usd_cap, Some(30.0));
 
     // Update replaces the payload wholesale.
-    crate::credits::tiers::update(&conn, t.id, Some("flash2"), Some(&tier_config(&["m-c"], 40.0)), Some(false))
+    crate::credits::tiers::update(&conn, t.id, Some("flash2"), Some(&tier_config(&["m-c"], 40.0)), Some(false), None)
         .expect("update");
     let t2 = crate::credits::tiers::get(&conn, t.id).expect("get").expect("tier");
     assert_eq!(t2.name, "flash2");
@@ -605,6 +623,7 @@ fn tier_allowlist_partitions_combos_from_models() {
             allowed_combos: None,
             ..tier_config(&["deepseek-v4.1-flash"], 10.0)
         },
+        &draft_plan(),
     )
     .expect("create mixed tier");
     let row_models: String = conn
@@ -630,19 +649,18 @@ fn tier_allowlist_partitions_combos_from_models() {
 }
 
 #[test]
-fn leveraged_package_charges_less_than_it_credits() {
+fn leveraged_plan_charges_less_than_it_credits() {
     let conn = test_conn();
     let key = seed_key(&conn, "lev");
     let mk = mk();
 
-    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-1"], 25.0))
+    // The tier IS the product: price 1, credit 6 (6x), lives 7 days.
+    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-1"], 25.0), &plan(1.0, 6.0, 7))
         .expect("tier");
-    let pkg = crate::credits::packages::create(&conn, "5x6", 1.0, 7, None, Some(6.0), Some(t.id))
-        .expect("package");
 
     // The buyer is charged the PRICE (whole dollar + jitter); the order
     // records the CREDIT (6x) for the matcher to pay out.
-    let order = orders::create_order(&conn, Some(key), None, 1 * USD, pkg.ttl_days, Some(pkg.id))
+    let order = orders::create_order(&conn, Some(key), None, 1 * USD, t.ttl_days, Some(t.id))
         .expect("order");
     assert_eq!(order.credit_units, 6 * USD, "credit_units must carry the leverage");
     assert!(order.amount_units >= 1 * USD && order.amount_units < 2 * USD);
@@ -669,36 +687,104 @@ fn leveraged_package_charges_less_than_it_credits() {
 }
 
 #[test]
-fn tier_config_wins_over_legacy_package_config_gaps() {
+fn sweep_deletes_keys_idle_for_six_months() {
     let conn = test_conn();
-    let t = crate::credits::tiers::create(&conn, "gate", &tier_config(&["tier-model"], 30.0))
-        .expect("tier");
+    let idle = seed_key(&conn, "idle-8mo");
+    let used_recently = seed_key(&conn, "used-3mo-ago");
+    let young = seed_key(&conn, "young");
+    let operator = seed_key(&conn, "operator");
 
-    // Legacy package config: an old monthly cap that the tier replaces.
-    let legacy = crate::credits::PackageConfig {
-        monthly_usd_cap: Some(100.0),
-        weekly_usd_cap: None,
-        five_hour_usd_cap: None,
-        allowed_models: Some(vec!["legacy-model".to_string()]),
-        allowed_providers: None,
-        allowed_combos: None,
-        only_whitelisted: None,
-    };
-    let pkg = crate::credits::packages::create(&conn, "mixed", 5.0, 15, Some(&legacy), None, Some(t.id))
-        .expect("package");
-    let resolved = crate::credits::packages::resolved_config(&conn, &pkg)
-        .expect("resolve")
-        .expect("config");
-    // Tier is the access contract: its models + caps win.
-    assert_eq!(resolved.allowed_models.as_deref(), Some(&["tier-model".to_string()][..]));
-    assert_eq!(resolved.monthly_usd_cap, Some(30.0));
+    conn.execute(
+        "UPDATE api_keys SET scopes_json = '[\"chat\",\"manage\"]' WHERE id = ?1",
+        params![operator.0],
+    )
+    .unwrap();
 
-    // Package without tier keeps the pure legacy behaviour.
-    let plain = crate::credits::packages::create(&conn, "legacy", 5.0, 15, Some(&legacy), None, None)
-        .expect("package");
-    let resolved = crate::credits::packages::resolved_config(&conn, &plain)
-        .expect("resolve")
-        .expect("config");
-    assert_eq!(resolved.allowed_models.as_deref(), Some(&["legacy-model".to_string()][..]));
-    assert_eq!(resolved.monthly_usd_cap, Some(100.0));
+    // Age three keys beyond the window; keep `young` inside it.
+    conn.execute(
+        "UPDATE api_keys SET created_at = datetime('now', '-8 months')
+         WHERE id IN (?1, ?2, ?3)",
+        params![idle.0, used_recently.0, operator.0],
+    )
+    .unwrap();
+
+    // `used_recently` has a request 3 months ago (inside the window) plus a
+    // stale one from 9 months ago: the recent one saves it.
+    for (rid, age) in [("recent", "-3 months"), ("stale", "-9 months")] {
+        conn.execute(
+            "INSERT INTO usage (api_key_id, request_id, trace_id, attempt, provider_id, 
+             upstream_model_id, status_code, total_ms, created_at)
+             VALUES (?1, ?2, 't', 1, 'p', 'm', 200, 10, datetime('now', ?3))",
+            params![used_recently.0, rid, age],
+        )
+        .unwrap();
+    }
+
+    // The idle key holds a small balance that must die with it.
+    conn.execute(
+        "INSERT INTO credit_transactions (api_key_id, kind, amount_units, status)
+         VALUES (?1, 'topup', 500, 'active')",
+        params![idle.0],
+    )
+    .unwrap();
+    // ...and carries a quota row (must cascade).
+    crate::api_key_quotas::upsert(
+        &conn,
+        idle,
+        &crate::api_key_quotas::QuotaCaps {
+            monthly_usd_cap: Some(5.0),
+            weekly_usd_cap: None,
+            five_hour_usd_cap: None,
+        },
+    )
+    .unwrap();
+
+    let swept = crate::credits::sweep::sweep_idle_keys(&conn, 100).expect("sweep");
+    assert_eq!(swept.len(), 1, "only the truly idle key is swept");
+    assert_eq!(swept[0].id, idle.0);
+    assert_eq!(swept[0].balance_units, 500, "the report carries the dead balance");
+
+    // Gone: key row, quota row, ledger rows.
+    let alive: i64 = conn
+        .query_row("SELECT COUNT(*) FROM api_keys WHERE id = ?1", params![idle.0], |r| r.get(0))
+        .unwrap();
+    assert_eq!(alive, 0);
+    let quotas: i64 = conn
+        .query_row("SELECT COUNT(*) FROM api_key_quotas WHERE api_key_id = ?1", params![idle.0], |r| r.get(0))
+        .unwrap();
+    assert_eq!(quotas, 0);
+    let ledger: i64 = conn
+        .query_row("SELECT COUNT(*) FROM credit_transactions WHERE api_key_id = ?1", params![idle.0], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ledger, 0);
+
+    // Survivors: young, recently-used, and the manage-scoped operator key.
+    let survivors: i64 = conn
+        .query_row("SELECT COUNT(*) FROM api_keys", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(survivors, 3);
+    assert!(crate::credits::sweep::is_idle(&conn, used_recently.0).unwrap() == false);
+    assert!(crate::credits::sweep::is_idle(&conn, young.0).unwrap() == false);
+    assert!(crate::credits::sweep::is_idle(&conn, operator.0).unwrap() == false);
+}
+
+#[test]
+fn sweep_respects_limit_per_pass() {
+    let conn = test_conn();
+    let mut ids = Vec::new();
+    for n in 0..3 {
+        let key = seed_key(&conn, &format!("old-{n}"));
+        conn.execute(
+            "UPDATE api_keys SET created_at = datetime('now', '-8 months') WHERE id = ?1",
+            params![key.0],
+        )
+        .unwrap();
+        ids.push(key);
+    }
+    let swept = crate::credits::sweep::sweep_idle_keys(&conn, 2).expect("sweep");
+    assert_eq!(swept.len(), 2, "limit caps the pass");
+    let left: i64 = conn
+        .query_row("SELECT COUNT(*) FROM api_keys WHERE created_at <= datetime('now', '-6 months')", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(left, 1, "the remaining idle key waits for the next pass");
 }

@@ -43,15 +43,11 @@
 
       <div id="step-buy">
         <div class="field">
-          <label for="usd">Amount (USD)</label>
+          <label for="usd">Plan</label>
           <select id="usd"></select>
         </div>
-        <div class="field">
-          <label for="ttl">Balance lifetime</label>
-          <select id="ttl"></select>
-        </div>
         <button id="create" class="btn primary" type="button">Create payment</button>
-        <div class="field"><small>No refunds: the balance expires on the date shown for the option you pick. Unused balance is not returned.</small></div>
+        <div class="field"><small>No refunds: the credited balance expires on the date shown for the plan you pick. Unused balance is not returned. Your key keeps working without a plan — buy again anytime.</small></div>
         <div class="err hidden" id="buy-err"></div>
       </div>
 
@@ -81,7 +77,7 @@
           <div class="amount" id="my-balance"></div>
           <div class="status" id="my-expiry"></div>
           <div class="field" style="margin-top:var(--space-3)">
-            <label for="my-usd">Top up (USD)</label>
+            <label for="my-usd">Top up (Plan)</label>
             <select id="my-usd"></select>
           </div>
           <button id="my-topup" class="btn btn-secondary" type="button">Create top-up for this key</button>
@@ -90,7 +86,7 @@
             <div id="my-history"></div>
           </div>
         </div>
-        <div class="field"><small>Top-ups to an existing key use the balance lifetime chosen above. No refunds.</small></div>
+        <div class="field"><small>Plan purchases to an existing key apply that plan's models and limits to the key. No refunds.</small></div>
         <div class="err hidden" id="mykey-err"></div>
       </div>
 
