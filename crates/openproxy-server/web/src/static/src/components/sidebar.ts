@@ -245,8 +245,9 @@ export function renderSidebar(): void {
               </div>`)
           : html`
               <div class="sidebar-nav-group">
-                <div class="sidebar-nav-group-label" ?hidden=${collapsed}>Insights</div>
+                <div class="sidebar-nav-group-label" ?hidden=${collapsed}>Client</div>
                 ${renderLink({ href: "#/analytics", icon: "analytics", label: "Analytics" }, collapsed)}
+                ${renderLink({ href: "#/credits", icon: "credits", label: "Credits" }, collapsed)}
                 ${renderLink({ href: "#/models", icon: "combos", label: "Models" }, collapsed)}
                 ${renderLink({ href: "#/playground", icon: "playground", label: "Playground" }, collapsed)}
               </div>`

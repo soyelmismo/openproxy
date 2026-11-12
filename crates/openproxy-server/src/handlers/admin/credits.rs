@@ -46,8 +46,15 @@ fn err(status: StatusCode, code: &str, message: &str) -> Response {
 
 /// Session key of the caller: the admin identity's key, or `?key_id=` for
 /// an operator acting on someone else's key.
+///
+/// `?key_id=` is an OPERATOR override. A non-manage session key can only ever
+/// address its own credits — the query parameter is ignored for it, so a
+/// client (analytics/read) key cannot read or top up someone else's balance.
 fn target_key(identity: Option<&crate::handlers::admin::auth::AdminIdentity>, params: &HashMap<String, String>) -> Option<ApiKeyId> {
-    if let Some(k) = params.get("key_id").and_then(|v| v.parse::<i64>().ok()) {
+    let is_operator = identity.map(|i| i.has_manage_scope()).unwrap_or(false);
+    if is_operator
+        && let Some(k) = params.get("key_id").and_then(|v| v.parse::<i64>().ok())
+    {
         return Some(ApiKeyId(k));
     }
     identity.and_then(|i| i.key_id()).map(ApiKeyId)
@@ -264,6 +271,20 @@ async fn create_topup(
                 &cfg.collector_address,
                 o.amount_units,
             );
+            // Same render as the public checkout reveal: the panel paints the
+            // QR straight from `qr_svg` (credits.ts paints it verbatim).
+            let qr_svg = match crate::handlers::credits_qr::render(
+                &qr_uri,
+                "#6366f1",
+                "#0b0d12",
+                "#ffffff",
+            ) {
+                Ok(q) => q.svg,
+                Err(e) => {
+                    tracing::warn!(error = %e, "qr render failed");
+                    String::new()
+                }
+            };
             Json(json!({
                 "order_code": o.order_code,
                 "status": o.status,
@@ -273,6 +294,7 @@ async fn create_topup(
                 "usdc_address": cfg.usdc_address,
                 "collector_address": cfg.collector_address,
                 "qr_uri": qr_uri,
+                "qr_svg": qr_svg,
                 "expires_at": o.expires_at,
                 "payment_window_secs": i64::from(cfg.payment_window_minutes) * 60,
                 "no_refunds": true,

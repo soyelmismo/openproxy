@@ -5,6 +5,13 @@
   function tab(name) {
     ["step-buy", "step-mykey"].forEach(function (id) { document.getElementById(id).classList.add("hidden"); });
     document.getElementById(name).classList.remove("hidden");
+    if (name === "step-buy") {
+      document.getElementById("tab-buy").className = "btn primary";
+      document.getElementById("tab-mykey").className = "btn btn-secondary";
+    } else {
+      document.getElementById("tab-buy").className = "btn btn-secondary";
+      document.getElementById("tab-mykey").className = "btn primary";
+    }
   }
   document.getElementById("tab-buy").addEventListener("click", function () { tab("step-buy"); });
   document.getElementById("tab-mykey").addEventListener("click", function () { tab("step-mykey"); });
@@ -19,9 +26,9 @@
       .then(function (r) { if (!r.ok) throw new Error("invalid key or credits disabled"); return r.json(); })
       .then(function (b) {
         document.getElementById("mykey-data").classList.remove("hidden");
-        document.getElementById("my-balance").textContent = "USDC " + b.balance_usd;
+        document.getElementById("my-balance").textContent = "$" + parseFloat(b.balance_usd || 0).toFixed(2) + " USDC";
         var lots = (b.lots || []).map(function (l) { return "USDC " + l.remaining_usd + " — expires " + (l.expires_at || "never"); });
-        document.getElementById("my-expiry").textContent = lots.join(" | ") || "No active lots.";
+        document.getElementById("my-expiry").textContent = lots.join(" | ") || "No active credit balance on this key yet.";
         return fetch("v1/credits/me/transactions?limit=50", { headers: { "Authorization": "Bearer " + key } });
       })
       .then(function (r) { return r.json(); })
@@ -44,10 +51,14 @@
     var key = document.getElementById("mykey").value.trim();
     var errEl = document.getElementById("mykey-err");
     errEl.classList.add("hidden");
+    var v = String(document.getElementById("my-usd").value);
+    var payload = v.indexOf("pkg:") === 0
+      ? { package_id: parseInt(v.slice(4), 10) }
+      : { usd: parseFloat(v) };
     fetch("v1/credits/me/topup", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + key },
-      body: JSON.stringify({ usd: parseFloat(document.getElementById("my-usd").value || 0) }),
+      body: JSON.stringify(payload),
     })
       .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
       .then(function (res) {
@@ -89,15 +100,22 @@
         if (ttlWrap) ttlWrap.style.display = "none";
       }
       var usd = document.getElementById("usd");
+      var myUsd = document.getElementById("my-usd");
+      if (myUsd) myUsd.innerHTML = "";
       packagesCache.forEach(function (pk) {
         var o = document.createElement("option");
+        var mo = document.createElement("option");
         if (pk.package_id != null) {
           o.value = "pkg:" + pk.package_id;
           o.textContent = pk.label + " — $" + pk.usd + " / " + pk.ttl_days + " days";
+          mo.value = "pkg:" + pk.package_id;
+          mo.textContent = pk.label + " — $" + pk.usd + " / " + pk.ttl_days + " days";
         } else {
           o.value = pk.usd; o.textContent = pk.label + " — $" + pk.usd;
+          mo.value = pk.usd; mo.textContent = pk.label + " — $" + pk.usd;
         }
         usd.appendChild(o);
+        if (myUsd) myUsd.appendChild(mo);
       });
       var ttl = document.getElementById("ttl");
       p.ttl_days.forEach(function (d) {

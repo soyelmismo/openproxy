@@ -147,6 +147,11 @@ export async function mountRouteInto(route: string, target: HTMLElement): Promis
     }
     case 'combos': case 'combo-detail': return mountCombos(parsed.name === 'combo-detail' ? { detailId: Number(parsed.context) } : {}, target);
     case 'keys': return mountKeys(target);
+    case 'credits': {
+      const { mountCredits } = await import('../views/credits.js');
+      if (target.isConnected) return mountCredits(target);
+      return;
+    }
     case 'key-detail': return mountKeyDetail(Number(parsed.context), target);
     case 'key-usage': return mountKeyUsage(Number(parsed.context), target);
     case 'logs': return mountLogs(target, route);
@@ -198,12 +203,15 @@ export function navigate(): void {
     location.hash = isFullAdmin() ? "#/" : "#/analytics";
     return;
   }
-  // Restricted tenant enforcement: non-admin keys get the analytics view, the
-  // client-facing models catalog and the playground (using their own session
-  // identity). Any admin-only route (keys, config, providers, …) redirects to
-  // #/analytics.
+  // Restricted tenant enforcement: non-admin keys get their own tenanted
+  // analytics, the client-facing models catalog, the playground and their
+  // own credits surface (balance / top-up / quota). Any admin-only route
+  // (keys, config, providers, …) redirects to #/analytics.
   const tenantAllowed =
-    r.name === "analytics" || r.name === "models" || r.name === "playground";
+    r.name === "analytics" ||
+    r.name === "models" ||
+    r.name === "playground" ||
+    r.name === "credits";
   if (loggedIn && !isFullAdmin() && !tenantAllowed) {
     location.hash = "#/analytics";
     return;

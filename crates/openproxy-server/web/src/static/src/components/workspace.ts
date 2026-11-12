@@ -639,6 +639,7 @@ async function loadResources(): Promise<void> {
 function tenantRouteFor(route: string): string {
   if (route === "#/models" || route.startsWith("#/models?")) return "#/models";
   if (route === "#/playground" || route.startsWith("#/playground?")) return "#/playground";
+  if (route === "#/credits" || route.startsWith("#/credits?")) return "#/credits";
   return "#/analytics";
 }
 

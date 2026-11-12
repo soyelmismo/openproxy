@@ -9,7 +9,6 @@
 // views/config.ts; the dashboard has no `lit` dependency.
 
 import { html, type TemplateResult } from "lit-html";
-import { PROXY_PREFIX } from "../state/proxy-prefix.js";
 import { setToken, clearToken, setProfile, type UserSessionProfile } from "../state/auth.js";
 import { api } from "../state/api.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
@@ -89,8 +88,6 @@ function onInput(e: Event): void {
 
 
 function renderLogin(): TemplateResult {
-  const subtitle: string = t("login.subtitle");
-  const helpText: string = t("login.help_text");
   const apiKeyLabel: string = t("login.api_key_label");
   const submitLabel: string = t("login.submit");
   // Always render the slot (with `nothing` when there is no error) so
@@ -102,7 +99,6 @@ function renderLogin(): TemplateResult {
     <div class="login-page">
       <section class="card login-card">
         <h2 class="login-title">${t("login.title")}</h2>
-        <p class="muted login-subtitle">${subtitle}</p>
         <form class="login-form" @submit=${onSubmit}>
           <label class="config-field login-field">
             <span class="config-label">${apiKeyLabel}</span>
@@ -127,10 +123,6 @@ function renderLogin(): TemplateResult {
             ?disabled=${submitting}
           >${submitting ? "…" : submitLabel}</button>
         </form>
-        <p class="muted login-help">${helpText}</p>
-        <p class="muted" style="font-size:12px;margin:8px 0 0">
-          No key yet? <a href=${PROXY_PREFIX + "/checkout"} style="color:var(--accent)">Buy credits and get one</a> — pays with USDC on Base.
-        </p>
       </section>
     </div>
   `;

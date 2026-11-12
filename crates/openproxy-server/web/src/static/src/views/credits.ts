@@ -14,6 +14,7 @@ import { html, type TemplateResult } from "lit-html";
 import { createView } from "../lib/view-utils.js";
 import { api } from "../state/api.js";
 import { showToast } from "../components/toast.js";
+import { isFullAdmin } from "../state/auth.js";
 
 interface LotView {
   remaining_usd: string;
@@ -111,13 +112,20 @@ async function loadPackages(): Promise<Packages> {
 }
 
 async function loadData(): Promise<CreditsData> {
-  const [balance, transactions, quota, packages, adminPackages, orders] = await Promise.all([
+  // The admin-only ledger queries run solely for operator sessions: a client
+  // (analytics/read) key would otherwise hit two 403s on every view mount.
+  const adminExtras: Promise<[AdminPackage[], AdminOrder[]]> = isFullAdmin()
+    ? Promise.all([
+        api("/credits/packages").catch(() => [] as AdminPackage[]),
+        api("/credits/orders?limit=200").catch(() => [] as AdminOrder[]),
+      ]) as Promise<[AdminPackage[], AdminOrder[]]>
+    : Promise.resolve([[], []]);
+  const [balance, transactions, quota, packages, [adminPackages, orders]] = await Promise.all([
     api("/credits/balance"),
     api("/credits/transactions?limit=100"),
     api("/credits/quota"),
     loadPackages(),
-    api("/credits/packages").catch(() => [] as AdminPackage[]),
-    api("/credits/orders?limit=200").catch(() => [] as AdminOrder[]),
+    adminExtras,
   ]);
   return {
     balance, transactions, quota, packages,
@@ -188,9 +196,11 @@ async function createTopup(): Promise<void> {
   }
 }
 
-/** Re-render in place (createView exposes no imperative refresh; re-mount). */
+/** Re-render in place: re-mounts into the surface the view currently lives in
+ *  (tile or shell #main), never a detached default container. */
 function requestRefresh(): void {
-  void mountCredits();
+  const el = mountedContainer && mountedContainer.isConnected ? mountedContainer : undefined;
+  void mountCredits(el);
 }
 
 function pct(win: QuotaWindow): number | null {
@@ -342,7 +352,7 @@ function render(data: CreditsData): TemplateResult {
           </table>`}
         </div>
       </section>
-      ${renderAdmin(data)}
+      ${isFullAdmin() ? renderAdmin(data) : html``}
     </div>
   `;
 }
@@ -450,8 +460,20 @@ function renderAdmin(data: CreditsData): TemplateResult {
   `;
 }
 
-export async function mountCredits(): Promise<(() => void) | void> {
+let mountedContainer: HTMLElement | null = null;
+
+export async function mountCredits(
+  target?: HTMLElement | null | string,
+): Promise<(() => void) | void> {
+  // Same dual-surface pattern as mountAnalytics: the shell renders into
+  // #main, workspace tiles pass their own target. Rendering into a detached
+  // #main while a tile owns the DOM leaves lit parts orphaned (Text node
+  // updates throw on the next refresh).
+  const container = target instanceof HTMLElement ? target : document.getElementById("main");
+  if (!container || !container.isConnected) return;
+  mountedContainer = container;
   return createView<CreditsData>({
+    container,
     loader: loadData,
     render,
     cleanup: stopTimers,

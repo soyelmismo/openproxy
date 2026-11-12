@@ -250,16 +250,32 @@ async fn admin_middleware_rejects_spoofed_real_ip_from_untrusted_peer() {
 }
 
 #[tokio::test]
-async fn analytics_scope_is_rejected_everywhere() {
-    // Operator-only panel: any key WITHOUT "manage" is rejected on every
-    // /admin/api endpoint — read-only analytics included. User keys are for
-    // the /v1 gateway and the anonymous checkout, never for this surface.
+async fn analytics_scope_gets_client_allowlist_only() {
+    // Client keys (analytics scope, no "manage") get ONLY the explicit client
+    // allowlist: their own tenanted analytics, auth/me, the client-facing
+    // model catalog and their own credits surface (balance/quota/topup on
+    // their OWN key). Everything operator — keys, config, package/order
+    // management, ws-ticket — stays 403, so a customer key can never reach an
+    // admin route regardless of which login screen it came through.
     let tmp = tempdir();
-    let (state, _admin_key) = make_state_with_key(tmp.path()).await;
+    // Credits enabled so the self-service balance/quota endpoints answer 200
+    // instead of 503 (credits_disabled).
+    let mut config = openproxy_core::AppConfig::default();
+    config.credits = Some(openproxy_types::config::CreditsConfig {
+        rpc_url: "http://127.0.0.1:1".into(),
+        usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+        collector_address: "0xc46e0bb29db2c74b2ca63cd7d2b61374dadd8ce6".into(),
+        payment_window_minutes: 15,
+        scan_interval_secs: 5,
+        min_topup_usd: 1.0,
+        ttl_days: vec![7, 15, 30],
+        chain_id: 8453,
+    });
+    let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 
     let analytics_raw_key = "op_live_analytics_test_secret_key_123456";
     let key_hash = openproxy_core::api_keys::hash_key(analytics_raw_key);
-    {
+    let analytics_key_id: i64 = {
         let w = state.db_pool().writer();
         w.execute(
             "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, allowed_models_json, is_active, created_at)
@@ -267,15 +283,19 @@ async fn analytics_scope_is_rejected_everywhere() {
             rusqlite::params![key_hash],
         )
         .expect("insert analytics key");
-    }
+        w.last_insert_rowid()
+    };
 
     let app = app_for(&state);
 
+    // Allowlist: identity, tenanted usage, client catalog, own credits.
     for uri in [
         "/admin/api/auth/me",
         "/admin/api/usage/summary",
         "/admin/api/formats",
         "/admin/api/models/catalog",
+        "/admin/api/credits/balance",
+        "/admin/api/credits/quota",
     ] {
         let resp = app
             .clone()
@@ -291,13 +311,64 @@ async fn analytics_scope_is_rejected_everywhere() {
             .unwrap();
         assert_eq!(
             resp.status(),
+            StatusCode::OK,
+            "analytics key must reach the client allowlist on {uri}"
+        );
+    }
+
+    // credits/balance is SELF-scoped: the operator's ?key_id= override is
+    // ignored for non-manage keys, so a client key can never read another
+    // key's balance by guessing its id.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/api/credits/balance?key_id=1")
+                .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        v["key_id"].as_i64(),
+        Some(analytics_key_id),
+        "?key_id= override must be ignored for non-manage keys"
+    );
+
+    // Deny by default: operator routes stay 403 for client keys.
+    for (method, uri) in [
+        ("GET", "/admin/api/keys"),
+        ("GET", "/admin/api/config"),
+        ("GET", "/admin/api/credits/packages"),
+        ("GET", "/admin/api/credits/orders"),
+        ("POST", "/admin/api/credits/packages"),
+        ("POST", "/admin/api/ws-ticket"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
             StatusCode::FORBIDDEN,
-            "analytics key must be rejected on {uri}"
+            "analytics key must be rejected on {method} {uri}"
         );
     }
 
     let resp = app
-        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -308,5 +379,6 @@ async fn analytics_scope_is_rejected_everywhere() {
         )
         .await
         .unwrap();
-    assert!(resp.status() == StatusCode::FORBIDDEN || resp.status() == StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(state.ws_tickets().is_empty());
 }

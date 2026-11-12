@@ -296,6 +296,28 @@ pub(crate) async fn authenticate_admin_ws(
     })
 }
 
+/// Client-facing allowlist for keys WITHOUT "manage" (analytics/read scopes).
+/// Everything not listed here is operator-only. Method is part of the rule so
+/// a client key can never mutate anything outside its own credits top-up.
+fn client_allowed(path: &str, method: &axum::http::Method) -> bool {
+    // Path without the /admin/api nest prefix (nginx /tokens/ strips are
+    // applied before this middleware sees the request).
+    let p = path.strip_prefix("/admin/api").unwrap_or(path);
+    let get = method == axum::http::Method::GET;
+    match p {
+        "/auth/me" | "/formats" | "/models/catalog" => get,
+        // Tenanted usage: usage.rs applies apply_tenant_and_public_scope per
+        // handler, so an analytics key only ever reads its own key's rows.
+        p if p.starts_with("/usage") => get,
+        // Self-service credits: own balance, own transactions, own quota,
+        // and topping up THIS key. Package/order/gateway management is not
+        // listed → operator-only.
+        "/credits/balance" | "/credits/transactions" | "/credits/quota" => get,
+        "/credits/topup" => method == axum::http::Method::POST,
+        _ => false,
+    }
+}
+
 pub async fn admin_auth_middleware(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -324,33 +346,37 @@ pub async fn admin_auth_middleware(
         Ok(identity) => {
             state.admin_limiter().record_success(client_ip_for_throttle);
 
-            // Scope-based endpoint authorization guard: the panel (served at
-            // /admin and, through the nginx /tokens/ prefix strip, at
-            // /tokens/admin) is OPERATOR-ONLY. Every key without "manage" (or
-            // dev bypass) is rejected outright — read-only analytics included:
-            // user keys are for the /v1 gateway and the anonymous checkout,
-            // never for this surface.
+            // Scope-based endpoint authorization guard (deny by default).
+            // "manage" is the operator scope and sees everything. Client keys
+            // (analytics/read) get ONLY the explicit allowlist below: their
+            // own tenanted analytics and their own credits surface. Every
+            // other route — keys, config, providers, accounts, backups,
+            // ws-ticket, package/order management — stays operator-only, so a
+            // customer key can never reach an admin route no matter which
+            // login screen it came through.
             if !identity.has_manage_scope() {
                 let path = req.uri().path();
                 let method = req.method();
-                tracing::warn!(
-                    target: "openproxy::security::audit",
-                    key_id = identity.key_id(),
-                    ip = identity.client_ip().map(|a| a.to_string()),
-                    path = %path,
-                    method = %method,
-                    "forbidden admin access: key lacks manage scope"
-                );
-                return (
-                    axum::http::StatusCode::FORBIDDEN,
-                    axum::Json(serde_json::json!({
-                        "error": {
-                            "code": "forbidden",
-                            "message": "forbidden: api key lacks manage scope"
-                        }
-                    })),
-                )
-                    .into_response();
+                if !client_allowed(path, method) {
+                    tracing::warn!(
+                        target: "openproxy::security::audit",
+                        key_id = identity.key_id(),
+                        ip = identity.client_ip().map(|a| a.to_string()),
+                        path = %path,
+                        method = %method,
+                        "forbidden admin access: key lacks manage scope"
+                    );
+                    return (
+                        axum::http::StatusCode::FORBIDDEN,
+                        axum::Json(serde_json::json!({
+                            "error": {
+                                "code": "forbidden",
+                                "message": "forbidden: api key lacks manage scope"
+                            }
+                        })),
+                    )
+                        .into_response();
+                }
             }
 
             req.extensions_mut().insert(identity);
