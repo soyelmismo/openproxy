@@ -33,6 +33,9 @@ pub struct CreditTier {
     pub active: bool,
     /// How many packages point at this tier (a tier in use cannot be deleted).
     pub package_count: i64,
+    /// How many live keys inherited this tier (the single-source-of-truth
+    /// propagation surface: an edit re-shapes exactly this many keys).
+    pub key_count: i64,
 }
 
 const TIER_COLS: &str = "t.id, t.name, t.models_json, t.providers_json, t.combos_json, \
@@ -58,6 +61,7 @@ fn row_to_tier(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditTier> {
         },
         active: row.get::<_, i64>(9)? != 0,
         package_count: row.get(10).unwrap_or(0),
+        key_count: row.get(11).unwrap_or(0),
     })
 }
 
@@ -69,7 +73,8 @@ pub fn list(conn: &Connection) -> openproxy_types::Result<Vec<CreditTier>> {
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {TIER_COLS}, \
-             (SELECT COUNT(*) FROM credit_packages p WHERE p.tier_id = t.id) \
+             (SELECT COUNT(*) FROM credit_packages p WHERE p.tier_id = t.id), \
+             (SELECT COUNT(*) FROM api_keys k WHERE k.tier_id = t.id) \
              FROM credit_tiers t ORDER BY t.active DESC, t.name ASC"
         ))
         .map_err(openproxy_db::error::map_db_error)?;
@@ -88,7 +93,8 @@ pub fn get(conn: &Connection, id: i64) -> openproxy_types::Result<Option<CreditT
     conn.query_row(
         &format!(
             "SELECT {TIER_COLS}, \
-             (SELECT COUNT(*) FROM credit_packages p WHERE p.tier_id = t.id) \
+             (SELECT COUNT(*) FROM credit_packages p WHERE p.tier_id = t.id), \
+             (SELECT COUNT(*) FROM api_keys k WHERE k.tier_id = t.id) \
              FROM credit_tiers t WHERE t.id = ?1"
         ),
         params![id],
@@ -216,6 +222,15 @@ pub fn update(
             params![i64::from(a), id],
         )
         .map_err(openproxy_db::error::map_db_error)?;
+    }
+    // Single source of truth: a config edit re-shapes every key linked to
+    // this tier, in the same transaction (Miguel, 2026-11-12). Active
+    // toggles only affect NEW purchases, not already-linked keys.
+    if config.is_some() {
+        let keys = crate::credits::packages::propagate_tier_to_keys(conn, id)?;
+        if keys > 0 {
+            tracing::info!(tier_id = id, keys, "tier propagated to linked keys");
+        }
     }
     Ok(())
 }

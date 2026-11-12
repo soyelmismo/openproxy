@@ -183,6 +183,8 @@ pub fn apply_payment(
             if let Some(cfg) = crate::credits::packages::resolved_config(conn, &pkg)? {
                 crate::credits::packages::apply_to_key(conn, key_id, &cfg)?;
             }
+            // Live link: future tier edits propagate to this key.
+            crate::credits::packages::set_key_tier(conn, key_id, pkg.tier_id)?;
         }
     }
 

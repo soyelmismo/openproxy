@@ -293,6 +293,129 @@ pub fn apply_to_key(
     Ok(())
 }
 
+/// Persist which tier a leveraged key inherited. This link (not the copied
+/// snapshot) is what makes the tier the single source of truth: edits to the
+/// tier re-shape every key pointing at it.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn set_key_tier(
+    conn: &Connection,
+    key_id: ApiKeyId,
+    tier_id: Option<i64>,
+) -> openproxy_types::Result<()> {
+    conn.execute(
+        "UPDATE api_keys SET tier_id = ?1 WHERE id = ?2",
+        params![tier_id, key_id.0],
+    )
+    .map_err(openproxy_db::error::map_db_error)?;
+    Ok(())
+}
+
+/// The tier's own shaping, independent of any package: caps and allowlists as
+/// the tier currently defines them. This is the LIVE contract propagation
+/// applies — unlike the purchase path, caps are replaced, never or-merged, so
+/// removing a cap in the tier removes it from the keys.
+#[must_use]
+pub fn tier_own_config(tier: &crate::credits::tiers::CreditTier) -> PackageConfig {
+    let t = &tier.config;
+    let gate = t
+        .only_whitelisted
+        .or(if t.allowed_models.is_some() { Some(true) } else { None });
+    PackageConfig {
+        monthly_usd_cap: t.monthly_usd_cap,
+        weekly_usd_cap: t.weekly_usd_cap,
+        five_hour_usd_cap: t.five_hour_usd_cap,
+        allowed_models: t.allowed_models.clone(),
+        allowed_providers: t.allowed_providers.clone(),
+        allowed_combos: t.allowed_combos.clone(),
+        only_whitelisted: gate,
+    }
+}
+
+/// Re-shape every key linked to `tier_id` with the tier's CURRENT config.
+/// Called after a tier edit: the tier is the single source of truth and the
+/// keys inherit the change immediately (Miguel, 2026-11-12). Quota caps
+/// are replaced, allowlists are overwritten wholesale. Returns the number of
+/// keys touched.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn propagate_tier_to_keys(
+    conn: &Connection,
+    tier_id: i64,
+) -> openproxy_types::Result<usize> {
+    let Some(tier) = crate::credits::tiers::get(conn, tier_id)? else {
+        return Ok(0);
+    };
+    let config = tier_own_config(&tier);
+    let key_ids: Vec<ApiKeyId> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM api_keys WHERE tier_id = ?1 AND is_active = 1")
+            .map_err(openproxy_db::error::map_db_error)?;
+        let rows = stmt
+            .query_map(params![tier_id], |row| row.get::<_, i64>(0))
+            .map_err(openproxy_db::error::map_db_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(openproxy_db::error::map_db_error)?
+            .into_iter()
+            .map(ApiKeyId)
+            .collect()
+    };
+    for kid in &key_ids {
+        apply_to_key_forced(conn, *kid, &config)?;
+    }
+    Ok(key_ids.len())
+}
+
+/// Like `apply_to_key` but authoritative: quota caps are SET (a `None` clears
+/// the previous cap) and allowlists are written even when the tier no longer
+/// constrains them. Used by tier propagation, where the tier is the truth.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn apply_to_key_forced(
+    conn: &Connection,
+    key_id: ApiKeyId,
+    config: &PackageConfig,
+) -> openproxy_types::Result<()> {
+    let caps = crate::api_key_quotas::QuotaCaps {
+        monthly_usd_cap: config.monthly_usd_cap,
+        weekly_usd_cap: config.weekly_usd_cap,
+        five_hour_usd_cap: config.five_hour_usd_cap,
+    };
+    crate::api_key_quotas::upsert(conn, key_id, &caps)?;
+    if let Some(models) = &config.allowed_models {
+        conn.execute(
+            "UPDATE api_keys SET allowed_models_json = ?1 WHERE id = ?2",
+            params![serde_json::to_string(models).unwrap_or_default(), key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
+    if let Some(providers) = &config.allowed_providers {
+        conn.execute(
+            "UPDATE api_keys SET allowed_providers_json = ?1 WHERE id = ?2",
+            params![serde_json::to_string(providers).unwrap_or_default(), key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
+    if let Some(combos) = &config.allowed_combos {
+        conn.execute(
+            "UPDATE api_keys SET allowed_combos_json = ?1 WHERE id = ?2",
+            params![serde_json::to_string(combos).unwrap_or_default(), key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
+    if let Some(only) = config.only_whitelisted {
+        conn.execute(
+            "UPDATE api_keys SET only_whitelisted = ?1 WHERE id = ?2",
+            params![i64::from(only), key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
+    Ok(())
+}
+
 /// Effective key-shaping of a purchase: the tier is the access contract, the
 /// package's own legacy `config_json` only fills fields the tier left unset
 /// (`None`). A package without tier keeps the pure legacy behaviour.

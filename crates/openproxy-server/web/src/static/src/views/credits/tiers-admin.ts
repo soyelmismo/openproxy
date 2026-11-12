@@ -1,17 +1,223 @@
 // views/credits/tiers-admin.ts — tier management (admin only).
 //
 // A tier is the access contract: models + quota caps a leveraged key gets
-// when a package tied to it is paid. The editor is a searchable multi-select
-// over the server's model catalog; saving replaces the whole config.
+// when a package tied to it is paid. It is also the SINGLE SOURCE OF TRUTH:
+// editing a tier re-shapes every key linked to it (backend propagation).
+//
+// The editor is a modal with a searchable, paged multi-select over the full
+// admin catalog (every model + every combo, active or not). All interactions
+// re-render the modal body locally — no view refetch per keystroke.
 
 import { html, type TemplateResult } from "lit-html";
 import { api } from "../../state/api.js";
 import { showToast } from "../../components/toast.js";
 import {
   catalogModels, ensureCatalog, requestRefresh, tierDraft,
-  setTierDraft,
+  setTierDraft, tierSearchQuery, setTierSearchQuery,
+  tierCatalogPage, setTierCatalogPage, resetTierCatalogBrowser,
 } from "./shared.js";
-import type { AdminTier, CreditsData, TierDraft } from "./types.js";
+import { openModal, refocusInput, type ModalHandle } from "./modal.js";
+import type { AdminTier, CatalogModel, CreditsData, TierDraft } from "./types.js";
+
+const PAGE_SIZE = 60;
+let kindFilter: "all" | "model" | "combo" = "all";
+let handle: ModalHandle | null = null;
+
+function syncScalars(): void {
+  if (!tierDraft) return;
+  const name = (document.getElementById("tier-name") as HTMLInputElement | null)?.value ?? tierDraft.name;
+  const monthly = (document.getElementById("tier-monthly") as HTMLInputElement | null)?.value ?? tierDraft.monthly;
+  const weekly = (document.getElementById("tier-weekly") as HTMLInputElement | null)?.value ?? tierDraft.weekly;
+  const fiveHour = (document.getElementById("tier-fivehour") as HTMLInputElement | null)?.value ?? tierDraft.fiveHour;
+  setTierDraft({ ...tierDraft, name, monthly, weekly, fiveHour });
+}
+
+function filtered(): CatalogModel[] {
+  const q = tierSearchQuery.trim().toLowerCase();
+  return (catalogModels ?? []).filter((m) => {
+    if (kindFilter !== "all" && m.kind !== kindFilter) return false;
+    if (!q) return true;
+    return `${m.id} ${m.name ?? ""} ${m.provider ?? ""} ${m.kind}`.toLowerCase().includes(q);
+  });
+}
+
+function repaint(): void {
+  syncScalars();
+  handle?.repaint(body());
+}
+
+function toggleDraftModel(id: string): void {
+  if (!tierDraft) return;
+  const has = tierDraft.models.includes(id);
+  setTierDraft({
+    ...tierDraft,
+    models: has ? tierDraft.models.filter((m) => m !== id) : [...tierDraft.models, id],
+  });
+  repaint();
+}
+
+function selectPage(ids: string[]): void {
+  if (!tierDraft) return;
+  setTierDraft({ ...tierDraft, models: [...new Set([...tierDraft.models, ...ids])] });
+  repaint();
+}
+
+function clearSelection(): void {
+  if (!tierDraft) return;
+  setTierDraft({ ...tierDraft, models: [] });
+  repaint();
+}
+
+async function saveTier(): Promise<void> {
+  if (!tierDraft) return;
+  syncScalars();
+  const d = tierDraft;
+  const name = d.name.trim();
+  const monthly = parseFloat(d.monthly);
+  const weekly = parseFloat(d.weekly);
+  const fiveHour = parseFloat(d.fiveHour);
+  if (!name) {
+    showToast("tier name is required", "error");
+    return;
+  }
+  if (d.models.length === 0) {
+    showToast("a tier without models leaves the key unrestricted — pick at least one", "error");
+    return;
+  }
+  const config = {
+    monthly_usd_cap: Number.isFinite(monthly) ? monthly : null,
+    weekly_usd_cap: Number.isFinite(weekly) ? weekly : null,
+    five_hour_usd_cap: Number.isFinite(fiveHour) ? fiveHour : null,
+    allowed_models: d.models,
+    allowed_providers: null,
+    allowed_combos: null,
+    only_whitelisted: true,
+  };
+  try {
+    if (d.id == null) {
+      await api("/credits/tiers", { method: "POST", body: JSON.stringify({ name, config }) });
+      showToast("tier created", "success");
+    } else {
+      await api(`/credits/tiers/${d.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name, config, active: d.active }),
+      });
+      showToast("tier saved — linked keys re-shaped", "success");
+    }
+    handle?.close();
+    setTierDraft(null);
+    requestRefresh();
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : "save failed", "error");
+  }
+}
+
+function closeEditor(): void {
+  handle?.close();
+  setTierDraft(null);
+  requestRefresh();
+}
+
+function body(): TemplateResult {
+  const d = tierDraft as TierDraft;
+  const rows = filtered();
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const page = Math.min(tierCatalogPage, pages - 1);
+  const shown = rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
+  const selected = new Set(d.models);
+  const pageIds = shown.map((m) => m.id);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  return html`
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Name</label>
+        <input id="tier-name" .value=${d.name} placeholder="e.g. Flash" style="max-width:170px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, name: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Monthly cap USD</label>
+        <input id="tier-monthly" .value=${d.monthly} placeholder="none" style="max-width:100px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, monthly: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Weekly cap USD</label>
+        <input id="tier-weekly" .value=${d.weekly} placeholder="none" style="max-width:100px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, weekly: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">5h cap USD</label>
+        <input id="tier-fivehour" .value=${d.fiveHour} placeholder="none" style="max-width:90px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, fiveHour: (e.target as HTMLInputElement).value }); }}></div>
+    </div>
+
+    <div style="margin-top:12px;font-size:12px;color:var(--color-text-muted)">
+      Models in this tier — <b>${d.models.length}</b> selected
+      ${d.models.length > 0 ? html` · <a style="cursor:pointer" @click=${() => clearSelection()}>clear all</a>` : null}
+    </div>
+    <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;max-height:90px;overflow:auto">
+      ${d.models.length === 0
+        ? html`<span style="font-size:11px;color:var(--color-text-muted)">none yet</span>`
+        : d.models.map((m) => html`
+          <span style="font-size:11px;background:var(--color-border);border-radius:20px;padding:2px 10px;white-space:nowrap">
+            ${m} <a style="cursor:pointer;margin-left:4px" @click=${() => toggleDraftModel(m)}>×</a>
+          </span>`)}
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <input id="tier-search" .value=${tierSearchQuery} placeholder="search ${catalogModels == null ? "catalog…" : `${(catalogModels ?? []).length} entries…`}"
+             style="flex:1;min-width:200px"
+             @input=${(e: Event) => {
+               setTierSearchQuery((e.target as HTMLInputElement).value);
+               setTierCatalogPage(0);
+               repaint();
+               refocusInput("tier-search");
+             }}>
+      <select style="max-width:120px" @change=${(e: Event) => {
+        kindFilter = (e.target as HTMLSelectElement).value as typeof kindFilter;
+        setTierCatalogPage(0);
+        repaint();
+      }}>
+        <option value="all" ?selected=${kindFilter === "all"}>all kinds</option>
+        <option value="model" ?selected=${kindFilter === "model"}>models</option>
+        <option value="combo" ?selected=${kindFilter === "combo"}>combos</option>
+      </select>
+      <button class="secondary" style="padding:2px 10px"
+              @click=${() => (allPageSelected ? pageIds.forEach((id) => toggleDraftModel(id)) : selectPage(pageIds))}>
+        ${allPageSelected ? "unselect page" : `select page (${pageIds.length})`}
+      </button>
+    </div>
+
+    <div style="margin-top:6px;border:1px solid var(--color-border);border-radius:8px;max-height:280px;overflow:auto">
+      ${catalogModels == null
+        ? html`<div style="color:var(--color-text-muted);font-size:12px;padding:8px">loading catalog…</div>`
+        : shown.length === 0
+          ? html`<div style="color:var(--color-text-muted);font-size:12px;padding:8px">no entries match</div>`
+          : shown.map((m) => html`
+            <label style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 8px;cursor:pointer;${m.active ? "" : "opacity:.55"}">
+              <input type="checkbox" ?checked=${selected.has(m.id)} @change=${() => toggleDraftModel(m.id)}>
+              <span style="font-family:monospace">${m.id}</span>
+              ${m.kind === "combo"
+                ? html`<span style="font-size:10px;border:1px solid var(--color-primary);border-radius:10px;padding:0 6px;color:var(--color-primary)">combo</span>`
+                : null}
+              ${m.active ? null : html`<span style="font-size:10px;color:var(--color-warn)">inactive</span>`}
+              <span style="color:var(--color-text-muted);font-size:11px;margin-left:auto">
+                ${m.kind === "combo" ? (m.name ?? "") : `${m.provider ?? ""}${(m.providers ?? 1) > 1 ? ` +${(m.providers ?? 1) - 1}` : ""}`}
+              </span>
+            </label>`)}
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;font-size:11px;color:var(--color-text-muted)">
+      <span>${rows.length === 0 ? "0 entries" : `${page * PAGE_SIZE + 1}–${Math.min(rows.length, (page + 1) * PAGE_SIZE)} of ${rows.length}`}</span>
+      <span style="display:flex;gap:6px">
+        <button class="secondary" style="padding:1px 8px" ?disabled=${page === 0}
+                @click=${() => { setTierCatalogPage(page - 1); repaint(); }}>prev</button>
+        <button class="secondary" style="padding:1px 8px" ?disabled=${page >= pages - 1}
+                @click=${() => { setTierCatalogPage(page + 1); repaint(); }}>next</button>
+      </span>
+    </div>
+
+    <div style="margin-top:14px;display:flex;gap:8px">
+      <button class="primary" @click=${() => void saveTier()}>${d.id == null ? "Create tier" : "Save tier"}</button>
+      <button class="secondary" @click=${() => closeEditor()}>Cancel</button>
+    </div>
+    <div style="font-size:11px;color:var(--color-text-muted);margin-top:8px">
+      An allowlist forces only_whitelisted on the buyer's key: the leveraged credit can only reach these models.
+      Saving an existing tier re-shapes every linked key immediately.
+    </div>`;
+}
 
 function openTierEditor(tier: AdminTier | null): void {
   setTierDraft(tier == null
@@ -25,59 +231,10 @@ function openTierEditor(tier: AdminTier | null): void {
         fiveHour: tier.config.five_hour_usd_cap == null ? "" : String(tier.config.five_hour_usd_cap),
         active: tier.active,
       });
-  requestRefresh();
-  void ensureCatalog().then(requestRefresh);
-}
-
-function toggleDraftModel(id: string): void {
-  if (!tierDraft) return;
-  setTierDraft({
-    ...tierDraft,
-    models: tierDraft.models.includes(id)
-      ? tierDraft.models.filter((m) => m !== id)
-      : [...tierDraft.models, id],
-  });
-  requestRefresh();
-}
-
-async function saveTier(): Promise<void> {
-  if (!tierDraft) return;
-  const name = (document.getElementById("tier-name") as HTMLInputElement | null)?.value.trim() ?? tierDraft.name;
-  const monthly = parseFloat((document.getElementById("tier-monthly") as HTMLInputElement | null)?.value ?? "");
-  const weekly = parseFloat((document.getElementById("tier-weekly") as HTMLInputElement | null)?.value ?? "");
-  const fiveHour = parseFloat((document.getElementById("tier-fivehour") as HTMLInputElement | null)?.value ?? "");
-  if (!name) {
-    showToast("tier name is required", "error");
-    return;
-  }
-  if (tierDraft.models.length === 0) {
-    showToast("a tier without models leaves the key unrestricted — pick at least one", "error");
-    return;
-  }
-  const config = {
-    monthly_usd_cap: Number.isFinite(monthly) ? monthly : null,
-    weekly_usd_cap: Number.isFinite(weekly) ? weekly : null,
-    five_hour_usd_cap: Number.isFinite(fiveHour) ? fiveHour : null,
-    allowed_models: tierDraft.models,
-    allowed_providers: null,
-    allowed_combos: null,
-    only_whitelisted: true,
-  };
-  try {
-    if (tierDraft.id == null) {
-      await api("/credits/tiers", { method: "POST", body: JSON.stringify({ name, config }) });
-    } else {
-      await api(`/credits/tiers/${tierDraft.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ name, config, active: tierDraft.active }),
-      });
-    }
-    showToast("tier saved", "success");
-    setTierDraft(null);
-    requestRefresh();
-  } catch (err) {
-    showToast(err instanceof Error ? err.message : "save failed", "error");
-  }
+  resetTierCatalogBrowser();
+  kindFilter = "all";
+  handle = openModal(tier == null ? "New tier" : `Edit tier — ${tier.name}`, body());
+  void ensureCatalog().then(() => repaint());
 }
 
 async function toggleTier(id: number, active: boolean): Promise<void> {
@@ -99,94 +256,35 @@ async function deleteTier(id: number): Promise<void> {
   }
 }
 
-function renderTierEditor(): TemplateResult {
-  const d = tierDraft as TierDraft;
-  const shown = (catalogModels ?? []).slice(0, 80);
-  return html`
-    <div style="border:1px solid var(--accent,#6366f1);border-radius:10px;padding:12px;margin-top:12px;background:var(--surface,#141824)">
-      <div style="font-weight:700;margin-bottom:8px">${d.id == null ? "New tier" : `Edit tier #${d.id}`}</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
-        <div><label style="font-size:11px;color:var(--muted);display:block">Name</label>
-          <input id="tier-name" .value=${d.name} placeholder="e.g. Flash" style="max-width:160px"></div>
-        <div><label style="font-size:11px;color:var(--muted);display:block">Monthly cap USD</label>
-          <input id="tier-monthly" .value=${d.monthly} placeholder="none" style="max-width:100px"></div>
-        <div><label style="font-size:11px;color:var(--muted);display:block">Weekly cap USD</label>
-          <input id="tier-weekly" .value=${d.weekly} placeholder="none" style="max-width:100px"></div>
-        <div><label style="font-size:11px;color:var(--muted);display:block">5h cap USD</label>
-          <input id="tier-fivehour" .value=${d.fiveHour} placeholder="none" style="max-width:90px"></div>
-      </div>
-      <div style="margin-top:10px;font-size:12px;color:var(--muted)">
-        Models in this tier — ${d.models.length} selected
-      </div>
-      <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
-        ${d.models.length === 0
-          ? html`<span style="font-size:11px;color:var(--muted)">none yet</span>`
-          : d.models.map((m) => html`
-            <span style="font-size:11px;background:var(--border,#232a3d);border-radius:20px;padding:2px 10px">
-              ${m} <a style="cursor:pointer;margin-left:4px" @click=${() => toggleDraftModel(m)}>×</a>
-            </span>`)}
-      </div>
-      <input id="tier-search" placeholder="filter the catalog…" style="margin-top:10px;width:100%;max-width:320px"
-             @input=${(e: Event) => {
-               const q = (e.target as HTMLInputElement).value.toLowerCase();
-               document.querySelectorAll<HTMLElement>("#tier-model-list label").forEach((el) => {
-                 const s = el.dataset["search"] ?? "";
-                 el.style.display = s.includes(q) ? "flex" : "none";
-               });
-             }}>
-      <div id="tier-model-list" style="max-height:190px;overflow:auto;border:1px solid var(--border,#232a3d);border-radius:8px;margin-top:6px;padding:4px">
-        ${catalogModels == null
-          ? html`<div style="color:var(--muted);font-size:12px;padding:6px">loading catalog…</div>`
-          : shown.length === 0
-            ? html`<div style="color:var(--muted);font-size:12px;padding:6px">catalog empty</div>`
-            : shown.map((m) => html`
-              <label data-search=${`${m.id} ${m.provider ?? ""}`.toLowerCase()}
-                     style="display:flex;gap:8px;align-items:center;font-size:12px;padding:3px 6px;cursor:pointer">
-                <input type="checkbox" ?checked=${d.models.includes(m.id)}
-                       @change=${() => toggleDraftModel(m.id)}>
-                <span style="font-family:monospace">${m.id}</span>
-                <span style="color:var(--muted);font-size:11px">${m.provider ?? ""}</span>
-              </label>`)}
-      </div>
-      <div style="margin-top:10px;display:flex;gap:8px">
-        <button class="primary" @click=${() => void saveTier()}>${d.id == null ? "Create tier" : "Save tier"}</button>
-        <button class="secondary" @click=${() => { setTierDraft(null); requestRefresh(); }}>Cancel</button>
-      </div>
-      <div style="font-size:11px;color:var(--muted);margin-top:8px">
-        An allowlist forces only_whitelisted on the buyer's key: the leveraged credit can only reach these models.
-      </div>
-    </div>`;
-}
-
 export function renderTiers(data: CreditsData): TemplateResult {
   return html`
     <section class="card" style="margin-top:16px">
       <div class="card-title">Tiers (access contracts: models + quota caps)</div>
       <div class="card-body" style="font-size:13px">
         ${data.adminTiers.length === 0
-          ? html`<div style="color:var(--muted)">No tiers yet — create one to gate a package.</div>`
+          ? html`<div style="color:var(--color-text-muted)">No tiers yet — create one to gate a package.</div>`
           : html`
         <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="color:var(--muted);font-size:11px;text-align:left">
+          <thead><tr style="color:var(--color-text-muted);font-size:11px;text-align:left">
             <th style="padding:4px 8px 4px 0">Name</th><th style="padding:4px 8px">Models</th>
-            <th style="padding:4px 8px">Caps (m / w / 5h)</th><th style="padding:4px 8px">Used by</th>
+            <th style="padding:4px 8px">Caps (m / w / 5h)</th><th style="padding:4px 8px">Inherited by</th>
             <th style="padding:4px 8px">Active</th><th></th>
           </tr></thead>
           <tbody>
             ${data.adminTiers.map((t) => html`
-            <tr style="border-top:1px solid var(--border,#232a3d)">
+            <tr style="border-top:1px solid var(--color-border)">
               <td style="padding:6px 8px 6px 0;font-weight:600">${t.name}</td>
               <td style="padding:6px 8px;max-width:260px">
                 ${t.config.allowed_models == null
-                  ? html`<span style="color:var(--warn,#f59e0b)">unrestricted</span>`
-                  : html`<span style="color:var(--muted)">${t.config.allowed_models.length} model(s)</span>
-                      <div style="font-size:10px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px">
+                  ? html`<span style="color:var(--color-warn)">unrestricted</span>`
+                  : html`<span style="color:var(--color-text-muted)">${t.config.allowed_models.length} model(s)</span>
+                      <div style="font-size:10px;color:var(--color-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:260px">
                         ${t.config.allowed_models.join(", ")}</div>`}
               </td>
-              <td style="padding:6px 8px;color:var(--muted);font-size:12px">
+              <td style="padding:6px 8px;color:var(--color-text-muted);font-size:12px">
                 ${t.config.monthly_usd_cap ?? "∞"} / ${t.config.weekly_usd_cap ?? "∞"} / ${t.config.five_hour_usd_cap ?? "∞"}
               </td>
-              <td style="padding:6px 8px">${t.package_count} pkg</td>
+              <td style="padding:6px 8px">${t.package_count} pkg · ${t.key_count} keys</td>
               <td style="padding:6px 8px">${t.active ? "yes" : "no"}</td>
               <td style="padding:6px 0 6px 8px;white-space:nowrap">
                 <button class="secondary" style="padding:2px 8px" @click=${() => openTierEditor(t)}>edit</button>
@@ -196,11 +294,9 @@ export function renderTiers(data: CreditsData): TemplateResult {
             </tr>`)}
           </tbody>
         </table>`}
-        ${tierDraft == null
-          ? html`<div style="margin-top:12px">
-              <button class="primary" @click=${() => openTierEditor(null)}>New tier</button>
-            </div>`
-          : renderTierEditor()}
+        <div style="margin-top:12px">
+          <button class="primary" @click=${() => openTierEditor(null)}>New tier</button>
+        </div>
       </div>
     </section>`;
 }

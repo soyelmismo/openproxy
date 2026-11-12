@@ -15,6 +15,21 @@ export let activeOrder: Order | null = null;
 export let selectedPackageId: number | null = null;
 export let tierDraft: TierDraft | null = null;
 export let catalogModels: CatalogModel[] | null = null;
+// Tier editor catalog browser state: kept module-scoped so the searchable,
+// paged multi-select re-renders locally (no full view refetch per keystroke).
+export let tierSearchQuery = "";
+export let tierCatalogPage = 0;
+
+export function setTierSearchQuery(v: string): void {
+  tierSearchQuery = v;
+}
+export function setTierCatalogPage(v: number): void {
+  tierCatalogPage = v;
+}
+export function resetTierCatalogBrowser(): void {
+  tierSearchQuery = "";
+  tierCatalogPage = 0;
+}
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let countdownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -95,17 +110,29 @@ export function startPolling(order: Order, onPaid: () => void): void {
 }
 
 // ── model catalog (tier editor) ─────────────────────────────────────
+// Full admin catalog: every model (all providers, active or not) plus every
+// combo as its virtual `combo:<name>` id. The tier editor pages through it.
 export async function ensureCatalog(): Promise<void> {
   if (catalogModels != null) return;
   try {
-    const rows = (await api("/models")) as Array<{ model_id: string; provider_id: string; active?: boolean }>;
-    setCatalogModels(
-      rows
-        .filter((m) => m.active !== false)
-        .map((m) => ({ id: m.model_id, provider: m.provider_id }))
-        .sort((a, b) => a.id.localeCompare(b.id)),
-    );
-  } catch {
+    const res = (await api("/credits/catalog")) as { models: Array<{ id: string; provider: string; active: boolean; providers: number }>; combos: Array<{ id: string; name: string; active: boolean }> };
+    const models: CatalogModel[] = (res.models ?? []).map((m) => ({
+      id: m.id,
+      provider: m.provider,
+      kind: "model" as const,
+      active: m.active,
+      providers: m.providers,
+    }));
+    const combos: CatalogModel[] = (res.combos ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      kind: "combo" as const,
+      active: c.active,
+    }));
+    setCatalogModels([...combos, ...models]);
+  } catch (err) {
+    // Never silently empty: a broken catalog must be visible, not a blank list.
+    showToast(err instanceof Error ? `catalog: ${err.message}` : "catalog load failed", "error");
     setCatalogModels([]);
   }
 }

@@ -14,8 +14,8 @@ import { quotaBar } from "./quota.js";
 import { renderTopupPanel } from "./topup.js";
 import { renderTiers } from "./tiers-admin.js";
 import { renderPackages } from "./packages-admin.js";
-import { renderOrders } from "./orders-admin.js";
-import type { AdminOrder, AdminPackage, AdminTier, CreditsData, PackagesResponse } from "./types.js";
+import { renderOrders, ensureOrdersLoaded } from "./orders-admin.js";
+import type { AdminPackage, AdminTier, CreditsData, PackagesResponse } from "./types.js";
 
 async function loadPackages(): Promise<PackagesResponse> {
   const res = await fetch("/v1/credits/packages", { headers: { Accept: "application/json" } });
@@ -25,14 +25,16 @@ async function loadPackages(): Promise<PackagesResponse> {
 async function loadData(): Promise<CreditsData> {
   // The admin-only ledger queries run solely for operator sessions: a client
   // (analytics/read) key would otherwise hit 403s on every view mount.
-  const adminExtras: Promise<[AdminPackage[], AdminTier[], AdminOrder[]]> = isFullAdmin()
+  // Orders live in their own module (search + pagination); only its first
+  // page is primed here so the table renders with data.
+  const adminExtras: Promise<[AdminPackage[], AdminTier[], void]> = isFullAdmin()
     ? Promise.all([
         api("/credits/packages").catch(() => [] as AdminPackage[]),
         api("/credits/tiers").catch(() => [] as AdminTier[]),
-        api("/credits/orders?limit=200").catch(() => [] as AdminOrder[]),
-      ]) as Promise<[AdminPackage[], AdminTier[], AdminOrder[]]>
-    : Promise.resolve([[], [], []]);
-  const [balance, transactions, quota, packages, [adminPackages, adminTiers, orders]] =
+        ensureOrdersLoaded(),
+      ]) as Promise<[AdminPackage[], AdminTier[], void]>
+    : Promise.resolve([[], [], undefined]);
+  const [balance, transactions, quota, packages, [adminPackages, adminTiers]] =
     await Promise.all([
       api("/credits/balance"),
       api("/credits/transactions?limit=100"),
@@ -44,12 +46,11 @@ async function loadData(): Promise<CreditsData> {
     balance, transactions, quota, packages,
     adminPackages: adminPackages as AdminPackage[],
     adminTiers: adminTiers as AdminTier[],
-    orders: orders as AdminOrder[],
   } as CreditsData;
 }
 
 function renderAdmin(data: CreditsData): TemplateResult {
-  return html`${renderTiers(data)} ${renderPackages(data)} ${renderOrders(data)}`;
+  return html`${renderTiers(data)} ${renderPackages(data)} ${renderOrders()}`;
 }
 
 function render(data: CreditsData): TemplateResult {

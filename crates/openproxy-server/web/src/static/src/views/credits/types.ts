@@ -82,6 +82,8 @@ export interface AdminTier {
   config: AdminTierConfig;
   active: boolean;
   package_count: number;
+  /** Live keys inheriting this tier (an edit re-shapes exactly these). */
+  key_count: number;
 }
 
 export interface AdminOrder {
@@ -97,11 +99,23 @@ export interface AdminOrder {
   created_at: string;
   paid_at: string | null;
   credit_units: number;
+  payer_email?: string | null;
+}
+
+/** GET /credits/admin/orders payload: page + filtered total. */
+export interface OrdersPage {
+  orders: AdminOrder[];
+  total: number;
 }
 
 export interface CatalogModel {
   id: string;
   provider?: string;
+  kind: "model" | "combo";
+  active: boolean;
+  /** models: how many providers serve the same id; combos: display name. */
+  providers?: number;
+  name?: string;
 }
 
 /** Order created by POST /credits/topup (panel checkout, with QR). */
@@ -134,5 +148,4 @@ export interface CreditsData {
   packages: PackagesResponse;
   adminPackages: AdminPackage[];
   adminTiers: AdminTier[];
-  orders: AdminOrder[];
 }

@@ -37,6 +37,9 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(update_tier).delete(delete_tier),
         )
         .route("/orders", get(list_orders))
+        // Full model+combo catalog for tier allowlists (every entry, not
+        // only the first page of active models the chat view shows).
+        .route("/catalog", get(admin_catalog))
         // Runtime master switch for the payment gateway (Config toggle).
         .route("/gateway", get(gateway_status).post(set_gateway))
 }
@@ -435,8 +438,20 @@ struct UpdatePackageRequest {
     config: Option<openproxy_core::credits::PackageConfig>,
     active: Option<bool>,
     /// Outer = touch, inner = value (`None` clears the leverage).
+    #[serde(default, deserialize_with = "double_option")]
     credit_usd: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "double_option")]
     tier_id: Option<Option<i64>>,
+}
+
+/// Distinguish `"field": null` (Some(None) → clear) from an absent field
+/// (None → leave as-is). Plain `Option<Option<T>>` maps both to None.
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::<T>::deserialize(de).map(Some)
 }
 
 async fn update_package(
@@ -550,7 +565,8 @@ async fn delete_tier(
 }
 
 /// The full order ledger for the admin: every checkout, its status, exact
-/// amount and chain pointer.
+/// amount and chain pointer. Searchable (`q` matches order code, payer email,
+/// status or key id) and paginated (`limit`/`offset`, with the filtered total).
 async fn list_orders(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -558,17 +574,45 @@ async fn list_orders(
     let limit = params
         .get("limit")
         .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(200)
+        .unwrap_or(50)
         .clamp(1, 1000);
-    match state
+    let offset = params.get("offset").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).max(0);
+    let q = params.get("q").map(|s| s.trim().to_string()).unwrap_or_default();
+    let res = state
         .db_pool()
         .spawn_read(move |r| {
-            let mut stmt = r.prepare(
+            // Filter: exact status / key id, substring for code and email.
+            let like = format!("%{}%", q.replace('%', ""));
+            let q_key = q.parse::<i64>().ok();
+            let where_clause = if q.is_empty() {
+                String::new()
+            } else {
+                " WHERE (order_code LIKE ?1 OR payer_email LIKE ?1 OR LOWER(status) = LOWER(?1)                  OR (?2 IS NOT NULL AND api_key_id = ?2))".to_string()
+            };
+            let total: i64 = if q.is_empty() {
+                r.query_row("SELECT COUNT(*) FROM credit_orders", [], |row| row.get(0))
+                    .map_err(openproxy_db::error::map_db_error)?
+            } else {
+                r.query_row(
+                    &format!("SELECT COUNT(*) FROM credit_orders{where_clause}"),
+                    rusqlite::params![like, q_key],
+                    |row| row.get(0),
+                )
+                .map_err(openproxy_db::error::map_db_error)?
+            };
+            let sql = if q.is_empty() {
                 "SELECT id, order_code, api_key_id, amount_units, base_units, ttl_days, status, \
-                 tx_hash, package_id, created_at, paid_at, credit_units FROM credit_orders \
-                 ORDER BY id DESC LIMIT ?1",
-            ).map_err(openproxy_db::error::map_db_error)?;
-            let rows = stmt.query_map(rusqlite::params![limit], |row| {
+                 tx_hash, package_id, created_at, paid_at, credit_units, payer_email \
+                 FROM credit_orders ORDER BY id DESC LIMIT ?1 OFFSET ?2".to_string()
+            } else {
+                format!(
+                    "SELECT id, order_code, api_key_id, amount_units, base_units, ttl_days, status, \
+                     tx_hash, package_id, created_at, paid_at, credit_units, payer_email \
+                     FROM credit_orders{where_clause} ORDER BY id DESC LIMIT ?3 OFFSET ?4"
+                )
+            };
+            let mut stmt = r.prepare(&sql).map_err(openproxy_db::error::map_db_error)?;
+            let map_row = |row: &rusqlite::Row| -> rusqlite::Result<serde_json::Value> {
                 Ok(json!({
                     "id": row.get::<_, i64>(0)?,
                     "order_code": row.get::<_, String>(1)?,
@@ -582,15 +626,83 @@ async fn list_orders(
                     "created_at": row.get::<_, String>(9)?,
                     "paid_at": row.get::<_, Option<String>>(10)?,
                     "credit_units": row.get::<_, Option<i64>>(11)?.unwrap_or(row.get::<_, i64>(4)?),
+                    "payer_email": row.get::<_, Option<String>>(12)?,
                 }))
-            }).map_err(openproxy_db::error::map_db_error)?;
-            let vals: Vec<_> = rows.collect::<Result<_, _>>().map_err(openproxy_db::error::map_db_error)?;
-            Ok(vals)
+            };
+            let rows: Vec<serde_json::Value> = if q.is_empty() {
+                stmt.query_map(rusqlite::params![limit, offset], map_row)
+                    .map_err(openproxy_db::error::map_db_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(openproxy_db::error::map_db_error)?
+            } else {
+                stmt.query_map(rusqlite::params![like, q_key, limit, offset], map_row)
+                    .map_err(openproxy_db::error::map_db_error)?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(openproxy_db::error::map_db_error)?
+            };
+            Ok(json!({ "orders": rows, "total": total }))
         })
-        .await
-    {
-        Ok(rows) => Json(rows).into_response(),
+        .await;
+    match res {
+        Ok(v) => Json(v).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "orders_failed", &format!("{e}")),
+    }
+}
+
+/// Every model and combo the tier editor can allowlist: all of them, active
+/// or not (inactive entries are marked, not hidden — a tier may need to keep
+/// naming a model a provider currently has off). Models are deduplicated by
+/// `model_id` (the same model often appears under many providers).
+async fn admin_catalog(State(state): State<AppState>) -> Response {
+    let res = state
+        .db_pool()
+        .spawn_read(|r| {
+            let mut models: Vec<serde_json::Value> = Vec::new();
+            let mut stmt = r
+                .prepare(
+                    "SELECT model_id, GROUP_CONCAT(DISTINCT provider_id), MAX(active), COUNT(*) \
+                     FROM models GROUP BY model_id ORDER BY model_id",
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(json!({
+                        "kind": "model",
+                        "id": row.get::<_, String>(0)?,
+                        "provider": row.get::<_, String>(1)?,
+                        "active": row.get::<_, i64>(2)? == 1,
+                        "providers": row.get::<_, i64>(3)?,
+                    }))
+                })
+                .map_err(openproxy_db::error::map_db_error)?;
+            for row in rows {
+                models.push(row.map_err(openproxy_db::error::map_db_error)?);
+            }
+            let mut combos: Vec<serde_json::Value> = Vec::new();
+            // combos has no active flag: a combo is selectable while it exists.
+            let mut stmt = r
+                .prepare("SELECT name FROM combos ORDER BY name")
+                .map_err(openproxy_db::error::map_db_error)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    let name: String = row.get(0)?;
+                    Ok(json!({
+                        "kind": "combo",
+                        "id": format!("combo:{name}"),
+                        "name": name,
+                        "active": true,
+                    }))
+                })
+                .map_err(openproxy_db::error::map_db_error)?;
+            for row in rows {
+                combos.push(row.map_err(openproxy_db::error::map_db_error)?);
+            }
+            Ok(json!({ "models": models, "combos": combos }))
+        })
+        .await;
+    match res {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "catalog_failed", &format!("{e}")),
     }
 }
 
