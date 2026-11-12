@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 /// Key-shaping payload of a tier. `None` allowlist = leave the key as-is.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TierConfig {
-    pub monthly_usd_cap: Option<f64>,
     pub weekly_usd_cap: Option<f64>,
     pub five_hour_usd_cap: Option<f64>,
     pub allowed_models: Option<Vec<String>>,
@@ -52,7 +51,7 @@ impl CreditTier {
 }
 
 const TIER_COLS: &str = "t.id, t.name, t.models_json, t.providers_json, t.combos_json, \
-                         t.only_whitelisted, t.monthly_usd_cap, t.weekly_usd_cap, \
+                         t.only_whitelisted, t.weekly_usd_cap, \
                          t.five_hour_usd_cap, t.active, t.price_usd, t.credit_usd, t.ttl_days";
 
 fn json_vec(raw: Option<String>) -> Option<Vec<String>> {
@@ -68,15 +67,14 @@ fn row_to_tier(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditTier> {
             allowed_providers: json_vec(row.get(3)?),
             allowed_combos: json_vec(row.get(4)?),
             only_whitelisted: row.get::<_, Option<i64>>(5)?.map(|v| v != 0),
-            monthly_usd_cap: row.get(6)?,
-            weekly_usd_cap: row.get(7)?,
-            five_hour_usd_cap: row.get(8)?,
+            weekly_usd_cap: row.get(6)?,
+            five_hour_usd_cap: row.get(7)?,
         },
-        active: row.get::<_, i64>(9)? != 0,
-        price_usd: row.get(10)?,
-        credit_usd: row.get(11)?,
-        ttl_days: row.get::<_, Option<i64>>(12)?.unwrap_or(30),
-        key_count: row.get(13).unwrap_or(0),
+        active: row.get::<_, i64>(8)? != 0,
+        price_usd: row.get(9)?,
+        credit_usd: row.get(10)?,
+        ttl_days: row.get::<_, Option<i64>>(11)?.unwrap_or(30),
+        key_count: row.get(12).unwrap_or(0),
     })
 }
 
@@ -166,7 +164,6 @@ fn sanitize(config: &TierConfig) -> TierConfig {
         }
     }
     TierConfig {
-        monthly_usd_cap: cap(config.monthly_usd_cap),
         weekly_usd_cap: cap(config.weekly_usd_cap),
         five_hour_usd_cap: cap(config.five_hour_usd_cap),
         allowed_models: config.allowed_models.clone(),
@@ -207,9 +204,9 @@ pub fn create(
     let (price_usd, credit_usd, ttl_days) = validate_plan(plan.price_usd, plan.credit_usd, Some(plan.ttl_days))?;
     conn.execute(
         "INSERT INTO credit_tiers (name, models_json, providers_json, combos_json, \
-             only_whitelisted, monthly_usd_cap, weekly_usd_cap, five_hour_usd_cap, \
+             only_whitelisted, weekly_usd_cap, five_hour_usd_cap, \
              price_usd, credit_usd, ttl_days) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             name,
             models
@@ -222,7 +219,6 @@ pub fn create(
                 .as_ref()
                 .map(|v| serde_json::to_string(v).unwrap_or_default()),
             cfg.only_whitelisted.map(i64::from),
-            cfg.monthly_usd_cap,
             cfg.weekly_usd_cap,
             cfg.five_hour_usd_cap,
             price_usd,
@@ -269,8 +265,8 @@ pub fn update(
         )?;
         conn.execute(
             "UPDATE credit_tiers SET models_json = ?1, providers_json = ?2, combos_json = ?3, \
-                 only_whitelisted = ?4, monthly_usd_cap = ?5, weekly_usd_cap = ?6, \
-                 five_hour_usd_cap = ?7, updated_at = datetime('now') WHERE id = ?8",
+                 only_whitelisted = ?4, weekly_usd_cap = ?5, \
+                 five_hour_usd_cap = ?6, updated_at = datetime('now') WHERE id = ?7",
             params![
                 models
                     .as_ref()
@@ -282,7 +278,6 @@ pub fn update(
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_default()),
                 cfg.only_whitelisted.map(i64::from),
-                cfg.monthly_usd_cap,
                 cfg.weekly_usd_cap,
                 cfg.five_hour_usd_cap,
                 id,
@@ -363,7 +358,6 @@ pub fn apply_to_key(
     config: &TierConfig,
 ) -> openproxy_types::Result<()> {
     let caps = crate::api_key_quotas::QuotaCaps {
-        monthly_usd_cap: config.monthly_usd_cap,
         weekly_usd_cap: config.weekly_usd_cap,
         five_hour_usd_cap: config.five_hour_usd_cap,
     };
@@ -588,7 +582,6 @@ pub fn tier_own_config(tier: &CreditTier) -> TierConfig {
             .unwrap_or_else(|| t.allowed_models.is_some() || t.allowed_providers.is_some()),
     );
     TierConfig {
-        monthly_usd_cap: t.monthly_usd_cap,
         weekly_usd_cap: t.weekly_usd_cap,
         five_hour_usd_cap: t.five_hour_usd_cap,
         allowed_models: t.allowed_models.clone(),
@@ -645,7 +638,6 @@ pub fn apply_to_key_forced(
     config: &TierConfig,
 ) -> openproxy_types::Result<()> {
     let caps = crate::api_key_quotas::QuotaCaps {
-        monthly_usd_cap: config.monthly_usd_cap,
         weekly_usd_cap: config.weekly_usd_cap,
         five_hour_usd_cap: config.five_hour_usd_cap,
     };

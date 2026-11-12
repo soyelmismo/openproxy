@@ -123,6 +123,10 @@ function renderLogin(): TemplateResult {
             ?disabled=${submitting}
           >${submitting ? "…" : submitLabel}</button>
         </form>
+        <div class="login-buy-block">
+          <span class="login-buy-hint">${t("login.no_key_hint")}</span>
+          <a class="btn chain login-buy" href="/checkout">${t("login.buy")}</a>
+        </div>
       </section>
     </div>
   `;

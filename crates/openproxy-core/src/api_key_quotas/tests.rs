@@ -1,4 +1,4 @@
-//! Tests for per-API-key dollar quotas.
+//! Tests for per-API-key dollar quotas (5h + week) and the plan status block.
 //!
 //! Spend rows are inserted directly into `usage` with explicit `created_at`
 //! (SQLite "YYYY-MM-DD HH:MM:SS" UTC) so the window boundaries are stable
@@ -54,6 +54,41 @@ fn insert_failed_attempt(conn: &Connection, key_id: i64, cost: f64) {
     .expect("insert usage");
 }
 
+/// Attach a plan (tier) to a key, with an expiry and a credited balance.
+fn attach_plan(conn: &Connection, key_id: i64, name: &str, credit_usd: f64, ttl_days: i64) {
+    let config = crate::credits::TierConfig {
+        weekly_usd_cap: None,
+        five_hour_usd_cap: None,
+        allowed_models: None,
+        allowed_providers: None,
+        allowed_combos: None,
+        only_whitelisted: None,
+    };
+    let plan = crate::credits::PlanCommerce {
+        price_usd: Some(1.0),
+        credit_usd: Some(credit_usd),
+        ttl_days,
+    };
+    let tier = crate::credits::tiers::create(conn, name, &config, &plan).expect("create tier");
+    conn.execute(
+        "UPDATE api_keys SET tier_id = ?1, expires_at = datetime('now', ?2) WHERE id = ?3",
+        params![tier.id, format!("+{ttl_days} days"), key_id],
+    )
+    .expect("attach tier");
+    let units = (credit_usd * 1_000_000.0) as i64;
+    let order = crate::credits::orders::create_order(
+        conn,
+        Some(ApiIdAlias(key_id)),
+        None,
+        units,
+        ttl_days,
+        None,
+    )
+    .expect("create order");
+    crate::credits::ledger::credit_topup(conn, ApiIdAlias(key_id), order.id, units, ttl_days, "0xtest")
+        .expect("credit topup");
+}
+
 #[test]
 fn no_row_means_unlimited() {
     let conn = fresh_conn();
@@ -62,15 +97,15 @@ fn no_row_means_unlimited() {
     assert!(caps.is_none());
     let st = status(&conn, ApiIdAlias(key)).expect("ok");
     assert!(!st.enabled);
+    assert!(st.plan.is_none());
     assert!(check(&conn, ApiIdAlias(key)).expect("ok").is_none());
 }
 
 #[test]
-fn upsert_roundtrip_and_delete() {
+fn upsert_roundtrip() {
     let conn = fresh_conn();
     let key = make_key(&conn, "quota");
     let caps = QuotaCaps {
-        monthly_usd_cap: Some(25.0),
         weekly_usd_cap: None,
         five_hour_usd_cap: Some(1.5),
     };
@@ -79,14 +114,14 @@ fn upsert_roundtrip_and_delete() {
     assert_eq!(stored, caps);
     // Re-upsert replaces (idempotent).
     let caps2 = QuotaCaps {
-        monthly_usd_cap: None,
         weekly_usd_cap: Some(10.0),
         five_hour_usd_cap: None,
     };
     upsert(&conn, ApiIdAlias(key), &caps2).expect("upsert");
     let stored = get_caps(&conn, ApiIdAlias(key)).expect("get").expect("row");
     assert_eq!(stored, caps2);
-    delete(&conn, ApiIdAlias(key)).expect("delete");
+    conn.execute("DELETE FROM api_key_quotas WHERE api_key_id = ?1", params![key])
+        .expect("delete");
     assert!(get_caps(&conn, ApiIdAlias(key)).expect("get").is_none());
 }
 
@@ -98,8 +133,7 @@ fn spend_counts_only_served_rows_and_respects_windows() {
         &conn,
         ApiIdAlias(key),
         &QuotaCaps {
-            monthly_usd_cap: Some(25.0),
-            weekly_usd_cap: None,
+            weekly_usd_cap: Some(5.0),
             five_hour_usd_cap: Some(1.0),
         },
     )
@@ -109,9 +143,9 @@ fn spend_counts_only_served_rows_and_respects_windows() {
     insert_failed_attempt(&conn, key, 99.0); // never served: excluded
     let st = status(&conn, ApiIdAlias(key)).expect("ok");
     assert!(st.enabled);
-    assert!((st.month.spent_usd - 2.0).abs() < 1e-9);
+    assert!((st.week.spent_usd - 2.0).abs() < 1e-9);
     assert!((st.five_hours.spent_usd - 0.80).abs() < 1e-9);
-    // Served 5h spend 0.80 < 1.0 cap -> allowed; month 2.0 < 25.0 -> allowed.
+    // Served 5h spend 0.80 < 1.0 cap -> allowed; week 2.0 < 5.0 -> allowed.
     assert!(check(&conn, ApiIdAlias(key)).expect("ok").is_none());
 }
 
@@ -123,7 +157,6 @@ fn check_reports_violated_window() {
         &conn,
         ApiIdAlias(key),
         &QuotaCaps {
-            monthly_usd_cap: Some(25.0),
             weekly_usd_cap: None,
             five_hour_usd_cap: Some(0.50),
         },
@@ -140,15 +173,14 @@ fn check_reports_violated_window() {
 }
 
 #[test]
-fn month_violation_carries_reset_time() {
+fn week_violation_carries_reset_time() {
     let conn = fresh_conn();
-    let key = make_key(&conn, "month");
+    let key = make_key(&conn, "week");
     upsert(
         &conn,
         ApiIdAlias(key),
         &QuotaCaps {
-            monthly_usd_cap: Some(1.0),
-            weekly_usd_cap: None,
+            weekly_usd_cap: Some(1.0),
             five_hour_usd_cap: None,
         },
     )
@@ -157,10 +189,56 @@ fn month_violation_carries_reset_time() {
     let v = check(&conn, ApiIdAlias(key))
         .expect("ok")
         .expect("violation");
-    assert_eq!(v.window, WINDOW_MONTH);
+    assert_eq!(v.window, WINDOW_WEEK);
     assert!(v.resets_at.is_some());
     // ISO-8601 shape: YYYY-MM-DDTHH:MM:SSZ
     let r = v.resets_at.unwrap();
     assert_eq!(r.len(), 20);
     assert!(r.ends_with('Z'));
+}
+
+#[test]
+fn uncapped_windows_report_no_reset_and_disabled() {
+    let conn = fresh_conn();
+    let key = make_key(&conn, "uncapped");
+    upsert(
+        &conn,
+        ApiIdAlias(key),
+        &QuotaCaps {
+            weekly_usd_cap: None,
+            five_hour_usd_cap: None,
+        },
+    )
+    .expect("upsert");
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    // No effective cap: nothing to count down, panel must not claim a reset.
+    assert!(!st.enabled);
+    assert!(st.week.resets_at.is_none());
+    assert!(st.five_hours.resets_at.is_none());
+    assert!(check(&conn, ApiIdAlias(key)).expect("ok").is_none());
+}
+
+#[test]
+fn plan_status_reports_balance_credit_and_expiry() {
+    let conn = fresh_conn();
+    let key = make_key(&conn, "plan");
+    attach_plan(&conn, key, "Lite", 3.0, 7);
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    let plan = st.plan.expect("plan present");
+    assert_eq!(plan.name, "Lite");
+    assert!((plan.credit_usd - 3.0).abs() < 1e-9);
+    assert!((plan.balance_usd - 3.0).abs() < 1e-9);
+    let exp = plan.expires_at.expect("expiry");
+    assert!(exp.ends_with('Z') && exp.contains('T'), "ISO-8601: {exp}");
+}
+
+#[test]
+fn plan_balance_follows_spend() {
+    let conn = fresh_conn();
+    let key = make_key(&conn, "plan-spend");
+    attach_plan(&conn, key, "Lite", 3.0, 7);
+    crate::credits::ledger::record_spend(&conn, ApiIdAlias(key), 1_000_000).expect("spend");
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    let plan = st.plan.expect("plan present");
+    assert!((plan.balance_usd - 2.0).abs() < 1e-9, "balance after $1 spend");
 }

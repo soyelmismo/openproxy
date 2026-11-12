@@ -98,14 +98,19 @@ function renderClientView(data: CreditsData): TemplateResult {
       ${topupOpen && !disabled ? renderTopupPanel(data) : null}
 
       <section class="card" style="margin-bottom:16px">
-        <div class="card-title">Quota</div>
+        <div class="card-title">Limits</div>
         <div class="card-body">
-          ${data.quota.enabled
-            ? html`
-                ${quotaBar("Monthly", data.quota.month)}
-                ${quotaBar("Weekly", data.quota.week)}
-                ${quotaBar("5 hours", data.quota.five_hours)}`
-            : html`<div style="color:var(--muted);font-size:13px">No quota caps on this key.</div>`}
+          ${(() => {
+            const bars = [
+              data.quota.five_hours.cap_usd != null ? quotaBar("5 hours", data.quota.five_hours) : null,
+              data.quota.week.cap_usd != null ? quotaBar("Weekly", data.quota.week) : null,
+            ].filter((b) => b !== null);
+            // A plan without window caps still has a limit: its balance.
+            if (bars.length === 0) {
+              return html`<div style="color:var(--muted);font-size:13px">No window caps on this key.</div>`;
+            }
+            return html`${bars}`;
+          })()}
         </div>
       </section>
 

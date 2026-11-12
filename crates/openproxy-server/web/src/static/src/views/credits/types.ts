@@ -33,7 +33,6 @@ export interface QuotaWindow {
 
 export interface QuotaStatus {
   enabled: boolean;
-  month: QuotaWindow;
   week: QuotaWindow;
   five_hours: QuotaWindow;
 }
@@ -54,7 +53,6 @@ export interface PlansResponse {
 }
 
 export interface AdminTierConfig {
-  monthly_usd_cap: number | null;
   weekly_usd_cap: number | null;
   five_hour_usd_cap: number | null;
   allowed_models: string[] | null;
@@ -126,7 +124,6 @@ export interface TierDraft {
   id: number | null;
   name: string;
   models: string[];
-  monthly: string;
   weekly: string;
   fiveHour: string;
   active: boolean;

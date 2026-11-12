@@ -545,6 +545,26 @@ body.on-login-page .sidebar { display: none; }
 .login-error-slot { min-height: 0; }
 .login-error { margin: 0; }
 .login-submit { align-self: flex-start; }
+
+/* Secondary path for visitors without a key: a quiet hint over a full-width
+   "Buy" button in the on-chain accent (the same indigo as the payment QR). */
+.login-buy-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: var(--border-w) dashed var(--color-border);
+}
+.login-buy-hint {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+}
+.login-buy {
+  width: 100%;
+  padding: 0.55rem 1rem;
+  font-size: var(--fs-md);
+}
 .login-help {
   margin-top: var(--space-4);
   margin-bottom: 0;

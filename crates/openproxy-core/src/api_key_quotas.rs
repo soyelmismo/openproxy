@@ -1,5 +1,10 @@
-//! Per-API-key dollar quotas over three windows: rolling 5h, ISO week
-//! (Monday 00:00 UTC) and calendar month (1st 00:00 UTC).
+//! Per-API-key dollar quotas over two windows: rolling 5h and ISO week
+//! (Monday 00:00 UTC).
+//!
+//! The monthly bound of a plan is NOT a quota window: it is the credited
+//! balance the buyer paid for. Spending draws the balance down to zero, so a
+//! separate monthly cap would be a second source of truth fighting the plan.
+//! Only 5h and week remain as optional caps.
 //!
 //! Spend is measured at official model prices: the sum of `usage.cost_usd`
 //! over rows that produced a client response (`client_response = 1`). Rows
@@ -15,18 +20,16 @@
 
 use crate::error::Result;
 use crate::ids::ApiKeyId;
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{Datelike, Duration, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-pub const WINDOW_FIVE_HOURS: &str = "5h";
 pub const WINDOW_WEEK: &str = "week";
-pub const WINDOW_MONTH: &str = "month";
+pub const WINDOW_FIVE_HOURS: &str = "5h";
 
 /// Caps for one key. `None` = that window is disabled.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct QuotaCaps {
-    pub monthly_usd_cap: Option<f64>,
     pub weekly_usd_cap: Option<f64>,
     pub five_hour_usd_cap: Option<f64>,
 }
@@ -34,24 +37,9 @@ pub struct QuotaCaps {
 impl QuotaCaps {
     /// True when no window is enabled (the row carries no effective limit).
     pub fn is_empty(&self) -> bool {
-        self.monthly_usd_cap.is_none()
-            && self.weekly_usd_cap.is_none()
-            && self.five_hour_usd_cap.is_none()
+        self.weekly_usd_cap.is_none() && self.five_hour_usd_cap.is_none()
     }
 
-    pub fn sanitized(mut self) -> Self {
-        self.monthly_usd_cap = sanitize_cap(self.monthly_usd_cap);
-        self.weekly_usd_cap = sanitize_cap(self.weekly_usd_cap);
-        self.five_hour_usd_cap = sanitize_cap(self.five_hour_usd_cap);
-        self
-    }
-}
-
-fn sanitize_cap(cap: Option<f64>) -> Option<f64> {
-    match cap {
-        Some(v) if v.is_finite() && v >= 0.0 => Some(v),
-        _ => None,
-    }
 }
 
 /// Spend + cap + reset information for one window, as served to the UI.
@@ -60,21 +48,37 @@ pub struct QuotaWindowStatus {
     pub cap_usd: Option<f64>,
     pub spent_usd: f64,
     /// Fixed windows: ISO-8601 UTC instant when the window resets to zero.
-    /// Rolling 5h window: `None` (capacity decays as old spend ages out).
+    /// `None` when the window has no cap (nothing to reset) and for the
+    /// rolling 5h window, whose capacity decays as old spend ages out.
     pub resets_at: Option<String>,
     /// Rolling 5h window only: timestamp of the oldest spend still inside
     /// the window, i.e. when capacity starts being released.
     pub oldest_spend_at: Option<String>,
 }
 
+/// The plan attached to a key: what the buyer paid for and how much of it
+/// is left. This is the monthly bound — the balance itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanStatus {
+    pub name: String,
+    /// Credited balance the plan grants (the maximum the key can spend).
+    pub credit_usd: f64,
+    /// Balance still available, in USD.
+    pub balance_usd: f64,
+    /// ISO-8601 UTC instant the plan expires, when it has a lifetime.
+    pub expires_at: Option<String>,
+}
+
 /// Full quota status for one key.
 #[derive(Debug, Clone, Serialize)]
 pub struct QuotaStatus {
-    /// Whether the key has a quota row at all.
+    /// Whether the key has an effective window cap (5h or week).
     pub enabled: bool,
-    pub month: QuotaWindowStatus,
     pub week: QuotaWindowStatus,
     pub five_hours: QuotaWindowStatus,
+    /// Plan (tier) attached to the key, if any. Its balance is the monthly
+    /// limit: the panel shows it as a percentage bar with the expiry.
+    pub plan: Option<PlanStatus>,
 }
 
 impl QuotaStatus {
@@ -87,9 +91,9 @@ impl QuotaStatus {
         };
         Self {
             enabled: false,
-            month: empty.clone(),
             week: empty.clone(),
             five_hours: empty,
+            plan: None,
         }
     }
 }
@@ -106,10 +110,8 @@ pub struct QuotaViolation {
 // ── window boundaries ───────────────────────────────────────────────
 
 struct Boundaries {
-    month_start: String,
     week_start: String,
     five_hours_ago: String,
-    next_month: String,
     next_monday: String,
 }
 
@@ -121,21 +123,9 @@ fn iso_ts(dt: &chrono::NaiveDateTime) -> String {
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-#[allow(clippy::expect_used)]
 fn boundaries() -> Boundaries {
     let now = Utc::now();
     let today = now.date_naive();
-    let month_start = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .expect("valid month start");
-    let (ny, nm) = if today.month() == 12 {
-        (today.year() + 1, 1)
-    } else {
-        (today.year(), today.month() + 1)
-    };
-    let next_month = NaiveDate::from_ymd_opt(ny, nm, 1)
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .expect("valid next month");
     let days_from_monday = today.weekday().num_days_from_monday() as i64;
     let week_start = (today - Duration::days(days_from_monday))
         .and_hms_opt(0, 0, 0)
@@ -145,10 +135,8 @@ fn boundaries() -> Boundaries {
         .expect("valid next monday");
     let five_hours_ago = (now - Duration::hours(5)).naive_utc();
     Boundaries {
-        month_start: sqlite_ts(&month_start),
         week_start: sqlite_ts(&week_start),
         five_hours_ago: sqlite_ts(&five_hours_ago),
-        next_month: iso_ts(&next_month),
         next_monday: iso_ts(&next_monday),
     }
 }
@@ -158,14 +146,13 @@ fn boundaries() -> Boundaries {
 pub fn get_caps(conn: &Connection, key_id: ApiKeyId) -> Result<Option<QuotaCaps>> {
     let caps = conn
         .query_row(
-            "SELECT monthly_usd_cap, weekly_usd_cap, five_hour_usd_cap \
+            "SELECT weekly_usd_cap, five_hour_usd_cap \
              FROM api_key_quotas WHERE api_key_id = ?1",
             params![key_id.0],
             |row| {
                 Ok(QuotaCaps {
-                    monthly_usd_cap: row.get(0)?,
-                    weekly_usd_cap: row.get(1)?,
-                    five_hour_usd_cap: row.get(2)?,
+                    weekly_usd_cap: row.get(0)?,
+                    five_hour_usd_cap: row.get(1)?,
                 })
             },
         )
@@ -177,77 +164,104 @@ pub fn get_caps(conn: &Connection, key_id: ApiKeyId) -> Result<Option<QuotaCaps>
 pub fn upsert(conn: &Connection, key_id: ApiKeyId, caps: &QuotaCaps) -> Result<()> {
     conn.execute(
         "INSERT INTO api_key_quotas \
-         (api_key_id, monthly_usd_cap, weekly_usd_cap, five_hour_usd_cap, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, datetime('now')) \
+         (api_key_id, weekly_usd_cap, five_hour_usd_cap, updated_at) \
+         VALUES (?1, ?2, ?3, datetime('now')) \
          ON CONFLICT(api_key_id) DO UPDATE SET \
-           monthly_usd_cap = excluded.monthly_usd_cap, \
            weekly_usd_cap = excluded.weekly_usd_cap, \
            five_hour_usd_cap = excluded.five_hour_usd_cap, \
            updated_at = datetime('now')",
-        params![
-            key_id.0,
-            caps.monthly_usd_cap,
-            caps.weekly_usd_cap,
-            caps.five_hour_usd_cap
-        ],
+        params![key_id.0, caps.weekly_usd_cap, caps.five_hour_usd_cap],
     )
     .map_err(openproxy_db::error::map_db_error)?;
     Ok(())
 }
 
-pub fn delete(conn: &Connection, key_id: ApiKeyId) -> Result<()> {
-    conn.execute(
-        "DELETE FROM api_key_quotas WHERE api_key_id = ?1",
-        params![key_id.0],
-    )
-    .map_err(openproxy_db::error::map_db_error)?;
-    Ok(())
+// ── plan (tier) status ──────────────────────────────────────────────
+
+/// Plan attached to a key: tier name + credited amount + live balance.
+/// `None` for keys without a tier (operator/legacy keys).
+fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>> {
+    let row = conn
+        .query_row(
+            "SELECT t.name, t.credit_usd, k.expires_at \
+             FROM api_keys k JOIN credit_tiers t ON t.id = k.tier_id \
+             WHERE k.id = ?1",
+            params![key_id.0],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<f64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(openproxy_db::error::map_db_error)?;
+    let Some((name, credit_usd, expires_at)) = row else {
+        return Ok(None);
+    };
+    let balance_units = crate::credits::ledger::balance_units(conn, key_id)?;
+    let balance_usd = balance_units as f64 / 1_000_000.0;
+    Ok(Some(PlanStatus {
+        name,
+        credit_usd: credit_usd.unwrap_or(balance_usd),
+        balance_usd,
+        expires_at: expires_at.map(|ts| {
+            // api_keys stores SQLite UTC stamps; the UI wants ISO-8601.
+            if ts.contains('T') {
+                ts
+            } else {
+                format!("{}Z", ts.replace(' ', "T"))
+            }
+        }),
+    }))
 }
 
 // ── spend + enforcement ─────────────────────────────────────────────
 
-/// Full status for one key: caps + spend per window + reset info.
+/// Full status for one key: caps + spend per window + reset info + plan.
 pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
+    let plan = plan_status(conn, key_id)?;
     let Some(caps) = get_caps(conn, key_id)? else {
-        return Ok(QuotaStatus::unlimited());
+        return Ok(QuotaStatus {
+            plan,
+            ..QuotaStatus::unlimited()
+        });
     };
     let b = boundaries();
-    let (month_spent, week_spent, five_hour_spent, oldest_5h): (f64, f64, f64, Option<String>) =
-        conn.query_row(
+    let (week_spent, five_hour_spent, oldest_5h): (f64, f64, Option<String>) = conn
+        .query_row(
             "SELECT \
                COALESCE((SELECT SUM(u.cost_usd) FROM usage u \
                   WHERE u.api_key_id = ?1 AND u.client_response = 1 AND u.created_at >= ?2), 0.0), \
                COALESCE((SELECT SUM(u.cost_usd) FROM usage u \
                   WHERE u.api_key_id = ?1 AND u.client_response = 1 AND u.created_at >= ?3), 0.0), \
-               COALESCE((SELECT SUM(u.cost_usd) FROM usage u \
-                  WHERE u.api_key_id = ?1 AND u.client_response = 1 AND u.created_at >= ?4), 0.0), \
                (SELECT MIN(u.created_at) FROM usage u \
                   WHERE u.api_key_id = ?1 AND u.client_response = 1 \
-                    AND u.cost_usd > 0 AND u.created_at >= ?4)",
-            params![key_id.0, b.month_start, b.week_start, b.five_hours_ago],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    AND u.cost_usd > 0 AND u.created_at >= ?3)",
+            params![key_id.0, b.week_start, b.five_hours_ago],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(openproxy_db::error::map_db_error)?;
+    let week = QuotaWindowStatus {
+        cap_usd: caps.weekly_usd_cap,
+        spent_usd: week_spent,
+        // Only a capped window has something to reset: an uncapped window
+        // printing "resets in ..." is exactly the phantom the UI must not show.
+        resets_at: caps.weekly_usd_cap.map(|_| b.next_monday),
+        oldest_spend_at: None,
+    };
+    let five_hours = QuotaWindowStatus {
+        cap_usd: caps.five_hour_usd_cap,
+        spent_usd: five_hour_spent,
+        resets_at: None,
+        oldest_spend_at: oldest_5h,
+    };
     Ok(QuotaStatus {
-        enabled: true,
-        month: QuotaWindowStatus {
-            cap_usd: caps.monthly_usd_cap,
-            spent_usd: month_spent,
-            resets_at: Some(b.next_month),
-            oldest_spend_at: None,
-        },
-        week: QuotaWindowStatus {
-            cap_usd: caps.weekly_usd_cap,
-            spent_usd: week_spent,
-            resets_at: Some(b.next_monday),
-            oldest_spend_at: None,
-        },
-        five_hours: QuotaWindowStatus {
-            cap_usd: caps.five_hour_usd_cap,
-            spent_usd: five_hour_spent,
-            resets_at: None,
-            oldest_spend_at: oldest_5h,
-        },
+        enabled: !caps.is_empty(),
+        week,
+        five_hours,
+        plan,
     })
 }
 
@@ -258,21 +272,17 @@ pub fn check(conn: &Connection, key_id: ApiKeyId) -> Result<Option<QuotaViolatio
     if !st.enabled {
         return Ok(None);
     }
-    let violated = [
-        (WINDOW_MONTH, &st.month),
-        (WINDOW_WEEK, &st.week),
-        (WINDOW_FIVE_HOURS, &st.five_hours),
-    ]
-    .into_iter()
-    .find_map(|(name, w)| match w.cap_usd {
-        Some(cap) if w.spent_usd >= cap => Some(QuotaViolation {
-            window: name,
-            spent_usd: w.spent_usd,
-            cap_usd: cap,
-            resets_at: w.resets_at.clone(),
-        }),
-        _ => None,
-    });
+    let violated = [(WINDOW_WEEK, &st.week), (WINDOW_FIVE_HOURS, &st.five_hours)]
+        .into_iter()
+        .find_map(|(name, w)| match w.cap_usd {
+            Some(cap) if w.spent_usd >= cap => Some(QuotaViolation {
+                window: name,
+                spent_usd: w.spent_usd,
+                cap_usd: cap,
+                resets_at: w.resets_at.clone(),
+            }),
+            _ => None,
+        });
     Ok(violated)
 }
 

@@ -29,13 +29,12 @@ const disp = (id: string): string => (id.startsWith("combo:") ? id.slice(6) : id
 function syncScalars(): void {
   if (!tierDraft) return;
   const name = (document.getElementById("tier-name") as HTMLInputElement | null)?.value ?? tierDraft.name;
-  const monthly = (document.getElementById("tier-monthly") as HTMLInputElement | null)?.value ?? tierDraft.monthly;
   const weekly = (document.getElementById("tier-weekly") as HTMLInputElement | null)?.value ?? tierDraft.weekly;
   const fiveHour = (document.getElementById("tier-fivehour") as HTMLInputElement | null)?.value ?? tierDraft.fiveHour;
   const price = (document.getElementById("tier-price") as HTMLInputElement | null)?.value ?? tierDraft.price;
   const credit = (document.getElementById("tier-credit") as HTMLInputElement | null)?.value ?? tierDraft.credit;
   const ttlDays = (document.getElementById("tier-ttl") as HTMLInputElement | null)?.value ?? tierDraft.ttlDays;
-  setTierDraft({ ...tierDraft, name, monthly, weekly, fiveHour, price, credit, ttlDays });
+  setTierDraft({ ...tierDraft, name, weekly, fiveHour, price, credit, ttlDays });
 }
 
 function filtered(): CatalogModel[] {
@@ -79,7 +78,6 @@ async function saveTier(): Promise<void> {
   syncScalars();
   const d = tierDraft;
   const name = d.name.trim();
-  const monthly = parseFloat(d.monthly);
   const weekly = parseFloat(d.weekly);
   const fiveHour = parseFloat(d.fiveHour);
   const price = parseFloat(d.price);
@@ -112,7 +110,6 @@ async function saveTier(): Promise<void> {
     .map((m) => m.slice("combo:".length));
   const models = d.models.filter((m) => !m.startsWith("combo:"));
   const config = {
-    monthly_usd_cap: Number.isFinite(monthly) ? monthly : null,
     weekly_usd_cap: Number.isFinite(weekly) ? weekly : null,
     five_hour_usd_cap: Number.isFinite(fiveHour) ? fiveHour : null,
     allowed_models: models,
@@ -173,9 +170,6 @@ function body(): TemplateResult {
       <div><label style="font-size:11px;color:var(--color-text-muted);display:block">TTL days</label>
         <input id="tier-ttl" .value=${d.ttlDays} placeholder="30" style="max-width:70px"
                @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, ttlDays: (e.target as HTMLInputElement).value }); }}></div>
-      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Monthly cap USD</label>
-        <input id="tier-monthly" .value=${d.monthly} placeholder="none" style="max-width:100px"
-               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, monthly: (e.target as HTMLInputElement).value }); }}></div>
       <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Weekly cap USD</label>
         <input id="tier-weekly" .value=${d.weekly} placeholder="none" style="max-width:100px"
                @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, weekly: (e.target as HTMLInputElement).value }); }}></div>
@@ -262,7 +256,7 @@ function body(): TemplateResult {
 
 function openTierEditor(tier: AdminTier | null): void {
   setTierDraft(tier == null
-    ? { id: null, name: "", models: [], monthly: "", weekly: "", fiveHour: "", active: true, price: "", credit: "", ttlDays: "30" }
+    ? { id: null, name: "", models: [], weekly: "", fiveHour: "", active: true, price: "", credit: "", ttlDays: "30" }
     : {
         id: tier.id,
         name: tier.name,
@@ -270,7 +264,6 @@ function openTierEditor(tier: AdminTier | null): void {
           ...(tier.config.allowed_models ?? []),
           ...(tier.config.allowed_combos ?? []).map((c) => (c.startsWith("combo:") ? c : `combo:${c}`)),
         ],
-        monthly: tier.config.monthly_usd_cap == null ? "" : String(tier.config.monthly_usd_cap),
         weekly: tier.config.weekly_usd_cap == null ? "" : String(tier.config.weekly_usd_cap),
         fiveHour: tier.config.five_hour_usd_cap == null ? "" : String(tier.config.five_hour_usd_cap),
         active: tier.active,
@@ -315,7 +308,7 @@ export function renderTiers(data: CreditsData): TemplateResult {
         <table style="width:100%;border-collapse:collapse">
           <thead><tr style="color:var(--color-text-muted);font-size:11px;text-align:left">
             <th style="padding:4px 8px 4px 0">Name</th><th style="padding:4px 8px">Models</th>
-            <th style="padding:4px 8px">Caps (m / w / 5h)</th><th style="padding:4px 8px">Inherited by</th>
+            <th style="padding:4px 8px">Caps (w / 5h)</th><th style="padding:4px 8px">Inherited by</th>
             <th style="padding:4px 8px">Active</th><th></th>
           </tr></thead>
           <tbody>
@@ -330,7 +323,7 @@ export function renderTiers(data: CreditsData): TemplateResult {
                         ${(t.config.allowed_models ?? []).map(disp).join(", ")}</div>`}
               </td>
               <td style="padding:6px 8px;color:var(--color-text-muted);font-size:12px">
-                ${t.config.monthly_usd_cap ?? "∞"} / ${t.config.weekly_usd_cap ?? "∞"} / ${t.config.five_hour_usd_cap ?? "∞"}
+                ${t.config.weekly_usd_cap ?? "∞"} / ${t.config.five_hour_usd_cap ?? "∞"}
               </td>
               <td style="padding:6px 8px">${t.price_usd != null ? `$${t.price_usd}` : "draft"} · ${t.key_count} keys</td>
               <td style="padding:6px 8px">${t.active ? "yes" : "no"}</td>

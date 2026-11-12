@@ -11,6 +11,18 @@ button.primary:hover,
   background: var(--color-primary-hover);
   border-color: var(--color-primary-hover);
 }
+button.chain,
+.btn-chain {
+  background: var(--color-chain);
+  color: var(--color-chain-fg);
+  border-color: var(--color-chain);
+  font-weight: 600;
+}
+button.chain:hover,
+.btn-chain:hover {
+  background: var(--color-chain-hover);
+  border-color: var(--color-chain-hover);
+}
 button.danger {
   background: var(--color-surface);
   color: var(--color-error);

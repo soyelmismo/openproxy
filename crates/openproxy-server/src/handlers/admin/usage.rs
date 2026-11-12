@@ -97,7 +97,8 @@ pub fn router() -> axum::Router<AppState> {
 
 /// GET /admin/api/usage/quota — the caller's own dollar-quota status.
 /// Served to `analytics`-scoped keys (the guard above allows GET /usage/*),
-/// so a customer can see their 5h / weekly / monthly consumption and resets.
+/// so a customer can see their 5h / weekly consumption, the plan balance and
+/// the plan expiry.
 pub async fn usage_quota(
     State(s): State<AppState>,
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,

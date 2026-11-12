@@ -216,7 +216,7 @@ pub async fn get_key_quota(
 fn fetch_key_quota_list(r: &rusqlite::Connection) -> Result<serde_json::Value, ApiError> {
     let mut stmt = r
         .prepare_cached(
-            "SELECT q.api_key_id, k.label, q.monthly_usd_cap, q.weekly_usd_cap, q.five_hour_usd_cap \
+            "SELECT q.api_key_id, k.label, q.weekly_usd_cap, q.five_hour_usd_cap \
              FROM api_key_quotas q JOIN api_keys k ON k.id = q.api_key_id \
              ORDER BY q.updated_at DESC, q.api_key_id DESC",
         )
@@ -228,18 +228,16 @@ fn fetch_key_quota_list(r: &rusqlite::Connection) -> Result<serde_json::Value, A
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<f64>>(2)?,
                 row.get::<_, Option<f64>>(3)?,
-                row.get::<_, Option<f64>>(4)?,
             ))
         })
         .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
     let mut out = Vec::new();
     for row in mapped {
-        let (api_key_id, label, monthly, weekly, five_hour) =
+        let (api_key_id, label, weekly, five_hour) =
             row.map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
         out.push(serde_json::json!({
             "api_key_id": api_key_id,
             "label": label,
-            "monthly_usd_cap": monthly,
             "weekly_usd_cap": weekly,
             "five_hour_usd_cap": five_hour,
         }));
@@ -256,7 +254,8 @@ fn fetch_key_quota(r: &rusqlite::Connection, id: i64) -> Result<serde_json::Valu
     let spend = openproxy_core::api_key_quotas::status(r, key_id)?;
     Ok(serde_json::json!({
         "api_key_id": id,
-        "enabled": caps.is_some(),
+        // Effective caps: a row with both windows NULL limits nothing.
+        "enabled": caps.as_ref().is_some_and(|c| !c.is_empty()),
         "caps": caps,
         "spend": spend,
     }))

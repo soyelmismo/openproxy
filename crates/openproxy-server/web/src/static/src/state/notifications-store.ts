@@ -29,7 +29,7 @@ import { api } from "./api.js";
 import { subscribeWs } from "./ws-bus.js";
 import { connectLogsWebSocket } from "./ws.js";
 import { state } from "./index.js";
-import { isLoggedIn } from "./auth.js";
+import { isFullAdmin, isLoggedIn } from "./auth.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
 import {
@@ -292,6 +292,11 @@ export function formatRelativeAgo(iso: string, nowMs: number = Date.now()): stri
 export function initNotificationsStore(): void {
   if (initialized) return;
   initialized = true;
+
+  // Admin-only surface: the notifications feed and the live-logs WS live behind
+  // `manage` scope. A client (analytics) key would take a 403 on every boot and
+  // every 5s reconnect tick, so the store stays dormant for it.
+  if (!isFullAdmin()) return;
 
   // Open the live-logs WS at boot so `notification` events arrive with no WS-owning view
   // mounted. `connectLogsWebSocket` is idempotent — a later call from views/logs.ts is a no-op.

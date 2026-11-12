@@ -533,10 +533,9 @@ fn session_order_credits_the_existing_key_without_minting() {
 
 // ── tiers + leveraged packages ──────────────────────────────────────
 
-fn tier_config(models: &[&str], monthly: f64) -> crate::credits::TierConfig {
+fn tier_config(models: &[&str], weekly: f64) -> crate::credits::TierConfig {
     crate::credits::TierConfig {
-        monthly_usd_cap: Some(monthly),
-        weekly_usd_cap: None,
+        weekly_usd_cap: Some(weekly),
         five_hour_usd_cap: None,
         allowed_models: Some(models.iter().map(|m| m.to_string()).collect()),
         allowed_providers: None,
@@ -588,7 +587,7 @@ fn tier_crud_and_apply_forces_the_whitelist_gate() {
     // Money invariant: an allowlist is a hard gate, not advisory.
     assert_eq!(gate, 1, "allowlist must force only_whitelisted");
     let caps = crate::api_key_quotas::get_caps(&conn, key).expect("caps").expect("caps row");
-    assert_eq!(caps.monthly_usd_cap, Some(30.0));
+    assert_eq!(caps.weekly_usd_cap, Some(30.0));
 
     // Update replaces the payload wholesale.
     crate::credits::tiers::update(&conn, t.id, Some("flash2"), Some(&tier_config(&["m-c"], 40.0)), Some(false), None)
@@ -686,7 +685,7 @@ fn leveraged_plan_charges_less_than_it_credits() {
         .expect("gate");
     assert_eq!(gate, 1);
     let caps = crate::api_key_quotas::get_caps(&conn, key).expect("caps").expect("caps row");
-    assert_eq!(caps.monthly_usd_cap, Some(25.0));
+    assert_eq!(caps.weekly_usd_cap, Some(25.0));
 }
 
 #[test]
@@ -735,8 +734,7 @@ fn sweep_deletes_keys_idle_for_six_months() {
         &conn,
         idle,
         &crate::api_key_quotas::QuotaCaps {
-            monthly_usd_cap: Some(5.0),
-            weekly_usd_cap: None,
+            weekly_usd_cap: Some(5.0),
             five_hour_usd_cap: None,
         },
     )

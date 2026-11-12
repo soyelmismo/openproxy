@@ -66,6 +66,7 @@ import type {
   KeyQuotaResponse,
   KeyQuotaStatus,
   MonthlyByProviderRow,
+  PlanStatus,
   Provider,
   UsageSummary,
 } from "../../lib/types/api.js";
@@ -160,11 +161,12 @@ function formatCountdown(ms: number): string {
   return parts.join(" ");
 }
 
-function countdownText(targetIso: string): string {
+function countdownText(targetIso: string, kind: "reset" | "expire" = "reset"): string {
   const d = new Date(targetIso);
   if (Number.isNaN(d.getTime())) return "";
   const diff = d.getTime() - Date.now();
-  return diff <= 0 ? "resetting…" : `resets in ${formatCountdown(diff)}`;
+  if (diff <= 0) return kind === "expire" ? "expired" : "resetting…";
+  return kind === "expire" ? `expires in ${formatCountdown(diff)}` : `resets in ${formatCountdown(diff)}`;
 }
 
 /** Live-tick every countdown hint in the panel (1s DOM updates, no re-render). */
@@ -173,7 +175,9 @@ function startCountdownTicker(): void {
   const tick = (): void => {
     document.querySelectorAll<HTMLElement>("[data-quota-countdown]").forEach((el) => {
       const attr = el.dataset["quotaCountdown"];
-      if (attr) el.textContent = countdownText(attr);
+      if (!attr) return;
+      const kind = el.dataset["quotaCountdownKind"] === "expire" ? "expire" : "reset";
+      el.textContent = countdownText(attr, kind);
     });
   };
   tick();
@@ -219,21 +223,49 @@ function quotaWindowHtml(w: AnalyticsQuotaWindow): TemplateResult {
   </div>`;
 }
 
-function quotaWindowList(spend: KeyQuotaStatus): TemplateResult[] {
-  const fiveOldest = parseQuotaTs(spend.five_hours.oldest_spend_at);
-  const fiveTarget = fiveOldest ? new Date(fiveOldest.getTime() + 5 * 60 * 60 * 1000).toISOString() : null;
-  return [
-    quotaWindowHtml({ title: "5h Window", cap: spend.five_hours.cap_usd, spent: spend.five_hours.spent_usd, targetIso: fiveTarget, rolling: true }),
-    quotaWindowHtml({ title: "Weekly Window", cap: spend.week.cap_usd, spent: spend.week.spent_usd, targetIso: spend.week.resets_at, rolling: false }),
-    quotaWindowHtml({ title: "Monthly Window", cap: spend.month.cap_usd, spent: spend.month.spent_usd, targetIso: spend.month.resets_at, rolling: false }),
-  ];
+/** The plan bar: its credited balance IS the monthly bound, so it renders as
+ *  a percentage of the credit spent, with the plan expiry as the countdown. */
+function planBalanceHtml(plan: PlanStatus): TemplateResult {
+  const used = Math.max(0, plan.credit_usd - plan.balance_usd);
+  const pct = plan.credit_usd > 0 ? Math.round((used / plan.credit_usd) * 100) : 0;
+  const color = pct > 80 ? "danger" : pct > 50 ? "warn" : "ok";
+  const numberClass = pct >= 100 ? "used" : pct > 80 ? "warn" : "available";
+  const target = parseQuotaTs(plan.expires_at);
+  const targetIso = target ? target.toISOString() : "";
+  const hint = targetIso ? countdownText(targetIso, "expire") : "no expiry";
+  return html`<div class="quota-window">
+    <div class="quota-window-header">
+      <span class="quota-window-title">${plan.name} balance</span>
+      <span class="quota-window-numbers ${numberClass}">${pct}%</span>
+    </div>
+    <div class="quota-bar mini ${color}">
+      <div class="quota-bar-track" role="meter" aria-label="${plan.name} balance" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100">
+        <div class="quota-bar-fill" style="width: ${Math.min(100, Math.max(0, pct))}%"></div>
+      </div>
+    </div>
+    <small class="quota-window-hint" data-quota-countdown="${targetIso}" data-quota-countdown-kind="expire">${hint}</small>
+  </div>`;
 }
 
-function quotaPanelCard(label: string | null, spend: KeyQuotaStatus, tabs: TemplateResult | null): TemplateResult {
+export function quotaWindowList(spend: KeyQuotaStatus): TemplateResult[] {
+  const fiveOldest = parseQuotaTs(spend.five_hours.oldest_spend_at);
+  const fiveTarget = fiveOldest ? new Date(fiveOldest.getTime() + 5 * 60 * 60 * 1000).toISOString() : null;
+  const windows: TemplateResult[] = [];
+  if (spend.plan) windows.push(planBalanceHtml(spend.plan));
+  // A window without a cap has nothing to show: no bar, no phantom countdown.
+  if (spend.five_hours.cap_usd != null) {
+    windows.push(quotaWindowHtml({ title: "5h Window", cap: spend.five_hours.cap_usd, spent: spend.five_hours.spent_usd, targetIso: fiveTarget, rolling: true }));
+  }
+  if (spend.week.cap_usd != null) {
+    windows.push(quotaWindowHtml({ title: "Weekly Window", cap: spend.week.cap_usd, spent: spend.week.spent_usd, targetIso: spend.week.resets_at, rolling: false }));
+  }
+  return windows;
+}
+
+function quotaPanelCard(label: string | null, spend: KeyQuotaStatus): TemplateResult {
   startCountdownTicker();
   return html`<section class="card analytics-quota-card">
-    <div class="analytics-card-heading"><div><h3>Dollar quotas</h3><p>${label ? `${label} · ` : ""}percent of each window cap · time to reset</p></div></div>
-    ${tabs}
+    <div class="analytics-card-heading"><div><h3>Usage & limits</h3><p>${label ? `${label} · ` : ""}plan balance · optional window caps · time to reset</p></div></div>
     <div class="family-quota-grid">
       ${quotaWindowList(spend)}
     </div>
@@ -247,13 +279,15 @@ function renderQuotaPanel(): TemplateResult {
     // selection. Nothing selected = nothing rendered.
     if (adminQuotaKeyId === null) return html``;
     if (adminQuota === null || adminQuota.api_key_id !== adminQuotaKeyId) return html``;
-    if (!adminQuota.enabled) return html`<p class="empty">This key has no dollar quotas (unlimited).</p>`;
+    if (!adminQuota.enabled && !adminQuota.spend.plan) {
+      return html`<p class="empty">This key has no plan or dollar quotas (unlimited).</p>`;
+    }
     const label = adminQuotaKeys?.find((r) => r.api_key_id === adminQuotaKeyId)?.label ?? null;
-    return quotaPanelCard(label, adminQuota.spend, null);
+    return quotaPanelCard(label, adminQuota.spend);
   }
 
-  if (!quotaStatus || !quotaStatus.enabled) return html``;
-  return quotaPanelCard(null, quotaStatus, null);
+  if (!quotaStatus || (!quotaStatus.enabled && !quotaStatus.plan)) return html``;
+  return quotaPanelCard(null, quotaStatus);
 }
 
 // ── Ranking list (used by model + provider strips) ──────────────────

@@ -180,29 +180,44 @@ export interface RecentUsageRow {
   created_at: string;
 }
 
-// ── Per-key dollar quotas (5h / weekly / monthly windows) ────────────
+// ── Per-key dollar quotas (5h / weekly windows) + plan balance ───────
+//
+// The monthly bound of a plan is its credited balance, not a window: the
+// panel shows the balance as a percentage of the plan credit and the plan
+// expiry. Only 5h and week carry optional caps.
 
 export interface QuotaWindowStatus {
   /** `null` = this window has no limit (disabled). */
   cap_usd: number | null;
   /** Spend at official model prices inside the window. */
   spent_usd: number;
-  /** Fixed windows: ISO instant when the window resets. Rolling 5h: null. */
+  /** Capped fixed windows: ISO instant when the window resets. Otherwise null. */
   resets_at: string | null;
   /** Rolling 5h only: oldest spend still inside the window. */
   oldest_spend_at: string | null;
 }
 
+/** Plan (tier) attached to a key: its balance is the monthly limit. */
+export interface PlanStatus {
+  name: string;
+  /** Credited balance the plan grants. */
+  credit_usd: number;
+  /** Balance still available. */
+  balance_usd: number;
+  /** ISO instant the plan expires (null = no lifetime). */
+  expires_at: string | null;
+}
+
 export interface KeyQuotaStatus {
-  /** `false` = the key has no quota row (unlimited). */
+  /** `false` = the key has no effective window cap. */
   enabled: boolean;
-  month: QuotaWindowStatus;
   week: QuotaWindowStatus;
   five_hours: QuotaWindowStatus;
+  /** Attached plan, if the key has one. */
+  plan: PlanStatus | null;
 }
 
 export interface KeyQuotaCaps {
-  monthly_usd_cap: number | null;
   weekly_usd_cap: number | null;
   five_hour_usd_cap: number | null;
 }
@@ -218,7 +233,6 @@ export interface KeyQuotaResponse {
 export interface KeyQuotaListItem {
   api_key_id: number;
   label: string | null;
-  monthly_usd_cap: number | null;
   weekly_usd_cap: number | null;
   five_hour_usd_cap: number | null;
 }
