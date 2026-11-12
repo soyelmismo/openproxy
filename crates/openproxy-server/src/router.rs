@@ -68,6 +68,7 @@ fn public_routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/v1/health", get(health))
         .route("/checkout", get(admin_ui::checkout_html))
+        .route("/checkout.js", get(admin_ui::checkout_js))
         .merge(handlers::public_api_routes(state))
 }
 
