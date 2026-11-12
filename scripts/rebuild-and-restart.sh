@@ -183,4 +183,58 @@ fi
   fi
 ) &
 
+# --- Cloudflare cache purge (entry bundles de tokens.<domain>) -------------
+# El dist se embebe en el binario y los entry bundles (app.js/app.css)
+# conservan el nombre entre deploys: si el edge de la zona guarda un objeto
+# stale, los usuarios sirven el panel viejo aunque el origin ya tenga la
+# build nueva (el origin manda cache-control: no-cache en entries e
+# immutable en chunks con hash, pero un objeto cacheado antes de ese header
+# sobrevive hasta que expira o se purga). Purge quirúrgico por URL de las
+# entradas, nunca purge_everything de la zona.
+#
+# No-fatal: sin token o con error de API el deploy queda válido y el script
+# avisa para purgar a mano. Fuentes del token, en orden:
+#   1. $CLOUDFLARE_API_TOKEN (sesión/cron con token exportado)
+#   2. $HOME/.config/cloudflare/purge-token (primera línea, chmod 600)
+#      — token con permiso Zone.Cache Purge sobre la zona del panel.
+CF_ZONE_DOMAIN="${CF_ZONE_DOMAIN:-listo.click}"
+purge_token="${CLOUDFLARE_API_TOKEN:-}"
+purge_token_file="${CF_PURGE_TOKEN_FILE:-$HOME/.config/cloudflare/purge-token}"
+if [[ -z "$purge_token" && -f "$purge_token_file" ]]; then
+  read -r purge_token < "$purge_token_file" || purge_token=""
+  purge_token="${purge_token//[[:space:]]/}"
+fi
+
+if [[ -n "$purge_token" ]]; then
+  log "cloudflare purge: resolviendo zone id de $CF_ZONE_DOMAIN"
+  zone_id=$(curl -s -H "Authorization: Bearer $purge_token" \
+    "https://api.cloudflare.com/client/v4/zones?name=$CF_ZONE_DOMAIN" \
+    | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin); print(d["result"][0]["id"] if d.get("result") else "")
+except Exception:
+    print("")' || true)
+  if [[ -n "$zone_id" ]]; then
+    files_json='["https://tokens.'"$CF_ZONE_DOMAIN"'/admin","https://tokens.'"$CF_ZONE_DOMAIN"'/admin/dist/app.js","https://tokens.'"$CF_ZONE_DOMAIN"'/admin/dist/app.css","https://tokens.'"$CF_ZONE_DOMAIN"'/admin/dist/theme-init.js","https://tokens.'"$CF_ZONE_DOMAIN"'/checkout","https://tokens.'"$CF_ZONE_DOMAIN"'/checkout.js"]'
+    purge_res=$(curl -s -X POST \
+      -H "Authorization: Bearer $purge_token" -H "Content-Type: application/json" \
+      "https://api.cloudflare.com/client/v4/zones/$zone_id/purge_cache" \
+      -d "{\"files\": $files_json}" \
+      | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin); print("ok" if d.get("success") else json.dumps(d.get("errors"))[:200])
+except Exception as e:
+    print("bad-response: " + str(e)[:120])' || true)
+    if [[ "$purge_res" == "ok" ]]; then
+      log "cloudflare purge OK (entry bundles de tokens.$CF_ZONE_DOMAIN)"
+    else
+      log "AVISO: cloudflare purge falló ($purge_res) — purga a mano o los usuarios verán el bundle viejo hasta que expire el edge cache"
+    fi
+  else
+    log "AVISO: no se resolvió zone id de $CF_ZONE_DOMAIN (token sin permiso zone:read o API caída) — skip purge"
+  fi
+else
+  log "AVISO: sin CLOUDFLARE_API_TOKEN ni $purge_token_file — skip cloudflare purge"
+fi
+
 log "OK ✅  openproxy corriendo con la build nueva"
