@@ -2,7 +2,7 @@
 //!
 //! Thin-funnel design: every top-up is sent to ONE collector address. Each
 //! [`orders::CreditOrder`] reserves a unique micro-USDC amount (a base amount
-//! plus a jitter in the low six decimals) that acts as its identifier on a
+//! plus a sub-cent jitter) that acts as its identifier on a
 //! shared address, so a single wallet can serve every buyer without
 //! sub-addresses or memos.
 //!
@@ -36,7 +36,7 @@ pub use orders::{CreditOrder, create_order, expire_stale_orders, get_order};
 pub const UNITS_PER_USD: i64 = 1_000_000;
 
 /// Convert whole USD (f64, API surface) into micro-USDC units, rejecting
-/// non-finite input. The jitter needs the six decimals below the unit point,
+/// non-finite input. The jitter is sub-cent: it must never move the price noticeably,
 /// so base amounts are whole dollars.
 #[must_use]
 pub fn usd_to_base_units(usd: f64) -> Option<i64> {

@@ -20,6 +20,12 @@ import { liveLogsStore } from "./state/live-logs-store.js";
 import { initModelsSync } from "./state/models-sync.js";
 import { isPanelDocument } from "./state/workspace.js";
 import { installPanelBridge } from "./components/workspace.js";
+import { installChunkRecovery } from "./lib/chunk-recovery.js";
+
+// Before anything else: a stale tab whose lazy chunks were replaced by a
+// deploy must reload once instead of dying on "Failed to fetch dynamically
+// imported module".
+installChunkRecovery();
 
 // Expose the global `state` for the e2e suite (and operator console debugging). The dashboard is an
 // internal admin tool, so exposing the in-memory state object crosses no public auth boundary.

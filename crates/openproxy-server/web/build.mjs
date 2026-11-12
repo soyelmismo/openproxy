@@ -68,9 +68,16 @@ if (isWatch) {
   await Promise.all([jsCtx.watch(), cssCtx.watch(), checkoutCtx.watch()]);
   console.log('Watching for changes...');
 } else {
-  // Limpiar chunks y bundles viejos para evitar que rust-embed infle el binario
-  const { rmSync, mkdirSync } = await import('fs');
-  rmSync(outDir, { recursive: true, force: true });
+  // Chunk-retention deploy: a browser tab opened before this build still holds
+  // an app.js that dynamically imports chunks by HASH (chunks/combos-XXXX.js).
+  // Deleting those chunks on rebuild makes every lazy route in an open tab die
+  // with "Failed to fetch dynamically imported module". So: stash the previous
+  // dist, rebuild, then copy back any OLD chunk that the new build did not
+  // re-emit (same name = same content). One generation only — older ones die.
+  const { rmSync, mkdirSync, renameSync, cpSync, existsSync } = await import('fs');
+  const prevDir = outDir + '.prev';
+  rmSync(prevDir, { recursive: true, force: true });
+  if (existsSync(outDir)) renameSync(outDir, prevDir);
   mkdirSync(outDir, { recursive: true });
 
   await Promise.all([
@@ -78,5 +85,23 @@ if (isWatch) {
     build(cssOptions),
     build(checkoutOptions),
   ]);
+
+  if (existsSync(prevDir)) {
+    const prevChunks = join(prevDir, 'chunks');
+    const nextChunks = join(outDir, 'chunks');
+    if (existsSync(prevChunks)) {
+      mkdirSync(nextChunks, { recursive: true });
+      cpSync(prevChunks, nextChunks, {
+        recursive: true,
+        // Copy only the old hashed .js/copy files missing from the new build.
+        filter: (src) => {
+          const rel = src.slice(prevChunks.length + 1);
+          if (!rel) return true;
+          return !existsSync(join(nextChunks, rel));
+        },
+      });
+    }
+    rmSync(prevDir, { recursive: true, force: true });
+  }
   console.log('Build complete: ' + outDir);
 }

@@ -50,7 +50,10 @@ fn create_order_jitters_within_six_decimals_and_credits_base() {
     let order = orders::create_order(&conn, Some(key), None, 10 * USD, 15, None).expect("create order");
     assert_eq!(order.base_units, 10 * USD);
     assert!(order.amount_units >= 10 * USD);
-    assert!(order.amount_units < 11 * USD, "jitter must stay below one dollar");
+    assert!(
+        order.amount_units < 10 * USD + 10_000,
+        "jitter must stay sub-cent"
+    );
     assert_eq!(order.status, "pending");
     assert_eq!(order.ttl_days, 15);
     // Public code shape: OP-XXXX-XXXX
@@ -69,16 +72,16 @@ fn create_order_rejects_non_whole_dollar_base() {
 
 #[test]
 fn live_orders_never_share_an_amount() {
-    // 2000 sequential creations inside one dollar of base: the unique index
-    // must hand out 2000 distinct amounts out of 1M possible jitters.
+    // 500 sequential creations of the same plan: the sub-cent jitter space
+    // (10k values) plus the unique index must keep every live amount distinct.
     let conn = test_conn();
     let key = seed_key(&conn, "jit3");
     let mut seen = std::collections::HashSet::new();
-    for _ in 0..2000 {
+    for _ in 0..500 {
         let o = orders::create_order(&conn, Some(key), None, 1 * USD, 15, None).expect("create");
         assert!(seen.insert(o.amount_units), "duplicate live amount {}", o.amount_units);
     }
-    assert_eq!(seen.len(), 2000);
+    assert_eq!(seen.len(), 500);
 }
 
 #[test]

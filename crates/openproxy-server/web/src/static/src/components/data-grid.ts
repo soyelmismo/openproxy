@@ -14,9 +14,11 @@
 //   click / ctrl / shift    → selection, with a floating bulk bar
 //   ↑↓ space F2 Supr Ctrl+A Esc → keyboard-first operation
 
+import { LIST_PAGE, LIST_WINDOW, WindowModel } from "./windowed-list.js";
 import { html, nothing, type TemplateResult } from "lit-html";
 import { openContextMenu, closeContextMenu, type ContextMenuItem } from "./context-menu.js";
 import { computeGridTracks } from "./data-grid-layout.js";
+import { requestUpdate } from "../state/reactive.js";
 
 export interface GridQuickAction<T> {
   action: string;
@@ -104,7 +106,15 @@ interface GridState {
   /** Viewport point of the click that produced the current selection: the
    *  bulk bar anchors there (fixed, so it survives scrolling). */
   bulkAt: { x: number; y: number } | null;
+  /** How many rows the grid currently paints. Big datasets paint a window and
+   *  page the rest from the footer: a 5k-row catalog as DOM freezes mobile. */
+  window?: number;
 }
+
+/** Rows painted on the first render of a grid. */
+export const GRID_WINDOW = LIST_WINDOW;
+/** Rows added per "show more" tap. */
+export const GRID_WINDOW_CHUNK = LIST_PAGE;
 
 const states = new Map<string, GridState>();
 /** Last post-render refresh per grid root: rows reference + box. A render
@@ -365,7 +375,17 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
     }, 0);
   }
 
-  const rowsTpl = rows.map((row, idx) => {
+  // Windowing: paint at most `window` rows, page the rest from the footer.
+  // Selection/editing/focus live in GridState (by row key), so growing the
+  // window never loses state; data-i stays the GLOBAL index for shift-ranges.
+  // The policy (budget, page, label) comes from the shared WindowModel.
+  const winModel = new WindowModel(rows.length, {
+    initialBudget: GRID_WINDOW,
+    pageSize: GRID_WINDOW_CHUNK,
+    ...(s.window != null ? { visible: s.window } : {}),
+  });
+  const shown = rows.length > winModel.visible ? rows.slice(0, winModel.visible) : rows;
+  const rowsTpl = shown.map((row, idx) => {
     const key = String(props.rowKey(row));
     const selected = s.selected.has(key);
     const editing = s.editing === key;
@@ -499,6 +519,14 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
           ${props.quickActions ? html`<div class="dg-col dg-actions"><div class="dg-inner"></div></div>` : nothing}
         </div>
         ${rows.length === 0 ? html`<div class="dg-empty">${empty}</div>` : rowsTpl}
+        ${winModel.hasPending
+          ? html`<div class="dg-more">
+              <button type="button" class="link" @click=${() => {
+                s.window = winModel.showMore();
+                if (props.__refresh) props.__refresh(); else requestUpdate();
+              }}>${winModel.moreLabel()}</button>
+            </div>`
+          : nothing}
         ${bulk}
       </div>
     </div>

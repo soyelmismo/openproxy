@@ -1,0 +1,24 @@
+/* components/windowed-list.css — windowing chrome for the shared list engine.
+   Items themselves come from the consumer; this styles the group sections and
+   the "show more" affordance. Token-driven like every other component. */
+
+.windowed-list { display: block; }
+
+.windowed-group { margin-bottom: var(--space-3); }
+
+.windowed-group-header {
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  padding: var(--space-2) 0 var(--space-1);
+}
+
+.windowed-group-items { display: block; }
+
+.windowed-group-tail { display: flex; justify-content: center; padding: var(--space-2) 0; }
+
+.windowed-more {
+  font-size: var(--fs-sm);
+  color: var(--color-info);
+}

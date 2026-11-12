@@ -9,6 +9,7 @@ import { html, render, type TemplateResult } from "lit-html";
 import type { Account, Model, Combo, ComboSummary, ComboTargetWithModel, Provider } from "../../lib/types/api.js";
 import { showToast } from "../../components/toast.js";
 import { ensureModalRoot, flashButton, showApiError } from "../../lib/ui-utils.js";
+import { WindowedList } from "../../components/windowed-list.js";
 import { invalidateSubCombo } from "../../views/combos/subcombo-group.js";
 import { beginButtonBusy, resolveBusyButton, withButtonBusy } from "../../lib/button-busy.js";
 
@@ -84,7 +85,7 @@ function addTargetTemplate(
                 <label for="target-model-search">Search Models</label>
                 <div class="model-search-bar">
                   <input type="text" id="target-model-search" placeholder="Search all models across providers (e.g. gpt)…" @input=${onTargetModelSearch}>
-                  <small class="model-search-hint">Empty search shows all active models from all providers, grouped by provider.</small>
+                  <small class="model-search-hint">Grouped by provider. Long lists load in chunks — type to narrow or tap "Show more".</small>
                 </div>
                 <div class="model-checkbox-header">
                   <button type="button" class="link" @click=${selectAllModelsInModal}>Select all</button>
@@ -139,11 +140,8 @@ function accountsForProviderTemplate(providerId: string): TemplateResult {
   `;
 }
 
-function modelCheckboxListTemplate(models: ModelWithFallbacks[], initialPriority: number = nextTargetPriority): TemplateResult {
-  if (models.length === 0) {
-    return html`<p class="model-checkbox-empty">No active models for this provider</p>`;
-  }
-  return html`${models.map((m) => {
+function modelCheckboxItemTemplate(m: ModelWithFallbacks, initialPriority: number = nextTargetPriority): TemplateResult {
+  {
     const rowId = m.row_id;
     const upstreamId = m.model_id || m.id;
     const providerId = m.provider_id;
@@ -207,25 +205,53 @@ function modelCheckboxListTemplate(models: ModelWithFallbacks[], initialPriority
         </div>
       </div>
     `;
-  })}`;
+  }
 }
 
-// ── Global model search ────────────────────────────────────────────────────
+// ── Shared list engine (windowed-list.ts) ──────────────────────────────────
+// The catalog is 5k+ models: painting it whole froze mobile at 0fps. The
+// WindowedList caps the initial DOM and pages the rest; extension is
+// append-only so checkbox state survives.
 
-function globalModelSearchTemplate(groups: Map<string, ModelWithFallbacks[]>, initialPriority: number = nextTargetPriority): TemplateResult {
-  if (groups.size === 0) {
-    return html`<p class="model-checkbox-empty">No active models match your search.</p>`;
-  }
+let targetModelList: WindowedList<ModelWithFallbacks> | null = null;
+
+function litItemToNode(t: TemplateResult): HTMLElement {
+  const tmp = document.createElement("div");
+  render(t, tmp);
+  return tmp.firstElementChild as HTMLElement;
+}
+
+function renderTargetModelList(groups: Map<string, ModelWithFallbacks[]>): void {
+  const modelList = document.getElementById("target-model-list");
+  if (!modelList) return;
+  targetModelList = null;
+  modelList.innerHTML = "";
+  // Flat, provider-grouped, in first-seen order (same order the old template used).
+  const flat: ModelWithFallbacks[] = [];
   const providerIds = [...groups.keys()].sort();
-  return html`${providerIds.map((p) => {
-    const models = groups.get(p) ?? [];
-    return html`
-      <div class="model-checkbox-group">
-        <div class="model-checkbox-group-header">${p}</div>
-        ${modelCheckboxListTemplate(models, initialPriority)}
-      </div>
-    `;
-  })}`;
+  for (const p of providerIds) flat.push(...(groups.get(p) ?? []));
+  targetModelList = new WindowedList<ModelWithFallbacks>({
+    container: modelList,
+    items: flat,
+    groupIdOf: (m) => m.provider_id,
+    renderGroupHeader: (gid) => {
+      const h = document.createElement("div");
+      h.className = "model-checkbox-group-header";
+      h.textContent = gid;
+      return h;
+    },
+    renderItem: (m) => litItemToNode(modelCheckboxItemTemplate(m)),
+    className: "model-checkbox-group",
+  });
+  let emptyNote = modelList.querySelector(".model-checkbox-empty");
+  if (!emptyNote) {
+    emptyNote = document.createElement("p");
+    emptyNote.className = "model-checkbox-empty";
+    modelList.appendChild(emptyNote);
+  }
+  emptyNote.textContent = flat.length === 0
+    ? "No active models match your search."
+    : `Showing ${targetModelList.renderedCount} of ${flat.length} models — type to narrow, or tap "Show more".`;
 }
 
 /** Whether a model matches the search query. Supports a direct model id or display name
@@ -327,8 +353,10 @@ function renderInitialModelList(): void {
   const modelList = document.getElementById("target-model-list");
   const countEl = document.getElementById("model-checkbox-count");
   if (!modelList) return;
+  targetModelList = null;
+  modelList.innerHTML = "";
   const groups = buildGlobalSearchGroups("");
-  render(globalModelSearchTemplate(groups), modelList);
+  renderTargetModelList(groups);
   if (countEl) {
     const checked = document.querySelectorAll<HTMLInputElement>(
       "#target-model-list input[name='model_row_ids']:checked"
@@ -416,7 +444,7 @@ export function onTargetModelSearch(): void {
   }
 
   const groups = buildGlobalSearchGroups(query);
-  render(globalModelSearchTemplate(groups), modelList);
+  renderTargetModelList(groups);
   if (countEl) {
     const checked = document.querySelectorAll<HTMLInputElement>(
       "#target-model-list input[name='model_row_ids']:checked"

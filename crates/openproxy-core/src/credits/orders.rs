@@ -14,9 +14,12 @@ use serde::Serialize;
 /// Payment window of an order: how long the quoted amount stays valid.
 pub const PAYMENT_WINDOW_SECS: i64 = 15 * 60;
 
-/// Jitter lives in the six decimal places of a USDC amount: 1,000,000
-/// distinct values per whole dollar.
-const JITTER_SPACE: i64 = 1_000_000;
+/// Jitter stays in the SUB-CENT range: 0..9999 micro-USDC (< $0.01 on top of
+/// the plan price). Ten thousand distinct values per base price is plenty to
+/// identify an order: live orders share the 15-minute payment window, so two
+/// buyers of the same plan rarely race, and the unique live-amount index
+/// resolves the rare collision in ~1 retry.
+const JITTER_SPACE: i64 = 10_000;
 
 /// Attempts to find a free jitter before giving up. With the live-order
 /// index the expected number of attempts is ~1 for any realistic backlog
@@ -88,8 +91,8 @@ fn is_unique_violation(err: &rusqlite::Error) -> bool {
     matches!(err.sqlite_error_code(), Some(ErrorCode::ConstraintViolation))
 }
 
-/// Create a checkout order. `base_units` must be a whole-dollar amount in
-/// micro-USDC (the jitter occupies the low six digits).
+/// Create a checkout order. `base_units` is the plan price in micro-USDC;
+/// the drawn jitter (sub-cent) rides on top only to identify the order.
 ///
 /// # Errors
 /// - validation: non-whole-dollar `base_units`, non-positive `ttl_days`.

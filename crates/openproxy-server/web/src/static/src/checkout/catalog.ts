@@ -31,45 +31,71 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   });
   card.appendChild(input);
 
+  // Row 1: selection dot + plan name, leverage badge on the far right.
   const head = document.createElement("div");
   head.className = "plan-head";
+  const dot = document.createElement("span");
+  dot.className = "plan-radio";
+  dot.setAttribute("aria-hidden", "true");
+  head.appendChild(dot);
   const name = document.createElement("h3");
   name.className = "plan-name";
   name.textContent = plan.name;
-  const price = document.createElement("div");
-  price.className = "plan-price";
-  price.textContent = formatUsd(plan.usd);
-  const per = document.createElement("small");
-  per.textContent = "per plan";
-  price.appendChild(per);
   head.appendChild(name);
-  head.appendChild(price);
-  card.appendChild(head);
-
-  const terms = document.createElement("div");
-  terms.className = "plan-terms";
   const credited = plan.credit_usd;
-  if (credited != null && credited !== plan.usd) {
-    const credit = document.createElement("span");
-    credit.className = "plan-credit";
-    credit.textContent = "→ " + formatUsd(credited) + " credits";
-    terms.appendChild(credit);
+  const leveraged = credited != null && credited > plan.usd;
+  if (leveraged) {
     const mult = document.createElement("span");
     mult.className = "plan-multiplier";
-    mult.textContent = Math.round(credited / plan.usd) + "×";
-    terms.appendChild(mult);
+    mult.textContent = Math.round(credited / plan.usd) + "\u00d7";
+    head.appendChild(mult);
   }
-  const ttl = document.createElement("span");
-  ttl.className = "plan-ttl";
-  ttl.textContent = "valid " + plan.ttl_days + " days";
-  terms.appendChild(ttl);
-  card.appendChild(terms);
+  card.appendChild(head);
 
+  // Row 2: the price is the hero of the card.
+  const priceRow = document.createElement("div");
+  priceRow.className = "plan-price-row";
+  const price = document.createElement("span");
+  price.className = "plan-price";
+  price.textContent = formatUsd(plan.usd);
+  const per = document.createElement("span");
+  per.className = "plan-per";
+  per.textContent = "per plan";
+  priceRow.appendChild(price);
+  priceRow.appendChild(per);
+  card.appendChild(priceRow);
+
+  // Row 3: the two facts that define the plan, as a spec strip.
+  const stats = document.createElement("dl");
+  stats.className = "plan-stats";
+  const creditStat = document.createElement("div");
+  creditStat.className = "plan-stat";
+  const creditDt = document.createElement("dt");
+  creditDt.textContent = "Credit";
+  const creditDd = document.createElement("dd");
+  creditDd.className = "plan-credit";
+  creditDd.textContent = formatUsd(credited ?? plan.usd);
+  creditStat.appendChild(creditDt);
+  creditStat.appendChild(creditDd);
+  stats.appendChild(creditStat);
+  const ttlStat = document.createElement("div");
+  ttlStat.className = "plan-stat";
+  const ttlDt = document.createElement("dt");
+  ttlDt.textContent = "Validity";
+  const ttlDd = document.createElement("dd");
+  ttlDd.className = "plan-ttl";
+  ttlDd.textContent = plan.ttl_days + (plan.ttl_days === 1 ? " day" : " days");
+  ttlStat.appendChild(ttlDt);
+  ttlStat.appendChild(ttlDd);
+  stats.appendChild(ttlStat);
+  card.appendChild(stats);
+
+  // Row 4: what the plan unlocks.
   const access = document.createElement("div");
   access.className = "plan-access";
   const accessLabel = document.createElement("div");
   accessLabel.className = "plan-access-label";
-  accessLabel.textContent = "Unlocks";
+  accessLabel.textContent = "Model access";
   access.appendChild(accessLabel);
 
   const models = document.createElement("div");
@@ -81,7 +107,6 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   for (const item of items) {
     const chip = document.createElement("span");
     chip.className = "chip plan-model" + (item.combo ? " combo-chip" : "");
-    chip.title = item.combo ? "combo" : "model";
     chip.textContent = item.name;
     models.appendChild(chip);
   }
@@ -89,18 +114,17 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
     const more = document.createElement("button");
     more.type = "button";
     more.className = "plan-more";
-    const hiddenCount = items.length - COLLAPSED_VISIBLE;
-    more.textContent = "+" + hiddenCount + " more";
+    more.textContent = "show all";
     more.addEventListener("click", (e) => {
       e.preventDefault();
       const expanded = models.classList.toggle("expanded");
-      more.textContent = expanded ? "show less" : "+" + hiddenCount + " more";
+      more.textContent = expanded ? "show less" : "show all";
     });
     models.appendChild(more);
   }
   if (items.length === 0) {
     const empty = document.createElement("span");
-    empty.style.cssText = "font-size:var(--fs-xs);color:var(--color-text-muted)";
+    empty.className = "plan-none";
     empty.textContent = "full catalog access";
     models.appendChild(empty);
   }

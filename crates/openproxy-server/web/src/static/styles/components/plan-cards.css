@@ -1,129 +1,212 @@
 /* components/plan-cards.css — selectable plan cards (checkout + anywhere a
-   tier is offered). Radio-card pattern: a visually hidden input keeps the
+   tier is offered). Product-tile pattern: a visually hidden radio keeps the
    native semantics (keyboard, form value) while the label draws the card.
    Look comes exclusively from the theme tokens. */
 
 .plan-grid {
   display: grid;
   gap: var(--space-3);
+  margin-top: var(--space-2);
 }
 
+/* The card IS the container: own surface, elevation and a 12px rhythm, so a
+   plan reads as a product tile instead of loose text. */
 .plan-card {
-  display: block;
+  display: grid;
+  gap: 0.75rem;
   position: relative;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4);
   border: var(--border-w) var(--border-style) var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
-  transition: border-color var(--t-base), box-shadow var(--t-base), background var(--t-base);
+  transition: border-color var(--t-base), box-shadow var(--t-base), transform var(--t-base);
   box-sizing: border-box;
 }
-.plan-card:hover { border-color: var(--color-primary); }
+.plan-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-md);
+}
 .plan-card.selected {
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary) inset;
-}
-.plan-card input:focus-visible ~ .plan-head {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
+  box-shadow: 0 0 0 1px var(--color-primary) inset, var(--shadow-md);
 }
 .plan-card input {
   position: absolute;
   opacity: 0;
   pointer-events: none;
 }
+.plan-card input:focus-visible ~ .plan-head .plan-radio {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
 
+/* Row 1 — dot + name (+ leverage badge right). */
 .plan-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.plan-radio {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  position: relative;
+  transition: border-color var(--t-base);
+}
+.plan-card.selected .plan-radio {
+  border-color: var(--color-primary);
+}
+.plan-card.selected .plan-radio::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: inherit;
+  background: var(--color-primary);
 }
 .plan-name {
   font-size: var(--fs-md);
   font-weight: 600;
+  letter-spacing: 0.1px;
+  line-height: 1.3;
   color: var(--color-text);
   margin: 0;
-}
-.plan-price {
-  font-size: var(--fs-xl);
-  font-weight: 700;
-  letter-spacing: 0.3px;
-  color: var(--color-text);
-  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.plan-price small {
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  color: var(--color-text-muted);
-  margin-left: 0.25rem;
-}
-
-.plan-terms {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-}
-.plan-credit {
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--color-success);
-}
 .plan-multiplier {
-  display: inline-block;
-  padding: 0.1rem 0.45rem;
+  flex: none;
+  margin-left: auto;
+  padding: 0.12rem 0.5rem;
   font-size: var(--fs-2xs);
   font-weight: 700;
+  letter-spacing: 0.04em;
   color: var(--color-success);
   background: var(--color-success-soft);
   border-radius: var(--radius-pill);
 }
-.plan-ttl {
+
+/* Row 2 — the price is the hero. */
+.plan-price-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.plan-price {
+  font-size: var(--fs-3xl);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+.plan-per {
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
 }
 
+/* Row 3 — spec strip: the two facts that define the plan. */
+.plan-stats {
+  display: flex;
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: var(--border-w) dashed var(--color-border);
+}
+.plan-stat {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.plan-stat + .plan-stat {
+  padding-left: var(--space-4);
+  border-left: var(--border-w) solid var(--color-border-soft);
+}
+.plan-stat dt {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.15rem;
+}
+.plan-stat dd {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-stat dd.plan-credit {
+  color: var(--color-success);
+}
+
+/* Row 4 — what the plan unlocks. */
 .plan-access {
-  margin-top: var(--space-3);
+  min-width: 0;
 }
 .plan-access-label {
   font-size: var(--fs-2xs);
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--color-text-muted);
-  margin-bottom: var(--space-2);
+  margin-bottom: 0.4rem;
 }
 .plan-models {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-2);
+  gap: 5px;
 }
 .plan-models .chip {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.5;
+  padding: 0.08rem 0.45rem;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-w) solid var(--color-border-soft);
+  border-radius: var(--radius-pill);
+}
+.plan-models .chip.combo-chip {
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+  border-color: transparent;
 }
 .plan-models .plan-more {
   background: transparent;
-  border: var(--border-w) var(--border-style) var(--color-border);
+  border: var(--border-w) dashed var(--color-border);
   border-radius: var(--radius-pill);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-family: var(--font-mono);
   color: var(--color-text-muted);
   cursor: pointer;
-  padding: 0.15rem 0.5rem;
+  padding: 0.08rem 0.5rem;
 }
 .plan-models .plan-more:hover {
   color: var(--color-text);
   border-color: var(--color-text-muted);
 }
-/* Collapsed: only the first 7 chips show; the "+N more" button expands. */
-.plan-models:not(.expanded) span:nth-of-type(n + 8) { display: none; }
+/* Collapsed: five chips keep the tile short in the checkout panel; the
+   "show all" button expands the rest. */
+.plan-models:not(.expanded) span:nth-of-type(n + 6) { display: none; }
+.plan-none {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
 
 @media (min-width: 720px) {
   .plan-grid { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }

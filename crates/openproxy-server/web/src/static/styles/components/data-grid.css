@@ -228,6 +228,22 @@
   text-align: left;
 }
 
+/* Windowed grids page from here instead of painting the whole dataset. */
+.dg-more {
+  display: flex;
+  justify-content: center;
+  padding: 10px 12px 14px;
+}
+.dg-more .link {
+  font-size: var(--fs-sm);
+  color: var(--color-info);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.dg-more .link:hover { color: var(--color-primary); }
+
 /* Selection bulk bar — floats over the top-right of the list so it is
    reachable without scrolling to the bottom. */
 .dg-bulk {
