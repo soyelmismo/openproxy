@@ -53,8 +53,8 @@ pub fn create(
             (key_hash, key_prefix, label, scopes_json, allowed_models_json, \
              allowed_combos_json, expires_at, created_by, \
              blacklisted_providers_json, blacklisted_models_json, only_whitelisted, \
-             allowed_providers_json) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             allowed_providers_json, kind) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             key_hash,
             key_prefix,
@@ -68,6 +68,7 @@ pub fn create(
             blacklisted_models_json,
             input.only_whitelisted as i64,
             allowed_providers_json,
+            super::kind::kind_for_creator(created_by),
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;

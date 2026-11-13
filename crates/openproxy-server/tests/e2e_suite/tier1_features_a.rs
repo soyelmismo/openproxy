@@ -452,3 +452,77 @@ async fn test_tier1_embeddings_usage_accounting_body() {
             && resp["usage"]["total_tokens"].as_u64().unwrap_or(0) > 0
     );
 }
+
+#[test]
+fn test_tier1_key_kinds_list_and_flip() {
+    crate::run_with_big_stack(test_tier1_key_kinds_list_and_flip_body);
+}
+
+async fn test_tier1_key_kinds_list_and_flip_body() {
+    let harness = TestHarness::new().await;
+    let (status, created) = harness
+        .admin_post(
+            "/admin/api/keys",
+            json!({"label": "kind-target", "scopes": ["chat"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = created["key"]["id"].as_i64().expect("created key id");
+
+    // A key created by the operator starts personal.
+    let (status, rows) = harness.admin_get("/admin/api/keys/kinds").await;
+    assert_eq!(status, StatusCode::OK);
+    let kind_of = |rows: &Value, id: i64| -> String {
+        rows.as_array()
+            .expect("kinds array")
+            .iter()
+            .find(|r| r["id"].as_i64() == Some(id))
+            .unwrap_or_else(|| panic!("key {id} missing from kinds list"))["kind"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(kind_of(&rows, id), "personal");
+
+    let (status, resp) = harness
+        .admin_post(&format!("/admin/api/keys/{id}/kind"), json!({"kind": "customer"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["kind"], "customer");
+
+    let (_, rows) = harness.admin_get("/admin/api/keys/kinds").await;
+    assert_eq!(kind_of(&rows, id), "customer");
+
+    // Unknown values are rejected, never stored.
+    let (status, _) = harness
+        .admin_post(&format!("/admin/api/keys/{id}/kind"), json!({"kind": "vip"}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, rows) = harness.admin_get("/admin/api/keys/kinds").await;
+    assert_eq!(kind_of(&rows, id), "customer");
+
+    // A missing key is a 404, not a silent no-op.
+    let (status, _) = harness
+        .admin_post("/admin/api/keys/999999/kind", json!({"kind": "customer"}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[test]
+fn test_tier1_usage_accepts_the_ownership_filter() {
+    crate::run_with_big_stack(test_tier1_usage_accepts_the_ownership_filter_body);
+}
+
+async fn test_tier1_usage_accepts_the_ownership_filter_body() {
+    let harness = TestHarness::new().await;
+    for kind in ["personal", "customer", "all", ""] {
+        let (status, _) = harness
+            .admin_get(&format!("/admin/api/usage/summary?api_key_kind={kind}"))
+            .await;
+        assert_eq!(status, StatusCode::OK, "api_key_kind={kind} must be accepted");
+    }
+    let (status, _) = harness
+        .admin_get("/admin/api/usage/summary?api_key_kind=vip")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

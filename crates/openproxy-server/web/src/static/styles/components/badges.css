@@ -27,6 +27,10 @@
   border-radius: var(--radius-pill);
 }
 .chip.combo-chip { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); }
+/* Ownership scope. Only customer keys carry a chip: personal is the default
+   and stays unlabelled so the list does not fill with noise. */
+.chip.kind-chip { margin-left: 0.4rem; }
+.chip.kind-chip.customer { background: var(--color-info-soft); color: var(--color-info); border-color: var(--color-info); }
 .virtual-provider { font-style: italic; color: var(--color-text-muted); }
 
 .model-chip {

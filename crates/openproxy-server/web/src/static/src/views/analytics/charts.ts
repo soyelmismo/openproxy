@@ -26,6 +26,7 @@ import {
   setRankMetric,
   type AnalyticsCharts,
 } from "./shared.js";
+import { kindOf } from "../../lib/keys-api.js";
 
 /** Create the uPlot chart instance after the first data-bearing render. Idempotent. */
 export function createAnalyticsCharts(): void {
@@ -102,10 +103,29 @@ export function renderAnalyticsToolbar(
   apiKeyId: string,
   modelId: string,
   preset: string,
+  keyKind = "",
 ): TemplateResult {
-  const hasFilters = providerId !== "" || apiKeyId !== "" || modelId !== "";
+  const hasFilters = providerId !== "" || apiKeyId !== "" || modelId !== "" || keyKind !== "";
+  // The key dropdown only offers keys inside the selected ownership scope: a
+  // personal key can never produce rows under "customers".
+  const scopedKeys = keyKind ? apiKeys.filter((k) => (k.kind ?? kindOf(k.id)) === keyKind) : apiKeys;
   return html`<section class="analytics-toolbar" aria-label=${t("analytics.filters_label")}>
     <div class="analytics-filter-row">
+      ${isFullAdmin() ? html`<div class="analytics-filter-field analytics-scope-filter">
+        <span>${t("analytics.filter.owner")}</span>
+        <div class="preset-selector" role="group" aria-label=${t("analytics.filter.owner")}>
+          ${([
+            { value: "", label: t("analytics.filter.owner.all") },
+            { value: "personal", label: t("analytics.filter.owner.personal") },
+            { value: "customer", label: t("analytics.filter.owner.customer") },
+          ] as const).map((opt) => html`<button
+            class="preset-btn${keyKind === opt.value ? " active" : ""}"
+            type="button"
+            aria-pressed=${keyKind === opt.value ? "true" : "false"}
+            @click=${() => setHashParams({ keyKind: opt.value, apiKeyId: "" })}
+          >${opt.label}</button>`)}
+        </div>
+      </div>` : html``}
       <label class="analytics-filter-field" for="analytics-provider-filter">
         <span>${t("analytics.filter.provider")}</span>
         <select id="analytics-provider-filter" class="filter-dropdown" .value=${providerId} @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
@@ -118,7 +138,7 @@ export function renderAnalyticsToolbar(
         <span>${t("analytics.filter.api_key")}</span>
         <select id="analytics-key-filter" class="filter-dropdown" .value=${live(apiKeyId)} @change=${(e: Event) => setHashParams({ apiKeyId: (e.target as HTMLSelectElement).value })}>
           <option value="" ?selected=${apiKeyId === ""}>${t("analytics.filter.all_api_keys")}</option>
-          ${apiKeys.map((k) => html`<option value=${String(k.id)} ?selected=${apiKeyId === String(k.id)}>${k.label || k.key_prefix || "—"}${k.key_prefix ? ` · ${k.key_prefix}` : ""}</option>`)}
+          ${scopedKeys.map((k) => html`<option value=${String(k.id)} ?selected=${apiKeyId === String(k.id)}>${k.label || k.key_prefix || "—"}${k.key_prefix ? ` · ${k.key_prefix}` : ""}</option>`)}
         </select>
       </label>` : html``}
       <div class="analytics-filter-field analytics-model-filter">
@@ -130,7 +150,7 @@ export function renderAnalyticsToolbar(
           <small aria-hidden="true">▾</small>
         </button>
       </div>
-      ${hasFilters ? html`<button class="analytics-clear-btn" type="button" @click=${() => setHashParams({ providerId: "", apiKeyId: "", modelId: "" })}>${t("analytics.filter.clear")}</button>` : html``}
+      ${hasFilters ? html`<button class="analytics-clear-btn" type="button" @click=${() => setHashParams({ providerId: "", apiKeyId: "", modelId: "", keyKind: "" })}>${t("analytics.filter.clear")}</button>` : html``}
     </div>
     <div class="analytics-range-row">
       <span class="analytics-range-label">${t("analytics.range_label")}</span>

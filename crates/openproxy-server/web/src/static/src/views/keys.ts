@@ -16,12 +16,18 @@ import { showCreateKey, showEditKey } from "../handlers/key-handlers.js";
 import { showPlaintextKey } from "../components/key-display.js";
 import { icons } from "../lib/icons.js";
 import { t } from "../i18n/index.js";
-import type { Model, ApiKey } from "../lib/types/api.js";
+import type { Model } from "../lib/types/api.js";
 import { renderDataGrid, type GridColumn } from "../components/data-grid.js";
+import { fetchKeysWithKind, kindOf, rememberKind, type ApiKeyWithKind } from "../lib/keys-api.js";
 
 // Mirrors the columns `/admin/api-keys` serialises. `allowed_models`:
 // null = all, [] = empty whitelist, [...] = explicit list.
-type ApiKeyRow = ApiKey;
+type ApiKeyRow = ApiKeyWithKind;
+
+// Which ownership scope the list shows. "all" is the default so the table
+// never hides a key the operator did not ask to hide.
+type KeyScope = "all" | "personal" | "customer";
+let keyScope: KeyScope = "all";
 
 // POST /keys/:id/regenerate response.
 interface KeyPlaintextResponse {
@@ -79,7 +85,7 @@ async function onRevokeKey(id: number, label: string | null): Promise<void> {
       location.hash = "#/login";
       return;
     }
-    state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    state.apiKeys = await fetchKeysWithKind() as typeof state.apiKeys;
     requestUpdate();
   } catch (e: unknown) {
     if (isSelf) {
@@ -116,6 +122,23 @@ async function onDeleteKey(id: number, label: string | null): Promise<void> {
       location.hash = "#/login";
       return;
     }
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(t("keys.list.toast.error_prefix") + msg, "error");
+  }
+}
+
+// Reclassify a key. Ownership is the only signal that separates keys sold
+// through the checkout from the operator's own; scopes and tier_id cannot.
+async function onSetKeyKind(id: number, kind: "personal" | "customer"): Promise<void> {
+  try {
+    const res = await api(`/keys/${id}/kind`, {
+      method: "POST",
+      body: JSON.stringify({ kind }),
+    }) as { kind: "personal" | "customer" };
+    rememberKind(id, res.kind);
+    requestUpdate();
+    showToast(t(kind === "customer" ? "keys.list.toast.marked_customer" : "keys.list.toast.marked_personal"));
+  } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     showToast(t("keys.list.toast.error_prefix") + msg, "error");
   }
@@ -219,7 +242,16 @@ function renderKeys(): TemplateResult {
       <div class="banner banner-error">${loadError}</div>
     `;
   }
-  const keys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
+  const allKeys: ApiKeyRow[] = (state.apiKeys as ApiKeyRow[]) || [];
+  // Ownership is resolved from the kind map, not from the row: `state.apiKeys`
+  // has other writers that would drop an attached field.
+  const scopeOf = (k: ApiKeyRow): string => k.kind ?? kindOf(k.id);
+  const counts = {
+    all: allKeys.length,
+    personal: allKeys.filter((k) => scopeOf(k) === "personal").length,
+    customer: allKeys.filter((k) => scopeOf(k) === "customer").length,
+  };
+  const keys = keyScope === "all" ? allKeys : allKeys.filter((k) => scopeOf(k) === keyScope);
 
   const columns: GridColumn<ApiKeyRow>[] = [
     {
@@ -227,7 +259,9 @@ function renderKeys(): TemplateResult {
       label: t("keys.list.col.label"),
       min: 90,
       elastic: true,
-      render: (k) => html`<strong class="key-name">${k.label || "—"}</strong>${k.created_by ? html`<small class="key-created-by">(${k.created_by})</small>` : ""}`,
+      render: (k) => html`<strong class="key-name">${k.label || "—"}</strong>${scopeOf(k) === "customer"
+        ? html`<span class="chip kind-chip customer">${t("keys.list.kind.customer")}</span>`
+        : ""}${k.created_by ? html`<small class="key-created-by">(${k.created_by})</small>` : ""}`,
     },
     {
       key: "key_prefix",
@@ -289,6 +323,9 @@ function renderKeys(): TemplateResult {
           menuItems: (k) => [
             { action: "rename", label: t("grid.menu.rename"), shortcut: "F2" },
             { action: "copy_prefix", label: t("grid.menu.copy_prefix") },
+            scopeOf(k) === "customer"
+              ? { action: "kind", label: t("keys.list.btn.mark_personal") }
+              : { action: "kind", label: t("keys.list.btn.mark_customer") },
             { action: "usage", label: t("keys.list.btn.usage"), shortcut: "U" },
             { separator: true },
             { action: "edit", label: t("keys.list.btn.edit") },
@@ -301,6 +338,7 @@ function renderKeys(): TemplateResult {
             switch (action) {
               case "rename": return; // handled through inline editing
               case "copy_prefix": void navigator.clipboard?.writeText(k.key_prefix || ""); showToast(t("grid.toast.copied")); return;
+              case "kind": return void onSetKeyKind(k.id, scopeOf(k) === "customer" ? "personal" : "customer");
               case "edit": return onShowEditKey(k.id);
               case "usage": return onViewKeyUsage(k.id);
               case "regenerate": return void onRegenerateKey(k.id, k.label);
@@ -317,7 +355,21 @@ function renderKeys(): TemplateResult {
       `;
   return html`
     <div class="page-header"><h2 class="view-identity">${t("keys.list.heading")}</h2>
-      <div class="actions"><button class="primary" @click=${onShowCreateKey}>${icons.plus()} ${t("keys.list.btn.create")}</button></div>
+      <div class="actions">
+        <div class="keys-scope-filter" role="group" aria-label=${t("keys.list.kind.label")}>
+          ${([
+            { value: "all", label: t("keys.list.kind.all"), n: counts.all },
+            { value: "personal", label: t("keys.list.kind.personal"), n: counts.personal },
+            { value: "customer", label: t("keys.list.kind.customer"), n: counts.customer },
+          ] as const).map((opt) => html`<button
+            class="scope-btn${keyScope === opt.value ? " active" : ""}"
+            type="button"
+            aria-pressed=${keyScope === opt.value ? "true" : "false"}
+            @click=${() => { keyScope = opt.value; requestUpdate(); }}
+          >${opt.label} <span class="scope-count">${opt.n}</span></button>`)}
+        </div>
+        <button class="primary" @click=${onShowCreateKey}>${icons.plus()} ${t("keys.list.btn.create")}</button>
+      </div>
     </div>
     ${body}
   `;
@@ -333,7 +385,7 @@ export async function mountKeys(
     renderKeys,
     async () => {
       const [keys, models] = await Promise.all([
-        api("/keys") as Promise<ApiKeyRow[]>,
+        fetchKeysWithKind(),
         api("/models") as Promise<Model[]>,
       ]);
       state.apiKeys = keys;

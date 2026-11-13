@@ -17,6 +17,10 @@ pub struct UsageFilter {
     pub combo_id: Option<ComboId>,
     /// Restrict to rows produced under a specific API key.
     pub api_key_id: Option<ApiKeyId>,
+    /// Restrict to keys of one ownership kind: `personal` (the operator's own)
+    /// or `customer` (sold through the checkout). Implemented as a subquery so
+    /// the aggregate queries never need to join `api_keys`.
+    pub key_kind: Option<KeyKind>,
     /// Upstream models excluded from every aggregate (stats-view toggles).
     #[serde(default)]
     pub exclude_models: Vec<String>,
@@ -28,6 +32,39 @@ pub struct UsageFilter {
     /// visibility clause hides upstream internals entirely.
     #[serde(default)]
     pub scope_public: Option<PublicScope>,
+}
+
+/// Ownership kind of an API key, as stored in `api_keys.kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyKind {
+    /// The operator's own key, for private consumption.
+    Personal,
+    /// A key sold through the checkout and governed by a plan.
+    Customer,
+}
+
+impl KeyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Personal => "personal",
+            Self::Customer => "customer",
+        }
+    }
+}
+
+impl std::str::FromStr for KeyKind {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim() {
+            "personal" => Ok(Self::Personal),
+            "customer" => Ok(Self::Customer),
+            other => Err(format!(
+                "key_kind must be 'personal' or 'customer', got '{other}'"
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -54,6 +91,7 @@ impl UsageFilter {
             self.account_id.is_some(),
             self.combo_id.is_some(),
             self.api_key_id.is_some(),
+            self.key_kind.is_some(),
             !self.exclude_models.is_empty(),
             !self.exclude_providers.is_empty(),
             self.scope_public.is_some(),
@@ -116,6 +154,12 @@ fn push_entity_filters(
     if let Some(kid) = f.api_key_id {
         clauses.push("api_key_id = ?".into());
         params.push(Box::new(kid.0));
+    }
+    if let Some(kind) = f.key_kind {
+        // Subquery instead of a join: every aggregate query stays untouched and
+        // SQLite resolves the key set once.
+        clauses.push("api_key_id IN (SELECT id FROM api_keys WHERE kind = ?)".into());
+        params.push(Box::new(kind.as_str().to_owned()));
     }
     push_not_in(clauses, params, "upstream_model_id", &f.exclude_models);
     push_not_in(clauses, params, "provider_id", &f.exclude_providers);
@@ -317,6 +361,47 @@ mod tests {
         } else {
             panic!("expected FromSqlConversionFailure, got {err:?}");
         }
+    }
+
+    #[test]
+    fn test_key_kind_becomes_a_subquery_clause() {
+        // "All" is expressed as None, never as a string that matches nothing.
+        let all = UsageFilter::default();
+        assert!(all.is_empty());
+
+        let customers = UsageFilter {
+            key_kind: Some(KeyKind::Customer),
+            ..Default::default()
+        };
+        assert!(!customers.is_empty());
+        let built = BuiltWhere::from_filter(&customers);
+        assert!(
+            built
+                .sql
+                .contains("api_key_id IN (SELECT id FROM api_keys WHERE kind = ?)"),
+            "got: {}",
+            built.sql
+        );
+        assert_eq!(built.params.len(), 1);
+
+        // A key picked under one scope is an independent, additive filter.
+        let both = UsageFilter {
+            key_kind: Some(KeyKind::Personal),
+            api_key_id: Some(ApiKeyId(7)),
+            ..Default::default()
+        };
+        let built = BuiltWhere::from_filter(&both);
+        assert!(built.sql.contains("api_key_id = ?"));
+        assert!(built.sql.contains("api_key_id IN (SELECT id FROM api_keys"));
+        assert_eq!(built.params.len(), 2);
+    }
+
+    #[test]
+    fn test_key_kind_parses_only_the_two_scopes() {
+        assert_eq!("personal".parse::<KeyKind>().unwrap(), KeyKind::Personal);
+        assert_eq!(" customer ".parse::<KeyKind>().unwrap(), KeyKind::Customer);
+        assert!("all".parse::<KeyKind>().is_err());
+        assert!("".parse::<KeyKind>().is_err());
     }
 
     #[test]

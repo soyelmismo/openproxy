@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod crud;
 mod error_contract;
+mod kind;
 mod matching;
 
 pub(crate) fn fresh_pool() -> (Connection, PathBuf) {

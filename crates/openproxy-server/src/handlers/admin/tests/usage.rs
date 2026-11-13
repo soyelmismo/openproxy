@@ -11,6 +11,7 @@ fn q(from: Option<&str>, to: Option<&str>, preset: Option<&str>) -> UsageQuery {
         account_id: None,
         combo_id: None,
         api_key_id: None,
+        api_key_kind: None,
         exclude_models: None,
         exclude_providers: None,
         public_scope: None,
@@ -150,4 +151,29 @@ async fn usage_recent_rejects_negative_since_id() {
     )
     .await;
     assert!(status.is_success());
+}
+
+#[test]
+fn usage_filter_reads_the_ownership_scope() {
+    use openproxy_core::usage::analytics::filter::KeyKind;
+
+    // `all` (and empty) mean "no ownership filter", not a kind named all.
+    let mut q_all = q(None, None, None);
+    q_all.api_key_kind = Some("all".into());
+    assert!(q_all.into_filter().unwrap().key_kind.is_none());
+
+    let mut q_empty = q(None, None, None);
+    q_empty.api_key_kind = Some(String::new());
+    assert!(q_empty.into_filter().unwrap().key_kind.is_none());
+
+    let mut q_customers = q(None, None, None);
+    q_customers.api_key_kind = Some("customer".into());
+    assert_eq!(
+        q_customers.into_filter().unwrap().key_kind,
+        Some(KeyKind::Customer)
+    );
+
+    let mut q_bad = q(None, None, None);
+    q_bad.api_key_kind = Some("vip".into());
+    assert!(q_bad.into_filter().is_err());
 }

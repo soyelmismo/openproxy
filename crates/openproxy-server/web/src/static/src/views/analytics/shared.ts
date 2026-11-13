@@ -22,6 +22,8 @@ export interface ApiKeyFilterRow {
   id: number;
   label: string | null;
   key_prefix: string | null;
+  /** "personal" | "customer", merged from `/admin/api/keys/kinds`. */
+  kind?: string;
 }
 
 /** Flat numeric payload from the `/usage/latency` endpoint. */
@@ -72,6 +74,18 @@ export interface AnalyticsHashParams {
   apiKeyId: string;
   modelId: string;
   rank: RankMetric;
+  /** Ownership scope: "" (all), "personal" or "customer". */
+  keyKind: string;
+}
+
+/** A valid ownership scope, or "" for all keys. */
+export function parseKeyKind(raw: string | null): string {
+  return raw === "personal" || raw === "customer" ? raw : "";
+}
+
+/** `buildUsageQuery` extra carrying the ownership scope when one is active. */
+export function keyKindExtra(keyKind: string): Record<string, string> {
+  return keyKind ? { api_key_kind: keyKind } : {};
 }
 
 /** Ranking list item used by `renderRanking`. */
@@ -169,6 +183,7 @@ export function parseHashParams(): AnalyticsHashParams {
     apiKeyId: params.get("api_key_id") || "",
     modelId: params.get("model_id") || "",
     rank: parseRank(params.get("rank")),
+    keyKind: parseKeyKind(params.get("key_kind")),
   };
 }
 
@@ -197,6 +212,13 @@ export function setHashParams(updates: Partial<AnalyticsHashParams>): void {
   if (updates.modelId !== undefined) {
     if (updates.modelId) params.set("model_id", updates.modelId);
     else params.delete("model_id");
+  }
+  if (updates.keyKind !== undefined) {
+    // Changing the ownership scope invalidates any key picked under the old
+    // one (a personal key can never appear under "customers"), so it clears.
+    if (updates.apiKeyId === undefined) params.delete("api_key_id");
+    if (updates.keyKind) params.set("key_kind", updates.keyKind);
+    else params.delete("key_kind");
   }
   if (updates.rank !== undefined) {
     // `cost` is the default, so an explicit cost clears the param and keeps

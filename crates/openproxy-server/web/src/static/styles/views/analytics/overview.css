@@ -89,6 +89,9 @@
 }
 .analytics-filter-row { display: flex; align-items: flex-end; gap: var(--space-3); flex-wrap: wrap; }
 .analytics-filter-field { display: flex; min-width: 190px; flex: 0 1 250px; flex-direction: column; gap: var(--space-1); }
+/* Ownership switch: the segmented control sits where a dropdown would, so it
+   drops the preset row's bottom margin and never wraps. */
+.analytics-scope-filter .preset-selector { margin: 0; flex-wrap: nowrap; }
 .analytics-filter-field > span,
 .analytics-range-label { color: var(--color-text-muted); font-size: var(--fs-xs); font-weight: 700; }
 .analytics-filter-field .filter-dropdown {

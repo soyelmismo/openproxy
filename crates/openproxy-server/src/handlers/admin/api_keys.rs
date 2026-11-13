@@ -9,12 +9,14 @@ use std::sync::Arc;
 pub fn router() -> axum::Router<AppState> {
     axum::Router::new()
         .route("/", axum::routing::get(list_api_keys).post(create_api_key))
+        .route("/kinds", axum::routing::get(list_key_kinds))
         .route(
             "/{id}",
             axum::routing::get(get_api_key)
                 .patch(update_api_key)
                 .delete(delete_api_key),
         )
+        .route("/{id}/kind", axum::routing::post(set_key_kind))
         .route("/{id}/revoke", axum::routing::post(revoke_api_key))
         .route("/{id}/regenerate", axum::routing::post(regenerate_api_key))
         .route("/{id}/usage", axum::routing::get(api_key_usage))
@@ -54,6 +56,39 @@ pub async fn list_api_keys(
 ) -> Result<Json<Vec<core_api_keys::ApiKey>>, ApiError> {
     let list = s.db_pool().spawn_read(core_api_keys::list).await?;
     Ok(Json(list))
+}
+
+/// Customer/personal classification for every key. A separate, tiny map keeps
+/// the key-list payload unchanged and lets both dashboard views switch on the
+/// same source.
+pub async fn list_key_kinds(
+    State(s): State<AppState>,
+) -> Result<Json<Vec<core_api_keys::kind::ApiKeyKindRow>>, ApiError> {
+    let rows = s.db_pool().spawn_read(core_api_keys::kind::list).await?;
+    Ok(Json(rows))
+}
+
+/// Reclassify one key. Customer keys are the ones sold through the checkout,
+/// personal keys are the operator's own, and nothing else distinguishes them.
+pub async fn set_key_kind(
+    State(s): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let kind = body
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            ApiError(CoreError::Validation(
+                "kind must be a string: 'personal' or 'customer'".into(),
+            ))
+        })?
+        .to_owned();
+    let stored = s
+        .db_pool()
+        .spawn_write(move |w| core_api_keys::kind::set(w, id, &kind))
+        .await?;
+    Ok(Json(serde_json::json!({ "id": id, "kind": stored })))
 }
 
 pub async fn create_api_key(

@@ -1,4 +1,5 @@
 pub mod crud;
+pub mod kind;
 pub mod mapping;
 pub mod matching;
 pub mod models;

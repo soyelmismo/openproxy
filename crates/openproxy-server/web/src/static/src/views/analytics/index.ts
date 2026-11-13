@@ -6,6 +6,7 @@ import { api } from "../../state/api.js";
 import { mountView, requestUpdate } from "../../state/reactive.js";
 import { t } from "../../i18n/index.js";
 import { isFullAdmin, getProfile } from "../../state/auth.js";
+import { loadKeyKinds } from "../../lib/keys-api.js";
 import {
   buildUsageQuery,
   byModel,
@@ -20,6 +21,7 @@ import {
   fmtDuration,
   formatRankValue,
   groupByStatus,
+  keyKindExtra,
   latency,
   loading,
   metric,
@@ -502,7 +504,7 @@ function renderAnalytics(): TemplateResult {
   queueMicrotask(() => {
     if (mountedEl?.isConnected) ensureAnalyticsChartsAlive();
   });
-  const { preset, providerId, apiKeyId, modelId } = parseHashParams();
+  const { preset, providerId, apiKeyId, modelId, keyKind } = parseHashParams();
   return html`
     <div class="analytics-dashboard">
       <div class="page-header analytics-header">
@@ -510,7 +512,7 @@ function renderAnalytics(): TemplateResult {
           <h2 class="view-identity" title=${t("analytics.subtitle")}>${t("analytics.title")}</h2>
         </div>
       </div>
-      ${renderAnalyticsToolbar(providerId, apiKeyId, modelId, preset)}
+      ${renderAnalyticsToolbar(providerId, apiKeyId, modelId, preset, keyKind)}
       ${renderBody()}
     </div>`;
 }
@@ -566,16 +568,16 @@ async function fetchAndApply(
   opts: { showLoading: boolean } = { showLoading: false },
 ): Promise<boolean> {
   if (opts.showLoading) setViewState({ loading: true, errorMsg: null });
-  const { preset, providerId, apiKeyId, modelId } = parseHashParams();
+  const { preset, providerId, apiKeyId, modelId, keyKind } = parseHashParams();
   try {
     // Shared by every `/usage/*` fetch; errors adds `limit=10` to cap the table.
     // Ranking exclusions ride along on every aggregate.
     const modelFilter = modelId ? { model_id: modelId } : {};
-    const usageQ = buildUsageQuery(preset, providerId, apiKeyId, { ...modelFilter, ...exclusionsExtra() });
-    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10", ...modelFilter, ...exclusionsExtra() });
+    const usageQ = buildUsageQuery(preset, providerId, apiKeyId, { ...modelFilter, ...keyKindExtra(keyKind), ...exclusionsExtra() });
+    const errorsQ = buildUsageQuery(preset, providerId, apiKeyId, { limit: "10", ...modelFilter, ...keyKindExtra(keyKind), ...exclusionsExtra() });
     const [
       summaryResp, byModelResp, byProviderResp, monthlyByProviderResp, latencyResp, racesResp,
-      byDayResp, byStatusResp, byComboResp, errorsResp, providersResp, apiKeysResp,
+      byDayResp, byStatusResp, byComboResp, errorsResp, providersResp, apiKeysResp, kindsResp,
     ] = await Promise.all([
       api(`/usage/summary${usageQ}`) as Promise<UsageSummary>,
       api(`/usage/by-model${usageQ}`) as Promise<ByModelRow[]>,
@@ -611,9 +613,21 @@ async function fetchAndApply(
                 }] as ApiKeyFilterRow[])
               : ([] as ApiKeyFilterRow[])
           ),
+      // Ownership scope for the keys dropdown; also refreshes the shared kind
+      // cache so `kindOf(id)` stays right even if another view rewrites
+      // `state.apiKeys` later.
+      isFullAdmin()
+        ? loadKeyKinds()
+        : Promise.resolve([] as { id: number; kind: string }[]),
     ]);
 
     if (!el.isConnected) return false;
+
+    const kindById = new Map<number, string>(kindsResp.map((r) => [r.id, r.kind]));
+    const keysScoped: ApiKeyFilterRow[] = apiKeysResp.map((k) => ({
+      ...k,
+      kind: kindById.get(k.id) ?? k.kind ?? "personal",
+    }));
 
     setViewState({
       summary: summaryResp,
@@ -627,12 +641,12 @@ async function fetchAndApply(
       byCombo: byComboResp,
       errors: errorsResp,
       providers: providersResp,
-      apiKeys: apiKeysResp,
+      apiKeys: keysScoped,
       loading: false,
     });
 
     if (providersResp) state.providers = providersResp;
-    if (apiKeysResp) state.apiKeys = apiKeysResp as typeof state.apiKeys;
+    if (keysScoped.length) state.apiKeys = keysScoped as typeof state.apiKeys;
 
     // Dollar quotas: clients read their own status; admins get the picked
     // key's live spend. No picker selection = no panel at all.

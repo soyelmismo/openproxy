@@ -44,6 +44,8 @@ pub struct UsageQuery {
     pub account_id: Option<i64>,
     pub combo_id: Option<i64>,
     pub api_key_id: Option<i64>,
+    /// Ownership filter: `personal`, `customer`, or absent for all keys.
+    pub api_key_kind: Option<String>,
     pub preset: Option<String>,
     /// Comma-separated upstream models excluded from every aggregate
     /// (the analytics ranking view toggles these per entry).
@@ -599,6 +601,15 @@ impl UsageQuery {
     pub(crate) fn into_filter(self) -> Result<UsageFilter, ApiError> {
         let provider_id = parse_provider_filter(self.provider_id)?;
         let (from, to) = resolve_query_time_bounds(self.from, self.to, self.preset.as_deref())?;
+        // An empty value or `all` means "no ownership filter"; anything else
+        // must parse to a known kind instead of matching nothing silently.
+        let key_kind = match self.api_key_kind.as_deref() {
+            None | Some("") | Some("all") => None,
+            Some(raw) => Some(
+                raw.parse::<core_usage::analytics::filter::KeyKind>()
+                    .map_err(|e| ApiError(CoreError::Validation(e)))?,
+            ),
+        };
 
         Ok(UsageFilter {
             from,
@@ -608,6 +619,7 @@ impl UsageQuery {
             account_id: self.account_id.map(AccountId::new),
             combo_id: self.combo_id.map(ComboId),
             api_key_id: self.api_key_id.map(ApiKeyId),
+            key_kind,
             exclude_models: parse_exclude_list(self.exclude_models.as_deref()),
             exclude_providers: parse_exclude_list(self.exclude_providers.as_deref()),
             scope_public: self.public_scope,
