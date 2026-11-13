@@ -53,15 +53,15 @@ fn first_boot_scans_from_the_bootstrap_block() {
     // Oldest unsettled order created around block 70_910 (~3 days before
     // the head): the first bounded chunk starts there, not "from now" and
     // not from genesis.
-    assert_eq!(scan_window(0, 200_000, 70_910), Some((70_910, 71_409)));
+    assert_eq!(scan_window(0, 200_000, 70_910, 500), Some((70_910, 71_409)));
     // A finality head behind the origin scans only the head: no block at or
     // below it can carry that payment yet, and the cursor gets pinned so
     // the following ticks stay incremental.
-    assert_eq!(scan_window(0, 100, 70_910), Some((100, 100)));
+    assert_eq!(scan_window(0, 100, 70_910, 500), Some((100, 100)));
     // Origin at genesis.
-    assert_eq!(scan_window(0, 50, 0), Some((0, 50)));
+    assert_eq!(scan_window(0, 50, 0, 500), Some((0, 50)));
     // Head 0 (empty chain view) scans only block 0.
-    assert_eq!(scan_window(0, 0, 0), Some((0, 0)));
+    assert_eq!(scan_window(0, 0, 0, 500), Some((0, 0)));
 }
 
 #[test]
@@ -71,23 +71,27 @@ fn an_ancient_bootstrap_origin_is_walked_in_bounded_chunks() {
     // request is still ONE bounded chunk and the cursor advances chunk by
     // chunk on the following ticks.
     assert_eq!(
-        scan_window(0, 4_000_000, 4_900),
+        scan_window(0, 4_000_000, 4_900, 500),
         Some((4_900, 5_399)),
         "old origin is scanned from the origin itself, never moved forward"
     );
-    assert_eq!(scan_window(5_399, 4_000_000, 0), Some((5_400, 5_899)));
+    assert_eq!(scan_window(5_399, 4_000_000, 0, 500), Some((5_400, 5_899)));
 }
 
 #[test]
 fn incremental_scan_is_one_bounded_chunk() {
-    assert_eq!(scan_window(4600, 5000, 0), Some((4601, 5000)));
-    assert_eq!(scan_window(100, 10_000, 0), Some((101, 600)));
+    assert_eq!(scan_window(4600, 5000, 0, 500), Some((4601, 5000)));
+    assert_eq!(scan_window(100, 10_000, 0, 500), Some((101, 600)));
+    // The chunk is the provider's cap: a node that rejects >10 blocks gets
+    // windows of 10, never a range it will refuse.
+    assert_eq!(scan_window(100, 10_000, 0, 10), Some((101, 110)));
+    assert_eq!(scan_window(0, 5, 0, 0), Some((0, 0)), "a zero chunk clamps to 1");
     assert_eq!(
-        scan_window(5000, 5000, 0),
+        scan_window(5000, 5000, 0, 500),
         None,
         "covered head scans nothing"
     );
-    assert_eq!(scan_window(5001, 5000, 0), None, "head behind cursor");
+    assert_eq!(scan_window(5001, 5000, 0, 500), None, "head behind cursor");
 }
 
 #[test]

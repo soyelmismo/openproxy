@@ -373,7 +373,7 @@ impl BaseRpc {
 /// which also pins the cursor so the following ticks are incremental instead of
 /// repeating the timestamp search. From then on the window is strictly
 /// incremental and capped at [`MAX_BLOCK_CHUNK`].
-const fn scan_window(last: i64, head: i64, boot_from: i64) -> Option<(i64, i64)> {
+const fn scan_window(last: i64, head: i64, boot_from: i64, chunk: i64) -> Option<(i64, i64)> {
     let from_block = if last == 0 {
         let first = if boot_from > 0 { boot_from } else { 0 };
         if head < first { head } else { first }
@@ -386,7 +386,8 @@ const fn scan_window(last: i64, head: i64, boot_from: i64) -> Option<(i64, i64)>
     if head < from_block {
         return None;
     }
-    let chunk_end = from_block + MAX_BLOCK_CHUNK - 1;
+    let chunk = if chunk < 1 { 1 } else { chunk };
+    let chunk_end = from_block + chunk - 1;
     Some((from_block, if head < chunk_end { head } else { chunk_end }))
 }
 
@@ -501,7 +502,8 @@ impl CreditsWatcherService {
         };
         let mut scanned_any = false;
         for _ in 0..MAX_CHUNKS_PER_TICK {
-            let Some((from_block, to_block)) = scan_window(last, head, boot_from) else {
+            let chunk = i64::from(self.config.max_block_chunk.max(1));
+            let Some((from_block, to_block)) = scan_window(last, head, boot_from, chunk) else {
                 break;
             };
             if !scanned_any {

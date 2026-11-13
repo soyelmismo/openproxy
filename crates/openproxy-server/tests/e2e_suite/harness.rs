@@ -450,6 +450,7 @@ impl TestHarness {
             min_topup_usd: 1.0,
             ttl_days: vec![7, 15, 30],
             chain_id: 8453,
+            max_block_chunk: 500,
         });
         let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
         let app_state = AppState::for_test(

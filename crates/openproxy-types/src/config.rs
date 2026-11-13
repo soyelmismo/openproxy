@@ -61,6 +61,16 @@ pub struct CreditsConfig {
     /// EVM chain id of the network the collector lives on (Base = 8453).
     #[serde(default = "default_chain_id")]
     pub chain_id: u64,
+    /// Largest block span a single `eth_getLogs` call may ask for. Public
+    /// providers cap this (Base's blastapi endpoint rejects anything above 10
+    /// blocks), and a range the node refuses means the watcher never advances
+    /// its cursor. Lower it to the node's limit, never above it.
+    #[serde(default = "default_max_block_chunk")]
+    pub max_block_chunk: u32,
+}
+
+fn default_max_block_chunk() -> u32 {
+    500
 }
 
 fn default_chain_id() -> u64 {

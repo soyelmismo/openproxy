@@ -269,6 +269,7 @@ async fn analytics_scope_gets_client_allowlist_only() {
         min_topup_usd: 1.0,
         ttl_days: vec![7, 15, 30],
         chain_id: 8453,
+        max_block_chunk: 500,
     });
     let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 
@@ -397,6 +398,7 @@ async fn chat_scope_customer_reads_its_own_plan() {
         min_topup_usd: 1.0,
         ttl_days: vec![7, 15, 30],
         chain_id: 8453,
+        max_block_chunk: 500,
     });
     let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 
