@@ -180,7 +180,7 @@ pub fn upsert(conn: &Connection, key_id: ApiKeyId, caps: &QuotaCaps) -> Result<(
 
 /// Plan attached to a key: tier name + credited amount + live balance.
 /// `None` for keys without a tier (operator/legacy keys).
-fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>> {
+pub fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>> {
     // The plan's lifetime belongs to the credit lot it funded, not to the key
     // row: a key survives its plan, and `api_keys.expires_at` is the legacy
     // key-expiry column (usually NULL for plan-managed keys). Fall back to it
@@ -189,9 +189,9 @@ fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>
         .query_row(
             "SELECT t.name, t.credit_usd, k.expires_at, \
                (SELECT MAX(l.expires_at) FROM credit_transactions l \
-                 WHERE l.api_key_id = k.id AND l.status = 'active' \
-                   AND l.kind IN ('topup', 'adjust') \
-                   AND l.expires_at IS NOT NULL AND l.expires_at > datetime('now')) \
+                 WHERE l.api_key_id = k.id AND l.status IN ('active', 'expired') \
+                   AND l.kind IN ('topup', 'adjust', 'grant') \
+                   AND l.expires_at IS NOT NULL) \
              FROM api_keys k JOIN credit_tiers t ON t.id = k.tier_id \
              WHERE k.id = ?1",
             params![key_id.0],

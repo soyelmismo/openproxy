@@ -1,13 +1,22 @@
-// checkout/mykey.ts — the "My key" tab: balance, lots, history and top-up
-// authenticated with the buyer's own key (Bearer, `chat` scope).
+// checkout/mykey.ts — the "My key" tab: read the key's plan and buy/renew
+// one for it, authenticated with the buyer's own key (Bearer, `chat` scope).
 
 import { $, err, hide, show } from "./dom.js";
-import { getAuth, getJson, postJson, type BalanceResponse, type CheckoutOrder, type TxRow } from "./api.js";
+import { getAuth, postJson, type CheckoutOrder, type MyPlanResponse } from "./api.js";
 import { renderPayStep, startCountdown, startPolling } from "./pay-step.js";
 import { parseSelection, selectedPlanValue } from "./catalog.js";
 
 function keyOf(): string {
   return ($<HTMLInputElement>("mykey")).value.trim();
+}
+
+function timeLeft(iso: string | null): string {
+  if (!iso) return "no expiry";
+  const left = new Date(iso).getTime() - Date.now();
+  if (left <= 0) return "expired";
+  const d = Math.floor(left / 86_400_000);
+  const h = Math.floor((left % 86_400_000) / 3_600_000);
+  return d > 0 ? `expires in ${d}d ${h}h` : `expires in ${h}h`;
 }
 
 export function initMyKey(): void {
@@ -16,37 +25,21 @@ export function initMyKey(): void {
     const errEl = $("mykey-err");
     errEl.classList.add("hidden");
     if (!key) return;
-    getAuth<BalanceResponse>("v1/credits/me/balance", key)
-      .then((b) => {
+    getAuth<MyPlanResponse>("v1/credits/me/plan", key)
+      .then((res) => {
         $("mykey-data").classList.remove("hidden");
-        $("my-balance").textContent =
-          "$" + parseFloat(b.balance_usd || "0").toFixed(2) + " USDC";
-        const lots = (b.lots || []).map(
-          (l) => "USDC " + l.remaining_usd + " — expires " + (l.expires_at || "never"),
-        );
-        $("my-expiry").textContent =
-          lots.join(" | ") || "No active credit balance on this key yet.";
-        return getJson<TxRow[]>("v1/credits/me/transactions?limit=50", {
-          headers: { Authorization: "Bearer " + key },
-        });
-      })
-      .then((txs) => {
-        const el = $("my-history");
-        el.innerHTML = "";
-        (txs || []).slice(0, 20).forEach((t) => {
-          const row = document.createElement("div");
-          row.style.marginBottom = "4px";
-          const link = t.basescan_url
-            ? '<a style="color:var(--color-primary)" href="' + t.basescan_url +
-              '" target="_blank" rel="noopener">view on BaseScan</a>'
-            : "—";
-          row.innerHTML =
-            t.created_at + " · " + t.kind + " · " +
-            (t.kind === "topup" ? "+" : "") + t.amount_usd + " USDC · " +
-            t.status + " · " + link;
-          el.appendChild(row);
-        });
-        if (!txs || txs.length === 0) el.textContent = "No transactions yet.";
+        const plan = res.plan;
+        if (!plan) {
+          $("my-plan-name").textContent = "No plan on this key";
+          $("my-plan-credit").textContent = "Pick a plan below to activate it.";
+          $("my-plan-expiry").textContent = "";
+          return;
+        }
+        $("my-plan-name").textContent = plan.name;
+        $("my-plan-credit").textContent =
+          "USDC " + plan.balance_usd.toFixed(2) + " of " +
+          plan.credit_usd.toFixed(2) + " credit left";
+        $("my-plan-expiry").textContent = timeLeft(plan.expires_at);
       })
       .catch((e: Error) => {
         errEl.textContent = e.message;
@@ -54,7 +47,7 @@ export function initMyKey(): void {
       });
   });
 
-  $("my-topup").addEventListener("click", () => {
+  $("my-buy").addEventListener("click", () => {
     const key = keyOf();
     const errEl = $("mykey-err");
     errEl.classList.add("hidden");
@@ -64,11 +57,11 @@ export function initMyKey(): void {
       return;
     }
     const payload = parseSelection(selection);
-    postJson<CheckoutOrder>("v1/credits/me/topup", payload, {
+    postJson<CheckoutOrder>("v1/credits/me/plan", payload, {
       Authorization: "Bearer " + key,
     })
       .then((res) => {
-        if (!res.ok) throw new Error(res.body.error?.message || "top-up failed");
+        if (!res.ok) throw new Error(res.body.error?.message || "plan purchase failed");
         hide("step-mykey");
         show("step-pay");
         renderPayStep(res.body);

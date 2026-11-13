@@ -22,7 +22,6 @@ function makeKeyForm(fields: {
   expiresAmount?: string;
   expiresUnit?: string;
   tierId?: string;
-  adjustUsd?: string;
 } = {}): HTMLFormElement {
   const form = document.createElement("form");
   const append = (name: string, value: string, tag: "input" | "select" = "input", type = "text"): void => {
@@ -58,7 +57,6 @@ function makeKeyForm(fields: {
   if (fields.expiresAmount !== undefined) append("expires_amount", fields.expiresAmount, "input", "number");
   if (fields.expiresUnit !== undefined) append("expires_unit", fields.expiresUnit, "select");
   if (fields.tierId !== undefined) append("tier_id", fields.tierId, "select");
-  if (fields.adjustUsd !== undefined) append("adjust_usd", fields.adjustUsd, "input", "number");
   document.body.appendChild(form);
   return form;
 }
@@ -95,7 +93,6 @@ describe("buildKeyBodyFromForm", () => {
     expect(body?.expires_at).toBeNull();     // "never" default
     // No plan picker in the minimal form: no tier field sent at all.
     expect("tier_id" in (body ?? {})).toBe(false);
-    expect("adjust_units" in (body ?? {})).toBe(false);
   });
 
   it("omits tier_id when the picker keeps the current plan", () => {
@@ -110,14 +107,6 @@ describe("buildKeyBodyFromForm", () => {
 
     const link = track(makeKeyForm({ scopes: ["chat"], tierId: "42" }));
     expect(buildKeyBodyFromForm(link)?.tier_id).toBe(42);
-  });
-
-  it("converts a signed USD adjustment to units and rejects zero", () => {
-    const form = track(makeKeyForm({ scopes: ["chat"], adjustUsd: "-1.50" }));
-    expect(buildKeyBodyFromForm(form)?.adjust_units).toBe(-1_500_000);
-
-    const zero = track(makeKeyForm({ scopes: ["chat"], adjustUsd: "0" }));
-    expect(buildKeyBodyFromForm(zero)).toBeNull();
   });
 
   it("splits and trims a comma-separated blacklist, dropping empty items", () => {

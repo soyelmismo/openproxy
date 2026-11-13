@@ -155,13 +155,9 @@ pub async fn list_models(
                 .compute_effective_capabilities(c.id)
                 .ok()
                 .flatten();
-            data.push(build_combo_entry(
-                c,
-                None,
-                effective_cw,
-                effective_mot,
-                effective_caps.as_ref(),
-            ));
+            // One entry per combo, under its bare routing name: the
+            // `combo:<name>` virtual id is still routed but not advertised,
+            // otherwise every combo appears twice in the model list.
             data.push(build_combo_entry(
                 c,
                 Some(&c.name),

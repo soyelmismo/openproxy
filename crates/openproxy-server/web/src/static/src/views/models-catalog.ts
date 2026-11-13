@@ -171,7 +171,10 @@ function badgesHtml(e: CatalogEntry): string {
 }
 
 function rowHtml(e: CatalogEntry): string {
-  const isCombo = (e.type || '').toLowerCase() === 'combo' || e.id.startsWith('combo:');
+  // Combos are listed under their bare routing name (no `combo:` prefix), so
+  // the marker is the owner/family the catalog stamps on every combo entry.
+  const isCombo = (e.type || '').toLowerCase() === 'combo' ||
+    e.owned_by === 'combo' || e.family === 'combo' || e.id.startsWith('combo:');
   const sub = e.display_name && e.display_name !== e.id
     ? `<span class="mc-sub">${escapeHtml(e.display_name)}</span>`
     : '';

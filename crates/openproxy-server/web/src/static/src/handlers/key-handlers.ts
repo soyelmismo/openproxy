@@ -52,8 +52,6 @@ interface KeyBody {
   expires_at: string | null;
   /** Plan link: number = link+apply, null = detach. Absent = no-op. */
   tier_id?: number | null;
-  /** Manual balance adjustment in units (signed). Edit mode only. */
-  adjust_units?: number;
 }
 
 /** Minimal tier row the plan picker needs. */
@@ -235,14 +233,6 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
                       </option>`)}
                   </select>
                 </div>
-                ${isEdit ? html`
-                <div class="field">
-                  <div class="key-form-field-head">
-                    <span class="field-label">Adjust balance</span>
-                    <span class="key-form-field-note">USD · signed · blank = no change</span>
-                  </div>
-                  <input name="adjust_usd" type="number" step="0.01" placeholder="e.g. -1.50 or 20">
-                </div>` : null}
               </div>
             </section>
             <section class="key-form-section" aria-labelledby="key-section-restrictions">
@@ -399,17 +389,6 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
     if (tierEl.value === "0") tierId = null;
     else if (tierEl.value !== "") tierId = parseInt(tierEl.value, 10);
   }
-  // Manual balance adjustment (edit): USD with 2 decimals -> signed units.
-  const adjustEl = form.querySelector<HTMLInputElement>('input[name="adjust_usd"]');
-  let adjustUnits: number | undefined;
-  if (adjustEl && adjustEl.value.trim() !== "") {
-    const usd = parseFloat(adjustEl.value);
-    if (!Number.isFinite(usd) || usd === 0) {
-      showToast("Adjust balance must be a non-zero number of USD.", "error");
-      return null;
-    }
-    adjustUnits = Math.round(usd * 1_000_000);
-  }
   return {
     label,
     scopes,
@@ -417,7 +396,6 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
     blacklisted_models: blacklistedModels,
     expires_at: expiresAt,
     ...(tierId !== undefined ? { tier_id: tierId } : {}),
-    ...(adjustUnits !== undefined ? { adjust_units: adjustUnits } : {}),
   };
 }
 

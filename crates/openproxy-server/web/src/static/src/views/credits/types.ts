@@ -1,30 +1,6 @@
 // views/credits/types.ts — wire shapes of the credits surface.
 // Mirrors handlers/admin/credits.rs + credits_gateway.rs + core credits/tiers.
 
-export interface LotView {
-  remaining_usd: string;
-  expires_at: string | null;
-}
-
-export interface Balance {
-  key_id: number;
-  credit_based: boolean;
-  balance_usd: string;
-  balance_units: number;
-  lots: LotView[];
-}
-
-export interface TxRow {
-  kind: string;
-  amount_usd: string;
-  remaining_usd: string;
-  status: string;
-  order_code: string | null;
-  tx_hash: string | null;
-  basescan_url: string | null;
-  created_at: string;
-}
-
 export interface QuotaWindow {
   cap_usd: number | null;
   spent_usd: number;
@@ -115,18 +91,6 @@ export interface CatalogModel {
   name?: string;
 }
 
-/** Order created by POST /credits/topup (panel checkout, with QR). */
-export interface Order {
-  order_code: string;
-  amount_units: number;
-  amount_display: string;
-  credit_units?: number;
-  credit_display?: string;
-  collector_address: string;
-  qr_svg: string;
-  expires_at: string;
-}
-
 /** Draft state of the tier editor (module-scoped, survives re-renders). */
 export interface TierDraft {
   id: number | null;
@@ -143,9 +107,7 @@ export interface TierDraft {
 
 export interface CreditsData {
   /** Consumer surfaces — absent on the admin-only view (noise there). */
-  balance?: Balance;
   quota?: QuotaStatus;
   plans?: PlansResponse;
-  transactions: TxRow[];
   adminTiers: AdminTier[];
 }

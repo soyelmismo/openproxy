@@ -262,3 +262,77 @@ fn plan_expiry_comes_from_the_lot_not_the_key() {
         "plan expiry must come from the active credit lot"
     );
 }
+
+#[test]
+fn assigning_a_plan_grants_its_leveraged_credit_once() {
+    use crate::credits::tiers::{self, PlanCommerce, TierConfig};
+
+    let conn = fresh_conn();
+    let key = make_key(&conn, "plan-grant");
+    let tier = tiers::create(
+        &conn,
+        "Lite",
+        &TierConfig::default(),
+        &PlanCommerce {
+            price_usd: Some(5.0),
+            credit_usd: Some(15.0),
+            ttl_days: 7,
+        },
+    )
+    .expect("create tier");
+    tiers::set_key_tier(&conn, ApiIdAlias(key), Some(tier.id)).expect("link tier");
+
+    assert!(
+        tiers::grant_plan(&conn, ApiIdAlias(key), &tier).expect("grant"),
+        "first assignment credits the plan"
+    );
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    let plan = st.plan.expect("plan present");
+    assert_eq!(plan.credit_usd, 15.0, "leverage: 5 paid -> 15 credit");
+    assert_eq!(plan.balance_usd, 15.0);
+    assert!(plan.expires_at.is_some(), "the grant carries the plan TTL");
+
+    // Re-saving the same plan is idempotent: no second lot, no double credit.
+    assert!(
+        !tiers::grant_plan(&conn, ApiIdAlias(key), &tier).expect("re-grant"),
+        "same plan already live"
+    );
+    assert_eq!(
+        crate::credits::ledger::balance_units(&conn, ApiIdAlias(key)).expect("balance"),
+        15_000_000
+    );
+}
+
+#[test]
+fn a_new_plan_supersedes_the_previous_grant() {
+    use crate::credits::tiers::{self, PlanCommerce, TierConfig};
+
+    let conn = fresh_conn();
+    let key = make_key(&conn, "plan-swap");
+    let make = |name: &str, credit: f64| {
+        tiers::create(
+            &conn,
+            name,
+            &TierConfig::default(),
+            &PlanCommerce {
+                price_usd: Some(5.0),
+                credit_usd: Some(credit),
+                ttl_days: 7,
+            },
+        )
+        .expect("create tier")
+    };
+    let lite = make("Lite", 15.0);
+    let pro = make("Pro", 30.0);
+
+    tiers::grant_plan(&conn, ApiIdAlias(key), &lite).expect("grant lite");
+    tiers::set_key_tier(&conn, ApiIdAlias(key), Some(pro.id)).expect("link pro");
+    assert!(tiers::grant_plan(&conn, ApiIdAlias(key), &pro).expect("grant pro"));
+
+    let plan = status(&conn, ApiIdAlias(key)).expect("ok").plan.expect("plan");
+    assert_eq!(plan.name, "Pro");
+    assert_eq!(
+        plan.balance_usd, 30.0,
+        "the old grant is expired, not stacked"
+    );
+}

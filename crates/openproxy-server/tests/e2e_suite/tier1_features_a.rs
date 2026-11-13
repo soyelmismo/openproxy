@@ -151,7 +151,9 @@ async fn test_tier1_models_list_includes_combos_body() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|m| m["id"] == "combo:tier1-smart-combo" && m["owned_by"] == "combo")
+            // One entry per combo, under its bare routing name (the
+            // `combo:` virtual id is routed but no longer advertised).
+            .any(|m| m["id"] == "tier1-smart-combo" && m["owned_by"] == "combo")
     );
 }
 

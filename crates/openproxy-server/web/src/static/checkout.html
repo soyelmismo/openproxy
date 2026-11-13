@@ -72,19 +72,16 @@
           <label for="mykey">Your API key</label>
           <input id="mykey" placeholder="op_live_..." autocomplete="off">
         </div>
-        <button id="mykey-load" class="btn btn-secondary" type="button">Load my balance</button>
+        <button id="mykey-load" class="btn btn-secondary" type="button">Load my plan</button>
         <div id="mykey-data" class="hidden">
-          <div class="amount" id="my-balance"></div>
-          <div class="status" id="my-expiry"></div>
+          <div class="amount" id="my-plan-name"></div>
+          <div class="status" id="my-plan-credit"></div>
+          <div class="status" id="my-plan-expiry"></div>
           <div class="field" style="margin-top:var(--space-3)">
-            <label>Top up (Plan)</label>
+            <label>Renew or change plan</label>
             <div id="my-usd"></div>
           </div>
-          <button id="my-topup" class="btn btn-secondary" type="button">Create top-up for this key</button>
-          <div class="field" style="margin-top:var(--space-3)">
-            <label>Transaction history</label>
-            <div id="my-history"></div>
-          </div>
+          <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
         </div>
         <div class="field"><small>Plan purchases to an existing key apply that plan's models and limits to the key. No refunds.</small></div>
         <div class="err hidden" id="mykey-err"></div>

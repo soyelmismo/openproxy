@@ -33,17 +33,14 @@ export interface CheckoutOrder {
   expires_at: string;
 }
 
-export interface BalanceResponse {
-  balance_usd: string;
-  lots: Array<{ remaining_usd: string; expires_at: string | null }>;
-}
-
-export interface TxRow {
-  kind: string;
-  amount_usd: string;
-  status: string;
-  basescan_url: string | null;
-  created_at: string;
+/** GET /v1/credits/me/plan — the key's plan (null: no plan assigned). */
+export interface MyPlanResponse {
+  plan: {
+    name: string;
+    credit_usd: number;
+    balance_usd: number;
+    expires_at: string | null;
+  } | null;
 }
 
 export interface OrderStatus {

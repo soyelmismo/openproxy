@@ -410,6 +410,68 @@ pub fn apply_to_key(
     Ok(())
 }
 
+/// Grant the plan's leveraged credit as a spendable lot.
+///
+/// This is the admin-assignment path: assigning a plan sells it without a
+/// payment, so the credit is born here as `kind = 'grant'` (never `topup`,
+/// which the reserve guard reads as real customer money).
+///
+/// Idempotent per tier: a key already holding a live grant from the same tier
+/// gets nothing, so re-saving the plan does not mint credit again. Assigning a
+/// different plan expires the previous grant (one live plan per key) before
+/// creating the new lot.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn grant_plan(
+    conn: &Connection,
+    key_id: ApiKeyId,
+    tier: &CreditTier,
+) -> openproxy_types::Result<bool> {
+    let Some(credit_usd) = tier.credit_usd else {
+        return Ok(false);
+    };
+    if credit_usd <= 0.0 || tier.ttl_days <= 0 {
+        return Ok(false);
+    }
+    let units = (credit_usd * 1_000_000.0).round() as i64;
+    if units <= 0 {
+        return Ok(false);
+    }
+    let already_live: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM credit_transactions \
+             WHERE api_key_id = ?1 AND tier_id = ?2 AND kind = 'grant' \
+               AND status = 'active' AND (expires_at IS NULL OR expires_at > datetime('now')))",
+            params![key_id.0, tier.id],
+            |row| row.get(0),
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    if already_live {
+        return Ok(false);
+    }
+    // One live plan per key: the newly assigned plan supersedes older grants.
+    conn.execute(
+        "UPDATE credit_transactions SET status = 'expired' \
+         WHERE api_key_id = ?1 AND kind = 'grant' AND status = 'active'",
+        params![key_id.0],
+    )
+    .map_err(openproxy_db::error::map_db_error)?;
+    conn.execute(
+        "INSERT INTO credit_transactions \
+             (api_key_id, kind, amount_units, remaining_units, status, expires_at, tier_id) \
+         VALUES (?1, 'grant', ?2, ?2, 'active', datetime('now', ?3), ?4)",
+        params![
+            key_id.0,
+            units,
+            format!("+{} days", tier.ttl_days),
+            tier.id
+        ],
+    )
+    .map_err(openproxy_db::error::map_db_error)?;
+    Ok(true)
+}
+
 // ── propagation & key-shaping (moved from packages.rs: the tier domain) ──
 
 /// Resolve combo names to the numeric combo ids the routing layer consumes

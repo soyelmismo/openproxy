@@ -1,27 +1,26 @@
-//! Admin credits section: balance, top-up, transactions, quota view.
+//! Admin credits section: plan status, plans (tiers), orders and the gateway
+//! switch.
 //!
-//! Session surface of the prepaid balance: everything a logged-in key owner
-//! sees about their credits. The public checkout (anonymous buy, reveal) lives
-//! in `crate::handlers::credits_gateway`.
+//! Credit exists only as a plan: a tier carries the price, the leveraged
+//! balance, the lifetime and the model allowlist. There is no prepaid balance
+//! and no manual top-up. The public checkout (anonymous buy, reveal) lives in
+//! `crate::handlers::credits_gateway`.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 
 use crate::state::AppState;
-use openproxy_core::credits::create_order;
+
 use openproxy_types::ids::ApiKeyId;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/balance", get(balance))
-        .route("/transactions", get(transactions))
-        .route("/topup", post(create_topup))
         .route("/quota", get(quota_status))
         // Plans (tiers) and the order ledger — credit packages are gone.
         .route("/tiers", get(list_tiers).post(create_tier))
@@ -51,7 +50,7 @@ fn err(status: StatusCode, code: &str, message: &str) -> Response {
 ///
 /// `?key_id=` is an OPERATOR override. A non-manage session key can only ever
 /// address its own credits — the query parameter is ignored for it, so a
-/// client (analytics/read) key cannot read or top up someone else's balance.
+/// client (analytics/read) key cannot read someone else's plan.
 fn target_key(identity: Option<&crate::handlers::admin::auth::AdminIdentity>, params: &HashMap<String, String>) -> Option<ApiKeyId> {
     let is_operator = identity.map(|i| i.has_manage_scope()).unwrap_or(false);
     if is_operator
@@ -60,261 +59,6 @@ fn target_key(identity: Option<&crate::handlers::admin::auth::AdminIdentity>, pa
         return Some(ApiKeyId(k));
     }
     identity.and_then(|i| i.key_id()).map(ApiKeyId)
-}
-
-#[derive(Debug, Serialize)]
-struct BalanceResponse {
-    key_id: i64,
-    credit_based: bool,
-    balance_usd: String,
-    balance_units: i64,
-    lots: Vec<LotView>,
-}
-
-#[derive(Debug, Serialize)]
-struct LotView {
-    remaining_usd: String,
-    expires_at: Option<String>,
-}
-
-async fn balance(
-    State(state): State<AppState>,
-    identity: Option<axum::extract::Extension<super::auth::AdminIdentity>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
-    if state.config().credits.is_none() {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "credits_disabled",
-            "on-chain top-ups are not enabled on this server",
-        );
-    }
-    let Some(key_id) = target_key(
-        identity.as_ref().map(|axum::extract::Extension(i)| i),
-        &params,
-    ) else {
-        return err(
-            StatusCode::UNAUTHORIZED,
-            "no_session_key",
-            "no session key: top up from the public checkout with your key",
-        );
-    };
-    let kid = key_id.0;
-    let res = state
-        .db_pool()
-        .spawn_read(move |w| {
-            let credit_based = openproxy_db::credits_ledger::is_credit_based(w, kid)?;
-            let units = openproxy_db::credits_ledger::balance_units(w, kid)?;
-            let lots = openproxy_db::credits_ledger::active_lots(w, kid)?;
-            Ok((credit_based, units, lots))
-        })
-        .await;
-    match res {
-        Ok((credit_based, units, lots)) => Json(BalanceResponse {
-            key_id: key_id.0,
-            credit_based,
-            balance_units: units,
-            balance_usd: openproxy_core::credits::units_to_usd_str(units),
-            lots: lots
-                .into_iter()
-                .map(|l| LotView {
-                    remaining_usd: openproxy_core::credits::units_to_usd_str(l.remaining_units),
-                    expires_at: l.expires_at,
-                })
-                .collect(),
-        })
-        .into_response(),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "balance_failed",
-            &format!("balance lookup failed: {e}"),
-        ),
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct TxView {
-    kind: String,
-    amount_usd: String,
-    remaining_usd: String,
-    status: String,
-    order_code: Option<String>,
-    tx_hash: Option<String>,
-    basescan_url: Option<String>,
-    created_at: String,
-}
-
-/// Every entry of the history points back into Base: `tx_hash` plus its
-/// basescan URL, so any top-up is auditable on-chain.
-fn basescan_url(chain_id: u64, tx: &str) -> String {
-    let host = match chain_id {
-        8453 => "basescan.org",
-        84532 => "sepolia.basescan.org",
-        _ => "basescan.org",
-    };
-    format!("https://{host}/tx/{tx}")
-}
-
-async fn transactions(
-    State(state): State<AppState>,
-    identity: Option<axum::extract::Extension<super::auth::AdminIdentity>>,
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
-    if state.config().credits.is_none() {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "credits_disabled",
-            "on-chain top-ups are not enabled on this server",
-        );
-    }
-    let Some(key_id) = target_key(
-        identity.as_ref().map(|axum::extract::Extension(i)| i),
-        &params,
-    ) else {
-        return err(
-            StatusCode::UNAUTHORIZED,
-            "no_session_key",
-            "no session key: use ?key_id= or the public checkout",
-        );
-    };
-    let limit = params
-        .get("limit")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(100)
-        .clamp(1, 1000);
-    let kid = key_id.0;
-    let res = state
-        .db_pool()
-        .spawn_read(move |w| openproxy_db::credits_ledger::list_transactions(w, kid, limit))
-        .await;
-    let chain_id = state.config().credits.as_ref().map_or(8453, |c| c.chain_id);
-    match res {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(|t| TxView {
-                    kind: t.kind,
-                    amount_usd: openproxy_core::credits::units_to_usd_str(t.amount_units),
-                    remaining_usd: openproxy_core::credits::units_to_usd_str(t.remaining_units),
-                    status: t.status,
-                    order_code: t.order_code,
-                    basescan_url: t
-                        .tx_hash
-                        .as_ref()
-                        .map(|tx| basescan_url(chain_id, tx)),
-                    tx_hash: t.tx_hash,
-                    created_at: t.created_at,
-                })
-                .collect::<Vec<_>>(),
-        )
-        .into_response(),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "tx_history_failed",
-            &format!("history lookup failed: {e}"),
-        ),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct TopUpRequest {
-    /// Every checkout buys a plan (tier): price/credit/ttl come from the tier.
-    tier_id: i64,
-}
-
-async fn create_topup(
-    State(state): State<AppState>,
-    identity: Option<axum::extract::Extension<super::auth::AdminIdentity>>,
-    Query(params): Query<HashMap<String, String>>,
-    Json(req): Json<TopUpRequest>,
-) -> Response {
-    let Some(cfg) = state.config().credits.clone() else {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "credits_disabled",
-            "on-chain top-ups are not enabled on this server",
-        );
-    };
-    let Some(key_id) = target_key(
-        identity.as_ref().map(|axum::extract::Extension(i)| i),
-        &params,
-    ) else {
-        return err(
-            StatusCode::UNAUTHORIZED,
-            "no_session_key",
-            "no session key: use ?key_id= or the public checkout",
-        );
-    };
-    // Plan purchase: charge the tier price; the order derives the credited
-    // amount (credit_usd, the leverage point) and the lifetime from the tier.
-    let Some(tier) = state
-        .db_pool()
-        .spawn_read(move |r| openproxy_core::credits::tiers::get(r, req.tier_id))
-        .await
-        .ok()
-        .flatten()
-    else {
-        return err(StatusCode::NOT_FOUND, "unknown_plan", "unknown plan");
-    };
-    if !tier.active {
-        return err(StatusCode::BAD_REQUEST, "inactive_plan", "plan is not active");
-    }
-    let Some(price) = tier.price_usd else {
-        return err(StatusCode::BAD_REQUEST, "not_sellable", "plan has no price");
-    };
-    let base_units =
-        (price * f64::from(openproxy_core::credits::UNITS_PER_USD as u32)).round() as i64;
-    let ttl_days = tier.ttl_days;
-    let tier_id = tier.id;
-    let created = state
-        .db_pool()
-        .spawn_write(move |w| create_order(w, Some(key_id), None, base_units, ttl_days, Some(tier_id)))
-        .await;
-    match created {
-        Ok(o) => {
-            let qr_uri = crate::handlers::credits_qr::eip681_usdc(
-                cfg.chain_id,
-                &cfg.usdc_address,
-                &cfg.collector_address,
-                o.amount_units,
-            );
-            // Same render as the public checkout reveal: the panel paints the
-            // QR straight from `qr_svg` (credits.ts paints it verbatim).
-            let qr_svg = match crate::handlers::credits_qr::render(
-                &qr_uri,
-                "#6366f1",
-                "#0b0d12",
-                "#ffffff",
-            ) {
-                Ok(q) => q.svg,
-                Err(e) => {
-                    tracing::warn!(error = %e, "qr render failed");
-                    String::new()
-                }
-            };
-            Json(json!({
-                "order_code": o.order_code,
-                "status": o.status,
-                "amount_units": o.amount_units,
-                "amount_display": openproxy_core::credits::units_to_usd_str(o.amount_units),
-                "credit_units": o.credit_units,
-                "credit_display": openproxy_core::credits::units_to_usd_str(o.credit_units),
-                "chain_id": cfg.chain_id,
-                "usdc_address": cfg.usdc_address,
-                "collector_address": cfg.collector_address,
-                "qr_uri": qr_uri,
-                "qr_svg": qr_svg,
-                "expires_at": o.expires_at,
-                "payment_window_secs": i64::from(cfg.payment_window_minutes) * 60,
-                "no_refunds": true,
-            }))
-            .into_response()
-        }
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "order_failed",
-            &format!("could not create order: {e}"),
-        ),
-    }
 }
 
 async fn quota_status(

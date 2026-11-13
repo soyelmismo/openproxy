@@ -111,21 +111,6 @@ pub async fn update_api_key(
         })?)),
     };
 
-    // Manual balance adjustment: signed units recorded as a ledger adjust.
-    let adjust_units: Option<i64> = match body.get("adjust_units") {
-        None => None,
-        Some(v) => Some(v.as_i64().ok_or_else(|| {
-            ApiError(CoreError::Validation(
-                "adjust_units must be an integer (units; 100 units = 1 USD)".into(),
-            ))
-        })?),
-    };
-    if adjust_units == Some(0) {
-        return Err(ApiError(CoreError::Validation(
-            "adjust_units must not be zero".into(),
-        )));
-    }
-
     let pool = Arc::clone(s.db_pool());
     let state_for_cache = s.clone();
     let _ = crate::error::run_blocking(move || {
@@ -171,7 +156,10 @@ pub async fn update_api_key(
     })
     .await?;
 
-    // Plan link: applying a tier re-shapes the key (models/combos/caps).
+    // Plan assignment: the tier is the only way a key gets credit. Linking
+    // reshapes the key (models/combos/caps) and grants the plan's leveraged
+    // balance as a `grant` lot with the plan's lifetime. Idempotent per tier,
+    // so re-saving the same plan never mints credit twice.
     if let Some(request) = tier_request {
         pool.spawn_write(move |w| match request {
             None => openproxy_core::credits::tiers::set_key_tier(w, ApiKeyId(id), None),
@@ -179,45 +167,15 @@ pub async fn update_api_key(
                 let tier = openproxy_core::credits::tiers::get(w, tier_id)?
                     .ok_or_else(|| CoreError::not_found("credit_tier", tier_id.to_string()))?;
                 openproxy_core::credits::tiers::apply_to_key(w, ApiKeyId(id), &tier.config)?;
-                openproxy_core::credits::tiers::set_key_tier(w, ApiKeyId(id), Some(tier.id))
+                openproxy_core::credits::tiers::set_key_tier(w, ApiKeyId(id), Some(tier.id))?;
+                openproxy_core::credits::tiers::grant_plan(w, ApiKeyId(id), &tier)?;
+                Ok(())
             }
         })
         .await?;
-        // The tier just reshaped the key (allowlists, caps). The cache was
-        // invalidated before this write, so drop it again or the catalog keeps
-        // serving the pre-plan shape until the entry expires.
-        state_for_cache.invalidate_api_key_cache(None);
-    }
-
-    // Manual balance adjustment through the ledger. A positive delta becomes
-    // an `adjust` lot (spendable, stamped with the plan TTL when the key has a
-    // tier); a negative delta consumes existing lots FIFO. `adjust` stays out
-    // of `kind = 'topup'` on purpose: the reserve guard reads topups as real
-    // customer money and would fund the escrow against a manual grant.
-    if let Some(delta) = adjust_units {
-        pool.spawn_write(move |w| {
-            if delta > 0 {
-                w.execute(
-                    "INSERT INTO credit_transactions \
-                         (api_key_id, kind, amount_units, remaining_units, status, expires_at) \
-                     SELECT ?1, 'adjust', ?2, ?2, 'active', \
-                            CASE WHEN t.ttl_days > 0 \
-                                 THEN datetime('now', '+' || t.ttl_days || ' days') END \
-                     FROM api_keys k LEFT JOIN credit_tiers t ON t.id = k.tier_id \
-                     WHERE k.id = ?1",
-                    rusqlite::params![id, delta],
-                )
-                .map_err(openproxy_db::error::map_db_error)?;
-            } else {
-                openproxy_core::credits::ledger::record_spend(
-                    w,
-                    ApiKeyId(id),
-                    delta.saturating_neg(),
-                )?;
-            }
-            Ok(())
-        })
-        .await?;
+        // The tier just reshaped the key (allowlists, caps, balance). The cache
+        // was invalidated before this write, so drop it again or the catalog
+        // keeps serving the pre-plan shape until the entry expires.
         state_for_cache.invalidate_api_key_cache(None);
     }
 

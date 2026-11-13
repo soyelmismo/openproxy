@@ -211,32 +211,30 @@ async fn anonymous_buy_pay_reveal_and_history_e2e() {
         .await;
     assert_eq!(status, axum::http::StatusCode::CONFLICT, "second reveal refused");
 
-    // 8. Balance of the minted key equals exactly the credited base amount.
+    // 8. The plan surface reports the credited balance and its lifetime.
     let kid = api_key_id;
-    let (status, bal) = h
+    let (status, q) = h
         .oneshot_json(h.admin_request(
             axum::http::Method::GET,
-            &format!("/admin/api/credits/balance?key_id={kid}"),
+            &format!("/admin/api/credits/quota?key_id={kid}"),
             "",
         ))
         .await;
-    assert_eq!(status, axum::http::StatusCode::OK, "balance: {bal}");
-    assert_eq!(bal["balance_units"], json!(base_units));
-    assert_eq!(bal["balance_usd"], json!("10.000000"));
+    assert_eq!(status, axum::http::StatusCode::OK, "quota: {q}");
+    assert_eq!(q["plan"]["credit_usd"], json!(10.0));
+    assert_eq!(q["plan"]["balance_usd"], json!(10.0));
+    assert!(q["plan"]["expires_at"].is_string(), "day-15 lot expires: {q}");
 
-    // 9. History points back into the chain.
-    let (status, txs) = h
-        .oneshot_json(h.admin_request(
-            axum::http::Method::GET,
-            &format!("/admin/api/credits/transactions?key_id={kid}"),
-            "",
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK, "history: {txs}");
-    assert_eq!(txs.as_array().map(Vec::len), Some(1));
-    assert_eq!(txs[0]["kind"], json!("topup"));
-    assert_eq!(txs[0]["basescan_url"], json!("https://basescan.org/tx/0xpay1"));
-    assert_eq!(txs[0]["order_code"], json!(code));
+    // 9. Exactly one ledger row, and it points back into the chain.
+    let rows = h
+        .db_pool
+        .spawn_read(move |r| openproxy_db::credits_ledger::list_transactions(r, kid, 10))
+        .await
+        .expect("ledger rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, "topup");
+    assert_eq!(rows[0].tx_hash.as_deref(), Some("0xpay1"));
+    assert_eq!(rows[0].order_code.as_deref(), Some(code.as_str()));
 }
 
 /// The REAL watcher loop against the mock chain: scan -> decode -> matcher ->
@@ -246,7 +244,7 @@ async fn anonymous_buy_pay_reveal_and_history_e2e() {
 async fn watcher_scan_credits_exactly_once_e2e() {
     let chain = Arc::new(MockChain::default());
     let rpc_addr = spawn_mock_rpc(Arc::clone(&chain));
-    let mut h = TestHarness::new().await;
+    let h = TestHarness::new().await;
 
     // Point the app config's rpc_url at the mock by rebuilding the credits
     // config the watcher service will use.
@@ -260,17 +258,17 @@ async fn watcher_scan_credits_exactly_once_e2e() {
 
     // A live order for the admin session key ($5 / 7-day plan, 1:1 credit).
     let plan = seed_plan(&h, 5.0, 5.0, 7).await;
+    let kid = h.admin_key_id.0;
     let (status, order) = h
-        .oneshot_json(h.admin_request(
+        .oneshot_json(h.public_request(
             axum::http::Method::POST,
-            &format!("/admin/api/credits/topup?key_id={}", h.admin_key_id.0),
-            json!({"tier_id": plan}).to_string(),
+            "/v1/credits/order",
+            json!({"tier_id": plan, "key_id": kid}).to_string(),
         ))
         .await;
-    assert_eq!(status, axum::http::StatusCode::OK, "topup order: {order}");
+    assert_eq!(status, axum::http::StatusCode::OK, "plan order: {order}");
     let amount_units = order["amount_units"].as_i64().expect("amount_units");
     let base_units = 5_000_000_i64;
-    let kid = h.admin_key_id.0;
 
     let service = openproxy_server::background::credits_watcher::CreditsWatcherService {
         db_pool: Arc::clone(&h.db_pool),
@@ -338,13 +336,14 @@ async fn concurrent_orders_stress_no_leaks_no_duplicates() {
 
     // Create N live orders (same base -> jitter must separate them).
     let plan = seed_plan(&h, 5.0, 5.0, 7).await;
+    let kid = h.admin_key_id.0;
     let mut amounts = Vec::with_capacity(N);
     for i in 0..N {
         let (status, order) = h
-            .oneshot_json(h.admin_request(
+            .oneshot_json(h.public_request(
                 axum::http::Method::POST,
-                &format!("/admin/api/credits/topup?key_id={}", h.admin_key_id.0),
-                json!({"tier_id": plan}).to_string(),
+                "/v1/credits/order",
+                json!({"tier_id": plan, "key_id": kid}).to_string(),
             ))
             .await;
         assert_eq!(status, axum::http::StatusCode::OK, "order {i}: {order}");
@@ -361,7 +360,6 @@ async fn concurrent_orders_stress_no_leaks_no_duplicates() {
 
     // Apply every payment concurrently, each delivered twice (watcher
     // rescan), plus two strays. All through the real spawn_write path.
-    let kid = h.admin_key_id.0;
     let mut handles = Vec::new();
     for (i, amount) in amounts.iter().enumerate() {
         let pool = Arc::clone(&h.db_pool);
@@ -415,19 +413,15 @@ async fn concurrent_orders_stress_no_leaks_no_duplicates() {
     assert_eq!(audit.topup_rows, N as i64);
 
     // History: one topup row per order, all with chain pointers.
-    let (status, txs) = h
-        .oneshot_json(h.admin_request(
-            axum::http::Method::GET,
-            &format!("/admin/api/credits/transactions?key_id={kid}&limit=100"),
-            "",
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-    let arr = txs.as_array().expect("array");
-    assert_eq!(arr.len(), N, "exactly one topup row per order");
+    let rows = h
+        .db_pool
+        .spawn_read(move |r| openproxy_db::credits_ledger::list_transactions(r, kid, 100))
+        .await
+        .expect("ledger rows");
+    assert_eq!(rows.len(), N, "exactly one topup row per order");
     assert!(
-        arr.iter().all(|t| t["basescan_url"].as_str().unwrap().contains("basescan.org/tx/0xstress")),
-        "every row points into the chain explorer"
+        rows.iter().all(|t| t.tx_hash.as_deref().is_some_and(|tx| tx.starts_with("0xstress"))),
+        "every row carries its chain tx"
     );
 }
 

@@ -113,15 +113,9 @@ pub async fn catalog(
                 .compute_effective_capabilities(c.id)
                 .ok()
                 .flatten();
-            data.push(crate::handlers::models::build_combo_entry(
-                c,
-                None,
-                effective_cw,
-                effective_mot,
-                effective_caps.as_ref(),
-            ));
-            // Mirror `GET /v1/models`: every combo is exposed both under its
-            // bare routing name and the `combo:` prefixed virtual id.
+            // One entry per combo, under its bare routing name. The
+            // `combo:<name>` virtual id stays accepted by routing but is no
+            // longer advertised: listing both doubles every combo in the UI.
             data.push(crate::handlers::models::build_combo_entry(
                 c,
                 Some(&c.name),

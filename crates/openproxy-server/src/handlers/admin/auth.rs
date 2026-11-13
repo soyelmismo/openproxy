@@ -297,8 +297,9 @@ pub(crate) async fn authenticate_admin_ws(
 }
 
 /// Client-facing allowlist for keys WITHOUT "manage" (analytics/read scopes).
-/// Everything not listed here is operator-only. Method is part of the rule so
-/// a client key can never mutate anything outside its own credits top-up.
+/// Everything not listed here is operator-only. Method is part of the rule, so
+/// a client key can never mutate anything: plan purchase runs on the public
+/// checkout with the key as Bearer, never through the admin API.
 fn client_allowed(path: &str, method: &axum::http::Method) -> bool {
     // Path without the /admin/api nest prefix (nginx /tokens/ strips are
     // applied before this middleware sees the request).
@@ -309,11 +310,9 @@ fn client_allowed(path: &str, method: &axum::http::Method) -> bool {
         // Tenanted usage: usage.rs applies apply_tenant_and_public_scope per
         // handler, so an analytics key only ever reads its own key's rows.
         p if p.starts_with("/usage") => get,
-        // Self-service credits: own balance, own transactions, own quota,
-        // and topping up THIS key. Package/order/gateway management is not
-        // listed → operator-only.
-        "/credits/balance" | "/credits/transactions" | "/credits/quota" => get,
-        "/credits/topup" => method == axum::http::Method::POST,
+        // Self-service plan status (own plan, balance and expiry). Plan,
+        // order and gateway management is not listed → operator-only.
+        "/credits/quota" => get,
         _ => false,
     }
 }

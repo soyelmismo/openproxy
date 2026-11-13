@@ -49,10 +49,9 @@ pub fn router() -> Router<AppState> {
         .route("/order/{code}", get(order_status))
         .route("/order/{code}/reveal", post(reveal_key))
         // Self-service surface for an existing key (Bearer = the key itself):
-        // balance, history and top-up without any admin session.
-        .route("/me/balance", get(me_balance))
-        .route("/me/transactions", get(me_transactions))
-        .route("/me/topup", post(me_topup))
+        // read the current plan and buy/renew one. Credit exists only as a
+        // plan; there is no prepaid balance to top up.
+        .route("/me/plan", get(me_plan).post(me_buy_plan))
 }
 
 fn gateway_error(status: StatusCode, code: &str, message: &str) -> Response {
@@ -381,7 +380,7 @@ async fn reveal_key(
 
 /// Resolve the key making a `/me` call. Accepts the key's own Bearer token
 /// (the same one used for chat) with `chat` scope: a buyer never needs an
-/// admin session to see their own balance or top up.
+/// admin session to see their own plan or buy one.
 async fn me_key_id(state: &AppState, headers: &HeaderMap) -> Result<ApiKeyId, Response> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -412,82 +411,32 @@ async fn me_key_id(state: &AppState, headers: &HeaderMap) -> Result<ApiKeyId, Re
     }
 }
 
-async fn me_balance(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// The key's current plan: name, leveraged credit, remaining balance and the
+/// lot's expiry. `plan` is null when the key has no tier assigned.
+async fn me_plan(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let key_id = match me_key_id(&state, &headers).await {
         Ok(k) => k,
         Err(resp) => return resp,
     };
-    let kid = key_id.0;
-    match state
+    let plan = match state
         .db_pool()
-        .spawn_read(move |w| {
-            let credit_based = openproxy_db::credits_ledger::is_credit_based(w, kid)?;
-            let units = openproxy_db::credits_ledger::balance_units(w, kid)?;
-            let lots = openproxy_db::credits_ledger::active_lots(w, kid)?;
-            Ok((credit_based, units, lots))
-        })
+        .spawn_read(move |r| openproxy_core::api_key_quotas::plan_status(r, key_id))
         .await
     {
-        Ok((credit_based, units, lots)) => Json(json!({
-            "key_id": kid,
-            "credit_based": credit_based,
-            "balance_units": units,
-            "balance_usd": openproxy_core::credits::units_to_usd_str(units),
-            "lots": lots.into_iter().map(|l| json!({
-                "remaining_usd": openproxy_core::credits::units_to_usd_str(l.remaining_units),
-                "expires_at": l.expires_at,
-            })).collect::<Vec<_>>(),
-        }))
-        .into_response(),
-        Err(e) => gateway_error(StatusCode::INTERNAL_SERVER_ERROR, "balance_failed", &format!("{e}")),
-    }
-}
-
-async fn me_transactions(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
-) -> Response {
-    let key_id = match me_key_id(&state, &headers).await {
-        Ok(k) => k,
-        Err(resp) => return resp,
+        Ok(p) => p,
+        Err(e) => {
+            return gateway_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "plan_failed",
+                &format!("{e}"),
+            );
+        }
     };
-    let limit = params
-        .get("limit")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(100)
-        .clamp(1, 1000);
-    let kid = key_id.0;
-    match state
-        .db_pool()
-        .spawn_read(move |w| openproxy_db::credits_ledger::list_transactions(w, kid, limit))
-        .await
-    {
-        Ok(rows) => Json(rows
-            .into_iter()
-            .map(|t| {
-                let basescan_url = t
-                    .tx_hash
-                    .as_ref()
-                    .map(|tx| format!("https://basescan.org/tx/{tx}"));
-                json!({
-                    "kind": t.kind,
-                    "amount_usd": openproxy_core::credits::units_to_usd_str(t.amount_units),
-                    "remaining_usd": openproxy_core::credits::units_to_usd_str(t.remaining_units),
-                    "status": t.status,
-                    "order_code": t.order_code,
-                    "tx_hash": t.tx_hash,
-                    "basescan_url": basescan_url,
-                    "created_at": t.created_at,
-                })
-            })
-            .collect::<Vec<_>>())
-        .into_response(),
-        Err(e) => gateway_error(StatusCode::INTERNAL_SERVER_ERROR, "history_failed", &format!("{e}")),
-    }
+    Json(json!({ "plan": plan })).into_response()
 }
 
-async fn me_topup(
+/// Buy (or renew) a plan for the calling key.
+async fn me_buy_plan(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<CreateOrderRequest>,

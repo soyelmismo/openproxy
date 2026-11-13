@@ -253,10 +253,9 @@ async fn admin_middleware_rejects_spoofed_real_ip_from_untrusted_peer() {
 async fn analytics_scope_gets_client_allowlist_only() {
     // Client keys (analytics scope, no "manage") get ONLY the explicit client
     // allowlist: their own tenanted analytics, auth/me, the client-facing
-    // model catalog and their own credits surface (balance/quota/topup on
-    // their OWN key). Everything operator — keys, config, package/order
-    // management, ws-ticket — stays 403, so a customer key can never reach an
-    // admin route regardless of which login screen it came through.
+    // model catalog and their own plan status. Everything operator — keys,
+    // config, plan/order management, ws-ticket — stays 403, so a customer key
+    // can never reach an admin route regardless of the login screen it used.
     let tmp = tempdir();
     // Credits enabled so the self-service balance/quota endpoints answer 200
     // instead of 503 (credits_disabled).
@@ -294,7 +293,6 @@ async fn analytics_scope_gets_client_allowlist_only() {
         "/admin/api/usage/summary",
         "/admin/api/formats",
         "/admin/api/models/catalog",
-        "/admin/api/credits/balance",
         "/admin/api/credits/quota",
     ] {
         let resp = app
@@ -316,29 +314,31 @@ async fn analytics_scope_gets_client_allowlist_only() {
         );
     }
 
-    // credits/balance is SELF-scoped: the operator's ?key_id= override is
-    // ignored for non-manage keys, so a client key can never read another
-    // key's balance by guessing its id.
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("GET")
-                .uri("/admin/api/credits/balance?key_id=1")
-                .header("Authorization", format!("Bearer {analytics_raw_key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(
-        v["key_id"].as_i64(),
-        Some(analytics_key_id),
-        "?key_id= override must be ignored for non-manage keys"
-    );
+    // The retired prepaid surfaces are gone and unreachable for a client key:
+    // there is no balance to read and no manual top-up to create.
+    for (method, uri) in [
+        ("GET", "/admin/api/credits/balance"),
+        ("GET", "/admin/api/credits/transactions"),
+        ("POST", "/admin/api/credits/topup"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("Authorization", format!("Bearer {analytics_raw_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::FORBIDDEN || resp.status() == StatusCode::NOT_FOUND,
+            "{method} {uri} must not exist for a client key, got {}",
+            resp.status()
+        );
+    }
 
     // Deny by default: operator routes stay 403 for client keys.
     for (method, uri) in [
