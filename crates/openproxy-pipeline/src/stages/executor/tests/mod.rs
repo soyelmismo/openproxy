@@ -270,6 +270,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
     });
 
     let (_pool, conn_arc, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn_arc.lock());
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
 
     let mk_mock = |id: &str, path: &str| {
@@ -335,6 +336,7 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
     ];
 
     let (mut req, _rx) = make_request(ComboId(1));
+    req.api_key_id = Some(caller);
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
     req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
@@ -483,6 +485,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
     });
 
     let (_pool, conn_arc, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn_arc.lock());
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
     let mut cfg = crate::test_utils::test_config(Arc::clone(&master_key));
     cfg.adapters = Arc::new(vec![
@@ -541,6 +544,7 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
 
     let targets = vec![mk_target(401, "prov-w1"), mk_target(402, "prov-w2")];
     let (mut req, _rx) = make_request(ComboId(400));
+    req.api_key_id = Some(caller);
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
     req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 

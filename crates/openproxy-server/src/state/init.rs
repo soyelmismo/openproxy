@@ -2,6 +2,20 @@
 
 use openproxy_db::conn::WriterGuard;
 
+/// Mutable boot state hydrated from persisted `app_config` rows.
+///
+/// Grouping the overrides keeps the hydration chain below clippy's argument
+/// budget without hiding any of the values behind a global.
+pub(crate) struct BootOverrides<'a> {
+    pub config: &'a mut openproxy_core::AppConfig,
+    pub recording_ttl_secs: &'a mut i64,
+    pub idle_chunk_retryable: &'a mut bool,
+    pub compression_mode: &'a mut openproxy_compression::CompressionMode,
+    pub notifications_enabled: &'a mut bool,
+    pub max_concurrent_per_key: &'a mut usize,
+    pub max_concurrent_global: &'a mut usize,
+}
+
 pub(crate) fn init_database(
     config: &openproxy_core::AppConfig,
 ) -> anyhow::Result<openproxy_db::DbPool> {
@@ -25,25 +39,10 @@ pub(crate) fn init_database(
 /// listener socket can bind immediately.
 pub(crate) fn run_database_maintenance(
     w: &mut WriterGuard<'_>,
-    config: &mut openproxy_core::AppConfig,
-    recording_ttl_secs: &mut i64,
-    idle_chunk_retryable: &mut bool,
-    compression_mode: &mut openproxy_compression::CompressionMode,
-    notifications_enabled: &mut bool,
-    max_concurrent_per_key: &mut usize,
-    max_concurrent_global: &mut usize,
+    overrides: &mut BootOverrides<'_>,
 ) -> anyhow::Result<()> {
     openproxy_db::migrations::run(w)?;
-    load_persisted_config_overrides(
-        w,
-        config,
-        recording_ttl_secs,
-        idle_chunk_retryable,
-        compression_mode,
-        notifications_enabled,
-        max_concurrent_per_key,
-        max_concurrent_global,
-    )?;
+    load_persisted_config_overrides(w, overrides)?;
     Ok(())
 }
 
@@ -137,23 +136,21 @@ fn load_persisted_compression_and_quota(
 
 fn load_persisted_config_overrides(
     w: &WriterGuard<'_>,
-    config: &mut openproxy_core::AppConfig,
-    recording_ttl_secs: &mut i64,
-    idle_chunk_retryable: &mut bool,
-    compression_mode: &mut openproxy_compression::CompressionMode,
-    notifications_enabled: &mut bool,
-    max_concurrent_per_key: &mut usize,
-    max_concurrent_global: &mut usize,
+    overrides: &mut BootOverrides<'_>,
 ) -> anyhow::Result<()> {
-    load_persisted_timeouts(w, config)?;
+    load_persisted_timeouts(w, overrides.config)?;
     load_persisted_runtime_flags(
         w,
-        recording_ttl_secs,
-        idle_chunk_retryable,
-        notifications_enabled,
+        overrides.recording_ttl_secs,
+        overrides.idle_chunk_retryable,
+        overrides.notifications_enabled,
     )?;
-    load_persisted_compression_and_quota(w, config, compression_mode)?;
-    load_persisted_concurrency_caps(w, max_concurrent_per_key, max_concurrent_global)?;
+    load_persisted_compression_and_quota(w, overrides.config, overrides.compression_mode)?;
+    load_persisted_concurrency_caps(
+        w,
+        overrides.max_concurrent_per_key,
+        overrides.max_concurrent_global,
+    )?;
     Ok(())
 }
 

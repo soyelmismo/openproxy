@@ -16,7 +16,7 @@ use openproxy_types::{
 use crate::images::horde_poll::{HordePollContext, poll_horde_image_generation};
 use crate::routing;
 use crate::unary::{
-    UnaryUsageArgs, map_upstream_status_error, record_unary_usage_async, resolve_api_key_async,
+    UnaryCharge, UnaryCreditLease, UnaryUsageArgs, map_upstream_status_error, resolve_api_key_async,
 };
 
 pub async fn dispatch_image_request(
@@ -51,6 +51,11 @@ pub async fn execute_image_generation(
 ) -> Result<ImageGenerationResponse> {
     let started = Instant::now();
 
+    // Take the key's turn before resolving or dispatching: a second concurrent
+    // image request for the same prepaid key must read its balance only after
+    // this request's debit is persisted.
+    let mut credit = UnaryCreditLease::admit(db_pool, api_key_id).await?;
+
     let routing_plan = routing::resolve_routing(db_pool, &req.model).await?;
 
     let targets =
@@ -58,6 +63,10 @@ pub async fn execute_image_generation(
             .await?;
 
     let request_id = RequestId::new();
+    // The image count is the only persistible billable quantity: the image
+    // price multiplies the `prompt_tokens` slot. An absent or zero `n` is the
+    // API default of one image, which is what the upstream will generate.
+    let images = req.n.filter(|count| *count > 0).unwrap_or(1);
     let mut last_error = None;
     let mut attempt = 0;
 
@@ -70,6 +79,27 @@ pub async fn execute_image_generation(
             .any(|t| t.provider.as_str() != "horde");
 
         crate::guarded_unary_target!(check_async: db_pool, circuit_breaker, target);
+
+        // Price the generation before it is dispatched. A prepaid key never
+        // sends a request whose maximum cost does not fit its balance, and an
+        // unpriced image model is refused instead of being recorded at zero.
+        let bound = match credit
+            .authorize_dispatch(
+                db_pool,
+                target,
+                UnaryCharge::Image {
+                    images: Some(images),
+                },
+                None,
+            )
+            .await
+        {
+            Ok(bound) => bound,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
 
         openproxy_types::emit_stage_event!(
             request_id: request_id,
@@ -280,14 +310,13 @@ pub async fn execute_image_generation(
         let req_json = serde_json::to_vec(&req).ok().map(bytes::Bytes::from);
         let resp_json = serde_json::to_value(&parsed_response).ok();
 
-        record_unary_usage_async(
-            db_pool,
-            &UnaryUsageArgs::from_target(target, EndpointKind::Image, status_code, total_ms)
-                .with_request_id(request_id)
-                .with_api_key_id(api_key_id)
-                .with_json(req_json, resp_json),
-        )
-        .await;
+        let args = UnaryUsageArgs::from_target(target, EndpointKind::Image, status_code, total_ms)
+            .with_request_id(request_id)
+            .with_api_key_id(api_key_id)
+            .with_tokens(Some(images), None)
+            .with_json(req_json, resp_json);
+        // The debit rides on this row; persist it before releasing the key.
+        credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;
 
         tracing::info!("Image request succeeded after {attempt} attempts");
         return Ok(parsed_response);

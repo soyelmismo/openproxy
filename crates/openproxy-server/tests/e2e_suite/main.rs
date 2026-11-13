@@ -8,13 +8,15 @@
 //! - Tier 3: Cross-Feature Combinations (Combos, Failover, Cooldown, Streaming, Auth, Usage)
 //! - Tier 4: Real-World Application Scenarios (Multi-turn conversations, Discovery sync, Multi-client analytics, Races, Admin lifecycle)
 
-pub mod credits_tests;
+pub mod checkout_admin_tests;
+mod credits_tests;
 pub mod harness;
 pub mod systemone_tests;
 pub mod tier1_features;
 pub mod tier2_boundaries;
 pub mod tier3_combinations;
 pub mod tier4_scenarios;
+pub mod watcher_tests;
 
 /// Runs an async test body on a dedicated thread with a large stack.
 ///

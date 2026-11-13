@@ -154,6 +154,10 @@ pub struct Pipeline {
     /// `latency_budget`): shortens the wait on targets known to be fast when
     /// they hang, without ever extending the resolved timeout.
     pub latency_budget: Arc<crate::latency_budget::LatencyBudget>,
+    /// Per-key admission lanes for prepaid credit keys: one request per key is
+    /// in flight from admission until its debit is persisted (see
+    /// [`crate::credits_gate`]). Keys without ledger rows never allocate a lane.
+    pub(crate) credits_gate: Arc<crate::credits_gate::CreditsAdmissionGate>,
     pub tracker: crate::usage_tracker::UsageTracker,
     pub dispatcher: crate::upstream_dispatcher::UpstreamDispatcher,
     pub(crate) repo: Arc<dyn crate::repository::PipelineRepository>,
@@ -298,6 +302,7 @@ impl Pipeline {
             session_affinity,
             message_threads,
             latency_budget,
+            credits_gate: Arc::new(crate::credits_gate::CreditsAdmissionGate::new()),
             tracker,
             dispatcher,
             repo,
@@ -352,6 +357,13 @@ impl Pipeline {
 
     pub fn selection_registry(&self) -> &Arc<SelectionRegistry> {
         &self.selection_registry
+    }
+
+    /// The prepaid-credit admission lanes, shared by every clone of this
+    /// pipeline. Exposed for tests that assert a key without ledger rows never
+    /// takes a lane.
+    pub fn credits_gate(&self) -> &Arc<crate::credits_gate::CreditsAdmissionGate> {
+        &self.credits_gate
     }
 
     pub fn is_recording(&self) -> bool {

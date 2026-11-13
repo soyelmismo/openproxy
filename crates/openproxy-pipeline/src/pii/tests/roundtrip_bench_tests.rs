@@ -92,7 +92,9 @@ async fn pii_http_roundtrip_unary_and_streaming() {
             pii_entities: vec![PiiEntity::Email, PiiEntity::Phone],
         };
         let pipeline = crate::test_utils::test_pipeline_with_pool(pool, config);
+        let caller = crate::test_utils::seed_test_api_key(&conn.lock());
         let (mut req, _disconnect) = crate::test_utils::make_request(combo_id);
+        req.api_key_id = Some(caller);
         let original = "email alice@example.com phone +34 600 123 456.";
         let openai = Arc::make_mut(&mut req.openai_request);
         openai.stream = streaming;
@@ -104,7 +106,22 @@ async fn pii_http_roundtrip_unary_and_streaming() {
         let result = tokio::time::timeout(std::time::Duration::from_secs(10), pipeline.run(req))
             .await
             .unwrap();
-        server.await.unwrap();
+        // The fixture only finishes when the pipeline reached the upstream. If the
+        // pipeline failed before dialing, awaiting the server would hang forever
+        // (this test hung the whole suite once); bound it and report the pipeline
+        // error instead.
+        let mut server = server;
+        match tokio::time::timeout(std::time::Duration::from_secs(10), &mut server).await {
+            Ok(joined) => joined.expect("upstream fixture task panicked"),
+            Err(_) => {
+                server.abort();
+                panic!(
+                    "streaming={streaming}: the upstream never received a request; \
+                     pipeline returned {} {:?}",
+                    result.status_code, result.error
+                );
+            }
+        }
         assert_eq!(
             result.status_code, 200,
             "streaming={streaming}: {:?}",

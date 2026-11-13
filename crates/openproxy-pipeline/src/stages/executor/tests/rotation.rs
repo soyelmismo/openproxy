@@ -260,6 +260,7 @@ async fn test_account_rotation_on_rate_limit_sequential() {
     });
 
     let (_pool, conn_arc, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn_arc.lock());
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
 
     let mk_mock = |id: &str, path: &str| {
@@ -330,6 +331,7 @@ async fn test_account_rotation_on_rate_limit_sequential() {
     let targets = vec![mk_target("minimax-1", 204), mk_target("minimax-2", 205)];
 
     let (mut req, _rx) = make_request(ComboId(-1));
+    req.api_key_id = Some(caller);
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
     req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
@@ -416,6 +418,7 @@ async fn test_account_rotation_after_race_exhaustion() {
     });
 
     let (_pool, conn_arc, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn_arc.lock());
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
 
     let mk_mock = |id: &str, path: &str| {
@@ -492,6 +495,7 @@ async fn test_account_rotation_after_race_exhaustion() {
     ];
 
     let (mut req, _rx) = make_request(ComboId(-1));
+    req.api_key_id = Some(caller);
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
     req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 
@@ -568,6 +572,7 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
     });
 
     let (_pool, conn_arc, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn_arc.lock());
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
 
     let mk_mock = |id: &str, path: &str| {
@@ -635,6 +640,7 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
     let targets = vec![mk_target("prov-m1", 1), mk_target("prov-m2", 2)];
 
     let (mut req, _rx) = make_request(ComboId(999));
+    req.api_key_id = Some(caller);
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
     req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 

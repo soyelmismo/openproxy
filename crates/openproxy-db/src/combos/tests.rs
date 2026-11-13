@@ -725,7 +725,10 @@ fn test_combo_purge_reasoning_crud() {
 
     let combo = get_combo(&conn, id).unwrap().unwrap();
     assert_eq!(combo.sanitize_response, Some(true));
-    assert_eq!(combo.real_model_id.as_deref(), Some("gemini-3.5-flash-lite"));
+    assert_eq!(
+        combo.real_model_id.as_deref(),
+        Some("gemini-3.5-flash-lite")
+    );
     assert_eq!(combo.purge_reasoning, Some(true));
     assert_eq!(
         list_combos(&conn)

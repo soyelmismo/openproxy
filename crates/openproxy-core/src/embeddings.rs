@@ -15,12 +15,29 @@ use openproxy_types::{
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
-    UnaryDeps, UnaryTarget as EmbeddingTargets, UnaryTarget, UnaryUsageArgs, is_target_available,
-    map_upstream_status_error, record_unary_target_success_async, record_unary_usage,
-    record_unary_usage_async, resolve_api_key, resolve_unary_targets,
+    HostLocal, UnaryCharge, UnaryCreditLease, UnaryDeps, UnaryTarget as EmbeddingTargets,
+    UnaryTarget, UnaryUsageArgs, is_target_available, map_upstream_status_error,
+    record_unary_target_success_async, record_unary_usage, record_unary_usage_async,
+    resolve_api_key, resolve_unary_targets,
 };
 
 pub type EmbeddingUsageArgs<'a> = UnaryUsageArgs<'a>;
+
+/// Whether this target is answered by the host-local embedding engine rather
+/// than an HTTP upstream.
+///
+/// The budget gate uses it to know that no metered upstream is spent (so a
+/// missing price is not a free ride). It must stay the *same* predicate as the
+/// short-circuit in [`dispatch_single_embedding`].
+#[cfg(feature = "embed-engine")]
+fn is_native_embedding_target(target: &UnaryTarget) -> bool {
+    target.provider.as_str() == "embeddinggemma" && openproxy_adapters::embed_engine::is_enabled()
+}
+
+#[cfg(not(feature = "embed-engine"))]
+fn is_native_embedding_target(_target: &UnaryTarget) -> bool {
+    false
+}
 
 pub fn resolve_embedding_targets(
     db_pool: &DbPool,
@@ -75,9 +92,7 @@ async fn dispatch_single_embedding(
     // decided by the model alias: `*-doc` (or any alias containing "doc")
     // embeds corpus text, everything else is a query.
     #[cfg(feature = "embed-engine")]
-    if target.provider.as_str() == "embeddinggemma"
-        && openproxy_adapters::embed_engine::is_enabled()
-    {
+    if is_native_embedding_target(target) {
         let task = if target.upstream_model.contains("doc") {
             openproxy_adapters::embed_engine::EmbedTask::Document
         } else {
@@ -227,6 +242,10 @@ pub async fn execute_embeddings(
     } = deps;
     let started = Instant::now();
 
+    // Take the key's turn before any dispatch; the lease is released only once
+    // this request's usage row (and its debit) is persisted.
+    let mut credit = UnaryCreditLease::admit(db_pool, api_key_id).await?;
+
     let routing_plan = routing::resolve_routing(db_pool, &req.model).await?;
 
     let targets = crate::unary::resolve_unary_targets_async(
@@ -253,6 +272,26 @@ pub async fn execute_embeddings(
                 target.provider
             )));
             continue;
+        };
+
+        // Price the request from the client's own input before anything reaches
+        // the upstream: a prepaid key never dispatches a request whose maximum
+        // cost does not fit its balance, and an unpriced request is refused
+        // instead of being recorded at zero.
+        let bound = match credit
+            .authorize_dispatch(
+                db_pool,
+                &target,
+                UnaryCharge::Embeddings(&req),
+                HostLocal::confirm(&target, is_native_embedding_target(&target)),
+            )
+            .await
+        {
+            Ok(bound) => bound,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
         };
 
         match dispatch_single_embedding(
@@ -291,7 +330,7 @@ pub async fn execute_embeddings(
                 if parsed_response.usage.prompt_tokens > 0 {
                     args = args.with_tokens(Some(parsed_response.usage.prompt_tokens), None);
                 }
-                record_unary_usage_async(db_pool, &args).await;
+                credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;
 
                 tracing::info!("Embedding request succeeded after {attempt} attempts");
                 return Ok(parsed_response);

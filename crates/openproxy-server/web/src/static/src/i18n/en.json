@@ -949,5 +949,17 @@
   "config.concurrency.in_flight": "Currently in flight: {{value}}",
   "config.concurrency.toast.updated": "Concurrency caps updated",
   "config.concurrency.per_key_above_global": "Per-key cap cannot exceed the global cap",
-  "config.concurrency.global_below_per_key": "Global cap cannot be lower than the per-key cap"
+  "config.concurrency.global_below_per_key": "Global cap cannot be lower than the per-key cap",
+  "analytics.filter.owner": "Owner",
+  "analytics.filter.owner.all": "All",
+  "analytics.filter.owner.personal": "Personal",
+  "analytics.filter.owner.customer": "Customers",
+  "keys.list.kind.label": "Key owner",
+  "keys.list.kind.all": "All",
+  "keys.list.kind.personal": "Personal",
+  "keys.list.kind.customer": "Customer",
+  "keys.list.btn.mark_customer": "Mark as customer",
+  "keys.list.btn.mark_personal": "Mark as personal",
+  "keys.list.toast.marked_customer": "Key marked as customer",
+  "keys.list.toast.marked_personal": "Key marked as personal"
 }

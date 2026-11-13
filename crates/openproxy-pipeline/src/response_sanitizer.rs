@@ -139,14 +139,21 @@ mod tests {
     #[test]
     fn test_sanitize_streaming_reasoning_chunk() {
         let mercury_chunk = r#"{"id":"gen-1","object":"chat.completion.chunk","created":123,"model":"mercury-3","choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.encrypted"}]},"finish_reason":null}]}"#;
-        assert_eq!(sanitize_streaming_chunk(mercury_chunk, "gemini-3.5-flash-lite", true), None);
+        assert_eq!(
+            sanitize_streaming_chunk(mercury_chunk, "gemini-3.5-flash-lite", true),
+            None
+        );
         let kept = sanitize_streaming_chunk(mercury_chunk, "gemini-3.5-flash-lite", false).unwrap();
         assert!(kept.contains(r#""model":"gemini-3.5-flash-lite""#));
         assert!(kept.contains("reasoning_details"));
 
         let kimi_chunk = r#"{"id":"gen-2","object":"chat.completion.chunk","created":123,"model":"moonshotai/Kimi-K3","choices":[{"index":0,"delta":{"reasoning_content":"Thinking..."},"finish_reason":null}]}"#;
-        assert_eq!(sanitize_streaming_chunk(kimi_chunk, "gemini-3.5-flash-lite", true), None);
-        let kept_kimi = sanitize_streaming_chunk(kimi_chunk, "gemini-3.5-flash-lite", false).unwrap();
+        assert_eq!(
+            sanitize_streaming_chunk(kimi_chunk, "gemini-3.5-flash-lite", true),
+            None
+        );
+        let kept_kimi =
+            sanitize_streaming_chunk(kimi_chunk, "gemini-3.5-flash-lite", false).unwrap();
         assert!(kept_kimi.contains(r#""model":"gemini-3.5-flash-lite""#));
         assert!(kept_kimi.contains("reasoning_content"));
     }
@@ -173,27 +180,35 @@ mod tests {
 
         sanitize_unary_response(&mut resp, "gemini-3.5-flash-lite", false);
         assert_eq!(resp.model, "gemini-3.5-flash-lite");
-        assert!(resp.choices[0].message.extra.contains_key("reasoning_content"));
-        assert!(!resp.choices[0].message.extra.contains_key("system_fingerprint"));
+        assert!(
+            resp.choices[0]
+                .message
+                .extra
+                .contains_key("reasoning_content")
+        );
+        assert!(
+            !resp.choices[0]
+                .message
+                .extra
+                .contains_key("system_fingerprint")
+        );
 
-        let mut resp_purged: OpenAIResponse = serde_json::from_value(
-            serde_json::json!({
-                "id": "resp-1",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "moonshotai/Kimi-K3",
-                "choices": [{
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello",
-                        "reasoning_content": "secret thoughts",
-                        "system_fingerprint": "fp_123"
-                    },
-                    "finish_reason": "stop"
-                }]
-            }),
-        )
+        let mut resp_purged: OpenAIResponse = serde_json::from_value(serde_json::json!({
+            "id": "resp-1",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "moonshotai/Kimi-K3",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning_content": "secret thoughts",
+                    "system_fingerprint": "fp_123"
+                },
+                "finish_reason": "stop"
+            }]
+        }))
         .unwrap();
         sanitize_unary_response(&mut resp_purged, "gemini-3.5-flash-lite", true);
         assert!(resp_purged.choices[0].message.extra.is_empty());
@@ -207,7 +222,8 @@ mod tests {
         assert!(!res.contains("system_fingerprint"));
         assert!(res.contains(r#""content":"Hello""#));
 
-        let res_no_purge = sanitize_streaming_chunk(content_chunk, "gemini-3.5-flash-lite", false).unwrap();
+        let res_no_purge =
+            sanitize_streaming_chunk(content_chunk, "gemini-3.5-flash-lite", false).unwrap();
         assert!(res_no_purge.contains(r#""model":"gemini-3.5-flash-lite""#));
         assert!(!res_no_purge.contains("system_fingerprint"));
         assert!(res_no_purge.contains(r#""content":"Hello""#));

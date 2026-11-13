@@ -587,9 +587,8 @@ mod tests {
         seed_provider(&conn, "openrouter");
         seed_healthy_account(&conn, "openrouter");
         let model_row = seed_model(&conn, "openrouter", "deepseek-v4.1-flash");
-        let combo_id =
-            combos::create_combo(&conn, "deepseek-v4.1-flash", Strategy::Priority, 1)
-                .expect("same-name combo is allowed (uniqueness is per-table)");
+        let combo_id = combos::create_combo(&conn, "deepseek-v4.1-flash", Strategy::Priority, 1)
+            .expect("same-name combo is allowed (uniqueness is per-table)");
 
         let plan = resolve(&conn, "deepseek-v4.1-flash").expect("resolve");
         match &plan {

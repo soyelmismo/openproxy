@@ -4,7 +4,7 @@ use super::background::{
     SpawnBackgroundTasksArgs, spawn_background_tasks, spawn_memory_cleanup,
     spawn_rate_limiter_cleanup, start_discovery_scheduler,
 };
-use super::init::{init_database, run_database_maintenance};
+use super::init::{BootOverrides, init_database, run_database_maintenance};
 use super::{AppState, BackfillStatus, VacuumStatus};
 use openproxy_adapters::adapters;
 use openproxy_adapters::upstream::UpstreamClient;
@@ -30,13 +30,15 @@ impl AppState {
 
         run_database_maintenance(
             &mut db_pool.writer(),
-            &mut config,
-            &mut recording_ttl_secs,
-            &mut idle_chunk_retryable,
-            &mut compression_mode,
-            &mut notifications_enabled,
-            &mut max_concurrent_per_key,
-            &mut max_concurrent_global,
+            &mut BootOverrides {
+                config: &mut config,
+                recording_ttl_secs: &mut recording_ttl_secs,
+                idle_chunk_retryable: &mut idle_chunk_retryable,
+                compression_mode: &mut compression_mode,
+                notifications_enabled: &mut notifications_enabled,
+                max_concurrent_per_key: &mut max_concurrent_per_key,
+                max_concurrent_global: &mut max_concurrent_global,
+            },
         )?;
 
         let usage_tx = usage::init_usage_broadcast();

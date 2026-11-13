@@ -17,11 +17,12 @@
 //! 3. **No partial states.** Either the payment is recorded, the order is
 //!    paid and the balanced is credited (one commit), or nothing happened.
 
+pub use super::delivery::{acknowledge_minted_key, reveal_minted_key_with_receipt};
 use crate::api_keys;
 use crate::error::Result;
-use openproxy_db::secrets::{MasterKey};
+use openproxy_db::secrets::MasterKey;
 use openproxy_types::ids::ApiKeyId;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::Serialize;
 
 /// Result of [`apply_payment`].
@@ -47,6 +48,13 @@ pub enum PaymentOutcome {
     },
 }
 
+/// Inclusion coordinates from the verified chain block.
+#[derive(Debug, Clone, Copy)]
+pub struct PaymentBlock {
+    pub number: i64,
+    pub timestamp: i64,
+}
+
 /// Process one USDC `Transfer` log. See the module docs for the guarantees.
 ///
 /// # Errors
@@ -61,6 +69,88 @@ pub fn apply_payment(
     amount_units: i64,
     from_address: Option<&str>,
 ) -> Result<PaymentOutcome> {
+    apply_payment_at(
+        conn,
+        master_key,
+        tx_hash,
+        log_index,
+        PaymentBlock {
+            number: block_number,
+            timestamp: chrono::Utc::now().timestamp(),
+        },
+        amount_units,
+        from_address,
+    )
+}
+
+/// Settle using the inclusion timestamp, not the watcher's processing time.
+/// This preserves payments made during an outage without accepting old
+/// transfers for newer orders that reused the same amount.
+pub fn apply_payment_at(
+    conn: &Connection,
+    master_key: &MasterKey,
+    tx_hash: &str,
+    log_index: i64,
+    block: PaymentBlock,
+    amount_units: i64,
+    from_address: Option<&str>,
+) -> Result<PaymentOutcome> {
+    // The pool serializes writers but does NOT start a SQL transaction.
+    // Own the transaction here so every caller gets rollback on any failure.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+        .map_err(openproxy_db::error::map_db_error)?;
+    let outcome = settle_payment(
+        &tx,
+        master_key,
+        tx_hash,
+        log_index,
+        block,
+        amount_units,
+        from_address,
+    )?;
+    let (kind, code) = match &outcome {
+        PaymentOutcome::Credited { order_code, .. } => ("credited", Some(order_code.as_str())),
+        PaymentOutcome::Unmatched { .. } => ("unmatched", None),
+        PaymentOutcome::OrderExpired { order_code } => ("unmatched", Some(order_code.as_str())),
+        PaymentOutcome::AlreadySeen { .. } => ("", None),
+    };
+    if !kind.is_empty() {
+        tx.execute(
+            "UPDATE matched_payments SET outcome = ?1, order_id = \
+            (SELECT id FROM credit_orders WHERE order_code = ?2) \
+            WHERE tx_hash = ?3 AND log_index = ?4",
+            rusqlite::params![kind, code, tx_hash, log_index],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
+    tx.commit().map_err(openproxy_db::error::map_db_error)?;
+    Ok(outcome)
+}
+
+struct PayableOrder {
+    id: i64,
+    code: String,
+    key_id: Option<i64>,
+    ttl_days: i64,
+    tier_id: Option<i64>,
+    credit_units: i64,
+}
+
+fn settle_payment(
+    conn: &Connection,
+    master_key: &MasterKey,
+    tx_hash: &str,
+    log_index: i64,
+    block: PaymentBlock,
+    amount_units: i64,
+    from_address: Option<&str>,
+) -> Result<PaymentOutcome> {
+    let block_number = block.number;
+    if amount_units <= 0 || block_number < 0 || log_index < 0 || block.timestamp < 0 {
+        return Err(crate::error::CoreError::Validation(
+            "invalid payment coordinates".into(),
+        ));
+    }
     // 1. Idempotency gate: record the log. Already recorded → done.
     let inserted = conn
         .execute(
@@ -76,38 +166,44 @@ pub fn apply_payment(
         });
     }
 
-    // 2. Find the live order advertising exactly this amount.
-    let order: Option<(
-        i64,
-        String,
-        Option<i64>,
-        i64,
-        i64,
-        Option<i64>,
-        i64,
-    )> = conn
+    // 2. Find the live order advertising exactly this amount. The acceptance
+    //    window uses the same grace constant as order allocation so a payment
+    //    can never match an order that the allocator already considers closed.
+    let grace = format!("+{} seconds", super::orders::CONFIRMATION_GRACE_SECS);
+    let order: Option<PayableOrder> = conn
         .query_row(
-            "SELECT id, order_code, api_key_id, base_units, ttl_days, tier_id, \
+            "SELECT id, order_code, api_key_id, ttl_days, tier_id, \
              COALESCE(credit_units, base_units) \
              FROM credit_orders \
              WHERE amount_units = ?1 AND status IN ('pending', 'expired') \
-               AND expires_at > datetime('now', '-10 minutes')",
-            rusqlite::params![amount_units],
+               AND created_at <= datetime(?2, 'unixepoch') \
+               AND datetime(expires_at, ?3) >= datetime(?2, 'unixepoch') \
+               AND (SELECT COUNT(*) FROM credit_orders c WHERE c.amount_units = ?1 \
+                    AND c.status != 'cancelled' \
+                    AND c.created_at <= datetime(?2, 'unixepoch') \
+                    AND datetime(c.expires_at, ?3) >= datetime(?2, 'unixepoch')) = 1",
+            rusqlite::params![amount_units, block.timestamp, grace],
             |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                ))
+                Ok(PayableOrder {
+                    id: row.get(0)?,
+                    code: row.get(1)?,
+                    key_id: row.get(2)?,
+                    ttl_days: row.get(3)?,
+                    tier_id: row.get(4)?,
+                    credit_units: row.get(5)?,
+                })
             },
         )
-        .ok();
-    let Some((order_id, order_code, api_key_id, _base_units, ttl_days, tier_id, credit_units)) =
-        order
+        .optional()
+        .map_err(openproxy_db::error::map_db_error)?;
+    let Some(PayableOrder {
+        id: order_id,
+        code: order_code,
+        key_id: api_key_id,
+        ttl_days,
+        tier_id,
+        credit_units,
+    }) = order
     else {
         tracing::warn!(
             %tx_hash,
@@ -121,6 +217,26 @@ pub fn apply_payment(
         });
     };
 
+    if let Some(existing) = api_key_id
+        && crate::api_keys::crud::get_by_id(conn, ApiKeyId(existing))?.is_none()
+    {
+        tracing::error!(%tx_hash, %order_code, existing, "payment target was deleted; deposit requires operator review");
+        return Ok(PaymentOutcome::Unmatched {
+            tx_hash: tx_hash.into(),
+            amount_units,
+        });
+    }
+    let tier = tier_id
+        .map(|id| crate::credits::tiers::get(conn, id))
+        .transpose()?
+        .flatten();
+    if tier_id.is_some() && tier.is_none() {
+        tracing::error!(%tx_hash, %order_code, "paid plan was deleted; deposit requires operator review");
+        return Ok(PaymentOutcome::Unmatched {
+            tx_hash: tx_hash.into(),
+            amount_units,
+        });
+    }
     // 3. CAS: exactly one concurrent caller can flip pending/expired→paid.
     // A payment broadcast before the deadline but confirmed after it still
     // credits (10-minute grace): money received for an issued order must
@@ -162,15 +278,31 @@ pub fn apply_payment(
             minted_key = Some(plaintext.clone());
             let blob = master_key.encrypt(&plaintext)?;
             conn.execute(
-                "UPDATE credit_orders SET minted_key_encrypted = ?1, status = 'minted' \
+                "UPDATE credit_orders SET minted_key_encrypted = ?1, status = 'minted', api_key_id = ?3 \
                  WHERE id = ?2",
-                rusqlite::params![blob, order_id],
+                rusqlite::params![blob, order_id, final_key_id],
             )
             .map_err(openproxy_db::error::map_db_error)?;
         }
     }
     let key_id = ApiKeyId(final_key_id);
 
+    if let Some(tier) = &tier {
+        let previous: Option<i64> = conn
+            .query_row(
+                "SELECT tier_id FROM api_keys WHERE id = ?1",
+                [key_id.0],
+                |r| r.get(0),
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+        conn.execute(
+            "UPDATE credit_transactions SET status = 'expired' \
+             WHERE api_key_id = ?1 AND status = 'active' \
+               AND (kind = 'grant' OR ?2 IS NOT ?3)",
+            rusqlite::params![key_id.0, previous, tier.id],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    }
     // 5. Credit the balance. A leveraged plan credits more than it charged
     //    (credit_units > amount minus jitter); 1:1 plans credit the price.
     crate::credits::ledger::credit_topup(conn, key_id, order_id, credit_units, ttl_days, tx_hash)?;
@@ -179,11 +311,13 @@ pub fn apply_payment(
     //     quota caps and LINKS the key to the tier (future plan edits
     //     propagate to every linked key). The paid order must leave the key
     //     shaped exactly like the plan that was bought.
-    if let Some(tier_id) = tier_id {
-        if let Some(tier) = crate::credits::tiers::get(conn, tier_id)? {
-            crate::credits::tiers::apply_to_key(conn, key_id, &tier.config)?;
-            crate::credits::tiers::set_key_tier(conn, key_id, Some(tier.id))?;
-        }
+    if let Some(tier) = tier {
+        crate::credits::tiers::apply_to_key_forced(
+            conn,
+            key_id,
+            &crate::credits::tiers::tier_own_config(&tier),
+        )?;
+        crate::credits::tiers::set_key_tier(conn, key_id, Some(tier.id))?;
     }
 
     tracing::info!(
@@ -200,36 +334,4 @@ pub fn apply_payment(
         credited_units: credit_units,
         minted_key,
     })
-}
-
-/// Reveal (once) the minted plaintext of an anonymous order, then wipe the
-/// stored ciphertext so a second read cannot happen.
-///
-/// # Errors
-/// - database failures;
-/// - master-key crypto failures.
-pub fn reveal_minted_key(
-    conn: &Connection,
-    master_key: &MasterKey,
-    order_code: &str,
-) -> Result<Option<String>> {
-    let row: Option<(Option<Vec<u8>>, i64)> = conn
-        .query_row(
-            "SELECT minted_key_encrypted, key_revealed FROM credit_orders \
-             WHERE order_code = ?1",
-            rusqlite::params![order_code],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .ok();
-    let Some((Some(blob), 0)) = row else {
-        return Ok(None);
-    };
-    let plaintext = master_key.decrypt(&blob)?;
-    conn.execute(
-        "UPDATE credit_orders SET key_revealed = 1, minted_key_encrypted = NULL \
-         WHERE order_code = ?1",
-        rusqlite::params![order_code],
-    )
-    .map_err(openproxy_db::error::map_db_error)?;
-    Ok(Some(plaintext))
 }

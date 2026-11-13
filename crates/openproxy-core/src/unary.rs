@@ -23,8 +23,12 @@ use crate::{
     routing::{self, RoutingPlan},
 };
 
+mod budget;
+mod credit;
 mod usage;
 
+pub use budget::{BudgetQuote, HostLocal, UnaryCharge};
+pub use credit::UnaryCreditLease;
 pub use usage::{
     UnaryUsageArgs, UnaryUsageArgsBuilder, record_unary_target_success_async, record_unary_usage,
     record_unary_usage_async,

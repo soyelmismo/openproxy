@@ -15,6 +15,8 @@ pub mod circuit_breaker;
 pub mod claude_tool_names;
 pub mod context;
 pub mod credentials;
+pub mod credit_budget;
+pub mod credits_gate;
 pub mod error_classification;
 pub mod execution;
 pub mod formatting;

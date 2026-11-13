@@ -1,9 +1,13 @@
 // checkout/tabs.ts — Buy / My key tab switcher of the public checkout.
+// Switching tabs hides EVERY step, not just the two tab panes: an in-flight
+// QR/reveal panel must not stay on screen next to the other tab.
 
 import { $ } from "./dom.js";
 
+const STEPS = ["step-buy", "step-mykey", "step-pay", "step-key", "step-done"];
+
 function tab(name: string): void {
-  ["step-buy", "step-mykey"].forEach((id) => $(id).classList.add("hidden"));
+  STEPS.forEach((id) => $(id).classList.add("hidden"));
   $(name).classList.remove("hidden");
   if (name === "step-buy") {
     $("tab-buy").className = "btn primary";

@@ -6,13 +6,13 @@
 //! 2. A given amount can only pay one order; concurrent duplicates lose.
 //! 3. Balance can never go negative and never double-credits.
 //! 4. Expiry kills the remaining balance with no refund.
-//! 5. Anonymous reveal happens exactly once.
+//! 5. Anonymous delivery is receipt-bound: a code-only caller never claims the
+//!    key, retries survive a lost response, and ack is idempotent.
 
-use rusqlite::params;
 use crate::credits::ledger::{self, record_spend};
 use crate::credits::matcher::{self, PaymentOutcome};
 use crate::credits::orders;
-use openproxy_db::secrets::{MasterKey};
+use openproxy_db::secrets::MasterKey;
 use openproxy_types::ids::ApiKeyId;
 use rusqlite::Connection;
 use std::sync::Arc;
@@ -47,7 +47,8 @@ fn mk() -> MasterKey {
 fn create_order_jitters_within_six_decimals_and_credits_base() {
     let conn = test_conn();
     let key = seed_key(&conn, "jit1");
-    let order = orders::create_order(&conn, Some(key), None, 10 * USD, 15, None).expect("create order");
+    let order =
+        orders::create_order(&conn, Some(key), None, 10 * USD, 15, None).expect("create order");
     assert_eq!(order.base_units, 10 * USD);
     assert!(order.amount_units >= 10 * USD);
     assert!(
@@ -78,8 +79,12 @@ fn live_orders_never_share_an_amount() {
     let key = seed_key(&conn, "jit3");
     let mut seen = std::collections::HashSet::new();
     for _ in 0..500 {
-        let o = orders::create_order(&conn, Some(key), None, 1 * USD, 15, None).expect("create");
-        assert!(seen.insert(o.amount_units), "duplicate live amount {}", o.amount_units);
+        let o = orders::create_order(&conn, Some(key), None, USD, 15, None).expect("create");
+        assert!(
+            seen.insert(o.amount_units),
+            "duplicate live amount {}",
+            o.amount_units
+        );
     }
     assert_eq!(seen.len(), 500);
 }
@@ -246,8 +251,8 @@ fn expired_order_is_not_paid() {
     )
     .expect("expire window");
 
-    let outcome =
-        matcher::apply_payment(&conn, &mk, "0xlate", 0, 10, order.amount_units, None).expect("apply");
+    let outcome = matcher::apply_payment(&conn, &mk, "0xlate", 0, 10, order.amount_units, None)
+        .expect("apply");
     assert!(matches!(outcome, PaymentOutcome::Unmatched { .. }));
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
 }
@@ -267,19 +272,13 @@ fn late_confirmed_payment_within_grace_still_credits() {
     )
     .expect("expire window");
 
-    let outcome =
-        matcher::apply_payment(&conn, &mk, "0xlate", 0, 10, order.amount_units, None).expect("apply");
+    let outcome = matcher::apply_payment(&conn, &mk, "0xlate", 0, 10, order.amount_units, None)
+        .expect("apply");
     assert!(
-        matches!(
-            outcome,
-            PaymentOutcome::Credited { .. }
-        ),
+        matches!(outcome, PaymentOutcome::Credited { .. }),
         "grace-window payment must credit, got {outcome:?}"
     );
-    assert_eq!(
-        ledger::balance_units(&conn, key).unwrap(),
-        order.base_units
-    );
+    assert_eq!(ledger::balance_units(&conn, key).unwrap(), order.base_units);
 }
 
 #[test]
@@ -454,15 +453,26 @@ fn balance_view_reports_lots_and_credit_based() {
     assert!((view.lots[0].amount_usd - 10.0).abs() < 1e-9);
 }
 
-// ── anonymous checkout: mint + reveal once ──────────────────────────
+// ── anonymous checkout: mint + balance ──────────────────────────────
 
 #[test]
-fn anonymous_payment_mints_key_and_reveals_once() {
+fn anonymous_payment_mints_a_chat_key_with_the_credited_balance() {
     let conn = test_conn();
     let mk = mk();
-    let order =
-        orders::create_order(&conn, None, Some("jordan.lee18@outlook.com"), 10 * USD, 15, None)
-            .expect("create anon order");
+    let receipt = "00000000-0000-4000-8000-000000000010";
+    let order = orders::create_order_with_receipt(
+        &conn,
+        orders::CreateOrderRequest {
+            api_key_id: None,
+            payer_email: Some("jordan.lee18@outlook.com".into()),
+            base_units: 10 * USD,
+            ttl_days: 15,
+            tier_id: None,
+        },
+        15 * 60,
+        receipt,
+    )
+    .expect("create anon order");
     let outcome = matcher::apply_payment(
         &conn,
         &mk,
@@ -473,7 +483,7 @@ fn anonymous_payment_mints_key_and_reveals_once() {
         Some("0xbuyer"),
     )
     .expect("apply");
-    let (minted, key_id) = match outcome {
+    let (minted, api_key_id) = match outcome {
         PaymentOutcome::Credited {
             minted_key: Some(k),
             api_key_id,
@@ -482,28 +492,19 @@ fn anonymous_payment_mints_key_and_reveals_once() {
         other => panic!("expected minted key, got {other:?}"),
     };
     assert!(minted.starts_with("op_live_"));
-
     // The key is a real chat-scoped row with the balance attached.
     let scopes: String = conn
         .query_row(
             "SELECT scopes_json FROM api_keys WHERE id = ?1",
-            rusqlite::params![key_id],
+            rusqlite::params![api_key_id],
             |r| r.get(0),
         )
         .expect("scopes");
     assert!(scopes.contains("chat"));
     assert_eq!(
-        ledger::balance_units(&conn, ApiKeyId(key_id)).unwrap(),
+        ledger::balance_units(&conn, ApiKeyId(api_key_id)).unwrap(),
         10 * USD
     );
-
-    // Reveal once: first call returns it, second returns None (wiped).
-    let first = matcher::reveal_minted_key(&conn, &mk, &order.order_code)
-        .expect("reveal")
-        .expect("present");
-    assert_eq!(first, minted);
-    let second = matcher::reveal_minted_key(&conn, &mk, &order.order_code).expect("reveal 2");
-    assert!(second.is_none(), "plaintext must not be recoverable twice");
 }
 
 #[test]
@@ -567,39 +568,76 @@ fn tier_crud_and_apply_forces_the_whitelist_gate() {
     let conn = test_conn();
     let key = seed_key(&conn, "tiered");
 
-    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-a", "m-b"], 30.0), &draft_plan())
-        .expect("create tier");
+    let t = crate::credits::tiers::create(
+        &conn,
+        "flash",
+        &tier_config(&["m-a", "m-b"], 30.0),
+        &draft_plan(),
+    )
+    .expect("create tier");
     assert_eq!(t.key_count, 0);
     assert!(t.active);
 
     // Validation: blank name rejected, duplicate rejected by UNIQUE.
-    assert!(crate::credits::tiers::create(&conn, "  ", &tier_config(&["m"], 1.0), &draft_plan()).is_err());
-    assert!(crate::credits::tiers::create(&conn, "flash", &tier_config(&["m"], 1.0), &draft_plan()).is_err());
+    assert!(
+        crate::credits::tiers::create(&conn, "  ", &tier_config(&["m"], 1.0), &draft_plan())
+            .is_err()
+    );
+    assert!(
+        crate::credits::tiers::create(&conn, "flash", &tier_config(&["m"], 1.0), &draft_plan())
+            .is_err()
+    );
 
     crate::credits::tiers::apply_to_key(&conn, key, &t.config).expect("apply");
     let models: String = conn
-        .query_row("SELECT allowed_models_json FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .query_row(
+            "SELECT allowed_models_json FROM api_keys WHERE id = ?1",
+            [key.0],
+            |r| r.get(0),
+        )
         .expect("models");
     assert_eq!(models, r#"["m-a","m-b"]"#);
     let gate: i64 = conn
-        .query_row("SELECT only_whitelisted FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .query_row(
+            "SELECT only_whitelisted FROM api_keys WHERE id = ?1",
+            [key.0],
+            |r| r.get(0),
+        )
         .expect("gate");
     // Money invariant: an allowlist is a hard gate, not advisory.
     assert_eq!(gate, 1, "allowlist must force only_whitelisted");
-    let caps = crate::api_key_quotas::get_caps(&conn, key).expect("caps").expect("caps row");
+    let caps = crate::api_key_quotas::get_caps(&conn, key)
+        .expect("caps")
+        .expect("caps row");
     assert_eq!(caps.weekly_usd_cap, Some(30.0));
 
     // Update replaces the payload wholesale.
-    crate::credits::tiers::update(&conn, t.id, Some("flash2"), Some(&tier_config(&["m-c"], 40.0)), Some(false), None)
-        .expect("update");
-    let t2 = crate::credits::tiers::get(&conn, t.id).expect("get").expect("tier");
+    crate::credits::tiers::update(
+        &conn,
+        t.id,
+        Some("flash2"),
+        Some(&tier_config(&["m-c"], 40.0)),
+        Some(false),
+        None,
+    )
+    .expect("update");
+    let t2 = crate::credits::tiers::get(&conn, t.id)
+        .expect("get")
+        .expect("tier");
     assert_eq!(t2.name, "flash2");
     assert!(!t2.active);
-    assert_eq!(t2.config.allowed_models.as_deref(), Some(&["m-c".to_string()][..]));
+    assert_eq!(
+        t2.config.allowed_models.as_deref(),
+        Some(&["m-c".to_string()][..])
+    );
 
     // Unused tier deletes cleanly.
     crate::credits::tiers::delete(&conn, t.id).expect("delete");
-    assert!(crate::credits::tiers::get(&conn, t.id).expect("get").is_none());
+    assert!(
+        crate::credits::tiers::get(&conn, t.id)
+            .expect("get")
+            .is_none()
+    );
 }
 
 #[test]
@@ -629,23 +667,48 @@ fn tier_allowlist_partitions_combos_from_models() {
     )
     .expect("create mixed tier");
     let row_models: String = conn
-        .query_row("SELECT models_json FROM credit_tiers WHERE id = ?1", [t.id], |r| r.get(0))
+        .query_row(
+            "SELECT models_json FROM credit_tiers WHERE id = ?1",
+            [t.id],
+            |r| r.get(0),
+        )
         .expect("row models");
     let row_combos: String = conn
-        .query_row("SELECT combos_json FROM credit_tiers WHERE id = ?1", [t.id], |r| r.get(0))
+        .query_row(
+            "SELECT combos_json FROM credit_tiers WHERE id = ?1",
+            [t.id],
+            |r| r.get(0),
+        )
         .expect("row combos");
-    assert_eq!(row_models, r#"["deepseek-v4.1-flash"]"#, "combo must leave models_json");
-    assert_eq!(row_combos, r#"["autos"]"#, "combo name must land in combos_json");
+    assert_eq!(
+        row_models, r#"["deepseek-v4.1-flash"]"#,
+        "combo must leave models_json"
+    );
+    assert_eq!(
+        row_combos, r#"["autos"]"#,
+        "combo name must land in combos_json"
+    );
 
     // Applying to a key resolves the combo NAME to the numeric id the
     // routing gate consumes, and the allowlist still forces the hard gate.
     crate::credits::tiers::apply_to_key(&conn, key, &t.config).expect("apply");
     let key_combos: String = conn
-        .query_row("SELECT allowed_combos_json FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .query_row(
+            "SELECT allowed_combos_json FROM api_keys WHERE id = ?1",
+            [key.0],
+            |r| r.get(0),
+        )
         .expect("key combos");
-    assert_eq!(key_combos, "[1]", "combo name must resolve to its numeric id");
+    assert_eq!(
+        key_combos, "[1]",
+        "combo name must resolve to its numeric id"
+    );
     let gate: i64 = conn
-        .query_row("SELECT only_whitelisted FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .query_row(
+            "SELECT only_whitelisted FROM api_keys WHERE id = ?1",
+            [key.0],
+            |r| r.get(0),
+        )
         .expect("gate");
     assert_eq!(gate, 1, "allowlist must force only_whitelisted");
 }
@@ -657,135 +720,58 @@ fn leveraged_plan_charges_less_than_it_credits() {
     let mk = mk();
 
     // The tier IS the product: price 1, credit 6 (6x), lives 7 days.
-    let t = crate::credits::tiers::create(&conn, "flash", &tier_config(&["m-1"], 25.0), &plan(1.0, 6.0, 7))
-        .expect("tier");
+    let t = crate::credits::tiers::create(
+        &conn,
+        "flash",
+        &tier_config(&["m-1"], 25.0),
+        &plan(1.0, 6.0, 7),
+    )
+    .expect("tier");
 
     // The buyer is charged the PRICE (whole dollar + jitter); the order
     // records the CREDIT (6x) for the matcher to pay out.
-    let order = orders::create_order(&conn, Some(key), None, 1 * USD, t.ttl_days, Some(t.id))
-        .expect("order");
-    assert_eq!(order.credit_units, 6 * USD, "credit_units must carry the leverage");
-    assert!(order.amount_units >= 1 * USD && order.amount_units < 2 * USD);
+    let order =
+        orders::create_order(&conn, Some(key), None, USD, t.ttl_days, Some(t.id)).expect("order");
+    assert_eq!(
+        order.credit_units,
+        6 * USD,
+        "credit_units must carry the leverage"
+    );
+    assert!(order.amount_units >= USD && order.amount_units < 2 * USD);
 
-    let outcome = matcher::apply_payment(&conn, &mk, "0xlev", 0, 1, order.amount_units, None)
-        .expect("apply");
+    let outcome =
+        matcher::apply_payment(&conn, &mk, "0xlev", 0, 1, order.amount_units, None).expect("apply");
     let credited = match outcome {
         PaymentOutcome::Credited { credited_units, .. } => credited_units,
         other => panic!("expected credited, got {other:?}"),
     };
-    assert_eq!(credited, 6 * USD, "the balance must be the leveraged credit");
+    assert_eq!(
+        credited,
+        6 * USD,
+        "the balance must be the leveraged credit"
+    );
 
     // The tier shaping landed on the key together with the credit.
     let models: String = conn
-        .query_row("SELECT allowed_models_json FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .query_row(
+            "SELECT allowed_models_json FROM api_keys WHERE id = ?1",
+            [key.0],
+            |r| r.get(0),
+        )
         .expect("models");
     assert_eq!(models, r#"["m-1"]"#);
     let gate: i64 = conn
-        .query_row("SELECT only_whitelisted FROM api_keys WHERE id = ?1", [key.0], |r| r.get(0))
+        .query_row(
+            "SELECT only_whitelisted FROM api_keys WHERE id = ?1",
+            [key.0],
+            |r| r.get(0),
+        )
         .expect("gate");
     assert_eq!(gate, 1);
-    let caps = crate::api_key_quotas::get_caps(&conn, key).expect("caps").expect("caps row");
+    let caps = crate::api_key_quotas::get_caps(&conn, key)
+        .expect("caps")
+        .expect("caps row");
     assert_eq!(caps.weekly_usd_cap, Some(25.0));
 }
 
-#[test]
-fn sweep_deletes_keys_idle_for_six_months() {
-    let conn = test_conn();
-    let idle = seed_key(&conn, "idle-8mo");
-    let used_recently = seed_key(&conn, "used-3mo-ago");
-    let young = seed_key(&conn, "young");
-    let operator = seed_key(&conn, "operator");
-
-    conn.execute(
-        "UPDATE api_keys SET scopes_json = '[\"chat\",\"manage\"]' WHERE id = ?1",
-        params![operator.0],
-    )
-    .unwrap();
-
-    // Age three keys beyond the window; keep `young` inside it.
-    conn.execute(
-        "UPDATE api_keys SET created_at = datetime('now', '-8 months')
-         WHERE id IN (?1, ?2, ?3)",
-        params![idle.0, used_recently.0, operator.0],
-    )
-    .unwrap();
-
-    // `used_recently` has a request 3 months ago (inside the window) plus a
-    // stale one from 9 months ago: the recent one saves it.
-    for (rid, age) in [("recent", "-3 months"), ("stale", "-9 months")] {
-        conn.execute(
-            "INSERT INTO usage (api_key_id, request_id, trace_id, attempt, provider_id, 
-             upstream_model_id, status_code, total_ms, created_at)
-             VALUES (?1, ?2, 't', 1, 'p', 'm', 200, 10, datetime('now', ?3))",
-            params![used_recently.0, rid, age],
-        )
-        .unwrap();
-    }
-
-    // The idle key holds a small balance that must die with it.
-    conn.execute(
-        "INSERT INTO credit_transactions (api_key_id, kind, amount_units, status)
-         VALUES (?1, 'topup', 500, 'active')",
-        params![idle.0],
-    )
-    .unwrap();
-    // ...and carries a quota row (must cascade).
-    crate::api_key_quotas::upsert(
-        &conn,
-        idle,
-        &crate::api_key_quotas::QuotaCaps {
-            weekly_usd_cap: Some(5.0),
-            five_hour_usd_cap: None,
-        },
-    )
-    .unwrap();
-
-    let swept = crate::credits::sweep::sweep_idle_keys(&conn, 100).expect("sweep");
-    assert_eq!(swept.len(), 1, "only the truly idle key is swept");
-    assert_eq!(swept[0].id, idle.0);
-    assert_eq!(swept[0].balance_units, 500, "the report carries the dead balance");
-
-    // Gone: key row, quota row, ledger rows.
-    let alive: i64 = conn
-        .query_row("SELECT COUNT(*) FROM api_keys WHERE id = ?1", params![idle.0], |r| r.get(0))
-        .unwrap();
-    assert_eq!(alive, 0);
-    let quotas: i64 = conn
-        .query_row("SELECT COUNT(*) FROM api_key_quotas WHERE api_key_id = ?1", params![idle.0], |r| r.get(0))
-        .unwrap();
-    assert_eq!(quotas, 0);
-    let ledger: i64 = conn
-        .query_row("SELECT COUNT(*) FROM credit_transactions WHERE api_key_id = ?1", params![idle.0], |r| r.get(0))
-        .unwrap();
-    assert_eq!(ledger, 0);
-
-    // Survivors: young, recently-used, and the manage-scoped operator key.
-    let survivors: i64 = conn
-        .query_row("SELECT COUNT(*) FROM api_keys", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(survivors, 3);
-    assert!(crate::credits::sweep::is_idle(&conn, used_recently.0).unwrap() == false);
-    assert!(crate::credits::sweep::is_idle(&conn, young.0).unwrap() == false);
-    assert!(crate::credits::sweep::is_idle(&conn, operator.0).unwrap() == false);
-}
-
-#[test]
-fn sweep_respects_limit_per_pass() {
-    let conn = test_conn();
-    let mut ids = Vec::new();
-    for n in 0..3 {
-        let key = seed_key(&conn, &format!("old-{n}"));
-        conn.execute(
-            "UPDATE api_keys SET created_at = datetime('now', '-8 months') WHERE id = ?1",
-            params![key.0],
-        )
-        .unwrap();
-        ids.push(key);
-    }
-    let swept = crate::credits::sweep::sweep_idle_keys(&conn, 2).expect("sweep");
-    assert_eq!(swept.len(), 2, "limit caps the pass");
-    let left: i64 = conn
-        .query_row("SELECT COUNT(*) FROM api_keys WHERE created_at <= datetime('now', '-6 months')", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(left, 1, "the remaining idle key waits for the next pass");
-}
+mod sweep;

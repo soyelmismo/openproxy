@@ -2,33 +2,123 @@
 //!
 //! One background task polls a Base JSON-RPC node for USDC `Transfer` logs
 //! whose `to` is the single collector address, and feeds each log to
-//! `openproxy_core::credits::matcher::apply_payment`, which owns the
+//! `openproxy_core::credits::matcher::apply_payment_at`, which owns the
 //! idempotency (`matched_payments` PK) and the compare-and-swap that makes a
 //! payment credit exactly one order exactly once.
 //!
-//! The scanner is deliberately dumb: it discovers logs, advances the
-//! persisted cursor, and hands them over. All assignment logic lives in the
-//! core module, so the money path is testable without a network.
+//! The scanner only discovers logs and advances the persisted cursor; all
+//! assignment logic lives in the core module, so the money path is testable
+//! without a network. Hardening rules (money path):
+//!
+//! - **Bounded chunks, catch-up per tick.** Each `eth_getLogs` call covers at
+//!   most [`MAX_BLOCK_CHUNK`] blocks and the cursor advances after that chunk
+//!   succeeds. A tick then keeps scanning further chunks (up to
+//!   [`MAX_CHUNKS_PER_TICK`]) until the finality head is covered, so a long
+//!   downtime catches up in a few intervals instead of one chunk per interval,
+//!   while no single request ever asks a provider for a range it rejects.
+//! - **Chain identity.** `eth_chainId` must equal `credits.chain_id` before
+//!   any log is trusted; the wrong RPC would otherwise mean silent zero logs.
+//! - **Finality, fail closed.** `safe` is preferred, then `finalized`. If the
+//!   node offers neither, the tick fails and the cursor is held: the watcher
+//!   never credits a `latest` head by subtracting a heuristic reorg margin.
+//! - **Bootstrap anchored on the oldest unsettled order.** With no cursor yet,
+//!   the watcher does not start "from now" nor from a fixed lookback: it starts
+//!   at the block that carries the `created_at` of the oldest still unsettled
+//!   order (`pending` or `expired`), located by a BOUNDED binary search over
+//!   block timestamps (`eth_getBlockByNumber`, at most
+//!   [`MAX_BLOCK_TIME_SEARCH_STEPS`] probes). Rationale is the matcher's own
+//!   rule: a transfer counts when its BLOCK timestamp falls inside
+//!   `[created_at, expires_at + grace]`. A payment made inside that window and
+//!   only processed days later — process down, cursor lost, order already
+//!   expired — is therefore still credited; filtering the bootstrap on "still
+//!   payable NOW" dropped exactly those payments. With no unsettled order the
+//!   configured payment window bounds the replay. There is deliberately NO age
+//!   cap: a tick already scans at most [`MAX_CHUNKS_PER_TICK`] ×
+//!   [`MAX_BLOCK_CHUNK`] blocks and the timestamp search costs at most
+//!   [`MAX_BLOCK_TIME_SEARCH_STEPS`] probes, so an order unsettled for months
+//!   is caught up incrementally across ticks instead of having its payment
+//!   dropped by an arbitrary horizon (`start.max(head - 90 days)` silently
+//!   discarded valid, already-paid deposits). A finality head that lags the
+//!   wall clock starts the scan AT the head (no block at or below it can carry
+//!   a payment for the order yet) and then catches up incrementally, never
+//!   above the finality head.
+//! - **Strict decoding.** `removed` logs are skipped, contract/topic/data/tx
+//!   sizes are validated, and a malformed log aborts the tick WITHOUT
+//!   advancing the cursor. Zero-value and > `i64` transfers are VALID ERC-20
+//!   transfers: they are ignored terminally (never credited, never truncated,
+//!   never cursor-blocking) so a dust attack cannot wedge the checkout.
+//! - **Block time, not wall clock.** Every credited payment is matched against
+//!   the block timestamp (`eth_getBlockByNumber`), so a delayed confirmation
+//!   cannot turn an on-time payment into a late one.
+//!
+//! ## Configuration is frozen for the process lifetime
+//!
+//! `rpc_url`, `usdc_address`, `collector_address`, `chain_id` and the payment
+//! window are copied at startup. There is no hot reload: the admin switch
+//! (`gateway_enabled`) is DB-backed and instant, but changing the collector or
+//! the RPC requires a restart. A restart with a new collector makes orders
+//! quoted with the old collector **unmatchable** by this watcher, so drain
+//! pending orders first (or reconcile them manually). Do not promise hot
+//! destination changes.
 
-use openproxy_core::credits::matcher::{PaymentOutcome, apply_payment};
+mod logs;
+
+pub use self::logs::UsdcTransfer;
+use self::logs::{DecodedLog, TRANSFER_TOPIC, decode_log, parse_quantity};
+use openproxy_core::credits::matcher::{PaymentBlock, PaymentOutcome, apply_payment_at};
+use openproxy_core::credits::orders::CONFIRMATION_GRACE_SECS;
 use openproxy_db::DbPool;
 use openproxy_types::config::CreditsConfig;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-/// ERC-20 `Transfer(address,address,uint256)` topic0 (keccak of the sig).
-const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+/// Maximum blocks per `eth_getLogs` call. Public Base providers commonly cap
+/// ranges/results; 500 stays far inside those limits.
+pub const MAX_BLOCK_CHUNK: i64 = 500;
 
-/// A decoded USDC transfer to the collector.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct UsdcTransfer {
-    pub tx_hash: String,
-    pub log_index: i64,
-    pub block_number: i64,
-    /// Amount in micro-USDC (6 decimals).
-    pub amount_units: i64,
-    pub from_address: String,
-    pub to_address: String,
+/// Chunks one tick may process back-to-back. A long outage (hours of blocks)
+/// is caught up within a few intervals instead of one chunk per interval, and
+/// the cap keeps a single tick from monopolising the writer for minutes.
+pub const MAX_CHUNKS_PER_TICK: usize = 40;
+
+/// Slack ahead of an order's `created_at` when locating its block: the DB
+/// stores wall-clock seconds (`datetime('now')`) and the matcher compares them
+/// with block timestamps, so a couple of minutes of skew must not cut the
+/// payment out of range.
+const BOOTSTRAP_TIME_MARGIN_SECS: i64 = 120;
+/// `eth_getBlockByNumber` probes allowed to locate the block at a timestamp.
+/// The search interval is `[0, head]`, so `log2(i64::MAX)` (63) steps always
+/// converge; 64 bounds a node whose timestamps do not behave monotonically.
+const MAX_BLOCK_TIME_SEARCH_STEPS: usize = 64;
+
+/// Wall-clock timestamp a fresh cursor must start from.
+///
+/// The matcher accepts a transfer while its BLOCK timestamp is inside
+/// `[created_at, expires_at + grace]`, so the earliest block that can settle an
+/// unsettled order is the one carrying its `created_at` — not "now", and not
+/// "now minus the configured window". Anchoring on `now` (or on orders that are
+/// still payable at startup) is what lost payments made inside an order's
+/// window and only processed after a crash: the order was `expired` by then,
+/// yet the payment was valid.
+///
+/// With no unsettled order there is nothing old to find, so the configured
+/// payment window plus the confirmation grace bounds the replay. Both paths are
+/// clamped at genesis and never negative.
+const fn bootstrap_target_ts(
+    now: i64,
+    window_secs: i64,
+    oldest_unsettled_created_at: Option<i64>,
+) -> i64 {
+    let target = match oldest_unsettled_created_at {
+        Some(created) => created.saturating_sub(BOOTSTRAP_TIME_MARGIN_SECS),
+        None => {
+            let window = if window_secs > 0 { window_secs } else { 0 };
+            now.saturating_sub(window.saturating_add(CONFIRMATION_GRACE_SECS))
+                .saturating_sub(BOOTSTRAP_TIME_MARGIN_SECS)
+        }
+    };
+    if target < 0 { 0 } else { target }
 }
 
 /// Minimal JSON-RPC client over the workspace HTTP stack.
@@ -94,25 +184,135 @@ impl BaseRpc {
             .ok_or_else(|| format!("rpc {method} returned no result"))
     }
 
-    /// Latest block tagged `safe` (reorg-resistant on Base).
+    /// `eth_chainId` as an integer.
     ///
     /// # Errors
-    /// Transport or RPC failures.
-    pub async fn safe_block_number(&self) -> Result<i64, String> {
+    /// Transport, RPC or malformed-quantity failures.
+    pub async fn chain_id(&self) -> Result<u64, String> {
+        let v = self.call("eth_chainId", serde_json::json!([])).await?;
+        let raw = v.as_str().ok_or("eth_chainId is not a string")?;
+        u64::try_from(parse_quantity(raw)?).map_err(|_| format!("negative chain id {raw}"))
+    }
+
+    /// Block number for a tag (`safe`, `finalized`) or an exact hex number.
+    /// `Ok(None)` when the node returns `null` for the tag.
+    ///
+    /// # Errors
+    /// Transport, RPC or malformed-quantity failures.
+    pub async fn block_number(&self, tag: &str) -> Result<Option<i64>, String> {
         let v = self
-            .call("eth_getBlockByNumber", serde_json::json!(["safe", false]))
+            .call("eth_getBlockByNumber", serde_json::json!([tag, false]))
             .await?;
-        parse_quantity(
-            v.get("number")
-                .and_then(serde_json::Value::as_str)
-                .ok_or("safe block missing number")?,
-        )
+        if v.is_null() {
+            return Ok(None);
+        }
+        let raw = v
+            .get("number")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("block missing number")?;
+        parse_quantity(raw).map(Some)
+    }
+
+    /// Canonical head to scan: `safe`, else `finalized`.
+    ///
+    /// Both tags are reorg-resistant commitments. `latest` is deliberately NOT
+    /// a fallback: "latest minus N blocks" is a heuristic, not finality, and a
+    /// reorg after crediting would mean paying out for a transfer that no
+    /// longer exists. No safe/finalized head means fail closed.
+    ///
+    /// # Errors
+    /// Neither the `safe` nor the `finalized` tag yields a block.
+    pub async fn finality_head(&self) -> Result<(i64, &'static str), String> {
+        match self.block_number("safe").await {
+            Ok(Some(n)) => return Ok((n, "safe")),
+            Ok(None) => tracing::warn!("rpc returned a null `safe` block; trying `finalized`"),
+            Err(e) => tracing::warn!(error = %e, "`safe` tag unsupported; trying `finalized`"),
+        }
+        match self.block_number("finalized").await {
+            Ok(Some(n)) => Ok((n, "finalized")),
+            Ok(None) => {
+                Err("node has neither `safe` nor `finalized` head; refusing to scan".into())
+            }
+            Err(e) => Err(format!(
+                "node has neither `safe` nor `finalized` head ({e}); refusing to scan"
+            )),
+        }
+    }
+
+    /// Unix timestamp (UTC seconds) of a block.
+    ///
+    /// # Errors
+    /// Transport, RPC or malformed-timestamp failures.
+    pub async fn block_timestamp(&self, block_number: i64) -> Result<i64, String> {
+        let v = self
+            .call(
+                "eth_getBlockByNumber",
+                serde_json::json!([format!("0x{block_number:x}"), false]),
+            )
+            .await?;
+        let raw = v
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("block {block_number} missing timestamp"))?;
+        parse_quantity(raw).and_then(|ts| {
+            if ts > 0 {
+                Ok(ts)
+            } else {
+                Err(format!("block {block_number} has non-positive timestamp"))
+            }
+        })
+    }
+
+    /// Lowest block in `[0, head]` whose timestamp is `>= target_ts`.
+    ///
+    /// Bounded binary search over the (monotone) block clock: at most
+    /// [`MAX_BLOCK_TIME_SEARCH_STEPS`] `eth_getBlockByNumber` probes, so
+    /// locating a days-old order costs ~25 calls, never a scan. A head whose own
+    /// timestamp is older than `target_ts` means the chain has not reached that
+    /// wall-clock time yet; the answer is the head itself — never a block above
+    /// the finality head, which would trust unfinalised data.
+    ///
+    /// # Errors
+    /// Transport/RPC failures, malformed timestamps, or a node whose block
+    /// timestamps do not converge within the step budget (fail closed: the
+    /// caller keeps its cursor and retries).
+    pub async fn first_block_at_or_after(&self, head: i64, target_ts: i64) -> Result<i64, String> {
+        if head < 0 {
+            return Err(format!("negative head block {head}"));
+        }
+        if self.block_timestamp(head).await? < target_ts {
+            return Ok(head);
+        }
+        let mut low = 0i64;
+        let mut high = head;
+        let mut steps = 0usize;
+        while low < high {
+            if steps >= MAX_BLOCK_TIME_SEARCH_STEPS {
+                return Err(format!(
+                    "block timestamp search over [0, {head}] did not converge"
+                ));
+            }
+            steps += 1;
+            let mid = low + (high - low) / 2;
+            if self.block_timestamp(mid).await? >= target_ts {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        Ok(low)
     }
 
     /// `eth_getLogs` for USDC transfers into `collector` in `[from, to]`.
     ///
+    /// Returns `Err` when any returned log is malformed: a log our own filter
+    /// selected but that cannot be decoded is exactly what must NOT be
+    /// silently skipped (the range would be lost forever). Valid-but-never-
+    /// creditable transfers (zero, > `i64`, reorged) are skipped terminally.
+    ///
     /// # Errors
-    /// Transport or RPC failures.
+    /// Transport/RPC failures, malformed logs, a malformed configured
+    /// address, or out-of-range block numbers.
     pub async fn transfer_logs(
         &self,
         usdc: &str,
@@ -120,9 +320,17 @@ impl BaseRpc {
         from_block: i64,
         to_block: i64,
     ) -> Result<Vec<UsdcTransfer>, String> {
+        // Validate once before building the filter: a truncated collector
+        // address would otherwise become a topic that matches nothing, and the
+        // checkout would look "empty" instead of broken.
         let collector_topic = format!(
             "0x{:0>64}",
-            collector.trim_start_matches("0x").to_lowercase()
+            collector
+                .strip_prefix("0x")
+                .or_else(|| collector.strip_prefix("0X"))
+                .filter(|b| { b.len() == 40 && b.bytes().all(|c| c.is_ascii_hexdigit()) })
+                .ok_or("configured collector_address is not a 20-byte hex address")?
+                .to_lowercase()
         );
         let filter = serde_json::json!({
             "address": usdc,
@@ -130,76 +338,56 @@ impl BaseRpc {
             "toBlock": format!("0x{to_block:x}"),
             "topics": [TRANSFER_TOPIC, null, collector_topic],
         });
-        let v = self.call("eth_getLogs", serde_json::json!([filter])).await?;
+        let v = self
+            .call("eth_getLogs", serde_json::json!([filter]))
+            .await?;
         let logs = v.as_array().ok_or("eth_getLogs result is not an array")?;
         let mut out = Vec::with_capacity(logs.len());
         for log in logs {
-            if let Some(t) = parse_transfer_log(log, collector) {
-                out.push(t);
+            match decode_log(log, usdc, collector, from_block, to_block) {
+                Ok(DecodedLog::Transfer(t)) => out.push(t),
+                Ok(DecodedLog::Ignored(reason)) => {
+                    // Terminal: never credit, never retry, never wedge the
+                    // cursor. Debug, not warn: a dust attacker controls this.
+                    tracing::debug!(reason, "credits watcher: transfer ignored");
+                }
+                Err(reason) => {
+                    tracing::error!(reason = %reason, log = %log, "credits watcher: malformed log in range; cursor held");
+                    return Err(format!(
+                        "malformed log in [{from_block}, {to_block}]: {reason}"
+                    ));
+                }
             }
         }
         Ok(out)
     }
 }
 
-/// Parse a hex quantity (`0x1a`) into an integer.
-fn parse_quantity(raw: &str) -> Result<i64, String> {
-    let trimmed = raw.trim_start_matches("0x");
-    i64::from_str_radix(trimmed, 16).map_err(|e| format!("invalid hex quantity {raw}: {e}"))
-}
-
-/// Decode one `eth_getLogs` entry into a [`UsdcTransfer`], returning `None`
-/// for logs that do not carry exactly one Transfer with a matching `to` and a
-/// value that fits the ledger's integer domain.
-fn parse_transfer_log(log: &serde_json::Value, collector: &str) -> Option<UsdcTransfer> {
-    let topics = log.get("topics")?.as_array()?;
-    if topics.len() != 3 {
-        return None;
-    }
-    let topic0 = topics.first()?.as_str()?;
-    if !topic0.eq_ignore_ascii_case(TRANSFER_TOPIC) {
-        return None;
-    }
-    // A topic is a 32-byte word: the 20-byte address sits in the LAST 40 hex
-    // chars, left-padded with zeroes. Compare those 40 chars, never the whole
-    // word, or every real payment would silently fail to match.
-    let word_to_addr = |topic: &str| -> String {
-        let word = topic.trim_start_matches("0x");
-        match word.len() {
-            n if n > 40 => word.get(n - 40..).unwrap_or(word).to_string(),
-            _ => word.to_string(),
+/// Inclusive `[from, to]` block window for one tick, or `None` when the
+/// cursor already covers the head.
+///
+/// With no cursor (first boot) the window starts at `boot_from`, the block that
+/// carries the oldest unsettled order's `created_at` (see
+/// [`bootstrap_target_ts`]). A head older than that timestamp starts the scan AT
+/// the head — no block at or below it can carry a payment for that order yet —
+/// which also pins the cursor so the following ticks are incremental instead of
+/// repeating the timestamp search. From then on the window is strictly
+/// incremental and capped at [`MAX_BLOCK_CHUNK`].
+const fn scan_window(last: i64, head: i64, boot_from: i64) -> Option<(i64, i64)> {
+    let from_block = if last == 0 {
+        let first = if boot_from > 0 { boot_from } else { 0 };
+        if head < first { head } else { first }
+    } else {
+        if head <= last {
+            return None;
         }
+        last + 1
     };
-    let from_address = format!("0x{}", word_to_addr(topics.get(1)?.as_str()?));
-    let to_topic = topics.get(2)?.as_str()?;
-    let to_address = format!("0x{}", word_to_addr(to_topic));
-    let collector_hex = collector.trim_start_matches("0x");
-    if !to_address
-        .trim_start_matches("0x")
-        .eq_ignore_ascii_case(collector_hex)
-    {
+    if head < from_block {
         return None;
     }
-    let data = log.get("data")?.as_str()?;
-    let raw_value = data.trim_start_matches("0x");
-    // ERC-20 value is a 32-byte word. Anything that overflows i64 is nonsense
-    // for a top-up and is skipped rather than truncated.
-    let value = i128::from_str_radix(raw_value, 16).ok()?;
-    let amount_units = i64::try_from(value).ok()?;
-    if amount_units <= 0 {
-        return None;
-    }
-    let tx_hash = log.get("transactionHash")?.as_str()?.to_string();
-    let log_index = parse_quantity(log.get("logIndex")?.as_str()?).ok()?;
-    let block_number = parse_quantity(log.get("blockNumber")?.as_str()?).ok()?;
-    Some(UsdcTransfer {
-        tx_hash,
-        log_index,
-        block_number,
-        amount_units,
-        from_address,
-        to_address,
-    })
+    let chunk_end = from_block + MAX_BLOCK_CHUNK - 1;
+    Some((from_block, if head < chunk_end { head } else { chunk_end }))
 }
 
 /// Outcome summary of one scan tick.
@@ -211,6 +399,12 @@ pub struct ScanReport {
     pub credited: usize,
     pub already_seen: usize,
     pub unmatched: usize,
+    /// Matched an order whose window had run out (deposit needs a human).
+    pub order_expired: usize,
+    /// Blocks still pending behind this bounded chunk.
+    pub backlog_blocks: i64,
+    /// Finality tag of the head this tick scanned (`safe` or `finalized`).
+    pub head_tag: String,
 }
 
 /// Background service: poll Base for USDC transfers into the collector and
@@ -223,16 +417,65 @@ pub struct CreditsWatcherService {
 }
 
 impl CreditsWatcherService {
-    /// One scan tick: read the cursor, fetch `safe`, process every transfer.
+    /// First block a fresh cursor must replay: the block that carries the
+    /// `created_at` of the oldest UNSETTLED order, or — with no such order — the
+    /// configured payment window. Located with a bounded timestamp binary search
+    /// (`O(log head)` probes) instead of a fixed block lookback, so a payment
+    /// made inside an order's window and only processed days later (process
+    /// down, cursor lost, order expired by then) is still inside the scan.
+    ///
+    /// There is NO additional age clamp on the origin. A fixed horizon
+    /// (`start.max(head - 90 days)`) silently discarded exactly the deposits
+    /// this function exists to recover: an order `expired` for a quarter still
+    /// owes the transfer made inside its window. Bounding the work is already
+    /// the tick's job — at most [`MAX_CHUNKS_PER_TICK`] × [`MAX_BLOCK_CHUNK`]
+    /// blocks per tick, cursor advanced chunk by chunk — so an old origin only
+    /// means a longer incremental catch-up, never an unbounded request and
+    /// never a lost payment.
+    async fn bootstrap_from_block(
+        &self,
+        pool: &Arc<DbPool>,
+        rpc: &BaseRpc,
+        head: i64,
+    ) -> Result<i64, String> {
+        let window_secs = i64::from(self.config.payment_window_minutes) * 60;
+        // `expired` is deliberately INCLUDED. The matcher settles a transfer
+        // while its BLOCK timestamp is inside `[created_at, expires_at +
+        // grace]`, so a long-expired order can still be owed a payment made on
+        // time. Requiring the window to be open *now* (the previous filter) is
+        // exactly what dropped those deposits on a restart without a cursor.
+        let oldest_unsettled = pool
+            .spawn_read(move |r| {
+                r.query_row(
+                    "SELECT CAST(strftime('%s', MIN(created_at)) AS INTEGER) \
+                     FROM credit_orders WHERE status IN ('pending','expired')",
+                    [],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+                .map_err(openproxy_db::error::map_db_error)
+            })
+            .await
+            .map_err(|e| format!("read oldest unsettled order: {e}"))?;
+        let now = chrono::Utc::now().timestamp();
+        let target_ts = bootstrap_target_ts(now, window_secs, oldest_unsettled);
+        let start = rpc.first_block_at_or_after(head, target_ts).await?;
+        Ok(start.min(head))
+    }
+
+    /// One scan tick: verify the chain, read the cursor, then scan bounded
+    /// chunks until the finality head is covered or [`MAX_CHUNKS_PER_TICK`]
+    /// is reached. The cursor advances only after each chunk fully succeeds,
+    /// so a failure retries the same range and a long outage catches up in
+    /// consecutive increments.
     ///
     /// # Errors
-    /// Transport/RPC failures and DB failures. The cursor is only advanced
-    /// after a successful pass, so a failure simply retries the same range.
+    /// Transport/RPC failures, malformed logs, chain mismatch and DB
+    /// failures.
     pub async fn tick(&self) -> Result<ScanReport, String> {
         let pool = Arc::clone(&self.db_pool);
         let mut report = ScanReport::default();
 
-        let last = pool
+        let mut last = pool
             .spawn_read(openproxy_db::credits_ledger::last_scanned_block)
             .await
             .map_err(|e| format!("read watcher cursor: {e}"))?;
@@ -241,48 +484,100 @@ impl CreditsWatcherService {
             self.config.rpc_url.clone(),
             Arc::clone(&self.upstream_client),
         );
-        let safe = rpc.safe_block_number().await?;
-        if last == 0 {
-            // First run: start at the head instead of replaying all history.
-            // Pre-existing deposits are not top-ups from this system.
-            pool.spawn_write(move |w| openproxy_db::credits_ledger::set_last_scanned_block(w, safe))
-                .await
-                .map_err(|e| format!("init watcher cursor: {e}"))?;
-            report.from_block = safe;
-            report.to_block = safe;
-            return Ok(report);
+        // Wrong network = zero logs forever. Refuse to scan.
+        let chain = rpc.chain_id().await?;
+        if chain != self.config.chain_id {
+            return Err(format!(
+                "rpc chain id {chain} != configured chain_id {}",
+                self.config.chain_id
+            ));
         }
-        if safe <= last {
+        let (head, head_tag) = rpc.finality_head().await?;
+        report.head_tag = head_tag.to_string();
+        let boot_from = if last == 0 {
+            self.bootstrap_from_block(&pool, &rpc, head).await?
+        } else {
+            0
+        };
+        let mut scanned_any = false;
+        for _ in 0..MAX_CHUNKS_PER_TICK {
+            let Some((from_block, to_block)) = scan_window(last, head, boot_from) else {
+                break;
+            };
+            if !scanned_any {
+                report.from_block = from_block;
+                scanned_any = true;
+            }
+            self.scan_chunk(&pool, &rpc, from_block, to_block, &mut report)
+                .await?;
+            report.to_block = to_block;
+            last = to_block;
+            if to_block >= head {
+                break;
+            }
+        }
+        if !scanned_any {
+            // Cursor already covers the head (or the node is behind it).
             report.from_block = last;
-            report.to_block = safe;
-            return Ok(report);
+            report.to_block = head;
         }
+        report.backlog_blocks = (head - report.to_block).max(0);
+        Ok(report)
+    }
 
-        let from_block = last + 1;
-        let transfers = rpc
+    /// Fetch, decode and settle one inclusive block range, then advance the
+    /// cursor. Counts accumulate into `report`.
+    async fn scan_chunk(
+        &self,
+        pool: &Arc<DbPool>,
+        rpc: &BaseRpc,
+        from_block: i64,
+        to_block: i64,
+        report: &mut ScanReport,
+    ) -> Result<(), String> {
+        let mut transfers = rpc
             .transfer_logs(
                 &self.config.usdc_address,
                 &self.config.collector_address,
                 from_block,
-                safe,
+                to_block,
             )
             .await?;
-        report.from_block = from_block;
-        report.to_block = safe;
-        report.logs_seen = transfers.len();
+        // Apply in chain order: a provider that returns logs out of order must
+        // not let an OLD payment land after (and expire) a NEWER plan order.
+        transfers.sort_by_key(|t| (t.block_number, t.log_index));
+        report.logs_seen += transfers.len();
 
+        // Block time (UTC) per block that carries transfers. Matching against
+        // the chain clock, not the server wall clock, is what makes a delayed
+        // `safe` confirmation fair to the buyer.
+        let mut timestamps: HashMap<i64, i64> = HashMap::new();
+        for t in &transfers {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                timestamps.entry(t.block_number)
+            {
+                let ts = rpc.block_timestamp(t.block_number).await?;
+                entry.insert(ts);
+            }
+        }
         for t in transfers {
+            let block_timestamp = *timestamps
+                .get(&t.block_number)
+                .ok_or("missing block timestamp for transfer")?;
             let master = Arc::clone(&self.master_key);
             let tx_hash = t.tx_hash.clone();
             let from = t.from_address.clone();
             let outcome = pool
                 .spawn_write(move |w| {
-                    apply_payment(
+                    apply_payment_at(
                         w,
                         &master,
                         &tx_hash,
                         t.log_index,
-                        t.block_number,
+                        PaymentBlock {
+                            number: t.block_number,
+                            timestamp: block_timestamp,
+                        },
                         t.amount_units,
                         Some(&from),
                     )
@@ -292,17 +587,18 @@ impl CreditsWatcherService {
             match outcome {
                 PaymentOutcome::Credited { .. } => report.credited += 1,
                 PaymentOutcome::AlreadySeen { .. } => report.already_seen += 1,
-                PaymentOutcome::Unmatched { .. } | PaymentOutcome::OrderExpired { .. } => {
-                    report.unmatched += 1;
-                }
+                PaymentOutcome::OrderExpired { .. } => report.order_expired += 1,
+                PaymentOutcome::Unmatched { .. } => report.unmatched += 1,
             }
         }
 
-        // Advance the cursor only after the whole range was applied.
-        pool.spawn_write(move |w| openproxy_db::credits_ledger::set_last_scanned_block(w, safe))
-            .await
-            .map_err(|e| format!("advance watcher cursor: {e}"))?;
-        Ok(report)
+        // Advance the cursor only after this chunk was fully applied.
+        pool.spawn_write(move |w| {
+            openproxy_db::credits_ledger::set_last_scanned_block(w, to_block)
+        })
+        .await
+        .map_err(|e| format!("advance watcher cursor: {e}"))?;
+        Ok(())
     }
 }
 
@@ -317,7 +613,7 @@ impl crate::background::BackgroundService for CreditsWatcherService {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = cancel.cancelled() => {
+                () = cancel.cancelled() => {
                     tracing::info!("credits watcher stopping");
                     return;
                 }
@@ -329,13 +625,17 @@ impl crate::background::BackgroundService for CreditsWatcherService {
                                 to = report.to_block,
                                 logs = report.logs_seen,
                                 credited = report.credited,
+                                already_seen = report.already_seen,
                                 unmatched = report.unmatched,
+                                order_expired = report.order_expired,
+                                backlog_blocks = report.backlog_blocks,
+                                head_tag = %report.head_tag,
                                 "credits watcher tick"
                             );
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            tracing::warn!(error = %e, "credits watcher tick failed; will retry");
+                            tracing::warn!(error = %e, "credits watcher tick failed; cursor held, will retry");
                         }
                     }
                 }
@@ -362,7 +662,7 @@ impl crate::background::BackgroundService for CreditsExpiryService {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = cancel.cancelled() => return,
+                () = cancel.cancelled() => return,
                 _ = ticker.tick() => {
                     let pool = Arc::clone(&self.db_pool);
                     match pool.spawn_write(|w| {
@@ -413,7 +713,7 @@ impl crate::background::BackgroundService for CreditsSweepService {
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                _ = cancel.cancelled() => return,
+                () = cancel.cancelled() => return,
                 _ = ticker.tick() => {
                     let pool = Arc::clone(&self.db_pool);
                     match pool.spawn_write(|w| {
@@ -439,72 +739,4 @@ impl crate::background::BackgroundService for CreditsSweepService {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const COLLECTOR: &str = "0x12c7ab78f21ba0253a21d34a0151d44ddb824950";
-
-    fn log(to: &str, value_hex: &str, idx: &str) -> serde_json::Value {
-        serde_json::json!({
-            "address": "0xusdc-token-contract",
-            "topics": [
-                TRANSFER_TOPIC,
-                "0x0000000000000000000000001111111111111111111111111111111111111111",
-                format!("0x000000000000000000000000{}", to.trim_start_matches("0x"))
-            ],
-            "data": format!("0x{:0>64}", value_hex.trim_start_matches("0x")),
-            "logIndex": idx,
-            "blockNumber": "0x10",
-            "transactionHash": "0xabc123"
-        })
-    }
-
-    #[test]
-    fn parses_a_usdc_transfer_to_the_collector() {
-        let t = parse_transfer_log(&log(COLLECTOR, "989680", "0x0"), COLLECTOR).expect("parse");
-        assert_eq!(t.amount_units, 10_000_000, "10 USDC in micro units");
-        assert_eq!(t.log_index, 0);
-        assert_eq!(t.block_number, 16);
-        assert_eq!(t.tx_hash, "0xabc123");
-        assert!(t.to_address.eq_ignore_ascii_case(COLLECTOR));
-    }
-
-    #[test]
-    fn ignores_transfers_to_other_addresses() {
-        let other = "0x9999999999999999999999999999999999999999";
-        assert!(parse_transfer_log(&log(other, "989680", "0x0"), COLLECTOR).is_none());
-    }
-
-    #[test]
-    fn ignores_zero_value_and_non_transfer_topics() {
-        assert!(parse_transfer_log(&log(COLLECTOR, "0", "0x0"), COLLECTOR).is_none());
-        let mut bad = log(COLLECTOR, "989680", "0x0");
-        bad["topics"][0] = serde_json::json!("0xdeadbeef");
-        assert!(parse_transfer_log(&bad, COLLECTOR).is_none());
-    }
-
-    #[test]
-    fn ignores_oversized_values_instead_of_wrapping() {
-        assert!(
-            parse_transfer_log(&log(COLLECTOR, "400000000000000000", "0x0"), COLLECTOR).is_none()
-        );
-    }
-
-    #[test]
-    fn parses_hex_quantities() {
-        assert_eq!(parse_quantity("0x0").unwrap(), 0);
-        assert_eq!(parse_quantity("0x10").unwrap(), 16);
-        assert_eq!(parse_quantity("0x8a2f").unwrap(), 35375);
-        assert!(parse_quantity("zz").is_err());
-    }
-
-    #[test]
-    fn jittered_amount_survives_hex_roundtrip() {
-        // The exact amount a buyer must send includes the jitter in the low
-        // six decimals; the parser must preserve every digit.
-        let amount_units: i64 = 10_000_000 + 987_654;
-        let hex = format!("{amount_units:x}");
-        let t = parse_transfer_log(&log(COLLECTOR, &hex, "0x1"), COLLECTOR).expect("parse");
-        assert_eq!(t.amount_units, amount_units);
-    }
-}
+mod tests;

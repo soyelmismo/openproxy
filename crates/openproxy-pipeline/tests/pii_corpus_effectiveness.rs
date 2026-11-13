@@ -67,14 +67,14 @@
 //!    a rustc error the agent had to read (and the edits the agent copied
 //!    from it). A single `:` mid-value stays allowed.
 //! 10. A UI copy value is not a credential. The i18n entry
-//!    `"login.api_key_label": "API Key"` was redacted as a secret behind the
-//!    `api_key_label` field name: the agent saw a placeholder in its own
-//!    history while the file on disk was correct, and stopped editing values
-//!    by hand to avoid writing the placeholder into code. Field names with a
-//!    UI suffix (`_label`, `_title`, `_hint`, `_placeholder`, `_text`,
-//!    `_message`, `_tooltip`, `_desc`, `_description`, `_name`, `_prompt`,
-//!    `_help`) hold display copy, and so does a quoted value of two or three
-//!    Capitalized/ALL-CAPS words (`API Key`): secrets carry no spaces.
+//!     `"login.api_key_label": "API Key"` was redacted as a secret behind the
+//!     `api_key_label` field name: the agent saw a placeholder in its own
+//!     history while the file on disk was correct, and stopped editing values
+//!     by hand to avoid writing the placeholder into code. Field names with a
+//!     UI suffix (`_label`, `_title`, `_hint`, `_placeholder`, `_text`,
+//!     `_message`, `_tooltip`, `_desc`, `_description`, `_name`, `_prompt`,
+//!     `_help`) hold display copy, and so does a quoted value of two or three
+//!     Capitalized/ALL-CAPS words (`API Key`): secrets carry no spaces.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

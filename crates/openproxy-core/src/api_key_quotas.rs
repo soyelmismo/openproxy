@@ -39,7 +39,6 @@ impl QuotaCaps {
     pub fn is_empty(&self) -> bool {
         self.weekly_usd_cap.is_none() && self.five_hour_usd_cap.is_none()
     }
-
 }
 
 /// Spend + cap + reset information for one window, as served to the UI.
@@ -127,12 +126,9 @@ fn boundaries() -> Boundaries {
     let now = Utc::now();
     let today = now.date_naive();
     let days_from_monday = today.weekday().num_days_from_monday() as i64;
-    let week_start = (today - Duration::days(days_from_monday))
-        .and_hms_opt(0, 0, 0)
-        .expect("valid week start");
-    let next_monday = (today + Duration::days(7 - days_from_monday))
-        .and_hms_opt(0, 0, 0)
-        .expect("valid next monday");
+    let week_start = (today - Duration::days(days_from_monday)).and_time(chrono::NaiveTime::MIN);
+    let next_monday =
+        (today + Duration::days(7 - days_from_monday)).and_time(chrono::NaiveTime::MIN);
     let five_hours_ago = (now - Duration::hours(5)).naive_utc();
     Boundaries {
         week_start: sqlite_ts(&week_start),

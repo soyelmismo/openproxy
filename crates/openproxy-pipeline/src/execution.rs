@@ -76,7 +76,28 @@ fn collect_and_dedup_target_ids(eligible: &[ComboTarget]) -> TargetIdCollections
 
 impl Pipeline {
     /// Drive one chat-completion request to completion.
+    ///
+    /// Prepaid-credit keys pass through the per-key admission gate first: one
+    /// request per key is in flight from admission until its debit is
+    /// persisted, so concurrent requests cannot all spend the same balance
+    /// (see [`crate::credits_gate`]). Keys without ledger rows are untouched.
     pub async fn run(&self, req: PipelineRequest) -> PipelineResult {
+        let lane = match self.admit_credit_request(&req).await {
+            crate::credits_gate::CreditAdmission::Open(lane) => lane,
+            // Boxed to keep the admission enum small; the result is returned
+            // whole, so the box is unwrapped rather than cloned.
+            crate::credits_gate::CreditAdmission::Denied(result) => return *result,
+        };
+
+        let result = self.run_stages(req).await;
+
+        if let Some(lane) = lane {
+            self.settle_credit_request(lane, &result).await;
+        }
+        result
+    }
+
+    async fn run_stages(&self, req: PipelineRequest) -> PipelineResult {
         use crate::context::PipelineContext;
         use crate::pipeline_chain;
         use crate::stages::{
@@ -376,7 +397,29 @@ impl Pipeline {
 
     /// Execute a test target directly through the full pipeline stages (OAuth refresh, custom adapter,
     /// formatting, wrap_request_body, target headers, dispatcher, retry, translation).
+    ///
+    /// Admin "test model" traffic is not a bypass: prepaid keys go through the
+    /// same admission lane, pre-dispatch budget bound and settlement as a real
+    /// chat request.
     pub async fn execute_test_target(
+        &self,
+        req: PipelineRequest,
+        resolved_target: crate::context::ResolvedTarget,
+    ) -> PipelineResult {
+        let lane = match self.admit_credit_request(&req).await {
+            crate::credits_gate::CreditAdmission::Open(lane) => lane,
+            crate::credits_gate::CreditAdmission::Denied(result) => return *result,
+        };
+
+        let result = self.execute_test_target_inner(req, resolved_target).await;
+
+        if let Some(lane) = lane {
+            self.settle_credit_request(lane, &result).await;
+        }
+        result
+    }
+
+    async fn execute_test_target_inner(
         &self,
         req: PipelineRequest,
         resolved_target: crate::context::ResolvedTarget,

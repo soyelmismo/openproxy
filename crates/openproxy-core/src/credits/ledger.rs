@@ -76,7 +76,7 @@ pub struct SpendOutcome {
 /// # Errors
 /// Propagates DB failures.
 pub fn is_credit_based(conn: &Connection, key_id: ApiKeyId) -> Result<bool> {
-    openproxy_db::credits_ledger::is_credit_based(conn, key_id.0).map_err(Into::into)
+    openproxy_db::credits_ledger::is_credit_based(conn, key_id.0)
 }
 
 /// Effective balance in micro-USDC units.
@@ -84,7 +84,7 @@ pub fn is_credit_based(conn: &Connection, key_id: ApiKeyId) -> Result<bool> {
 /// # Errors
 /// Propagates DB failures.
 pub fn balance_units(conn: &Connection, key_id: ApiKeyId) -> Result<i64> {
-    openproxy_db::credits_ledger::balance_units(conn, key_id.0).map_err(Into::into)
+    openproxy_db::credits_ledger::balance_units(conn, key_id.0)
 }
 
 /// Balance view for the portal.
@@ -172,7 +172,7 @@ pub fn record_spend(conn: &Connection, key_id: ApiKeyId, cost_units: i64) -> Res
 /// # Errors
 /// Propagates DB failures.
 pub fn expire_due(conn: &Connection) -> Result<usize> {
-    openproxy_db::credits_ledger::expire_due(conn).map_err(Into::into)
+    openproxy_db::credits_ledger::expire_due(conn)
 }
 
 /// Ledger history for one key, newest first.

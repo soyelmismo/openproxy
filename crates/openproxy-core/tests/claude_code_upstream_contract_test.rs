@@ -1,352 +1,196 @@
-//! Integration test for 1:1 contract parity between OpenProxy and upstream CLIProxyAPI (Claude Code).
+//! Offline integration contract for the captured Claude Code profile runtime.
 //!
-//! Validates:
-//! 1. Golden contract spec parity (100% offline, runs on every `cargo test`).
-//! 2. Live remote upstream contract verification against `github.com/router-for-me/CLIProxyAPI`
-//!    via lightweight remote HTTP queries without cloning or caching git history.
-//! 3. Background / dynamic auto-update when fetching models or querying upstream profile.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! CLIProxyAPI's Go fingerprint and the old network refresh helpers are no
+//! longer the source of truth. Exercise the public captured-profile store,
+//! pinned adapter and header APIs without network or the host's live cache.
 
-use openproxy_adapters::adapters::claude_code::{
-    ClaudeCodeAdapter, get_claude_code_ua, get_claude_code_version,
+use openproxy_adapters::adapters::claude_code::ClaudeCodeAdapter;
+use openproxy_adapters::client_contract::ContractError;
+use openproxy_adapters::spoofer::claude_code_profile::{
+    ClaudeCodeProfile, ClaudeContractRuntime, capture_candidate, parse_profile,
 };
 use openproxy_adapters::spoofer::{
-    CLAUDE_CODE_ASYNC_TEST_LOCK, CLAUDE_CODE_TEST_LOCK, ClaudeCodeSpoofer, ClientSpoofer,
-    DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION, DEFAULT_CLAUDE_CODE_BETA,
-    DEFAULT_CLAUDE_CODE_CLI_VERSION, DEFAULT_CLAUDE_CODE_PACKAGE_VERSION,
-    DEFAULT_CLAUDE_CODE_RUNTIME_VERSION, DEFAULT_CLAUDE_CODE_UA, current_claude_code_beta,
-    current_claude_code_package_version, current_claude_code_runtime_version,
-    current_claude_code_ua, current_claude_code_version, parse_claude_version,
-    parse_cliproxyapi_claude_profile, refresh_claude_code_upstream,
-    reset_dynamic_claude_code_overrides, set_dynamic_claude_code_beta,
-    set_dynamic_claude_code_extra_header, set_dynamic_claude_code_package_version,
-    set_dynamic_claude_code_runtime_version, set_dynamic_claude_code_ua,
-    set_dynamic_claude_code_version,
+    CLAUDE_CODE_TEST_LOCK, ClaudeCodeSpoofer, DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION,
+    DEFAULT_CLAUDE_CODE_BETA, DEFAULT_CLAUDE_CODE_CLI_VERSION, DEFAULT_CLAUDE_CODE_PACKAGE_VERSION,
+    DEFAULT_CLAUDE_CODE_RUNTIME_VERSION, DEFAULT_CLAUDE_CODE_UA,
+    reset_dynamic_claude_code_overrides, set_dynamic_claude_code_extra_header,
+    set_dynamic_claude_code_package_version, set_dynamic_claude_code_runtime_version,
+    set_dynamic_claude_code_ua, set_dynamic_claude_code_version,
 };
-use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
-};
+use serde_json::json;
 
-#[test]
-fn test_claude_code_golden_contract_spec_parity() {
-    let _guard = CLAUDE_CODE_TEST_LOCK.lock().unwrap();
-    reset_dynamic_claude_code_overrides();
-
-    assert_eq!(DEFAULT_CLAUDE_CODE_CLI_VERSION, "2.1.280");
-    assert_eq!(DEFAULT_CLAUDE_CODE_PACKAGE_VERSION, "0.112.1");
-    assert_eq!(DEFAULT_CLAUDE_CODE_RUNTIME_VERSION, "v26.3.0");
-    assert_eq!(DEFAULT_CLAUDE_CODE_UA, "claude-cli/2.1.280 (external, cli)");
-    assert_eq!(DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION, "2023-06-01");
-
-    assert_eq!(current_claude_code_version(), "2.1.280");
-    assert_eq!(get_claude_code_version(), "2.1.280");
-    assert_eq!(
-        current_claude_code_ua(),
-        "claude-cli/2.1.280 (external, cli)"
-    );
-    assert_eq!(get_claude_code_ua(), "claude-cli/2.1.280 (external, cli)");
-
-    let spoofer = ClaudeCodeSpoofer::with_session_id("sess-contract-test");
-    let headers = spoofer.headers();
-    let find_hdr = |name: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
-    };
-
-    assert_eq!(find_hdr("User-Agent"), Some(DEFAULT_CLAUDE_CODE_UA));
-    assert_eq!(find_hdr("X-App"), Some("cli"));
-    assert_eq!(
-        find_hdr("Anthropic-Version"),
-        Some(DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION)
-    );
-    assert_eq!(
-        find_hdr("Anthropic-Dangerous-Direct-Browser-Access"),
-        Some("true")
-    );
-    assert_eq!(find_hdr("Anthropic-Beta"), Some(DEFAULT_CLAUDE_CODE_BETA));
-    assert_eq!(find_hdr("X-Stainless-Retry-Count"), Some("0"));
-    assert_eq!(find_hdr("X-Stainless-Runtime"), Some("node"));
-    assert_eq!(find_hdr("X-Stainless-Lang"), Some("js"));
-    assert_eq!(find_hdr("X-Stainless-Timeout"), Some("600"));
-    assert_eq!(
-        find_hdr("X-Stainless-Runtime-Version"),
-        Some(DEFAULT_CLAUDE_CODE_RUNTIME_VERSION)
-    );
-    assert_eq!(
-        find_hdr("X-Stainless-Package-Version"),
-        Some(DEFAULT_CLAUDE_CODE_PACKAGE_VERSION)
-    );
-    assert_eq!(
-        find_hdr("X-Claude-Code-Session-Id"),
-        Some("sess-contract-test")
-    );
-    assert!(find_hdr("x-client-request-id").is_some());
+struct TestRuntime {
+    runtime: ClaudeContractRuntime,
+    root: std::path::PathBuf,
 }
 
-#[test]
-fn test_claude_version_parser_cases() {
-    assert_eq!(
-        parse_claude_version("claude-cli/2.1.280 (external, cli)"),
-        Some("2.1.280".to_string())
-    );
-    assert_eq!(
-        parse_claude_version("claude-cli/2.1.295.d7b (external, cli)"),
-        Some("2.1.295.d7b".to_string())
-    );
-    assert_eq!(
-        parse_claude_version("claude-cli/3.0.0"),
-        Some("3.0.0".to_string())
-    );
-    assert_eq!(parse_claude_version("curl/7.68.0"), None);
-}
-
-#[test]
-fn test_local_cliproxyapi_profile_parser() {
-    let local_path = "/tmp/CLIProxyAPI/internal/runtime/executor/helps/claude_device_profile.go";
-    if let Ok(content) = std::fs::read_to_string(local_path) {
-        let profile = parse_cliproxyapi_claude_profile(&content).expect("parse local go profile");
-        assert_eq!(profile.user_agent, "claude-cli/2.1.280 (external, cli)");
-        assert_eq!(profile.cli_version, "2.1.280");
-        assert_eq!(profile.package_version, "0.112.1");
-        assert_eq!(profile.runtime_version, "v26.3.0");
-        assert_eq!(profile.os, "MacOS");
-        assert_eq!(profile.arch, "arm64");
+impl TestRuntime {
+    fn new() -> Self {
+        let root = std::env::temp_dir().join(format!("claude-contract-{}", uuid::Uuid::new_v4()));
+        Self {
+            runtime: ClaudeContractRuntime::new(&root),
+            root,
+        }
     }
 }
 
-#[test]
-fn test_claude_dynamic_overrides_and_headers_propagation() {
-    let _guard = CLAUDE_CODE_TEST_LOCK.lock().unwrap();
-    reset_dynamic_claude_code_overrides();
+impl Drop for TestRuntime {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
 
-    set_dynamic_claude_code_version("2.1.300");
-    set_dynamic_claude_code_ua("claude-cli/2.1.300 (external, custom)");
-    set_dynamic_claude_code_package_version("0.115.0");
-    set_dynamic_claude_code_runtime_version("v26.5.0");
-    set_dynamic_claude_code_beta("custom-beta-2026-01-01");
+struct ResetOverrides;
+
+impl Drop for ResetOverrides {
+    fn drop(&mut self) {
+        reset_dynamic_claude_code_overrides();
+    }
+}
+
+fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+#[test]
+fn measured_seed_and_headers_are_coherent() -> Result<(), Box<dyn std::error::Error>> {
+    let _lock = CLAUDE_CODE_TEST_LOCK
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let _reset = ResetOverrides;
+    reset_dynamic_claude_code_overrides();
+    let fixture = TestRuntime::new();
+    let snapshot = fixture.runtime.load()?;
+    let profile = &snapshot.payload;
+    assert_eq!(profile.cli_version, DEFAULT_CLAUDE_CODE_CLI_VERSION);
+    assert_eq!(profile.package_version, DEFAULT_CLAUDE_CODE_PACKAGE_VERSION);
+    assert_eq!(profile.runtime_version, DEFAULT_CLAUDE_CODE_RUNTIME_VERSION);
+    let headers =
+        ClaudeCodeSpoofer::with_session_id("contract-session").headers_for_profile(profile);
+    for (name, expected) in [
+        ("User-Agent", DEFAULT_CLAUDE_CODE_UA),
+        ("X-App", "cli"),
+        ("Anthropic-Version", DEFAULT_CLAUDE_CODE_ANTHROPIC_VERSION),
+        ("Anthropic-Dangerous-Direct-Browser-Access", "true"),
+        ("Anthropic-Beta", DEFAULT_CLAUDE_CODE_BETA),
+        ("X-Stainless-Retry-Count", "0"),
+        ("X-Stainless-Runtime", "node"),
+        ("X-Stainless-Lang", "js"),
+        ("X-Stainless-Timeout", "600"),
+        (
+            "X-Stainless-Runtime-Version",
+            DEFAULT_CLAUDE_CODE_RUNTIME_VERSION,
+        ),
+        (
+            "X-Stainless-Package-Version",
+            DEFAULT_CLAUDE_CODE_PACKAGE_VERSION,
+        ),
+        ("X-Claude-Code-Session-Id", "contract-session"),
+    ] {
+        assert_eq!(header(&headers, name), Some(expected), "{name}");
+    }
+    assert!(header(&headers, "x-client-request-id").is_some());
+    Ok(())
+}
+
+#[test]
+fn manual_overrides_reach_pinned_profile_headers() -> Result<(), Box<dyn std::error::Error>> {
+    let _lock = CLAUDE_CODE_TEST_LOCK
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let _reset = ResetOverrides;
+    reset_dynamic_claude_code_overrides();
+    set_dynamic_claude_code_version("2.2.0");
+    set_dynamic_claude_code_ua("claude-cli/2.2.0 (external, custom)");
+    set_dynamic_claude_code_package_version("0.130.0");
+    set_dynamic_claude_code_runtime_version("v28.0.0");
+    set_dynamic_claude_code_extra_header("anthropic-beta", "custom-beta");
     set_dynamic_claude_code_extra_header("X-Stainless-Os", "Linux");
     set_dynamic_claude_code_extra_header("X-Stainless-Arch", "x64");
-
-    assert_eq!(current_claude_code_version(), "2.1.300");
-    assert_eq!(
-        current_claude_code_ua(),
-        "claude-cli/2.1.300 (external, custom)"
-    );
-    assert_eq!(current_claude_code_package_version(), "0.115.0");
-    assert_eq!(current_claude_code_runtime_version(), "v26.5.0");
-    assert_eq!(current_claude_code_beta(), "custom-beta-2026-01-01");
-
-    let spoofer = ClaudeCodeSpoofer::with_session_id("sess-dynamic-123");
-    let headers = spoofer.headers();
-    let find_hdr = |name: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
-    };
-
-    assert_eq!(
-        find_hdr("User-Agent"),
-        Some("claude-cli/2.1.300 (external, custom)")
-    );
-    assert_eq!(find_hdr("Anthropic-Beta"), Some("custom-beta-2026-01-01"));
-    assert_eq!(find_hdr("X-Stainless-Package-Version"), Some("0.115.0"));
-    assert_eq!(find_hdr("X-Stainless-Runtime-Version"), Some("v26.5.0"));
-    assert_eq!(find_hdr("X-Stainless-Os"), Some("Linux"));
-    assert_eq!(find_hdr("X-Stainless-Arch"), Some("x64"));
-    assert_eq!(find_hdr("X-Claude-Code-Session-Id"), Some("sess-dynamic-123"));
-
-    reset_dynamic_claude_code_overrides();
-    assert_eq!(
-        current_claude_code_version(),
-        DEFAULT_CLAUDE_CODE_CLI_VERSION
-    );
-    assert_eq!(current_claude_code_ua(), DEFAULT_CLAUDE_CODE_UA);
+    let headers = ClaudeCodeSpoofer::with_session_id("manual-session")
+        .headers_for_profile(&ClaudeCodeProfile::default());
+    for (name, expected) in [
+        ("User-Agent", "claude-cli/2.2.0 (external, custom)"),
+        ("Anthropic-Beta", "custom-beta"),
+        ("X-Stainless-Package-Version", "0.130.0"),
+        ("X-Stainless-Runtime-Version", "v28.0.0"),
+        ("X-Stainless-Os", "Linux"),
+        ("X-Stainless-Arch", "x64"),
+        ("X-Claude-Code-Session-Id", "manual-session"),
+    ] {
+        assert_eq!(header(&headers, name), Some(expected), "{name}");
+    }
+    Ok(())
 }
 
-#[tokio::test]
-async fn test_live_remote_cliproxyapi_upstream_profile() {
-    let client = UpstreamClient::new();
-    let url = "https://raw.githubusercontent.com/router-for-me/CLIProxyAPI/main/internal/runtime/executor/helps/claude_device_profile.go";
-    let req = UpstreamRequest::get(url);
-
-    let cancel = CancellationToken::new();
-    let resp = match client.call(req, TimeoutProfile::OAuth, cancel).await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Skipping live remote test due to network connectivity: {e}");
-            return;
-        }
-    };
-
-    if !resp.status.is_success() {
-        eprintln!(
-            "Skipping live remote test due to upstream HTTP status {}",
-            resp.status
+#[test]
+fn profile_parser_rejects_invalid_versions_and_request_contracts()
+-> Result<(), Box<dyn std::error::Error>> {
+    let profile = serde_json::to_value(ClaudeCodeProfile::default())?;
+    assert!(parse_profile(&serde_json::to_vec(&profile)?).is_ok());
+    for (field, invalid) in [
+        ("cli_version", json!("2.1.293\r\nInjected: true")),
+        ("cli_version", json!("2.1.293.d7b")),
+        ("runtime_version", json!("26.3.0")),
+        ("betas", json!(["claude-code-20250219", "invalid,beta"])),
+        ("request_defaults", json!({"thinking":{"type":"disabled"}})),
+    ] {
+        let mut candidate = profile.clone();
+        candidate[field] = invalid;
+        assert!(
+            parse_profile(&serde_json::to_vec(&candidate)?).is_err(),
+            "{field}"
         );
-        return;
     }
-
-    let body = resp
-        .collect()
-        .await
-        .expect("read live cliproxyapi profile body");
-    let text = std::str::from_utf8(&body).expect("utf8 profile text");
-
-    let profile = parse_cliproxyapi_claude_profile(text).expect("parse live cliproxyapi profile");
-    assert!(
-        profile.user_agent.starts_with("claude-cli/"),
-        "User-Agent must start with claude-cli/: {}",
-        profile.user_agent
-    );
-    assert!(
-        !profile.cli_version.is_empty(),
-        "CLI version must not be empty"
-    );
-    assert!(
-        !profile.package_version.is_empty(),
-        "Package version must not be empty"
-    );
-    assert!(
-        !profile.runtime_version.is_empty(),
-        "Runtime version must not be empty"
-    );
-    assert_eq!(profile.os, "MacOS");
-    assert_eq!(profile.arch, "arm64");
+    Ok(())
 }
 
-#[tokio::test]
-async fn test_claude_code_fetch_models_triggers_upstream_refresh() {
-    let _lock = CLAUDE_CODE_ASYNC_TEST_LOCK.lock().await;
+#[test]
+fn captured_upgrade_persists_and_does_not_mutate_a_pinned_request()
+-> Result<(), Box<dyn std::error::Error>> {
+    let _lock = CLAUDE_CODE_TEST_LOCK
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let _reset = ResetOverrides;
     reset_dynamic_claude_code_overrides();
-
-    assert_eq!(current_claude_code_version(), "2.1.280");
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind mock listener");
-    let addr = listener.local_addr().expect("mock local addr");
-
-    tokio::spawn(async move {
-        if let Ok((mut stream, _)) = listener.accept().await {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf).await;
-            let mock_go = r#"
-package helps
-const (
-	defaultClaudeFingerprintUserAgent      = "claude-cli/2.1.299 (external, cli)"
-	defaultClaudeFingerprintPackageVersion = "0.119.0"
-	defaultClaudeFingerprintRuntimeVersion = "v26.8.0"
-	defaultClaudeFingerprintOS             = "Linux"
-	defaultClaudeFingerprintArch           = "arm64"
-)
-"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                mock_go.len(),
-                mock_go
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
-        }
-    });
-
-    let mock_url = format!("http://{addr}/claude_device_profile.go");
-    unsafe {
-        std::env::set_var("OPENPROXY_CLAUDE_CODE_UPSTREAM_URL", &mock_url);
-    }
-
-    let client = std::sync::Arc::new(UpstreamClient::new());
-    let adapter = ClaudeCodeAdapter::new();
-
-    let models = adapter
-        .fetch_models_pipeline(&client, "")
-        .await
-        .expect("fetch models");
-    assert!(!models.is_empty());
-
-    assert_eq!(current_claude_code_version(), "2.1.299");
-    assert_eq!(
-        current_claude_code_ua(),
-        "claude-cli/2.1.299 (external, cli)"
-    );
-    assert_eq!(current_claude_code_package_version(), "0.119.0");
-    assert_eq!(current_claude_code_runtime_version(), "v26.8.0");
-
-    let headers = ClaudeCodeSpoofer::new().headers();
-    let find_hdr = |name: &str| {
-        headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case(name))
-            .map(|(_, v)| v.as_str())
+    let fixture = TestRuntime::new();
+    let baseline = fixture.runtime.load()?;
+    let adapter = ClaudeCodeAdapter::new().with_pinned_contract(std::sync::Arc::clone(&baseline));
+    let upgraded = ClaudeCodeProfile {
+        cli_version: "99.0.0".into(),
+        package_version: "99.1.0".into(),
+        ..baseline.payload.clone()
     };
+    let candidate = capture_candidate(&serde_json::to_vec(&upgraded)?)?;
+    let activated = fixture
+        .runtime
+        .commit(&candidate)?
+        .ok_or("upgrade did not activate")?;
+    assert_eq!(activated.payload.cli_version, "99.0.0");
+    let pinned = adapter
+        .pinned_contract()
+        .ok_or("adapter has no pinned contract")?;
+    assert_eq!(pinned.generation, baseline.generation);
+    assert_eq!(pinned.payload.cli_version, DEFAULT_CLAUDE_CODE_CLI_VERSION);
+    let headers = ClaudeCodeSpoofer::new().headers_for_profile(&pinned.payload);
+    assert_eq!(header(&headers, "User-Agent"), Some(DEFAULT_CLAUDE_CODE_UA));
+
+    let reopened = ClaudeContractRuntime::new(&fixture.root);
+    assert_eq!(reopened.load()?.generation, activated.generation);
+    let stale = capture_candidate(&serde_json::to_vec(&baseline.payload)?)?;
+    assert!(matches!(
+        reopened.commit(&stale),
+        Err(ContractError::Downgrade { .. })
+    ));
     assert_eq!(
-        find_hdr("User-Agent"),
-        Some("claude-cli/2.1.299 (external, cli)")
+        reopened
+            .snapshot()
+            .ok_or("missing active snapshot")?
+            .generation,
+        activated.generation
     );
-    assert_eq!(find_hdr("X-Stainless-Package-Version"), Some("0.119.0"));
-    assert_eq!(find_hdr("X-Stainless-Runtime-Version"), Some("v26.8.0"));
-    assert_eq!(find_hdr("X-Stainless-Os"), Some("Linux"));
-
-    unsafe {
-        std::env::remove_var("OPENPROXY_CLAUDE_CODE_UPSTREAM_URL");
-    }
-    reset_dynamic_claude_code_overrides();
+    Ok(())
 }
-
-#[tokio::test]
-async fn test_refresh_claude_code_upstream_direct() {
-    let _lock = CLAUDE_CODE_ASYNC_TEST_LOCK.lock().await;
-    reset_dynamic_claude_code_overrides();
-
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind mock listener");
-    let addr = listener.local_addr().expect("mock local addr");
-
-    tokio::spawn(async move {
-        if let Ok((mut stream, _)) = listener.accept().await {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut buf = [0u8; 1024];
-            let _ = stream.read(&mut buf).await;
-            let mock_go = r#"
-package helps
-const (
-	defaultClaudeFingerprintUserAgent      = "claude-cli/2.2.0 (external, cli)"
-	defaultClaudeFingerprintPackageVersion = "0.125.0"
-	defaultClaudeFingerprintRuntimeVersion = "v28.0.0"
-	defaultClaudeFingerprintOS             = "MacOS"
-	defaultClaudeFingerprintArch           = "arm64"
-)
-"#;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                mock_go.len(),
-                mock_go
-            );
-            let _ = stream.write_all(resp.as_bytes()).await;
-        }
-    });
-
-    let mock_url = format!("http://{addr}/profile.go");
-    unsafe {
-        std::env::set_var("OPENPROXY_CLAUDE_CODE_UPSTREAM_URL", &mock_url);
-    }
-
-    let client = std::sync::Arc::new(UpstreamClient::new());
-    let profile = refresh_claude_code_upstream(&client)
-        .await
-        .expect("refresh profile");
-    assert_eq!(profile.cli_version, "2.2.0");
-    assert_eq!(current_claude_code_version(), "2.2.0");
-    assert_eq!(current_claude_code_package_version(), "0.125.0");
-    assert_eq!(current_claude_code_runtime_version(), "v28.0.0");
-
-    unsafe {
-        std::env::remove_var("OPENPROXY_CLAUDE_CODE_UPSTREAM_URL");
-    }
-    reset_dynamic_claude_code_overrides();
-}
-

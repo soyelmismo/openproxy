@@ -97,7 +97,9 @@ async fn async_usage_waits_for_writer_without_blocking_tokio() {
     let pending = tokio::time::timeout(std::time::Duration::from_millis(150), &mut record).await;
     release_tx.send(()).unwrap();
     assert!(pending.is_err());
-    record.await;
+    record
+        .await
+        .expect("usage row is recorded once the writer is free");
     blocker.join().unwrap();
     let count = pool
         .spawn_read(|conn| {

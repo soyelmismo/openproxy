@@ -70,6 +70,7 @@ async fn interrupted_stream(first_body: &'static str, race_size: u8, discard: bo
     });
 
     let (_pool, conn, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn.lock());
     let mut config = test_config(Arc::new(
         openproxy_db::secrets::MasterKey::generate().unwrap(),
     ));
@@ -114,6 +115,7 @@ async fn interrupted_stream(first_body: &'static str, race_size: u8, discard: bo
         })
         .collect();
     let (mut req, _cancel) = make_request(combo.id);
+    req.api_key_id = Some(caller);
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
     Arc::make_mut(&mut req.openai_request).stream = !discard;
     req.stream_sink = Some(if discard {

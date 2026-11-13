@@ -327,3 +327,45 @@ fn test_record_with_deleted_api_key_does_not_fail_foreign_key() {
         .unwrap();
     assert_eq!(saved_key_id, None, "orphaned api_key_id must be NULL");
 }
+
+#[test]
+fn attributed_insert_failure_cannot_fall_back_to_anonymous_usage() {
+    let pool = DbPool::test_pool_with_prefix("checkout-no-anonymous-fallback").unwrap();
+    let conn = pool.writer();
+    conn.execute(
+        "INSERT INTO api_keys(key_hash) VALUES('attributed-fixture')",
+        [],
+    )
+    .unwrap();
+    let key = conn.last_insert_rowid();
+    conn.execute("INSERT INTO credit_transactions(api_key_id,kind,amount_units,remaining_units) VALUES(?1,'grant',1000000,1000000)", [key]).unwrap();
+    conn.execute_batch("CREATE TRIGGER reject_attributed_usage BEFORE INSERT ON usage WHEN NEW.api_key_id IS NOT NULL BEGIN SELECT RAISE(ABORT,'injected attributed insert failure'); END").unwrap();
+    let mut input = test_input(1000, 100, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
+    input.provider_id = ProviderId::new("openrouter");
+    input.upstream_model_id = "openai/gpt-4o-mini".into();
+    input.api_key_id = Some(openproxy_types::ids::ApiKeyId(key));
+
+    assert!(record(&conn, &input).is_err());
+    let rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        rows, 0,
+        "failed attributed insert must not become anonymous"
+    );
+    assert_eq!(
+        crate::credits_ledger::balance_units(&conn, key).unwrap(),
+        1_000_000
+    );
+
+    conn.execute_batch("DROP TRIGGER reject_attributed_usage")
+        .unwrap();
+    let id = record(&conn, &input).unwrap();
+    let saved: i64 = conn
+        .query_row("SELECT api_key_id FROM usage WHERE id=?1", [id.0], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(saved, key);
+    assert!(crate::credits_ledger::balance_units(&conn, key).unwrap() < 1_000_000);
+}

@@ -85,8 +85,15 @@ fn attach_plan(conn: &Connection, key_id: i64, name: &str, credit_usd: f64, ttl_
         None,
     )
     .expect("create order");
-    crate::credits::ledger::credit_topup(conn, ApiIdAlias(key_id), order.id, units, ttl_days, "0xtest")
-        .expect("credit topup");
+    crate::credits::ledger::credit_topup(
+        conn,
+        ApiIdAlias(key_id),
+        order.id,
+        units,
+        ttl_days,
+        "0xtest",
+    )
+    .expect("credit topup");
 }
 
 #[test]
@@ -120,8 +127,11 @@ fn upsert_roundtrip() {
     upsert(&conn, ApiIdAlias(key), &caps2).expect("upsert");
     let stored = get_caps(&conn, ApiIdAlias(key)).expect("get").expect("row");
     assert_eq!(stored, caps2);
-    conn.execute("DELETE FROM api_key_quotas WHERE api_key_id = ?1", params![key])
-        .expect("delete");
+    conn.execute(
+        "DELETE FROM api_key_quotas WHERE api_key_id = ?1",
+        params![key],
+    )
+    .expect("delete");
     assert!(get_caps(&conn, ApiIdAlias(key)).expect("get").is_none());
 }
 
@@ -240,7 +250,10 @@ fn plan_balance_follows_spend() {
     crate::credits::ledger::record_spend(&conn, ApiIdAlias(key), 1_000_000).expect("spend");
     let st = status(&conn, ApiIdAlias(key)).expect("ok");
     let plan = st.plan.expect("plan present");
-    assert!((plan.balance_usd - 2.0).abs() < 1e-9, "balance after $1 spend");
+    assert!(
+        (plan.balance_usd - 2.0).abs() < 1e-9,
+        "balance after $1 spend"
+    );
 }
 
 #[test]
@@ -329,7 +342,10 @@ fn a_new_plan_supersedes_the_previous_grant() {
     tiers::set_key_tier(&conn, ApiIdAlias(key), Some(pro.id)).expect("link pro");
     assert!(tiers::grant_plan(&conn, ApiIdAlias(key), &pro).expect("grant pro"));
 
-    let plan = status(&conn, ApiIdAlias(key)).expect("ok").plan.expect("plan");
+    let plan = status(&conn, ApiIdAlias(key))
+        .expect("ok")
+        .plan
+        .expect("plan");
     assert_eq!(plan.name, "Pro");
     assert_eq!(
         plan.balance_usd, 30.0,

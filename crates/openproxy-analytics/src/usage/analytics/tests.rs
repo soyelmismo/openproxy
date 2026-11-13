@@ -1,7 +1,7 @@
 use super::recent::map_usage_row;
 
 /// Minimal schema for the `usage` table, matching only the columns
-/// that `map_usage_row` reads (indices 0..=34).
+/// that `map_usage_row` reads (indices 0..=38).
 const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
     id INTEGER PRIMARY KEY,
     request_id TEXT NOT NULL,
@@ -40,7 +40,8 @@ const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
     cached_tokens INTEGER,
     pii_redacted TEXT,
     api_key_id INTEGER,
-    audio_ms INTEGER
+    audio_ms INTEGER,
+    session_hash INTEGER
 )";
 
 #[test]
@@ -99,6 +100,7 @@ fn map_usage_row_basic() {
             Some("email: 1"),
             Some(777i64),
             None::<i64>,
+            Some(123_456i64),
         ],
     )
     .unwrap();
@@ -129,6 +131,7 @@ fn map_usage_row_basic() {
     // flags: IS_STREAMING(2) | STREAM_COMPLETE(4) | CLIENT_RESPONSE(8) = 14
     assert_eq!(row.flags, 14);
     assert_eq!(row.api_key_id, Some(777));
+    assert_eq!(row.session_hash, Some(123_456));
 }
 
 #[test]

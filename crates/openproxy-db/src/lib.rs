@@ -11,9 +11,13 @@ pub mod migrations;
 pub mod accounts;
 pub mod cooldowns;
 pub mod cost;
+mod credits_billing;
 pub mod credits_ledger;
+#[cfg(test)]
+mod credits_ledger_tests;
 pub mod pricing;
 pub mod providers;
+pub mod reservations;
 pub mod secrets;
 #[cfg(feature = "sql-profile")]
 pub mod sql_profile;

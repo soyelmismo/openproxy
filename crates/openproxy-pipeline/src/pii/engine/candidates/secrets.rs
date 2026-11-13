@@ -97,10 +97,7 @@ fn is_titlecase_ui_label(val: &str) -> bool {
     }
     words.iter().all(|w| {
         let all_caps = w.len() > 1 && w.bytes().all(|b| b.is_ascii_uppercase());
-        let title = w
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
+        let title = w.chars().next().is_some_and(|c| c.is_ascii_uppercase())
             && w.chars().skip(1).all(|c| c.is_ascii_lowercase());
         all_caps || title
     })

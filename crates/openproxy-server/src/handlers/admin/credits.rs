@@ -51,11 +51,12 @@ fn err(status: StatusCode, code: &str, message: &str) -> Response {
 /// `?key_id=` is an OPERATOR override. A non-manage session key can only ever
 /// address its own credits — the query parameter is ignored for it, so a
 /// client (analytics/read) key cannot read someone else's plan.
-fn target_key(identity: Option<&crate::handlers::admin::auth::AdminIdentity>, params: &HashMap<String, String>) -> Option<ApiKeyId> {
-    let is_operator = identity.map(|i| i.has_manage_scope()).unwrap_or(false);
-    if is_operator
-        && let Some(k) = params.get("key_id").and_then(|v| v.parse::<i64>().ok())
-    {
+fn target_key(
+    identity: Option<&crate::handlers::admin::auth::AdminIdentity>,
+    params: &HashMap<String, String>,
+) -> Option<ApiKeyId> {
+    let is_operator = identity.is_some_and(|i| i.has_manage_scope());
+    if is_operator && let Some(k) = params.get("key_id").and_then(|v| v.parse::<i64>().ok()) {
         return Some(ApiKeyId(k));
     }
     identity.and_then(|i| i.key_id()).map(ApiKeyId)
@@ -100,7 +101,11 @@ async fn list_tiers(State(state): State<AppState>) -> Response {
         .await
     {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "tiers_failed", &format!("{e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "tiers_failed",
+            &format!("{e}"),
+        ),
     }
 }
 
@@ -115,10 +120,7 @@ struct TierRequest {
     ttl_days: i64,
 }
 
-async fn create_tier(
-    State(state): State<AppState>,
-    Json(req): Json<TierRequest>,
-) -> Response {
+async fn create_tier(State(state): State<AppState>, Json(req): Json<TierRequest>) -> Response {
     let plan = openproxy_core::credits::PlanCommerce {
         price_usd: req.price_usd,
         credit_usd: req.credit_usd,
@@ -136,15 +138,45 @@ async fn create_tier(
     }
 }
 
+/// A missing PATCH field is distinct from an explicit JSON null.
+#[derive(Debug, Default)]
+enum PatchField<T> {
+    #[default]
+    Missing,
+    Present(Option<T>),
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for PatchField<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(de).map(Self::Present)
+    }
+}
+
+impl<T> PatchField<T> {
+    fn is_present(&self) -> bool {
+        matches!(self, Self::Present(_))
+    }
+
+    fn merge(self, current: Option<T>) -> Option<T> {
+        match self {
+            Self::Missing => current,
+            Self::Present(value) => value,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct UpdateTierRequest {
     name: Option<String>,
     config: Option<openproxy_core::credits::TierConfig>,
     active: Option<bool>,
-    /// Plan half; the admin UI always sends it complete (like `config`).
-    price_usd: Option<Option<f64>>,
-    credit_usd: Option<Option<f64>>,
-    ttl_days: Option<i64>,
+    /// Plan half; absent preserves the stored value, `null` clears it.
+    #[serde(default)]
+    price_usd: PatchField<f64>,
+    #[serde(default)]
+    credit_usd: PatchField<f64>,
+    #[serde(default)]
+    ttl_days: PatchField<i64>,
 }
 
 async fn update_tier(
@@ -152,25 +184,58 @@ async fn update_tier(
     Path(id): Path<i64>,
     Json(req): Json<UpdateTierRequest>,
 ) -> Response {
-    // Same convention as `UpdatePackageRequest`: touching a plan field is
-    // explicit — an absent field leaves it alone, a `null` field clears it.
-    let plan = req.price_usd.is_some() || req.credit_usd.is_some() || req.ttl_days.is_some();
-    let commerce = openproxy_core::credits::PlanCommerce {
-        price_usd: req.price_usd.flatten(),
-        credit_usd: req.credit_usd.flatten(),
-        ttl_days: req.ttl_days.unwrap_or(30),
-    };
+    let touches_plan =
+        req.price_usd.is_present() || req.credit_usd.is_present() || req.ttl_days.is_present();
     let res = state
         .db_pool()
         .spawn_write(move |w| {
+            let tx =
+                rusqlite::Transaction::new_unchecked(&*w, rusqlite::TransactionBehavior::Immediate)
+                    .map_err(openproxy_db::error::map_db_error)?;
+            // Read and merge under the same transaction, including other processes.
+            let commerce = if touches_plan {
+                let Some(current) = openproxy_core::credits::tiers::get(&tx, id)? else {
+                    return Err(openproxy_types::CoreError::NotFound {
+                        what: "credit tier".into(),
+                        id: id.to_string(),
+                    });
+                };
+                // Tri-state semantics: absent keeps the stored value, an
+                // explicit value replaces it, and an explicit `null` for
+                // ttl_days is INVALID (a priced plan without a lifetime
+                // cannot be sold). Never invent a default here.
+                let ttl_days = match req.ttl_days {
+                    PatchField::Missing => current.ttl_days,
+                    PatchField::Present(None) => {
+                        return Err(openproxy_types::CoreError::Validation(
+                            "ttl_days cannot be null for a plan".into(),
+                        ));
+                    }
+                    PatchField::Present(Some(days)) if days <= 0 => {
+                        return Err(openproxy_types::CoreError::Validation(
+                            "ttl_days must be positive".into(),
+                        ));
+                    }
+                    PatchField::Present(Some(days)) => days,
+                };
+                Some(openproxy_core::credits::PlanCommerce {
+                    price_usd: req.price_usd.merge(current.price_usd),
+                    credit_usd: req.credit_usd.merge(current.credit_usd),
+                    ttl_days,
+                })
+            } else {
+                None
+            };
             openproxy_core::credits::tiers::update(
-                w,
+                &tx,
                 id,
                 req.name.as_deref(),
                 req.config.as_ref(),
                 req.active,
-                if plan { Some(&commerce) } else { None },
-            )
+                commerce.as_ref(),
+            )?;
+            tx.commit().map_err(openproxy_db::error::map_db_error)?;
+            Ok(())
         })
         .await;
     match res {
@@ -179,10 +244,7 @@ async fn update_tier(
     }
 }
 
-async fn delete_tier(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Response {
+async fn delete_tier(State(state): State<AppState>, Path(id): Path<i64>) -> Response {
     match state
         .db_pool()
         .spawn_write(move |w| openproxy_core::credits::tiers::delete(w, id))
@@ -205,8 +267,15 @@ async fn list_orders(
         .and_then(|v| v.parse::<i64>().ok())
         .unwrap_or(50)
         .clamp(1, 1000);
-    let offset = params.get("offset").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0).max(0);
-    let q = params.get("q").map(|s| s.trim().to_string()).unwrap_or_default();
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0)
+        .max(0);
+    let q = params
+        .get("q")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     let res = state
         .db_pool()
         .spawn_read(move |r| {
@@ -279,7 +348,11 @@ async fn list_orders(
         .await;
     match res {
         Ok(v) => Json(v).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "orders_failed", &format!("{e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "orders_failed",
+            &format!("{e}"),
+        ),
     }
 }
 
@@ -336,7 +409,11 @@ async fn admin_catalog(State(state): State<AppState>) -> Response {
         .await;
     match res {
         Ok(v) => Json(v).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "catalog_failed", &format!("{e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "catalog_failed",
+            &format!("{e}"),
+        ),
     }
 }
 
@@ -363,11 +440,18 @@ async fn set_gateway(
     State(state): State<AppState>,
     Json(req): Json<GatewayToggleRequest>,
 ) -> Response {
-    let res = state.db_pool().spawn_write(move |w| {
-        openproxy_db::app_config::save_credits_gateway_enabled_to_db(w, req.enabled, 0)
-    }).await;
+    let res = state
+        .db_pool()
+        .spawn_write(move |w| {
+            openproxy_db::app_config::save_credits_gateway_enabled_to_db(w, req.enabled, 0)
+        })
+        .await;
     match res {
         Ok(()) => Json(json!({ "enabled": req.enabled })).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, "gateway_failed", &format!("{e}")),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "gateway_failed",
+            &format!("{e}"),
+        ),
     }
 }

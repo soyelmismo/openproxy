@@ -274,7 +274,7 @@ async fn analytics_scope_gets_client_allowlist_only() {
 
     let analytics_raw_key = "op_live_analytics_test_secret_key_123456";
     let key_hash = openproxy_core::api_keys::hash_key(analytics_raw_key);
-    let analytics_key_id: i64 = {
+    {
         let w = state.db_pool().writer();
         w.execute(
             "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, allowed_models_json, is_active, created_at)
@@ -282,8 +282,7 @@ async fn analytics_scope_gets_client_allowlist_only() {
             rusqlite::params![key_hash],
         )
         .expect("insert analytics key");
-        w.last_insert_rowid()
-    };
+    }
 
     let app = app_for(&state);
 

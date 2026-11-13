@@ -81,7 +81,7 @@ fn insert_usage_record(
                 rusqlite::params![id],
                 |row| row.get(0),
             )
-            .unwrap_or(false);
+            .map_err(crate::error::map_db_error)?;
         if !exists {
             api_key_id = None;
         }
@@ -171,19 +171,11 @@ fn insert_usage_record(
         )
     };
 
-    match execute_insert(api_key_id) {
-        Ok(_) => Ok(conn.last_insert_rowid()),
-        Err(err) if api_key_id.is_some() => {
-            tracing::warn!(
-                api_key_id = ?api_key_id,
-                error = %err,
-                "usage insert foreign key error; retrying with NULL api_key_id"
-            );
-            execute_insert(None).map_err(crate::error::map_db_error)?;
-            Ok(conn.last_insert_rowid())
-        }
-        Err(err) => Err(crate::error::map_db_error(err)),
-    }
+    // Missing keys were resolved above. Any other insert failure must retain
+    // attribution and propagate: retrying as anonymous can bypass a trigger
+    // failure and turn a prepaid response into unbilled usage.
+    execute_insert(api_key_id).map_err(crate::error::map_db_error)?;
+    Ok(conn.last_insert_rowid())
 }
 
 static WARNED_MISSING_PRICING: LazyLock<parking_lot::Mutex<std::collections::HashSet<u64>>> =
@@ -258,14 +250,18 @@ pub fn record_row(
     };
     let error_msg_for_db = prepare_usage_error_msg(input.error_msg.as_ref());
 
-    let rowid = insert_usage_record(
-        conn,
-        input,
-        cost_usd,
-        tps,
-        error_msg_for_db.as_deref(),
-        error_msg_for_db.as_deref(),
-    )?;
+    let rowid = crate::credits_billing::transaction(conn, |conn| {
+        let id = insert_usage_record(
+            conn,
+            input,
+            cost_usd,
+            tps,
+            error_msg_for_db.as_deref(),
+            error_msg_for_db.as_deref(),
+        )?;
+        crate::credits_billing::debit_usage(conn, id)?;
+        Ok(id)
+    })?;
 
     let row = RecentUsageRow {
         id: UsageId(rowid),
@@ -577,31 +573,18 @@ const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream
     proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash";
 
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
-    let affected = conn
-        .execute(
+    crate::credits_billing::transaction(conn, |conn| {
+        conn.execute(
             "UPDATE usage SET was_winner = 1, client_response = 1 WHERE id = ?1",
             params![row_id.0],
         )
         .map_err(crate::error::map_db_error_ctx("mark_client_response"))?;
+        crate::credits_billing::debit_usage(conn, row_id.0)
+    })?;
 
-    // Billable instant: the response reached the client. Consume the prepaid
-    // balance (best-effort — see `record_spend_best_effort`).
-    if affected > 0
-        && let Ok((key_id, cost_units)) = conn.query_row(
-            "SELECT api_key_id, CAST(ROUND(cost_usd * 1000000) AS INTEGER) FROM usage \
-             WHERE id = ?1 AND client_response = 1 AND cost_usd > 0 AND api_key_id IS NOT NULL",
-            params![row_id.0],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        )
-    {
-        crate::credits_ledger::record_spend_best_effort(conn, key_id, cost_units);
-    }
-
-    if affected > 0
-        && let Ok(mut stmt) = conn.prepare(&format!(
-            "SELECT {RECENT_USAGE_COLS} FROM usage WHERE id = ?1"
-        ))
-        && let Ok(row) = stmt.query_row(params![row_id.0], map_recent_usage_from_row)
+    if let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT {RECENT_USAGE_COLS} FROM usage WHERE id = ?1"
+    )) && let Ok(row) = stmt.query_row(params![row_id.0], map_recent_usage_from_row)
     {
         broadcast_usage_row(row);
     }
@@ -614,28 +597,28 @@ pub fn mark_winner_usage_row(
     attempt: u8,
     target_id: openproxy_types::ids::ComboTargetId,
 ) -> openproxy_types::Result<()> {
-    let affected = conn
-        .execute(
-            "UPDATE usage SET was_winner = 1, client_response = 1 WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3",
-            params![request_id, attempt, target_id.0],
-        )
-        .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
+    crate::credits_billing::transaction(conn, |conn| {
+        let mut stmt = conn
+            .prepare(
+                "UPDATE usage SET was_winner = 1, client_response = 1 \
+             WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 RETURNING id",
+            )
+            .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
+        let ids = stmt
+            .query_map(params![request_id, attempt, target_id.0], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map_err(crate::error::map_db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(crate::error::map_db_error)?;
+        drop(stmt);
+        for id in ids {
+            crate::credits_billing::debit_usage(conn, id)?;
+        }
+        Ok(())
+    })?;
 
-    // Billable instant: consume the prepaid balance (best-effort).
-    if affected > 0
-        && let Ok((key_id, cost_units)) = conn.query_row(
-            "SELECT api_key_id, CAST(ROUND(cost_usd * 1000000) AS INTEGER) FROM usage \
-             WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 \
-               AND client_response = 1 AND cost_usd > 0 AND api_key_id IS NOT NULL",
-            params![request_id, attempt, target_id.0],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-        )
-    {
-        crate::credits_ledger::record_spend_best_effort(conn, key_id, cost_units);
-    }
-
-    if affected > 0
-        && let Ok(mut stmt) = conn.prepare(&format!(
+    if let Ok(mut stmt) = conn.prepare(&format!(
             "SELECT {RECENT_USAGE_COLS} FROM usage WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 ORDER BY id DESC LIMIT 1"
         ))
         && let Ok(row) = stmt.query_row(params![request_id, attempt, target_id.0], map_recent_usage_from_row)
@@ -664,300 +647,4 @@ pub fn record_no_healthy_targets_row(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::conn::DbPool;
-    use openproxy_types::endpoint::EndpointKind;
-    use openproxy_types::ids::{ProviderId, RequestId};
-    use openproxy_types::usage::UsageInput;
-
-    fn test_input(
-        prompt: u32,
-        completion: u32,
-        ttft: Option<u64>,
-        total: u64,
-        flags: u8,
-    ) -> UsageInput {
-        UsageInput {
-            request_id: RequestId::new(),
-            trace_id: "trace-test".to_string(),
-            attempt: 1,
-            provider_id: ProviderId::new("test"),
-            account_id: None,
-            combo_id: None,
-            combo_target_id: None,
-            model_row_id: None,
-            upstream_model_id: "test-model".to_string(),
-            prompt_tokens: Some(prompt),
-            completion_tokens: Some(completion),
-            connect_ms: None,
-            ttft_ms: ttft,
-            total_ms: total,
-            status_code: 200,
-            error_msg: None,
-            race_total: 1,
-            api_key_id: None,
-            request_body_json: None,
-            response_body_json: None,
-            request_headers: None,
-            response_headers: None,
-            error_message: None,
-            race_attempts: 1,
-            stop_reason: None,
-            compression_savings_pct: None,
-            compression_techniques: None,
-            pii_redacted: None,
-            endpoint_kind: EndpointKind::Chat,
-            proxy_url: None,
-            proxy_status: None,
-            cached_tokens: None,
-            flags,
-            audio_ms: None,
-            session_hash: None,
-            max_chunk_gap_ms: None,
-            avg_chunk_gap_ms: None,
-        }
-    }
-
-    #[test]
-    fn test_compute_cost_and_tps() {
-        let price = crate::pricing::Price {
-            input_per_1m: 1.0,
-            output_per_1m: 2.0,
-            cached_per_1m: None,
-            kind: crate::pricing::PriceKind::Chat,
-            audio_per_hour: None,
-        };
-        let mut input = test_input(
-            100,
-            200,
-            Some(100),
-            1000,
-            USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
-        );
-        let (cost, tps) = compute(Some(price), &input);
-        assert_eq!(cost, Some(0.0005));
-        // 200 * 1000 / 1000 = 200.0
-        assert_eq!(tps, Some(200.0));
-
-        input.cached_tokens = Some(100);
-        let (cost_cached, _) = compute(Some(price), &input);
-        assert!(cost_cached.is_some_and(|c| (c - 0.00045).abs() < 1e-9));
-
-        input.total_ms = 0;
-        assert_eq!(
-            compute(Some(crate::pricing::Price::default()), &input).1,
-            None
-        );
-
-        input.total_ms = 1000;
-        input.completion_tokens = Some(0);
-        assert_eq!(
-            compute(Some(crate::pricing::Price::default()), &input).1,
-            None
-        );
-    }
-
-    #[test]
-    fn test_redact_error_msg() {
-        let raw_msg = "Error connecting to sk-1234567890abcdef and x-api-key: my-secret-key and Authorization: Bearer my-bearer-token.";
-        let redacted = redact_error_msg(raw_msg);
-        assert!(!redacted.contains("sk-1234567890abcdef") && redacted.contains("sk-[REDACTED]"));
-        assert!(!redacted.contains("my-secret-key") && redacted.contains("x-api-key: [REDACTED]"));
-        assert!(
-            !redacted.contains("my-bearer-token")
-                && redacted.contains("Authorization: Bearer [REDACTED]")
-        );
-        let long_msg = "a".repeat(2100);
-        let redacted2 = redact_error_msg(&long_msg);
-        assert!(redacted2.ends_with("...[truncated]") && redacted2.len() <= 2048 + 14);
-    }
-
-    #[test]
-    fn test_record() {
-        let pool = DbPool::test_pool_with_prefix("openproxy-cost-test").expect("open pool");
-        let conn = pool.writer();
-        let mut input = test_input(
-            100,
-            200,
-            Some(100),
-            1100,
-            USAGE_FLAG_IS_STREAMING | USAGE_FLAG_STREAM_COMPLETE | USAGE_FLAG_CLIENT_RESPONSE,
-        );
-        input.connect_ms = Some(10);
-        input.error_msg = Some("test error sk-1234567890abcdef".to_string());
-        let rowid = record(&conn, &input).expect("record failed");
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM usage WHERE id = ?1",
-                rusqlite::params![rowid.0],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-        let error_msg_redacted: String = conn
-            .query_row(
-                "SELECT error_msg_redacted FROM usage WHERE id = ?1",
-                rusqlite::params![rowid.0],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(error_msg_redacted, "test error sk-[REDACTED]");
-    }
-
-    #[test]
-    fn record_with_retry_succeeds_first_attempt_on_quiescent_db() {
-        let pool = DbPool::test_pool_with_prefix("openproxy-cost-retry").expect("open pool");
-        let input = test_input(10, 20, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
-        assert!(record_with_retry(&pool.writer(), &input).is_ok());
-    }
-
-    #[test]
-    fn test_client_response_and_winner_lifecycle() {
-        let pool = DbPool::test_pool_with_prefix("openproxy-cost-client-resp").expect("open pool");
-        let conn = pool.writer();
-        let target_id = openproxy_types::ids::ComboTargetId(42);
-
-        let mut input_winner = test_input(10, 20, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
-        input_winner.combo_target_id = Some(target_id);
-        let rowid1 = record(&conn, &input_winner).expect("insert winner");
-        let (cr1, ww1): (i64, i64) = conn
-            .query_row(
-                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
-                rusqlite::params![rowid1.0],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(cr1, 1);
-        assert_eq!(ww1, 1);
-
-        let mut input_fail = input_winner.clone();
-        input_fail.request_id = RequestId::new();
-        input_fail.flags = 0;
-        let rowid2 = record(&conn, &input_fail).expect("insert non-winner");
-        let (cr2, ww2): (i64, i64) = conn
-            .query_row(
-                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
-                rusqlite::params![rowid2.0],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(cr2, 0);
-        assert_eq!(ww2, 0);
-
-        mark_winner_usage_row(&conn, &input_fail.request_id.to_string(), 1, target_id)
-            .expect("mark_winner_usage_row");
-        let (cr2_after, ww2_after): (i64, i64) = conn
-            .query_row(
-                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
-                rusqlite::params![rowid2.0],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(cr2_after, 1);
-        assert_eq!(ww2_after, 1);
-
-        let mut input_3 = input_winner;
-        input_3.request_id = RequestId::new();
-        input_3.flags = 0;
-        let rowid3 = record(&conn, &input_3).expect("insert row 3");
-        mark_client_response(&conn, rowid3).expect("mark_client_response");
-        let (cr3, ww3): (i64, i64) = conn
-            .query_row(
-                "SELECT client_response, was_winner FROM usage WHERE id = ?1",
-                rusqlite::params![rowid3.0],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(cr3, 1);
-        assert_eq!(ww3, 1);
-    }
-
-    #[test]
-    fn test_record_row_returns_id_and_row_without_lock_contention() {
-        let pool = DbPool::test_pool_with_prefix("openproxy-cost-record-row").expect("open pool");
-        let conn = pool.writer();
-        let input = test_input(50, 150, Some(80), 800, USAGE_FLAG_CLIENT_RESPONSE);
-        let (usage_id, row) = record_row(&conn, &input).expect("record_row succeeded");
-        assert_eq!(usage_id, row.id);
-        assert_eq!(row.prompt_tokens, Some(50));
-        assert_eq!(row.completion_tokens, Some(150));
-        assert_eq!(row.ttft_ms, Some(80));
-    }
-
-    #[test]
-    fn combo_own_price_bills_the_request_not_the_member_model() {
-        let pool =
-            DbPool::test_pool_with_prefix("openproxy-cost-combo-price").expect("open pool");
-        let conn = pool.writer();
-        // The routed model has an official (expensive) price.
-        conn.execute(
-            "INSERT INTO model_capabilities_sync \
-             (provider_id, model_id, pricing_input_per_1m, pricing_output_per_1m) \
-             VALUES ('test', 'test-model', 10.0, 30.0)",
-            [],
-        )
-        .expect("seed model price");
-        // The combo carries its own product price.
-        conn.execute(
-            "INSERT INTO combos (id, name, strategy, pricing_input_per_1m, pricing_output_per_1m) \
-             VALUES (900, 'priced', 'priority', 1.0, 2.0), \
-                    (901, 'inherits', 'priority', NULL, NULL)",
-            [],
-        )
-        .expect("seed combos");
-
-        let mut priced = test_input(1_000_000, 1_000_000, None, 1000, USAGE_FLAG_CLIENT_RESPONSE);
-        priced.combo_id = Some(openproxy_types::ids::ComboId(900));
-        let (priced_id, _) = record_row(&conn, &priced).expect("record priced combo row");
-        let priced_cost: f64 = conn
-            .query_row(
-                "SELECT cost_usd FROM usage WHERE id = ?1",
-                rusqlite::params![priced_id.0],
-                |r| r.get(0),
-            )
-            .unwrap();
-        // 1M input at 1.0 + 1M output at 2.0 = 3.0 — never the model's 40.0.
-        assert!(
-            (priced_cost - 3.0).abs() < 1e-9,
-            "combo price must win, got {priced_cost}"
-        );
-
-        // A combo without its own price still bills the target model's rate.
-        let mut inherits =
-            test_input(1_000_000, 1_000_000, None, 1000, USAGE_FLAG_CLIENT_RESPONSE);
-        inherits.combo_id = Some(openproxy_types::ids::ComboId(901));
-        let (inherits_id, _) = record_row(&conn, &inherits).expect("record inheriting row");
-        let inherits_cost: f64 = conn
-            .query_row(
-                "SELECT cost_usd FROM usage WHERE id = ?1",
-                rusqlite::params![inherits_id.0],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(
-            (inherits_cost - 40.0).abs() < 1e-9,
-            "unpriced combo must fall back to the model rate, got {inherits_cost}"
-        );
-    }
-
-    #[test]
-    fn test_record_with_deleted_api_key_does_not_fail_foreign_key() {
-        let pool = DbPool::test_pool_with_prefix("openproxy-cost-del-key").expect("open pool");
-        let conn = pool.writer();
-        let mut input = test_input(100, 200, Some(50), 500, USAGE_FLAG_CLIENT_RESPONSE);
-        input.api_key_id = Some(openproxy_types::ids::ApiKeyId(99999999));
-
-        let res = record(&conn, &input);
-        assert!(res.is_ok(), "insert must succeed: {:?}", res.err());
-        let rowid = res.unwrap();
-        let saved_key_id: Option<i64> = conn
-            .query_row(
-                "SELECT api_key_id FROM usage WHERE id = ?1",
-                rusqlite::params![rowid.0],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(saved_key_id, None, "orphaned api_key_id must be NULL");
-    }
-}
+mod tests;

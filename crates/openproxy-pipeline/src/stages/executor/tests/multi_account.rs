@@ -65,6 +65,7 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
     });
 
     let (_pool, conn_arc, _path) = fresh_pool();
+    let caller = crate::test_utils::seed_test_api_key(&conn_arc.lock());
     let master_key = Arc::new(openproxy_db::secrets::MasterKey::generate().unwrap());
 
     let mk_mock = |id: &str, path: &str| {
@@ -171,6 +172,7 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
     let targets = vec![t1_acc1, t1_acc2, t2];
 
     let (mut req, _rx) = make_request(ComboId(500));
+    req.api_key_id = Some(caller);
     let (tx_direct, _rx_direct) = tokio::sync::mpsc::channel(16);
     req.stream_sink = Some(crate::race_sink::StreamSink::direct(tx_direct));
 

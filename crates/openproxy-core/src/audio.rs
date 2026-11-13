@@ -31,9 +31,10 @@ pub struct AudioTranscriptionResponse {
 }
 
 pub use crate::unary::{
-    UnaryTarget as AudioTargets, UnaryTarget, UnaryUsageArgs, apply_adapter_headers,
-    is_target_available, map_upstream_status_error, record_unary_target_success_async,
-    record_unary_usage, record_unary_usage_async, resolve_api_key, resolve_unary_targets,
+    UnaryCharge, UnaryCreditLease, UnaryTarget as AudioTargets, UnaryTarget, UnaryUsageArgs,
+    apply_adapter_headers, is_target_available, map_upstream_status_error,
+    record_unary_target_success_async, record_unary_usage, record_unary_usage_async,
+    resolve_api_key, resolve_unary_targets,
 };
 
 pub type AudioUsageArgs<'a> = UnaryUsageArgs<'a>;
@@ -208,6 +209,19 @@ pub async fn execute_transcribe(
 ) -> Result<AudioTranscriptionResponse> {
     let started = Instant::now();
 
+    // Hold the key's turn before resolving anything. A second request for the
+    // same prepaid key must read its balance only after this request's debit is
+    // persisted; without the lease both would dispatch against one balance
+    // (see `UnaryCreditLease`). Free keys get a no-op lease.
+    let mut credit = UnaryCreditLease::admit(db_pool, api_key_id).await?;
+
+    // STT bills per hour of audio, so the duration is the request's price
+    // driver — and it must be known *before* dispatch. Probing afterwards (as
+    // this path used to) meant an unreadable container was still sent upstream
+    // and its row cost zero. One probe now serves both the admission bound and
+    // the usage row.
+    let audio_ms = crate::audio_duration::probe_duration_ms(&parsed_body.file_bytes);
+
     let routing_plan = routing::resolve_routing(db_pool, &parsed_body.model_name).await?;
 
     let targets = crate::unary::resolve_unary_targets_async(
@@ -240,6 +254,27 @@ pub async fn execute_transcribe(
             continue;
         };
 
+        // Price the request before the audio leaves the proxy. For a prepaid
+        // key an unreadable container or an unpaid balance is refused here,
+        // while nothing has been sent upstream.
+        let bound = match credit
+            .authorize_dispatch(
+                db_pool,
+                &target,
+                UnaryCharge::Audio {
+                    duration_ms: audio_ms,
+                },
+                None,
+            )
+            .await
+        {
+            Ok(bound) => bound,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
+
         match dispatch_single_transcribe(
             db_pool,
             upstream_client,
@@ -253,11 +288,10 @@ pub async fn execute_transcribe(
         {
             Ok(resp) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                // STT bills per hour of audio, so the duration — not the token
-                // counts — is this row's billable quantity. Probe the container
-                // header once; a miss leaves `audio_ms` NULL and the row simply
-                // records zero cost rather than a wrong one.
-                let audio_ms = crate::audio_duration::probe_duration_ms(&parsed_body.file_bytes);
+                // The duration probed before dispatch is this row's billable
+                // quantity (and the bound admission priced). A `None` here is
+                // a free-key request with an unreadable container: it still
+                // dispatches, and its row records no duration.
                 let mut args = UnaryUsageArgs::from_target(
                     &target,
                     EndpointKind::Audio,
@@ -268,7 +302,9 @@ pub async fn execute_transcribe(
                 if let Some(ms) = audio_ms {
                     args = args.with_audio_ms(Some(ms));
                 }
-                record_unary_usage_async(db_pool, &args).await;
+                // The debit rides on this row, so the lane is released only
+                // once it is persisted; a failure is surfaced, not dropped.
+                credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;
 
                 tracing::info!("Audio request succeeded after {} attempts", attempt);
                 return Ok(resp);

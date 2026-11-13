@@ -79,6 +79,7 @@ impl UpstreamDispatcher {
         };
         let req_proxy_url = upstream_request.proxy.clone();
         let req_proxy_status = upstream_request.proxy_status.clone();
+        let request_body_len = upstream_request.body.as_ref().map_or(0, bytes::Bytes::len);
         let result = self
             .config
             .upstream_client
@@ -168,6 +169,42 @@ impl UpstreamDispatcher {
             proxy_url: dctx.proxy_url.clone(),
             proxy_status: dctx.proxy_status.clone(),
         };
+
+        // Prepaid streaming: commit the conservative quote and the delivery
+        // flag with the first client-visible chunk (see `StreamSink`). The
+        // guard is attached before the loop; the quote is re-checked here so a
+        // price or balance change between formatting and 2xx is not ignored.
+        let guard = match crate::credit_budget::stream_guard(
+            std::sync::Arc::clone(&self.conn),
+            &req,
+            combo,
+            target,
+            model,
+            request_body_len,
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(error) => {
+                return self
+                    .record_and_fail_with_trace_id(
+                        req.clone(),
+                        combo,
+                        target,
+                        dctx.fail_ctx_code(
+                            &error,
+                            Some(connect_and_send_ms),
+                            None,
+                            error.http_status(),
+                        ),
+                        trace_id.clone(),
+                    )
+                    .await;
+            }
+        };
+        if let Some(guard) = guard {
+            sink.attach_delivery_guard(guard);
+        }
 
         match state.run_stream_loop(&ctx, self, &mut stream).await {
             Ok(crate::streaming_state::ChunkResult::Return(r)) => return *r,
@@ -270,6 +307,16 @@ impl UpstreamDispatcher {
                 .send(bytes::Bytes::clone(&crate::pipeline::SSE_DONE_BYTES))
                 .await;
             state.done_sent = true;
+        }
+
+        // Persist the tail of the delivered text. A failure here cannot
+        // un-deliver bytes; settlement still bills the real usage row, and only
+        // a later crash would lose at most this last checkpoint interval.
+        if let Err(error) = sink.flush_delivery().await {
+            tracing::error!(
+                %error,
+                "prepaid stream: final delivered-byte checkpoint failed; usage settlement still applies"
+            );
         }
 
         self.record_streaming_success(
@@ -389,6 +436,17 @@ impl UpstreamDispatcher {
             return self
                 .fail_stream_with_error(CoreError::RaceLost, fctx, None)
                 .await;
+        }
+
+        if matches!(e, crate::race_sink::StreamSinkError::DeliveryNotRecorded) {
+            // The first delivered frame could not be checkpointed, so no durable
+            // prepaid evidence exists. This is not a client disconnect and not
+            // an upstream health signal: fail closed before billing anything.
+            let err = CoreError::Internal(
+                "prepaid stream: delivered bytes could not be checkpointed before the first frame"
+                    .into(),
+            );
+            return self.fail_stream_with_error(err, fctx, Some(500)).await;
         }
 
         let elapsed = fctx.started.elapsed().as_millis() as u64;

@@ -172,7 +172,8 @@ async fn run_fan_out_combo_tests(
 
         let tasks = targets.into_iter().map(|t| {
             let cancel_rx = cancel_rx.clone();
-            let attribution = attribution.clone();
+            // `ApiKeyId` is `Copy`: the async block copies it per target, no
+            // clone needed (clippy::clone_on_copy).
             async move {
                 if let Some(skipped) = build_skipped_target_entry(&t) {
                     return skipped;

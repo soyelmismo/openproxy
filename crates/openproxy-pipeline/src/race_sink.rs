@@ -9,6 +9,10 @@ pub enum StreamSinkError {
     Closed,
     #[error("race lost")]
     Lost,
+    /// The prepaid-credit delivery evidence could not be committed, so the
+    /// chunk was withheld instead of being sent unbilled.
+    #[error("stream delivery could not be recorded")]
+    DeliveryNotRecorded,
 }
 
 /// All clones share the commit bit, including the sinks passed into race lanes.
@@ -17,6 +21,10 @@ pub enum StreamSinkError {
 pub struct DirectSink {
     tx: mpsc::Sender<bytes::Bytes>,
     committed: Arc<AtomicBool>,
+    /// Set by the prepaid dispatcher before the first chunk. The guard commits
+    /// the durable quote and delivery flag once, for the lane that actually
+    /// reaches the client.
+    delivery: Arc<parking_lot::Mutex<Option<Arc<crate::credit_budget::CreditStreamGuard>>>>,
 }
 
 impl From<mpsc::Sender<bytes::Bytes>> for DirectSink {
@@ -24,12 +32,21 @@ impl From<mpsc::Sender<bytes::Bytes>> for DirectSink {
         Self {
             tx,
             committed: Arc::new(AtomicBool::new(false)),
+            delivery: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 }
 
 impl DirectSink {
-    async fn send(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
+    fn attach_delivery_guard(&self, guard: Arc<crate::credit_budget::CreditStreamGuard>) {
+        // One request per direct sink: replacing a guard is how a retry that
+        // never delivered swaps in the quote of the target it is about to try.
+        *self.delivery.lock() = Some(guard);
+    }
+
+    /// Enqueue without touching delivery evidence. Race lanes enqueue through
+    /// here only after the winner committed its own guard.
+    async fn enqueue(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
         let permit = self
             .tx
             .reserve()
@@ -39,6 +56,44 @@ impl DirectSink {
             self.committed.store(true, Ordering::Release);
         }
         permit.send(chunk);
+        Ok(())
+    }
+
+    async fn send(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
+        // Fail closed: a frame is only counted once it was actually enqueued
+        // for the client. Clone the guard out first: a `parking_lot` guard
+        // held across an `await` makes this future !Send.
+        let delivery = { self.delivery.lock().clone() };
+        self.enqueue(chunk.clone()).await?;
+        if !chunk.is_empty()
+            && let Some(guard) = delivery
+            && let Err(error) = guard.record_delivered_frame(&chunk).await
+        {
+            tracing::error!(
+                %error,
+                "prepaid stream: delivered bytes could not be checkpointed"
+            );
+            // Before the first checkpoint nothing durable proves delivery, so
+            // the stream stops. After one, the already-checkpointed bytes stay
+            // billable and the real usage row remains authoritative.
+            if guard.reserved_units() == 0 {
+                return Err(StreamSinkError::DeliveryNotRecorded);
+            }
+        }
+        Ok(())
+    }
+
+    async fn flush_delivery(&self) -> Result<(), StreamSinkError> {
+        let delivery = { self.delivery.lock().clone() };
+        if let Some(guard) = delivery
+            && let Err(error) = guard.flush_delivery().await
+        {
+            tracing::error!(
+                %error,
+                "prepaid stream: final delivered-byte checkpoint failed"
+            );
+            return Err(StreamSinkError::DeliveryNotRecorded);
+        }
         Ok(())
     }
 }
@@ -53,6 +108,20 @@ pub enum StreamSink {
 impl StreamSink {
     pub fn direct(tx: mpsc::Sender<bytes::Bytes>) -> Self {
         Self::Direct(tx.into())
+    }
+
+    /// Attach the prepaid delivery guard to this lane. Each race worker owns
+    /// its own guard, so a losing lane can never overwrite the quote that the
+    /// winning lane committed to the durable intent.
+    pub(crate) fn attach_delivery_guard(
+        &self,
+        guard: Arc<crate::credit_budget::CreditStreamGuard>,
+    ) {
+        match self {
+            StreamSink::Direct(sink) => sink.attach_delivery_guard(guard),
+            StreamSink::Race(handle) => handle.attach_delivery_guard(guard),
+            StreamSink::Discard => {}
+        }
     }
 
     /// Claim the final result through the same arbiter as the first chunk.
@@ -82,6 +151,15 @@ impl StreamSink {
         match self {
             StreamSink::Direct(sink) => sink.send(chunk).await,
             StreamSink::Race(handle) => handle.send(chunk).await,
+            StreamSink::Discard => Ok(()),
+        }
+    }
+
+    /// Persist the last delivered bytes once the stream body is finished.
+    pub(crate) async fn flush_delivery(&self) -> Result<(), StreamSinkError> {
+        match self {
+            StreamSink::Direct(sink) => sink.flush_delivery().await,
+            StreamSink::Race(handle) => handle.flush_delivery().await,
             StreamSink::Discard => Ok(()),
         }
     }
@@ -121,6 +199,7 @@ impl RaceSink {
         RaceSinkHandle {
             sink: Arc::clone(self),
             worker_id,
+            delivery: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 
@@ -155,9 +234,31 @@ impl RaceSink {
         }
     }
 
-    async fn send(&self, worker_id: usize, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
+    async fn send(
+        &self,
+        worker_id: usize,
+        chunk: bytes::Bytes,
+        delivery: &parking_lot::Mutex<Option<Arc<crate::credit_budget::CreditStreamGuard>>>,
+    ) -> Result<(), StreamSinkError> {
+        // Claim first: only the lane that actually owns the client stream may
+        // commit delivery evidence. Clone the guard out of the lock before
+        // awaiting (`parking_lot` guard is not `Send`).
         self.claim_winner(worker_id)?;
-        self.inner.send(chunk).await
+        let guard = { delivery.lock().clone() };
+        self.inner.enqueue(chunk.clone()).await?;
+        if !chunk.is_empty()
+            && let Some(guard) = guard
+            && let Err(error) = guard.record_delivered_frame(&chunk).await
+        {
+            tracing::error!(
+                %error,
+                "prepaid race stream: delivered bytes could not be checkpointed"
+            );
+            if guard.reserved_units() == 0 {
+                return Err(StreamSinkError::DeliveryNotRecorded);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -165,11 +266,30 @@ impl RaceSink {
 pub struct RaceSinkHandle {
     sink: Arc<RaceSink>,
     worker_id: usize,
+    delivery: Arc<parking_lot::Mutex<Option<Arc<crate::credit_budget::CreditStreamGuard>>>>,
 }
 
 impl RaceSinkHandle {
+    fn attach_delivery_guard(&self, guard: Arc<crate::credit_budget::CreditStreamGuard>) {
+        *self.delivery.lock() = Some(guard);
+    }
+
     pub async fn send(&self, chunk: bytes::Bytes) -> Result<(), StreamSinkError> {
-        self.sink.send(self.worker_id, chunk).await
+        self.sink.send(self.worker_id, chunk, &self.delivery).await
+    }
+
+    async fn flush_delivery(&self) -> Result<(), StreamSinkError> {
+        let guard = { self.delivery.lock().clone() };
+        if let Some(guard) = guard
+            && let Err(error) = guard.flush_delivery().await
+        {
+            tracing::error!(
+                %error,
+                "prepaid race stream: final delivered-byte checkpoint failed"
+            );
+            return Err(StreamSinkError::DeliveryNotRecorded);
+        }
+        Ok(())
     }
 }
 

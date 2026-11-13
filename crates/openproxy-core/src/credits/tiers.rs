@@ -133,24 +133,26 @@ fn validate_plan(
     credit_usd: Option<f64>,
     ttl_days: Option<i64>,
 ) -> openproxy_types::Result<(Option<f64>, Option<f64>, i64)> {
-    if let Some(p) = price_usd {
-        if !p.is_finite() || p <= 0.0 {
-            return Err(openproxy_types::CoreError::Validation(
-                "price_usd must be a positive number".into(),
-            ));
-        }
+    if let Some(p) = price_usd
+        && crate::credits::usd_to_units(p)
+            .and_then(|units| units.checked_add(9_999))
+            .is_none()
+    {
+        return Err(openproxy_types::CoreError::Validation(
+            "price_usd must be a positive number".into(),
+        ));
     }
-    if let Some(c) = credit_usd {
-        if !c.is_finite() || c <= 0.0 {
-            return Err(openproxy_types::CoreError::Validation(
-                "credit_usd must be a positive number".into(),
-            ));
-        }
+    if let Some(c) = credit_usd
+        && crate::credits::usd_to_units(c).is_none()
+    {
+        return Err(openproxy_types::CoreError::Validation(
+            "credit_usd must be a positive number".into(),
+        ));
     }
     let ttl = ttl_days.unwrap_or(30);
-    if ttl < 1 {
+    if !(1..=36_500).contains(&ttl) {
         return Err(openproxy_types::CoreError::Validation(
-            "ttl_days must be at least 1".into(),
+            "ttl_days must be between 1 and 36500".into(),
         ));
     }
     Ok((price_usd, credit_usd, ttl))
@@ -201,7 +203,8 @@ pub fn create(
         cfg.allowed_models.as_ref(),
         cfg.allowed_combos.as_ref(),
     )?;
-    let (price_usd, credit_usd, ttl_days) = validate_plan(plan.price_usd, plan.credit_usd, Some(plan.ttl_days))?;
+    let (price_usd, credit_usd, ttl_days) =
+        validate_plan(plan.price_usd, plan.credit_usd, Some(plan.ttl_days))?;
     conn.execute(
         "INSERT INTO credit_tiers (name, models_json, providers_json, combos_json, \
              only_whitelisted, weekly_usd_cap, five_hour_usd_cap, \
@@ -228,9 +231,8 @@ pub fn create(
     )
     .map_err(openproxy_db::error::map_db_error)?;
     let id = conn.last_insert_rowid();
-    get(conn, id)?.ok_or_else(|| {
-        openproxy_types::CoreError::Internal("tier vanished after insert".into())
-    })
+    get(conn, id)?
+        .ok_or_else(|| openproxy_types::CoreError::Internal("tier vanished after insert".into()))
 }
 
 /// Update a tier. `config: Some` replaces the whole payload (the admin UI
@@ -239,6 +241,19 @@ pub fn create(
 /// # Errors
 /// Validation and DB failures.
 pub fn update(
+    conn: &Connection,
+    id: i64,
+    name: Option<&str>,
+    config: Option<&TierConfig>,
+    active: Option<bool>,
+    plan: Option<&PlanCommerce>,
+) -> openproxy_types::Result<()> {
+    super::transaction(conn, |conn| {
+        update_tier(conn, id, name, config, active, plan)
+    })
+}
+
+fn update_tier(
     conn: &Connection,
     id: i64,
     name: Option<&str>,
@@ -323,6 +338,10 @@ pub fn update(
 /// - [`openproxy_types::CoreError::Validation`] when keys still use it.
 /// - Propagates DB failures.
 pub fn delete(conn: &Connection, id: i64) -> openproxy_types::Result<()> {
+    super::transaction(conn, |conn| delete_tier(conn, id))
+}
+
+fn delete_tier(conn: &Connection, id: i64) -> openproxy_types::Result<()> {
     if crate::credits::tiers::get(conn, id)?.is_none() {
         return Ok(());
     }
@@ -333,7 +352,12 @@ pub fn delete(conn: &Connection, id: i64) -> openproxy_types::Result<()> {
             |r| r.get(0),
         )
         .map_err(openproxy_db::error::map_db_error)?;
-    if used > 0 {
+    let pending: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM credit_orders WHERE tier_id = ?1 \
+         AND status IN ('pending', 'expired') AND datetime(expires_at, '+600 seconds') >= datetime('now'))",
+        [id], |row| row.get(0),
+    ).map_err(openproxy_db::error::map_db_error)?;
+    if used > 0 || pending {
         return Err(openproxy_types::CoreError::Validation(format!(
             "tier is used by {used} key(s): deactivate it instead"
         )));
@@ -410,67 +434,7 @@ pub fn apply_to_key(
     Ok(())
 }
 
-/// Grant the plan's leveraged credit as a spendable lot.
-///
-/// This is the admin-assignment path: assigning a plan sells it without a
-/// payment, so the credit is born here as `kind = 'grant'` (never `topup`,
-/// which the reserve guard reads as real customer money).
-///
-/// Idempotent per tier: a key already holding a live grant from the same tier
-/// gets nothing, so re-saving the plan does not mint credit again. Assigning a
-/// different plan expires the previous grant (one live plan per key) before
-/// creating the new lot.
-///
-/// # Errors
-/// Propagates DB failures.
-pub fn grant_plan(
-    conn: &Connection,
-    key_id: ApiKeyId,
-    tier: &CreditTier,
-) -> openproxy_types::Result<bool> {
-    let Some(credit_usd) = tier.credit_usd else {
-        return Ok(false);
-    };
-    if credit_usd <= 0.0 || tier.ttl_days <= 0 {
-        return Ok(false);
-    }
-    let units = (credit_usd * 1_000_000.0).round() as i64;
-    if units <= 0 {
-        return Ok(false);
-    }
-    let already_live: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM credit_transactions \
-             WHERE api_key_id = ?1 AND tier_id = ?2 AND kind = 'grant' \
-               AND status = 'active' AND (expires_at IS NULL OR expires_at > datetime('now')))",
-            params![key_id.0, tier.id],
-            |row| row.get(0),
-        )
-        .map_err(openproxy_db::error::map_db_error)?;
-    if already_live {
-        return Ok(false);
-    }
-    // One live plan per key: the newly assigned plan supersedes older grants.
-    conn.execute(
-        "UPDATE credit_transactions SET status = 'expired' \
-         WHERE api_key_id = ?1 AND kind = 'grant' AND status = 'active'",
-        params![key_id.0],
-    )
-    .map_err(openproxy_db::error::map_db_error)?;
-    conn.execute(
-        "INSERT INTO credit_transactions \
-             (api_key_id, kind, amount_units, remaining_units, status, expires_at, tier_id) \
-         VALUES (?1, 'grant', ?2, ?2, 'active', datetime('now', ?3), ?4)",
-        params![
-            key_id.0,
-            units,
-            format!("+{} days", tier.ttl_days),
-            tier.id
-        ],
-    )
-    .map_err(openproxy_db::error::map_db_error)?;
-    Ok(true)
-}
+pub use super::plan_grants::grant_plan;
 
 // ── propagation & key-shaping (moved from packages.rs: the tier domain) ──
 
@@ -533,8 +497,8 @@ fn allowlist_payload(
             }
         }
     }
-    let models_json = models
-        .map(|_| serde_json::to_string(&model_ids).unwrap_or_else(|_| "[]".into()));
+    let models_json =
+        models.map(|_| serde_json::to_string(&model_ids).unwrap_or_else(|_| "[]".into()));
     let combos_json = if models.is_some() || combos.is_some() {
         Some(resolve_combo_ids(conn, &combo_names)?)
     } else {
@@ -551,14 +515,15 @@ fn allowlist_payload(
 ///
 /// # Errors
 /// Propagates DB failures.
+type PartitionedNames = (Option<Vec<String>>, Option<Vec<String>>);
+
 pub(crate) fn partition_names(
     conn: &Connection,
     models: Option<&Vec<String>>,
     combos: Option<&Vec<String>>,
-) -> openproxy_types::Result<(Option<Vec<String>>, Option<Vec<String>>)> {
-    match (models, combos) {
-        (None, None) => return Ok((None, None)),
-        _ => {}
+) -> openproxy_types::Result<PartitionedNames> {
+    if let (None, None) = (models, combos) {
+        return Ok((None, None));
     }
     let mut model_ids: Vec<String> = Vec::new();
     let mut combo_names: Vec<String> = Vec::new();
@@ -602,10 +567,10 @@ pub(crate) fn partition_names(
     combo_names.sort();
     combo_names.dedup();
     let models_out = models.map(|_| model_ids);
-    let combos_out = if combo_names.is_empty() {
-        None
-    } else {
+    let combos_out = if models.is_some() || combos.is_some() || !combo_names.is_empty() {
         Some(combo_names)
+    } else {
+        None
     };
     Ok((models_out, combos_out))
 }
@@ -639,10 +604,9 @@ pub fn tier_own_config(tier: &CreditTier) -> TierConfig {
     // Propagation always writes a definite strict-mode flag: an unrestricted
     // tier must CLEAR only_whitelisted (a stale 1 with cleared allowlists
     // denies every request).
-    let gate = Some(
-        t.only_whitelisted
-            .unwrap_or_else(|| t.allowed_models.is_some() || t.allowed_providers.is_some()),
-    );
+    let gate = Some(t.only_whitelisted.unwrap_or_else(|| {
+        t.allowed_models.is_some() || t.allowed_providers.is_some() || t.allowed_combos.is_some()
+    }));
     TierConfig {
         weekly_usd_cap: t.weekly_usd_cap,
         five_hour_usd_cap: t.five_hour_usd_cap,
@@ -661,10 +625,7 @@ pub fn tier_own_config(tier: &CreditTier) -> TierConfig {
 ///
 /// # Errors
 /// Propagates DB failures.
-pub fn propagate_tier_to_keys(
-    conn: &Connection,
-    tier_id: i64,
-) -> openproxy_types::Result<usize> {
+pub fn propagate_tier_to_keys(conn: &Connection, tier_id: i64) -> openproxy_types::Result<usize> {
     let Some(tier) = get(conn, tier_id)? else {
         return Ok(0);
     };
@@ -725,13 +686,19 @@ pub fn apply_to_key_forced(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
-    if let Some(providers) = &config.allowed_providers {
-        conn.execute(
-            "UPDATE api_keys SET allowed_providers_json = ?1 WHERE id = ?2",
-            params![serde_json::to_string(providers).unwrap_or_default(), key_id.0],
-        )
-        .map_err(openproxy_db::error::map_db_error)?;
-    }
+    conn.execute(
+        "UPDATE api_keys SET allowed_providers_json = ?1 WHERE id = ?2",
+        params![
+            config
+                .allowed_providers
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| openproxy_types::CoreError::Internal(e.to_string()))?,
+            key_id.0
+        ],
+    )
+    .map_err(openproxy_db::error::map_db_error)?;
     if let Some(payload) = combos_json {
         conn.execute(
             "UPDATE api_keys SET allowed_combos_json = ?1 WHERE id = ?2",

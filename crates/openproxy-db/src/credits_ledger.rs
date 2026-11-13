@@ -23,7 +23,7 @@ pub fn balance_units(conn: &Connection, api_key_id: i64) -> openproxy_types::Res
     let sum: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(remaining_units), 0) FROM credit_transactions \
-             WHERE api_key_id = ?1 AND status = 'active' \
+             WHERE api_key_id = ?1 AND status = 'active' AND kind IN ('topup', 'adjust', 'grant') \
                AND (expires_at IS NULL OR expires_at > datetime('now'))",
             params![api_key_id],
             |row| row.get(0),
@@ -71,16 +71,15 @@ pub fn record_spend(
     // inside one). Join it instead of opening a nested one: BEGIN inside a
     // live transaction fails outright ("cannot start a transaction within a
     // transaction"), which would silently drop every spend record.
-    let mut owned_tx: Option<rusqlite::Transaction<'_>> = None;
-    let tx: &Connection = if conn.is_autocommit() {
-        owned_tx = Some(
-            conn.unchecked_transaction()
+    let owned_tx = if conn.is_autocommit() {
+        Some(
+            rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
                 .map_err(crate::error::map_db_error)?,
-        );
-        owned_tx.as_ref().expect("just created")
+        )
     } else {
-        conn
+        None
     };
+    let tx: &Connection = owned_tx.as_deref().unwrap_or(conn);
     let balance = balance_units(tx, api_key_id)?;
     if balance < cost_units {
         return Err(CoreError::InsufficientCredits {
@@ -95,7 +94,7 @@ pub fn record_spend(
                  WHERE api_key_id = ?1 AND status = 'active' AND kind IN ('topup', 'adjust', 'grant') \
                    AND remaining_units > 0 \
                    AND (expires_at IS NULL OR expires_at > datetime('now')) \
-                 ORDER BY expires_at ASC, id ASC",
+                 ORDER BY (expires_at IS NULL), expires_at ASC, id ASC",
             )
             .map_err(crate::error::map_db_error)?;
         let lots: Vec<(i64, i64)> = stmt
@@ -110,7 +109,11 @@ pub fn record_spend(
             }
             let take = remaining.min(need);
             let new_remaining = remaining - take;
-            let new_status = if new_remaining == 0 { "exhausted" } else { "active" };
+            let new_status = if new_remaining == 0 {
+                "exhausted"
+            } else {
+                "active"
+            };
             tx.execute(
                 "UPDATE credit_transactions SET remaining_units = ?1, status = ?2 WHERE id = ?3",
                 params![new_remaining, new_status, id],
@@ -126,7 +129,7 @@ pub fn record_spend(
             balance_usd: balance as f64 / 1_000_000.0,
         });
     }
-    if let Some(t) = owned_tx.take() {
+    if let Some(t) = owned_tx {
         t.commit().map_err(crate::error::map_db_error)?;
     }
     Ok(cost_units)
@@ -147,37 +150,6 @@ pub fn expire_due(conn: &Connection) -> openproxy_types::Result<usize> {
     )
     .map_err(crate::error::map_db_error)
 }
-
-/// Spend hook for the post-response path: consumes the balance when a usage
-/// row becomes billable (`client_response = 1`). Never propagates: by this
-/// point the response already reached the client, so a ledger failure is
-/// logged, not turned into an HTTP error. A failed overdraw is the accepted
-/// single-request overshoot, same policy as window quotas.
-pub fn record_spend_best_effort(conn: &Connection, api_key_id: i64, cost_units: i64) {
-    if cost_units <= 0 {
-        return;
-    }
-    match record_spend(conn, api_key_id, cost_units) {
-        Ok(_) => {}
-        Err(CoreError::InsufficientCredits { balance_usd }) => {
-            tracing::warn!(
-                api_key_id,
-                cost_units,
-                balance_usd,
-                "credit balance overrun accepted (single in-flight request overshoot)"
-            );
-        }
-        Err(e) => {
-            tracing::error!(
-                api_key_id,
-                cost_units,
-                error = %e,
-                "failed to record credit spend: balance may be stale until next reconcile"
-            );
-        }
-    }
-}
-
 
 /// Last block fully scanned by the watcher.
 ///
@@ -212,7 +184,7 @@ pub fn set_last_scanned_block(conn: &Connection, block: i64) -> openproxy_types:
 pub struct ReconcileReport {
     pub paid_orders: i64,
     pub topup_rows: i64,
-    /// Sum of `base_units` over paid/minted orders (micro-USDC).
+    /// Sum of promised credit over paid/minted orders (micro-USDC).
     pub credited_expected_units: i64,
     /// Sum of `amount_units` over topup ledger rows (micro-USDC).
     pub credited_actual_units: i64,
@@ -225,7 +197,9 @@ pub struct ReconcileReport {
 impl ReconcileReport {
     #[must_use]
     pub fn is_consistent(&self) -> bool {
-        self.orphans == 0 && self.credited_expected_units == self.credited_actual_units
+        self.orphans == 0
+            && self.paid_orders == self.topup_rows
+            && self.credited_expected_units == self.credited_actual_units
     }
 }
 
@@ -239,7 +213,7 @@ impl ReconcileReport {
 pub fn reconcile(conn: &Connection) -> openproxy_types::Result<ReconcileReport> {
     let (paid_orders, credited_expected): (i64, i64) = conn
         .query_row(
-            "SELECT COUNT(*), COALESCE(SUM(base_units), 0) FROM credit_orders              WHERE status IN ('paid', 'minted')",
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(credit_units, base_units)), 0) FROM credit_orders              WHERE status IN ('paid', 'minted')",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -260,7 +234,12 @@ pub fn reconcile(conn: &Connection) -> openproxy_types::Result<ReconcileReport> 
         .map_err(crate::error::map_db_error)?;
     let orphan_rows: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM credit_transactions t              WHERE t.kind = 'topup' AND t.order_id IS NOT NULL                AND (SELECT COUNT(*) FROM credit_orders o                     WHERE o.id = t.order_id AND o.status IN ('paid', 'minted')) != 1",
+            "SELECT COUNT(*) FROM credit_transactions t \
+             LEFT JOIN credit_orders o ON o.id = t.order_id \
+             WHERE t.kind = 'topup' AND (o.id IS NULL OR o.status NOT IN ('paid', 'minted') \
+               OR t.amount_units != COALESCE(o.credit_units, o.base_units) \
+               OR t.api_key_id IS NOT o.api_key_id OR t.remaining_units < 0 \
+               OR t.remaining_units > t.amount_units)",
             [],
             |row| row.get(0),
         )
@@ -334,10 +313,7 @@ pub struct CreditLot {
 ///
 /// # Errors
 /// Propagates DB failures.
-pub fn active_lots(
-    conn: &Connection,
-    api_key_id: i64,
-) -> openproxy_types::Result<Vec<CreditLot>> {
+pub fn active_lots(conn: &Connection, api_key_id: i64) -> openproxy_types::Result<Vec<CreditLot>> {
     let mut stmt = conn
         .prepare(
             "SELECT remaining_units, expires_at, created_at FROM credit_transactions \

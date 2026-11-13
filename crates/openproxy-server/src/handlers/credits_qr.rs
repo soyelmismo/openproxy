@@ -7,6 +7,7 @@
 //! the payload never leaves our origin.
 
 use qrcode::{Color, EcLevel, QrCode};
+use std::fmt::Write as _;
 
 /// Rendered SVG plus the payload it encodes (for accessibility/tests).
 #[derive(Debug, Clone)]
@@ -33,19 +34,23 @@ pub fn render(payload: &str, accent: &str, dark: &str, light: &str) -> Result<St
     let total = width + quiet * 2;
 
     let mut svg = String::with_capacity(total * total * 12);
-    svg.push_str(&format!(
+    // Writing into a `String` cannot fail; `let _` keeps the infallible
+    // `fmt::Write` signature without an `unwrap`.
+    let _ = write!(
+        svg,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {total} {total}" width="100%" height="100%" shape-rendering="geometricPrecision" role="img" aria-label="Payment QR code">"#
-    ));
-    svg.push_str(&format!(
+    );
+    let _ = write!(
+        svg,
         r#"<rect width="{total}" height="{total}" rx="3" fill="{light}"/>"#
-    ));
+    );
 
     let is_finder = |x: usize, y: usize| -> bool {
         let in_box = |ox: usize, oy: usize| x >= ox && x < ox + 7 && y >= oy && y < oy + 7;
         in_box(0, 0) || in_box(width - 7, 0) || in_box(0, width - 7)
     };
 
-    svg.push_str(&format!(r#"<g fill="{accent}">"#));
+    let _ = write!(svg, r#"<g fill="{accent}">"#);
     for y in 0..width {
         for x in 0..width {
             if !modules[y * width + x] || is_finder(x, y) {
@@ -53,30 +58,33 @@ pub fn render(payload: &str, accent: &str, dark: &str, light: &str) -> Result<St
             }
             let cx = (x + quiet) as f64;
             let cy = (y + quiet) as f64;
-            svg.push_str(&format!(
+            let _ = write!(
+                svg,
                 r#"<rect x="{cx}" y="{cy}" width="1" height="1" rx="0.42"/>"#
-            ));
+            );
         }
     }
     svg.push_str("</g>");
 
-    svg.push_str(&format!(r#"<g fill="none" stroke="{dark}" stroke-width="1">"#));
+    let _ = write!(svg, r#"<g fill="none" stroke="{dark}" stroke-width="1">"#);
     for (ox, oy) in [(0usize, 0usize), (width - 7, 0), (0, width - 7)] {
         let cx = (ox + quiet) as f64;
         let cy = (oy + quiet) as f64;
-        svg.push_str(&format!(
+        let _ = write!(
+            svg,
             r#"<rect x="{cx}" y="{cy}" width="7" height="7" rx="2.1"/>"#
-        ));
+        );
     }
     svg.push_str("</g>");
 
-    svg.push_str(&format!(r#"<g fill="{dark}">"#));
+    let _ = write!(svg, r#"<g fill="{dark}">"#);
     for (ox, oy) in [(0usize, 0usize), (width - 7, 0), (0, width - 7)] {
         let cx = (ox + quiet) as f64 + 2.0;
         let cy = (oy + quiet) as f64 + 2.0;
-        svg.push_str(&format!(
+        let _ = write!(
+            svg,
             r#"<rect x="{cx}" y="{cy}" width="3" height="3" rx="0.9"/>"#
-        ));
+        );
     }
     svg.push_str("</g></svg>");
 

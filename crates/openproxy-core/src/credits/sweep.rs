@@ -47,13 +47,15 @@ pub fn find_idle_keys(conn: &Connection) -> Result<Vec<IdleKey>> {
                  )
              )
              SELECT idle.id, idle.label,
-                    COALESCE(SUM(ct.amount_units), 0)
+                    COALESCE(SUM(CASE WHEN ct.status = 'active' \
+                        AND (ct.expires_at IS NULL OR ct.expires_at > datetime('now')) \
+                        THEN ct.remaining_units ELSE 0 END), 0)
              FROM idle
              LEFT JOIN credit_transactions ct ON ct.api_key_id = idle.id
              GROUP BY idle.id
              ORDER BY idle.id",
         )
-        .map_err(|e| map_db_error(e))?;
+        .map_err(map_db_error)?;
     let rows = stmt
         .query_map(params![window], |r| {
             Ok(IdleKey {
@@ -62,7 +64,7 @@ pub fn find_idle_keys(conn: &Connection) -> Result<Vec<IdleKey>> {
                 balance_units: r.get(2)?,
             })
         })
-        .map_err(|e| map_db_error(e))?
+        .map_err(map_db_error)?
         .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
         .map_err(map_db_error)?;
     Ok(rows)
@@ -70,20 +72,13 @@ pub fn find_idle_keys(conn: &Connection) -> Result<Vec<IdleKey>> {
 
 /// Fully delete every idle key (up to `limit` per pass, oldest first).
 /// Returns what was swept. Deleting the key cascades the quota row; the
-/// credit ledger rows are removed so no dead balance stays on the books;
+/// credit ledger rows are retained but expired, preserving paid-order evidence;
 /// usage rows survive with `api_key_id = NULL` (analytics history).
-pub fn sweep_idle_keys(
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<IdleKey>> {
+pub fn sweep_idle_keys(conn: &Connection, limit: usize) -> Result<Vec<IdleKey>> {
     let candidates = find_idle_keys(conn)?;
     let mut swept = Vec::new();
     for key in candidates.into_iter().take(limit) {
-        conn.execute(
-            "DELETE FROM credit_transactions WHERE api_key_id = ?1",
-            params![key.id],
-        )
-        .map_err(|e| map_db_error(e))?;
+        // Preserve the immutable payment trail; hard_delete expires the lots.
         crate::api_keys::hard_delete(conn, ApiKeyId(key.id))?;
         swept.push(key);
     }
@@ -110,6 +105,6 @@ pub fn is_idle(conn: &Connection, key_id: i64) -> Result<bool> {
         |r| r.get::<_, i64>(0),
     )
     .optional()
-    .map(|v| v.map(|n| n != 0).unwrap_or(false))
-    .map_err(|e| map_db_error(e))
+    .map(|v| v.is_some_and(|n| n != 0))
+    .map_err(map_db_error)
 }

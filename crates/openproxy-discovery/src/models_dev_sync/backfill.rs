@@ -100,10 +100,10 @@ fn resolve_recompute_price(
 ) -> Option<crate::pricing::Price> {
     // A combo that carries its own list price bills every row it routed at
     // that rate; the member models' prices never enter the bill.
-    if let Some(combo_id) = combo_id {
-        if let Some(price) = crate::pricing::lookup_combo_price(conn, combo_id) {
-            return Some(price);
-        }
+    if let Some(combo_id) = combo_id
+        && let Some(price) = crate::pricing::lookup_combo_price(conn, combo_id)
+    {
+        return Some(price);
     }
     let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
     match price {

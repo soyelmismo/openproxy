@@ -20,8 +20,8 @@ use crate::images::multipart::{
 use crate::images::png_mask::extract_png_alpha_mask;
 use crate::routing;
 use crate::unary::{
-    UnaryUsageArgs, apply_adapter_headers, map_upstream_status_error, record_unary_usage_async,
-    resolve_api_key_async,
+    UnaryCharge, UnaryCreditLease, UnaryUsageArgs, apply_adapter_headers,
+    map_upstream_status_error, resolve_api_key_async,
 };
 
 pub(crate) async fn dispatch_horde_img2img(
@@ -138,6 +138,21 @@ pub(crate) async fn dispatch_horde_img2img(
     Ok((resp, upstream_url))
 }
 
+/// Image count requested by a multipart body (`n` field), or `None` when the
+/// field is present but unparseable.
+///
+/// The API default — and what upstreams generate for `n = 0` — is one image.
+fn multipart_image_count(body: &ParsedImageMultipartBody) -> Option<u32> {
+    match body.form_fields.iter().find(|(key, _)| key == "n") {
+        None => Some(1),
+        Some((_, raw)) => match raw.trim().parse::<u32>() {
+            Ok(0) => Some(1),
+            Ok(count) => Some(count),
+            Err(_) => None,
+        },
+    }
+}
+
 pub(crate) async fn execute_image_multipart(
     ctx: &ImageServiceContext<'_>,
     body: ParsedImageMultipartBody,
@@ -145,6 +160,15 @@ pub(crate) async fn execute_image_multipart(
     api_key_id: Option<ApiKeyId>,
 ) -> Result<ImageGenerationResponse> {
     let started = Instant::now();
+
+    // Take the key's turn before resolving or dispatching; the lane is released
+    // only after this request's usage row (and its debit) is persisted.
+    let mut credit = UnaryCreditLease::admit(ctx.db_pool, api_key_id).await?;
+
+    // The requested image count is the only persistible billable quantity for
+    // this endpoint. `None` means the field was present but not a number: a
+    // prepaid request then has no bound and is refused instead of guessed.
+    let images = multipart_image_count(&body);
 
     let routing_plan = routing::resolve_routing(ctx.db_pool, &body.model_name).await?;
 
@@ -170,6 +194,21 @@ pub(crate) async fn execute_image_multipart(
             .any(|t| t.provider.as_str() != "horde");
 
         crate::guarded_unary_target!(check_async: ctx.db_pool, ctx.circuit_breaker, target);
+
+        // Price the edit/variation before dispatch: a prepaid key never sends a
+        // request whose maximum cost does not fit its balance, and a request
+        // without a persistible image count is refused rather than recorded at
+        // zero.
+        let bound = match credit
+            .authorize_dispatch(ctx.db_pool, target, UnaryCharge::Image { images }, None)
+            .await
+        {
+            Ok(bound) => bound,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
+        };
 
         openproxy_types::emit_stage_event!(
             request_id: request_id,
@@ -430,29 +469,29 @@ pub(crate) async fn execute_image_multipart(
 
         let total_ms = started.elapsed().as_millis() as u64;
         let resp_json = serde_json::to_value(&parsed_response).ok();
-        record_unary_usage_async(
-            ctx.db_pool,
-            &UnaryUsageArgs {
-                request_id,
-                api_key_id,
-                provider_id: &target.provider,
-                account_id: target.account_id,
-                combo_id: target.combo_id,
-                combo_target_id: target.combo_target_id,
-                model_row_id: target.model_row_id,
-                upstream_model_id: &target.upstream_model,
-                prompt_tokens: None,
-                completion_tokens: None,
-                status_code,
-                error_msg: None,
-                total_ms,
-                endpoint_kind: EndpointKind::Image,
-                request_body_json: None,
-                response_body_json: resp_json,
-                audio_ms: None,
-            },
-        )
-        .await;
+        let args = UnaryUsageArgs {
+            request_id,
+            api_key_id,
+            provider_id: &target.provider,
+            account_id: target.account_id,
+            combo_id: target.combo_id,
+            combo_target_id: target.combo_target_id,
+            model_row_id: target.model_row_id,
+            upstream_model_id: &target.upstream_model,
+            prompt_tokens: images,
+            completion_tokens: None,
+            status_code,
+            error_msg: None,
+            total_ms,
+            endpoint_kind: EndpointKind::Image,
+            request_body_json: None,
+            response_body_json: resp_json,
+            audio_ms: None,
+        };
+        // The debit rides on this row; persist it before releasing the key.
+        credit
+            .settle_quoted(ctx.db_pool, &args, bound.as_ref())
+            .await?;
 
         tracing::info!(
             "Image multipart request succeeded after {attempt} attempts, url={upstream_url}"

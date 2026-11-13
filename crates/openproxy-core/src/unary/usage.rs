@@ -209,7 +209,9 @@ impl<'a> UnaryUsageArgsBuilder<'a> {
     }
 }
 
-fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
+/// Build the [`UsageInput`] a unary executor records. Crate-visible so the
+/// credit settlement path uses the exact same row the plain recorder writes.
+pub(crate) fn unary_usage_input(args: &UnaryUsageArgs<'_>) -> UsageInput {
     UsageInput {
         proxy_url: None,
         proxy_status: None,
@@ -265,18 +267,26 @@ pub fn record_unary_usage(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
 }
 
 /// Async callers wait for persistence without acquiring SQLite locks on Tokio.
-pub async fn record_unary_usage_async(db_pool: &DbPool, args: &UnaryUsageArgs<'_>) {
+///
+/// The error is returned instead of logged and dropped: a caller that answers
+/// the client after a failed insert would leave the ledger without this
+/// request's charge, and the next request would spend a balance that is too
+/// high. Callers that hold a [`crate::unary::UnaryCreditLease`] settle through
+/// it instead, so the lane is released only after this succeeds.
+pub async fn record_unary_usage_async(
+    db_pool: &DbPool,
+    args: &UnaryUsageArgs<'_>,
+) -> openproxy_types::Result<()> {
     let job =
         openproxy_pipeline::worker::BackgroundJob::RecordUsage(Box::new(unary_usage_input(args)));
     let conn = db_pool.writer_arc();
     match tokio::task::spawn_blocking(move || openproxy_pipeline::worker::process_job(&conn, job))
         .await
     {
-        Ok(Ok(())) => {}
-        result => tracing::error!(
-            ?result,
-            "unary usage persistence failed; admitted jobs remain journaled"
-        ),
+        Ok(result) => result,
+        Err(error) => Err(openproxy_types::CoreError::Internal(format!(
+            "unary usage persistence task failed to run: {error}"
+        ))),
     }
 }
 
@@ -289,11 +299,11 @@ pub async fn record_unary_target_success_async(
     status_code: u16,
     total_ms: u64,
     tokens: (Option<u32>, Option<u32>),
-) {
+) -> openproxy_types::Result<()> {
     let mut args = UnaryUsageArgs::from_target(target, endpoint_kind, status_code, total_ms)
         .with_api_key_id(api_key_id);
     if tokens.0.is_some() || tokens.1.is_some() {
         args = args.with_tokens(tokens.0, tokens.1);
     }
-    record_unary_usage_async(db_pool, &args).await;
+    record_unary_usage_async(db_pool, &args).await
 }

@@ -17,12 +17,29 @@ use openproxy_types::{
 use crate::routing::{self, RoutingPlan};
 
 pub use crate::unary::{
-    UnaryTarget as SystemOneTargets, UnaryTarget, UnaryUsageArgs, is_target_available,
-    map_upstream_status_error, record_unary_target_success_async, record_unary_usage,
-    record_unary_usage_async, resolve_api_key, resolve_unary_targets,
+    HostLocal, UnaryCharge, UnaryCreditLease, UnaryTarget as SystemOneTargets, UnaryTarget,
+    UnaryUsageArgs, is_target_available, map_upstream_status_error,
+    record_unary_target_success_async, record_unary_usage, record_unary_usage_async,
+    resolve_api_key, resolve_unary_targets,
 };
 
 pub type SystemOneUsageArgs<'a> = UnaryUsageArgs<'a>;
+
+/// Whether this target is answered by the host-local decision engine rather
+/// than an HTTP upstream.
+///
+/// Must stay the same predicate as the short-circuit in
+/// [`dispatch_single_system_one`]: the budget gate relies on it to know that no
+/// metered upstream is spent.
+#[cfg(feature = "laya-engine")]
+fn is_native_system_one_target(target: &UnaryTarget) -> bool {
+    target.provider.as_str() == "laya" && openproxy_adapters::laya_engine::is_enabled()
+}
+
+#[cfg(not(feature = "laya-engine"))]
+fn is_native_system_one_target(_target: &UnaryTarget) -> bool {
+    false
+}
 
 pub fn resolve_system_one_targets(
     db_pool: &DbPool,
@@ -72,7 +89,7 @@ async fn dispatch_single_system_one(
     req: &SystemOneRequest,
 ) -> Result<(SystemOneResponse, u16)> {
     #[cfg(feature = "laya-engine")]
-    if target.provider.as_str() == "laya" && openproxy_adapters::laya_engine::is_enabled() {
+    if is_native_system_one_target(target) {
         let mut req_clone = req.clone();
         if req_clone.model.is_none() {
             req_clone.model = Some(target.upstream_model.clone());
@@ -163,6 +180,11 @@ pub async fn execute_system_one(
         master_key,
     } = deps;
     let started = Instant::now();
+
+    // Take the key's turn before any dispatch; released only once this
+    // request's usage row (and its debit) is persisted.
+    let mut credit = UnaryCreditLease::admit(db_pool, api_key_id).await?;
+
     let req_model = req.model.as_deref().unwrap_or("jev-latest");
     let routing_plan = routing::resolve_routing(db_pool, req_model).await?;
     let targets = crate::unary::resolve_unary_targets_async(
@@ -193,6 +215,26 @@ pub async fn execute_system_one(
         let Some(adapter) = adapters.iter().find(|a| a.id() == &target.provider) else {
             tracing::warn!("No adapter found for provider {}", target.provider);
             continue;
+        };
+
+        // Price the request from its state/questions and the model's own output
+        // ceiling before dispatching: a prepaid key never sends a request whose
+        // maximum cost does not fit its balance, and an unpriced request is
+        // refused rather than recorded at zero.
+        let bound = match credit
+            .authorize_dispatch(
+                db_pool,
+                &target,
+                UnaryCharge::SystemOne(&req),
+                HostLocal::confirm(&target, is_native_system_one_target(&target)),
+            )
+            .await
+        {
+            Ok(bound) => bound,
+            Err(error) => {
+                last_error = Some(error);
+                continue;
+            }
         };
 
         attempt += 1;
@@ -234,7 +276,10 @@ pub async fn execute_system_one(
                 if input_tokens.is_some() || output_tokens.is_some() {
                     args = args.with_tokens(input_tokens, output_tokens);
                 }
-                crate::unary::record_unary_usage_async(db_pool, &args).await;
+                // A prepaid row is bounded by what admission priced: an
+                // upstream that omits `usage` (or reports zero) bills at the
+                // bound instead of for free.
+                credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;
 
                 tracing::info!("SystemOne request succeeded after {attempt} attempts");
                 return Ok(parsed_response);

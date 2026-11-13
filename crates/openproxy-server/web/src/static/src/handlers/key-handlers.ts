@@ -15,6 +15,7 @@
 
 import { state } from "../state/index.js";
 import { api } from "../state/api.js";
+import { fetchKeysWithKind } from "../lib/keys-api.js";
 import { clearToken, isCurrentSessionKey } from "../state/auth.js";
 import { html, render, type TemplateResult } from "lit-html";
 import { showPlaintextKey } from "../components/key-display.js";
@@ -413,7 +414,7 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
     // delay or drop the only plaintext display. Same refresh pattern
     // as updateKey (plaintext-modal flows stay inline, see regenerateKey).
     showPlaintextKey(result.plaintext, result.key);
-    state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    state.apiKeys = await fetchKeysWithKind() as typeof state.apiKeys;
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
@@ -432,7 +433,7 @@ export async function updateKey(id: number, e: Event, wrapper?: HTMLElement): Pr
     await api("/keys/" + id, { method: "PATCH", body: JSON.stringify(body) });
     if (wrapper) wrapper.remove();
     else closeKeyForm("self", e);
-    state.apiKeys = await api("/keys") as typeof state.apiKeys;
+    state.apiKeys = await fetchKeysWithKind() as typeof state.apiKeys;
     requestUpdate();
   } catch (err: unknown) {
     showApiError(err, "Error");
@@ -482,7 +483,7 @@ export async function revokeKey(id: number, label: string | null): Promise<void>
         location.hash = "#/login";
         return;
       }
-      state.apiKeys = await api("/keys") as typeof state.apiKeys;
+      state.apiKeys = await fetchKeysWithKind() as typeof state.apiKeys;
     },
   });
   if (isSelf) {

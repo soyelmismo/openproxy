@@ -182,6 +182,27 @@ impl PipelineStage for FormattingStage {
             Err(e) => return fail_stage!(ctx, &current.target, &e, Some(&current.model)),
         };
 
+        // A prepaid key must prove it can pay the *maximum* cost of this
+        // candidate before any upstream is touched. This runs after the exact
+        // formatted body exists (so its byte length is a real token bound) and
+        // before the dispatch stage, for unary and streaming alike. Without a
+        // combo in context the check is skipped here: `DispatchStage` requires
+        // the combo and re-runs this check on the final bytes, so no dispatch
+        // path can reach the upstream unbounded.
+        if let Some(combo) = ctx.combo.as_ref()
+            && let Err(error) = crate::credit_budget::check_prepaid_dispatch(
+                &ctx.pipeline,
+                &ctx.req,
+                combo,
+                &current.target,
+                &current.model,
+                body_bytes.len(),
+            )
+            .await
+        {
+            return fail_stage!(ctx, &current.target, &error, Some(&current.model));
+        }
+
         ctx.target_format = Some(target_format);
         ctx.body_bytes = Some(body_bytes);
         ctx.is_streaming = Some(stream);

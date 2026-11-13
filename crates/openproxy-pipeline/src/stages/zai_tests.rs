@@ -557,6 +557,7 @@ async fn full_pipeline_paid_dispatch_uses_selected_credential_and_local_route() 
     target.model.capabilities_json =
         Some(serde_json::json!({"streaming":false}).to_string().into());
     let (mut request, _disconnect_guard) = crate::test_utils::make_request(ComboId(1));
+    request.api_key_id = Some(crate::test_utils::seed_test_api_key(&pipeline.conn.lock()));
     request.stream_sink = None;
     let result = pipeline.execute_test_target(request, target).await;
     assert_eq!(

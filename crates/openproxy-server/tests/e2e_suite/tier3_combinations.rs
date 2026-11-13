@@ -239,7 +239,10 @@ async fn test_tier3_key_model_restrictions_with_combo_body() {
     // NOT include restricted-combo: the key is shaped through a plan, and
     // the routing gate denies any combo outside that list.
     let _ = harness
-        .admin_post("/admin/api/combos", json!({"name": "allowed-combo", "strategy": "priority"}))
+        .admin_post(
+            "/admin/api/combos",
+            json!({"name": "allowed-combo", "strategy": "priority"}),
+        )
         .await;
     let key_res = harness
         .create_key_with_tier(

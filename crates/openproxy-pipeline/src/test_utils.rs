@@ -81,6 +81,30 @@ pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
     (pool, conn, path)
 }
 
+/// Seed the caller identity that the executor requires before it will dispatch.
+///
+/// `Pipeline::execute_single` rejects a request without `api_key_id` (the
+/// ghost-request guard), so any fixture that expects a real upstream hit must
+/// carry attribution. `usage.api_key_id` is a foreign key with
+/// `PRAGMA foreign_keys = ON`, so the row has to exist before usage is
+/// recorded; the same row is returned on repeat calls for one database.
+pub fn seed_test_api_key(conn: &Connection) -> openproxy_types::ApiKeyId {
+    conn.execute(
+        "INSERT INTO api_keys (key_hash, label) VALUES ('test-attribution', 'test attribution') \
+         ON CONFLICT(key_hash) DO NOTHING",
+        [],
+    )
+    .expect("seed api key");
+    let id: i64 = conn
+        .query_row(
+            "SELECT id FROM api_keys WHERE key_hash = 'test-attribution'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("test api key id");
+    openproxy_types::ApiKeyId(id)
+}
+
 /// A reasonable default `PipelineConfig` for tests: no real adapters
 /// (tests exercise the routing/usage path, not the HTTP path).
 pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {

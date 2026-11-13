@@ -154,6 +154,22 @@ impl PipelineStage for DispatchStage {
         } else {
             body_bytes
         };
+        // The adapter/custom profile may append signatures, billing headers or
+        // provider envelopes after `FormattingStage` measured the body. Re-run
+        // the budget on the exact bytes about to be dispatched so a finalizer
+        // cannot grow the payload past the admitted maximum.
+        if let Err(error) = crate::credit_budget::check_prepaid_dispatch(
+            &ctx.pipeline,
+            &ctx.req,
+            combo,
+            target,
+            model,
+            body_bytes.len(),
+        )
+        .await
+        {
+            return fail_stage!(ctx, target, &error, Some(model));
+        }
         let resolved_timeouts = ctx.resolved_timeouts.ok_or_else(|| {
             CoreError::Internal("missing resolved_timeouts in pipeline context".into())
         })?;
@@ -229,6 +245,18 @@ impl PipelineStage for DispatchStage {
                 Ok(body) => body,
                 Err(error) => return fail_stage!(ctx, target, &error, Some(model)),
             };
+            if let Err(error) = crate::credit_budget::check_prepaid_dispatch(
+                &ctx.pipeline,
+                &ctx.req,
+                combo,
+                target,
+                model,
+                body_bytes.len(),
+            )
+            .await
+            {
+                return fail_stage!(ctx, target, &error, Some(model));
+            }
             result = ctx
                 .pipeline
                 .dispatcher

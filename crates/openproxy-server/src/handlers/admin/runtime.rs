@@ -448,10 +448,8 @@ pub async fn put_concurrency_caps(
             "provide 'max_concurrent_per_key' and/or 'max_concurrent_global'".into(),
         )));
     }
-    let per_key = per_key.map(|v| v as usize).unwrap_or(s.max_concurrent_per_key());
-    let global = global
-        .map(|v| v as usize)
-        .unwrap_or(s.max_concurrent_global());
+    let per_key = per_key.map_or(s.max_concurrent_per_key(), |v| v as usize);
+    let global = global.map_or(s.max_concurrent_global(), |v| v as usize);
     if per_key == 0 || global == 0 {
         return Err(ApiError(CoreError::Validation(
             "concurrency caps must be at least 1".into(),

@@ -50,7 +50,7 @@ pub(crate) async fn resolve_tester_api_key_id(
             let (key, _plaintext) = openproxy_core::api_keys::create(
                 w,
                 openproxy_core::api_keys::CreateApiKeyInput {
-                    label: Some(label.clone()),
+                    label: Some(label),
                     scopes: vec!["chat".to_string()],
                     ..Default::default()
                 },
