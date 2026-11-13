@@ -4,7 +4,7 @@
 // Plans ARE the product: each one carries its price, credited balance,
 // lifetime and the access (models + combos) it unlocks. There are no free
 // amounts anymore: every checkout buys a specific tier. Both pickers (buy tab
-// and top-up tab) render the same cards from one renderer; the radio input
+// and plan-renew tab) render the same cards from one renderer; the radio input
 // inside each card keeps the native semantics and carries the "tier:N" value.
 
 import { $, err, hide } from "./dom.js";
@@ -156,14 +156,14 @@ export function loadCatalog(): void {
   })
     .then((p) => {
       if (!p.enabled) {
-        throw new Error("on-chain top-ups are not enabled on this server");
+        throw new Error("plan purchases are not enabled on this server");
       }
       const plans = p.plans || [];
       if (plans.length === 0) {
         throw new Error("no plans are available right now");
       }
       renderCards("usd", "plan-buy", plans);
-      renderCards("my-usd", "plan-topup", plans);
+      renderCards("my-usd", "plan-renew", plans);
     })
     .catch((e: Error) => {
       err("page-err", "Could not load plans: " + e.message);

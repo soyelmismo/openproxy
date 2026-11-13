@@ -1,7 +1,7 @@
-// views/config/credits-gateway.ts — runtime master switch for the credits
-// payment gateway. Off = nobody can buy plans or top up (buying surfaces
-// return 403 gateway_disabled and the checkout UI closes itself). Balance
-// history stays readable; spending an existing balance is unaffected.
+// views/config/credits-gateway.ts — runtime master switch for the plan
+// payment gateway. Off = nobody can buy a plan (buying surfaces return 403
+// gateway_disabled and the checkout UI closes itself). Active plans keep
+// spending their granted credit.
 import { html, type TemplateResult } from "lit-html";
 import { api } from "../../state/api.js";
 import { requestUpdate } from "../../state/reactive.js";
@@ -48,8 +48,8 @@ export function renderCreditsGatewayCard(): TemplateResult {
       <div class="config-toggle-info">
         <span class="config-label">Payment gateway</span>
         <span class="config-help">${on
-          ? "Open: anonymous purchases, packages and top-ups are accepted."
-          : "Closed: nobody can buy plans or top up. Existing balances still spend."}</span>
+          ? "Open: plans are on sale through the public checkout."
+          : "Closed: nobody can buy a plan. Active plans still spend."}</span>
       </div>
       <button type="button" role="switch" aria-checked=${on ? "true" : "false"}
         class="toggle-btn ${on ? "on" : "off"}" ?disabled=${toggling}

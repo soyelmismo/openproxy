@@ -8,7 +8,7 @@ import { getJson } from "./api.js";
 let order: CheckoutOrder | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-/** Current order (null until a buy or a key top-up creates one). */
+/** Current order (null until a buy or a plan renewal creates one). */
 export function currentOrder(): CheckoutOrder | null {
   return order;
 }

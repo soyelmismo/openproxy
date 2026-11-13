@@ -21,7 +21,7 @@ export interface QuotaStatus {
   plan: PlanStatus | null;
 }
 
-/** Public `/v1/credits/plans` offer (checkout + panel top-up). */
+/** Public `/v1/credits/plans` offer (checkout). */
 export interface PlanOffer {
   tier_id: number;
   name: string;

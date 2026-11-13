@@ -2,7 +2,7 @@
 // modules; each one owns exactly one responsibility:
 //   tabs.ts    → Buy / My key switcher
 //   catalog.ts → plan cards (price, credited balance, lifetime, access)
-//   mykey.ts   → balance/history/top-up with the buyer's key
+//   mykey.ts   → read the key's plan, buy/renew one for it
 //   buy.ts     → anonymous order + key reveal
 //   pay-step.ts → QR, countdown, on-chain poll (shared payment state)
 //

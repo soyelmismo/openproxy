@@ -205,7 +205,7 @@ export function navigate(): void {
   }
   // Restricted tenant enforcement: non-admin keys get their own tenanted
   // analytics, the client-facing models catalog, the playground and their
-  // own credits surface (balance / top-up / quota). Any admin-only route
+  // own plan status (quota). Any admin-only route
   // (keys, config, providers, …) redirects to #/analytics.
   const tenantAllowed =
     r.name === "analytics" ||
