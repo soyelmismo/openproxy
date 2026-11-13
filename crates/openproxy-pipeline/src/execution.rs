@@ -402,6 +402,9 @@ impl Pipeline {
             modality_gate: None,
             sanitize_response: None,
             real_model_id: None,
+            purge_reasoning: None,
+            pricing_input_per_1m: None,
+            pricing_output_per_1m: None,
         };
 
         let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();

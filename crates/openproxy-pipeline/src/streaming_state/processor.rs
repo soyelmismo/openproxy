@@ -246,8 +246,12 @@ impl ChunkProcessor<'_> {
                 .real_model_id
                 .as_deref()
                 .unwrap_or(&ctx.req.openai_request.model);
-            sanitized_storage =
-                crate::response_sanitizer::sanitize_streaming_chunk(final_payload, model_override);
+            let purge_reasoning = ctx.combo.purge_reasoning.unwrap_or(false);
+            sanitized_storage = crate::response_sanitizer::sanitize_streaming_chunk(
+                final_payload,
+                model_override,
+                purge_reasoning,
+            );
             match &sanitized_storage {
                 Some(s) => s.as_str(),
                 None => return Ok(crate::streaming::ChunkEvent::Skip),

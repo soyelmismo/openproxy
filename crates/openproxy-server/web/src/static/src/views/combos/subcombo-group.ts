@@ -300,6 +300,7 @@ export async function showEditSubComboModal(
       const raceSize = parseInt(String(data.get("race_size") || "1"), 10);
       const prevRl = data.get("preventive_rate_limit") === "on";
       const sanitizeResp = data.get("sanitize_response") === "on";
+      const purgeReasoning = data.get("purge_reasoning") === "on";
       const priorityMode = String(data.get("priority_mode") || "strict");
       const cooldownMode = String(data.get("cooldown_mode") || "flat");
 
@@ -331,6 +332,7 @@ export async function showEditSubComboModal(
         race_size: Number.isFinite(raceSize) && raceSize >= 1 ? raceSize : 1,
         preventive_rate_limit: prevRl,
         sanitize_response: sanitizeResp,
+        purge_reasoning: purgeReasoning,
         priority_mode: priorityMode,
         context_window: contextWindow,
         decision_model: decisionModel,
@@ -395,7 +397,13 @@ export async function showEditSubComboModal(
                 <div class="field">
                   <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                     <input id="subcombo-sanitize-response" name="sanitize_response" type="checkbox" ?checked=${combo.sanitize_response ?? false}>
-                    <span>${icons.check()} Sanitize Responses (Rewrite model & purge reasoning)</span>
+                    <span>${icons.check()} Sanitize Responses (Rewrite model)</span>
+                  </label>
+                </div>
+                <div class="field" style="margin-left: 20px;">
+                  <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                    <input id="subcombo-purge-reasoning" name="purge_reasoning" type="checkbox" ?checked=${combo.purge_reasoning ?? false}>
+                    <span>${icons.trash()} Purge Reasoning (Strip internal thinking/reasoning)</span>
                   </label>
                 </div>
                 <div class="field">

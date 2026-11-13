@@ -264,6 +264,41 @@ fn apply_combo_general_updates(
             ))));
         }
     }
+    match body.get("purge_reasoning") {
+        None => {}
+        Some(serde_json::Value::Null) => core_combos::update_purge_reasoning(w, id, None)?,
+        Some(serde_json::Value::Bool(enabled)) => {
+            core_combos::update_purge_reasoning(w, id, Some(*enabled))?;
+        }
+        Some(other) => {
+            return Err(ApiError(CoreError::Validation(format!(
+                "purge_reasoning must be a boolean or null, got {other}"
+            ))));
+        }
+    }
+    // Per-combo pricing is a pair: both rates travel together (or are both
+    // cleared). The combo's price wins over the target model's on every
+    // request routed through it.
+    if body.get("pricing_input_per_1m").is_some()
+        || body.get("pricing_output_per_1m").is_some()
+    {
+        let read_rate = |key: &str| -> Result<Option<f64>, ApiError> {
+            match body.get(key) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(v) => v.as_f64().map(Some).ok_or_else(|| {
+                    ApiError(CoreError::Validation(format!(
+                        "{key} must be a number or null"
+                    )))
+                }),
+            }
+        };
+        core_combos::update_combo_pricing_pair(
+            w,
+            id,
+            read_rate("pricing_input_per_1m")?,
+            read_rate("pricing_output_per_1m")?,
+        )?;
+    }
     Ok(())
 }
 

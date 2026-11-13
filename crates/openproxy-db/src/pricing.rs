@@ -252,6 +252,46 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
         .or_else(|| lookup_static_variants(provider, model))
 }
 
+/// The combo's own list price, when the operator set one.
+///
+/// A combo price is a *pair*: both rates or neither (`update_combo_pricing_pair`
+/// enforces it), so a half-priced row never leaks a partial bill.
+pub fn lookup_combo_price(conn: &Connection, combo_id: i64) -> Option<Price> {
+    use rusqlite::OptionalExtension;
+    let result: Result<Option<(f64, f64)>, _> = conn
+        .query_row(
+            "SELECT pricing_input_per_1m, pricing_output_per_1m FROM combos \
+             WHERE id = ?1 \
+               AND pricing_input_per_1m IS NOT NULL \
+               AND pricing_output_per_1m IS NOT NULL",
+            rusqlite::params![combo_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional();
+    result.ok().flatten().map(|(input, output)| Price {
+        input_per_1m: input,
+        output_per_1m: output,
+        ..Default::default()
+    })
+}
+
+/// Price that governs one request.
+///
+/// When the request was routed through a combo that carries its own price,
+/// that price is the bill — the target models' rates are irrelevant (several
+/// upstreams publish no pricing at all, and the combo is the product sold).
+/// Without a combo price the lookup falls back to the target model's price.
+pub fn lookup_for_request(
+    conn: &Connection,
+    provider: &str,
+    model: &str,
+    combo_id: Option<i64>,
+) -> Option<Price> {
+    combo_id
+        .and_then(|id| lookup_combo_price(conn, id))
+        .or_else(|| lookup_with_db(conn, provider, model))
+}
+
 crate::def_table_select!(
     pricing_select,
     "model_capabilities_sync",

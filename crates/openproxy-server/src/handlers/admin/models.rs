@@ -116,13 +116,22 @@ pub async fn catalog(
             // One entry per combo, under its bare routing name. The
             // `combo:<name>` virtual id stays accepted by routing but is no
             // longer advertised: listing both doubles every combo in the UI.
-            data.push(crate::handlers::models::build_combo_entry(
+            let mut entry = crate::handlers::models::build_combo_entry(
                 c,
                 Some(&c.name),
                 effective_cw,
                 effective_mot,
                 effective_caps.as_ref(),
-            ));
+            );
+            // A combo with its own price is billed at that rate, so the
+            // catalog shows it instead of leaving the row unpriced.
+            if let (Some(input), Some(output)) =
+                (c.pricing_input_per_1m, c.pricing_output_per_1m)
+            {
+                entry["pricing_input_per_1m"] = serde_json::json!(input);
+                entry["pricing_output_per_1m"] = serde_json::json!(output);
+            }
+            data.push(entry);
         }
         let count = data.len();
         Ok(Json(serde_json::json!({ "count": count, "data": data })))

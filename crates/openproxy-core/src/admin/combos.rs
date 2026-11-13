@@ -46,6 +46,14 @@ pub struct CreateComboInput {
     /// Decision routing timeout in milliseconds. Default: 100ms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_timeout_ms: Option<u64>,
+    /// Per-combo list price in USD per 1M input tokens. Both price fields must
+    /// be set together; they win over the target model's price for every
+    /// request routed through this combo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_input_per_1m: Option<f64>,
+    /// Per-combo list price in USD per 1M output tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_output_per_1m: Option<f64>,
 }
 
 impl CreateComboInput {
@@ -108,6 +116,16 @@ fn apply_combo_overrides(
     }
     if input.decision_timeout_ms.is_some() {
         combos::update_decision_timeout(conn, combo_id, input.decision_timeout_ms)?;
+    }
+    if input.pricing_input_per_1m.is_some() || input.pricing_output_per_1m.is_some() {
+        // Both rates or neither: the pair validator rejects a half-set price
+        // instead of quietly billing one side at zero.
+        combos::update_combo_pricing_pair(
+            conn,
+            combo_id,
+            input.pricing_input_per_1m,
+            input.pricing_output_per_1m,
+        )?;
     }
     Ok(())
 }

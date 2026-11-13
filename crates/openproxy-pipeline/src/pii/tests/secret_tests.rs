@@ -2,6 +2,21 @@ use super::super::*;
 use openproxy_types::config::PiiEntity;
 
 #[test]
+fn test_i18n_label_after_api_key_is_not_a_secret() {
+    // Session 20261104_064253_23d6c6: the i18n string
+    // `"login.api_key_label": "API Key"` was redacted as a secret value
+    // behind the `api_key_label` field name. The agent saw a placeholder in
+    // its own history while the file on disk was correct, and had to stop
+    // editing values by hand to avoid writing the placeholder into code.
+    let engine = PiiEngine::new(&[PiiEntity::Secret]);
+    let mut session = PiiSession::new(true);
+    let payload = "  \"login.api_key_label\": \"API Key\",\n  \"login.submit\": \"Login\",\n  \"login.placeholder\": \"Enter your manage-scope API key\",\n";
+    let red = engine.redact_text(payload, &mut session);
+    assert!(!red.contains("sec_"), "redacted: {red}");
+    assert_eq!(session.restore_text(&red), payload);
+}
+
+#[test]
 fn test_module_path_with_key_word_is_not_a_secret() {
     // Session 20261110_224747_dd8331: a rustc error mentioning
     // `openproxy_core::api_keys::CreateApiKeyInput` had the type path

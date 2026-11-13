@@ -23,6 +23,8 @@ fn ci(name: &str, strategy: &str) -> CreateComboInput {
         selection_window_secs: None,
         decision_model: None,
         decision_timeout_ms: None,
+        pricing_input_per_1m: None,
+        pricing_output_per_1m: None,
     }
 }
 

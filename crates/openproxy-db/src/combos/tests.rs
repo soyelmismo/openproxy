@@ -707,3 +707,80 @@ fn test_clone_combo() {
     let custom_combo = get_combo(&conn, custom_id).unwrap().unwrap();
     assert_eq!(custom_combo.name, "custom-clone");
 }
+
+#[test]
+fn test_combo_purge_reasoning_crud() {
+    let (pool, _path) = fresh_pool();
+    let mut conn = pool.writer();
+    let id = create_combo(&conn, "purge-test", Strategy::Priority, 1).expect("create");
+
+    // Default is NULL: reasoning is preserved.
+    let combo = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(combo.purge_reasoning, None);
+    assert_eq!(combo.sanitize_response, None);
+
+    update_sanitize_response(&conn, id, Some(true)).unwrap();
+    update_real_model_id(&conn, id, Some("gemini-3.5-flash-lite")).unwrap();
+    update_purge_reasoning(&conn, id, Some(true)).unwrap();
+
+    let combo = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(combo.sanitize_response, Some(true));
+    assert_eq!(combo.real_model_id.as_deref(), Some("gemini-3.5-flash-lite"));
+    assert_eq!(combo.purge_reasoning, Some(true));
+    assert_eq!(
+        list_combos(&conn)
+            .unwrap()
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.purge_reasoning),
+        Some(true)
+    );
+
+    // Cloning preserves the flag.
+    let cloned = clone_combo(&mut conn, id, Some("purge-test-copy")).expect("clone");
+    assert_eq!(
+        get_combo(&conn, cloned).unwrap().unwrap().purge_reasoning,
+        Some(true)
+    );
+
+    // Clearing writes NULL back: reasoning is passed through again.
+    update_purge_reasoning(&conn, id, None).unwrap();
+    assert_eq!(get_combo(&conn, id).unwrap().unwrap().purge_reasoning, None);
+
+    // Explicit false is distinct from NULL.
+    update_purge_reasoning(&conn, id, Some(false)).unwrap();
+    assert_eq!(
+        get_combo(&conn, id).unwrap().unwrap().purge_reasoning,
+        Some(false)
+    );
+}
+
+#[test]
+fn combo_pricing_is_a_pair_and_survives_a_clone() {
+    let (pool, _path) = fresh_pool();
+    let mut conn = pool.writer();
+    let id = create_combo(&conn, "priced-combo", Strategy::Priority, 1).expect("create");
+
+    update_combo_pricing_pair(&conn, id, Some(0.15), Some(0.6)).expect("set pair");
+    let combo = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(combo.pricing_input_per_1m, Some(0.15));
+    assert_eq!(combo.pricing_output_per_1m, Some(0.6));
+
+    // Cloning a combo carries its price: a copy bills the same as the original.
+    let cloned = clone_combo(&mut conn, id, Some("priced-combo-copy")).expect("clone");
+    let copy = get_combo(&conn, cloned).unwrap().unwrap();
+    assert_eq!(copy.pricing_input_per_1m, Some(0.15));
+    assert_eq!(copy.pricing_output_per_1m, Some(0.6));
+
+    // Half a pair is rejected: one side would silently bill at the model rate.
+    assert!(update_combo_pricing_pair(&conn, id, Some(2.0), None).is_err());
+    // Negative and non-finite rates are rejected at the source.
+    assert!(update_combo_pricing_pair(&conn, id, Some(-1.0), Some(1.0)).is_err());
+    assert!(update_combo_pricing_pair(&conn, id, Some(f64::NAN), Some(1.0)).is_err());
+
+    // Clearing both restores model-price inheritance.
+    update_combo_pricing_pair(&conn, id, None, None).expect("clear pair");
+    let cleared = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(cleared.pricing_input_per_1m, None);
+    assert_eq!(cleared.pricing_output_per_1m, None);
+}

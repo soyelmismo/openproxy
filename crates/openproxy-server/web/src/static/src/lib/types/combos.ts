@@ -30,6 +30,11 @@ export interface Combo {
   modality_gate?: boolean | null;
   sanitize_response?: boolean | null;
   real_model_id?: string | null;
+  purge_reasoning?: boolean | null;
+  /** Combo list price, USD per 1M input tokens. Both rates are set together. */
+  pricing_input_per_1m?: number | null;
+  /** Combo list price, USD per 1M output tokens. */
+  pricing_output_per_1m?: number | null;
 }
 
 export interface ComboTarget {
@@ -113,6 +118,9 @@ export interface CreateComboInput {
   decision_timeout_ms?: number;
   sanitize_response?: boolean;
   real_model_id?: string | null;
+  purge_reasoning?: boolean;
+  pricing_input_per_1m?: number;
+  pricing_output_per_1m?: number;
 }
 
 export interface AddTargetInput {

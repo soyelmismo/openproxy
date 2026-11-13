@@ -76,7 +76,13 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
             <div class="field">
               <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
                 <input id="combo-sanitize-response" name="sanitize_response" type="checkbox">
-                <span>Sanitize Responses (Rewrite model & purge reasoning)</span>
+                <span>Sanitize Responses (Rewrite model)</span>
+              </label>
+            </div>
+            <div class="field" style="margin-left: 20px;">
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+                <input id="combo-purge-reasoning" name="purge_reasoning" type="checkbox">
+                <span>Purge Reasoning (Strip internal thinking/reasoning)</span>
               </label>
             </div>
             <div class="field">
@@ -117,6 +123,13 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
               <div class="field">
                 <label for="combo-cd-max"><abbr title=${PARAM_TOOLTIPS.max_secs}>Max (s)</abbr></label>
                 <input id="combo-cd-max" name="cooldown_max_secs" type="number" min="1" value="3600">
+              </div>
+            </div>
+            <div class="field">
+              <label><abbr title="USD per 1M tokens. Set both rates to give the combo its own price: every request routed through it bills at this rate, whatever the member models cost. Leave both blank to inherit the model price.">Combo pricing (USD / 1M tokens)</abbr></label>
+              <div style="display:flex;gap:8px;">
+                <input id="combo-pricing-input" name="pricing_input_per_1m" type="number" min="0" step="0.0001" placeholder="input (inherit model)">
+                <input id="combo-pricing-output" name="pricing_output_per_1m" type="number" min="0" step="0.0001" placeholder="output (inherit model)">
               </div>
             </div>
           </div>
@@ -193,6 +206,7 @@ export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput 
     race_size: parseInt(String(f.get("race_size") || "1"), 10),
     preventive_rate_limit: f.get("preventive_rate_limit") === "on",
     sanitize_response: f.get("sanitize_response") === "on",
+    purge_reasoning: f.get("purge_reasoning") === "on",
     priority_mode: priorityMode,
     cooldown_mode: cooldownMode,
   };
@@ -236,6 +250,23 @@ export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput 
     if (factorRaw !== "") {
       const factor = parseInt(factorRaw, 10);
       if (!Number.isNaN(factor)) body.cooldown_factor = factor;
+    }
+  }
+  // Combo list price: both rates or neither. A single rate would bill only one
+  // side of the request, so a half-filled pair is dropped entirely.
+  const priceInRaw = String(f.get("pricing_input_per_1m") || "").trim();
+  const priceOutRaw = String(f.get("pricing_output_per_1m") || "").trim();
+  if (priceInRaw !== "" || priceOutRaw !== "") {
+    const priceIn = parseFloat(priceInRaw);
+    const priceOut = parseFloat(priceOutRaw);
+    if (
+      Number.isFinite(priceIn) &&
+      Number.isFinite(priceOut) &&
+      priceIn >= 0 &&
+      priceOut >= 0
+    ) {
+      body.pricing_input_per_1m = priceIn;
+      body.pricing_output_per_1m = priceOut;
     }
   }
   return body;

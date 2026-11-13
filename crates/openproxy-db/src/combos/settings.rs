@@ -43,6 +43,36 @@ define_column_updaters! {
     pub fn update_modality_gate(gate: Option<bool> => gate.map(i64::from)) => "modality_gate";
     pub fn update_sanitize_response(enabled: Option<bool> => enabled.map(i64::from)) => "sanitize_response";
     pub fn update_real_model_id(model_id: Option<&str>) => "real_model_id";
+    pub fn update_purge_reasoning(purge: Option<bool> => purge.map(i64::from)) => "purge_reasoning";
+    pub(crate) fn raw_update_combo_pricing(input: Option<f64>) => "pricing_input_per_1m";
+    pub(crate) fn raw_update_combo_pricing_output(output: Option<f64>) => "pricing_output_per_1m";
+}
+
+/// Set the combo's own list price. All-or-nothing: both rates must be present
+/// (or both cleared), because a half-priced combo would silently fall back to
+/// the target model on one side of the bill. Rates are USD per 1M tokens and
+/// must be finite and non-negative.
+pub fn update_combo_pricing_pair(
+    conn: &Connection,
+    id: ComboId,
+    input_per_1m: Option<f64>,
+    output_per_1m: Option<f64>,
+) -> Result<()> {
+    if input_per_1m.is_some() != output_per_1m.is_some() {
+        return Err(CoreError::Validation(
+            "combo pricing needs both pricing_input_per_1m and pricing_output_per_1m (or neither)"
+                .into(),
+        ));
+    }
+    for rate in [input_per_1m, output_per_1m].into_iter().flatten() {
+        if !rate.is_finite() || rate < 0.0 {
+            return Err(CoreError::Validation(format!(
+                "combo price must be a finite, non-negative USD rate per 1M tokens, got {rate}"
+            )));
+        }
+    }
+    raw_update_combo_pricing(conn, id, input_per_1m)?;
+    raw_update_combo_pricing_output(conn, id, output_per_1m)
 }
 
 pub fn update_target_weight(

@@ -379,6 +379,9 @@ async fn translate_plan_to_targets(
                     modality_gate: None,
                     sanitize_response: None,
                     real_model_id: None,
+                    purge_reasoning: None,
+                    pricing_input_per_1m: None,
+                    pricing_output_per_1m: None,
                 };
                 Ok((combo_id, Some(synthetic_combo), Some(targets)))
             } else if has_key_restrictions {

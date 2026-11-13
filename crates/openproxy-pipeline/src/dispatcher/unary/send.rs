@@ -366,9 +366,11 @@ impl UpstreamDispatcher {
                 .real_model_id
                 .as_deref()
                 .unwrap_or(&params.req.openai_request.model);
+            let purge_reasoning = params.combo.purge_reasoning.unwrap_or(false);
             crate::response_sanitizer::sanitize_unary_response(
                 &mut openai_response,
                 model_override,
+                purge_reasoning,
             );
         }
 

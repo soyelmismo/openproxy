@@ -76,6 +76,20 @@ pub struct Combo {
     /// over the client-requested model name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub real_model_id: Option<String>,
+    /// When `sanitize_response` is enabled, controls whether internal reasoning metadata
+    /// (`reasoning_content`, `reasoning_details`, `thought`, `thinking`) is stripped
+    /// or passed through. Defaults to `false` (reasoning is passed through unless
+    /// explicitly purged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purge_reasoning: Option<bool>,
+    /// Per-combo list price, USD per 1M input tokens. When both price columns
+    /// are set, requests routed through this combo are costed with them
+    /// instead of the target model's price (many upstreams publish none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_input_per_1m: Option<f64>,
+    /// Per-combo list price, USD per 1M output tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_output_per_1m: Option<f64>,
 }
 
 fn default_target_weight() -> i32 {
@@ -210,6 +224,9 @@ impl Default for Combo {
             modality_gate: None,
             sanitize_response: None,
             real_model_id: None,
+            purge_reasoning: None,
+            pricing_input_per_1m: None,
+            pricing_output_per_1m: None,
         }
     }
 }
@@ -457,6 +474,9 @@ mod tests {
             modality_gate: None,
             sanitize_response: None,
             real_model_id: None,
+            purge_reasoning: None,
+            pricing_input_per_1m: None,
+            pricing_output_per_1m: None,
         };
 
         // Default: inherits combo (Flat 60s) -> not disabled

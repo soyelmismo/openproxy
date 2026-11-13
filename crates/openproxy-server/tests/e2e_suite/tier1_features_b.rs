@@ -298,3 +298,57 @@ async fn test_tier1_admin_combos_delete_body() {
         .await;
     assert_eq!(status_after, StatusCode::NOT_FOUND);
 }
+
+#[test]
+fn test_tier1_admin_combos_purge_reasoning() {
+    crate::run_with_big_stack(test_tier1_admin_combos_purge_reasoning_body);
+}
+
+async fn test_tier1_admin_combos_purge_reasoning_body() {
+    let harness = TestHarness::new().await;
+    let (status, created) = harness
+        .admin_post(
+            "/admin/api/combos",
+            json!({"name": "purge-reasoning-combo", "strategy": "priority"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let combo_id = created["id"].as_i64().unwrap();
+    let path = format!("/admin/api/combos/{combo_id}");
+
+    // NULL by default: reasoning is passed through.
+    let (status, combo) = harness.admin_get(&path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(combo["purge_reasoning"].is_null());
+
+    // sanitize_response alone must not turn on purge_reasoning.
+    let (status, _) = harness
+        .admin_patch(&path, json!({"sanitize_response": true}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, combo) = harness.admin_get(&path).await;
+    assert_eq!(combo["sanitize_response"], json!(true));
+    assert!(combo["purge_reasoning"].is_null());
+
+    // Explicit opt-in.
+    let (status, _) = harness
+        .admin_patch(&path, json!({"purge_reasoning": true}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, combo) = harness.admin_get(&path).await;
+    assert_eq!(combo["purge_reasoning"], json!(true));
+
+    // Non-boolean payload is rejected.
+    let (status, _) = harness
+        .admin_patch(&path, json!({"purge_reasoning": "yes"}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Clearing writes NULL back.
+    let (status, _) = harness
+        .admin_patch(&path, json!({"purge_reasoning": null}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, combo) = harness.admin_get(&path).await;
+    assert!(combo["purge_reasoning"].is_null());
+}

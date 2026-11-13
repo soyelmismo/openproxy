@@ -63,6 +63,49 @@ fn is_module_path(val: &str) -> bool {
     val.starts_with(':') || val.contains("::")
 }
 
+/// i18n and UI field suffixes: `api_key_label`, `token_title`, `secret_hint`
+/// hold the text a human reads on screen, not the credential itself.
+fn is_ui_label_key(key: &str) -> bool {
+    const SUFFIXES: &[&str] = &[
+        "label",
+        "title",
+        "hint",
+        "placeholder",
+        "text",
+        "message",
+        "tooltip",
+        "desc",
+        "description",
+        "name",
+        "prompt",
+        "help",
+    ];
+    let lower = key.to_ascii_lowercase();
+    SUFFIXES.iter().any(|s| lower.ends_with(&format!("_{s}")))
+}
+
+/// A short quoted value whose words are all Capitalized or ALL-CAPS
+/// (`API Key`) is UI copy, not a credential: secrets do not carry spaces and
+/// Title Case. Two or three words max, letters and spaces only.
+fn is_titlecase_ui_label(val: &str) -> bool {
+    let words: Vec<&str> = val.split_whitespace().collect();
+    if !(2..=3).contains(&words.len()) || val.len() > 24 {
+        return false;
+    }
+    if !val.bytes().all(|b| b.is_ascii_alphabetic() || b == b' ') {
+        return false;
+    }
+    words.iter().all(|w| {
+        let all_caps = w.len() > 1 && w.bytes().all(|b| b.is_ascii_uppercase());
+        let title = w
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase())
+            && w.chars().skip(1).all(|c| c.is_ascii_lowercase());
+        all_caps || title
+    })
+}
+
 /// Cargo and npm package or crate names passed to `-p` / `-u` flags:
 /// lowercase identifiers joined by `-` or `_` (`openproxy-server`,
 /// `openproxy_pipeline`). They are not credentials, and masking them hides
@@ -230,6 +273,8 @@ pub(crate) fn collect_secret_candidates<'a>(
         if is_variable_reference(trimmed_val, &bound_names)
             || is_code_expression(text, val_m.end())
             || is_module_path(trimmed_val)
+            || is_ui_label_key(key_str)
+            || is_titlecase_ui_label(trimmed_val)
         {
             continue;
         }

@@ -216,7 +216,14 @@ pub fn record_row(
     conn: &Connection,
     input: &UsageInput,
 ) -> openproxy_types::Result<(UsageId, RecentUsageRow)> {
-    let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
+    // A combo with its own price bills at that price; otherwise the target
+    // model's rate applies. Never a blend of both.
+    let price = pricing::lookup_for_request(
+        conn,
+        input.provider_id.as_str(),
+        &input.upstream_model_id,
+        input.combo_id.map(|c| c.0),
+    );
     if price.is_none()
         && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
     {
@@ -343,27 +350,38 @@ fn update_backfill_price(
     price: Option<pricing::Price>,
 ) -> openproxy_types::Result<usize> {
     use pricing::PriceKind;
+    // Rows that ran through a priced combo are billed by the combo pass; the
+    // model fallback must never overwrite them with the target model's rate.
+    const NOT_A_PRICED_COMBO: &str = "AND (combo_id IS NULL OR combo_id NOT IN \
+         (SELECT id FROM combos WHERE pricing_input_per_1m IS NOT NULL \
+            AND pricing_output_per_1m IS NOT NULL))";
     match price {
         // Audio rows bill on `audio_ms` at an hourly rate; the token formula
         // below would price them at zero forever.
         Some(p) if p.kind == PriceKind::Audio => {
             let per_hour = p.audio_per_hour.unwrap_or(p.input_per_1m);
             conn.execute(
-                "UPDATE usage \
-                 SET cost_usd = (?1 * audio_ms / 3600000.0) \
-                 WHERE provider_id = ?2 AND upstream_model_id = ?3 \
-                   AND audio_ms > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                &format!(
+                    "UPDATE usage \
+                     SET cost_usd = (?1 * audio_ms / 3600000.0) \
+                     WHERE provider_id = ?2 AND upstream_model_id = ?3 \
+                       AND audio_ms > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL) \
+                       {NOT_A_PRICED_COMBO}"
+                ),
                 params![per_hour, provider_id, upstream_model_id],
             )
             .map_err(crate::error::map_db_error)
         }
         Some(p) => conn
             .execute(
-                "UPDATE usage \
-                 SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
-                                (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
-                 WHERE provider_id = ?3 AND upstream_model_id = ?4 \
-                   AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                &format!(
+                    "UPDATE usage \
+                     SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
+                                    (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
+                     WHERE provider_id = ?3 AND upstream_model_id = ?4 \
+                       AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL) \
+                       {NOT_A_PRICED_COMBO}"
+                ),
                 params![
                     p.input_per_1m,
                     p.output_per_1m,
@@ -374,23 +392,87 @@ fn update_backfill_price(
             .map_err(crate::error::map_db_error),
         None => conn
             .execute(
-                "UPDATE usage \
-                 SET cost_usd = NULL \
-                 WHERE provider_id = ?1 AND upstream_model_id = ?2 \
-                   AND prompt_tokens > 0 AND cost_usd = 0.0",
+                &format!(
+                    "UPDATE usage \
+                     SET cost_usd = NULL \
+                     WHERE provider_id = ?1 AND upstream_model_id = ?2 \
+                       AND prompt_tokens > 0 AND cost_usd = 0.0 \
+                       {NOT_A_PRICED_COMBO}"
+                ),
                 params![provider_id, upstream_model_id],
             )
             .map_err(crate::error::map_db_error),
     }
 }
 
+/// Backfill rows routed through a combo that carries its own price.
+fn update_backfill_combo_price(
+    conn: &Connection,
+    combo_id: i64,
+    price: pricing::Price,
+) -> openproxy_types::Result<usize> {
+    if price.kind == pricing::PriceKind::Audio {
+        let per_hour = price.audio_per_hour.unwrap_or(price.input_per_1m);
+        return conn
+            .execute(
+                "UPDATE usage SET cost_usd = (?1 * audio_ms / 3600000.0) \
+                 WHERE combo_id = ?2 AND audio_ms > 0 \
+                   AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                params![per_hour, combo_id],
+            )
+            .map_err(crate::error::map_db_error);
+    }
+    conn.execute(
+        "UPDATE usage \
+         SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
+                        (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
+         WHERE combo_id = ?3 AND prompt_tokens > 0 \
+           AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+        params![price.input_per_1m, price.output_per_1m, combo_id],
+    )
+    .map_err(crate::error::map_db_error)
+}
+
 pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usize> {
+    // 1. Combo prices first: a combo that carries its own rate bills every row
+    //    it routed, whatever the target models cost.
+    let combo_prices: Vec<(i64, pricing::Price)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, pricing_input_per_1m, pricing_output_per_1m FROM combos \
+                 WHERE pricing_input_per_1m IS NOT NULL \
+                   AND pricing_output_per_1m IS NOT NULL",
+            )
+            .map_err(crate::error::map_db_error)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    pricing::Price {
+                        input_per_1m: r.get(1)?,
+                        output_per_1m: r.get(2)?,
+                        ..Default::default()
+                    },
+                ))
+            })
+            .map_err(crate::error::map_db_error)?;
+        rows.filter_map(std::result::Result::ok).collect()
+    };
+    let mut total_updated = 0;
+    for (combo_id, price) in combo_prices {
+        total_updated += update_backfill_combo_price(conn, combo_id, price)?;
+    }
+
+    // 2. Everything else falls back to the target model's price.
     let mut stmt = conn
         .prepare(
             "SELECT DISTINCT provider_id, upstream_model_id \
              FROM usage \
              WHERE (prompt_tokens > 0 OR audio_ms > 0) \
-               AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+               AND (cost_usd = 0.0 OR cost_usd IS NULL) \
+               AND (combo_id IS NULL OR combo_id NOT IN \
+                    (SELECT id FROM combos WHERE pricing_input_per_1m IS NOT NULL \
+                       AND pricing_output_per_1m IS NOT NULL))",
         )
         .map_err(crate::error::map_db_error)?;
 
@@ -400,7 +482,6 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
         .filter_map(std::result::Result::ok)
         .collect();
 
-    let mut total_updated = 0;
     for (provider_id, upstream_model_id) in pairs {
         let price = pricing::lookup_with_db(conn, &provider_id, &upstream_model_id);
         total_updated += update_backfill_price(conn, &provider_id, &upstream_model_id, price)?;
@@ -801,6 +882,62 @@ mod tests {
         assert_eq!(row.prompt_tokens, Some(50));
         assert_eq!(row.completion_tokens, Some(150));
         assert_eq!(row.ttft_ms, Some(80));
+    }
+
+    #[test]
+    fn combo_own_price_bills_the_request_not_the_member_model() {
+        let pool =
+            DbPool::test_pool_with_prefix("openproxy-cost-combo-price").expect("open pool");
+        let conn = pool.writer();
+        // The routed model has an official (expensive) price.
+        conn.execute(
+            "INSERT INTO model_capabilities_sync \
+             (provider_id, model_id, pricing_input_per_1m, pricing_output_per_1m) \
+             VALUES ('test', 'test-model', 10.0, 30.0)",
+            [],
+        )
+        .expect("seed model price");
+        // The combo carries its own product price.
+        conn.execute(
+            "INSERT INTO combos (id, name, strategy, pricing_input_per_1m, pricing_output_per_1m) \
+             VALUES (900, 'priced', 'priority', 1.0, 2.0), \
+                    (901, 'inherits', 'priority', NULL, NULL)",
+            [],
+        )
+        .expect("seed combos");
+
+        let mut priced = test_input(1_000_000, 1_000_000, None, 1000, USAGE_FLAG_CLIENT_RESPONSE);
+        priced.combo_id = Some(openproxy_types::ids::ComboId(900));
+        let (priced_id, _) = record_row(&conn, &priced).expect("record priced combo row");
+        let priced_cost: f64 = conn
+            .query_row(
+                "SELECT cost_usd FROM usage WHERE id = ?1",
+                rusqlite::params![priced_id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // 1M input at 1.0 + 1M output at 2.0 = 3.0 — never the model's 40.0.
+        assert!(
+            (priced_cost - 3.0).abs() < 1e-9,
+            "combo price must win, got {priced_cost}"
+        );
+
+        // A combo without its own price still bills the target model's rate.
+        let mut inherits =
+            test_input(1_000_000, 1_000_000, None, 1000, USAGE_FLAG_CLIENT_RESPONSE);
+        inherits.combo_id = Some(openproxy_types::ids::ComboId(901));
+        let (inherits_id, _) = record_row(&conn, &inherits).expect("record inheriting row");
+        let inherits_cost: f64 = conn
+            .query_row(
+                "SELECT cost_usd FROM usage WHERE id = ?1",
+                rusqlite::params![inherits_id.0],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            (inherits_cost - 40.0).abs() < 1e-9,
+            "unpriced combo must fall back to the model rate, got {inherits_cost}"
+        );
     }
 
     #[test]

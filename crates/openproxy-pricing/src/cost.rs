@@ -292,7 +292,14 @@ fn execute_usage_insert(
 
 /// Insert a usage row. Returns the new UsageId.
 pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
-    let price = pricing::lookup_with_db(conn, input.provider_id.as_str(), &input.upstream_model_id);
+    // A combo with its own price bills at that price; otherwise the target
+    // model's rate applies. Never a blend of both.
+    let price = pricing::lookup_for_request(
+        conn,
+        input.provider_id.as_str(),
+        &input.upstream_model_id,
+        input.combo_id.map(|c| c.0),
+    );
     warn_missing_pricing(input, price.as_ref());
     // Audio rows carry their billable quantity in `audio_ms`, not in the token
     // columns: STT is priced per hour of audio. Feed the duration through the

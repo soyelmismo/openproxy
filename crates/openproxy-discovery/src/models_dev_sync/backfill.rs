@@ -82,13 +82,29 @@ pub fn backfill_model_id_normalized(conn: &Connection) -> Result<usize> {
     Ok(total)
 }
 
-type UsageRow = (i64, String, String, Option<u32>, Option<u32>, Option<u32>);
+type UsageRow = (
+    i64,
+    String,
+    String,
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+    Option<i64>,
+);
 
 fn resolve_recompute_price(
     conn: &Connection,
     provider_id: &str,
     model_id: &str,
+    combo_id: Option<i64>,
 ) -> Option<crate::pricing::Price> {
+    // A combo that carries its own list price bills every row it routed at
+    // that rate; the member models' prices never enter the bill.
+    if let Some(combo_id) = combo_id {
+        if let Some(price) = crate::pricing::lookup_combo_price(conn, combo_id) {
+            return Some(price);
+        }
+    }
     let price = crate::pricing::lookup_with_db(conn, provider_id, model_id);
     match price {
         Some(p) if p.input_per_1m == 0.0 && p.output_per_1m == 0.0 => {
@@ -129,7 +145,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     let rows: Vec<UsageRow> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens, audio_ms \
+                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens, audio_ms, combo_id \
                  FROM usage \
                  WHERE cost_usd = 0.0 \
                    AND status_code >= 200 AND status_code < 400 \
@@ -145,6 +161,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                     row.get::<_, Option<u32>>(3)?,
                     row.get::<_, Option<u32>>(4)?,
                     row.get::<_, Option<u32>>(5)?,
+                    row.get::<_, Option<i64>>(6)?,
                 ))
             })
             .map_err(openproxy_db::error::map_db_error)?;
@@ -156,8 +173,10 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
         let mut stmt = conn
             .prepare("UPDATE usage SET cost_usd = ?1 WHERE id = ?2")
             .map_err(openproxy_db::error::map_db_error)?;
-        for (id, provider_id, model_id, prompt_tokens, completion_tokens, audio_ms) in &rows {
-            let price = resolve_recompute_price(conn, provider_id, model_id);
+        for (id, provider_id, model_id, prompt_tokens, completion_tokens, audio_ms, combo_id) in
+            &rows
+        {
+            let price = resolve_recompute_price(conn, provider_id, model_id, *combo_id);
             if let Some(cost) =
                 compute_usage_row_cost(price, *prompt_tokens, *completion_tokens, *audio_ms)
             {
