@@ -7,7 +7,7 @@ use openproxy_core::rate_limit::{
     RateLimitConfig, RateLimitKey, RateLimiter, SlidingWindowRateLimiter,
 };
 use openproxy_types::ids::ComboTargetId;
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[test]
 fn test_tier3_combo_resolution_failover_cooldown() {
@@ -256,4 +256,71 @@ async fn test_tier3_key_model_restrictions_with_combo_body() {
     let plaintext = key_res["plaintext"].as_str().unwrap();
     let req = axum::http::Request::builder().method(axum::http::Method::POST).uri("/v1/chat/completions").header(axum::http::header::AUTHORIZATION, format!("Bearer {plaintext}")).header(axum::http::header::CONTENT_TYPE, "application/json").body(axum::body::Body::from(json!({"model": "restricted-combo", "messages": [{"role": "user", "content": "Should be blocked"}]}).to_string())).unwrap();
     assert_eq!(harness.oneshot(req).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn test_tier3_combo_shadowed_by_model_name_dispatches_the_combo() {
+    crate::run_with_big_stack(test_tier3_combo_shadowed_by_model_name_body);
+}
+
+/// Resolution is model-first, so a combo whose name matches a real model row
+/// never wins on its own. A key that is denied the model but allowed the
+/// same-named combo asked for the combo, and must get it instead of a 401.
+async fn test_tier3_combo_shadowed_by_model_name_body() {
+    let harness = TestHarness::new().await;
+    // The mock provider advertises `mock-gpt-4`, so this combo is shadowed.
+    let (status, combo) = harness
+        .admin_post(
+            "/admin/api/combos",
+            json!({"name": "mock-gpt-4", "strategy": "priority"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "create shadow combo: {combo}");
+    let combo_id = combo["id"].as_i64().unwrap();
+    let (_, models) = harness.admin_get("/admin/api/models").await;
+    let m1 = models[0]
+        .get("row_id")
+        .or_else(|| models[0].get("id"))
+        .unwrap()
+        .as_i64()
+        .unwrap();
+    let (status, target) = harness
+        .admin_post(
+            &format!("/admin/api/combos/{combo_id}/targets"),
+            json!({"provider_id": "mock-prov", "model_row_id": m1, "priority_order": 1}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "add target: {target}");
+
+    let key_res = harness
+        .create_key_with_tier(
+            "shadowed-combo-key",
+            openproxy_core::credits::TierConfig {
+                allowed_combos: Some(vec!["mock-gpt-4".to_string()]),
+                ..Default::default()
+            },
+        )
+        .await;
+    let plaintext = key_res["plaintext"].as_str().unwrap();
+    let req = axum::http::Request::builder()
+        .method(axum::http::Method::POST)
+        .uri("/v1/chat/completions")
+        .header(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {plaintext}"),
+        )
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(
+            json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "shadowed"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    let (status, _, body) = harness.oneshot(req).await;
+    let resp: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a combo shadowed by a model row must still dispatch: {resp}"
+    );
+    assert_eq!(resp["object"], "chat.completion");
 }

@@ -300,7 +300,9 @@ async fn verify_combo_authorization(
     state: &AppState,
     auth: Option<&ValidatedApiToken>,
     model_name: &str,
+    allow_shadowed_combo: bool,
 ) -> Result<Option<openproxy_core::routing::RoutingPlan>, ApiError> {
+    let requested = model_name.to_owned();
     let model_name = model_name.to_owned();
     let plan = state
         .db_pool()
@@ -317,6 +319,35 @@ async fn verify_combo_authorization(
             "combo not allowed for this key".into(),
         )));
     }
+
+    // Resolution is model-first: a combo whose name collides with a real model
+    // row (e.g. the `glm-5.3` combo next to the `glm-5.3` model rows other
+    // providers advertise) never wins. A key that is denied that model but is
+    // allowed the same-named combo asked for the combo, so resolve it through
+    // the explicit `combo:` prefix and dispatch there instead of a 401.
+    if allow_shadowed_combo
+        && let Some(auth) = auth
+    {
+        let resolved_as_real_combo = matches!(
+            &plan,
+            Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. })
+                if combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
+        );
+        if !resolved_as_real_combo && !auth.is_model_allowed(&requested, None) {
+            let combo_key = format!("combo:{requested}");
+            let combo_plan = state
+                .db_pool()
+                .spawn_read(move |r| openproxy_core::routing::resolve(r, &combo_key))
+                .await
+                .ok();
+            if let Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. }) = &combo_plan
+                && combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
+                && auth.is_combo_allowed(combo_id.0)
+            {
+                return Ok(combo_plan);
+            }
+        }
+    }
     Ok(plan)
 }
 
@@ -328,7 +359,12 @@ pub(crate) async fn authenticate_and_authorize_model(
 ) -> Result<Option<ApiKeyId>, ApiError> {
     let auth_result = authenticate(state, headers).await?;
 
-    let combo_plan = verify_combo_authorization(state, auth_result.as_ref(), model_name).await?;
+    // These endpoints dispatch the model string themselves, so a combo that
+    // shadows a model row cannot be honoured here: authorizing the combo would
+    // route the caller to a model its key is not allowed. Only the chat path,
+    // which dispatches the resolved plan, opts into the shadowed-combo swap.
+    let combo_plan =
+        verify_combo_authorization(state, auth_result.as_ref(), model_name, false).await?;
     // A combo that passed the key's combo allowlist (`is_combo_allowed`) is
     // authorized as a combo: the model-name gate does not apply to it. A
     // combo name will generally not match the plan's model allowlist even
@@ -456,7 +492,7 @@ pub async fn auth_middleware(
         // A combo that passed the key's combo allowlist (`is_combo_allowed`)
         // is authorized as a combo: the model-name gate does not apply to it.
         pre_resolved_plan =
-            verify_combo_authorization(&state, Some(token), requested_model).await?;
+            verify_combo_authorization(&state, Some(token), requested_model, true).await?;
         let combo_allowed = matches!(
             pre_resolved_plan,
             Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. })
