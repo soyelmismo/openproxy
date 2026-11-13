@@ -724,6 +724,7 @@ mod tests {
         let price = crate::pricing::Price {
             input_per_1m: 1.0,
             output_per_1m: 2.0,
+            cached_per_1m: None,
             kind: crate::pricing::PriceKind::Chat,
             audio_per_hour: None,
         };

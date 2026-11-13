@@ -20,6 +20,13 @@ pub enum PriceKind {
 pub struct Price {
     pub input_per_1m: f64,
     pub output_per_1m: f64,
+    /// Cached-input rate, USD per 1M tokens. `None` keeps the historical
+    /// default of 50% of `input_per_1m` (see [`compute_cost_opt_with_cache`]),
+    /// which is right for the static catalog but wrong for vendors whose
+    /// cache-read price is not half the input rate — and for a combo, whose
+    /// price is the product being sold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_per_1m: Option<f64>,
     #[serde(default)]
     pub kind: PriceKind,
     /// Audio duration pricing, in USD per hour of audio. Only meaningful for
@@ -132,6 +139,7 @@ pub fn lookup_audio_price(model: &str) -> Option<Price> {
     Some(Price {
         input_per_1m: per_hour,
         output_per_1m: 0.0,
+        cached_per_1m: None,
         kind: PriceKind::Audio,
         audio_per_hour: Some(per_hour),
     })
@@ -254,23 +262,26 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
 
 /// The combo's own list price, when the operator set one.
 ///
-/// A combo price is a *pair*: both rates or neither (`update_combo_pricing_pair`
-/// enforces it), so a half-priced row never leaks a partial bill.
+/// A combo price is a *pair*: both input and output rates or neither
+/// (`update_combo_pricing` enforces it), so a half-priced row never leaks a
+/// partial bill. The cached-input rate is optional and hangs off that pair: it
+/// only exists while the pair does.
 pub fn lookup_combo_price(conn: &Connection, combo_id: i64) -> Option<Price> {
     use rusqlite::OptionalExtension;
-    let result: Result<Option<(f64, f64)>, _> = conn
+    let result: Result<Option<(f64, f64, Option<f64>)>, _> = conn
         .query_row(
-            "SELECT pricing_input_per_1m, pricing_output_per_1m FROM combos \
-             WHERE id = ?1 \
+            "SELECT pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m \
+             FROM combos WHERE id = ?1 \
                AND pricing_input_per_1m IS NOT NULL \
                AND pricing_output_per_1m IS NOT NULL",
             rusqlite::params![combo_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional();
-    result.ok().flatten().map(|(input, output)| Price {
+    result.ok().flatten().map(|(input, output, cached)| Price {
         input_per_1m: input,
         output_per_1m: output,
+        cached_per_1m: cached,
         ..Default::default()
     })
 }
@@ -295,12 +306,12 @@ pub fn lookup_for_request(
 crate::def_table_select!(
     pricing_select,
     "model_capabilities_sync",
-    "pricing_input_per_1m, pricing_output_per_1m"
+    "pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m"
 );
 
 fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<Price> {
     use rusqlite::OptionalExtension;
-    let result: Result<Option<(f64, f64)>, _> = conn
+    let result: Result<Option<(f64, f64, Option<f64>)>, _> = conn
         .query_row(
             pricing_select!(
                 "WHERE provider_id = ?1 AND model_id = ?2 \
@@ -308,19 +319,20 @@ fn lookup_exact_in_db(conn: &Connection, provider: &str, model: &str) -> Option<
                  AND pricing_output_per_1m IS NOT NULL"
             ),
             rusqlite::params![provider, model],
-            |row| crate::map_row_tuple!(row => ((0, f64), (1, f64))),
+            |row| crate::map_row_tuple!(row => ((0, f64), (1, f64), (2, Option<f64>))),
         )
         .optional();
-    result.ok().flatten().map(|(inp, out)| Price {
+    result.ok().flatten().map(|(inp, out, cached)| Price {
         input_per_1m: inp,
         output_per_1m: out,
+        cached_per_1m: cached,
         ..Default::default()
     })
 }
 
 pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price> {
     use rusqlite::OptionalExtension;
-    let result: Result<Option<(f64, f64)>, _> = conn
+    let result: Result<Option<(f64, f64, Option<f64>)>, _> = conn
         .query_row(
             pricing_select!(
                 "WHERE model_id_normalized = ?1 \
@@ -329,12 +341,13 @@ pub fn lookup_by_normalized(conn: &Connection, normalized: &str) -> Option<Price
                  LIMIT 1"
             ),
             rusqlite::params![normalized],
-            |row| crate::map_row_tuple!(row => ((0, f64), (1, f64))),
+            |row| crate::map_row_tuple!(row => ((0, f64), (1, f64), (2, Option<f64>))),
         )
         .optional();
-    result.ok().flatten().map(|(inp, out)| Price {
+    result.ok().flatten().map(|(inp, out, cached)| Price {
         input_per_1m: inp,
         output_per_1m: out,
+        cached_per_1m: cached,
         ..Default::default()
     })
 }
@@ -359,8 +372,11 @@ pub fn compute_cost_opt_with_cache(
         _ => {
             let cached = cached_tokens.unwrap_or(0).min(prompt_tokens);
             let non_cached = prompt_tokens.saturating_sub(cached);
-            // Default cache read discount is 50% of input rate
-            let cached_price_per_1m = price.input_per_1m * 0.5;
+            // An explicit cached rate wins; otherwise keep the historical
+            // default of 50% of the input rate.
+            let cached_price_per_1m = price
+                .cached_per_1m
+                .unwrap_or(price.input_per_1m * 0.5);
             let input_cost = (price.input_per_1m * f64::from(non_cached)
                 + cached_price_per_1m * f64::from(cached))
                 / 1_000_000.0;
@@ -495,6 +511,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 0.0,
             output_per_1m: 0.0,
+            cached_per_1m: None,
             kind: PriceKind::Audio,
             audio_per_hour: Some(3.6),
         });
@@ -508,6 +525,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 10.0,
             output_per_1m: 0.0,
+            cached_per_1m: None,
             kind: PriceKind::Image,
             audio_per_hour: None,
         });
@@ -520,6 +538,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 3.0,
             output_per_1m: 15.0,
+            cached_per_1m: None,
             kind: PriceKind::Chat,
             audio_per_hour: None,
         });
@@ -538,6 +557,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 0.0,
             output_per_1m: 999_999.0,
+            cached_per_1m: None,
             kind: PriceKind::Audio,
             audio_per_hour: Some(0.36),
         });
@@ -552,6 +572,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 1.0,
             output_per_1m: 2.0,
+            cached_per_1m: None,
             kind: PriceKind::Other,
             audio_per_hour: None,
         });

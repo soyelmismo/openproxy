@@ -612,6 +612,7 @@ mod tests {
             purge_reasoning: None,
             pricing_input_per_1m: None,
             pricing_output_per_1m: None,
+            pricing_cached_per_1m: None,
         };
         let list = vec![
             combo(607, "deepseek-v4.1-flash"),
@@ -670,6 +671,7 @@ mod tests {
             purge_reasoning: None,
             pricing_input_per_1m: None,
             pricing_output_per_1m: None,
+            pricing_cached_per_1m: None,
         };
         assert!(filter_combos_for_key(vec![combo], Some(&key)).is_empty());
     }
@@ -752,6 +754,7 @@ mod tests {
             purge_reasoning: None,
             pricing_input_per_1m: None,
             pricing_output_per_1m: None,
+            pricing_cached_per_1m: None,
         };
         let mut caps = capabilities::ModelCapabilities::empty();
         caps.thinking = Some(true);

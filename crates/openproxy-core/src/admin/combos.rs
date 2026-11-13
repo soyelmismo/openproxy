@@ -54,6 +54,10 @@ pub struct CreateComboInput {
     /// Per-combo list price in USD per 1M output tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing_output_per_1m: Option<f64>,
+    /// Per-combo list price in USD per 1M cached input tokens. Optional: when
+    /// absent, cache reads bill at 50% of the input rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_cached_per_1m: Option<f64>,
 }
 
 impl CreateComboInput {
@@ -117,14 +121,19 @@ fn apply_combo_overrides(
     if input.decision_timeout_ms.is_some() {
         combos::update_decision_timeout(conn, combo_id, input.decision_timeout_ms)?;
     }
-    if input.pricing_input_per_1m.is_some() || input.pricing_output_per_1m.is_some() {
-        // Both rates or neither: the pair validator rejects a half-set price
-        // instead of quietly billing one side at zero.
-        combos::update_combo_pricing_pair(
+    if input.pricing_input_per_1m.is_some()
+        || input.pricing_output_per_1m.is_some()
+        || input.pricing_cached_per_1m.is_some()
+    {
+        // Input/output rates or neither: the validator rejects a half-set price
+        // instead of quietly billing one side at zero, and rejects a cached
+        // rate with no base pair to discount.
+        combos::update_combo_pricing(
             conn,
             combo_id,
             input.pricing_input_per_1m,
             input.pricing_output_per_1m,
+            input.pricing_cached_per_1m,
         )?;
     }
     Ok(())

@@ -77,38 +77,51 @@ async function onFloatInput(field: string, e: Event): Promise<void> {
   await patchCombo(detailComboId!, { [field]: val });
 }
 
-/** Persist the combo's own list price from the two-field bar.
+/** Persist the combo's own list price from the bar.
  *
- *  The pair is all-or-nothing: both rates or both cleared. A half-filled pair
- *  would bill one side of the request at the model's rate, so it is rejected
- *  here instead of being silently merged server-side. */
+ *  Input/output is all-or-nothing: both rates or both cleared. A half-filled
+ *  pair would bill one side of the request at the model's rate, so it is
+ *  rejected here instead of being silently merged server-side. The cached-input
+ *  rate is optional: blank means "no explicit rate" (billing keeps the 50% of
+ *  input default) and it can only exist alongside the pair. */
 async function patchComboPricingFromBar(bar: HTMLElement | null): Promise<void> {
   if (!bar) return;
   const inEl = bar.querySelector<HTMLInputElement>("input[data-rate='input']");
   const outEl = bar.querySelector<HTMLInputElement>("input[data-rate='output']");
-  if (!inEl || !outEl) return;
+  const cachedEl = bar.querySelector<HTMLInputElement>("input[data-rate='cached']");
+  if (!inEl || !outEl || !cachedEl) return;
   const inRaw = inEl.value.trim();
   const outRaw = outEl.value.trim();
+  const cachedRaw = cachedEl.value.trim();
   if (inRaw === "" && outRaw === "") {
+    if (cachedRaw !== "") {
+      cachedEl.toggleAttribute("aria-invalid", true);
+      showToast(t("combos.toast.pricing_pair"), "error");
+      return;
+    }
     inEl.removeAttribute("aria-invalid");
     outEl.removeAttribute("aria-invalid");
     await patchCombo(detailComboId!, {
       pricing_input_per_1m: null,
       pricing_output_per_1m: null,
+      pricing_cached_per_1m: null,
     });
     return;
   }
   const priceIn = parseFloat(inRaw);
   const priceOut = parseFloat(outRaw);
+  const priceCached = cachedRaw === "" ? null : parseFloat(cachedRaw);
   const valid =
     inRaw !== "" &&
     outRaw !== "" &&
     Number.isFinite(priceIn) &&
     Number.isFinite(priceOut) &&
     priceIn >= 0 &&
-    priceOut >= 0;
+    priceOut >= 0 &&
+    (priceCached === null || (Number.isFinite(priceCached) && priceCached >= 0));
   inEl.toggleAttribute("aria-invalid", !valid);
   outEl.toggleAttribute("aria-invalid", !valid);
+  cachedEl.toggleAttribute("aria-invalid", !valid);
   if (!valid) {
     showToast(t("combos.toast.pricing_pair"), "error");
     return;
@@ -116,12 +129,14 @@ async function patchComboPricingFromBar(bar: HTMLElement | null): Promise<void> 
   await patchCombo(detailComboId!, {
     pricing_input_per_1m: priceIn,
     pricing_output_per_1m: priceOut,
+    pricing_cached_per_1m: priceCached,
   });
 }
 
 /** Combo list price. When both rates are set, every request routed through the
  *  combo bills at them — member model prices (often missing entirely) never
- *  enter the bill. Blank both fields to inherit the model price again. */
+ *  enter the bill. The cached-input rate is optional; blank bills cache reads at
+ *  the default 50% of input. Blank both base fields to inherit again. */
 function renderPricingBar(combo: Combo): TemplateResult {
   const hasPrice = combo.pricing_input_per_1m != null && combo.pricing_output_per_1m != null;
   const rate = (v: number | null | undefined): string => (v != null ? String(v) : "");
@@ -139,6 +154,13 @@ function renderPricingBar(combo: Combo): TemplateResult {
       <input type="number" min="0" step="0.0001" data-rate="output" class="cw-input"
         .value=${rate(combo.pricing_output_per_1m)}
         placeholder=${t("combos.detail.pricing_inherit")}
+        @change=${(e: Event) => void patchComboPricingFromBar((e.target as HTMLElement).closest(".combo-pricing-bar"))}>
+    </label>
+    <label class="combo-field-subfield">
+      <abbr title=${t("combos.detail.pricing_cached_hint")}>${t("combos.detail.pricing_cached")}</abbr>
+      <input type="number" min="0" step="0.0001" data-rate="cached" class="cw-input"
+        .value=${rate(combo.pricing_cached_per_1m)}
+        placeholder=${t("combos.detail.pricing_cached_default")}
         @change=${(e: Event) => void patchComboPricingFromBar((e.target as HTMLElement).closest(".combo-pricing-bar"))}>
     </label>
     ${hasPrice ? html`<span class="muted">${t("combos.detail.pricing_own")}</span>` : html`<span class="muted">${t("combos.detail.pricing_inherit")}</span>`}

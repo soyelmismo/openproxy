@@ -756,31 +756,38 @@ fn test_combo_purge_reasoning_crud() {
 }
 
 #[test]
-fn combo_pricing_is_a_pair_and_survives_a_clone() {
+fn combo_pricing_is_a_pair_plus_cached_and_survives_a_clone() {
     let (pool, _path) = fresh_pool();
     let mut conn = pool.writer();
     let id = create_combo(&conn, "priced-combo", Strategy::Priority, 1).expect("create");
 
-    update_combo_pricing_pair(&conn, id, Some(0.15), Some(0.6)).expect("set pair");
+    update_combo_pricing(&conn, id, Some(0.15), Some(0.6), Some(0.03)).expect("set price");
     let combo = get_combo(&conn, id).unwrap().unwrap();
     assert_eq!(combo.pricing_input_per_1m, Some(0.15));
     assert_eq!(combo.pricing_output_per_1m, Some(0.6));
+    assert_eq!(combo.pricing_cached_per_1m, Some(0.03));
 
     // Cloning a combo carries its price: a copy bills the same as the original.
     let cloned = clone_combo(&mut conn, id, Some("priced-combo-copy")).expect("clone");
     let copy = get_combo(&conn, cloned).unwrap().unwrap();
     assert_eq!(copy.pricing_input_per_1m, Some(0.15));
     assert_eq!(copy.pricing_output_per_1m, Some(0.6));
+    assert_eq!(copy.pricing_cached_per_1m, Some(0.03));
 
     // Half a pair is rejected: one side would silently bill at the model rate.
-    assert!(update_combo_pricing_pair(&conn, id, Some(2.0), None).is_err());
+    assert!(update_combo_pricing(&conn, id, Some(2.0), None, None).is_err());
+    // A cached rate with no base pair to discount is rejected too.
+    assert!(update_combo_pricing(&conn, id, None, None, Some(0.01)).is_err());
     // Negative and non-finite rates are rejected at the source.
-    assert!(update_combo_pricing_pair(&conn, id, Some(-1.0), Some(1.0)).is_err());
-    assert!(update_combo_pricing_pair(&conn, id, Some(f64::NAN), Some(1.0)).is_err());
+    assert!(update_combo_pricing(&conn, id, Some(-1.0), Some(1.0), None).is_err());
+    assert!(update_combo_pricing(&conn, id, Some(f64::NAN), Some(1.0), None).is_err());
+    assert!(update_combo_pricing(&conn, id, Some(1.0), Some(1.0), Some(f64::INFINITY)).is_err());
 
-    // Clearing both restores model-price inheritance.
-    update_combo_pricing_pair(&conn, id, None, None).expect("clear pair");
+    // Clearing the pair restores model-price inheritance and takes the cached
+    // rate with it, so no orphaned discount survives.
+    update_combo_pricing(&conn, id, None, None, None).expect("clear price");
     let cleared = get_combo(&conn, id).unwrap().unwrap();
     assert_eq!(cleared.pricing_input_per_1m, None);
     assert_eq!(cleared.pricing_output_per_1m, None);
+    assert_eq!(cleared.pricing_cached_per_1m, None);
 }

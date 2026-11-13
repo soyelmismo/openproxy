@@ -46,17 +46,21 @@ define_column_updaters! {
     pub fn update_purge_reasoning(purge: Option<bool> => purge.map(i64::from)) => "purge_reasoning";
     pub(crate) fn raw_update_combo_pricing(input: Option<f64>) => "pricing_input_per_1m";
     pub(crate) fn raw_update_combo_pricing_output(output: Option<f64>) => "pricing_output_per_1m";
+    pub(crate) fn raw_update_combo_pricing_cached(cached: Option<f64>) => "pricing_cached_per_1m";
 }
 
-/// Set the combo's own list price. All-or-nothing: both rates must be present
-/// (or both cleared), because a half-priced combo would silently fall back to
-/// the target model on one side of the bill. Rates are USD per 1M tokens and
+/// Set the combo's own list price. Input and output are all-or-nothing: both
+/// rates present (or both cleared), because a half-priced combo would silently
+/// fall back to the target model on one side of the bill. The cached-input rate
+/// is optional but only allowed while that pair exists, so a cached rate can
+/// never outlive the base price it discounts. Rates are USD per 1M tokens and
 /// must be finite and non-negative.
-pub fn update_combo_pricing_pair(
+pub fn update_combo_pricing(
     conn: &Connection,
     id: ComboId,
     input_per_1m: Option<f64>,
     output_per_1m: Option<f64>,
+    cached_per_1m: Option<f64>,
 ) -> Result<()> {
     if input_per_1m.is_some() != output_per_1m.is_some() {
         return Err(CoreError::Validation(
@@ -64,7 +68,15 @@ pub fn update_combo_pricing_pair(
                 .into(),
         ));
     }
-    for rate in [input_per_1m, output_per_1m].into_iter().flatten() {
+    if input_per_1m.is_none() && cached_per_1m.is_some() {
+        return Err(CoreError::Validation(
+            "combo pricing_cached_per_1m needs the input/output price pair".into(),
+        ));
+    }
+    for rate in [input_per_1m, output_per_1m, cached_per_1m]
+        .into_iter()
+        .flatten()
+    {
         if !rate.is_finite() || rate < 0.0 {
             return Err(CoreError::Validation(format!(
                 "combo price must be a finite, non-negative USD rate per 1M tokens, got {rate}"
@@ -72,7 +84,8 @@ pub fn update_combo_pricing_pair(
         }
     }
     raw_update_combo_pricing(conn, id, input_per_1m)?;
-    raw_update_combo_pricing_output(conn, id, output_per_1m)
+    raw_update_combo_pricing_output(conn, id, output_per_1m)?;
+    raw_update_combo_pricing_cached(conn, id, cached_per_1m)
 }
 
 pub fn update_target_weight(

@@ -163,11 +163,11 @@ fn test_tier1_models_list_key_scoped_filtering() {
 }
 
 #[test]
-fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair() {
-    crate::run_with_big_stack(test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body);
+fn test_tier1_combo_price_pair_plus_cached_and_clears_as_a_unit() {
+    crate::run_with_big_stack(test_tier1_combo_price_pair_plus_cached_and_clears_as_a_unit_body);
 }
 
-async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
+async fn test_tier1_combo_price_pair_plus_cached_and_clears_as_a_unit_body() {
     let harness = TestHarness::new().await;
     let (status, created) = harness
         .admin_post(
@@ -177,6 +177,7 @@ async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
                 "strategy": "priority",
                 "pricing_input_per_1m": 0.15,
                 "pricing_output_per_1m": 0.6,
+                "pricing_cached_per_1m": 0.03,
             }),
         )
         .await;
@@ -193,11 +194,41 @@ async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
         .expect("created combo listed");
     assert_eq!(combo["pricing_input_per_1m"], 0.15);
     assert_eq!(combo["pricing_output_per_1m"], 0.6);
+    assert_eq!(combo["pricing_cached_per_1m"], 0.03);
 
-    // A single rate is rejected: the pair is all-or-nothing.
+    // A partial patch touches only the rate it names: the rest of the price
+    // survives, so a typo in one field never resets the others.
     let (status, _) = harness
         .admin_patch(
             &format!("/admin/api/combos/{combo_id}"),
+            json!({"pricing_input_per_1m": 0.2}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, list) = harness.admin_get("/admin/api/combos").await;
+    let combo = list
+        .as_array()
+        .expect("combo array")
+        .iter()
+        .find(|c| c["id"] == combo_id)
+        .expect("combo listed");
+    assert_eq!(combo["pricing_input_per_1m"], 0.2);
+    assert_eq!(combo["pricing_output_per_1m"], 0.6);
+    assert_eq!(combo["pricing_cached_per_1m"], 0.03);
+
+    // A price pair that ends up half-set is rejected: on an unpriced combo a
+    // lone input rate would bill output at the model's rate.
+    let (status, created) = harness
+        .admin_post(
+            "/admin/api/combos",
+            json!({"name": "tier1-unpriced-combo", "strategy": "priority"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let unpriced_id = created["id"].as_i64().expect("combo id");
+    let (status, _) = harness
+        .admin_patch(
+            &format!("/admin/api/combos/{unpriced_id}"),
             json!({"pricing_input_per_1m": 1.0}),
         )
         .await;
@@ -206,6 +237,26 @@ async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
         StatusCode::BAD_REQUEST,
         "half a price pair must be rejected"
     );
+
+    // A cached rate on its own is a partial patch: it updates the discount and
+    // leaves the base pair untouched.
+    let (status, _) = harness
+        .admin_patch(
+            &format!("/admin/api/combos/{combo_id}"),
+            json!({"pricing_cached_per_1m": 0.01}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, list) = harness.admin_get("/admin/api/combos").await;
+    let combo = list
+        .as_array()
+        .expect("combo array")
+        .iter()
+        .find(|c| c["id"] == combo_id)
+        .expect("combo listed");
+    assert_eq!(combo["pricing_input_per_1m"], 0.2);
+    assert_eq!(combo["pricing_output_per_1m"], 0.6);
+    assert_eq!(combo["pricing_cached_per_1m"], 0.01);
 
     // Negative rates never reach the ledger.
     let (status, _) = harness
@@ -216,7 +267,8 @@ async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
-    // Clearing both returns the combo to model-price inheritance.
+    // Clearing the pair returns the combo to model-price inheritance and takes
+    // the cached rate with it, even when the body never mentions it.
     let (status, _) = harness
         .admin_patch(
             &format!("/admin/api/combos/{combo_id}"),
@@ -233,6 +285,7 @@ async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
         .expect("combo still listed");
     assert!(combo["pricing_input_per_1m"].is_null());
     assert!(combo["pricing_output_per_1m"].is_null());
+    assert!(combo["pricing_cached_per_1m"].is_null());
 }
 
 async fn test_tier1_models_list_key_scoped_filtering_body() {

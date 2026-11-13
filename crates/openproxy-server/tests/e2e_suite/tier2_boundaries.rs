@@ -130,7 +130,9 @@ async fn test_tier2_auth_manage_scope_required_for_admin_body() {
         .body(Body::empty())
         .unwrap();
     let (status, _, _) = harness.oneshot(req).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A customer key (`chat` scope) is a valid identity in the admin surface —
+    // it can read its own plan and quota — but operator routes stay off limits.
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[test]

@@ -130,6 +130,7 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
               <div style="display:flex;gap:8px;">
                 <input id="combo-pricing-input" name="pricing_input_per_1m" type="number" min="0" step="0.0001" placeholder="input (inherit model)">
                 <input id="combo-pricing-output" name="pricing_output_per_1m" type="number" min="0" step="0.0001" placeholder="output (inherit model)">
+                <input id="combo-pricing-cached" name="pricing_cached_per_1m" type="number" min="0" step="0.0001" placeholder="cached (50% of input)">
               </div>
             </div>
           </div>
@@ -252,21 +253,26 @@ export function buildComboBodyFromForm(form: HTMLFormElement): CreateComboInput 
       if (!Number.isNaN(factor)) body.cooldown_factor = factor;
     }
   }
-  // Combo list price: both rates or neither. A single rate would bill only one
-  // side of the request, so a half-filled pair is dropped entirely.
+  // Combo list price: input/output are a pair. A single base rate would bill
+  // only one side of the request, so a half-filled pair is dropped entirely.
+  // The cached-input rate is optional and only travels with the pair.
   const priceInRaw = String(f.get("pricing_input_per_1m") || "").trim();
   const priceOutRaw = String(f.get("pricing_output_per_1m") || "").trim();
+  const priceCachedRaw = String(f.get("pricing_cached_per_1m") || "").trim();
   if (priceInRaw !== "" || priceOutRaw !== "") {
     const priceIn = parseFloat(priceInRaw);
     const priceOut = parseFloat(priceOutRaw);
+    const priceCached = priceCachedRaw === "" ? null : parseFloat(priceCachedRaw);
     if (
       Number.isFinite(priceIn) &&
       Number.isFinite(priceOut) &&
       priceIn >= 0 &&
-      priceOut >= 0
+      priceOut >= 0 &&
+      (priceCached === null || (Number.isFinite(priceCached) && priceCached >= 0))
     ) {
       body.pricing_input_per_1m = priceIn;
       body.pricing_output_per_1m = priceOut;
+      body.pricing_cached_per_1m = priceCached;
     }
   }
   return body;

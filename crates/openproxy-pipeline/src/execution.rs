@@ -405,6 +405,7 @@ impl Pipeline {
             purge_reasoning: None,
             pricing_input_per_1m: None,
             pricing_output_per_1m: None,
+            pricing_cached_per_1m: None,
         };
 
         let cancel_tok = openproxy_adapters::upstream::CancellationToken::new();

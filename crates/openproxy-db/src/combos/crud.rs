@@ -180,8 +180,8 @@ pub fn clone_combo(
             cooldown_factor, lkgp_exploration_rate, selection_window_secs,
             preventive_rate_limit, decision_model, decision_timeout_ms,
             modality_gate, sanitize_response, real_model_id, purge_reasoning,
-            pricing_input_per_1m, pricing_output_per_1m
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+            pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             new_name,
             source_combo.strategy.as_str(),
@@ -204,6 +204,7 @@ pub fn clone_combo(
             source_combo.purge_reasoning.map(i64::from),
             source_combo.pricing_input_per_1m,
             source_combo.pricing_output_per_1m,
+            source_combo.pricing_cached_per_1m,
         ],
     );
 

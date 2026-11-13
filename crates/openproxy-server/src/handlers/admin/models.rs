@@ -130,6 +130,9 @@ pub async fn catalog(
             {
                 entry["pricing_input_per_1m"] = serde_json::json!(input);
                 entry["pricing_output_per_1m"] = serde_json::json!(output);
+                if let Some(cached) = c.pricing_cached_per_1m {
+                    entry["pricing_cached_per_1m"] = serde_json::json!(cached);
+                }
             }
             data.push(entry);
         }

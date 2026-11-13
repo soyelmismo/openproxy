@@ -35,6 +35,8 @@ export interface Combo {
   pricing_input_per_1m?: number | null;
   /** Combo list price, USD per 1M output tokens. */
   pricing_output_per_1m?: number | null;
+  /** Combo list price, USD per 1M cached input tokens. Only valid with the pair. */
+  pricing_cached_per_1m?: number | null;
 }
 
 export interface ComboTarget {
@@ -121,6 +123,7 @@ export interface CreateComboInput {
   purge_reasoning?: boolean;
   pricing_input_per_1m?: number;
   pricing_output_per_1m?: number;
+  pricing_cached_per_1m?: number | null;
 }
 
 export interface AddTargetInput {

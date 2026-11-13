@@ -276,12 +276,15 @@ fn apply_combo_general_updates(
             ))));
         }
     }
-    // Per-combo pricing is a pair: both rates travel together (or are both
-    // cleared). The combo's price wins over the target model's on every
-    // request routed through it.
-    if body.get("pricing_input_per_1m").is_some()
-        || body.get("pricing_output_per_1m").is_some()
-    {
+    // Per-combo pricing: input/output is a pair (both rates or neither) and the
+    // optional cached-input rate only exists alongside it. The combo's price
+    // wins over the target model's on every request routed through it.
+    // A key absent from the body keeps its stored value, so fixing just the
+    // cached rate never wipes the base pair (and vice versa).
+    let touches_pair = body.get("pricing_input_per_1m").is_some()
+        || body.get("pricing_output_per_1m").is_some();
+    let touches_cached = body.get("pricing_cached_per_1m").is_some();
+    if touches_pair || touches_cached {
         let read_rate = |key: &str| -> Result<Option<f64>, ApiError> {
             match body.get(key) {
                 None | Some(serde_json::Value::Null) => Ok(None),
@@ -292,12 +295,29 @@ fn apply_combo_general_updates(
                 }),
             }
         };
-        core_combos::update_combo_pricing_pair(
-            w,
-            id,
-            read_rate("pricing_input_per_1m")?,
-            read_rate("pricing_output_per_1m")?,
-        )?;
+        let current = openproxy_db::combos::get_combo(w, id)?.ok_or_else(|| {
+            ApiError(CoreError::Validation(format!("combo {id} not found")))
+        })?;
+        let input_per_1m = if body.get("pricing_input_per_1m").is_some() {
+            read_rate("pricing_input_per_1m")?
+        } else {
+            current.pricing_input_per_1m
+        };
+        let output_per_1m = if body.get("pricing_output_per_1m").is_some() {
+            read_rate("pricing_output_per_1m")?
+        } else {
+            current.pricing_output_per_1m
+        };
+        let cached_per_1m = if input_per_1m.is_none() && output_per_1m.is_none() {
+            // Clearing the pair clears the discount with it: a cached rate with
+            // nothing to discount is an orphan and must not survive.
+            None
+        } else if touches_cached {
+            read_rate("pricing_cached_per_1m")?
+        } else {
+            current.pricing_cached_per_1m
+        };
+        core_combos::update_combo_pricing(w, id, input_per_1m, output_per_1m, cached_per_1m)?;
     }
     Ok(())
 }
