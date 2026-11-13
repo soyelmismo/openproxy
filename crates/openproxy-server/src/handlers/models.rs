@@ -60,10 +60,7 @@ pub(crate) fn filter_combos_for_key(
             // legacy shape where combo names ride inside `allowed_models`.
             // A strict key (`only_whitelisted = 1`) with an empty model list
             // must still list its allowed combos.
-            let explicit_combo_gate = k
-                .allowed_combos
-                .as_deref()
-                .is_some_and(|a| !a.is_empty());
+            let explicit_combo_gate = k.allowed_combos.as_deref().is_some_and(|a| !a.is_empty());
             combos
                 .into_iter()
                 .filter(|c| {
@@ -74,8 +71,7 @@ pub(crate) fn filter_combos_for_key(
                         return true;
                     }
                     let combo_virtual_id = format!("combo:{}", c.name);
-                    k.is_model_allowed(&combo_virtual_id, None)
-                        || k.is_model_allowed(&c.name, None)
+                    k.is_model_allowed(&combo_virtual_id, None) || k.is_model_allowed(&c.name, None)
                 })
                 .collect()
         }

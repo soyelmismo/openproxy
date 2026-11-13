@@ -142,7 +142,10 @@ mod tests {
     fn longer_payloads_use_a_denser_matrix() {
         let short = render("a", "#fff", "#000", "#fff").expect("short");
         let long = render(&"x".repeat(300), "#fff", "#000", "#fff").expect("long");
-        assert!(long.modules > short.modules, "denser payload, denser matrix");
+        assert!(
+            long.modules > short.modules,
+            "denser payload, denser matrix"
+        );
     }
 
     #[test]

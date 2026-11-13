@@ -485,7 +485,10 @@ async fn test_tier1_key_kinds_list_and_flip_body() {
     assert_eq!(kind_of(&rows, id), "personal");
 
     let (status, resp) = harness
-        .admin_post(&format!("/admin/api/keys/{id}/kind"), json!({"kind": "customer"}))
+        .admin_post(
+            &format!("/admin/api/keys/{id}/kind"),
+            json!({"kind": "customer"}),
+        )
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(resp["kind"], "customer");
@@ -495,7 +498,10 @@ async fn test_tier1_key_kinds_list_and_flip_body() {
 
     // Unknown values are rejected, never stored.
     let (status, _) = harness
-        .admin_post(&format!("/admin/api/keys/{id}/kind"), json!({"kind": "vip"}))
+        .admin_post(
+            &format!("/admin/api/keys/{id}/kind"),
+            json!({"kind": "vip"}),
+        )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (_, rows) = harness.admin_get("/admin/api/keys/kinds").await;
@@ -519,7 +525,11 @@ async fn test_tier1_usage_accepts_the_ownership_filter_body() {
         let (status, _) = harness
             .admin_get(&format!("/admin/api/usage/summary?api_key_kind={kind}"))
             .await;
-        assert_eq!(status, StatusCode::OK, "api_key_kind={kind} must be accepted");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "api_key_kind={kind} must be accepted"
+        );
     }
     let (status, _) = harness
         .admin_get("/admin/api/usage/summary?api_key_kind=vip")

@@ -217,6 +217,7 @@
   "analytics.summary.total_cost": "Total cost USD",
   "analytics.summary.avg_ttft": "Avg TTFT ms",
   "analytics.metric.attempts": "upstream attempts",
+  "analytics.metric.requests_hint": "successful requests",
   "analytics.metric.success_rate": "Success rate",
   "analytics.metric.failed_responses": "failed responses",
   "analytics.metric.tokens": "Total tokens",

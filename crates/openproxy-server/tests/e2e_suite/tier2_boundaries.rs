@@ -574,3 +574,115 @@ async fn test_tier2_admin_key_simulation_header_body() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(resp["object"], "chat.completion");
 }
+
+/// A customer key reads spend, tokens, the daily trend and the per-model
+/// split. Latency, races, status distribution, combo health, detailed rows
+/// and the provider matrix are operator telemetry: the routes answer 403 and
+/// the summary payload does not carry their fields.
+#[test]
+fn test_tier2_customer_analytics_is_minimal() {
+    crate::run_with_big_stack(test_tier2_customer_analytics_is_minimal_body);
+}
+
+async fn test_tier2_customer_analytics_is_minimal_body() {
+    async fn client_get(harness: &TestHarness, path: &str) -> (StatusCode, serde_json::Value) {
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(path)
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", harness.client_key),
+            )
+            .body(Body::empty())
+            .unwrap();
+        let (status, _, body) = harness.oneshot(req).await;
+        (
+            status,
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    let harness = TestHarness::new().await;
+
+    // Allowed: the client's own minimal analytics.
+    for path in [
+        "/admin/api/usage/summary",
+        "/admin/api/usage/by-model",
+        "/admin/api/usage/by-day",
+    ] {
+        let (status, _) = client_get(&harness, path).await;
+        assert_eq!(status, StatusCode::OK, "{path} must stay readable");
+    }
+
+    // The summary carries the customer KPIs and nothing else.
+    let (status, summary) = client_get(&harness, "/admin/api/usage/summary").await;
+    assert_eq!(status, StatusCode::OK);
+    for kept in [
+        "unique_requests",
+        "total_prompt_tokens",
+        "total_completion_tokens",
+        "total_cached_tokens",
+        "total_cost_usd",
+    ] {
+        assert!(
+            summary.get(kept).is_some(),
+            "summary keeps {kept}: {summary}"
+        );
+    }
+    for dropped in [
+        "avg_ttft_ms",
+        "avg_success_total_ms",
+        "avg_success_connect_ms",
+        "avg_success_ttft_ms",
+        "avg_total_ms",
+        "avg_compression_savings_pct",
+        "winners",
+        "losers",
+        "total_attempts",
+    ] {
+        assert!(
+            summary.get(dropped).is_none(),
+            "summary must not ship operator telemetry ({dropped}): {summary}"
+        );
+    }
+
+    // Denied: operator-only telemetry, even though the key is a valid identity.
+    for path in [
+        "/admin/api/usage/latency",
+        "/admin/api/usage/races",
+        "/admin/api/usage/by-status",
+        "/admin/api/usage/by-combo",
+        "/admin/api/usage/by-provider",
+        "/admin/api/usage/monthly-by-provider",
+        "/admin/api/usage/by-account",
+        "/admin/api/usage/errors",
+        "/admin/api/usage/recent",
+    ] {
+        let (status, _) = client_get(&harness, path).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{path} is operator telemetry and must not reach a customer key"
+        );
+    }
+
+    // The operator keeps the full payload and every route.
+    let (status, admin_summary) = harness.admin_get("/admin/api/usage/summary").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        admin_summary.get("avg_ttft_ms").is_some(),
+        "operator summary keeps latency: {admin_summary}"
+    );
+    for path in [
+        "/admin/api/usage/latency",
+        "/admin/api/usage/races",
+        "/admin/api/usage/by-status",
+    ] {
+        let (status, _) = harness.admin_get(path).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path} must stay readable for the operator"
+        );
+    }
+}

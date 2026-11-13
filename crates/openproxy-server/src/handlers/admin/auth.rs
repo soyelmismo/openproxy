@@ -311,9 +311,12 @@ fn client_allowed(path: &str, method: &axum::http::Method) -> bool {
     let get = method == axum::http::Method::GET;
     match p {
         "/auth/me" | "/formats" | "/models/catalog" => get,
-        // Tenanted usage: usage.rs applies apply_tenant_and_public_scope per
-        // handler, so an analytics key only ever reads its own key's rows.
-        p if p.starts_with("/usage") => get,
+        // Minimal self-service usage: spend, tokens, the daily trend and the
+        // per-model split of the caller's own key. Latency percentiles, race
+        // stats, status distribution, combo health, detailed rows and the
+        // provider matrix are operator telemetry: they stay off this list so
+        // the payload is never even built for a customer.
+        "/usage/summary" | "/usage/by-model" | "/usage/by-day" | "/usage/quota" => get,
         // Self-service plan status (own plan, balance and expiry). Plan,
         // order and gateway management is not listed → operator-only.
         "/credits/quota" => get,

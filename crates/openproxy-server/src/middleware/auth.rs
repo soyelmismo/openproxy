@@ -325,9 +325,7 @@ async fn verify_combo_authorization(
     // providers advertise) never wins. A key that is denied that model but is
     // allowed the same-named combo asked for the combo, so resolve it through
     // the explicit `combo:` prefix and dispatch there instead of a 401.
-    if allow_shadowed_combo
-        && let Some(auth) = auth
-    {
+    if allow_shadowed_combo && let Some(auth) = auth {
         let resolved_as_real_combo = matches!(
             &plan,
             Some(openproxy_core::routing::RoutingPlan::Combo { combo_id, .. })

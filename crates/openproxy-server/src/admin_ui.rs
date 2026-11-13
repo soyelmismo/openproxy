@@ -84,7 +84,10 @@ pub async fn callback_html() -> Html<&'static str> {
 /// `/v1/credits/*` surface.
 pub async fn checkout_html() -> impl IntoResponse {
     (
-        [("cache-control", "no-store"), ("content-type", "text/html; charset=utf-8")],
+        [
+            ("cache-control", "no-store"),
+            ("content-type", "text/html; charset=utf-8"),
+        ],
         include_str!("../web/src/static/checkout.html"),
     )
 }
@@ -94,7 +97,10 @@ pub async fn checkout_html() -> impl IntoResponse {
 /// for the SPA), so the checkout loads its JS as a `'self'` asset.
 pub async fn checkout_js() -> impl IntoResponse {
     (
-        [("cache-control", "no-store"), ("content-type", "application/javascript")],
+        [
+            ("cache-control", "no-store"),
+            ("content-type", "application/javascript"),
+        ],
         include_str!("../web/src/static/checkout.js"),
     )
 }

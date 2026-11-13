@@ -175,8 +175,14 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
         // origin answers 405 and the browser renders "HTTP ERROR 405" on
         // reload until a fresh GET navigation.
         .route("/", get(admin_ui::index_html).post(admin_ui::index_html))
-        .route("/panel", get(admin_ui::index_html).post(admin_ui::index_html))
-        .route("/panel/", get(admin_ui::index_html).post(admin_ui::index_html))
+        .route(
+            "/panel",
+            get(admin_ui::index_html).post(admin_ui::index_html),
+        )
+        .route(
+            "/panel/",
+            get(admin_ui::index_html).post(admin_ui::index_html),
+        )
         .route(
             "/callback.html",
             get(admin_ui::callback_html).post(admin_ui::callback_html),

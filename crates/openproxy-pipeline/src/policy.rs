@@ -75,15 +75,20 @@ impl EffectiveTargetPolicy {
     /// Invariant:
     /// - If the client explicitly provided `max_tokens` or `max_completion_tokens`, it is PRESERVED.
     /// - If the client omitted both, `policy.max_output_tokens` is populated into `max_tokens`.
-    /// - If `thinking_effort` is configured, it is inserted into `extra["reasoning_effort"]`.
+    /// - If `thinking_effort` is configured, it is an OVERRIDE, not a default: it REPLACES any
+    ///   client-provided effort (`reasoning_effort`, `reasoningEffort`, `thinking_effort`, or the
+    ///   `reasoning` object). A combo chain that passes the client's effort through a parent
+    ///   (passthrough) must still be able to pin a final value at the leaf target.
     pub fn normalize_request(&self, req: &Arc<OpenAIRequest>) -> Arc<OpenAIRequest> {
         let client_has_max = req.max_tokens.is_some()
             || req.extra.contains_key("max_completion_tokens")
             || req.extra.contains_key("max_tokens");
 
-        let needs_effort = self.thinking_effort.is_some()
-            && !req.extra.contains_key("reasoning_effort")
-            && !req.extra.contains_key("thinking_effort");
+        // Target-level thinking_effort always wins over client-supplied effort.
+        // Gating on `!req.extra.contains_key(...)` here made every override dead
+        // whenever the client pinned an effort that a passthrough parent combo
+        // forwarded verbatim (client "medium" silently beat target "high").
+        let needs_effort = self.thinking_effort.is_some();
 
         let needs_max = !client_has_max && self.max_output_tokens.is_some();
 
@@ -95,12 +100,16 @@ impl EffectiveTargetPolicy {
         if needs_max {
             patched.max_tokens = self.max_output_tokens;
         }
-        if let Some(ref effort) = self.thinking_effort
-            && needs_effort
-        {
+        if let Some(ref effort) = self.thinking_effort {
             patched
                 .extra
                 .insert("reasoning_effort".to_string(), serde_json::json!(effort));
+            // Strip the client's competing effort variants so no dialect fallback
+            // (anthropic `thinking_effort`, `reasoningEffort`, `reasoning.effort`)
+            // can resurrect the overridden value downstream.
+            patched.extra.remove("thinking_effort");
+            patched.extra.remove("reasoningEffort");
+            patched.extra.remove("reasoning");
         }
 
         Arc::new(patched)
@@ -206,5 +215,61 @@ mod tests {
         let normalized_b = policy.normalize_request(&req_omitted);
         assert_eq!(normalized_b.max_tokens, Some(32_768));
         assert_eq!(normalized_b.extra["reasoning_effort"], "high");
+    }
+
+    fn request_with_extra(extra: serde_json::Value) -> Arc<OpenAIRequest> {
+        Arc::new(OpenAIRequest {
+            messages: vec![OpenAIMessage {
+                role: "user".into(),
+                content: Some(serde_json::json!("hi")),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                extra: Default::default(),
+            }],
+            extra: extra.as_object().cloned().unwrap_or_default(),
+            ..Default::default()
+        })
+    }
+
+    /// Target-level override must beat a client-pinned effort forwarded through
+    /// a passthrough parent combo (client "medium" vs target override "high").
+    #[test]
+    fn test_policy_override_replaces_client_effort() {
+        let policy =
+            EffectiveTargetPolicy::resolve(None, &sample_target(Some("high")), &sample_model(None));
+        let req = request_with_extra(serde_json::json!({"reasoning_effort": "medium"}));
+        let normalized = policy.normalize_request(&req);
+        assert_eq!(normalized.extra["reasoning_effort"], "high");
+    }
+
+    /// No competing variant (`thinking_effort`, `reasoningEffort`, `reasoning{}`
+    /// object) may survive the override: dialect fallbacks read them when
+    /// `reasoning_effort` is absent, so leftovers would resurrect "medium".
+    #[test]
+    fn test_policy_override_strips_client_effort_variants() {
+        let policy =
+            EffectiveTargetPolicy::resolve(None, &sample_target(Some("high")), &sample_model(None));
+        let req = request_with_extra(serde_json::json!({
+            "reasoning_effort": "medium",
+            "thinking_effort": "medium",
+            "reasoningEffort": "medium",
+            "reasoning": {"effort": "medium"}
+        }));
+        let normalized = policy.normalize_request(&req);
+        assert_eq!(normalized.extra["reasoning_effort"], "high");
+        assert!(normalized.extra.get("thinking_effort").is_none());
+        assert!(normalized.extra.get("reasoningEffort").is_none());
+        assert!(normalized.extra.get("reasoning").is_none());
+    }
+
+    /// Passthrough (no target override) leaves the client's effort untouched.
+    #[test]
+    fn test_policy_passthrough_keeps_client_effort() {
+        let policy =
+            EffectiveTargetPolicy::resolve(None, &sample_target(None), &sample_model(None));
+        let req = request_with_extra(serde_json::json!({"reasoning_effort": "medium"}));
+        let normalized = policy.normalize_request(&req);
+        assert_eq!(normalized.extra["reasoning_effort"], "medium");
     }
 }

@@ -90,7 +90,6 @@ fn default_ttl_days() -> Vec<u32> {
     vec![7, 15, 30]
 }
 
-
 fn default_rate_limit_requests() -> u32 {
     1000
 }

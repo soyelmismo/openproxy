@@ -20,10 +20,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}/revoke", axum::routing::post(revoke_api_key))
         .route("/{id}/regenerate", axum::routing::post(regenerate_api_key))
         .route("/{id}/usage", axum::routing::get(api_key_usage))
-        .route(
-            "/{id}/quota",
-            axum::routing::get(get_key_quota),
-        )
+        .route("/{id}/quota", axum::routing::get(get_key_quota))
         .route("/quotas", axum::routing::get(list_key_quotas))
 }
 
@@ -151,16 +148,22 @@ pub async fn update_api_key(
     let _ = crate::error::run_blocking(move || {
         let label = body.get("label").and_then(|v| v.as_str());
         let scopes_owned: Option<Vec<String>> =
-            body.get("scopes")
-                .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect());
+            body.get("scopes").and_then(|v| v.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            });
         let scopes_slice: Option<&[String]> = scopes_owned.as_deref();
         let is_active = body.get("is_active").and_then(serde_json::Value::as_bool);
         let blacklisted_providers_owned =
-            extract_tristate_array(&body, "blacklisted_providers", |x| x.as_str().map(String::from));
-        let blacklisted_providers_slice = blacklisted_providers_owned.as_ref().map(|v| v.as_slice());
-        let blacklisted_models_owned =
-            extract_tristate_array(&body, "blacklisted_models", |x| x.as_str().map(String::from));
+            extract_tristate_array(&body, "blacklisted_providers", |x| {
+                x.as_str().map(String::from)
+            });
+        let blacklisted_providers_slice =
+            blacklisted_providers_owned.as_ref().map(|v| v.as_slice());
+        let blacklisted_models_owned = extract_tristate_array(&body, "blacklisted_models", |x| {
+            x.as_str().map(String::from)
+        });
         let blacklisted_models_slice = blacklisted_models_owned.as_ref().map(|v| v.as_slice());
         let expires_field = match body.get("expires_at") {
             None => UpdateField::Ignore,

@@ -5,7 +5,8 @@ use crate::error::CoreError;
 #[test]
 fn a_key_created_by_the_checkout_is_a_customer_from_birth() {
     let (conn, _p) = fresh_pool();
-    let (key, _plain) = crud::create(&conn, make_input("client"), "credits-checkout:ORD-42").unwrap();
+    let (key, _plain) =
+        crud::create(&conn, make_input("client"), "credits-checkout:ORD-42").unwrap();
     let rows = kind::list(&conn).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, key.id.0);
@@ -26,10 +27,16 @@ fn set_flips_a_key_both_ways_and_list_reflects_it() {
     let (conn, _p) = fresh_pool();
     let (key, _plain) = crud::create(&conn, make_input("mine"), "admin").unwrap();
 
-    assert_eq!(kind::set(&conn, key.id.0, "customer").unwrap(), kind::KIND_CUSTOMER);
+    assert_eq!(
+        kind::set(&conn, key.id.0, "customer").unwrap(),
+        kind::KIND_CUSTOMER
+    );
     assert_eq!(kind::list(&conn).unwrap()[0].kind, kind::KIND_CUSTOMER);
 
-    assert_eq!(kind::set(&conn, key.id.0, " personal ").unwrap(), kind::KIND_PERSONAL);
+    assert_eq!(
+        kind::set(&conn, key.id.0, " personal ").unwrap(),
+        kind::KIND_PERSONAL
+    );
     assert_eq!(kind::list(&conn).unwrap()[0].kind, kind::KIND_PERSONAL);
 }
 

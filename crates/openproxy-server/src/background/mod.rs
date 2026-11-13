@@ -7,8 +7,8 @@ use std::time::Duration;
 
 mod claude_profile;
 pub mod client_contract;
-pub mod credits_watcher;
 mod codebuddy_contract;
+pub mod credits_watcher;
 pub mod runner;
 pub mod supervisor;
 // Factories del refresco de contratos de cliente (wiring en state/background.rs).

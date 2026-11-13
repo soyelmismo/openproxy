@@ -92,10 +92,7 @@ mod tests {
 
     #[test]
     fn checkout_keys_are_customers_by_creator() {
-        assert_eq!(
-            kind_for_creator("credits-checkout:ORD-1"),
-            KIND_CUSTOMER
-        );
+        assert_eq!(kind_for_creator("credits-checkout:ORD-1"), KIND_CUSTOMER);
         assert_eq!(kind_for_creator("admin"), KIND_PERSONAL);
     }
 }

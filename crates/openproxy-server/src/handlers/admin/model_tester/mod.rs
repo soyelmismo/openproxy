@@ -185,12 +185,10 @@ pub async fn test_model(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let cancel_rx = cancel_watch.map(|axum::Extension(cw)| cw.rx);
     let (account_id, proxy_override) = parse_test_model_params(&s, &body_bytes).await?;
-    let attribution = resolve_tester_api_key_id(
-        &s,
-        identity.and_then(|axum::Extension(i)| i.key_id()),
-    )
-    .await
-    .map_err(ApiError)?;
+    let attribution =
+        resolve_tester_api_key_id(&s, identity.and_then(|axum::Extension(i)| i.key_id()))
+            .await
+            .map_err(ApiError)?;
 
     let (r, debug_payload) = run_test_for_model(
         &s,

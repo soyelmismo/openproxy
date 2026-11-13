@@ -180,12 +180,49 @@ fn apply_tenant_and_public_scope(
     Ok(())
 }
 
-analytics_handler!(
-    usage_summary,
-    "summary",
-    core_usage::summary,
-    core_usage::UsageSummary
-);
+/// GET /admin/api/usage/summary — KPI totals.
+///
+/// The operator gets the whole row: attempts, winners/losers, latency
+/// averages, compression savings. A customer key gets the four numbers its
+/// own dashboard shows (requests, tokens, cached tokens, spend). The rest is
+/// operator telemetry, and it is never serialised for a customer: the payload
+/// simply does not carry those fields.
+pub async fn usage_summary(
+    State(s): State<AppState>,
+    identity: Option<axum::Extension<super::auth::AdminIdentity>>,
+    Query(mut q): Query<UsageQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // No identity = dev bypass or the master key: full payload.
+    let operator = identity
+        .as_ref()
+        .is_none_or(|axum::Extension(id)| id.has_manage_scope());
+    if let Some(axum::Extension(ref id)) = identity {
+        apply_tenant_and_public_scope(id, &mut q)?;
+    }
+
+    crate::error::run_blocking(move || {
+        let f = q.into_filter()?;
+        let summary: core_usage::UsageSummary =
+            run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
+                core_usage::summary(conn, fl)
+            })?;
+        let value = if operator {
+            serde_json::to_value(summary)
+        } else {
+            Ok(serde_json::json!({
+                "unique_requests": summary.unique_requests,
+                "total_prompt_tokens": summary.total_prompt_tokens,
+                "total_completion_tokens": summary.total_completion_tokens,
+                "total_cached_tokens": summary.total_cached_tokens,
+                "total_cost_usd": summary.total_cost_usd,
+            }))
+        }
+        .map_err(|e| ApiError(CoreError::Internal(format!("summary serialize: {e}"))))?;
+        Ok(Json(value))
+    })
+    .await
+}
+
 analytics_handler!(
     usage_by_model,
     "by_model",

@@ -75,8 +75,23 @@ import type {
 
 // ── KPI metrics strip ──────────────────────────────────────────────
 
+/// Customer strip: requests, tokens and spend. Everything else in the admin
+/// strip (success/latency averages, cache internals, local compression) is
+/// operator telemetry and the server no longer sends those fields.
+function renderClientMetrics(): TemplateResult {
+  if (!summary) return html``;
+  const totalTokens = summary.total_prompt_tokens + summary.total_completion_tokens;
+  const costPerRequest = summary.unique_requests > 0 ? summary.total_cost_usd / summary.unique_requests : 0;
+  return html`<div class="analytics-metrics" aria-label=${t("analytics.summary")}>
+    ${metric(t("analytics.summary.unique_requests"), fmtNumber(summary.unique_requests), t("analytics.metric.requests_hint"))}
+    ${metric(t("analytics.metric.tokens"), fmtNumber(totalTokens), `${fmtNumber(summary.total_prompt_tokens)} in · ${fmtNumber(summary.total_completion_tokens)} out`)}
+    ${metric(t("analytics.summary.total_cost"), fmtCost(summary.total_cost_usd), `${fmtCost(costPerRequest)} ${t("analytics.metric.per_request")}`)}
+  </div>`;
+}
+
 function renderMetrics(): TemplateResult {
   if (!summary) return html``;
+  if (!isFullAdmin()) return renderClientMetrics();
   // Requests KPI counts only requests with a successful row; failures feed
   // the success rate and the failed counter. The all/failed fields come
   // from the newer backend; fall back gracefully against an older one.
@@ -440,7 +455,7 @@ function renderBody(): TemplateResult {
   if (!summary) return html`<div class="loading">${t("common.loading")}</div>`;
 
   const nullPricingCount = summary.rows_with_null_pricing ?? 0;
-  const nullPricingBanner = nullPricingCount > 0
+  const nullPricingBanner = isFullAdmin() && nullPricingCount > 0
     ? html`<div class="banner banner-warning">${t("analytics.null_pricing_warning", { count: nullPricingCount })}</div>`
     : html``;
 
@@ -460,22 +475,43 @@ function renderBody(): TemplateResult {
   }));
   const rankSubtitle = t("analytics.rank.by", { metric: t(RANK_LABEL_KEYS[rankMetric]) });
 
+  const trendCard = html`<section class="card analytics-trend-card">
+    <div class="analytics-card-heading"><div><h3>${t("analytics.chart.daily_usage")}</h3><p>${t("analytics.chart.daily_usage.subtitle")}</p></div></div>
+    <div class="analytics-chart-container" id="chart-daily-usage"></div>
+  </section>`;
+  const rankHead = html`<div class="analytics-rank-head">
+    <span class="analytics-rank-head-label">${t("analytics.rank.label")}</span>
+    ${renderRankMetricSwitch()}
+  </div>`;
+
+  // Customer dashboard: spend, the daily trend and the per-model split. Status
+  // distribution, latency percentiles, race outcomes, combo health and the
+  // detailed tables are operator telemetry; the server does not send their
+  // payloads to a customer key at all, so nothing here may depend on them.
+  if (!isFullAdmin()) {
+    return html`
+      ${nullPricingBanner}
+      ${renderMetrics()}
+      ${renderQuotaPanel()}
+      <div class="analytics-primary-grid">
+        ${trendCard}
+      </div>
+      <div class="analytics-insight-grid">
+        ${rankHead}
+        ${renderRanking(t("analytics.chart.by_model"), rankSubtitle, modelItems, "models")}
+      </div>`;
+  }
+
   return html`
     ${nullPricingBanner}
     ${renderMetrics()}
     ${renderQuotaPanel()}
     <div class="analytics-primary-grid">
-      <section class="card analytics-trend-card">
-        <div class="analytics-card-heading"><div><h3>${t("analytics.chart.daily_usage")}</h3><p>${t("analytics.chart.daily_usage.subtitle")}</p></div></div>
-        <div class="analytics-chart-container" id="chart-daily-usage"></div>
-      </section>
+      ${trendCard}
       ${renderStatusHealth()}
     </div>
     <div class="analytics-insight-grid">
-      <div class="analytics-rank-head">
-        <span class="analytics-rank-head-label">${t("analytics.rank.label")}</span>
-        ${renderRankMetricSwitch()}
-      </div>
+      ${rankHead}
       ${renderRanking(t("analytics.chart.by_model"), rankSubtitle, modelItems, "models")}
       ${isFullAdmin()
         ? renderRanking(t("analytics.chart.by_provider"), rankSubtitle, providerItems, "providers")
@@ -586,13 +622,28 @@ async function fetchAndApply(
       isFullAdmin()
         ? (api(`/usage/by-provider${usageQ}`) as Promise<ByProviderRow[]>)
         : Promise.resolve([] as ByProviderRow[]),
-      api(`/usage/monthly-by-provider${usageQ}`) as Promise<MonthlyByProviderRow[]>,
-      api(`/usage/latency${usageQ}`) as Promise<LatencyPayload>,
-      api(`/usage/races${usageQ}`) as Promise<RaceStatsPayload>,
+      // Operator-only telemetry. A customer key is not allowed on these
+      // routes at all, so it must not request them: an unlisted route answers
+      // 403 and would turn a healthy dashboard into an error banner.
+      isFullAdmin()
+        ? (api(`/usage/monthly-by-provider${usageQ}`) as Promise<MonthlyByProviderRow[]>)
+        : Promise.resolve([] as MonthlyByProviderRow[]),
+      isFullAdmin()
+        ? (api(`/usage/latency${usageQ}`) as Promise<LatencyPayload>)
+        : Promise.resolve(null as LatencyPayload | null),
+      isFullAdmin()
+        ? (api(`/usage/races${usageQ}`) as Promise<RaceStatsPayload>)
+        : Promise.resolve(null as RaceStatsPayload | null),
       api(`/usage/by-day${usageQ}`) as Promise<ByDayRow[]>,
-      api(`/usage/by-status${usageQ}`) as Promise<ByStatusRow[]>,
-      api(`/usage/by-combo${usageQ}`) as Promise<ByComboRow[]>,
-      api(`/usage/errors${errorsQ}`) as Promise<ErrorRow[]>,
+      isFullAdmin()
+        ? (api(`/usage/by-status${usageQ}`) as Promise<ByStatusRow[]>)
+        : Promise.resolve([] as ByStatusRow[]),
+      isFullAdmin()
+        ? (api(`/usage/by-combo${usageQ}`) as Promise<ByComboRow[]>)
+        : Promise.resolve([] as ByComboRow[]),
+      isFullAdmin()
+        ? (api(`/usage/errors${errorsQ}`) as Promise<ErrorRow[]>)
+        : Promise.resolve([] as ErrorRow[]),
       // Prefer the bg-poll's cache; fall back to a direct fetch on a cold paint.
       // Non-admin keys cannot access /providers or /keys (they are strictly forbidden).
       isFullAdmin()

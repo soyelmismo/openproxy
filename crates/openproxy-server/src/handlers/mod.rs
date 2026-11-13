@@ -22,10 +22,10 @@ macro_rules! call_unary_executor {
 }
 
 pub mod admin;
-pub mod credits_gateway;
-pub mod credits_qr;
 pub mod audio;
 pub mod chat;
+pub mod credits_gateway;
+pub mod credits_qr;
 pub mod embeddings;
 pub mod images;
 pub mod messages;

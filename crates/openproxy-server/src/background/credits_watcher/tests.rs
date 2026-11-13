@@ -85,7 +85,11 @@ fn incremental_scan_is_one_bounded_chunk() {
     // The chunk is the provider's cap: a node that rejects >10 blocks gets
     // windows of 10, never a range it will refuse.
     assert_eq!(scan_window(100, 10_000, 0, 10), Some((101, 110)));
-    assert_eq!(scan_window(0, 5, 0, 0), Some((0, 0)), "a zero chunk clamps to 1");
+    assert_eq!(
+        scan_window(0, 5, 0, 0),
+        Some((0, 0)),
+        "a zero chunk clamps to 1"
+    );
     assert_eq!(
         scan_window(5000, 5000, 0, 500),
         None,

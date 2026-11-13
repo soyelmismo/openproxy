@@ -126,13 +126,13 @@ export function renderAnalyticsToolbar(
           >${opt.label}</button>`)}
         </div>
       </div>` : html``}
-      <label class="analytics-filter-field" for="analytics-provider-filter">
+      ${isFullAdmin() ? html`<label class="analytics-filter-field" for="analytics-provider-filter">
         <span>${t("analytics.filter.provider")}</span>
         <select id="analytics-provider-filter" class="filter-dropdown" .value=${providerId} @change=${(e: Event) => setHashParams({ providerId: (e.target as HTMLSelectElement).value })}>
           <option value="">${t("analytics.filter.all_providers")}</option>
           ${providers.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
         </select>
-      </label>
+      </label>` : html``}
       ${isFullAdmin() ? html`
       <label class="analytics-filter-field" for="analytics-key-filter">
         <span>${t("analytics.filter.api_key")}</span>

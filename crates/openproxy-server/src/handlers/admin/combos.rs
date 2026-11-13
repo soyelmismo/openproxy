@@ -281,8 +281,8 @@ fn apply_combo_general_updates(
     // wins over the target model's on every request routed through it.
     // A key absent from the body keeps its stored value, so fixing just the
     // cached rate never wipes the base pair (and vice versa).
-    let touches_pair = body.get("pricing_input_per_1m").is_some()
-        || body.get("pricing_output_per_1m").is_some();
+    let touches_pair =
+        body.get("pricing_input_per_1m").is_some() || body.get("pricing_output_per_1m").is_some();
     let touches_cached = body.get("pricing_cached_per_1m").is_some();
     if touches_pair || touches_cached {
         let read_rate = |key: &str| -> Result<Option<f64>, ApiError> {
@@ -295,9 +295,8 @@ fn apply_combo_general_updates(
                 }),
             }
         };
-        let current = openproxy_db::combos::get_combo(w, id)?.ok_or_else(|| {
-            ApiError(CoreError::Validation(format!("combo {id} not found")))
-        })?;
+        let current = openproxy_db::combos::get_combo(w, id)?
+            .ok_or_else(|| ApiError(CoreError::Validation(format!("combo {id} not found"))))?;
         let input_per_1m = if body.get("pricing_input_per_1m").is_some() {
             read_rate("pricing_input_per_1m")?
         } else {

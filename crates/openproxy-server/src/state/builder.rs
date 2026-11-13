@@ -24,8 +24,7 @@ impl AppState {
         let mut idle_chunk_retryable = db::app_config::IDLE_CHUNK_RETRYABLE_DEFAULT;
         let mut compression_mode = openproxy_compression::CompressionMode::Off;
         let mut notifications_enabled = db::app_config::NOTIFICATIONS_ENABLED_DEFAULT;
-        let mut max_concurrent_per_key =
-            openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY;
+        let mut max_concurrent_per_key = openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY;
         let mut max_concurrent_global = openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_GLOBAL;
 
         run_database_maintenance(

@@ -125,9 +125,7 @@ pub async fn catalog(
             );
             // A combo with its own price is billed at that rate, so the
             // catalog shows it instead of leaving the row unpriced.
-            if let (Some(input), Some(output)) =
-                (c.pricing_input_per_1m, c.pricing_output_per_1m)
-            {
+            if let (Some(input), Some(output)) = (c.pricing_input_per_1m, c.pricing_output_per_1m) {
                 entry["pricing_input_per_1m"] = serde_json::json!(input);
                 entry["pricing_output_per_1m"] = serde_json::json!(output);
                 if let Some(cached) = c.pricing_cached_per_1m {
