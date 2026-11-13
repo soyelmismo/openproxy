@@ -99,6 +99,34 @@ pub async fn checkout_js() -> impl IntoResponse {
     )
 }
 
+/// `GET /admin/build.json` — public build fingerprint of the embedded SPA.
+///
+/// The dashboard compares this id against the one it recorded on its first
+/// boot; a change means a deploy replaced the bundle, so a long-lived tab
+/// reloads itself instead of running code that may call retired endpoints.
+/// It is a content hash, never a secret: no auth, no caching.
+pub async fn build_id() -> Response {
+    let id = DashboardAssets::get("dist/app.js")
+        .map(|file| {
+            let hash = file.metadata.sha256_hash();
+            let mut hex = String::with_capacity(64);
+            for byte in hash {
+                use std::fmt::Write;
+                let _ = write!(hex, "{byte:02x}");
+            }
+            hex
+        })
+        .unwrap_or_default();
+    (
+        [
+            ("cache-control", "no-store"),
+            ("content-type", "application/json"),
+        ],
+        format!("{{\"id\":\"{id}\"}}"),
+    )
+        .into_response()
+}
+
 /// Serve a static asset from the embedded `src/static/` tree.
 ///
 /// The router mounts this handler as the `fallback` for `/admin/*`,

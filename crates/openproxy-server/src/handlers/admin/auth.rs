@@ -211,11 +211,15 @@ pub(crate) async fn authenticate_admin(
 
     let token = extract_bearer_token(headers)?
         .ok_or_else(|| ApiError(CoreError::Auth("missing authorization header".into())))?;
-    // Allowed scopes for admin endpoints: full "manage", or read-only "analytics"
+    // Allowed scopes for admin endpoints: full "manage", read-only "analytics"/
+    // "read", or the customer "chat" scope a checkout-minted key carries. The
+    // endpoint allowlist in `client_allowed` is what actually bounds a
+    // non-manage key: it can only read its own plan and its own tenanted
+    // usage, never an operator route.
     let key = crate::middleware::auth::verify_key_credentials_any_scope(
         state,
         token,
-        &["manage", "analytics", "read"],
+        &["manage", "analytics", "read", "chat"],
     )
     .await?;
     Ok(AdminIdentity {

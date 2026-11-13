@@ -41,11 +41,12 @@ export function setupTimers(): void {
  * every test in this suite assumes unless it explicitly opts out via `opts`.
  */
 export async function setupAuthMock(
-  opts: { token?: string | null; loggedIn?: boolean } = {},
+  opts: { token?: string | null; loggedIn?: boolean; fullAdmin?: boolean } = {},
 ): Promise<{
   auth: typeof import("../state/auth.js");
   getToken: ReturnType<typeof vi.spyOn>;
   isLoggedIn: ReturnType<typeof vi.spyOn>;
+  isFullAdmin: ReturnType<typeof vi.spyOn>;
 }> {
   const auth = await import("../state/auth.js");
   // Use `in` to distinguish "token not provided" (use the default) from "token explicitly set
@@ -57,7 +58,12 @@ export async function setupAuthMock(
   const isLoggedIn = vi
     .spyOn(auth, "isLoggedIn")
     .mockReturnValue(opts.loggedIn ?? true);
-  return { auth, getToken, isLoggedIn };
+  // `isFullAdmin()` is fail-closed on an unknown profile, so the logged-in
+  // operator baseline these suites assume needs the manage profile stated.
+  const isFullAdmin = vi
+    .spyOn(auth, "isFullAdmin")
+    .mockReturnValue(opts.fullAdmin ?? true);
+  return { auth, getToken, isLoggedIn, isFullAdmin };
 }
 
 /**

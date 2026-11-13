@@ -380,3 +380,82 @@ async fn analytics_scope_gets_client_allowlist_only() {
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(state.ws_tickets().is_empty());
 }
+
+/// A plain customer key — the `["chat"]` scope the checkout mints — must be
+/// able to sign in and read its OWN plan. It never needs `manage`: the client
+/// allowlist bounds it to its identity and its credits row, and every operator
+/// route stays 403.
+#[tokio::test]
+async fn chat_scope_customer_reads_its_own_plan() {
+    let tmp = tempdir();
+    let mut config = openproxy_core::AppConfig::default();
+    config.credits = Some(openproxy_types::config::CreditsConfig {
+        rpc_url: "http://127.0.0.1:1".into(),
+        usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+        collector_address: "0xc46e0bb29db2c74b2ca63cd7d2b61374dadd8ce6".into(),
+        payment_window_minutes: 15,
+        scan_interval_secs: 5,
+        min_topup_usd: 1.0,
+        ttl_days: vec![7, 15, 30],
+        chain_id: 8453,
+    });
+    let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
+
+    let customer_raw_key = "op_live_customer_chat_scope_secret_9876";
+    let key_hash = openproxy_core::api_keys::hash_key(customer_raw_key);
+    {
+        let w = state.db_pool().writer();
+        w.execute(
+            "INSERT INTO api_keys (key_hash, key_prefix, label, scopes_json, allowed_models_json, is_active, created_at)
+             VALUES (?1, 'op_live_custom', 'Customer', '[\"chat\"]', '[]', 1, '2026-11-05 12:00:00')",
+            rusqlite::params![key_hash],
+        )
+        .expect("insert customer key");
+    }
+
+    let app = app_for(&state);
+
+    for uri in ["/admin/api/auth/me", "/admin/api/credits/quota"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .header("Authorization", format!("Bearer {customer_raw_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "chat-scope customer key must read {uri} without manage scope"
+        );
+    }
+
+    for (method, uri) in [
+        ("GET", "/admin/api/keys"),
+        ("GET", "/admin/api/credits/orders"),
+        ("POST", "/admin/api/ws-ticket"),
+    ] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("Authorization", format!("Bearer {customer_raw_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "chat-scope key must be rejected on {method} {uri}"
+        );
+    }
+}

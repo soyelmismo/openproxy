@@ -21,6 +21,8 @@ import { initModelsSync } from "./state/models-sync.js";
 import { isPanelDocument } from "./state/workspace.js";
 import { installPanelBridge } from "./components/workspace.js";
 import { installChunkRecovery } from "./lib/chunk-recovery.js";
+import { installBuildWatch } from "./lib/build-watch.js";
+import { hydrateProfile } from "./state/auth.js";
 
 // Before anything else: a stale tab whose lazy chunks were replaced by a
 // deploy must reload once instead of dying on "Failed to fetch dynamically
@@ -119,6 +121,13 @@ async function boot(): Promise<void> {
   installMotionProvider();
   await loadLang("en");
   bootstrapTheme();
+  // Hydrate the session profile BEFORE the first render: `isFullAdmin()` is
+  // fail-closed, so without the profile a logged-in operator would mount the
+  // client surface and every admin view would flash then remount.
+  await hydrateProfile();
+  // A tab that outlived a deploy reloads itself instead of calling endpoints
+  // the new binary may have retired.
+  installBuildWatch();
   // Hydrate the sidebar collapse flag from localStorage before the shell mounts, so the first
   // renderSidebar() call already reflects the persisted choice.
   if (isPanelDocument()) installPanelBridge();

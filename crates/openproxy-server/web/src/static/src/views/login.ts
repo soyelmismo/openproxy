@@ -1,9 +1,9 @@
 // The only screen reachable without a token: the auth gate in
 // `state/router.ts` redirects every other route here when
-// `isLoggedIn()` is false. It collects a manage-scope API key, persists
-// it via `state/auth.ts::setToken`, validates it with a single
-// authenticated GET, and on success navigates to `#/`, which the gate
-// then lets through.
+// `isLoggedIn()` is false. It collects an API key — operator or customer,
+// the scope decides the surface — persists it via `state/auth.ts::setToken`,
+// validates it with a single authenticated GET, and on success navigates to
+// the surface the profile allows.
 //
 // Uses the same lit-html + mountView pattern as views/keys.ts and
 // views/config.ts; the dashboard has no `lit` dependency.
@@ -30,14 +30,15 @@ let errorMsg: string | null = null;
 let submitting: boolean = false;
 
 
-/** Validate the key against `/admin/api/notifications/unread-count`:
- *  a tiny `{count: N}` payload behind the same `admin_auth_middleware`
- *  as every other `/admin/api/*` route, so a 2xx proves the key is
- *  valid AND has `manage` scope.
+/** Validate the key against `/admin/api/auth/me`, the identity endpoint the
+ *  admin middleware serves to EVERY valid key: an operator (manage) and a
+ *  plain customer (chat) both get their profile, and `is_admin` decides which
+ *  surface the shell mounts. The endpoint allowlist keeps a customer inside
+ *  its own plan and usage.
  *
- *  On success: keep the optimistically-set token and navigate to `#/`.
- *  On failure: clear the token so no stale value stays in localStorage,
- *  then show the i18n error. */
+ *  On success: keep the optimistically-set token and navigate to the surface
+ *  the profile allows. On failure: clear the token so no stale value stays in
+ *  localStorage, then show the i18n error. */
 async function onSubmit(e: Event): Promise<void> {
   e.preventDefault();
   if (submitting) return;
@@ -58,8 +59,8 @@ async function onSubmit(e: Event): Promise<void> {
     const me = (await api("/auth/me")) as UserSessionProfile;
     setProfile(me);
 
-    // If the key has full manage scope: navigate to home.
-    // If the key has restricted scope (analytics only): navigate directly to #/analytics.
+    // Operator keys land on the home dashboard; customer keys land on their
+    // own analytics, which is also where the router sends any admin route.
     if (me.is_admin) {
       location.hash = "#/";
     } else {

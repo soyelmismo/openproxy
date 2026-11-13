@@ -33,6 +33,9 @@ async function setupStore(opts: { init?: boolean } = {}): Promise<StoreHarness> 
 
   const auth = await import("./auth.js");
   vi.spyOn(auth, "isLoggedIn").mockReturnValue(true);
+  // Notifications are operator-only (`isFullAdmin()` gate), and the gate is
+  // fail-closed on an unknown profile.
+  vi.spyOn(auth, "isFullAdmin").mockReturnValue(true);
 
   const i18n = await import("../i18n/index.js");
   const t = vi.fn((key: string) => key);

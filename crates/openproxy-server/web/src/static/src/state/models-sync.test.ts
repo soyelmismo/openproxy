@@ -9,11 +9,15 @@ import * as sharedView from "../views/providers/shared.js";
 import type { WsEnvelope } from "../views/logs.js";
 
 describe("models-sync", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     state.models = [];
     state.providers = [];
     sharedView.setDetailProviderId(null);
     vi.restoreAllMocks();
+    // The sync listeners are operator-only (`isFullAdmin()` gate); state a
+    // manage profile so the fail-closed default does not silence them.
+    const { setProfile } = await import("./auth.js");
+    setProfile({ key_id: 1, key_prefix: "op_live_test", label: "test", scopes: ["manage"], is_admin: true });
   });
 
   it("updates state.models and state.providers when models_refreshed event matches detailProviderId", async () => {

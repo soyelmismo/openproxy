@@ -182,6 +182,9 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
             get(admin_ui::callback_html).post(admin_ui::callback_html),
         )
         .route("/health", get(handlers::admin::runtime::admin_health))
+        // Public build fingerprint: lets a long-lived tab notice that a deploy
+        // replaced the bundle and reload itself. Content hash only, no auth.
+        .route("/build.json", get(admin_ui::build_id))
         .route(
             "/oauth/callback",
             get(handlers::admin::oauth::oauth_callback),

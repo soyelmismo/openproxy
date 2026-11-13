@@ -172,4 +172,21 @@ describe("auth store", () => {
     expect(getToken()).toBeNull();
     expect(location.hash).toBe("#/login");
   });
+
+  it("isFullAdmin fails closed while the profile is unknown", async () => {
+    const { isFullAdmin } = await import("./auth.js");
+    // A stored token with no profile yet: the boot hydration is what proves
+    // the session, so the shell must not assume operator rights.
+    localStorage.setItem("openproxy_admin_token", "op_live_UNKNOWN");
+    expect(isFullAdmin()).toBe(false);
+  });
+
+  it("isFullAdmin follows the persisted profile", async () => {
+    const { isFullAdmin, setProfile } = await import("./auth.js");
+    setProfile({ key_id: 1, key_prefix: "op_live_oper", label: "Ops", scopes: ["manage"], is_admin: true });
+    expect(isFullAdmin()).toBe(true);
+
+    setProfile({ key_id: 2, key_prefix: "op_live_cust", label: "Customer", scopes: ["chat"], is_admin: false });
+    expect(isFullAdmin()).toBe(false);
+  });
 });

@@ -63,7 +63,7 @@
   "nav.system": "System",
   "nav.logout": "Logout",
   "login.title": "Login",
-  "login.subtitle": "Enter your manage-scope API key to access the dashboard",
+  "login.subtitle": "Enter your API key to access your dashboard",
   "login.api_key_label": "API Key",
   "login.submit": "Login",
   "login.error_invalid": "Invalid API key — please check and try again",

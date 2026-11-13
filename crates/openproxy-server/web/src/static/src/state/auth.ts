@@ -113,9 +113,27 @@ export function clearProfile(): void {
 }
 
 export function isFullAdmin(): boolean {
+  // Fail closed: an unknown profile means we cannot prove the session holds
+  // the "manage" scope, so the shell renders the client surface. The boot
+  // path hydrates the profile from `/auth/me` before the first render, so a
+  // real operator never sees the client UI.
   const profile = getProfile();
-  if (!profile) return true; // optimistic fallback
+  if (!profile) return false;
   return profile.is_admin;
+}
+
+/** Hydrate the cached profile from the server. Runs once at boot when a token
+ *  is present but the profile was not persisted (fresh storage, key rotated by
+ *  another tab). A 401 leaves the token for `api()` to clear and the router to
+ *  send to login; any other failure keeps the fail-closed default. */
+export async function hydrateProfile(): Promise<void> {
+  if (!isLoggedIn() || getProfile() !== null) return;
+  try {
+    const { api } = await import("./api.js");
+    setProfile((await api("/auth/me")) as UserSessionProfile);
+  } catch (e: unknown) {
+    console.warn("[auth] profile hydration failed:", e);
+  }
 }
 
 /** Whether a token is present. Drives the router's auth gate. */
