@@ -76,11 +76,13 @@ fn admin_routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .route(
             "/",
-            get(|| async { axum::response::Redirect::temporary("/admin") }),
+            get(|| async { axum::response::Redirect::temporary("/admin") })
+                .post(|| async { axum::response::Redirect::temporary("/admin") }),
         )
         .route(
             "/admin/",
-            get(|| async { axum::response::Redirect::temporary("/admin") }),
+            get(|| async { axum::response::Redirect::temporary("/admin") })
+                .post(|| async { axum::response::Redirect::temporary("/admin") }),
         )
         // Providers whose authorization allowlist only accepts a literal
         // `http://127.0.0.1:<port>/callback` redirect (Devin) land on this
@@ -167,9 +169,14 @@ fn build_admin_router(state: &AppState) -> Router<AppState> {
         // paths. Only "/" is registered here: axum 0.8 rejects empty-string route
         // paths, and the outer `.nest("/admin", admin_routes)` covers the
         // no-trailing-slash form via the SPA fallback.
-        .route("/", get(admin_ui::index_html))
-        .route("/panel", get(admin_ui::index_html))
-        .route("/panel/", get(admin_ui::index_html))
+        // A document navigation can arrive as POST: the browser re-submits a
+        // form, or a challenge page resolves onto the same URL. The shell is
+        // stateless, so both methods serve it. Without the POST twin the
+        // origin answers 405 and the browser renders "HTTP ERROR 405" on
+        // reload until a fresh GET navigation.
+        .route("/", get(admin_ui::index_html).post(admin_ui::index_html))
+        .route("/panel", get(admin_ui::index_html).post(admin_ui::index_html))
+        .route("/panel/", get(admin_ui::index_html).post(admin_ui::index_html))
         .route(
             "/callback.html",
             get(admin_ui::callback_html).post(admin_ui::callback_html),

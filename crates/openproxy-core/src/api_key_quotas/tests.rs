@@ -242,3 +242,23 @@ fn plan_balance_follows_spend() {
     let plan = st.plan.expect("plan present");
     assert!((plan.balance_usd - 2.0).abs() < 1e-9, "balance after $1 spend");
 }
+
+#[test]
+fn plan_expiry_comes_from_the_lot_not_the_key() {
+    // The key survives its plan: `api_keys.expires_at` is NULL for
+    // plan-managed keys, and the countdown must still come from the credit.
+    let conn = fresh_conn();
+    let key = make_key(&conn, "plan-lot-expiry");
+    attach_plan(&conn, key, "Lite", 3.0, 7);
+    conn.execute(
+        "UPDATE api_keys SET expires_at = NULL WHERE id = ?1",
+        params![key],
+    )
+    .expect("clear key expiry");
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    let plan = st.plan.expect("plan present");
+    assert!(
+        plan.expires_at.is_some(),
+        "plan expiry must come from the active credit lot"
+    );
+}
