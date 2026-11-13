@@ -387,6 +387,19 @@ mod tests {
     }
 
     #[test]
+    fn compute_cost_video_dispatch() {
+        let price = Some(Price {
+            input_per_1m: 2.0,
+            output_per_1m: 4.0,
+            kind: PriceKind::Video,
+            audio_per_hour: None,
+        });
+        // 2.0 * 1000 / 1e6 + 4.0 * 500 / 1e6 = 0.002 + 0.002 = 0.004
+        let cost = compute_cost(price, 1000, 500);
+        assert!((cost - 0.004).abs() < 1e-12);
+    }
+
+    #[test]
     fn compute_cost_with_zero_tokens() {
         let price = Some(Price {
             input_per_1m: 5.0,
