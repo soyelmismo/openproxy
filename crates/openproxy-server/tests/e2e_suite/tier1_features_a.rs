@@ -162,6 +162,79 @@ fn test_tier1_models_list_key_scoped_filtering() {
     crate::run_with_big_stack(test_tier1_models_list_key_scoped_filtering_body);
 }
 
+#[test]
+fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair() {
+    crate::run_with_big_stack(test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body);
+}
+
+async fn test_tier1_combo_own_price_is_settable_and_clears_as_a_pair_body() {
+    let harness = TestHarness::new().await;
+    let (status, created) = harness
+        .admin_post(
+            "/admin/api/combos",
+            json!({
+                "name": "tier1-priced-combo",
+                "strategy": "priority",
+                "pricing_input_per_1m": 0.15,
+                "pricing_output_per_1m": 0.6,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let combo_id = created["id"].as_i64().expect("combo id");
+
+    let (status, list) = harness.admin_get("/admin/api/combos").await;
+    assert_eq!(status, StatusCode::OK);
+    let combo = list
+        .as_array()
+        .expect("combo array")
+        .iter()
+        .find(|c| c["id"] == combo_id)
+        .expect("created combo listed");
+    assert_eq!(combo["pricing_input_per_1m"], 0.15);
+    assert_eq!(combo["pricing_output_per_1m"], 0.6);
+
+    // A single rate is rejected: the pair is all-or-nothing.
+    let (status, _) = harness
+        .admin_patch(
+            &format!("/admin/api/combos/{combo_id}"),
+            json!({"pricing_input_per_1m": 1.0}),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "half a price pair must be rejected"
+    );
+
+    // Negative rates never reach the ledger.
+    let (status, _) = harness
+        .admin_patch(
+            &format!("/admin/api/combos/{combo_id}"),
+            json!({"pricing_input_per_1m": -1.0, "pricing_output_per_1m": 1.0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Clearing both returns the combo to model-price inheritance.
+    let (status, _) = harness
+        .admin_patch(
+            &format!("/admin/api/combos/{combo_id}"),
+            json!({"pricing_input_per_1m": null, "pricing_output_per_1m": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, list) = harness.admin_get("/admin/api/combos").await;
+    let combo = list
+        .as_array()
+        .expect("combo array")
+        .iter()
+        .find(|c| c["id"] == combo_id)
+        .expect("combo still listed");
+    assert!(combo["pricing_input_per_1m"].is_null());
+    assert!(combo["pricing_output_per_1m"].is_null());
+}
+
 async fn test_tier1_models_list_key_scoped_filtering_body() {
     let harness = TestHarness::new().await;
     // `allowed_models` is additive: it grants access to the named models on
