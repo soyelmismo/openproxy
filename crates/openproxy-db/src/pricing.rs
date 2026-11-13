@@ -20,11 +20,10 @@ pub enum PriceKind {
 pub struct Price {
     pub input_per_1m: f64,
     pub output_per_1m: f64,
-    /// Cached-input rate, USD per 1M tokens. `None` keeps the historical
-    /// default of 50% of `input_per_1m` (see [`compute_cost_opt_with_cache`]),
-    /// which is right for the static catalog but wrong for vendors whose
-    /// cache-read price is not half the input rate — and for a combo, whose
-    /// price is the product being sold.
+    /// Cached-input rate, USD per 1M tokens, in the same unit as the other two
+    /// rates. `None` bills cache reads at `input_per_1m` (see
+    /// [`compute_cost_opt_with_cache`]): the ledger never derives a price from a
+    /// percentage of another rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_per_1m: Option<f64>,
     #[serde(default)]
@@ -372,11 +371,10 @@ pub fn compute_cost_opt_with_cache(
         _ => {
             let cached = cached_tokens.unwrap_or(0).min(prompt_tokens);
             let non_cached = prompt_tokens.saturating_sub(cached);
-            // An explicit cached rate wins; otherwise keep the historical
-            // default of 50% of the input rate.
-            let cached_price_per_1m = price
-                .cached_per_1m
-                .unwrap_or(price.input_per_1m * 0.5);
+            // Every rate is USD per 1M tokens, cached included. Without an
+            // explicit cached rate, cache reads bill at the input rate: no
+            // percentage is ever derived from the input rate.
+            let cached_price_per_1m = price.cached_per_1m.unwrap_or(price.input_per_1m);
             let input_cost = (price.input_per_1m * f64::from(non_cached)
                 + cached_price_per_1m * f64::from(cached))
                 / 1_000_000.0;
@@ -538,7 +536,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 3.0,
             output_per_1m: 15.0,
-            cached_per_1m: None,
+            cached_per_1m: Some(1.5),
             kind: PriceKind::Chat,
             audio_per_hour: None,
         });
@@ -550,6 +548,39 @@ mod tests {
         let cost = compute_cost_with_cache(price, 1000, 100, Some(800));
         let expected = (200.0 * 3.0 + 800.0 * 1.5 + 100.0 * 15.0) / 1_000_000.0;
         assert!((cost - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_cost_without_cached_rate_bills_cache_at_input() {
+        // No cached rate means no discount: every prompt token bills at input.
+        // A percentage is never inferred from the input rate.
+        let price = Some(Price {
+            input_per_1m: 3.0,
+            output_per_1m: 15.0,
+            cached_per_1m: None,
+            kind: PriceKind::Chat,
+            audio_per_hour: None,
+        });
+        let with_cache = compute_cost_with_cache(price, 1000, 100, Some(800));
+        let without_cache = compute_cost_with_cache(price, 1000, 100, None);
+        assert!((with_cache - without_cache).abs() < 1e-12);
+        let expected = (1000.0 * 3.0 + 100.0 * 15.0) / 1_000_000.0;
+        assert!((with_cache - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_cost_uses_cached_rate_as_its_own_dollar_rate() {
+        // The cached rate is a dollar rate in its own right: it does not have
+        // to be any fraction of the input rate.
+        let price = Some(Price {
+            input_per_1m: 0.15,
+            output_per_1m: 0.6,
+            cached_per_1m: Some(0.02),
+            kind: PriceKind::Chat,
+            audio_per_hour: None,
+        });
+        let cost = compute_cost_with_cache(price, 1_000_000, 0, Some(1_000_000));
+        assert!((cost - 0.02).abs() < 1e-12, "got {cost}");
     }
 
     #[test]

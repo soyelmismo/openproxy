@@ -130,7 +130,7 @@ function createComboTemplate(wrapper: HTMLElement): TemplateResult {
               <div style="display:flex;gap:8px;">
                 <input id="combo-pricing-input" name="pricing_input_per_1m" type="number" min="0" step="0.0001" placeholder="input (inherit model)">
                 <input id="combo-pricing-output" name="pricing_output_per_1m" type="number" min="0" step="0.0001" placeholder="output (inherit model)">
-                <input id="combo-pricing-cached" name="pricing_cached_per_1m" type="number" min="0" step="0.0001" placeholder="cached (50% of input)">
+                <input id="combo-pricing-cached" name="pricing_cached_per_1m" type="number" min="0" step="0.0001" placeholder="cached (same as input)">
               </div>
             </div>
           </div>

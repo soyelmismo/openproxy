@@ -90,9 +90,10 @@ pub struct Combo {
     /// Per-combo list price, USD per 1M output tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing_output_per_1m: Option<f64>,
-    /// Per-combo list price, USD per 1M **cached** input tokens. Optional and
-    /// only meaningful alongside the input/output pair; `None` bills cache
-    /// reads at the default 50% of the input rate.
+    /// Per-combo list price, USD per 1M **cached** input tokens, in the same
+    /// dollar unit as the other two rates. Optional and only meaningful
+    /// alongside the input/output pair; `None` bills cache reads at the input
+    /// rate, never at a percentage of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing_cached_per_1m: Option<f64>,
 }

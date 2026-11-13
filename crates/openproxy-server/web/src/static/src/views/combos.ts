@@ -82,8 +82,9 @@ async function onFloatInput(field: string, e: Event): Promise<void> {
  *  Input/output is all-or-nothing: both rates or both cleared. A half-filled
  *  pair would bill one side of the request at the model's rate, so it is
  *  rejected here instead of being silently merged server-side. The cached-input
- *  rate is optional: blank means "no explicit rate" (billing keeps the 50% of
- *  input default) and it can only exist alongside the pair. */
+ *  rate is optional and priced in dollars like the other two: blank means "no
+ *  explicit rate", so cache reads bill at the input rate. It can only exist
+ *  alongside the pair. */
 async function patchComboPricingFromBar(bar: HTMLElement | null): Promise<void> {
   if (!bar) return;
   const inEl = bar.querySelector<HTMLInputElement>("input[data-rate='input']");
@@ -135,8 +136,9 @@ async function patchComboPricingFromBar(bar: HTMLElement | null): Promise<void> 
 
 /** Combo list price. When both rates are set, every request routed through the
  *  combo bills at them — member model prices (often missing entirely) never
- *  enter the bill. The cached-input rate is optional; blank bills cache reads at
- *  the default 50% of input. Blank both base fields to inherit again. */
+ *  enter the bill. The cached-input rate is optional and priced in dollars;
+ *  blank bills cache reads at the input rate. Blank both base fields to inherit
+ *  again. */
 function renderPricingBar(combo: Combo): TemplateResult {
   const hasPrice = combo.pricing_input_per_1m != null && combo.pricing_output_per_1m != null;
   const rate = (v: number | null | undefined): string => (v != null ? String(v) : "");
