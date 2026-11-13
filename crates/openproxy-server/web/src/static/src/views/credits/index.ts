@@ -10,7 +10,7 @@ import { createView } from "../../lib/view-utils.js";
 import { api } from "../../state/api.js";
 import { isFullAdmin } from "../../state/auth.js";
 import { bindRefresh, setTopupOpen, stopTimers, topupOpen, setActiveOrder, requestRefresh } from "./shared.js";
-import { quotaBar } from "./quota.js";
+import { quotaBar, planCard } from "./quota.js";
 import { renderTopupPanel } from "./topup.js";
 import { renderTiers } from "./tiers-admin.js";
 import { renderOrders, ensureOrdersLoaded } from "./orders-admin.js";
@@ -97,6 +97,8 @@ function renderClientView(data: CreditsData): TemplateResult {
 
       ${topupOpen && !disabled ? renderTopupPanel(data) : null}
 
+      ${data.quota.plan ? planCard(data.quota.plan) : null}
+
       <section class="card" style="margin-bottom:16px">
         <div class="card-title">Limits</div>
         <div class="card-body">
@@ -107,7 +109,9 @@ function renderClientView(data: CreditsData): TemplateResult {
             ].filter((b) => b !== null);
             // A plan without window caps still has a limit: its balance.
             if (bars.length === 0) {
-              return html`<div style="color:var(--muted);font-size:13px">No window caps on this key.</div>`;
+              return html`<div style="color:var(--color-text-muted);font-size:13px">${data.quota.plan
+                ? "No window caps: the plan balance is the limit."
+                : "No window caps on this key."}</div>`;
             }
             return html`${bars}`;
           })()}

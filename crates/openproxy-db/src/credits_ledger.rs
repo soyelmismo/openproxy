@@ -92,7 +92,8 @@ pub fn record_spend(
         let mut stmt = tx
             .prepare(
                 "SELECT id, remaining_units FROM credit_transactions \
-                 WHERE api_key_id = ?1 AND status = 'active' AND kind = 'topup' \
+                 WHERE api_key_id = ?1 AND status = 'active' AND kind IN ('topup', 'adjust') \
+                   AND remaining_units > 0 \
                    AND (expires_at IS NULL OR expires_at > datetime('now')) \
                  ORDER BY expires_at ASC, id ASC",
             )

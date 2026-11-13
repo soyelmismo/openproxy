@@ -53,16 +53,32 @@ pub(crate) fn filter_combos_for_key(
     key: Option<&openproxy_core::api_keys::ApiKey>,
 ) -> Vec<openproxy_types::Combo> {
     match key {
-        Some(k) => combos
-            .into_iter()
-            .filter(|c| {
-                if !k.is_combo_allowed(c.id.0) {
-                    return false;
-                }
-                let combo_virtual_id = format!("combo:{}", c.name);
-                k.is_model_allowed(&combo_virtual_id, None) || k.is_model_allowed(&c.name, None)
-            })
-            .collect(),
+        Some(k) => {
+            // A non-empty `allowed_combos` is the authoritative combo gate: it
+            // holds resolved combo ids, exactly what the routing layer enforces
+            // (`is_combo_allowed`). The model-name check below is only for the
+            // legacy shape where combo names ride inside `allowed_models`.
+            // A strict key (`only_whitelisted = 1`) with an empty model list
+            // must still list its allowed combos.
+            let explicit_combo_gate = k
+                .allowed_combos
+                .as_deref()
+                .is_some_and(|a| !a.is_empty());
+            combos
+                .into_iter()
+                .filter(|c| {
+                    if !k.is_combo_allowed(c.id.0) {
+                        return false;
+                    }
+                    if explicit_combo_gate {
+                        return true;
+                    }
+                    let combo_virtual_id = format!("combo:{}", c.name);
+                    k.is_model_allowed(&combo_virtual_id, None)
+                        || k.is_model_allowed(&c.name, None)
+                })
+                .collect()
+        }
         None => combos,
     }
 }
@@ -552,6 +568,113 @@ mod tests {
     }
 
     #[test]
+    fn strict_key_with_combo_allowlist_lists_its_combos() {
+        // A tier like "Lite": only_whitelisted = 1, empty model allowlist and
+        // two combos. The combo ids are the authoritative gate, so the catalog
+        // must list them even though `is_model_allowed("combo:...")` is false
+        // under the strict model gate.
+        let key = openproxy_core::api_keys::ApiKey {
+            id: openproxy_types::ApiKeyId(1),
+            key_hash: "hash".into(),
+            key_prefix: Some("op_live_test".into()),
+            label: Some("test".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec![]),
+            allowed_combos: Some(vec![607, 608]),
+            blacklisted_providers: None,
+            allowed_providers: None,
+            blacklisted_models: None,
+            only_whitelisted: true,
+            is_active: true,
+            revoked_at: None,
+            expires_at: None,
+            last_used_at: None,
+            created_at: "2024-01-01".into(),
+            created_by: None,
+        };
+        let combo = |id: i64, name: &str| openproxy_types::Combo {
+            id: openproxy_types::ComboId(id),
+            name: name.into(),
+            strategy: openproxy_types::combos::Strategy::Priority,
+            race_size: 1,
+            preventive_rate_limit: false,
+            created_at: "2024-01-01".into(),
+            context_window: None,
+            max_output_tokens: None,
+            priority_mode: Default::default(),
+            cooldown_mode: Default::default(),
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: None,
+            selection_window_secs: None,
+            decision_model: None,
+            decision_timeout_ms: None,
+            modality_gate: None,
+            sanitize_response: None,
+            real_model_id: None,
+            purge_reasoning: None,
+        };
+        let list = vec![
+            combo(607, "deepseek-v4.1-flash"),
+            combo(608, "glm-5.3-flash"),
+            combo(1, "someone-elses-combo"),
+        ];
+        let filtered = filter_combos_for_key(list, Some(&key));
+        let names: Vec<&str> = filtered.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["deepseek-v4.1-flash", "glm-5.3-flash"]);
+    }
+
+    #[test]
+    fn strict_key_without_combo_allowlist_lists_no_combos() {
+        // Guard the other side: a strict key with no model and no combo
+        // allowlist must not see the catalog.
+        let key = openproxy_core::api_keys::ApiKey {
+            id: openproxy_types::ApiKeyId(1),
+            key_hash: "hash".into(),
+            key_prefix: Some("op_live_test".into()),
+            label: Some("test".into()),
+            scopes: vec!["chat".into()],
+            allowed_models: Some(vec![]),
+            allowed_combos: None,
+            blacklisted_providers: None,
+            allowed_providers: None,
+            blacklisted_models: None,
+            only_whitelisted: true,
+            is_active: true,
+            revoked_at: None,
+            expires_at: None,
+            last_used_at: None,
+            created_at: "2024-01-01".into(),
+            created_by: None,
+        };
+        let combo = openproxy_types::Combo {
+            id: openproxy_types::ComboId(607),
+            name: "deepseek-v4.1-flash".into(),
+            strategy: openproxy_types::combos::Strategy::Priority,
+            race_size: 1,
+            preventive_rate_limit: false,
+            created_at: "2024-01-01".into(),
+            context_window: None,
+            max_output_tokens: None,
+            priority_mode: Default::default(),
+            cooldown_mode: Default::default(),
+            cooldown_base_secs: None,
+            cooldown_max_secs: None,
+            cooldown_factor: None,
+            lkgp_exploration_rate: None,
+            selection_window_secs: None,
+            decision_model: None,
+            decision_timeout_ms: None,
+            modality_gate: None,
+            sanitize_response: None,
+            real_model_id: None,
+            purge_reasoning: None,
+        };
+        assert!(filter_combos_for_key(vec![combo], Some(&key)).is_empty());
+    }
+
+    #[test]
     fn gemini_flash_lite_model_type_is_chat() {
         let mut m = empty_model();
         m.provider_id = ProviderId::new("gemini");
@@ -626,6 +749,7 @@ mod tests {
             modality_gate: None,
             sanitize_response: None,
             real_model_id: None,
+            purge_reasoning: None,
         };
         let mut caps = capabilities::ModelCapabilities::empty();
         caps.thinking = Some(true);

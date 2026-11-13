@@ -97,7 +97,7 @@ pub fn balance_view(conn: &Connection, key_id: ApiKeyId) -> Result<BalanceView> 
     let mut stmt = conn
         .prepare(
             "SELECT amount_units, remaining_units, expires_at FROM credit_transactions \
-             WHERE api_key_id = ?1 AND status = 'active' AND kind = 'topup' \
+             WHERE api_key_id = ?1 AND status = 'active' AND kind IN ('topup', 'adjust') \
                AND expires_at IS NOT NULL AND expires_at > datetime('now') \
              ORDER BY expires_at ASC, id ASC",
         )

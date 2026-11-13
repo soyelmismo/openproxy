@@ -2,11 +2,20 @@
 // Percentage + time-to-reset only, never hard dates (product rule).
 
 import { html, type TemplateResult } from "lit-html";
-import type { QuotaWindow } from "./types.js";
+import type { PlanStatus, QuotaWindow } from "./types.js";
 
 function pct(win: QuotaWindow): number | null {
   if (win.cap_usd == null || win.cap_usd <= 0) return null;
   return Math.min(100, Math.round((win.spent_usd / win.cap_usd) * 100));
+}
+
+function leftText(left: number): string {
+  const d = Math.floor(left / 86_400_000);
+  const h = Math.floor((left % 86_400_000) / 3_600_000);
+  const m = Math.floor((left % 3_600_000) / 60_000);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
 }
 
 /** "resets in 2d 3h" style time-to-reset; never a hard date (product rule). */
@@ -14,12 +23,41 @@ function timeToReset(iso: string | null): string {
   if (!iso) return "";
   const left = new Date(iso).getTime() - Date.now();
   if (left <= 0) return "now";
-  const d = Math.floor(left / 86_400_000);
-  const h = Math.floor((left % 86_400_000) / 3_600_000);
-  const m = Math.floor((left % 3_600_000) / 60_000);
-  if (d > 0) return `resets in ${d}d ${h}h`;
-  if (h > 0) return `resets in ${h}h ${m}m`;
-  return `resets in ${m}m`;
+  return `resets in ${leftText(left)}`;
+}
+
+/** Plan lifetime countdown; never a hard date (product rule). */
+export function expiryText(iso: string | null): string {
+  if (!iso) return "no expiry";
+  const left = new Date(iso).getTime() - Date.now();
+  if (left <= 0) return "expired";
+  return `expires in ${leftText(left)}`;
+}
+
+/** The plan itself: credited balance as the limit, its TTL as the countdown. */
+export function planCard(plan: PlanStatus): TemplateResult {
+  const used = Math.max(0, plan.credit_usd - plan.balance_usd);
+  const p = plan.credit_usd > 0 ? Math.min(100, Math.round((used / plan.credit_usd) * 100)) : 0;
+  const tone = p > 80 ? "danger" : p > 50 ? "warn" : "ok";
+  return html`
+    <section class="card" style="margin-bottom:16px">
+      <div class="card-title">Plan</div>
+      <div class="card-body">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px">
+          <span>${plan.name} — USDC ${plan.credit_usd.toFixed(2)} credit</span>
+          <span style="font-weight:600">${p}% used</span>
+        </div>
+        <div class="quota-bar ${tone}" style="margin-top:8px">
+          <div class="quota-bar-track" role="meter" aria-label="${plan.name} balance"
+               aria-valuenow=${p} aria-valuemin="0" aria-valuemax="100">
+            <div class="quota-bar-fill" style="width:${p}%"></div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--color-text-muted);margin-top:4px">
+          USDC ${plan.balance_usd.toFixed(2)} left · ${expiryText(plan.expires_at)}
+        </div>
+      </div>
+    </section>`;
 }
 
 export function quotaBar(label: string, win: QuotaWindow): TemplateResult {

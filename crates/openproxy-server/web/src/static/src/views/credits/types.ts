@@ -31,10 +31,18 @@ export interface QuotaWindow {
   resets_at: string | null;
 }
 
+export interface PlanStatus {
+  name: string;
+  credit_usd: number;
+  balance_usd: number;
+  expires_at: string | null;
+}
+
 export interface QuotaStatus {
   enabled: boolean;
   week: QuotaWindow;
   five_hours: QuotaWindow;
+  plan: PlanStatus | null;
 }
 
 /** Public `/v1/credits/plans` offer (checkout + panel top-up). */

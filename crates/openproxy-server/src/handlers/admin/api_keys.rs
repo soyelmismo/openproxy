@@ -183,17 +183,38 @@ pub async fn update_api_key(
             }
         })
         .await?;
+        // The tier just reshaped the key (allowlists, caps). The cache was
+        // invalidated before this write, so drop it again or the catalog keeps
+        // serving the pre-plan shape until the entry expires.
+        state_for_cache.invalidate_api_key_cache(None);
     }
 
-    // Manual balance adjustment through the ledger (kind = adjust).
+    // Manual balance adjustment through the ledger. A positive delta becomes
+    // an `adjust` lot (spendable, stamped with the plan TTL when the key has a
+    // tier); a negative delta consumes existing lots FIFO. `adjust` stays out
+    // of `kind = 'topup'` on purpose: the reserve guard reads topups as real
+    // customer money and would fund the escrow against a manual grant.
     if let Some(delta) = adjust_units {
         pool.spawn_write(move |w| {
-            w.execute(
-                "INSERT INTO credit_transactions (api_key_id, kind, amount_units, status) 
-                 VALUES (?1, 'adjust', ?2, 'active')",
-                rusqlite::params![id, delta],
-            )
-            .map_err(openproxy_db::error::map_db_error)?;
+            if delta > 0 {
+                w.execute(
+                    "INSERT INTO credit_transactions \
+                         (api_key_id, kind, amount_units, remaining_units, status, expires_at) \
+                     SELECT ?1, 'adjust', ?2, ?2, 'active', \
+                            CASE WHEN t.ttl_days > 0 \
+                                 THEN datetime('now', '+' || t.ttl_days || ' days') END \
+                     FROM api_keys k LEFT JOIN credit_tiers t ON t.id = k.tier_id \
+                     WHERE k.id = ?1",
+                    rusqlite::params![id, delta],
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
+            } else {
+                openproxy_core::credits::ledger::record_spend(
+                    w,
+                    ApiKeyId(id),
+                    delta.saturating_neg(),
+                )?;
+            }
             Ok(())
         })
         .await?;

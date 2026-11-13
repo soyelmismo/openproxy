@@ -181,9 +181,17 @@ pub fn upsert(conn: &Connection, key_id: ApiKeyId, caps: &QuotaCaps) -> Result<(
 /// Plan attached to a key: tier name + credited amount + live balance.
 /// `None` for keys without a tier (operator/legacy keys).
 fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>> {
+    // The plan's lifetime belongs to the credit lot it funded, not to the key
+    // row: a key survives its plan, and `api_keys.expires_at` is the legacy
+    // key-expiry column (usually NULL for plan-managed keys). Fall back to it
+    // only for keys whose lifetime was set directly.
     let row = conn
         .query_row(
-            "SELECT t.name, t.credit_usd, k.expires_at \
+            "SELECT t.name, t.credit_usd, k.expires_at, \
+               (SELECT MAX(l.expires_at) FROM credit_transactions l \
+                 WHERE l.api_key_id = k.id AND l.status = 'active' \
+                   AND l.kind IN ('topup', 'adjust') \
+                   AND l.expires_at IS NOT NULL AND l.expires_at > datetime('now')) \
              FROM api_keys k JOIN credit_tiers t ON t.id = k.tier_id \
              WHERE k.id = ?1",
             params![key_id.0],
@@ -192,12 +200,13 @@ fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<f64>>(1)?,
                     row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             },
         )
         .optional()
         .map_err(openproxy_db::error::map_db_error)?;
-    let Some((name, credit_usd, expires_at)) = row else {
+    let Some((name, credit_usd, key_expires_at, lot_expires_at)) = row else {
         return Ok(None);
     };
     let balance_units = crate::credits::ledger::balance_units(conn, key_id)?;
@@ -206,8 +215,8 @@ fn plan_status(conn: &Connection, key_id: ApiKeyId) -> Result<Option<PlanStatus>
         name,
         credit_usd: credit_usd.unwrap_or(balance_usd),
         balance_usd,
-        expires_at: expires_at.map(|ts| {
-            // api_keys stores SQLite UTC stamps; the UI wants ISO-8601.
+        expires_at: lot_expires_at.or(key_expires_at).map(|ts| {
+            // SQLite UTC stamps; the UI wants ISO-8601.
             if ts.contains('T') {
                 ts
             } else {
