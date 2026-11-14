@@ -8,7 +8,7 @@ use crate::ids::ApiKeyId;
 use crate::validation::Validatable;
 use openproxy_db::error::map_db_error_ctx;
 use openproxy_types::{ResultExt, UpdateField};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 /// Create a new API key. Returns the persisted row plus the plaintext
 /// (shown to the user once and never re-derivable).
@@ -164,9 +164,49 @@ pub fn revoke(conn: &Connection, id: ApiKeyId) -> Result<()> {
 }
 
 /// Hard delete an API key by id.
+/// Fully remove a key and settle its money trail, atomically:
+/// - pending purchases are CANCELLED (a deleted key can never receive the
+///   plan, and the matcher only scans live orders, so a late transfer for a
+///   cancelled order reports `Unmatched` instead of crediting a ghost);
+/// - active ledger lots are closed as `expired`: the paid-order evidence
+///   survives (`reconcile` counts topup rows regardless of status) while the
+///   balance reads 0 — a dead key must not keep a balance on the books;
+/// - the key row is deleted: quota rows cascade (FK) and usage rows survive
+///   with `api_key_id = NULL` (analytics history).
 pub fn hard_delete(conn: &Connection, id: ApiKeyId) -> Result<()> {
-    conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id.0])
-        .map_err(|e| map_db_error_ctx(format!("delete api_key {}", id.0))(e))?;
+    // One context for the whole operation: the error contract (tests/
+    // error_contract.rs) names operations as `{op} api_key {id}`; the SQLite
+    // error text inside already says which step failed.
+    let ctx = |e| map_db_error_ctx(format!("delete api_key {}", id.0))(e);
+
+    // The money trail exists only in builds that know the money tables:
+    // without the `payments` feature credit_orders/credit_transactions are
+    // never created, so there is nothing to settle — the plain DELETE is the
+    // whole operation.
+    #[cfg(feature = "payments")]
+    {
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(ctx)?;
+        tx.execute(
+            "UPDATE credit_orders SET status = 'cancelled' \
+             WHERE api_key_id = ?1 AND status = 'pending'",
+            params![id.0],
+        )
+        .map_err(ctx)?;
+        tx.execute(
+            "UPDATE credit_transactions SET status = 'expired' \
+             WHERE api_key_id = ?1 AND status = 'active'",
+            params![id.0],
+        )
+        .map_err(ctx)?;
+        tx.execute("DELETE FROM api_keys WHERE id = ?1", params![id.0])
+            .map_err(ctx)?;
+        tx.commit().map_err(ctx)?;
+    }
+    #[cfg(not(feature = "payments"))]
+    {
+        conn.execute("DELETE FROM api_keys WHERE id = ?1", params![id.0])
+            .map_err(ctx)?;
+    }
     Ok(())
 }
 
