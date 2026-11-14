@@ -9,9 +9,28 @@
 <link rel="stylesheet" href="/admin/dist/app.css">
 <style>
   /* Solo layout de página; TODO el look viene del design system del panel
-     (app.css): .card/.card-title/.field/.btn y sus tokens --space/--fs/--radius. */
+     (app.css): .card/.card-title/.field/.btn/.modal y sus tokens
+     --space/--fs/--radius/--color. */
   body { display: flex; justify-content: center; padding: 40px 16px; }
   main.checkout { width: 100%; max-width: 480px; }
+  /* Card surface: the same look section.card gets in the panel (layout.css),
+     restated for this div-based card. */
+  main.checkout .card {
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-4);
+  }
+  main.checkout .card-title {
+    font-family: var(--font-display, inherit);
+    font-size: var(--fs-xl); font-weight: 700;
+    color: var(--color-text-emphasis);
+  }
+  main.checkout .card-subtitle {
+    color: var(--color-text-muted); font-size: var(--fs-sm);
+    line-height: 1.5; margin-top: var(--space-1); margin-bottom: var(--space-3);
+  }
   .checkout-tabs { display: flex; gap: 8px; margin: var(--space-4) 0; }
   .checkout-tabs .btn { margin-top: 0; flex: 1; }
   .qr { display: flex; justify-content: center; padding: var(--space-2) 0; }
@@ -28,6 +47,7 @@
     --qr-ink: #f5f7fa;
   }
   .amount { text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .3px; color: var(--color-text); cursor: copy; }
+  .amount:hover { text-decoration: underline dotted var(--color-text-muted); text-underline-offset: 4px; }
   .amount.copied, .addr.copied { color: var(--color-success); }
   .addr { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); word-break: break-all; margin: 4px 0 10px; cursor: copy; }
   .timer { text-align: center; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); color: var(--color-warn); }
@@ -41,17 +61,43 @@
   .hidden { display: none; }
   .history-row { margin-bottom: 4px; font-size: var(--fs-xs); color: var(--color-text-muted); }
   .checkout-login { text-align: right; font-size: var(--fs-xs); margin-bottom: var(--space-2); }
-  .checkout-login a { color: var(--color-text-muted); }
+  .checkout-login a { color: var(--color-text-muted); text-decoration: none; }
+  .checkout-login a:hover { color: var(--color-link); text-decoration: underline; }
   .terms-check {
     display: flex; gap: 8px; align-items: flex-start;
-    font-size: var(--fs-xs); color: var(--color-text-muted);
+    font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.5;
     margin: var(--space-3) 0;
   }
-  .terms-check input { margin-top: 2px; }
-  .faq { margin-top: var(--space-4); border-top: var(--border-w) var(--border-style) var(--color-border); padding-top: var(--space-3); }
-  .faq details { margin-bottom: 6px; }
-  .faq summary { cursor: pointer; font-size: var(--fs-sm); color: var(--color-text); }
-  .faq details small { display: block; margin-top: 4px; color: var(--color-text-muted); }
+  .terms-check input { margin-top: 2px; flex: none; }
+  .terms-check a, .checkout-foot a, .faq a { color: var(--color-link); }
+  /* Legal / help copy under the primary action: readable, never a wall. */
+  .field small { display: block; line-height: 1.55; }
+  .checkout-foot {
+    display: flex; justify-content: center; gap: var(--space-3);
+    margin-top: var(--space-4); padding-top: var(--space-3);
+    border-top: var(--border-w) var(--border-style) var(--color-border);
+    font-size: var(--fs-xs);
+  }
+  .checkout-foot a { color: var(--color-text-muted); text-decoration: none; }
+  .checkout-foot a:hover { color: var(--color-link); text-decoration: underline; }
+  /* Terms modal: /terms.html is a full document (own theme + design system),
+     so it rides in an iframe — one source of truth, no duplicated copy. */
+  #terms-modal .modal { max-width: 760px; }
+  #terms-modal .modal-body { padding: 0; }
+  #terms-modal iframe { border: 0; width: 100%; height: min(72vh, 720px); display: block; background: transparent; }
+  /* FAQ modal: the same <details> pattern the dashboard uses. */
+  #faq-modal .modal { max-width: 620px; }
+  .faq details { border-bottom: var(--border-w) var(--border-style) var(--color-border-soft); }
+  .faq details:last-child { border-bottom: 0; }
+  .faq summary {
+    cursor: pointer; font-size: var(--fs-sm); color: var(--color-text);
+    padding: var(--space-3) 0; list-style: none; display: flex; justify-content: space-between; gap: var(--space-2);
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "+"; color: var(--color-text-muted); font-weight: 600; }
+  .faq details[open] summary::after { content: "−"; }
+  .faq summary:hover { color: var(--color-link); }
+  .faq details small { display: block; padding: 0 0 var(--space-3); color: var(--color-text-muted); line-height: 1.55; font-size: var(--fs-xs); }
 </style>
 </head>
 <body>
@@ -60,7 +106,6 @@
   <div class="card">
     <div class="card-title">OpenProxy credits</div>
     <div class="card-subtitle">Pay with USDC on Base. Your key appears automatically once the payment lands on-chain.</div>
-    <div style="padding: var(--space-3);">
       <div class="checkout-tabs">
         <button id="tab-buy" class="btn primary" type="button">Buy credits</button>
         <button id="tab-mykey" class="btn btn-secondary" type="button">My key</button>
@@ -73,7 +118,7 @@
         </div>
         <label class="terms-check">
           <input type="checkbox" id="terms-check">
-          <span>I accept the <a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
+          <span>I accept the <a href="/terms.html" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
         <button id="create" class="btn primary" type="button">Create payment</button>
         <div class="field"><small>No refunds: the credited balance expires on the date shown for the plan you pick. Unused balance is not returned. Plan prices include a network-fee allowance — pay the exact amount shown. Your key keeps working without a plan — buy again anytime.</small></div>
@@ -82,8 +127,8 @@
 
       <div class="hidden" id="step-pay">
         <div class="qr" id="qr"></div>
-        <div class="amount" id="amount"></div>
-        <div class="addr" id="addr"></div>
+        <div class="amount" id="amount" title="Tap to copy"></div>
+        <div class="addr" id="addr" title="Tap to copy"></div>
         <div class="timer" id="timer"></div>
         <div class="status" id="pay-status">Waiting for the transfer on Base. This page updates by itself.</div>
         <div class="field"><small>Send the exact amount shown (tap it to copy). Paying from an exchange such as Binance? It deducts its network fee from the transfer — the payment still credits the plan when it arrives up to 0.25 USDC short. The payment window closes when the timer runs out. No refunds.</small></div>
@@ -112,7 +157,7 @@
           </div>
           <label class="terms-check">
           <input type="checkbox" id="terms-check-my">
-          <span>I accept the <a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
+          <span>I accept the <a href="/terms.html" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
         <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
         </div>
@@ -128,36 +173,113 @@
 
       <div class="err hidden" id="page-err"></div>
 
-      <div class="faq">
-        <div class="card-title">FAQ</div>
-        <details>
-          <summary>What am I buying?</summary>
-          <small>Software credit: a plan that grants a USD-denominated balance you consume through the OpenProxy API. The balance is live the moment your payment confirms on-chain and it expires on the plan's date.</small>
-        </details>
-        <details>
-          <summary>Are prices per request?</summary>
-          <small>No. You buy a plan once; every request deducts its own cost from that plan's balance. The price on the card is the plan price, not a per-call fee.</small>
-        </details>
-        <details>
-          <summary>Can I cancel or get a refund?</summary>
-          <small>No. Credit is consumable software delivered in full the moment the payment confirms, so purchases cannot be cancelled, reversed or refunded (see the <a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a>).</small>
-        </details>
-        <details>
-          <summary>Where do I see what I have left?</summary>
-          <small>Open the “My key” tab, paste your key and press “Load my plan”: it shows the plan name, the balance left and the expiry date.</small>
-        </details>
-        <details>
-          <summary>Why is the price not a round number?</summary>
-          <small>Plan prices include a small allowance for the withdrawal fee that exchanges like Binance deduct from the transfer, and a unique cent-jitter identifies your order on-chain. Always pay the exact amount displayed: a transfer up to 0.25 USDC short still credits the plan.</small>
-        </details>
-        <details>
-          <summary>What if my payment is late?</summary>
-          <small>A transfer sent before the deadline still credits the plan when it confirms on-chain, even if the timer expired. Keep the tab open: the page resumes by itself.</small>
-        </details>
+      <div class="checkout-foot">
+        <a href="/terms.html" data-modal="terms">Terms of Service</a>
+        <a href="#faq" data-modal="faq">FAQ</a>
       </div>
-    </div>
   </div>
 </main>
+
+<!-- Terms modal: the real /terms.html document, loaded lazily on first open. -->
+<div class="modal-bg hidden" id="terms-modal" role="dialog" aria-modal="true" aria-labelledby="terms-modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="terms-modal-title">Terms of Service</h2>
+      <button type="button" class="close-btn" data-close aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <iframe id="terms-frame" data-src="/terms.html" title="Terms of Service" loading="lazy"></iframe>
+    </div>
+  </div>
+</div>
+
+<!-- FAQ modal: what the page used to dump at the bottom of the card. -->
+<div class="modal-bg hidden" id="faq-modal" role="dialog" aria-modal="true" aria-labelledby="faq-modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="faq-modal-title">FAQ</h2>
+      <button type="button" class="close-btn" data-close aria-label="Close">&times;</button>
+    </div>
+    <div class="modal-body faq">
+      <details>
+        <summary>What am I buying?</summary>
+        <small>Software credit: a plan that grants a USD-denominated balance you consume through the OpenProxy API. The balance is live the moment your payment confirms on-chain and it expires on the plan's date.</small>
+      </details>
+      <details>
+        <summary>Are prices per request?</summary>
+        <small>No. You buy a plan once; every request deducts its own cost from that plan's balance. The price on the card is the plan price, not a per-call fee.</small>
+      </details>
+      <details>
+        <summary>Can I cancel or get a refund?</summary>
+        <small>No. Credit is consumable software delivered in full the moment the payment confirms, so purchases cannot be cancelled, reversed or refunded (see the <a href="/terms.html" data-modal="terms">Terms of Service</a>).</small>
+      </details>
+      <details>
+        <summary>Where do I see what I have left?</summary>
+        <small>Open the “My key” tab, paste your key and press “Load my plan”: it shows the plan name, the balance left and the expiry date.</small>
+      </details>
+      <details>
+        <summary>Why is the price not a round number?</summary>
+        <small>Plan prices include a small allowance for the withdrawal fee that exchanges like Binance deduct from the transfer, and a unique cent-jitter identifies your order on-chain. Always pay the exact amount displayed: a transfer up to 0.25 USDC short still credits the plan.</small>
+      </details>
+      <details>
+        <summary>What if my payment is late?</summary>
+        <small>A transfer sent before the deadline still credits the plan when it confirms on-chain, even if the timer expired. Keep the tab open: the page resumes by itself.</small>
+      </details>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Modals in the same page: terms (iframe of the real document) and FAQ.
+  // Escape, backdrop click and the X all close; the page never navigates.
+  (function () {
+    var openId = null;
+
+    function open(name) {
+      close();
+      var modal = document.getElementById(name + "-modal");
+      if (!modal) return;
+      var frame = modal.querySelector("iframe[data-src]");
+      if (frame && !frame.getAttribute("src")) frame.setAttribute("src", frame.getAttribute("data-src"));
+      modal.classList.remove("hidden");
+      document.body.style.overflow = "hidden";
+      openId = name + "-modal";
+      var focusable = modal.querySelector(".close-btn");
+      if (focusable) focusable.focus();
+    }
+
+    function close() {
+      if (!openId) return;
+      var modal = document.getElementById(openId);
+      if (modal) modal.classList.add("hidden");
+      document.body.style.overflow = "";
+      openId = null;
+    }
+
+    document.addEventListener("click", function (e) {
+      var trigger = e.target.closest("[data-modal]");
+      if (trigger) {
+        e.preventDefault();
+        open(trigger.getAttribute("data-modal"));
+        return;
+      }
+      if (e.target.closest("[data-close]")) {
+        e.preventDefault();
+        close();
+        return;
+      }
+      // Only a click on the backdrop itself closes (not inside .modal).
+      if (e.target.classList && e.target.classList.contains("modal-bg")) close();
+    });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && openId) {
+        e.stopPropagation();
+        close();
+      }
+    });
+  })();
+</script>
 <script src="/checkout.js"></script>
 </body>
 </html>
