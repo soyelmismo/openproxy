@@ -34,6 +34,19 @@ pub fn restore_backup(
         let dest_str = format!("{}.safety-backup-{}.db", path.display(), timestamp);
         let dest = Path::new(&dest_str);
         if let Ok(()) = std::fs::copy(path, dest).map(|_| ()) {
+            // ROOT FIX (audit A6-03): the safety backup is a full copy of
+            // the payment database — it must not stay world-readable just
+            // because fs::copy inherited the source mode (or the umask).
+            // Tighten to owner-only, same rule as the live DB file.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(dest) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(perms.mode() & 0o600);
+                    let _ = std::fs::set_permissions(dest, perms);
+                }
+            }
             safety_backup_path = Some(dest_str);
         }
     }
