@@ -148,7 +148,41 @@ impl IntoResponse for ApiError {
                 "message": message,
             }
         });
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        // A rate-limited client must be told when to come back, like any
+        // generic rate limiter: the quota path carries the window's reset
+        // instant, the upstream path its retry hint.
+        if let Some(retry_after) = retry_after_value(&self.0) {
+            if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after) {
+                response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
+            }
+        }
+        response
+    }
+}
+
+/// The `Retry-After` a rate-limited client must honor, in whole seconds.
+///
+/// - `QuotaExceeded` (the key's 5h/weekly window): seconds until `resets_at`.
+///   The rolling-window fallback ("rolling window") has no instant, so no
+///   header goes out.
+/// - `RateLimited` (upstream pressure): the provider's retry hint in ms.
+fn retry_after_value(err: &CoreError) -> Option<String> {
+    match err {
+        CoreError::QuotaExceeded { resets_at, .. } => {
+            let instant = chrono::DateTime::parse_from_rfc3339(resets_at)
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(resets_at, "%Y-%m-%d %H:%M:%S")
+                        .map(|naive| naive.and_utc().fixed_offset())
+                })
+                .ok()?;
+            let secs = instant.timestamp() - chrono::Utc::now().timestamp();
+            Some(secs.max(1).to_string())
+        }
+        CoreError::RateLimited { retry_after_ms, .. } => {
+            Some((*retry_after_ms).div_ceil(1000).max(1).to_string())
+        }
+        _ => None,
     }
 }
 
@@ -175,6 +209,53 @@ pub(crate) fn truncate_error_message(raw: &str) -> std::borrow::Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quota_exceeded_sets_the_retry_after_header() {
+        let err = ApiError(CoreError::QuotaExceeded {
+            window: "5h".into(),
+            spent_usd: 2.0,
+            cap_usd: 2.0,
+            resets_at: (chrono::Utc::now() + chrono::Duration::seconds(300)).to_rfc3339(),
+        });
+        let response = err.into_response();
+        assert_eq!(response.status().as_u16(), 429);
+        let header = response
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .expect("retry-after")
+            .to_str()
+            .expect("ascii");
+        let secs: u64 = header.parse().expect("numeric retry-after");
+        assert!((250..=300).contains(&secs), "seconds until reset, got {secs}");
+    }
+
+    #[test]
+    fn rate_limited_carries_the_upstream_retry_hint() {
+        let err = ApiError(CoreError::RateLimited {
+            provider: "mock".into(),
+            retry_after_ms: 1500,
+            is_proxy_rotated: false,
+        });
+        let response = err.into_response();
+        assert_eq!(response.status().as_u16(), 429);
+        let header = response
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .expect("retry-after")
+            .to_str()
+            .expect("ascii");
+        assert_eq!(header, "2", "1500ms rounds up to 2s");
+    }
+
+    #[test]
+    fn insufficient_credits_maps_to_402_with_the_buy_hint() {
+        let err = ApiError(CoreError::InsufficientCredits { balance_usd: 0.0 });
+        let message = err.sanitized_message();
+        let response = err.into_response();
+        assert_eq!(response.status().as_u16(), 402);
+        assert!(message.contains("/checkout"));
+    }
 
     #[test]
     fn truncate_error_message_returns_short_strings_unchanged() {

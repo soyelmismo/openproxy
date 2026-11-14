@@ -102,7 +102,7 @@ pub enum CoreError {
     },
 
     #[error(
-        "quota exceeded: window={window} spent_usd={spent_usd:.4} cap_usd={cap_usd:.4} resets_at={resets_at}"
+        "rate limited: the {window} quota is used up (${spent_usd:.2} of the ${cap_usd:.2} cap); it resets at {resets_at}"
     )]
     QuotaExceeded {
         window: String,
@@ -111,7 +111,9 @@ pub enum CoreError {
         resets_at: String,
     },
 
-    #[error("insufficient credits: balance_usd={balance_usd:.4}")]
+    #[error(
+        "plan credits exhausted (balance_usd={balance_usd:.4}): buy a plan at /checkout to keep using the API"
+    )]
     InsufficientCredits { balance_usd: f64 },
 
     #[error("parse error: {0}")]

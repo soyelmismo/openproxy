@@ -337,23 +337,27 @@ impl Drop for Harness {
 const STATIC_MODEL: &str = "openai/gpt-4o";
 
 #[tokio::test]
-async fn balance_below_the_maximum_cost_never_reaches_the_upstream() {
+async fn the_last_draw_admits_a_request_the_maximum_exceeds() {
     let upstream = Upstream::start(UpstreamMode::Ok).await;
     let harness = Harness::start(&upstream, STATIC_MODEL, Some((2.5, 10.0)), Some(100), true);
 
     let result = harness.run(harness.request(Some(64))).await;
 
     assert_eq!(
-        result.status_code, 402,
-        "an unaffordable maximum must be refused before dispatch: {:?}",
+        result.status_code, 200,
+        "a positive balance is always admitted (last-draw): {:?}",
         result.error
     );
-    assert!(matches!(
-        result.error,
-        Some(CoreError::InsufficientCredits { .. })
-    ));
-    assert_eq!(harness.hits.load(Ordering::SeqCst), 0, "no upstream hit");
-    assert_eq!(harness.balance(), 100, "nothing was spent");
+    assert_eq!(
+        harness.hits.load(Ordering::SeqCst),
+        1,
+        "the request reached the upstream"
+    );
+    assert_eq!(
+        harness.balance(),
+        0,
+        "the debit clamped to the balance: the plan closes at exactly 0"
+    );
 }
 
 #[tokio::test]
@@ -552,7 +556,7 @@ async fn free_keys_keep_full_access_even_with_unpriced_models() {
 }
 
 #[tokio::test]
-async fn execute_test_target_obeys_the_prepaid_budget() {
+async fn execute_test_target_runs_the_last_draw() {
     let upstream = Upstream::start(UpstreamMode::Ok).await;
     let harness = Harness::start(&upstream, STATIC_MODEL, Some((2.5, 10.0)), Some(100), true);
 
@@ -561,11 +565,14 @@ async fn execute_test_target_obeys_the_prepaid_budget() {
     let result = harness.pipeline.execute_test_target(req, resolved).await;
 
     assert_eq!(
-        result.status_code, 402,
-        "admin test traffic must not bypass prepaid admission: {:?}",
+        result.status_code, 200,
+        "admin test traffic obeys the same last-draw admission: {:?}",
         result.error
     );
-    assert_eq!(harness.hits.load(Ordering::SeqCst), 0);
+    assert_eq!(harness.hits.load(Ordering::SeqCst), 1);
+    // The test-target path dispatches without settling a usage row, so no
+    // debit (clamped or not) is asserted here; the admission itself is the
+    // last-draw contract under test.
 }
 
 #[tokio::test]

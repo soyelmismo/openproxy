@@ -1,15 +1,14 @@
 //! Strict monetary bound for prepaid chat requests, enforced **before** the
 //! upstream is touched.
 //!
-//! The per-key credit gate serializes requests and refuses a balance that is
-//! already exhausted, but a single request used to be admitted as long as
-//! `balance > 0`: its cost is only known after the response, and the debit was
-//! clamped to whatever was left (`debit = min(cost, balance)`). A prepaid key
-//! could therefore consume more than it owned on every request.
-//!
-//! This module computes a conservative *maximum* cost for one candidate before
-//! dispatch and rejects it with `402 InsufficientCredits` when that maximum does
-//! not fit the authoritative balance. The rules are deliberately one-sided:
+//! The per-key credit gate serializes requests and refuses an exhausted
+//! balance, but admits any request while the balance is positive — even when
+//! the conservative maximum exceeds it. That is the **last-draw** policy: the
+//! client's real cost may still fit what is left, and the debit clamps to
+//! whatever remains, so a prepaid plan is always consumed to exactly 0 and
+//! the next request is refused by the middleware with a clean 402. The
+//! overdraft is therefore bounded by one balance lifetime (plus whatever is
+//! already in flight concurrently).
 //!
 //! - **Input** is bounded by the exact formatted payload size in bytes. A BPE
 //!   token is a byte sequence of length >= 1, and JSON escaping only adds bytes,
@@ -378,10 +377,22 @@ fn load_credit_state(
 }
 
 fn deny_if_over_budget(quote: &CreditQuote, balance_units: i64) -> Result<(), CoreError> {
+    if balance_units <= 0 {
+        return Err(CoreError::InsufficientCredits { balance_usd: 0.0 });
+    }
     if quote.units > balance_units {
-        return Err(CoreError::InsufficientCredits {
-            balance_usd: balance_units as f64 / UNITS_PER_USD,
-        });
+        // LAST-DRAW admission: the balance no longer covers the conservative
+        // maximum, but the client's real cost may still fit it. The request is
+        // admitted and the debit clamps to whatever remains, so the plan lands
+        // at exactly 0 and the buyer sees their bar consumed to 100% instead
+        // of a stranded remainder they cannot spend. The next request finds a
+        // zero balance and is refused with a clean 402 by the middleware, so
+        // the overdraft is bounded by one balance lifetime.
+        tracing::warn!(
+            balance_units,
+            max_quote_units = quote.units,
+            "credit last-draw: admitted a request whose maximum exceeds the balance"
+        );
     }
     Ok(())
 }

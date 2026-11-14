@@ -99,7 +99,8 @@ impl UnaryCreditLease {
     /// `laya` / `embeddinggemma` engines): see [`super::budget::HostLocal`].
     ///
     /// # Errors
-    /// - [`CoreError::InsufficientCredits`] when the bound exceeds the budget.
+    /// - [`CoreError::InsufficientCredits`] when the balance is exhausted (0):
+    ///   a positive balance is always admitted (last-draw; the debit clamps).
     /// - [`CoreError::ServiceUnavailable`] when the request has no usable
     ///   price (fail closed: it must not dispatch unbilled).
     /// - [`CoreError::Validation`] when no billable quantity can be derived.
@@ -115,18 +116,27 @@ impl UnaryCreditLease {
         };
         let quote = budget::quote(db_pool, target, charge, local).await?;
         let budget = lane.budget_units();
+        if budget <= 0 {
+            tracing::warn!(
+                api_key_id = lane.key_id(),
+                provider = %target.provider,
+                model = %target.upstream_model,
+                "prepaid balance exhausted; refusing before dispatch"
+            );
+            return Err(CoreError::InsufficientCredits { balance_usd: 0.0 });
+        }
         if quote.units() > budget {
+            // LAST-DRAW: the real cost may still fit the remainder; the debit
+            // clamps to whatever is left, so the plan closes at exactly 0 and
+            // the next request is refused above.
             tracing::warn!(
                 api_key_id = lane.key_id(),
                 required_units = quote.units(),
                 budget_units = budget,
                 provider = %target.provider,
                 model = %target.upstream_model,
-                "prepaid budget cannot cover this request; refusing before dispatch"
+                "credit last-draw: admitted a request whose maximum exceeds the balance"
             );
-            return Err(CoreError::InsufficientCredits {
-                balance_usd: budget as f64 / 1_000_000.0,
-            });
         }
         Ok(Some(quote))
     }

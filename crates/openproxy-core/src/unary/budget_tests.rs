@@ -285,35 +285,29 @@ const EMBEDDING_OK: &str = r#"{"object":"list","data":[{"object":"embedding","in
 // ── embeddings ──────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn prepaid_embedding_over_the_balance_is_refused_before_dispatch() {
+async fn prepaid_embedding_over_the_balance_runs_the_last_draw() {
     // "hello" is a 5-byte input: the bound is 5 + 8 framing = 13 tokens, i.e.
-    // 13_000 micro-USD at 1000 USD/1M. The grant is 1_000: it cannot cover it.
+    // 13_000 micro-USD at 1000 USD/1M. The grant is 1_000: the LAST-DRAW
+    // policy admits it anyway and the debit clamps to the grant, closing the
+    // balance at exactly 0 instead of stranding an unspendable remainder.
     let fx = Fixture::new("mock-model", Some((1000.0, 0.0)), Some(1_000), None).await;
     let mock = fx.respond("/embeddings", EMBEDDING_OK).await;
     let client = UpstreamClient::new();
     let cb = breaker();
 
-    let error = crate::embeddings::execute_embeddings(
+    crate::embeddings::execute_embeddings(
         fx.deps(&client, &cb),
         embedding_request(&fx.route, "hello"),
         fx.key(),
         false,
     )
     .await
-    .expect_err("an unaffordable request must be refused");
-    assert!(
-        matches!(error, CoreError::InsufficientCredits { .. }),
-        "expected 402, got {error:?}"
-    );
-    assert_eq!(
-        mock.calls_async().await,
-        0,
-        "nothing may reach the upstream"
-    );
-    assert_eq!(fx.balance(), 1_000, "the balance must be untouched");
-    assert_eq!(fx.usage_rows(), 0, "a refused request records nothing");
+    .expect("a positive balance is admitted (last-draw)");
+    assert_eq!(mock.calls_async().await, 1, "the request dispatched");
+    assert_eq!(fx.balance(), 0, "the debit consumed the whole grant");
 
-    // The lane was released with the refusal: a second attempt is not wedged.
+    // The balance is gone: a second attempt is refused with a clean 402 and
+    // the lane is not wedged.
     let again = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         crate::embeddings::execute_embeddings(
@@ -325,7 +319,11 @@ async fn prepaid_embedding_over_the_balance_is_refused_before_dispatch() {
     )
     .await
     .expect("the refusal must not leave the key lane held");
-    assert!(again.is_err());
+    let error = again.expect_err("an exhausted balance must be refused");
+    assert!(
+        matches!(error, CoreError::InsufficientCredits { .. }),
+        "expected 402, got {error:?}"
+    );
 }
 
 #[tokio::test]
@@ -671,23 +669,22 @@ async fn system_one_without_usage_bills_the_model_output_bound() {
 }
 
 #[tokio::test]
-async fn system_one_request_over_the_balance_is_refused_before_dispatch() {
+async fn system_one_request_over_the_balance_runs_the_last_draw() {
     let fx = Fixture::new("mock-model", Some((1000.0, 1000.0)), Some(1), Some(64)).await;
     let mock = fx.respond("/systemone", r#"{"answers":{}}"#).await;
     let client = UpstreamClient::new();
     let cb = breaker();
 
-    let error = crate::systemone::execute_system_one(
+    crate::systemone::execute_system_one(
         fx.deps(&client, &cb),
         system_one_request(&fx.route),
         fx.key(),
         false,
     )
     .await
-    .expect_err("one micro-unit cannot cover state plus output");
-    assert!(matches!(error, CoreError::InsufficientCredits { .. }));
-    assert_eq!(mock.calls_async().await, 0);
-    assert_eq!(fx.balance(), 1);
+    .expect("a positive balance is admitted (last-draw)");
+    assert_eq!(mock.calls_async().await, 1);
+    assert_eq!(fx.balance(), 0, "the debit clamped to the 1-unit grant");
 }
 
 #[tokio::test]

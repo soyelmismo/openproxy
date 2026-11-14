@@ -775,16 +775,13 @@ fn spend_is_fifo_by_expiry_and_cannot_overdraw() {
     assert_eq!(lots.len(), 1, "the soon lot must be exhausted");
     assert!((lots[0].remaining_usd - 4.0).abs() < 1e-9);
 
-    // Overdraw is refused and consumes nothing.
-    let err = record_spend(&conn, key, 5 * USD).expect_err("overdraw");
-    assert!(matches!(
-        err,
-        openproxy_types::CoreError::InsufficientCredits { .. }
-    ));
-    assert_eq!(ledger::balance_units(&conn, key).unwrap(), 4 * USD);
+    // LAST-DRAW: a spend beyond the balance consumes the whole remainder and
+    // closes the plan at exactly 0.
+    record_spend(&conn, key, 5 * USD).expect("last-draw spend");
+    assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
 
-    // Exact spend empties it.
-    record_spend(&conn, key, 4 * USD).expect("exact spend");
+    // An exhausted balance charges nothing and reports it.
+    record_spend(&conn, key, 4 * USD).expect("no balance left to charge");
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
 }
 
@@ -830,8 +827,9 @@ fn expiry_kills_remaining_without_refund() {
         .expect("status");
     assert_eq!(status, "expired");
 
-    // Spending against an expired balance is refused.
-    assert!(record_spend(&conn, key, 1).is_err());
+    // Spending against an exhausted balance charges nothing.
+    assert_eq!(record_spend(&conn, key, 1).unwrap().spent_units, 0);
+    assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
 }
 
 #[test]

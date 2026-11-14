@@ -81,10 +81,14 @@ pub fn record_spend(
     };
     let tx: &Connection = owned_tx.as_deref().unwrap_or(conn);
     let balance = balance_units(tx, api_key_id)?;
-    if balance < cost_units {
-        return Err(CoreError::InsufficientCredits {
-            balance_usd: balance as f64 / 1_000_000.0,
-        });
+    // LAST-DRAW: charge whatever the plan still holds instead of failing. The
+    // gate admits requests while the balance is positive, so a request whose
+    // real cost exceeds the balance pays with the remainder and the plan
+    // closes at exactly 0; the middleware refuses everything after that. A
+    // concurrent sibling may have drained it first: charge nothing, close.
+    let cost_units = cost_units.min(balance.max(0));
+    if cost_units <= 0 {
+        return Ok(0);
     }
     let mut need = cost_units;
     {
