@@ -68,7 +68,6 @@ export interface RotationResponse {
 export interface OrderStatus {
   order_code: string;
   status: string;
-  api_key_id: number | null;
   block_number: number | null;
   expires_at: string;
   key_revealed: boolean;

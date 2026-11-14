@@ -148,7 +148,12 @@ async fn anonymous_buy_pay_reveal_and_history_e2e() {
         json!("minted"),
         "anonymous orders are paid+minted in one step"
     );
-    assert_eq!(st["tx_hash"], json!("0xpay1"));
+    // The public status surface no longer exposes the tx hash or the
+    // internal api_key_id: the code alone must not link an order to a
+    // chain transaction or a tenant (audit A4-04).
+    assert!(st.get("tx_hash").is_none(), "tx_hash must not leak: {st}");
+    assert!(st.get("api_key_id").is_none(), "api_key_id must not leak: {st}");
+    assert!(st["block_number"].is_number(), "block height stays for the UI");
 
     // 7. Reveal with its receipt; a different receipt cannot claim the key.
     let (status, rev) = h.oneshot_json(reveal_request(&code, Some(receipt))).await;

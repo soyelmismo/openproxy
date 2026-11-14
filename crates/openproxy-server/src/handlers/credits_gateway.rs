@@ -605,11 +605,13 @@ struct OrderStatusResponse {
     amount_units: i64,
     base_units: i64,
     ttl_days: i64,
-    api_key_id: Option<i64>,
+    /// Inclusion height, shown by the checkout UI ("confirmed in block N").
+    /// The tx hash itself is deliberately NOT exposed on this public,
+    /// code-addressable surface: it would link the buyer's order to a chain
+    /// transaction for anyone holding the code.
+    block_number: Option<i64>,
     expires_at: String,
     paid_at: Option<String>,
-    tx_hash: Option<String>,
-    block_number: Option<i64>,
     key_revealed: bool,
     no_refunds: bool,
 }
@@ -633,11 +635,9 @@ async fn order_status(State(state): State<AppState>, Path(code): Path<String>) -
             amount_units: o.amount_units,
             base_units: o.base_units,
             ttl_days: o.ttl_days,
-            api_key_id: o.api_key_id,
+            block_number: o.block_number,
             expires_at: o.expires_at,
             paid_at: o.paid_at,
-            tx_hash: o.tx_hash.clone(),
-            block_number: o.block_number,
             key_revealed: o.key_revealed,
             no_refunds: true,
         })
