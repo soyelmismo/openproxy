@@ -645,6 +645,7 @@ impl TestHarness {
                         price_usd: None,
                         credit_usd: None,
                         ttl_days: 30,
+                        stock: None,
                     },
                 )?;
                 openproxy_core::credits::tiers::apply_to_key(

@@ -47,6 +47,7 @@ pub(crate) async fn seed_plan(h: &TestHarness, price: f64, credit: f64, ttl: i64
                     price_usd: Some(price),
                     credit_usd: Some(credit),
                     ttl_days: ttl,
+                    stock: None,
                 },
             )
             .map(|t| t.id)
