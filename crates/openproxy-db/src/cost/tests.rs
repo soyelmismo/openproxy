@@ -154,6 +154,9 @@ fn record_with_retry_succeeds_first_attempt_on_quiescent_db() {
     assert!(record_with_retry(&pool.writer(), &input).is_ok());
 }
 
+// Asserts the real credit-debit path: payments-only (the public build's
+// debit is a no-op stub).
+#[cfg(feature = "payments")]
 #[test]
 fn billable_insert_debits_and_callback_does_not_debit_twice() {
     let pool = DbPool::test_pool_with_prefix("checkout-billable-insert").unwrap();
@@ -328,6 +331,8 @@ fn test_record_with_deleted_api_key_does_not_fail_foreign_key() {
     assert_eq!(saved_key_id, None, "orphaned api_key_id must be NULL");
 }
 
+// Asserts the real credit-debit path: payments-only (see the sibling test).
+#[cfg(feature = "payments")]
 #[test]
 fn attributed_insert_failure_cannot_fall_back_to_anonymous_usage() {
     let pool = DbPool::test_pool_with_prefix("checkout-no-anonymous-fallback").unwrap();

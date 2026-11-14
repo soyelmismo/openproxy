@@ -249,6 +249,9 @@ async fn admin_middleware_rejects_spoofed_real_ip_from_untrusted_peer() {
     assert_eq!(identity.remote_addr, Some(untrusted_addr));
 }
 
+// Asserts the client allowlist against credit surfaces (quota, orders,
+// transactions): payments-only — the routes do not exist in a public build.
+#[cfg(feature = "payments")]
 #[tokio::test]
 async fn analytics_scope_gets_client_allowlist_only() {
     // Client keys (analytics scope, no "manage") get ONLY the explicit client
@@ -385,6 +388,7 @@ async fn analytics_scope_gets_client_allowlist_only() {
 /// able to sign in and read its OWN plan. It never needs `manage`: the client
 /// allowlist bounds it to its identity and its credits row, and every operator
 /// route stays 403.
+#[cfg(feature = "payments")]
 #[tokio::test]
 async fn chat_scope_customer_reads_its_own_plan() {
     let tmp = tempdir();

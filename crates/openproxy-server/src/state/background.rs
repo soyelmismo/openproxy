@@ -117,7 +117,9 @@ pub(crate) fn spawn_background_tasks(
     }
 
     // Credits: on-chain watcher + expiry/self-audit. Only when credits are
-    // configured (None = credits disabled entirely).
+    // configured (None = credits disabled entirely) AND the build has the
+    // payments feature; in a public build the whole subsystem is absent.
+    #[cfg(feature = "payments")]
     if let Some(credits_config) = config.credits.clone() {
         supervisor.spawn(crate::background::credits_watcher::CreditsWatcherService {
             db_pool: Arc::clone(&db_pool),

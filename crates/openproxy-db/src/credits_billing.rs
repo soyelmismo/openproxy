@@ -1,7 +1,9 @@
 //! Exactly-once debit for billable usage rows, shared by insert and callbacks.
 use crate::error::map_db_error;
 use openproxy_types::Result;
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
+#[cfg(feature = "payments")]
+use rusqlite::OptionalExtension;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 pub(crate) fn transaction<T>(
     conn: &Connection,
@@ -24,6 +26,7 @@ pub(crate) fn transaction<T>(
 
 /// Caller owns the transaction. A paid response may exhaust, but never leave
 /// a positive balance on an overrun: otherwise oversize requests are free forever.
+#[cfg(feature = "payments")]
 pub(crate) fn debit_usage(conn: &Connection, usage_id: i64) -> Result<()> {
     let row: Option<(i64, i64)> = conn
         .query_row(
@@ -61,7 +64,15 @@ pub(crate) fn debit_usage(conn: &Connection, usage_id: i64) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+/// Payments-disabled build: usage rows are recorded (and priced, for
+/// analytics) but nothing debits a credit balance, because no credit tables
+/// exist and no key is credit-based.
+#[cfg(not(feature = "payments"))]
+pub(crate) fn debit_usage(_conn: &Connection, _usage_id: i64) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(all(test, feature = "payments"))]
 mod tests {
     use super::*;
     fn db() -> Connection {

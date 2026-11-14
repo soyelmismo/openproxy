@@ -19,6 +19,11 @@ embed-engine = ["openproxy-adapters/embed-engine"]
 upstream-hyper = ["dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body", "dep:http-body-util", "dep:futures-util", "dep:tokio-rustls", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots", "dep:socket2"]
 # Stub gate for callers that want to disable just this client (e.g.
 # downstream consumers building with `default-features = false`).
+# The on-chain payments/credits subsystem (plans, credit ledger, quota
+# windows). OFF by default — the openproxy-server `payments` feature enables
+# it, so the public build never compiles the money modules. Enabling it also
+# turns on openproxy-db's payments feature (real ledger + money migrations).
+payments = ["openproxy-db/payments", "openproxy-pipeline/payments"]
 upstream-stub = []
 # Allow private/reserved IP addresses in upstream connections (SSRF bypass).
 # Used by downstream test harnesses (e.g. openproxy-api-client) that connect

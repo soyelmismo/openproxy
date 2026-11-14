@@ -37,6 +37,11 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 #                       OPENPROXY_BENCH_CA_PEM.
 # `laya-engine` is a default feature, so dropping --all-features does not lose
 # it. Pass --features explicitly if a one-off build really needs more.
+#
+# Payments flag file: if `payments.local` exists at the repo root, the build
+# enables the on-chain payments/credits subsystem (feature `payments` of
+# openproxy-server). The file is untracked (see .gitignore) — this checkout
+# runs the paid product while the public repo ships without it.
 FEATURES=""
 DO_RESTART=1
 LOG_PREFIX="[rebuild]"
@@ -54,6 +59,13 @@ while [[ $# -gt 0 ]]; do
       exit 2 ;;
   esac
 done
+
+# Payments flag file (checked after arg parsing so a custom --project wins):
+# its presence builds with the on-chain payments/credits subsystem unless the
+# caller already passed --features explicitly.
+if [[ -f "$PROJECT_DIR/payments.local" && "$FEATURES" != *payments* ]]; then
+  FEATURES="--features openproxy-server/payments"
+fi
 
 log() { echo "$LOG_PREFIX $(date +%H:%M:%S) $*"; }
 die() { echo "$LOG_PREFIX ERROR: $*" >&2; exit 1; }
@@ -103,7 +115,13 @@ if [[ -d "$WEB_DIR" && -f "$WEB_DIR/package.json" ]]; then
   fi
   rm -f "$PNPM_ERR"
   log "pnpm build  (esbuild emite a $WEB_DIR/src/static/dist/)"
-  (cd "$WEB_DIR" && pnpm run build)
+  # The web bundle must match the Rust feature: with the payments flag the
+  # checkout/credits chunks ship; otherwise the public (payments-free) bundle.
+  if [[ "$FEATURES" == *payments* ]]; then
+    (cd "$WEB_DIR" && pnpm run build)
+  else
+    (cd "$WEB_DIR" && OP_PAYMENTS=0 pnpm run build)
+  fi
   # Sanity check: app.js (esbuild bundle) + 2 .d.ts files que demuestran
   # que tsc caminó todo el source tree (esbuild inlinea todo en app.js,
   # así que los .js por módulo no se emiten más).

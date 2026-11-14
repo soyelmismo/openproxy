@@ -28,10 +28,14 @@ pub mod systemone;
 pub use systemone::execute_system_one;
 pub mod unary;
 
+// Payments/credits subsystem. OFF in the public build: the whole money
+// domain (plans, tiers, ledger, quota windows) is not compiled at all.
+#[cfg(feature = "payments")]
 pub mod api_key_quotas;
 pub mod api_keys;
 pub mod backup;
 pub mod bootstrap;
+#[cfg(feature = "payments")]
 pub mod credits;
 
 pub mod discovery_scheduler;

@@ -622,6 +622,8 @@ fn output_ceiling(
     })
 }
 
-#[cfg(test)]
+// Prepaid-budget tests build credit-backed fixtures, which only exist with
+// the payments feature.
+#[cfg(all(test, feature = "payments"))]
 #[path = "budget_tests.rs"]
 mod tests;

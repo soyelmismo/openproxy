@@ -1,5 +1,7 @@
 use crate::{error::ApiError, state::AppState};
 use axum::{extract::State, http::HeaderMap};
+// The plan-quota window system only exists with payments.
+#[cfg(feature = "payments")]
 use openproxy_core::api_key_quotas;
 use openproxy_core::api_keys::{self as core_api_keys, ApiKey};
 use openproxy_types::{CoreError, ids::ApiKeyId};
@@ -59,33 +61,44 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
 /// Resolve the caller from the `Authorization` header.
 /// Reject the request with 429 when the key already spent its dollar cap in
 /// any enabled quota window. Keys without a quota row pass untouched.
+///
+/// Payments-disabled build: no quota tables exist, so no key can ever have a
+/// cap and the check no-ops.
 async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), ApiError> {
-    let violation = state
-        .db_pool()
-        .spawn_read(move |r| api_key_quotas::check(r, key_id))
-        .await
-        .map_err(|e| {
-            tracing::error!(%e, "db error checking api key quota");
-            ApiError(CoreError::Internal("quota check failed".into()))
-        })?;
-    let Some(violation) = violation else {
+    #[cfg(not(feature = "payments"))]
+    {
+        let _ = (state, key_id);
         return Ok(());
-    };
-    tracing::warn!(
-        key_id = key_id.0,
-        window = violation.window,
-        spent = violation.spent_usd,
-        cap = violation.cap_usd,
-        "api key quota exceeded"
-    );
-    Err(ApiError(CoreError::QuotaExceeded {
-        window: violation.window.to_string(),
-        spent_usd: violation.spent_usd,
-        cap_usd: violation.cap_usd,
-        resets_at: violation
-            .resets_at
-            .unwrap_or_else(|| "rolling window".into()),
-    }))
+    }
+    #[cfg(feature = "payments")]
+    {
+        let violation = state
+            .db_pool()
+            .spawn_read(move |r| api_key_quotas::check(r, key_id))
+            .await
+            .map_err(|e| {
+                tracing::error!(%e, "db error checking api key quota");
+                ApiError(CoreError::Internal("quota check failed".into()))
+            })?;
+        let Some(violation) = violation else {
+            return Ok(());
+        };
+        tracing::warn!(
+            key_id = key_id.0,
+            window = violation.window,
+            spent = violation.spent_usd,
+            cap = violation.cap_usd,
+            "api key quota exceeded"
+        );
+        Err(ApiError(CoreError::QuotaExceeded {
+            window: violation.window.to_string(),
+            spent_usd: violation.spent_usd,
+            cap_usd: violation.cap_usd,
+            resets_at: violation
+                .resets_at
+                .unwrap_or_else(|| "rolling window".into()),
+        }))
+    }
 }
 
 /// Reject the request with 402 when the key is credit-based (carries at

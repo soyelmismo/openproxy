@@ -13,6 +13,29 @@ const isWatch = process.argv.includes('--watch');
 const srcDir = join(__dirname, 'src', 'static', 'src');
 const outDir = join(__dirname, 'src', 'static', 'dist');
 
+// The on-chain payments/credits subsystem. OP_PAYMENTS=0 builds the public
+// bundle: no checkout.js is emitted and every payments module the SPA could
+// import (credits view, credits-gateway config card) resolves to an empty
+// stub, so no payment code ships in the public chunks. The Rust `payments`
+// cargo feature must match.
+const PAYMENTS = process.env.OP_PAYMENTS !== '0';
+
+const paymentsStubPlugin = {
+  name: 'payments-stub',
+  setup(build) {
+    if (PAYMENTS) return;
+    const stubFilter = /views\/credits\/|credits-gateway\.js$/;
+    build.onResolve({ filter: stubFilter }, (args) => ({
+      path: args.path,
+      namespace: 'payments-stub',
+    }));
+    build.onLoad({ filter: /.*/, namespace: 'payments-stub' }, () => ({
+      contents: 'export {};',
+      loader: 'js',
+    }));
+  },
+};
+
 const options = {
   entryPoints: [join(srcDir, 'app.ts'), join(srcDir, 'theme-init.ts')],
   bundle: true,
@@ -28,6 +51,8 @@ const options = {
   legalComments: 'eof',
   packages: 'bundle',
   logLevel: 'info',
+  define: { __OP_PAYMENTS__: PAYMENTS ? 'true' : 'false' },
+  plugins: [paymentsStubPlugin],
 };
 
 // Public checkout page: TS source (fragmented under src/checkout/) →
@@ -60,12 +85,11 @@ const cssOptions = {
 };
 
 if (isWatch) {
-  const [jsCtx, cssCtx, checkoutCtx] = await Promise.all([
+  const [jsCtx, cssCtx] = await Promise.all([
     context(options),
     context(cssOptions),
-    context(checkoutOptions),
   ]);
-  await Promise.all([jsCtx.watch(), cssCtx.watch(), checkoutCtx.watch()]);
+  await Promise.all([jsCtx.watch(), cssCtx.watch()]);
   console.log('Watching for changes...');
 } else {
   // Chunk-retention deploy: a browser tab opened before this build still holds
@@ -80,11 +104,10 @@ if (isWatch) {
   if (existsSync(outDir)) renameSync(outDir, prevDir);
   mkdirSync(outDir, { recursive: true });
 
-  await Promise.all([
-    build(options),
-    build(cssOptions),
-    build(checkoutOptions),
-  ]);
+  const builds = [build(options), build(cssOptions)];
+  // Money surface: the public checkout only exists with payments.
+  if (PAYMENTS) builds.push(build(checkoutOptions));
+  await Promise.all(builds);
 
   if (existsSync(prevDir)) {
     const prevChunks = join(prevDir, 'chunks');

@@ -13,6 +13,9 @@ workspace = true
 default = ["laya-engine"]
 laya-engine = ["openproxy-adapters/laya-engine"]
 benchmark-profile = ["openproxy-db/sql-profile"]
+# Real pass-through: enabling pipeline/payments brings the db money modules
+# and migrations too (openproxy-core/payments also forwards here).
+payments = ["openproxy-db/payments"]
 
 [dev-dependencies]
 criterion = { workspace = true }

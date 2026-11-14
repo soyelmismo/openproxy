@@ -95,7 +95,8 @@ use db_port::{CreditGateDb, UnaryPersistError};
 pub use reservation::note_delivery_started;
 use unary_persist::persist_unary_usage;
 
-#[cfg(test)]
+// Seeds credit_reservations rows directly, which only exist with payments.
+#[cfg(all(test, feature = "payments"))]
 mod interprocess_tests;
 
 /// Lanes kept before idle ones are pruned. One lane per (database, prepaid key);
@@ -787,6 +788,7 @@ pub async fn settle_unary_credit(
     Err(failure)
 }
 
-#[cfg(test)]
+// These tests seed credit tables directly: they only exist with payments.
+#[cfg(all(test, feature = "payments"))]
 #[path = "credits_gate_tests.rs"]
 mod tests;

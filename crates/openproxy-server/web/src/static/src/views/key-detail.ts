@@ -22,7 +22,10 @@ export async function mountKeyDetail(
   try {
     const [loaded, tiers] = await Promise.all([
       api(`/keys/${id}`) as Promise<ApiKey>,
-      api("/credits/tiers").catch(() => []) as Promise<TierOption[]>,
+      // Payments-only endpoint; a disabled build shows no tier selector.
+      __OP_PAYMENTS__
+        ? api("/credits/tiers").catch(() => []) as Promise<TierOption[]>
+        : Promise.resolve([] as TierOption[]),
       state.providers.length ? Promise.resolve() : api("/providers").then(providers => { state.providers = providers as Provider[]; }),
     ]);
     if (disposed || !container.isConnected) return () => {};

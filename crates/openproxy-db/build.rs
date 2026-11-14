@@ -13,7 +13,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let migrations_dir = Path::new(&manifest_dir).join("migrations");
 
     println!("cargo:rerun-if-changed=migrations");
-
+    // The payments subsystem ships DISABLED: without the `payments` feature
+    // the money migrations are not embedded at all, so a public build neither
+    // creates nor knows the money tables. This is an explicit allow-list of
+    // money migration versions — every new migration that only makes sense
+    // with payments must be added here (and ideally carries `credit`/`plan`
+    // in its file name).
+    let payments = env::var_os("CARGO_FEATURE_PAYMENTS").is_some();
+    // 110 api_key_quotas · 111 credits · 112 packages · 113 tiers ·
+    // 114 live tier link · 115 plan tiers · 117 plan quota windows ·
+    // 118 plan grant · 121 checkout resilience · 122 receipt binding ·
+    // 123 checkout replay target · 124 credit reservations ·
+    // 126 credit key-kind backfill.
+    const PAYMENTS_ONLY_MIGRATIONS: &[i64] =
+        &[110, 111, 112, 113, 114, 115, 117, 118, 121, 122, 123, 124, 126];
     let mut entries = Vec::new();
 
     if migrations_dir.exists() {
@@ -31,6 +44,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Ok(version) = ver_str.parse::<i64>() else {
                     continue;
                 };
+                if !payments && PAYMENTS_ONLY_MIGRATIONS.contains(&version) {
+                    continue;
+                }
                 entries.push((version, stem.to_string(), filename));
             }
         }

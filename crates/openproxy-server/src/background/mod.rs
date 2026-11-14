@@ -8,6 +8,7 @@ use std::time::Duration;
 mod claude_profile;
 pub mod client_contract;
 mod codebuddy_contract;
+#[cfg(feature = "payments")]
 pub mod credits_watcher;
 pub mod runner;
 pub mod supervisor;

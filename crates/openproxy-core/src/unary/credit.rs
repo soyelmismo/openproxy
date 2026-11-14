@@ -168,6 +168,6 @@ impl UnaryCreditLease {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 #[path = "credit_tests.rs"]
 mod tests;

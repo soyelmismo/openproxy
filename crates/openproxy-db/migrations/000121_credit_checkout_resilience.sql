@@ -22,8 +22,3 @@ CREATE INDEX idx_credit_orders_amount_window
 -- Mark terminal/unmatched deposits explicitly for operator investigation.
 ALTER TABLE matched_payments ADD COLUMN order_id INTEGER;
 ALTER TABLE matched_payments ADD COLUMN outcome TEXT NOT NULL DEFAULT 'legacy';
-
--- A usage row is debited exactly once, independently of winner callbacks.
--- Historical billable rows must not be charged again by a delayed callback.
-ALTER TABLE usage ADD COLUMN credits_debited INTEGER NOT NULL DEFAULT 0;
-UPDATE usage SET credits_debited = 1 WHERE client_response = 1;

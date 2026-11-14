@@ -12,6 +12,10 @@ workspace = true
 [features]
 # Disabled in normal builds: statement tracing perturbs the measured workload.
 sql-profile = ["rusqlite/trace"]
+# The on-chain payments/credits subsystem: credit ledger, billing, credit
+# reservations and the credit/plan migrations. OFF in the public build; the
+# openproxy-server `payments` feature turns it on.
+payments = []
 
 [dependencies]
 openproxy-types = { path = "../openproxy-types" }

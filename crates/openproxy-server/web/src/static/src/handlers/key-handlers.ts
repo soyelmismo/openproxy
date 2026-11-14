@@ -220,6 +220,7 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
                 <p class="key-form-section-hint">The tier owns model access and caps</p>
               </div>
               <div class="key-form-grid key-form-grid--access">
+                ${__OP_PAYMENTS__ ? html`
                 <div class="field">
                   <div class="key-form-field-head">
                     <span class="field-label">Plan (tier)</span>
@@ -233,7 +234,7 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
                         ${tr.name}${tr.price_usd != null ? ` — pay $${tr.price_usd}` : " — draft"}${tr.credit_usd != null ? ` → $${tr.credit_usd}` : ""} · ${tr.ttl_days}d
                       </option>`)}
                   </select>
-                </div>
+                </div>` : ''}
               </div>
             </section>
             <section class="key-form-section" aria-labelledby="key-section-restrictions">
@@ -284,7 +285,9 @@ export async function showCreateKey(): Promise<void> {
   if (!state.providers || state.providers.length === 0) {
     state.providers = await api("/providers") as Provider[];
   }
-  const tiers = await api("/credits/tiers").catch(() => []) as TierOption[];
+  const tiers = __OP_PAYMENTS__
+    ? await api("/credits/tiers").catch(() => []) as TierOption[]
+    : [];
   const wrapper = document.createElement("div");
   ensureModalRoot().appendChild(wrapper);
   render(keyFormTemplate({ mode: "create", tiers, wrapper }), wrapper);

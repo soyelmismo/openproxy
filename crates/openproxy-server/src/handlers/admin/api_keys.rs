@@ -7,7 +7,7 @@ use openproxy_types::UpdateField;
 use std::sync::Arc;
 
 pub fn router() -> axum::Router<AppState> {
-    axum::Router::new()
+    let router = axum::Router::new()
         .route("/", axum::routing::get(list_api_keys).post(create_api_key))
         .route("/kinds", axum::routing::get(list_key_kinds))
         .route(
@@ -19,15 +19,23 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}/kind", axum::routing::post(set_key_kind))
         .route("/{id}/revoke", axum::routing::post(revoke_api_key))
         .route("/{id}/regenerate", axum::routing::post(regenerate_api_key))
-        .route("/{id}/usage", axum::routing::get(api_key_usage))
+        .route("/{id}/usage", axum::routing::get(api_key_usage));
+    // Plan quota windows only exist with payments (api_key_quotas tables).
+    #[cfg(feature = "payments")]
+    let router = router
         .route("/{id}/quota", axum::routing::get(get_key_quota))
-        .route("/quotas", axum::routing::get(list_key_quotas))
+        .route("/quotas", axum::routing::get(list_key_quotas));
+    router
 }
 
 /// Privileges and dollar quotas are plan territory: the tier owns them. The
 /// admin key editor may only link a key to a tier, adjust its balance, and
 /// subtract access via blacklists. Allowlists / the whitelist gate / quotas
 /// can never be set directly on a key.
+///
+/// Payments-disabled build: there are no plans, so nothing is plan-owned and
+/// the editor simply has no tier flow.
+#[cfg(feature = "payments")]
 const PLAN_OWNED_FIELDS: [&str; 5] = [
     "allowed_models",
     "allowed_combos",
@@ -35,6 +43,9 @@ const PLAN_OWNED_FIELDS: [&str; 5] = [
     "only_whitelisted",
     "quota",
 ];
+
+#[cfg(not(feature = "payments"))]
+const PLAN_OWNED_FIELDS: [&str; 0] = [];
 
 fn reject_plan_owned_fields(body: &serde_json::Value) -> Result<(), ApiError> {
     for field in PLAN_OWNED_FIELDS {
@@ -133,6 +144,7 @@ pub async fn update_api_key(
     reject_plan_owned_fields(&body)?;
 
     // Tri-state tier link: absent = no-op, null = detach, number = link + apply.
+    #[cfg(feature = "payments")]
     let tier_request: Option<Option<i64>> = match body.get("tier_id") {
         None => None,
         Some(v) if v.is_null() => Some(None),
@@ -143,7 +155,9 @@ pub async fn update_api_key(
         })?)),
     };
 
+    #[cfg(feature = "payments")]
     let pool = Arc::clone(s.db_pool());
+    #[cfg(feature = "payments")]
     let state_for_cache = s.clone();
     let _ = crate::error::run_blocking(move || {
         let label = body.get("label").and_then(|v| v.as_str());
@@ -198,6 +212,7 @@ pub async fn update_api_key(
     // reshapes the key (models/combos/caps) and grants the plan's leveraged
     // balance as a `grant` lot with the plan's lifetime. Idempotent per tier,
     // so re-saving the same plan never mints credit twice.
+    #[cfg(feature = "payments")]
     if let Some(request) = tier_request {
         pool.spawn_write(move |w| match request {
             None => openproxy_core::credits::tiers::set_key_tier(w, ApiKeyId(id), None),
@@ -220,6 +235,8 @@ pub async fn update_api_key(
     Ok(Json(serde_json::json!({ "id": id })))
 }
 
+/// GET /admin/api/keys/{id}/quota — plan window caps + live spend.
+#[cfg(feature = "payments")]
 pub async fn get_key_quota(
     State(s): State<AppState>,
     Path(id): Path<i64>,
@@ -230,6 +247,7 @@ pub async fn get_key_quota(
     Ok(Json(out))
 }
 
+#[cfg(feature = "payments")]
 fn fetch_key_quota_list(r: &rusqlite::Connection) -> Result<serde_json::Value, ApiError> {
     let mut stmt = r
         .prepare_cached(
@@ -262,6 +280,7 @@ fn fetch_key_quota_list(r: &rusqlite::Connection) -> Result<serde_json::Value, A
     Ok(serde_json::json!({ "quotas": out }))
 }
 
+#[cfg(feature = "payments")]
 fn fetch_key_quota(r: &rusqlite::Connection, id: i64) -> Result<serde_json::Value, ApiError> {
     let key_id = ApiKeyId(id);
     if core_api_keys::get_by_id(r, key_id)?.is_none() {
@@ -278,6 +297,7 @@ fn fetch_key_quota(r: &rusqlite::Connection, id: i64) -> Result<serde_json::Valu
     }))
 }
 
+#[cfg(feature = "payments")]
 pub async fn list_key_quotas(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {

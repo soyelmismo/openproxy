@@ -65,7 +65,8 @@ const GROUPS: readonly SidebarGroup[] = [
     { href: "#/providers", icon: "providers", label: "Providers" },
     { href: "#/combos", icon: "combos", label: "Combos" },
     { href: "#/keys", icon: "keys", label: "API Keys" },
-    { href: "#/credits", icon: "credits", label: "Credits" },
+    // Payments-only: the credits tile disappears in a payments-disabled build.
+    ...(__OP_PAYMENTS__ ? [{ href: "#/credits", icon: "credits" as const, label: "Credits" }] : []),
     { href: "#/playground", icon: "playground", label: "Playground" },
     { href: "#/proxies", icon: "proxies", label: "Free Proxies" },
     { href: "#/proxy-sources", icon: "proxy-sources", label: "Proxy Sources" },
@@ -245,10 +246,10 @@ export function renderSidebar(): void {
               </div>`)
           : html`
               <div class="sidebar-nav-group">
-                <div class="sidebar-nav-group-label" ?hidden=${collapsed}>Client</div>
-                ${renderLink({ href: "#/analytics", icon: "analytics", label: "Analytics" }, collapsed)}
-                ${renderLink({ href: "#/credits", icon: "credits", label: "Credits" }, collapsed)}
-                ${renderLink({ href: "#/models", icon: "combos", label: "Models" }, collapsed)}
+              <div class="sidebar-nav-group-label" ?hidden=${collapsed}>Client</div>
+              ${renderLink({ href: "#/analytics", icon: "analytics", label: "Analytics" }, collapsed)}
+              ${__OP_PAYMENTS__ ? renderLink({ href: "#/credits", icon: "credits", label: "Credits" }, collapsed) : ''}
+              ${renderLink({ href: "#/models", icon: "combos", label: "Models" }, collapsed)}
                 ${renderLink({ href: "#/playground", icon: "playground", label: "Playground" }, collapsed)}
               </div>`
       }</nav>

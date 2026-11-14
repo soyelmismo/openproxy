@@ -24,7 +24,9 @@ macro_rules! call_unary_executor {
 pub mod admin;
 pub mod audio;
 pub mod chat;
+#[cfg(feature = "payments")]
 pub mod credits_gateway;
+#[cfg(feature = "payments")]
 pub mod credits_qr;
 pub mod embeddings;
 pub mod images;
@@ -76,8 +78,11 @@ pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
         .merge(tokenize::router(state))
         .nest("/chat", chat::router(state))
         .nest("/audio", audio::router(state))
-        .nest("/images", images::router(state))
-        .nest("/credits", credits_gateway::router());
+        .nest("/images", images::router(state));
+
+    // The credit gateway (checkout/orders/QR) only exists with payments.
+    #[cfg(feature = "payments")]
+    let v1_routes = v1_routes.nest("/credits", credits_gateway::router());
 
     axum::Router::new().nest("/v1", v1_routes)
 }

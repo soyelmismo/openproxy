@@ -686,6 +686,7 @@ pub async fn check_resolved(
 #[path = "credit_budget_tests.rs"]
 mod tests;
 
-#[cfg(test)]
+// Credit-backed lifecycle fixtures: payments-only.
+#[cfg(all(test, feature = "payments"))]
 #[path = "credit_budget_lifecycle_tests.rs"]
 mod lifecycle_tests;

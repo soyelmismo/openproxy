@@ -54,3 +54,6 @@ lcov.info
 # minified bundle). Their guard test skips when the artifact is absent.
 fixtures/codebuddy-code-*.tgz
 fixtures/codebuddy-extracted/codebuddy.js
+
+# Payments feature flag file (local only, never committed)
+payments.local

@@ -17,10 +17,16 @@ import {
   renderPiiCard, renderQuotaCard, renderRecordingTtlCard, renderTimeoutsCard,
 } from "./editable-cards.js";
 import { loadMaintenanceState, pollVacuumStatus, renderMaintenanceCard } from "./maintenance.js";
-import {
-  loadCreditsGatewayState,
-  renderCreditsGatewayCard,
-} from "./credits-gateway.js";
+// The credits-gateway card is a payments-only surface. Dynamic import behind
+// __OP_PAYMENTS__: in a payments-disabled build the module is never fetched
+// (and never bundled), the card just does not render.
+type CreditsGatewayModule = typeof import("./credits-gateway.js");
+let creditsGateway: CreditsGatewayModule | null = null;
+async function loadCreditsGateway(): Promise<void> {
+  if (!__OP_PAYMENTS__ || creditsGateway) return;
+  creditsGateway = await import("./credits-gateway.js");
+  await creditsGateway.loadCreditsGatewayState();
+}
 import { tileRootActive } from "../../lib/tile-active.js";
 import { renderBackupCard } from "./backup.js";
 
@@ -126,7 +132,7 @@ function renderConfig(): TemplateResult {
           <div class="config-group-grid">
             ${renderQuotaCard()}
             ${renderPiiCard()}
-            ${renderCreditsGatewayCard()}
+            ${creditsGateway ? creditsGateway.renderCreditsGatewayCard() : ''}
           </div>
         </section>
         <section class="config-group config-group-data">
@@ -173,7 +179,7 @@ export async function mountConfig(
       setConfig(payload);
       applyServerConfig(payload);
       await loadMaintenanceState();
-      await loadCreditsGatewayState();
+      await loadCreditsGateway();
       // 5s poll so the button reflects a completing VACUUM. Hibernated while
       // another tile is maximized: the poll ticks, but does nothing.
       if (vacuumPollHandle) clearInterval(vacuumPollHandle);

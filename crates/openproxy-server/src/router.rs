@@ -65,11 +65,13 @@ pub fn build_admin_listener_router(state: AppState) -> Router {
 }
 
 fn public_routes(state: &AppState) -> Router<AppState> {
-    Router::new()
-        .route("/v1/health", get(health))
+    let routes = Router::new().route("/v1/health", get(health));
+    // The public checkout page only exists with payments.
+    #[cfg(feature = "payments")]
+    let routes = routes
         .route("/checkout", get(admin_ui::checkout_html))
-        .route("/checkout.js", get(admin_ui::checkout_js))
-        .merge(handlers::public_api_routes(state))
+        .route("/checkout.js", get(admin_ui::checkout_js));
+    routes.merge(handlers::public_api_routes(state))
 }
 
 fn admin_routes(state: &AppState) -> Router<AppState> {

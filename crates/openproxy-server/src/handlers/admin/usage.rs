@@ -73,9 +73,12 @@ fn parse_exclude_list(raw: Option<&str>) -> Vec<String> {
 }
 
 pub fn router() -> axum::Router<AppState> {
-    axum::Router::new()
-        .route("/summary", axum::routing::get(usage_summary))
-        .route("/quota", axum::routing::get(usage_quota))
+    let router =
+        axum::Router::new().route("/summary", axum::routing::get(usage_summary));
+    // The plan-quota view only exists with payments (api_key_quotas).
+    #[cfg(feature = "payments")]
+    let router = router.route("/quota", axum::routing::get(usage_quota));
+    let router = router
         .route("/by-model", axum::routing::get(usage_by_model))
         .route("/by-provider", axum::routing::get(usage_by_provider))
         .route("/by-combo", axum::routing::get(usage_by_combo))
@@ -94,13 +97,15 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/recompute-costs",
             axum::routing::post(recompute_usage_costs),
-        )
+        );
+    router
 }
 
 /// GET /admin/api/usage/quota — the caller's own dollar-quota status.
 /// Served to `analytics`-scoped keys (the guard above allows GET /usage/*),
 /// so a customer can see their 5h / weekly consumption, the plan balance and
 /// the plan expiry.
+#[cfg(feature = "payments")]
 pub async fn usage_quota(
     State(s): State<AppState>,
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,

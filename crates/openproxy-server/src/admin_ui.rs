@@ -82,6 +82,7 @@ pub async fn callback_html() -> Html<&'static str> {
 /// Public checkout page for the credits gateway (anonymous key purchase).
 /// No admin session required: everything it does goes through the public
 /// `/v1/credits/*` surface.
+#[cfg(feature = "payments")]
 pub async fn checkout_html() -> impl IntoResponse {
     (
         [
@@ -95,6 +96,7 @@ pub async fn checkout_html() -> impl IntoResponse {
 /// External script of the checkout page. The global CSP forbids inline
 /// scripts (`script-src` without `unsafe-inline`, deliberate XSS hardening
 /// for the SPA), so the checkout loads its JS as a `'self'` asset.
+#[cfg(feature = "payments")]
 pub async fn checkout_js() -> impl IntoResponse {
     (
         [

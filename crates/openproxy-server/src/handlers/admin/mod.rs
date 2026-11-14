@@ -6,6 +6,7 @@ pub mod auth;
 pub mod backup;
 pub mod combo_targets;
 pub mod combos;
+#[cfg(feature = "payments")]
 pub mod credits;
 pub mod debug;
 pub mod helpers;
@@ -31,7 +32,7 @@ pub(crate) use openproxy_types::combos as types_combos;
 
 /// Assemble all modular admin sub-routers into the unified admin REST router.
 pub fn admin_api_routes() -> axum::Router<AppState> {
-    axum::Router::new()
+    let admin = axum::Router::new()
         .nest("/config", runtime::router())
         .nest("/backup", backup::router())
         .nest("/providers", providers::router())
@@ -48,8 +49,11 @@ pub fn admin_api_routes() -> axum::Router<AppState> {
         .nest("/proxies", proxies::router())
         .nest("/proxy-sources", proxy_sources::router())
         .nest("/notifications", notifications::router())
-        .nest("/oauth", oauth::router())
-        .nest("/credits", credits::router())
+        .nest("/oauth", oauth::router());
+    // Credit management (plans, orders, ledger, tiers) only exists with payments.
+    #[cfg(feature = "payments")]
+    let admin = admin.nest("/credits", credits::router());
+    admin
         .route("/auth/me", axum::routing::get(auth::auth_me))
         .route("/formats", axum::routing::get(get_formats))
         .route("/ws-ticket", axum::routing::post(usage_ws::issue_ws_ticket))

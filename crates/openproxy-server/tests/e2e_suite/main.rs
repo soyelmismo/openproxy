@@ -7,6 +7,12 @@
 //! - Tier 2: Boundary & Corner Cases (Payload limits, Auth, Disconnects, Timeouts/Retries)
 //! - Tier 3: Cross-Feature Combinations (Combos, Failover, Cooldown, Streaming, Auth, Usage)
 //! - Tier 4: Real-World Application Scenarios (Multi-turn conversations, Discovery sync, Multi-client analytics, Races, Admin lifecycle)
+//!
+//! The suite shapes keys through plan tiers (the only way a key gets credit),
+//! so it only builds with the payments feature. The public build compiles this
+//! target to zero tests; run the e2e suite with
+//! `cargo test -p openproxy-server --test e2e_suite --features payments`.
+#![cfg(feature = "payments")]
 
 pub mod checkout_admin_tests;
 mod credits_tests;

@@ -11,6 +11,12 @@ workspace = true
 
 [features]
 default = ["laya-engine", "embed-engine"]
+# The on-chain payments/credits subsystem: credit gateway (checkout, orders,
+# QR, watcher), admin credit management, plan tiers, quota windows and the
+# money migrations. OFF in the public build; enable locally with
+# `--features openproxy-server/payments` (or the payments.local flag file the
+# rebuild script reads).
+payments = ["openproxy-core/payments", "openproxy-db/payments"]
 # OP-20: opt-in build flag for the local-development admin auth bypass
 # (OPENPROXY_DASHBOARD_AUTH_BYPASS). Never enabled by default.
 dev-auth-bypass = []
