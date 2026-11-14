@@ -717,3 +717,136 @@ async fn order_code_alone_cannot_claim_a_receipt_bound_key_e2e() {
         "key delivered: {rev}"
     );
 }
+
+/// Root-fix regression (audit A1-01/A4-01): the checkout surface is rate
+/// limited per client IP. Before the fix, ~10 000 free anonymous order
+/// creations exhausted the 10 000 jitter slots of a base price for the whole
+/// window + grace and every real buyer of that price got 503 (reproduced at
+/// 49 orders/s, zero 429s). With admission control the flood is cut off at
+/// the configured budget while the status surface keeps answering.
+#[tokio::test]
+async fn checkout_admission_control_blocks_the_order_flood() {
+    use openproxy_server::{router::build_router, state::AppState};
+    use openproxy_db::secrets::MasterKey;
+
+    // Strict admission config: 5 order creations / 10 min, 20 polls/min.
+    let temp = openproxy_db::testing::TempDir::new("admission-e2e").expect("temp");
+    let db_pool = Arc::new(openproxy_db::DbPool::open(&temp.path().join("a.db")).expect("db"));
+    {
+        let mut w = db_pool.writer();
+        openproxy_db::migrations::run(&mut w).expect("migrate");
+    }
+    let master_key = Arc::new(MasterKey::generate().expect("mk"));
+    let mut cfg = openproxy_core::AppConfig::default();
+    cfg.credits = Some(openproxy_types::config::CreditsConfig {
+        rpc_url: "http://127.0.0.1:1".into(),
+        usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+        collector_address: "0x12c7ab78f21ba0253a21d34a0151d44ddb824950".into(),
+        payment_window_minutes: 15,
+        scan_interval_secs: 5,
+        ttl_days: vec![7, 15, 30],
+        chain_id: 8453,
+        max_block_chunk: 500,
+        payment_tolerance_units: 250_000,
+        checkout_order_creations_per_ip: 5,
+        checkout_order_window_secs: 600,
+        checkout_poll_per_ip_per_min: 20,
+    });
+    let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
+    let state = AppState::for_test(cfg, Arc::clone(&db_pool), Arc::clone(&master_key), adapters);
+    state.rebuild_adapters().await.expect("adapters");
+    let router = build_router(state);
+
+    let plan = db_pool
+        .spawn_write(move |w| {
+            openproxy_core::credits::tiers::create(
+                w,
+                "flood-plan",
+                &openproxy_core::credits::TierConfig::default(),
+                &openproxy_core::credits::PlanCommerce {
+                    price_usd: Some(5.0),
+                    credit_usd: Some(5.0),
+                    ttl_days: 15,
+                    stock: None,
+                },
+            )
+            .map(|t| t.id)
+        })
+        .await
+        .expect("plan");
+
+    let oneshot = |mut req: axum::http::Request<axum::body::Body>| async {
+        use std::net::SocketAddr;
+        use tower::ServiceExt;
+        if req
+            .extensions()
+            .get::<axum::extract::connect_info::ConnectInfo<SocketAddr>>()
+            .is_none()
+        {
+            req.extensions_mut().insert(
+                axum::extract::connect_info::ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 4444))),
+            );
+        }
+        let resp = router.clone().oneshot(req).await.expect("oneshot");
+        let status = resp.status();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .expect("body");
+        (status, body)
+    };
+
+    // The flood: 30 order creations from one IP. Only the first 5 pass.
+    let mut ok = 0usize;
+    let mut throttled = 0usize;
+    let mut first_code = String::new();
+    for i in 0..30 {
+        let receipt = format!("admiss-0000000{i}-aaaa-bbbb-cccccccccccc");
+        let req = axum::http::Request::builder()
+            .method(axum::http::Method::POST)
+            .uri("/v1/credits/order")
+            .header("content-type", "application/json")
+            .header("idempotency-key", receipt)
+            .body(axum::body::Body::from(
+                serde_json::json!({"tier_id": plan, "mint_new_key": true}).to_string(),
+            ))
+            .unwrap();
+        let (status, body) = oneshot(req).await;
+        match status {
+            axum::http::StatusCode::OK => {
+                ok += 1;
+                if first_code.is_empty() {
+                    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    first_code = v["order_code"].as_str().unwrap().to_string();
+                }
+            }
+            axum::http::StatusCode::TOO_MANY_REQUESTS => throttled += 1,
+            s => panic!("unexpected status {s}: {}", String::from_utf8_lossy(&body)),
+        }
+    }
+    assert_eq!(ok, 5, "exactly the configured budget passes");
+    assert_eq!(throttled, 25, "the rest of the flood is throttled");
+
+    // The read surface keeps serving the buyer inside its own budget.
+    let req = axum::http::Request::builder()
+        .method(axum::http::Method::GET)
+        .uri(format!("/v1/credits/order/{first_code}"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let (status, _) = oneshot(req).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "status poll unaffected");
+
+    // Poll budget applies too: past 20/min the read surface throttles.
+    let mut polls_429 = 0usize;
+    for _ in 0..40 {
+        let req = axum::http::Request::builder()
+            .method(axum::http::Method::GET)
+            .uri(format!("/v1/credits/order/{first_code}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let (status, _) = oneshot(req).await;
+        if status == axum::http::StatusCode::TOO_MANY_REQUESTS {
+            polls_429 += 1;
+        }
+    }
+    assert!(polls_429 > 0, "poll budget eventually throttles");
+}

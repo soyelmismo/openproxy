@@ -72,10 +72,45 @@ pub struct CreditsConfig {
     /// headroom; a transfer short by more falls back to `unmatched`.
     #[serde(default = "default_payment_tolerance_units")]
     pub payment_tolerance_units: i64,
+    /// Checkout admission control (root fix for the jitter-space exhaustion
+    /// DoS): maximum order creations (`POST /v1/credits/order` and
+    /// `POST /v1/credits/me/plan`) per client IP inside
+    /// `checkout_order_window_secs`. Each order reserves a unique live
+    /// amount for its whole window + confirmation grace, and there are only
+    /// 10 000 jitter slots per base price, so unbounded free creation lets
+    /// one origin close the sales funnel of a price (~10k orders, reproduced)
+    /// and squat the amount space. The default caps one IP at 30 orders per
+    /// 10 minutes (≈ 75 live orders in steady state — 0.75% of a price's
+    /// slot space).
+    #[serde(default = "default_checkout_order_creations_per_ip")]
+    pub checkout_order_creations_per_ip: u32,
+    /// Window for [`CreditsConfig::checkout_order_creations_per_ip`], in
+    /// seconds.
+    #[serde(default = "default_checkout_order_window_secs")]
+    pub checkout_order_window_secs: u64,
+    /// Checkout admission control for the read/reveal surface
+    /// (`GET /v1/credits/order/{code}`, `reveal`, `ack`, `me/plan` GET,
+    /// `me/rotate`): maximum requests per client IP per minute. The default
+    /// (240) leaves the polling UI (one poll per 5 s = 12/min) two orders of
+    /// magnitude of headroom while bounding receipt brute-force attempts.
+    #[serde(default = "default_checkout_poll_per_ip_per_min")]
+    pub checkout_poll_per_ip_per_min: u32,
 }
 
 fn default_max_block_chunk() -> u32 {
     500
+}
+
+fn default_checkout_order_creations_per_ip() -> u32 {
+    30
+}
+
+fn default_checkout_order_window_secs() -> u64 {
+    600
+}
+
+fn default_checkout_poll_per_ip_per_min() -> u32 {
+    240
 }
 
 fn default_payment_tolerance_units() -> i64 {

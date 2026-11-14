@@ -123,6 +123,9 @@ impl AppState {
                 max_concurrent_global,
             ),
         );
+        #[cfg(feature = "payments")]
+        let checkout_admission = Arc::new(crate::handlers::credits_gateway::CheckoutAdmission::
+            from_config(config.credits.as_ref()));
         // The persisted overrides (if any) are applied by
         // `AppState::reload_runtime_config` once the DB is open, so a live
         // retune survives a restart without editing config.toml.
@@ -179,6 +182,8 @@ impl AppState {
             adapters,
             rate_limiter,
             inflight_limiter,
+            #[cfg(feature = "payments")]
+            checkout_admission,
             upstream_client,
             usage_tx,
             stage_tx,
@@ -273,6 +278,9 @@ impl AppState {
                 openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_GLOBAL,
             ),
         );
+        #[cfg(feature = "payments")]
+        let checkout_admission = Arc::new(crate::handlers::credits_gateway::CheckoutAdmission::
+            from_config(config.credits.as_ref()));
         // The persisted overrides (if any) are applied by
         // `AppState::reload_runtime_config` once the DB is open, so a live
         // retune survives a restart without editing config.toml.
@@ -322,6 +330,8 @@ impl AppState {
             adapters,
             rate_limiter,
             inflight_limiter,
+            #[cfg(feature = "payments")]
+            checkout_admission,
             upstream_client,
             usage_tx: usage::init_usage_broadcast(),
             stage_tx: usage::init_stage_broadcast(),

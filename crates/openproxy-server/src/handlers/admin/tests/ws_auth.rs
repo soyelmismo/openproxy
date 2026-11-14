@@ -273,6 +273,9 @@ async fn analytics_scope_gets_client_allowlist_only() {
         chain_id: 8453,
         max_block_chunk: 500,
         payment_tolerance_units: 250_000,
+        checkout_order_creations_per_ip: 30,
+        checkout_order_window_secs: 600,
+        checkout_poll_per_ip_per_min: 240,
     });
     let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 
@@ -403,6 +406,9 @@ async fn chat_scope_customer_reads_its_own_plan() {
         chain_id: 8453,
         max_block_chunk: 500,
         payment_tolerance_units: 250_000,
+        checkout_order_creations_per_ip: 30,
+        checkout_order_window_secs: 600,
+        checkout_poll_per_ip_per_min: 240,
     });
     let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 
