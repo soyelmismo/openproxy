@@ -15,6 +15,22 @@ use openproxy_types::CoreError;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
+/// Distinct sold identities: every `customer` key is one registration
+/// (checkout-created or plan-granted). The registration quota
+/// (`credits_registration_quota` in `app_config`) compares against this
+/// count — it is the "registrados" figure the dashboard shows.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn count_customer_keys(conn: &Connection) -> openproxy_types::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM api_keys WHERE kind = 'customer'",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(crate::error::map_db_error)
+}
+
 /// Effective balance in micro-USDC units.
 ///
 /// # Errors

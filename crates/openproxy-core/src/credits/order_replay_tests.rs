@@ -38,8 +38,8 @@ fn retry_after_mint_and_ack_keeps_original_anonymous_target() {
         100,
         first.amount_units,
         None,
-    
-        250_000)
+        250_000,
+    )
     .unwrap();
     let minted = create(&conn);
     assert_eq!(first.order_code, minted.order_code);

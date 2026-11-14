@@ -41,6 +41,9 @@ pub struct CreditTier {
     /// How many live keys inherited this tier (the single-source-of-truth
     /// propagation surface: an edit re-shapes exactly this many keys).
     pub key_count: i64,
+    /// Max seats sold of this plan (000130). 0 = unlimited. A seat is taken
+    /// by a live customer key; a pending anonymous mint order reserves one.
+    pub stock: i64,
 }
 
 impl CreditTier {
@@ -52,7 +55,7 @@ impl CreditTier {
 
 const TIER_COLS: &str = "t.id, t.name, t.models_json, t.providers_json, t.combos_json, \
                          t.only_whitelisted, t.weekly_usd_cap, \
-                         t.five_hour_usd_cap, t.active, t.price_usd, t.credit_usd, t.ttl_days";
+                         t.five_hour_usd_cap, t.active, t.price_usd, t.credit_usd, t.ttl_days, t.stock";
 
 fn json_vec(raw: Option<String>) -> Option<Vec<String>> {
     raw.and_then(|j| serde_json::from_str(&j).ok())
@@ -74,7 +77,8 @@ fn row_to_tier(row: &rusqlite::Row<'_>) -> rusqlite::Result<CreditTier> {
         price_usd: row.get(9)?,
         credit_usd: row.get(10)?,
         ttl_days: row.get::<_, Option<i64>>(11)?.unwrap_or(30),
-        key_count: row.get(12).unwrap_or(0),
+        stock: row.get(12).unwrap_or(0),
+        key_count: row.get(13).unwrap_or(0),
     })
 }
 
@@ -113,6 +117,40 @@ pub fn get(conn: &Connection, id: i64) -> openproxy_types::Result<Option<CreditT
     )
     .optional()
     .map_err(openproxy_db::error::map_db_error)
+}
+
+/// Seats taken for a plan: live customer keys on the tier + pending anonymous
+/// mint orders targeting it. A pending checkout RESERVES its seat until it
+/// settles (pays / expires / cancels), so two buyers holding QRs cannot both
+/// take the last seat. Renewals and key-bound orders take no seat here: the
+/// key is already counted, and its plan only moves when payment lands.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn seats_taken(conn: &Connection, tier_id: i64) -> openproxy_types::Result<i64> {
+    conn.query_row(
+        "SELECT \
+           (SELECT COUNT(*) FROM api_keys k \
+             WHERE k.tier_id = ?1 AND k.kind = 'customer') \
+         + (SELECT COUNT(*) FROM credit_orders o \
+             WHERE o.tier_id = ?1 AND o.status = 'pending' AND o.api_key_id IS NULL)",
+        params![tier_id],
+        |row| row.get(0),
+    )
+    .map_err(openproxy_db::error::map_db_error)
+}
+
+/// Seats still sellable: `None` = unlimited (stock 0). Never negative: a
+/// stock cut below current occupancy reads 0 (sold out), not negative.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn seats_left(conn: &Connection, tier: &CreditTier) -> openproxy_types::Result<Option<i64>> {
+    if tier.stock <= 0 {
+        return Ok(None);
+    }
+    let taken = seats_taken(conn, tier.id)?;
+    Ok(Some((tier.stock - taken).max(0)))
 }
 
 fn validate_name(name: &str) -> openproxy_types::Result<String> {
@@ -158,6 +196,21 @@ fn validate_plan(
     Ok((price_usd, credit_usd, ttl))
 }
 
+/// Seat cap: 0 = unlimited, positive = max seats sold. Negative is a typo,
+/// not a cap.
+///
+/// # Errors
+/// Rejects negative caps.
+fn validate_stock(stock: Option<i64>) -> openproxy_types::Result<i64> {
+    match stock {
+        None => Ok(0),
+        Some(s) if s >= 0 => Ok(s),
+        Some(s) => Err(openproxy_types::CoreError::Validation(format!(
+            "stock must be 0 (unlimited) or a positive seat count, got {s}"
+        ))),
+    }
+}
+
 fn sanitize(config: &TierConfig) -> TierConfig {
     fn cap(v: Option<f64>) -> Option<f64> {
         match v {
@@ -181,6 +234,9 @@ pub struct PlanCommerce {
     pub price_usd: Option<f64>,
     pub credit_usd: Option<f64>,
     pub ttl_days: i64,
+    /// Seat cap (000130). `None` = keep unlimited (0). Negative is invalid.
+    #[serde(default)]
+    pub stock: Option<i64>,
 }
 
 /// Create a tier. Duplicate names are rejected by the UNIQUE index.
@@ -205,11 +261,12 @@ pub fn create(
     )?;
     let (price_usd, credit_usd, ttl_days) =
         validate_plan(plan.price_usd, plan.credit_usd, Some(plan.ttl_days))?;
+    let stock = validate_stock(plan.stock)?;
     conn.execute(
         "INSERT INTO credit_tiers (name, models_json, providers_json, combos_json, \
              only_whitelisted, weekly_usd_cap, five_hour_usd_cap, \
-             price_usd, credit_usd, ttl_days) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             price_usd, credit_usd, ttl_days, stock) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             name,
             models
@@ -227,6 +284,7 @@ pub fn create(
             price_usd,
             credit_usd,
             ttl_days,
+            stock,
         ],
     )
     .map_err(openproxy_db::error::map_db_error)?;
@@ -307,8 +365,10 @@ fn update_tier(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
-    // The plan half (price/credit/ttl) updates separately from the access
-    // contract: a sale-off toggle (active) must not need the whole payload.
+    // The plan half (price/credit/ttl/stock) updates separately from the
+    // access contract: a sale-off toggle (active) must not need the whole
+    // payload. `stock: None` PRESERVES the stored seat cap; `Some` replaces
+    // it (0 = unlimited) — an edit of the price must never wipe the seats.
     if let Some(p) = plan {
         let (price, credit, ttl) = validate_plan(p.price_usd, p.credit_usd, Some(p.ttl_days))?;
         conn.execute(
@@ -317,6 +377,14 @@ fn update_tier(
             params![price, credit, ttl, id],
         )
         .map_err(openproxy_db::error::map_db_error)?;
+        if let Some(s) = p.stock {
+            let stock = validate_stock(Some(s))?;
+            conn.execute(
+                "UPDATE credit_tiers SET stock = ?1, updated_at = datetime('now') WHERE id = ?2",
+                params![stock, id],
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+        }
     }
     // Single source of truth: a config edit re-shapes every key linked to
     // this tier, in the same transaction (Miguel, 2026-11-12). Active

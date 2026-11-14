@@ -30,6 +30,7 @@ mod plan_grants;
 pub mod sweep;
 pub mod tiers;
 
+pub use delivery::{DeliveryOp, DeliveryOutcome, apply_delivery_batch};
 pub use ledger::{BalanceView, ExpiringLot, SpendOutcome, TxRow};
 pub use matcher::{
     PaymentOutcome, acknowledge_minted_key, apply_payment, reveal_minted_key_with_receipt,
@@ -98,6 +99,8 @@ pub fn units_to_usd_str(units: i64) -> String {
 
 #[cfg(test)]
 mod order_replay_tests;
+#[cfg(test)]
+mod payment_batch_tests;
 #[cfg(test)]
 mod receipt_tests;
 #[cfg(test)]

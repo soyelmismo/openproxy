@@ -167,8 +167,8 @@ fn payment_credits_exactly_once_and_is_idempotent() {
         1000,
         order.amount_units,
         Some("0xbuyer"),
-    
-        250_000)
+        250_000,
+    )
     .expect("apply");
     match first {
         PaymentOutcome::Credited {
@@ -192,8 +192,8 @@ fn payment_credits_exactly_once_and_is_idempotent() {
         1000,
         order.amount_units,
         Some("0xbuyer"),
-    
-        250_000)
+        250_000,
+    )
     .expect("apply again");
     assert!(matches!(again, PaymentOutcome::AlreadySeen { .. }));
     assert_eq!(
@@ -213,8 +213,8 @@ fn payment_credits_exactly_once_and_is_idempotent() {
         1001,
         order.amount_units,
         Some("0xbuyer"),
-    
-        250_000)
+        250_000,
+    )
     .expect("apply other");
     assert!(matches!(other_tx, PaymentOutcome::Unmatched { .. }));
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 10 * USD);
@@ -231,10 +231,12 @@ fn one_amount_pays_one_order_only() {
     let b = paid_order(&conn, key, 7, 15);
     assert_ne!(a.amount_units, b.amount_units);
 
-    matcher::apply_payment(&conn, &mk, "0xaaa", 0, 10, a.amount_units, None, 250_000).expect("pay a");
+    matcher::apply_payment(&conn, &mk, "0xaaa", 0, 10, a.amount_units, None, 250_000)
+        .expect("pay a");
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 5 * USD);
 
-    matcher::apply_payment(&conn, &mk, "0xbbb", 0, 11, b.amount_units, None, 250_000).expect("pay b");
+    matcher::apply_payment(&conn, &mk, "0xbbb", 0, 11, b.amount_units, None, 250_000)
+        .expect("pay b");
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 12 * USD);
 }
 
@@ -254,8 +256,17 @@ fn expired_order_is_not_paid() {
     )
     .expect("expire window");
 
-    let outcome = matcher::apply_payment(&conn, &mk, "0xlate", 0, 10, order.amount_units, None, 250_000)
-        .expect("apply");
+    let outcome = matcher::apply_payment(
+        &conn,
+        &mk,
+        "0xlate",
+        0,
+        10,
+        order.amount_units,
+        None,
+        250_000,
+    )
+    .expect("apply");
     assert!(matches!(outcome, PaymentOutcome::Unmatched { .. }));
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
 }
@@ -275,8 +286,17 @@ fn late_confirmed_payment_within_grace_still_credits() {
     )
     .expect("expire window");
 
-    let outcome = matcher::apply_payment(&conn, &mk, "0xlate", 0, 10, order.amount_units, None, 250_000)
-        .expect("apply");
+    let outcome = matcher::apply_payment(
+        &conn,
+        &mk,
+        "0xlate",
+        0,
+        10,
+        order.amount_units,
+        None,
+        250_000,
+    )
+    .expect("apply");
     assert!(
         matches!(outcome, PaymentOutcome::Credited { .. }),
         "grace-window payment must credit, got {outcome:?}"
@@ -297,9 +317,8 @@ fn a_transfer_short_by_the_exchange_fee_still_pays_the_order() {
     let fee = 200_000; // 0.2 USDC Base withdrawal fee
     let received = order.amount_units - fee;
 
-    let outcome =
-        matcher::apply_payment(&conn, &mk, "0xshort", 0, 10, received, None, 250_000)
-            .expect("apply");
+    let outcome = matcher::apply_payment(&conn, &mk, "0xshort", 0, 10, received, None, 250_000)
+        .expect("apply");
     match outcome {
         PaymentOutcome::Credited {
             order_code,
@@ -324,9 +343,8 @@ fn a_transfer_short_beyond_tolerance_stays_unmatched() {
     let order = paid_order(&conn, key, 5, 15);
     let received = order.amount_units - 300_000; // 0.3 short, tol 0.25
 
-    let outcome =
-        matcher::apply_payment(&conn, &mk, "0xtooshort", 0, 10, received, None, 250_000)
-            .expect("apply");
+    let outcome = matcher::apply_payment(&conn, &mk, "0xtooshort", 0, 10, received, None, 250_000)
+        .expect("apply");
     assert!(matches!(outcome, PaymentOutcome::Unmatched { .. }));
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
 }
@@ -355,8 +373,7 @@ fn an_ambiguous_short_payment_between_two_live_orders_stays_unmatched() {
     let received = (5 * USD + 9_217) - 200_000; // b minus the exchange fee
 
     let outcome =
-        matcher::apply_payment(&conn, &mk, "0xtie", 0, 10, received, None, 250_000)
-            .expect("apply");
+        matcher::apply_payment(&conn, &mk, "0xtie", 0, 10, received, None, 250_000).expect("apply");
     assert!(
         matches!(outcome, PaymentOutcome::Unmatched { .. }),
         "two candidates must never guess a buyer, got {outcome:?}"
@@ -364,7 +381,11 @@ fn an_ambiguous_short_payment_between_two_live_orders_stays_unmatched() {
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 0);
     for o in [&a, &b] {
         let status: String = conn
-            .query_row("SELECT status FROM credit_orders WHERE id = ?1", [o.id], |r| r.get(0))
+            .query_row(
+                "SELECT status FROM credit_orders WHERE id = ?1",
+                [o.id],
+                |r| r.get(0),
+            )
             .expect("status");
         assert_eq!(status, "pending", "both orders stay payable");
     }
@@ -391,10 +412,9 @@ fn an_exact_payment_wins_even_when_another_order_sits_in_the_window() {
     )
     .expect("pin b");
 
-    let outcome = matcher::apply_payment(
-        &conn, &mk, "0xexact", 0, 10, 5 * USD + 9_217, None, 250_000,
-    )
-    .expect("apply");
+    let outcome =
+        matcher::apply_payment(&conn, &mk, "0xexact", 0, 10, 5 * USD + 9_217, None, 250_000)
+            .expect("apply");
     match outcome {
         PaymentOutcome::Credited { order_code, .. } => {
             assert_eq!(order_code, b.order_code);
@@ -415,9 +435,8 @@ fn a_fee_short_payment_credits_when_plan_prices_separate_the_windows() {
     let dear = paid_order(&conn, key, 20, 15);
     let received = cheap.amount_units - 200_000;
 
-    let outcome =
-        matcher::apply_payment(&conn, &mk, "0xshort5", 0, 10, received, None, 250_000)
-            .expect("apply");
+    let outcome = matcher::apply_payment(&conn, &mk, "0xshort5", 0, 10, received, None, 250_000)
+        .expect("apply");
     match outcome {
         PaymentOutcome::Credited { order_code, .. } => {
             assert_eq!(order_code, cheap.order_code);
@@ -439,9 +458,8 @@ fn overpaid_payment_within_tolerance_credits() {
     let order = paid_order(&conn, key, 5, 15);
     let received = order.amount_units + 100_000; // 0.1 over
 
-    let outcome =
-        matcher::apply_payment(&conn, &mk, "0xover", 0, 10, received, None, 250_000)
-            .expect("apply");
+    let outcome = matcher::apply_payment(&conn, &mk, "0xover", 0, 10, received, None, 250_000)
+        .expect("apply");
     assert!(matches!(outcome, PaymentOutcome::Credited { .. }));
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 5 * USD);
 }
@@ -455,15 +473,12 @@ fn zero_tolerance_restores_exact_only_matching() {
     let mk = mk();
     let order = paid_order(&conn, key, 5, 15);
 
-    let short =
-        matcher::apply_payment(&conn, &mk, "0xs", 0, 10, order.amount_units - 1, None, 0)
-            .expect("apply short");
+    let short = matcher::apply_payment(&conn, &mk, "0xs", 0, 10, order.amount_units - 1, None, 0)
+        .expect("apply short");
     assert!(matches!(short, PaymentOutcome::Unmatched { .. }));
 
-    let exact = matcher::apply_payment(
-        &conn, &mk, "0xe", 0, 11, order.amount_units, None, 0,
-    )
-    .expect("apply exact");
+    let exact = matcher::apply_payment(&conn, &mk, "0xe", 0, 11, order.amount_units, None, 0)
+        .expect("apply exact");
     assert!(matches!(exact, PaymentOutcome::Credited { .. }));
 }
 
@@ -494,7 +509,16 @@ fn the_same_fee_short_log_credits_once_under_concurrent_delivery() {
             conn.busy_timeout(std::time::Duration::from_secs(10)).ok();
             let mk = MasterKey::generate().expect("mk");
             for _ in 0..10 {
-                match matcher::apply_payment(&conn, &mk, "0xshortdup", 0, 500, short_amount, None, 250_000) {
+                match matcher::apply_payment(
+                    &conn,
+                    &mk,
+                    "0xshortdup",
+                    0,
+                    500,
+                    short_amount,
+                    None,
+                    250_000,
+                ) {
                     Ok(PaymentOutcome::Credited { .. }) => {
                         credited.fetch_add(1, Ordering::SeqCst);
                     }
@@ -511,7 +535,9 @@ fn the_same_fee_short_log_credits_once_under_concurrent_delivery() {
     assert_eq!(credited.load(Ordering::SeqCst), 1, "exactly one credit");
     let conn = Connection::open(&path).expect("open reader");
     let key_id: i64 = conn
-        .query_row("SELECT id FROM api_keys WHERE label = 'tol9'", [], |r| r.get(0))
+        .query_row("SELECT id FROM api_keys WHERE label = 'tol9'", [], |r| {
+            r.get(0)
+        })
         .expect("key");
     assert_eq!(
         ledger::balance_units(&conn, ApiKeyId(key_id)).unwrap(),
@@ -610,7 +636,9 @@ fn stress_fee_short_payments_amid_many_live_orders_never_miscredit() {
         .expect("paid count");
     assert_eq!(paid, 0, "no order may flip to paid");
     let key_id: i64 = conn
-        .query_row("SELECT id FROM api_keys WHERE label = 'flood'", [], |r| r.get(0))
+        .query_row("SELECT id FROM api_keys WHERE label = 'flood'", [], |r| {
+            r.get(0)
+        })
         .expect("key");
     assert_eq!(
         ledger::balance_units(&conn, ApiKeyId(key_id)).unwrap(),
@@ -679,11 +707,19 @@ fn stress_exact_payments_amid_many_live_orders_all_credit_their_order() {
     for h in handles {
         h.join().expect("join");
     }
-    assert_eq!(credited.load(Ordering::SeqCst), 30, "every exact payment credits");
+    assert_eq!(
+        credited.load(Ordering::SeqCst),
+        30,
+        "every exact payment credits"
+    );
 
     let conn = Connection::open(&path).expect("open reader");
     let key_id: i64 = conn
-        .query_row("SELECT id FROM api_keys WHERE label = 'exactflood'", [], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM api_keys WHERE label = 'exactflood'",
+            [],
+            |r| r.get(0),
+        )
         .expect("key");
     assert_eq!(
         ledger::balance_units(&conn, ApiKeyId(key_id)).unwrap(),
@@ -721,7 +757,16 @@ fn concurrent_duplicate_payments_credit_once() {
             conn.busy_timeout(std::time::Duration::from_secs(10)).ok();
             let mk = MasterKey::generate().expect("mk");
             for _ in 0..10 {
-                match matcher::apply_payment(&conn, &mk, "0xsamelog", 0, 500, order_amount, None, 250_000) {
+                match matcher::apply_payment(
+                    &conn,
+                    &mk,
+                    "0xsamelog",
+                    0,
+                    500,
+                    order_amount,
+                    None,
+                    250_000,
+                ) {
                     Ok(PaymentOutcome::Credited { .. }) => {
                         winners.fetch_add(1, Ordering::SeqCst);
                     }
@@ -762,9 +807,11 @@ fn spend_is_fifo_by_expiry_and_cannot_overdraw() {
     let mk = mk();
     // Two lots: $3 expiring in 1 day, $5 expiring in 30.
     let soon = paid_order(&conn, key, 3, 1);
-    matcher::apply_payment(&conn, &mk, "0xsoon", 0, 1, soon.amount_units, None, 250_000).expect("pay soon");
+    matcher::apply_payment(&conn, &mk, "0xsoon", 0, 1, soon.amount_units, None, 250_000)
+        .expect("pay soon");
     let late = paid_order(&conn, key, 5, 30);
-    matcher::apply_payment(&conn, &mk, "0xlate", 0, 2, late.amount_units, None, 250_000).expect("pay late");
+    matcher::apply_payment(&conn, &mk, "0xlate", 0, 2, late.amount_units, None, 250_000)
+        .expect("pay late");
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 8 * USD);
 
     // Spend $4: takes the whole $3 lot, then $1 from the $5 lot.
@@ -791,7 +838,8 @@ fn expiry_kills_remaining_without_refund() {
     let key = seed_key(&conn, "exp1");
     let mk = mk();
     let order = paid_order(&conn, key, 10, 15);
-    matcher::apply_payment(&conn, &mk, "0xexp", 0, 1, order.amount_units, None, 250_000).expect("pay");
+    matcher::apply_payment(&conn, &mk, "0xexp", 0, 1, order.amount_units, None, 250_000)
+        .expect("pay");
     record_spend(&conn, key, 4 * USD).expect("spend");
     assert_eq!(ledger::balance_units(&conn, key).unwrap(), 6 * USD);
 
@@ -838,7 +886,17 @@ fn history_exposes_the_on_chain_pointer() {
     let key = seed_key(&conn, "hist1");
     let mk = mk();
     let order = paid_order(&conn, key, 10, 15);
-    matcher::apply_payment(&conn, &mk, "0xaudit", 7, 999, order.amount_units, None, 250_000).expect("pay");
+    matcher::apply_payment(
+        &conn,
+        &mk,
+        "0xaudit",
+        7,
+        999,
+        order.amount_units,
+        None,
+        250_000,
+    )
+    .expect("pay");
 
     let rows = ledger::history(&conn, key, 50).expect("history");
     assert_eq!(rows.len(), 1);
@@ -855,7 +913,17 @@ fn balance_view_reports_lots_and_credit_based() {
     assert!(!ledger::is_credit_based(&conn, key).unwrap());
     let mk = mk();
     let order = paid_order(&conn, key, 10, 15);
-    matcher::apply_payment(&conn, &mk, "0xview", 0, 1, order.amount_units, None, 250_000).expect("pay");
+    matcher::apply_payment(
+        &conn,
+        &mk,
+        "0xview",
+        0,
+        1,
+        order.amount_units,
+        None,
+        250_000,
+    )
+    .expect("pay");
     let view = ledger::balance_view(&conn, key).unwrap();
     assert!(view.credit_based);
     assert!((view.balance_usd - 10.0).abs() < 1e-9);
@@ -891,8 +959,8 @@ fn anonymous_payment_mints_a_chat_key_with_the_credited_balance() {
         42,
         order.amount_units,
         Some("0xbuyer"),
-    
-        250_000)
+        250_000,
+    )
     .expect("apply");
     let (minted, api_key_id) = match outcome {
         PaymentOutcome::Credited {
@@ -924,8 +992,17 @@ fn session_order_credits_the_existing_key_without_minting() {
     let key = seed_key(&conn, "sess1");
     let mk = mk();
     let order = paid_order(&conn, key, 15, 15);
-    let outcome = matcher::apply_payment(&conn, &mk, "0xsess", 0, 1, order.amount_units, None, 250_000)
-        .expect("apply");
+    let outcome = matcher::apply_payment(
+        &conn,
+        &mk,
+        "0xsess",
+        0,
+        1,
+        order.amount_units,
+        None,
+        250_000,
+    )
+    .expect("apply");
     match outcome {
         PaymentOutcome::Credited {
             minted_key,
@@ -959,6 +1036,7 @@ fn tier_config(models: &[&str], weekly: f64) -> crate::credits::TierConfig {
 /// Sellable plan commerce: what the buyer pays, what they get, how long it lives.
 fn plan(price: f64, credit: f64, ttl: i64) -> crate::credits::PlanCommerce {
     crate::credits::PlanCommerce {
+        stock: None,
         price_usd: Some(price),
         credit_usd: Some(credit),
         ttl_days: ttl,
@@ -968,6 +1046,7 @@ fn plan(price: f64, credit: f64, ttl: i64) -> crate::credits::PlanCommerce {
 /// A draft plan (no price): not listed for sale.
 fn draft_plan() -> crate::credits::PlanCommerce {
     crate::credits::PlanCommerce {
+        stock: None,
         price_usd: None,
         credit_usd: None,
         ttl_days: 30,
@@ -1151,7 +1230,8 @@ fn leveraged_plan_charges_less_than_it_credits() {
     assert!(order.amount_units >= USD && order.amount_units < 2 * USD);
 
     let outcome =
-        matcher::apply_payment(&conn, &mk, "0xlev", 0, 1, order.amount_units, None, 250_000).expect("apply");
+        matcher::apply_payment(&conn, &mk, "0xlev", 0, 1, order.amount_units, None, 250_000)
+            .expect("apply");
     let credited = match outcome {
         PaymentOutcome::Credited { credited_units, .. } => credited_units,
         other => panic!("expected credited, got {other:?}"),

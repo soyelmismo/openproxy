@@ -302,6 +302,7 @@ fn receipt_hash_query_uses_bound_value_for_every_order_shape() {
         "receipt plan",
         &super::tiers::TierConfig::default(),
         &super::tiers::PlanCommerce {
+            stock: None,
             price_usd: Some(5.0),
             credit_usd: None,
             ttl_days: 7,

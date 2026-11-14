@@ -106,8 +106,78 @@ pub fn apply_payment_at(
     // Own the transaction here so every caller gets rollback on any failure.
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
         .map_err(openproxy_db::error::map_db_error)?;
-    let outcome = settle_payment(
+    let outcome = settle_and_record(
         &tx,
+        master_key,
+        tx_hash,
+        log_index,
+        block,
+        amount_units,
+        from_address,
+        tolerance_units,
+    )?;
+    tx.commit().map_err(openproxy_db::error::map_db_error)?;
+    Ok(outcome)
+}
+
+/// One verified transfer, in chain order. Group settlement keeps FULL durability
+/// while sharing the commit across transfers. No outcome escapes a failed commit.
+pub struct PaymentInput {
+    pub tx_hash: String,
+    pub log_index: i64,
+    pub block: PaymentBlock,
+    pub amount_units: i64,
+    pub from_address: Option<String>,
+}
+
+/// Apply a bounded group atomically. Any error rolls back the entire group;
+/// replay is safe through the persistent (tx_hash, log_index) identity.
+pub fn apply_payments_batch(
+    conn: &Connection,
+    master: &MasterKey,
+    payments: &[PaymentInput],
+    tolerance_units: i64,
+) -> Result<Vec<PaymentOutcome>> {
+    if payments.is_empty() {
+        return Ok(Vec::new());
+    }
+    // A busy writer (a long usage drain, a checkpoint) must not surface as a
+    // failed payment batch: the whole group retries with backoff. Replaying
+    // is safe — `matched_payments` PK + the CAS make each payment land once,
+    // and a rolled-back attempt wrote nothing.
+    openproxy_db::error::with_busy_retry("apply_payments_batch", || {
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
+            .map_err(openproxy_db::error::map_db_error)?;
+        let mut outcomes = Vec::with_capacity(payments.len());
+        for p in payments {
+            outcomes.push(settle_and_record(
+                &tx,
+                master,
+                &p.tx_hash,
+                p.log_index,
+                p.block,
+                p.amount_units,
+                p.from_address.as_deref(),
+                tolerance_units,
+            )?);
+        }
+        tx.commit().map_err(openproxy_db::error::map_db_error)?;
+        Ok(outcomes)
+    })
+}
+
+fn settle_and_record(
+    conn: &Connection,
+    master_key: &MasterKey,
+    tx_hash: &str,
+    log_index: i64,
+    block: PaymentBlock,
+    amount_units: i64,
+    from_address: Option<&str>,
+    tolerance_units: i64,
+) -> Result<PaymentOutcome> {
+    let outcome = settle_payment(
+        conn,
         master_key,
         tx_hash,
         log_index,
@@ -123,7 +193,7 @@ pub fn apply_payment_at(
         PaymentOutcome::AlreadySeen { .. } => ("", None),
     };
     if !kind.is_empty() {
-        tx.execute(
+        conn.execute(
             "UPDATE matched_payments SET outcome = ?1, order_id = \
             (SELECT id FROM credit_orders WHERE order_code = ?2) \
             WHERE tx_hash = ?3 AND log_index = ?4",
@@ -131,7 +201,6 @@ pub fn apply_payment_at(
         )
         .map_err(openproxy_db::error::map_db_error)?;
     }
-    tx.commit().map_err(openproxy_db::error::map_db_error)?;
     Ok(outcome)
 }
 
@@ -218,9 +287,12 @@ fn settle_payment(
         )
         .optional()
         .map_err(openproxy_db::error::map_db_error)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, order_code, api_key_id, ttl_days, tier_id, \
+    // An exact, unambiguous match wins by contract. Do not scan every other
+    // pending order for tolerance candidates when the exact match exists.
+    let near = if exact.is_none() {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, order_code, api_key_id, ttl_days, tier_id, \
              COALESCE(credit_units, base_units), amount_units \
              FROM credit_orders \
              WHERE status IN ('pending', 'expired') \
@@ -228,29 +300,33 @@ fn settle_payment(
                AND ABS(amount_units - ?1) > 0 \
                AND created_at <= datetime(?2, 'unixepoch') \
                AND datetime(expires_at, ?3) >= datetime(?2, 'unixepoch')",
-        )
-        .map_err(openproxy_db::error::map_db_error)?;
-    let near: Vec<(PayableOrder, i64)> = stmt
-        .query_map(
-            rusqlite::params![amount_units, block.timestamp, grace, tolerance_units],
-            |row| {
-                Ok((
-                    PayableOrder {
-                        id: row.get(0)?,
-                        code: row.get(1)?,
-                        key_id: row.get(2)?,
-                        ttl_days: row.get(3)?,
-                        tier_id: row.get(4)?,
-                        credit_units: row.get(5)?,
-                    },
-                    row.get(6)?,
-                ))
-            },
-        )
-        .map_err(openproxy_db::error::map_db_error)?
-        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
-        .map_err(openproxy_db::error::map_db_error)?;
-    drop(stmt);
+            )
+            .map_err(openproxy_db::error::map_db_error)?;
+        let near: Vec<(PayableOrder, i64)> = stmt
+            .query_map(
+                rusqlite::params![amount_units, block.timestamp, grace, tolerance_units],
+                |row| {
+                    Ok((
+                        PayableOrder {
+                            id: row.get(0)?,
+                            code: row.get(1)?,
+                            key_id: row.get(2)?,
+                            ttl_days: row.get(3)?,
+                            tier_id: row.get(4)?,
+                            credit_units: row.get(5)?,
+                        },
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .map_err(openproxy_db::error::map_db_error)?
+            .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
+            .map_err(openproxy_db::error::map_db_error)?;
+        drop(stmt);
+        near
+    } else {
+        Vec::new()
+    };
     // Exact first; otherwise the tolerance path credits only an unambiguous
     // single candidate.
     let had_exact = exact.is_some();

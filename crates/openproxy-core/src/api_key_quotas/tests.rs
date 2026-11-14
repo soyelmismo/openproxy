@@ -65,6 +65,7 @@ fn attach_plan(conn: &Connection, key_id: i64, name: &str, credit_usd: f64, ttl_
         only_whitelisted: None,
     };
     let plan = crate::credits::PlanCommerce {
+        stock: None,
         price_usd: Some(1.0),
         credit_usd: Some(credit_usd),
         ttl_days,
@@ -403,6 +404,7 @@ fn assigning_a_plan_grants_its_leveraged_credit_once() {
         "Lite",
         &TierConfig::default(),
         &PlanCommerce {
+            stock: None,
             price_usd: Some(5.0),
             credit_usd: Some(15.0),
             ttl_days: 7,
@@ -444,6 +446,7 @@ fn a_new_plan_supersedes_the_previous_grant() {
             name,
             &TierConfig::default(),
             &PlanCommerce {
+                stock: None,
                 price_usd: Some(5.0),
                 credit_usd: Some(credit),
                 ttl_days: 7,

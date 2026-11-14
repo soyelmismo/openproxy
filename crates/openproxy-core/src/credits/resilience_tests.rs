@@ -51,9 +51,9 @@ fn failed_settlement_rolls_back_and_same_log_can_retry() {
             0,
             100,
             order.amount_units,
-            None
-        ,
-            250_000)
+            None,
+            250_000
+        )
         .is_err()
     );
     assert_eq!(
@@ -78,8 +78,8 @@ fn failed_settlement_rolls_back_and_same_log_can_retry() {
         100,
         order.amount_units,
         None,
-    
-        250_000)
+        250_000,
+    )
     .unwrap();
     assert!(matches!(result, matcher::PaymentOutcome::Credited { .. }));
 }
@@ -97,8 +97,8 @@ fn anonymous_order_links_its_minted_key() {
         100,
         order.amount_units,
         None,
-    
-        250_000)
+        250_000,
+    )
     .unwrap();
     let matcher::PaymentOutcome::Credited { api_key_id, .. } = result else {
         panic!("not credited")
@@ -122,6 +122,7 @@ fn leveraged_payment_reconciles_credit_not_charge() {
         "leveraged fixture",
         &tiers::TierConfig::default(),
         &tiers::PlanCommerce {
+            stock: None,
             price_usd: Some(5.0),
             credit_usd: Some(30.0),
             ttl_days: 7,
@@ -137,8 +138,8 @@ fn leveraged_payment_reconciles_credit_not_charge() {
         100,
         order.amount_units,
         None,
-    
-        250_000)
+        250_000,
+    )
     .unwrap();
     assert_eq!(ledger::balance_units(&conn, kid).unwrap(), 30_000_000);
     let audit = openproxy_db::credits_ledger::reconcile(&conn).unwrap();
@@ -161,9 +162,9 @@ fn missing_existing_key_does_not_receive_or_burn_payment() {
             0,
             100,
             order.amount_units,
-            None
-        ,
-            250_000)
+            None,
+            250_000
+        )
         .unwrap(),
         matcher::PaymentOutcome::Unmatched { .. }
     ));
@@ -182,9 +183,9 @@ fn missing_existing_key_does_not_receive_or_burn_payment() {
             0,
             100,
             order.amount_units,
-            None
-        ,
-            250_000)
+            None,
+            250_000
+        )
         .unwrap(),
         matcher::PaymentOutcome::AlreadySeen { .. }
     ));

@@ -2,7 +2,7 @@
 
 use openproxy_types::{
     CompressionMode, ModalityRoutingConfig, PiiConfig, PiiEntity, QuotaProtectionConfig, Result,
-    ResultExt, TimeoutsConfig,
+    ResultExt, TargetErrorMaskingConfig, TimeoutsConfig,
 };
 use rusqlite::{Connection, params};
 
@@ -26,8 +26,21 @@ pub const IDLE_CHUNK_RETRYABLE_KEY: &str = "idle_chunk_retryable";
 /// Credits payment gateway master switch (admin-toggled at runtime).
 pub const CREDITS_GATEWAY_ENABLED_KEY: &str = "credits_gateway_enabled";
 
+/// Key under which the registration quota is stored: the maximum number of
+/// distinct sold keys (`kind = 'customer'`). `None` (row absent) or `<= 0`
+/// means unlimited. Only gates NEW orders; existing ones complete.
+pub const CREDITS_REGISTRATION_QUOTA_KEY: &str = "credits_registration_quota";
+
+/// Key under which plan purchases on EXISTING keys are enabled. Absent or
+/// `true` = allowed; `false` = existing keys cannot buy/renew plans (new
+/// registrations still follow the quota). Only gates NEW orders.
+pub const CREDITS_RENEWALS_ENABLED_KEY: &str = "credits_renewals_enabled";
+
 /// Key under which the input-modality routing config is stored.
 pub const MODALITY_ROUTING_KEY: &str = "modality_routing";
+
+/// Key under which the target-error masking config is stored.
+pub const ERROR_MASKING_KEY: &str = "error_masking";
 
 /// Key under which the PII config is stored.
 pub const PII_CONFIG_KEY: &str = "pii_config";
@@ -153,6 +166,8 @@ app_config_kv! {
     load_quota_protection_override_from_db, save_quota_protection_to_db, QUOTA_PROTECTION_KEY, &QuotaProtectionConfig;
     /// Input-modality routing override.
     load_modality_routing_from_db, save_modality_routing_to_db, MODALITY_ROUTING_KEY, &ModalityRoutingConfig;
+    /// Target-error masking override.
+    load_error_masking_from_db, save_error_masking_to_db, ERROR_MASKING_KEY, &TargetErrorMaskingConfig;
 }
 
 app_config_kv! {
@@ -160,6 +175,10 @@ app_config_kv! {
     load_idle_chunk_retryable_from_db, save_idle_chunk_retryable_to_db, IDLE_CHUNK_RETRYABLE_KEY, bool;
     /// Credits payment gateway master switch (buying new plans / top-ups).
     load_credits_gateway_enabled_from_db, save_credits_gateway_enabled_to_db, CREDITS_GATEWAY_ENABLED_KEY, bool;
+    /// Registration quota: max distinct customer keys (None/<=0 = unlimited).
+    load_credits_registration_quota_from_db, save_credits_registration_quota_to_db, CREDITS_REGISTRATION_QUOTA_KEY, i64;
+    /// Plan purchases on existing keys (renew/upgrade) allowed? Absent = yes.
+    load_credits_renewals_enabled_from_db, save_credits_renewals_enabled_to_db, CREDITS_RENEWALS_ENABLED_KEY, bool;
     /// Recording TTL in seconds.
     load_recording_ttl_from_db, save_recording_ttl_to_db, RECORDING_TTL_KEY, i64;
     /// Per-key concurrent-request cap (live-tunable fairness bound).
