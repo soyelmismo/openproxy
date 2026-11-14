@@ -1302,3 +1302,79 @@ fn leveraged_plan_charges_less_than_it_credits() {
 }
 
 mod sweep;
+
+#[test]
+fn expired_order_within_grace_still_holds_its_seat() {
+    // Root-fix regression (seat oversell, audit A1-02): an anonymous order
+    // whose window expired 60s ago sits INSIDE the 10-minute confirmation
+    // grace, so the matcher would still accept a late payment for it. The
+    // seat must stay reserved: a second buyer taking the "free" seat while
+    // the first one paid inside the grace oversold the plan (stock=1 sold
+    // twice, reproduced with both payments credited).
+    let conn = test_conn();
+    let tier = crate::credits::tiers::create(
+        &conn,
+        "founders-seat",
+        &crate::credits::TierConfig::default(),
+        &crate::credits::PlanCommerce {
+            price_usd: Some(5.0),
+            credit_usd: Some(5.0),
+            ttl_days: 15,
+            stock: Some(1),
+        },
+    )
+    .expect("tier");
+
+    // Buyer A takes the only seat with an anonymous order, then lets the
+    // window expire 60s ago (inside the grace).
+    let a = orders::create_order_with_receipt(
+        &conn,
+        orders::CreateOrderRequest {
+            api_key_id: None,
+            payer_email: None,
+            base_units: 0,
+            ttl_days: 0,
+            tier_id: Some(tier.id),
+        },
+        900,
+        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    .expect("order A");
+    conn.execute(
+        "UPDATE credit_orders SET status = 'expired', \
+         expires_at = datetime('now', '-60 seconds') WHERE id = ?1",
+        rusqlite::params![a.id],
+    )
+    .expect("expire A");
+
+    let taken = crate::credits::tiers::seats_taken(&conn, tier.id).expect("seats");
+    assert_eq!(taken, 1, "the grace window must keep the seat reserved");
+    let err = orders::create_order_with_receipt(
+        &conn,
+        orders::CreateOrderRequest {
+            api_key_id: None,
+            payer_email: None,
+            base_units: 0,
+            ttl_days: 0,
+            tier_id: Some(tier.id),
+        },
+        900,
+        "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff",
+    );
+    assert!(
+        matches!(&err, Err(openproxy_types::CoreError::Validation(m)) if m.contains("is full")),
+        "buyer B must not take a seat the late-paying A still owns: {err:?}"
+    );
+
+    // Outside the grace (10 min + margin) the seat frees for the next buyer.
+    conn.execute(
+        "UPDATE credit_orders SET expires_at = datetime('now', '-700 seconds') WHERE id = ?1",
+        rusqlite::params![a.id],
+    )
+    .expect("age out A");
+    assert_eq!(
+        crate::credits::tiers::seats_taken(&conn, tier.id).expect("seats"),
+        0,
+        "past the grace the seat is really free"
+    );
+}
