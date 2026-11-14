@@ -32,7 +32,8 @@ pub enum PaymentOutcome {
     AlreadySeen { tx_hash: String },
     /// A transfer to the collector that matches no live order. Stays in the
     /// wallet as an unmatched deposit for a human to resolve (settlement
-    /// collision, late payment against an expired order, etc.).
+    /// collision, late payment against an expired order, short beyond the
+    /// configured tolerance, etc.).
     Unmatched { tx_hash: String, amount_units: i64 },
     /// Matched an order, but its payment window had already run out. The
     /// order stays `expired`; the deposit is recoverable via a manual
@@ -45,6 +46,9 @@ pub enum PaymentOutcome {
         credited_units: i64,
         /// Plaintext key, present only for anonymous checkouts at mint time.
         minted_key: Option<String>,
+        /// Micro-USDC actually received (may sit below the quoted amount by up
+        /// to the configured tolerance: exchange withdrawal fees).
+        received_units: i64,
     },
 }
 
@@ -68,6 +72,7 @@ pub fn apply_payment(
     block_number: i64,
     amount_units: i64,
     from_address: Option<&str>,
+    tolerance_units: i64,
 ) -> Result<PaymentOutcome> {
     apply_payment_at(
         conn,
@@ -80,6 +85,7 @@ pub fn apply_payment(
         },
         amount_units,
         from_address,
+        tolerance_units,
     )
 }
 
@@ -94,6 +100,7 @@ pub fn apply_payment_at(
     block: PaymentBlock,
     amount_units: i64,
     from_address: Option<&str>,
+    tolerance_units: i64,
 ) -> Result<PaymentOutcome> {
     // The pool serializes writers but does NOT start a SQL transaction.
     // Own the transaction here so every caller gets rollback on any failure.
@@ -107,6 +114,7 @@ pub fn apply_payment_at(
         block,
         amount_units,
         from_address,
+        tolerance_units,
     )?;
     let (kind, code) = match &outcome {
         PaymentOutcome::Credited { order_code, .. } => ("credited", Some(order_code.as_str())),
@@ -144,6 +152,7 @@ fn settle_payment(
     block: PaymentBlock,
     amount_units: i64,
     from_address: Option<&str>,
+    tolerance_units: i64,
 ) -> Result<PaymentOutcome> {
     let block_number = block.number;
     if amount_units <= 0 || block_number < 0 || log_index < 0 || block.timestamp < 0 {
@@ -151,6 +160,7 @@ fn settle_payment(
             "invalid payment coordinates".into(),
         ));
     }
+    let tolerance_units = tolerance_units.max(0);
     // 1. Idempotency gate: record the log. Already recorded → done.
     let inserted = conn
         .execute(
@@ -166,14 +176,23 @@ fn settle_payment(
         });
     }
 
-    // 2. Find the live order advertising exactly this amount. The acceptance
-    //    window uses the same grace constant as order allocation so a payment
-    //    can never match an order that the allocator already considers closed.
+    // 2. Find the live order this payment pays. Exact amount first (the common
+    //    path: the buyer reproduced the quoted jitter to the micro-unit — the
+    //    live-amount unique index makes that match unambiguous), then the
+    //    tolerance path: a custodial exchange deducts its withdrawal fee from
+    //    the sent amount, so a $5 transfer can land as 4.80. A short payment
+    //    is only credited when exactly ONE live order sits inside the
+    //    configured window: with two candidates the fee reorders distances
+    //    (4.809 is closer to 5.004 than to 5.009) and picking one would guess
+    //    which buyer sent it — that deposit stays unmatched for a human. The
+    //    acceptance window uses the same grace constant as order allocation so
+    //    a payment can never match an order that the allocator already
+    //    considers closed.
     let grace = format!("+{} seconds", super::orders::CONFIRMATION_GRACE_SECS);
-    let order: Option<PayableOrder> = conn
+    let exact: Option<(PayableOrder, i64)> = conn
         .query_row(
             "SELECT id, order_code, api_key_id, ttl_days, tier_id, \
-             COALESCE(credit_units, base_units) \
+             COALESCE(credit_units, base_units), amount_units \
              FROM credit_orders \
              WHERE amount_units = ?1 AND status IN ('pending', 'expired') \
                AND created_at <= datetime(?2, 'unixepoch') \
@@ -184,38 +203,98 @@ fn settle_payment(
                     AND datetime(c.expires_at, ?3) >= datetime(?2, 'unixepoch')) = 1",
             rusqlite::params![amount_units, block.timestamp, grace],
             |row| {
-                Ok(PayableOrder {
-                    id: row.get(0)?,
-                    code: row.get(1)?,
-                    key_id: row.get(2)?,
-                    ttl_days: row.get(3)?,
-                    tier_id: row.get(4)?,
-                    credit_units: row.get(5)?,
-                })
+                Ok((
+                    PayableOrder {
+                        id: row.get(0)?,
+                        code: row.get(1)?,
+                        key_id: row.get(2)?,
+                        ttl_days: row.get(3)?,
+                        tier_id: row.get(4)?,
+                        credit_units: row.get(5)?,
+                    },
+                    row.get(6)?,
+                ))
             },
         )
         .optional()
         .map_err(openproxy_db::error::map_db_error)?;
-    let Some(PayableOrder {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, order_code, api_key_id, ttl_days, tier_id, \
+             COALESCE(credit_units, base_units), amount_units \
+             FROM credit_orders \
+             WHERE status IN ('pending', 'expired') \
+               AND ABS(amount_units - ?1) <= ?4 \
+               AND ABS(amount_units - ?1) > 0 \
+               AND created_at <= datetime(?2, 'unixepoch') \
+               AND datetime(expires_at, ?3) >= datetime(?2, 'unixepoch')",
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    let near: Vec<(PayableOrder, i64)> = stmt
+        .query_map(
+            rusqlite::params![amount_units, block.timestamp, grace, tolerance_units],
+            |row| {
+                Ok((
+                    PayableOrder {
+                        id: row.get(0)?,
+                        code: row.get(1)?,
+                        key_id: row.get(2)?,
+                        ttl_days: row.get(3)?,
+                        tier_id: row.get(4)?,
+                        credit_units: row.get(5)?,
+                    },
+                    row.get(6)?,
+                ))
+            },
+        )
+        .map_err(openproxy_db::error::map_db_error)?
+        .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
+        .map_err(openproxy_db::error::map_db_error)?;
+    drop(stmt);
+    // Exact first; otherwise the tolerance path credits only an unambiguous
+    // single candidate.
+    let had_exact = exact.is_some();
+    let had_candidates = !near.is_empty();
+    let chosen: Option<(PayableOrder, i64)> = match exact {
+        Some(hit) => Some(hit),
+        None => {
+            if near.len() > 1 {
+                tracing::warn!(
+                    %tx_hash,
+                    amount_units,
+                    block_number,
+                    candidates = near.len(),
+                    "ambiguous short payment near several live orders: no order credited"
+                );
+                None
+            } else {
+                near.into_iter().next()
+            }
+        }
+    };
+    let Some((payable, quoted_units)) = chosen else {
+        if !had_exact && !had_candidates {
+            tracing::warn!(
+                %tx_hash,
+                amount_units,
+                block_number,
+                "unmatched USDC transfer to collector: no live order within tolerance"
+            );
+        }
+        return Ok(PaymentOutcome::Unmatched {
+            tx_hash: tx_hash.to_string(),
+            amount_units,
+        });
+    };
+    let PayableOrder {
         id: order_id,
         code: order_code,
         key_id: api_key_id,
         ttl_days,
         tier_id,
         credit_units,
-    }) = order
-    else {
-        tracing::warn!(
-            %tx_hash,
-            amount_units,
-            block_number,
-            "unmatched USDC transfer to collector: no live order with this amount"
-        );
-        return Ok(PaymentOutcome::Unmatched {
-            tx_hash: tx_hash.to_string(),
-            amount_units,
-        });
-    };
+    } = payable;
+    let short_units = quoted_units - amount_units; // negative when overpaid
 
     if let Some(existing) = api_key_id
         && crate::api_keys::crud::get_by_id(conn, ApiKeyId(existing))?.is_none()
@@ -324,7 +403,9 @@ fn settle_payment(
         %tx_hash,
         order_code = %order_code,
         credited_units = credit_units,
-        charged_units = amount_units,
+        quoted_units,
+        received_units = amount_units,
+        short_units,
         key_id = final_key_id,
         "top-up credited"
     );
@@ -333,5 +414,6 @@ fn settle_payment(
         api_key_id: final_key_id,
         credited_units: credit_units,
         minted_key,
+        received_units: amount_units,
     })
 }

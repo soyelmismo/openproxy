@@ -52,9 +52,6 @@ pub struct CreditsConfig {
     /// Watcher poll interval in seconds.
     #[serde(default = "default_scan_interval_secs")]
     pub scan_interval_secs: u64,
-    /// Smallest top-up accepted, in USD.
-    #[serde(default = "default_min_topup_usd")]
-    pub min_topup_usd: f64,
     /// Allowed balance lifetimes for a top-up, in days.
     #[serde(default = "default_ttl_days")]
     pub ttl_days: Vec<u32>,
@@ -67,10 +64,22 @@ pub struct CreditsConfig {
     /// its cursor. Lower it to the node's limit, never above it.
     #[serde(default = "default_max_block_chunk")]
     pub max_block_chunk: u32,
+    /// How far a received transfer may sit from an order's quoted amount and
+    /// still pay it, in micro-USDC. Custodial exchanges (Binance) deduct their
+    /// withdrawal fee from the sent amount, so a transfer arrives short — an
+    /// exact-only matcher strands that money in the collector. The default
+    /// (250_000 = 0.25 USDC) covers the ~0.2 USDC Base withdrawal fee with
+    /// headroom; a transfer short by more falls back to `unmatched`.
+    #[serde(default = "default_payment_tolerance_units")]
+    pub payment_tolerance_units: i64,
 }
 
 fn default_max_block_chunk() -> u32 {
     500
+}
+
+fn default_payment_tolerance_units() -> i64 {
+    250_000
 }
 
 fn default_chain_id() -> u64 {
@@ -82,9 +91,6 @@ fn default_payment_window_minutes() -> u32 {
 }
 fn default_scan_interval_secs() -> u64 {
     5
-}
-fn default_min_topup_usd() -> f64 {
-    0.5
 }
 fn default_ttl_days() -> Vec<u32> {
     vec![7, 15, 30]

@@ -79,7 +79,8 @@ fn delayed_scan_uses_block_time_and_does_not_credit_newer_order() {
         },
         old.amount_units,
         None,
-    )
+    
+        250_000)
     .unwrap();
     assert!(
         matches!(result, matcher::PaymentOutcome::Credited { order_code, .. } if order_code == old.order_code)
@@ -99,7 +100,8 @@ fn delayed_scan_uses_block_time_and_does_not_credit_newer_order() {
         101,
         old.amount_units,
         None,
-    )
+    
+        250_000)
     .unwrap();
     assert!(
         matches!(result, matcher::PaymentOutcome::Credited { order_code, .. } if order_code == new.order_code)
@@ -132,7 +134,8 @@ fn ambiguous_legacy_amount_is_unmatched_not_assigned_to_first_row() {
             100,
             amount_matches,
             None
-        )
+        ,
+            250_000)
         .unwrap(),
         matcher::PaymentOutcome::Unmatched { .. }
     ));
@@ -178,7 +181,8 @@ fn receipt_retries_lost_response_until_ack_and_excludes_other_receipts() {
         100,
         order.amount_units,
         None,
-    )
+    
+        250_000)
     .unwrap();
     let stranger = "10000000-0000-4000-8000-000000000000";
     let first = matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, receipt)
@@ -247,7 +251,8 @@ fn plan_switch_replaces_contract_and_prevents_free_grant_after_purchase() {
         100,
         order.amount_units,
         None,
-    )
+    
+        250_000)
     .unwrap();
     let shape: (Option<String>, Option<String>, i64) = conn.query_row(
         "SELECT allowed_models_json, allowed_providers_json, only_whitelisted FROM api_keys WHERE id = ?1", [kid.0], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
@@ -296,7 +301,8 @@ fn deleting_paid_key_preserves_reconciliation_and_cancels_pending_purchase() {
         100,
         paid.amount_units,
         None,
-    )
+    
+        250_000)
     .unwrap();
     let pending = orders::create_order(&conn, Some(kid), None, 5_000_000, 7, None).unwrap();
     crate::api_keys::hard_delete(&conn, kid).unwrap();
@@ -322,7 +328,8 @@ fn deleting_paid_key_preserves_reconciliation_and_cancels_pending_purchase() {
             101,
             pending.amount_units,
             None
-        )
+        ,
+            250_000)
         .unwrap(),
         matcher::PaymentOutcome::Unmatched { .. }
     ));

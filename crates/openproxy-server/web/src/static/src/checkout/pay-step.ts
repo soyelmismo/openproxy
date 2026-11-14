@@ -162,6 +162,7 @@ export function renderPayStep(o: CheckoutOrder): boolean {
     qr.textContent = o.qr_uri + " → " + o.collector_address;
   }
   $("amount").textContent = o.amount_display + " USDC";
+  attachCopy($("amount"), o.amount_display + " USDC");
   const old = document.getElementById("amount-credit");
   if (o.credit_usd != null && o.credit_usd !== o.base_usd) {
     const cred = old ?? document.createElement("div");
@@ -174,6 +175,7 @@ export function renderPayStep(o: CheckoutOrder): boolean {
     old.remove();
   }
   $("addr").textContent = o.collector_address;
+  attachCopy($("addr"), o.collector_address);
   // A resumed order (refresh days later) must not pretend the price still
   // holds; it says what is actually happening instead.
   $("pay-status").textContent =
@@ -181,6 +183,24 @@ export function renderPayStep(o: CheckoutOrder): boolean {
       ? "Waiting for the transfer on Base. This page updates by itself."
       : LATE_STATUS;
   return durable;
+}
+
+/**
+ * Tap-to-copy for the two values a buyer must reproduce outside the QR
+ * (exchange withdrawals do not parse EIP-681: Binance fills only the
+ * address). Flashing green confirms the copy; failure is silent — the value
+ * stays selectable and the page works without clipboard permission.
+ */
+function attachCopy(el: HTMLElement, text: string): void {
+  el.onclick = () => {
+    void navigator.clipboard?.writeText(text).then(
+      () => {
+        el.classList.add("copied");
+        setTimeout(() => el.classList.remove("copied"), 1_200);
+      },
+      () => {},
+    );
+  };
 }
 
 /**

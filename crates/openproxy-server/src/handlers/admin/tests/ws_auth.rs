@@ -266,10 +266,10 @@ async fn analytics_scope_gets_client_allowlist_only() {
         collector_address: "0xc46e0bb29db2c74b2ca63cd7d2b61374dadd8ce6".into(),
         payment_window_minutes: 15,
         scan_interval_secs: 5,
-        min_topup_usd: 1.0,
         ttl_days: vec![7, 15, 30],
         chain_id: 8453,
         max_block_chunk: 500,
+        payment_tolerance_units: 250_000,
     });
     let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 
@@ -395,10 +395,10 @@ async fn chat_scope_customer_reads_its_own_plan() {
         collector_address: "0xc46e0bb29db2c74b2ca63cd7d2b61374dadd8ce6".into(),
         payment_window_minutes: 15,
         scan_interval_secs: 5,
-        min_topup_usd: 1.0,
         ttl_days: vec![7, 15, 30],
         chain_id: 8453,
         max_block_chunk: 500,
+        payment_tolerance_units: 250_000,
     });
     let (state, _admin_key) = make_state_with_key_and_config(tmp.path(), config).await;
 

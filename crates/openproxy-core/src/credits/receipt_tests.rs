@@ -42,7 +42,7 @@ fn anon(conn: &Connection, receipt: &str) -> orders::CreditOrder {
 }
 
 fn paid(conn: &Connection, master: &MasterKey, order: &orders::CreditOrder, tx: &str) {
-    matcher::apply_payment(conn, master, tx, 0, 100, order.amount_units, None).unwrap();
+    matcher::apply_payment(conn, master, tx, 0, 100, order.amount_units, None, 250_000).unwrap();
 }
 
 fn delivery_state(conn: &Connection, id: i64) -> (Option<String>, i64, Option<Vec<u8>>) {

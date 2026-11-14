@@ -394,7 +394,7 @@ async fn create_order_impl(
         &cfg.collector_address,
         order.amount_units,
     );
-    let qr_svg = match credits_qr::render(&qr_uri, "#6366f1", "#0b0d12", "#ffffff") {
+    let qr_svg = match credits_qr::render(&qr_uri, "#e91d2a") {
         Ok(q) => q.svg,
         Err(e) => {
             tracing::warn!(error = %e, "qr render failed");

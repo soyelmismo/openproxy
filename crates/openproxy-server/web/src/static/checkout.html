@@ -15,9 +15,12 @@
   .checkout-tabs { display: flex; gap: 8px; margin: var(--space-4) 0; }
   .checkout-tabs .btn { margin-top: 0; flex: 1; }
   .qr { display: flex; justify-content: center; padding: var(--space-2) 0; }
-  .qr svg { width: 240px; height: 240px; background: #fff; border-radius: var(--radius-lg); }
-  .amount { text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .3px; color: var(--color-text); }
-  .addr { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); word-break: break-all; margin: 4px 0 10px; }
+  /* Superficie fija gris claro: los módulos rojos del QR necesitan fondo claro
+     para que el escáner los lea en ambos temas; el SVG en sí es transparente. */
+  .qr svg { width: 240px; height: 240px; background: #eceef2; border-radius: var(--radius-lg); }
+  .amount { text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .3px; color: var(--color-text); cursor: copy; }
+  .amount.copied, .addr.copied { color: var(--color-success); }
+  .addr { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); word-break: break-all; margin: 4px 0 10px; cursor: copy; }
   .timer { text-align: center; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); color: var(--color-warn); }
   .status { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); margin-top: 8px; }
   .err { color: var(--color-error); font-size: var(--fs-sm); margin-top: 12px; }
@@ -57,7 +60,7 @@
         <div class="addr" id="addr"></div>
         <div class="timer" id="timer"></div>
         <div class="status" id="pay-status">Waiting for the transfer on Base. This page updates by itself.</div>
-        <div class="field"><small>Send the exact amount shown. The amount must match to the last decimal; the payment window closes when the timer runs out. No refunds.</small></div>
+        <div class="field"><small>Send the exact amount shown (tap it to copy). Paying from an exchange such as Binance? It deducts its network fee from the transfer — the payment still credits the plan when it arrives up to 0.25 USDC short. The payment window closes when the timer runs out. No refunds.</small></div>
       </div>
 
       <div class="hidden" id="step-key">

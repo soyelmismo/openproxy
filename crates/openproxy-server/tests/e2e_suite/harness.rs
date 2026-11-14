@@ -447,10 +447,10 @@ impl TestHarness {
             collector_address: String::from("0x12c7ab78f21ba0253a21d34a0151d44ddb824950"),
             payment_window_minutes: 15,
             scan_interval_secs: 5,
-            min_topup_usd: 1.0,
             ttl_days: vec![7, 15, 30],
             chain_id: 8453,
             max_block_chunk: 500,
+            payment_tolerance_units: 250_000,
         });
         let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
         let app_state = AppState::for_test(

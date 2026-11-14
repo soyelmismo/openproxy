@@ -71,8 +71,9 @@
   --color-info:         #2b5a78;   /* sky dark */
   --color-info-soft:    #cfdde5;
 
-  /* On-chain payment accent: the indigo the QR modules are painted with
-     (credits_qr::render), shared by "buy" affordances that lead to checkout. */
+  /* On-chain payment accent: the indigo of "buy" affordances that lead to
+     checkout. The QR itself is painted in the brand red (--c-dell-red) by
+     credits_qr::render. */
   --color-chain:        #6366f1;
   --color-chain-hover:  #4f46e5;
   --color-chain-fg:     #ffffff;

@@ -567,6 +567,7 @@ impl CreditsWatcherService {
                 .get(&t.block_number)
                 .ok_or("missing block timestamp for transfer")?;
             let master = Arc::clone(&self.master_key);
+            let tolerance_units = self.config.payment_tolerance_units;
             let tx_hash = t.tx_hash.clone();
             let from = t.from_address.clone();
             let outcome = pool
@@ -582,6 +583,7 @@ impl CreditsWatcherService {
                         },
                         t.amount_units,
                         Some(&from),
+                        tolerance_units,
                     )
                 })
                 .await

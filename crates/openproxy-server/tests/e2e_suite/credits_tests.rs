@@ -99,7 +99,7 @@ async fn anonymous_buy_pay_reveal_and_history_e2e() {
     let mk = Arc::clone(&h.master_key);
     let outcome = h
         .db_pool
-        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xstray", 0, 100, stray, None))
+        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xstray", 0, 100, stray, None, 250_000))
         .await
         .expect("apply stray");
     assert!(matches!(outcome, PaymentOutcome::Unmatched { .. }));
@@ -108,7 +108,7 @@ async fn anonymous_buy_pay_reveal_and_history_e2e() {
     let mk = Arc::clone(&h.master_key);
     let outcome = h
         .db_pool
-        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xpay1", 0, 100, amount_units, None))
+        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xpay1", 0, 100, amount_units, None, 250_000))
         .await
         .expect("apply pay1");
     let PaymentOutcome::Credited {
@@ -128,7 +128,7 @@ async fn anonymous_buy_pay_reveal_and_history_e2e() {
     let mk = Arc::clone(&h.master_key);
     let outcome = h
         .db_pool
-        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xpay1", 0, 100, amount_units, None))
+        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xpay1", 0, 100, amount_units, None, 250_000))
         .await
         .expect("replay pay1");
     assert!(matches!(outcome, PaymentOutcome::AlreadySeen { .. }));
@@ -245,11 +245,11 @@ async fn concurrent_orders_stress_no_leaks_no_duplicates() {
         let amount = *amount;
         handles.push(tokio::task::spawn(async move {
             let first = pool
-                .spawn_write(move |w| apply_payment(w, mk1.as_ref(), &tx1, 0, 100, amount, None))
+                .spawn_write(move |w| apply_payment(w, mk1.as_ref(), &tx1, 0, 100, amount, None, 250_000))
                 .await
                 .expect("first delivery");
             let second = pool
-                .spawn_write(move |w| apply_payment(w, mk2.as_ref(), &tx2, 0, 100, amount, None))
+                .spawn_write(move |w| apply_payment(w, mk2.as_ref(), &tx2, 0, 100, amount, None, 250_000))
                 .await
                 .expect("replay delivery");
             (first, second)
@@ -461,7 +461,7 @@ async fn reveal_with_receipt_is_retryable_until_ack_e2e() {
     let mk = Arc::clone(&h.master_key);
     let outcome = h
         .db_pool
-        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xreceipt", 0, 100, amount, None))
+        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xreceipt", 0, 100, amount, None, 250_000))
         .await
         .expect("apply payment");
     assert!(matches!(outcome, PaymentOutcome::Credited { .. }));
@@ -509,7 +509,7 @@ async fn reveal_without_receipt_cannot_consume_the_key_e2e() {
     let mk = Arc::clone(&h.master_key);
     let outcome = h
         .db_pool
-        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xnoheader", 0, 100, amount, None))
+        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xnoheader", 0, 100, amount, None, 250_000))
         .await
         .expect("apply payment");
     assert!(matches!(outcome, PaymentOutcome::Credited { .. }));
@@ -662,7 +662,7 @@ async fn retried_create_with_same_receipt_reuses_the_order_e2e() {
     let amount = first["amount_units"].as_i64().unwrap();
     let mk = Arc::clone(&h.master_key);
     h.db_pool
-        .spawn_write(move |w| apply_payment(w, &mk, "replayed-mint", 0, 100, amount, None))
+        .spawn_write(move |w| apply_payment(w, &mk, "replayed-mint", 0, 100, amount, None, 250_000))
         .await
         .unwrap();
     let (status, paid_retry) = create_anonymous_order(&h, plan, receipt).await;
@@ -695,7 +695,7 @@ async fn order_code_alone_cannot_claim_a_receipt_bound_key_e2e() {
     let mk = Arc::clone(&h.master_key);
     let outcome = h
         .db_pool
-        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xleaked", 0, 100, amount, None))
+        .spawn_write(move |w| apply_payment(w, mk.as_ref(), "0xleaked", 0, 100, amount, None, 250_000))
         .await
         .expect("apply payment");
     assert!(matches!(outcome, PaymentOutcome::Credited { .. }));
