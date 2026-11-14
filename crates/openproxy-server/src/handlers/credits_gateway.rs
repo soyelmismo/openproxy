@@ -394,10 +394,10 @@ async fn create_order_impl(
         &cfg.collector_address,
         order.amount_units,
     );
-    // The ink is a CSS variable the checkout page controls: the dark brand
-    // background needs light modules (an inverted QR — every modern scanner
-    // reads it) while keeping the red accent for light themes.
-    let qr_svg = match credits_qr::render(&qr_uri, "var(--qr-ink,#e91d2a)") {
+    // The ink is plain light (#f5f7fa): WHITE modules on the dark brand
+    // background, as scanners expect. No CSS-variable indirection — the SVG
+    // carries its own final color everywhere it is shown.
+    let qr_svg = match credits_qr::render(&qr_uri, "#f5f7fa") {
         Ok(q) => q.svg,
         Err(e) => {
             tracing::warn!(error = %e, "qr render failed");

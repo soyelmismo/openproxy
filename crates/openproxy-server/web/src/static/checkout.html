@@ -34,17 +34,13 @@
   .checkout-tabs { display: flex; gap: 8px; margin: var(--space-4) 0; }
   .checkout-tabs .btn { margin-top: 0; flex: 1; }
   .qr { display: flex; justify-content: center; padding: var(--space-2) 0; }
-  /* QR: dark brand background (#151413 is the page background theme-init
-     paints) with light modules. The red accent survives in the CSS var
-     fallback for any page that keeps a light QR surface. Light ink on dark
-     is an inverted QR — the scanners that matter (iOS/Android cameras,
-     MetaMask, Binance) binarize both polarities; the previous light surface
-     is what the modules must contrast against, hence the bright ink. */
+  /* QR: dark brand surface (#151413, the theme-init page background) with
+     WHITE modules — the ink color is baked into the SVG server-side
+     (#f5f7fa), scanners get the standard high-contrast pairing. */
   .qr svg {
     width: 240px; height: 240px;
     background: #151413;
     border-radius: var(--radius-lg);
-    --qr-ink: #f5f7fa;
   }
   .amount { text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .3px; color: var(--color-text); cursor: copy; }
   .amount:hover { text-decoration: underline dotted var(--color-text-muted); text-underline-offset: 4px; }
@@ -229,57 +225,6 @@
   </div>
 </div>
 
-<script>
-  // Modals in the same page: terms (iframe of the real document) and FAQ.
-  // Escape, backdrop click and the X all close; the page never navigates.
-  (function () {
-    var openId = null;
-
-    function open(name) {
-      close();
-      var modal = document.getElementById(name + "-modal");
-      if (!modal) return;
-      var frame = modal.querySelector("iframe[data-src]");
-      if (frame && !frame.getAttribute("src")) frame.setAttribute("src", frame.getAttribute("data-src"));
-      modal.classList.remove("hidden");
-      document.body.style.overflow = "hidden";
-      openId = name + "-modal";
-      var focusable = modal.querySelector(".close-btn");
-      if (focusable) focusable.focus();
-    }
-
-    function close() {
-      if (!openId) return;
-      var modal = document.getElementById(openId);
-      if (modal) modal.classList.add("hidden");
-      document.body.style.overflow = "";
-      openId = null;
-    }
-
-    document.addEventListener("click", function (e) {
-      var trigger = e.target.closest("[data-modal]");
-      if (trigger) {
-        e.preventDefault();
-        open(trigger.getAttribute("data-modal"));
-        return;
-      }
-      if (e.target.closest("[data-close]")) {
-        e.preventDefault();
-        close();
-        return;
-      }
-      // Only a click on the backdrop itself closes (not inside .modal).
-      if (e.target.classList && e.target.classList.contains("modal-bg")) close();
-    });
-
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && openId) {
-        e.stopPropagation();
-        close();
-      }
-    });
-  })();
-</script>
 <script src="/checkout.js"></script>
 </body>
 </html>
