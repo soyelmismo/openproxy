@@ -65,6 +65,12 @@ export function initMyKey(): void {
       err("mykey-err", "Pick a plan first.");
       return;
     }
+    // Same terms precondition as the mint-new-key flow: a renewal buys
+    // consumable software credit too.
+    if (!$<HTMLInputElement>("terms-check-my").checked) {
+      err("mykey-err", "You must accept the Terms of Service to buy.");
+      return;
+    }
     btn.disabled = true; // double click must not create two payable orders
     // A renewal is authenticated by the owner's Bearer key, but the same
     // receipt-before-POST rule applies: a lost response must retry the SAME

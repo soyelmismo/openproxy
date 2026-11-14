@@ -21,6 +21,13 @@ export function initBuy(): void {
       err("buy-err", "Pick a plan first.");
       return;
     }
+    // The terms acceptance is a PRECONDITION of buying: the plan is consumable
+    // software delivered on confirmation, so the buyer must have read (or at
+    // least reached) the terms before any payable order exists.
+    if (!$<HTMLInputElement>("terms-check").checked) {
+      err("buy-err", "You must accept the Terms of Service to buy.");
+      return;
+    }
     btn.disabled = true;
     // The receipt is a PRECONDITION of the order: the server hashes it at
     // creation, so it must exist and be DURABLE before the POST. If storage

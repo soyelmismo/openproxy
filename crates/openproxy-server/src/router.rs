@@ -70,6 +70,7 @@ fn public_routes(state: &AppState) -> Router<AppState> {
     #[cfg(feature = "payments")]
     let routes = routes
         .route("/checkout", get(admin_ui::checkout_html))
+        .route("/terms", get(admin_ui::terms_html))
         .route("/checkout.js", get(admin_ui::checkout_js));
     routes.merge(handlers::public_api_routes(state))
 }

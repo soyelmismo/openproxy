@@ -69,6 +69,8 @@ function mountBuy(): void {
     <div id="usd">
       <label><input type="radio" name="plan-buy" value="tier:3" checked></label>
     </div>
+    <!-- The terms checkbox is a buy precondition: the flow fixtures accept it. -->
+    <label><input type="checkbox" id="terms-check" checked></label>
     <button id="create"></button>
     <div id="buy-err" class="err hidden"></div>
     <button id="new-order"></button>
@@ -90,6 +92,8 @@ function mountMyKey(): void {
     <div id="my-usd">
       <label><input type="radio" name="plan-renew" value="tier:5" checked></label>
     </div>
+    <!-- The terms checkbox is a buy precondition: the flow fixtures accept it. -->
+    <label><input type="checkbox" id="terms-check-my" checked></label>
     <button id="my-buy"></button>
     <div id="mykey-err" class="err hidden"></div>
     ${PAY_STEP_DOM}

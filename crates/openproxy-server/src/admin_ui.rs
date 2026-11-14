@@ -107,6 +107,19 @@ pub async fn checkout_js() -> impl IntoResponse {
     )
 }
 
+/// Public terms page for the credits checkout (the T&C checkbox links to it).
+/// Static text: the no-refund disclaimer of the consumable software credit.
+#[cfg(feature = "payments")]
+pub async fn terms_html() -> impl IntoResponse {
+    (
+        [
+            ("cache-control", "no-store"),
+            ("content-type", "text/html; charset=utf-8"),
+        ],
+        include_str!("../web/src/static/terms.html"),
+    )
+}
+
 /// `GET /admin/build.json` — public build fingerprint of the embedded SPA.
 ///
 /// The dashboard compares this id against the one it recorded on its first

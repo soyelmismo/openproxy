@@ -31,10 +31,23 @@
   }
   .hidden { display: none; }
   .history-row { margin-bottom: 4px; font-size: var(--fs-xs); color: var(--color-text-muted); }
+  .checkout-login { text-align: right; font-size: var(--fs-xs); margin-bottom: var(--space-2); }
+  .checkout-login a { color: var(--color-text-muted); }
+  .terms-check {
+    display: flex; gap: 8px; align-items: flex-start;
+    font-size: var(--fs-xs); color: var(--color-text-muted);
+    margin: var(--space-3) 0;
+  }
+  .terms-check input { margin-top: 2px; }
+  .faq { margin-top: var(--space-4); border-top: var(--border-w) var(--border-style) var(--color-border); padding-top: var(--space-3); }
+  .faq details { margin-bottom: 6px; }
+  .faq summary { cursor: pointer; font-size: var(--fs-sm); color: var(--color-text); }
+  .faq details small { display: block; margin-top: 4px; color: var(--color-text-muted); }
 </style>
 </head>
 <body>
 <main class="checkout">
+  <div class="checkout-login"><a href="/admin/#/login">Operator sign in</a></div>
   <div class="card">
     <div class="card-title">OpenProxy credits</div>
     <div class="card-subtitle">Pay with USDC on Base. Your key appears automatically once the payment lands on-chain.</div>
@@ -49,6 +62,10 @@
           <label>Plan</label>
           <div id="usd"></div>
         </div>
+        <label class="terms-check">
+          <input type="checkbox" id="terms-check">
+          <span>I accept the <a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
+        </label>
         <button id="create" class="btn primary" type="button">Create payment</button>
         <div class="field"><small>No refunds: the credited balance expires on the date shown for the plan you pick. Unused balance is not returned. Your key keeps working without a plan — buy again anytime.</small></div>
         <div class="err hidden" id="buy-err"></div>
@@ -84,7 +101,11 @@
             <label>Renew or change plan</label>
             <div id="my-usd"></div>
           </div>
-          <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
+          <label class="terms-check">
+          <input type="checkbox" id="terms-check-my">
+          <span>I accept the <a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
+        </label>
+        <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
         </div>
         <div class="field"><small>Plan purchases to an existing key apply that plan's models and limits to the key. No refunds.</small></div>
         <div class="err hidden" id="mykey-err"></div>
@@ -97,6 +118,30 @@
       </div>
 
       <div class="err hidden" id="page-err"></div>
+
+      <div class="faq">
+        <div class="card-title">FAQ</div>
+        <details>
+          <summary>What am I buying?</summary>
+          <small>Software credit: a plan that grants a USD-denominated balance you consume through the OpenProxy API. The balance is live the moment your payment confirms on-chain and it expires on the plan's date.</small>
+        </details>
+        <details>
+          <summary>Are prices per request?</summary>
+          <small>No. You buy a plan once; every request deducts its own cost from that plan's balance. The price on the card is the plan price, not a per-call fee.</small>
+        </details>
+        <details>
+          <summary>Can I cancel or get a refund?</summary>
+          <small>No. Credit is consumable software delivered in full the moment the payment confirms, so purchases cannot be cancelled, reversed or refunded (see the <a href="/terms.html" target="_blank" rel="noopener">Terms of Service</a>).</small>
+        </details>
+        <details>
+          <summary>Where do I see what I have left?</summary>
+          <small>Open the “My key” tab, paste your key and press “Load my plan”: it shows the plan name, the balance left and the expiry date.</small>
+        </details>
+        <details>
+          <summary>What if my payment is late?</summary>
+          <small>A transfer sent before the deadline still credits the plan when it confirms on-chain, even if the timer expired. Keep the tab open: the page resumes by itself.</small>
+        </details>
+      </div>
     </div>
   </div>
 </main>
