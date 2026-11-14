@@ -79,6 +79,13 @@ pub async fn callback_html() -> Html<&'static str> {
     Html(include_str!("../web/src/static/callback.html"))
 }
 
+/// The terms content: ONE source of truth (`terms-body.html`), injected
+/// natively into the checkout modal by `checkout_html` and wrapped in a
+/// standalone page by `terms_html`. No iframes, no fetches, no second URL
+/// the client depends on.
+#[cfg(feature = "payments")]
+const TERMS_BODY: &str = include_str!("../web/src/static/terms-body.html");
+
 /// Public checkout page for the credits gateway (anonymous key purchase).
 /// No admin session required: everything it does goes through the public
 /// `/v1/credits/*` surface.
@@ -89,7 +96,7 @@ pub async fn checkout_html() -> impl IntoResponse {
             ("cache-control", "no-store"),
             ("content-type", "text/html; charset=utf-8"),
         ],
-        include_str!("../web/src/static/checkout.html"),
+        include_str!("../web/src/static/checkout.html").replace("<!--TERMS_BODY-->", TERMS_BODY),
     )
 }
 
@@ -107,6 +114,47 @@ pub async fn checkout_js() -> impl IntoResponse {
     )
 }
 
+/// Shell of the standalone /terms page: same theme + design system as the
+/// panel, with the terms typography. The body is `TERMS_BODY`.
+#[cfg(feature = "payments")]
+const TERMS_SHELL_HEAD: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms of Service — OpenProxy credits</title>
+<script src="/admin/dist/theme-init.js"></script>
+<link rel="stylesheet" href="/admin/dist/app.css">
+<style>
+  body { display: flex; justify-content: center; padding: 40px 16px; }
+  main.terms { width: 100%; max-width: 720px; }
+  .terms-nav { text-align: right; font-size: var(--fs-xs); margin-bottom: var(--space-2); }
+  .terms-nav a { color: var(--color-text-muted); }
+  .terms-body { padding: var(--space-3); }
+  .terms-body h2 { font-size: var(--fs-md); margin: var(--space-4) 0 var(--space-2); }
+  .terms-body h2:first-child { margin-top: 0; }
+  .terms-body p { font-size: var(--fs-sm); color: var(--color-text); margin: 0 0 var(--space-2); }
+  .terms-body li { font-size: var(--fs-sm); margin-bottom: 4px; }
+  .terms-meta { font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: var(--space-4); }
+</style>
+</head>
+<body>
+<main class="terms">
+  <div class="terms-nav"><a href="/checkout">← Return to checkout</a></div>
+  <div class="card">
+    <div class="card-title">Terms of Service — OpenProxy credits</div>
+    <div class="card-subtitle">The rules that govern the purchase of software credit plans, including the no-refund policy you accept at checkout.</div>
+    <div class="terms-body">
+"#;
+
+#[cfg(feature = "payments")]
+const TERMS_SHELL_FOOT: &str = r#"</div>
+  </div>
+</main>
+</body>
+</html>
+"#;
+
 /// Public terms page for the credits checkout (the T&C checkbox links to it).
 /// Static text: the no-refund disclaimer of the consumable software credit.
 #[cfg(feature = "payments")]
@@ -116,7 +164,7 @@ pub async fn terms_html() -> impl IntoResponse {
             ("cache-control", "no-store"),
             ("content-type", "text/html; charset=utf-8"),
         ],
-        include_str!("../web/src/static/terms.html"),
+        [TERMS_SHELL_HEAD, TERMS_BODY, TERMS_SHELL_FOOT].concat(),
     )
 }
 

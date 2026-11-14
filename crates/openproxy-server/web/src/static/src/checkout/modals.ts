@@ -5,6 +5,10 @@
 // are `[data-modal="terms|faq"]` anchors — clicking one opens the matching
 // `#terms-modal` / `#faq-modal` instead of navigating; Escape, the X and a
 // backdrop click close, and the body scroll locks while a modal is open.
+//
+// The terms content is not fetched and not framed: the server injects it
+// into the page itself (checkout_html replaces <!--TERMS_BODY-->), so the
+// modal has zero network dependencies.
 
 function close(openId: string | null): void {
   if (!openId) return;
@@ -16,10 +20,6 @@ function open(name: string): void {
   close(current);
   const modal = document.getElementById(`${name}-modal`);
   if (!modal) return;
-  // The terms modal ships an iframe with data-src: load the document lazily
-  // on first open so a buyer who never opens it pays no request.
-  const frame = modal.querySelector<HTMLIFrameElement>("iframe[data-src]");
-  if (frame && !frame.getAttribute("src")) frame.setAttribute("src", frame.dataset["src"] ?? "");
   modal.classList.remove("hidden");
   document.body.style.overflow = "hidden";
   current = modal.id;

@@ -76,11 +76,16 @@
   }
   .checkout-foot a { color: var(--color-text-muted); text-decoration: none; }
   .checkout-foot a:hover { color: var(--color-link); text-decoration: underline; }
-  /* Terms modal: /terms is a full document (own theme + design system),
-     so it rides in an iframe — one source of truth, no duplicated copy. */
-  #terms-modal .modal { max-width: 760px; }
-  #terms-modal .modal-body { padding: 0; }
-  #terms-modal iframe { border: 0; width: 100%; height: min(72vh, 720px); display: block; background: transparent; }
+  /* Terms modal: the content is injected server-side into the page itself —
+     no iframe, no fetch, no second URL that could fail. Same typography the
+     standalone /terms page uses. */
+  #terms-modal .modal { max-width: 680px; }
+  #terms-modal .modal-body { overflow-y: auto; }
+  .terms-modal-body h2 { font-size: var(--fs-md); margin: var(--space-4) 0 var(--space-2); }
+  .terms-modal-body h2:first-child { margin-top: 0; }
+  .terms-modal-body p { font-size: var(--fs-sm); color: var(--color-text); margin: 0 0 var(--space-2); }
+  .terms-modal-body li { font-size: var(--fs-sm); margin-bottom: 4px; }
+  .terms-modal-body .terms-meta { font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: var(--space-4); }
   /* FAQ modal: the same <details> pattern the dashboard uses. */
   #faq-modal .modal { max-width: 620px; }
   .faq details { border-bottom: var(--border-w) var(--border-style) var(--color-border-soft); }
@@ -184,7 +189,11 @@
       <button type="button" class="close-btn" data-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
-      <iframe id="terms-frame" data-src="/terms" title="Terms of Service" loading="lazy"></iframe>
+      <!-- The terms content is injected server-side (checkout_html):
+           one source of truth, rendered natively — no iframe, no fetch. -->
+      <div class="terms-body terms-modal-body">
+<!--TERMS_BODY-->
+      </div>
     </div>
   </div>
 </div>
@@ -212,14 +221,6 @@
       <details>
         <summary>Where do I see what I have left?</summary>
         <small>Open the “My key” tab, paste your key and press “Load my plan”: it shows the plan name, the balance left and the expiry date.</small>
-      </details>
-      <details>
-        <summary>Why is the price not a round number?</summary>
-        <small>Plan prices include a small allowance for the withdrawal fee that exchanges like Binance deduct from the transfer, and a unique cent-jitter identifies your order on-chain. Always pay the exact amount displayed: a transfer up to 0.25 USDC short still credits the plan.</small>
-      </details>
-      <details>
-        <summary>What if my payment is late?</summary>
-        <small>A transfer sent before the deadline still credits the plan when it confirms on-chain, even if the timer expired. Keep the tab open: the page resumes by itself.</small>
       </details>
     </div>
   </div>

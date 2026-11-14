@@ -18,7 +18,8 @@ function mount(): void {
         <div class="modal-header"><h2>Terms of Service</h2>
           <button type="button" class="close-btn" data-close>&times;</button></div>
         <div class="modal-body">
-          <iframe id="terms-frame" data-src="/terms" title="Terms of Service"></iframe>
+          <!-- The server injects the terms body here; the modal never fetches. -->
+          <div class="terms-body terms-modal-body"><h2>1. What you buy</h2><p>A plan grants a balance.</p></div>
         </div>
       </div>
     </div>
@@ -42,11 +43,12 @@ describe("checkout modals", () => {
     expect(document.getElementById("terms-modal")!.classList.contains("hidden")).toBe(false);
   });
 
-  it("the terms iframe loads /terms lazily on first open", () => {
-    const frame = document.getElementById("terms-frame") as HTMLIFrameElement;
-    expect(frame.getAttribute("src")).toBeNull();
-    document.getElementById("trigger-terms")!.click();
-    expect(frame.getAttribute("src")).toBe("/terms");
+  it("the injected terms body is already in the page: the modal never fetches", () => {
+    // No network dependency: the server-rendered body must be there at load.
+    expect(
+      document.querySelector("#terms-modal .terms-modal-body h2")!.textContent,
+    ).toBe("1. What you buy");
+    expect(document.getElementById("terms-modal")!.querySelector("iframe")).toBeNull();
   });
 
   it("escape closes the open modal and unlocks the body scroll", () => {
