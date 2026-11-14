@@ -56,6 +56,8 @@ const CHECKOUT_DOM = `
     </div>
     <div id="my-usd"></div>
     <button id="my-buy"></button>
+    <button id="my-rotate"></button>
+    <div id="my-rotated-key" class="hidden"></div>
     <div id="mykey-err" class="err hidden"></div>
   </div>
   <div id="step-done" class="hidden"><button id="new-order"></button></div>

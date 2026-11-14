@@ -2,7 +2,7 @@
 // one for it, authenticated with the buyer's own key (Bearer).
 
 import { $, err, hide, show } from "./dom.js";
-import { getAuth, postJson, type CheckoutOrder, type MyPlanResponse } from "./api.js";
+import { getAuth, postJson, type CheckoutOrder, type MyPlanResponse, type RotationResponse } from "./api.js";
 import { enterOrder } from "./pay-step.js";
 import { parseSelection, selectedPlanValue } from "./catalog.js";
 import { clearKey, endCreate, parseUtc, prepareCreate } from "./session.js";
@@ -53,6 +53,42 @@ export function initMyKey(): void {
       .finally(() => {
         btn.disabled = false;
       });
+  });
+
+  // Self-service rotation (POST /v1/credits/me/rotate): for a leaked key.
+  // The old plaintext dies server-side the instant the new one is generated;
+  // the id stays, so plan, balance and quotas all survive. The new plaintext
+  // is shown once in this tab — there is no way to see it again.
+  $("my-rotate").addEventListener("click", function (this: HTMLButtonElement) {
+    const btn = this;
+    const key = keyOf();
+    err("mykey-err", "");
+    if (
+      !window.confirm(
+        "Rotate this key? The current key stops working immediately and the " +
+          "new key is shown only once. Do this only if the key leaked or was " +
+          "shared.",
+      )
+    ) {
+      return;
+    }
+    btn.disabled = true;
+    postJson<RotationResponse>("v1/credits/me/rotate", {}, {
+      Authorization: "Bearer " + key,
+    })
+      .then((res) => {
+        btn.disabled = false;
+        if (!res.ok) {
+          throw new Error(res.body.error?.message || "rotation failed");
+        }
+        const el = $("my-rotated-key");
+        el.textContent = res.body.key;
+        el.classList.remove("hidden");
+        btn.classList.add("hidden");
+      })
+      .catch((e: unknown) =>
+        err("mykey-err", e instanceof Error ? e.message : String(e)),
+      );
   });
 
   $("my-buy").addEventListener("click", function (this: HTMLButtonElement) {

@@ -97,6 +97,8 @@ function mountMyKey(): void {
     <!-- The terms checkbox is a buy precondition: the flow fixtures accept it. -->
     <label><input type="checkbox" id="terms-check-my" checked></label>
     <button id="my-buy"></button>
+    <button id="my-rotate"></button>
+    <div id="my-rotated-key" class="hidden"></div>
     <div id="mykey-err" class="err hidden"></div>
     ${PAY_STEP_DOM}
   `;

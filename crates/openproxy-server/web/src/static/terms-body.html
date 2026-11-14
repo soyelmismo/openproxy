@@ -19,6 +19,8 @@
 
 <h2>5. Key custody</h2>
 <p>The API key that receives the credit is shown once and cannot be recovered by OpenProxy. Store it safely. A key lost by its owner cannot be re-issued, and its remaining balance cannot be transferred.</p>
+<p>The checkout itself can re-show the key it delivered for 7 days after payment (via the recovery link, so a lost tab does not lose the key). After those 7 days the checkout's copy is erased for good. This does not affect the key: a valid key keeps working; only the checkout's ability to display it again ends.</p>
+<p>If a key leaks, the owner can replace it at once from the checkout's "My key" tab (Rotate key): the previous key stops working immediately, and the key's plan, balance and limits carry over. OpenProxy never rotates a key on request by anyone but the key holder.</p>
 
 <h2>6. Acceptance</h2>
 <p>Checking the Terms of Service box during checkout constitutes your acceptance of these terms. The version in force at your purchase is the one published at <a href="/terms">/terms</a> at that moment (version below).</p>

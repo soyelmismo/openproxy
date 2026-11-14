@@ -82,9 +82,10 @@ pub fn router() -> Router<AppState> {
         .route("/order/{code}/reveal", post(reveal_key))
         .route("/order/{code}/ack", post(ack_key))
         // Self-service surface for an existing key (Bearer = the key itself):
-        // read the current plan and buy/renew one. Credit exists only as a
-        // plan; there is no prepaid balance to top up.
+        // read the current plan and buy/renew one, rotate a leaked credential.
+        // Credit exists only as a plan; there is no prepaid balance to top up.
         .route("/me/plan", get(me_plan).post(me_buy_plan))
+        .route("/me/rotate", post(me_rotate_key))
         .layer(axum::middleware::from_fn(no_store))
 }
 
@@ -671,6 +672,35 @@ async fn me_key_id(state: &AppState, headers: &HeaderMap) -> Result<ApiKeyId, Re
             &format!("invalid api key: {e}"),
         )),
     }
+}
+
+/// POST /v1/credits/me/rotate — self-service rotation of a leaked credential
+/// (Bearer = the key being rotated). Keeps the key id, so plan, balance,
+/// quotas and expiry all survive; the old plaintext stops working at once.
+/// Anyone holding the CURRENT key can rotate it — that is the point: rotate
+/// immediately on suspicion, the leaked copy dies. The new plaintext rides
+/// once in a no-store response.
+async fn me_rotate_key(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let key_id = match me_key_id(&state, &headers).await {
+        Ok(k) => k,
+        Err(resp) => return resp,
+    };
+    let rotated = state
+        .db_pool()
+        .spawn_write(move |w| openproxy_core::api_keys::regenerate(w, key_id))
+        .await;
+    let (row, plaintext) = match rotated {
+        Ok(v) => v,
+        Err(e) => return core_failure("me.rotate", e),
+    };
+    Json(json!({
+        "rotated": true,
+        "api_key_id": row.id.0,
+        "key": plaintext,
+        "prefix": row.key_prefix,
+        "warning": "The previous key stopped working at once. Store the new key now — it is shown once.",
+    }))
+    .into_response()
 }
 
 /// The key's current plan: name, leveraged credit, remaining balance and the

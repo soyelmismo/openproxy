@@ -151,7 +151,7 @@
         <div class="timer" id="timer"></div>
         <div class="status" id="pay-status">Waiting for the transfer on Base. This page updates by itself.</div>
         <div class="recovery hidden" id="recovery">
-          <small><strong>Save this recovery link</strong> — it restores this purchase on any device if this tab is lost. The key itself is still shown once, here, after payment.</small>
+          <small><strong>Save this recovery link</strong> — it restores this purchase on any device if this tab is lost. The key itself is still shown once, here, after payment; the re-show works for 7 days after payment.</small>
           <div class="recovery-row">
             <a id="recovery-link" href="#"></a>
             <button id="recovery-copy" class="btn btn-secondary" type="button">Copy</button>
@@ -168,7 +168,7 @@
         <div class="ok" style="font-weight:600;margin-bottom:8px;color:var(--color-success)">Payment confirmed. Your key:</div>
         <div class="key hidden" id="key"></div>
         <button id="reveal" class="btn btn-secondary" type="button">Show my key (once)</button>
-        <div class="field"><small>This key is shown once and cannot be recovered: save it now. Top it up anytime from the same page; balances expire on schedule. No refunds.</small></div>
+        <div class="field"><small>This key is shown once and cannot be recovered: save it now. The checkout can re-show it for 7 days after payment (from the recovery link), after that it is gone for good. Top it up anytime from the same page; balances expire on schedule. No refunds.</small></div>
       </div>
 
       <div class="hidden" id="step-mykey">
@@ -190,6 +190,12 @@
           <span>I accept the <a href="/terms" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
         <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
+          <div class="field" style="margin-top:var(--space-3)">
+            <label>Rotate key (if leaked)</label>
+            <small>If your key leaked, replace it: the old key stops working at once and your plan and balance stay. The new key is shown once — store it before you close this page.</small>
+            <button id="my-rotate" class="btn btn-secondary" type="button">Rotate this key</button>
+            <div class="key hidden" id="my-rotated-key"></div>
+          </div>
         </div>
         <div class="field"><small>Plan purchases to an existing key apply that plan's models and limits to the key. No refunds.</small></div>
         <div class="err hidden" id="mykey-err"></div>

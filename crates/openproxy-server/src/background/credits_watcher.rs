@@ -685,12 +685,17 @@ impl crate::background::BackgroundService for CreditsExpiryService {
                     match pool.spawn_write(|w| {
                         let lots = openproxy_db::credits_ledger::expire_due(w)?;
                         let orders = openproxy_core::credits::orders::expire_stale_orders(w)?;
+                        let sweeps =
+                            openproxy_core::credits::sweep_expired_minted_ciphertexts(w)?;
                         let audit = openproxy_db::credits_ledger::reconcile(w)?;
-                        Ok((lots, orders, audit))
+                        Ok((lots, orders, sweeps, audit))
                     }).await {
-                        Ok((lots, orders, audit)) => {
+                        Ok((lots, orders, sweeps, audit)) => {
                             if lots > 0 || orders > 0 {
                                 tracing::info!(lots, orders, "expired credit lots/orders");
+                            }
+                            if sweeps > 0 {
+                                tracing::info!(sweeps, "expired minted-key deliveries (TTL)");
                             }
                             if !audit.is_consistent() {
                                 tracing::error!(

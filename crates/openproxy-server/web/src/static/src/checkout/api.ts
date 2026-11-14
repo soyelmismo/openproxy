@@ -56,6 +56,15 @@ export interface MyPlanResponse {
   } | null;
 }
 
+/// POST /v1/credits/me/rotate: the new plaintext rides once in this response
+/// (no-store); the previous key is already dead when it arrives.
+export interface RotationResponse {
+  rotated: boolean;
+  key: string;
+  prefix: string;
+  warning: string;
+}
+
 export interface OrderStatus {
   order_code: string;
   status: string;
