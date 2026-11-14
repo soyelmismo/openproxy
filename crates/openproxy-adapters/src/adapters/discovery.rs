@@ -230,4 +230,40 @@ mod tests {
         let payload: OpenAIModelsResponse = serde_json::from_value(json).unwrap();
         assert!(payload.data.is_empty());
     }
+
+    #[test]
+    fn test_insert_upstream_headers() {
+        let mut req = UpstreamRequest::get("http://localhost");
+        let headers = [
+            ("authorization", "Bearer token123"),
+            ("x-api-key", "secret-key"),
+            ("custom-header", "custom-value"),
+            ("bad-val", "invalid\nvalue"),
+        ];
+
+        let res = insert_upstream_headers(&mut req, &headers);
+        assert!(res.is_ok());
+        assert_eq!(
+            req.headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok()),
+            Some("Bearer token123")
+        );
+        assert_eq!(
+            req.headers.get("x-api-key").and_then(|v| v.to_str().ok()),
+            Some("secret-key")
+        );
+        assert_eq!(
+            req.headers
+                .get("custom-header")
+                .and_then(|v| v.to_str().ok()),
+            Some("custom-value")
+        );
+        assert!(!req.headers.contains_key("bad-val"));
+
+        // Invalid header name
+        let invalid_header = [("invalid header name", "value")];
+        let err = insert_upstream_headers(&mut req, &invalid_header);
+        assert!(err.is_err());
+    }
 }
