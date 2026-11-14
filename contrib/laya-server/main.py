@@ -17,9 +17,11 @@ Security (OP-11):
 import argparse
 import hmac
 import os
+import sys
 import time
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
@@ -32,12 +34,23 @@ API_KEY = ""
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """OP-11: reject unauthenticated callers when a key is configured."""
+    """OP-11: reject unauthenticated callers when a key is configured.
+
+    ROOT FIX (audit A6-06): an HTTPException raised inside a BaseHTTPMiddleware
+    is not handled by FastAPI's exception layer — it surfaced as a 500
+    Internal Server Error instead of a 401 (verified: 'curl /health' without
+    Authorization -> 500). The block was fail-closed (access denied) but the
+    status code lied about it and polluted logs. Return the response
+    directly instead of raising.
+    """
     if API_KEY:
         provided = request.headers.get("authorization", "")
         expected = f"Bearer {API_KEY}"
         if not hmac.compare_digest(provided, expected):
-            raise HTTPException(status_code=401, detail="missing or invalid API key")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "missing or invalid API key"},
+            )
     return await call_next(request)
 
 class SystemOneQuestion(BaseModel):
@@ -168,11 +181,18 @@ def main():
 
     global API_KEY
     API_KEY = args.api_key
+    # ROOT FIX (audit A6-06): the non-loopback guard was warning-only — the
+    # server kept listening on every interface with no authentication (a
+    # single unauthenticated curl from the network could drive the inferencer).
+    # Binding a non-loopback interface without an API key is now a hard error.
     if args.host not in ("127.0.0.1", "localhost", "::1") and not API_KEY:
         print(
-            "WARNING (OP-11): binding a non-loopback interface without --api-key; "
-            "anyone on the network will be able to use this server."
+            "ERROR (OP-11): refusing to bind a non-loopback interface without --api-key; "
+            "anyone on the network would be able to use this server. "
+            "Pass --api-key (or set LAYA_SERVER_API_KEY) or bind 127.0.0.1.",
+            file=sys.stderr,
         )
+        sys.exit(2)
 
     init_model(args.model, args.device)
     uvicorn.run(app, host=args.host, port=args.port)
