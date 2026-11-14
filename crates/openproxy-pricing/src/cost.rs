@@ -43,6 +43,12 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
 fn apply_secret_redactions(text: String) -> String {
     static RE_SK: LazyLock<regex::Regex> =
         LazyLock::new(|| openproxy_types::static_regex!(r"sk-[A-Za-z0-9_\-]{10,}"));
+    // ROOT FIX (audit A6-04): the product's OWN key format was missing from
+    // the redaction set — an op_live_… credential landing in a WARN/ERROR
+    // message stayed in clear text in a world-readable debug.log and in the
+    // dashboard ring buffer, while sk-… keys were redacted.
+    static RE_OP_LIVE: LazyLock<regex::Regex> =
+        LazyLock::new(|| openproxy_types::static_regex!(r"op_live_[A-Za-z0-9]{16,}"));
     static RE_XAPIKEY: LazyLock<regex::Regex> =
         LazyLock::new(|| openproxy_types::static_regex!(r"(?i)x-api-key:\s*\S+"));
     static RE_BEARER: LazyLock<regex::Regex> =
@@ -50,6 +56,7 @@ fn apply_secret_redactions(text: String) -> String {
 
     let patterns: &[(&LazyLock<regex::Regex>, &str)] = &[
         (&RE_SK, "sk-[REDACTED]"),
+        (&RE_OP_LIVE, "op_live_[REDACTED]"),
         (&RE_XAPIKEY, "x-api-key: [REDACTED]"),
         (&RE_BEARER, "Authorization: Bearer [REDACTED]"),
     ];

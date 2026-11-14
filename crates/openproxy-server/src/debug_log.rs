@@ -113,6 +113,19 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<D
         else {
             return;
         };
+        // ROOT FIX (audit A6-04): the debug log is written with the default
+        // umask (0644/0666 — verified) and can carry WARN/ERROR payloads
+        // from the money path. Tighten it to owner-only, like the master
+        // key file, on every (re)open including the 12 h rotation.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = file.metadata().await {
+                let mut perms = meta.permissions();
+                perms.set_mode(perms.mode() & 0o600);
+                let _ = tokio::fs::set_permissions(&path, perms).await;
+            }
+        }
 
         let mut rotation_interval = tokio::time::interval(std::time::Duration::from_hours(12));
         rotation_interval.tick().await;
@@ -127,6 +140,15 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<D
                         .open(&path)
                         .await
                     {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            if let Ok(meta) = new_file.metadata().await {
+                                let mut perms = meta.permissions();
+                                perms.set_mode(perms.mode() & 0o600);
+                                let _ = tokio::fs::set_permissions(&path, perms).await;
+                            }
+                        }
                         file = new_file;
                     }
                 }
