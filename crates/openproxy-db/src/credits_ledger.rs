@@ -212,6 +212,16 @@ pub struct ReconcileReport {
     /// without a paid/minted order. Non-zero means corruption: a credit
     /// appeared or vanished outside the matcher's transaction.
     pub orphans: i64,
+    /// ROOT FIX (blind spot, audit A6-05): `balance_units` also sums
+    /// `adjust` and `grant` rows, but the audit only looked at `topup`
+    /// rows — an operator-granted (or directly injected) balance was
+    /// invisible to the self-audit. The totals are now part of the report
+    /// so any adjust/grant activity is visible in the periodic CRITICAL
+    /// check instead of silently passing as 'consistent'.
+    pub adjust_rows: i64,
+    pub adjust_units: i64,
+    pub grant_rows: i64,
+    pub grant_units: i64,
 }
 
 impl ReconcileReport {
@@ -344,12 +354,32 @@ pub fn reconcile(conn: &Connection) -> openproxy_types::Result<ReconcileReport> 
             |row| row.get(0),
         )
         .map_err(crate::error::map_db_error)?;
+    let (adjust_rows, adjust_units): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(amount_units), 0) FROM credit_transactions \
+             WHERE kind = 'adjust'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(crate::error::map_db_error)?;
+    let (grant_rows, grant_units): (i64, i64) = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(amount_units), 0) FROM credit_transactions \
+             WHERE kind = 'grant'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(crate::error::map_db_error)?;
     Ok(ReconcileReport {
         paid_orders,
         topup_rows,
         credited_expected_units: credited_expected,
         credited_actual_units: credited_actual,
         orphans: orphans + orphan_rows,
+        adjust_rows,
+        adjust_units,
+        grant_rows,
+        grant_units,
     })
 }
 
