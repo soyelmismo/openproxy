@@ -64,6 +64,27 @@ style-src-elem 'self' 'unsafe-inline' https://*.alicdn.com; \
 style-src-attr 'unsafe-inline'; \
 media-src 'self' blob:";
 
+/// Strict CSP for the PUBLIC money surface (`/checkout`, `/checkout.js`,
+/// `/terms`, `/v1/*`). Root fix for the CSP over-exposure (audit A5-03): the
+/// dashboard needs `'unsafe-eval'` and alicdn/alibaba origins for its chart
+/// providers, but that wide policy used to ride on the checkout page too —
+/// the one surface an anonymous buyer loads with a paid capability in it.
+/// The checkout loads exclusively same-origin assets (theme-init.js,
+/// app.css, checkout.js — verified), so everything else is denied and a
+/// hypothetical future markup regression in the QR/plan rendering cannot
+/// load attacker-controlled scripts or exfiltrate anywhere.
+const CSP_PUBLIC_MONEY_SURFACE: &str = "default-src 'self'; \
+script-src 'self'; \
+object-src 'none'; \
+base-uri 'self'; \
+frame-ancestors 'none'; \
+img-src 'self' data:; \
+style-src 'self' 'unsafe-inline'; \
+style-src-elem 'self'; \
+style-src-attr 'unsafe-inline'; \
+connect-src 'self'; \
+media-src 'self' blob:";
+
 /// Accept only `host[:port]` made of characters that are valid in a CSP
 /// host-source. Anything else (spaces, `;`, quotes, …) is dropped so a
 /// hostile `Host` header cannot inject directives.
@@ -107,10 +128,22 @@ fn is_panel_path(path: &str) -> bool {
     path == "/admin/panel" || path == "/admin/panel/"
 }
 
+/// Whether the path belongs to the public, anonymous money surface.
+fn is_public_money_surface(path: &str) -> bool {
+    path == "/checkout"
+        || path == "/checkout.js"
+        || path == "/terms"
+        || path.starts_with("/v1/")
+}
+
 /// Axum middleware fn: see module docs.
 pub async fn security_headers(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let allow_frame_self = is_panel_path(req.uri().path());
-    let csp = if allow_frame_self {
+    let path = req.uri().path();
+    let allow_frame_self = is_panel_path(path);
+    let public_money_surface = is_public_money_surface(path);
+    let csp = if public_money_surface {
+        CSP_PUBLIC_MONEY_SURFACE.to_string()
+    } else if allow_frame_self {
         build_csp_with_frame_ancestors_self(sanitized_host(&req))
     } else {
         build_csp(sanitized_host(&req))
@@ -140,6 +173,19 @@ pub async fn security_headers(State(state): State<AppState>, req: Request, next:
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         );
     }
+    // ROOT FIX (missing Referrer/Permissions policies, audit A5-02): the
+    // checkout is the one page whose URL can carry a capability (the
+    // recovery receipt) and whose responses can carry a revealed key. A
+    // strict Referrer-Policy guarantees no full/partial URL ever leaks to a
+    // third party through a Referer header, on every surface.
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=()"),
+    );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -269,6 +315,21 @@ mod tests {
             resp.headers().get("strict-transport-security").unwrap(),
             "max-age=31536000; includeSubDomains"
         );
+    }
+
+    #[test]
+    fn public_money_surface_gets_the_strict_csp() {
+        // Root-fix regression (audit A5-03): the checkout/API surface must
+        // not inherit the dashboard's 'unsafe-eval' + alicdn/alibaba policy.
+        for path in ["/checkout", "/checkout.js", "/terms", "/v1/credits/order"] {
+            assert!(is_public_money_surface(path), "{path}");
+        }
+        assert!(!is_public_money_surface("/admin/panel"));
+        assert!(!is_public_money_surface("/admin"));
+        assert!(CSP_PUBLIC_MONEY_SURFACE.contains("script-src 'self';"));
+        assert!(!CSP_PUBLIC_MONEY_SURFACE.contains("unsafe-eval"));
+        assert!(!CSP_PUBLIC_MONEY_SURFACE.contains("alicdn"));
+        assert!(CSP_PUBLIC_MONEY_SURFACE.contains("connect-src 'self';"));
     }
 
     /// Test shim standing in for the state-aware middleware: same logic,
