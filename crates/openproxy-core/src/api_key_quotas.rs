@@ -280,12 +280,26 @@ pub fn check(conn: &Connection, key_id: ApiKeyId) -> Result<Option<QuotaViolatio
     let violated = [(WINDOW_WEEK, &st.week), (WINDOW_FIVE_HOURS, &st.five_hours)]
         .into_iter()
         .find_map(|(name, w)| match w.cap_usd {
-            Some(cap) if w.spent_usd >= cap => Some(QuotaViolation {
-                window: name,
-                spent_usd: w.spent_usd,
-                cap_usd: cap,
-                resets_at: w.resets_at.clone(),
-            }),
+            Some(cap) if w.spent_usd >= cap => {
+                // The 5h window is rolling: it frees up five hours after the
+                // OLDEST spend still inside it, not at a fixed boundary.
+                // Deriving the instant lets the client honor a real
+                // Retry-After instead of polling blindly.
+                let resets_at = w.resets_at.clone().or_else(|| {
+                    w.oldest_spend_at.as_ref().map(|oldest| {
+                        chrono::NaiveDateTime::parse_from_str(oldest, "%Y-%m-%d %H:%M:%S")
+                            .map(|naive| naive + chrono::Duration::hours(5))
+                            .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                            .unwrap_or_else(|_| "rolling window".into())
+                    })
+                });
+                Some(QuotaViolation {
+                    window: name,
+                    spent_usd: w.spent_usd,
+                    cap_usd: cap,
+                    resets_at,
+                })
+            }
             _ => None,
         });
     Ok(violated)

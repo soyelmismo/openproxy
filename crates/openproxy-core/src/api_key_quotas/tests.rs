@@ -179,7 +179,16 @@ fn check_reports_violated_window() {
     assert_eq!(v.window, WINDOW_FIVE_HOURS);
     assert!((v.cap_usd - 0.50).abs() < 1e-9);
     assert!((v.spent_usd - 0.75).abs() < 1e-9);
-    assert!(v.resets_at.is_none()); // rolling window
+    // The rolling window frees up five hours after the OLDEST spend inside
+    // it: the violation carries that instant so the client honors a real
+    // Retry-After instead of polling blindly.
+    let resets = v.resets_at.expect("the derived reset instant");
+    let t = chrono::DateTime::parse_from_rfc3339(&resets).expect("iso instant");
+    let secs = t.timestamp() - chrono::Utc::now().timestamp();
+    assert!(
+        (17_800..=18_000).contains(&secs),
+        "oldest spend (60s ago) + 5h ≈ {secs}s from now"
+    );
 }
 
 #[test]
