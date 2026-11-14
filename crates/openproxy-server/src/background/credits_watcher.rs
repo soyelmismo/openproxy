@@ -69,6 +69,7 @@ use openproxy_core::credits::matcher::{PaymentBlock, PaymentOutcome};
 use openproxy_core::credits::orders::CONFIRMATION_GRACE_SECS;
 use openproxy_db::DbPool;
 use openproxy_types::config::CreditsConfig;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -220,6 +221,11 @@ impl BaseRpc {
     /// reorg after crediting would mean paying out for a transfer that no
     /// longer exists. No safe/finalized head means fail closed.
     ///
+    /// The residual reorg window between `safe` and `finalized` is covered by
+    /// the post-scan reorg audit ([`CreditsWatcherService::audit_reorged_credits`]):
+    /// payments credited from blocks that later vanish are detected and
+    /// CRITICAL-logged instead of silently persisting.
+    ///
     /// # Errors
     /// Neither the `safe` nor the `finalized` tag yields a block.
     pub async fn finality_head(&self) -> Result<(i64, &'static str), String> {
@@ -237,6 +243,26 @@ impl BaseRpc {
                 "node has neither `safe` nor `finalized` head ({e}); refusing to scan"
             )),
         }
+    }
+
+    /// Receipt of a transaction: `Ok(None)` when the node no longer knows the
+    /// transaction (reorged out entirely), `Ok(Some(true))` when it is mined
+    /// with status 1 (success), `Ok(Some(false))` when it reverted.
+    ///
+    /// # Errors
+    /// Transport, RPC or malformed-status failures.
+    async fn transaction_receipt(&self, tx_hash: &str) -> Result<Option<bool>, String> {
+        let v = self
+            .call("eth_getTransactionReceipt", serde_json::json!([tx_hash]))
+            .await?;
+        if v.is_null() {
+            return Ok(None);
+        }
+        let status = v
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("receipt missing status")?;
+        Ok(Some(parse_quantity(status)? == 1))
     }
 
     /// Unix timestamp (UTC seconds) of a block.
@@ -305,10 +331,14 @@ impl BaseRpc {
 
     /// `eth_getLogs` for USDC transfers into `collector` in `[from, to]`.
     ///
+    /// Returns the creditable transfers PLUS the `(tx_hash, log_index)`
+    /// identity of `removed: true` logs (reorg victims), so the scanner can
+    /// cross-check them against already-credited payments.
+    ///
     /// Returns `Err` when any returned log is malformed: a log our own filter
     /// selected but that cannot be decoded is exactly what must NOT be
     /// silently skipped (the range would be lost forever). Valid-but-never-
-    /// creditable transfers (zero, > `i64`, reorged) are skipped terminally.
+    /// creditable transfers (zero, > `i64`) are skipped terminally.
     ///
     /// # Errors
     /// Transport/RPC failures, malformed logs, a malformed configured
@@ -319,7 +349,7 @@ impl BaseRpc {
         collector: &str,
         from_block: i64,
         to_block: i64,
-    ) -> Result<Vec<UsdcTransfer>, String> {
+    ) -> Result<(Vec<UsdcTransfer>, Vec<(String, i64)>), String> {
         // Validate once before building the filter: a truncated collector
         // address would otherwise become a topic that matches nothing, and the
         // checkout would look "empty" instead of broken.
@@ -343,9 +373,15 @@ impl BaseRpc {
             .await?;
         let logs = v.as_array().ok_or("eth_getLogs result is not an array")?;
         let mut out = Vec::with_capacity(logs.len());
+        let mut removed: Vec<(String, i64)> = Vec::new();
         for log in logs {
             match decode_log(log, usdc, collector, from_block, to_block) {
                 Ok(DecodedLog::Transfer(t)) => out.push(t),
+                Ok(DecodedLog::Removed(tx_hash, log_index)) => {
+                    if let (Some(tx_hash), Some(log_index)) = (tx_hash, log_index) {
+                        removed.push((tx_hash, log_index));
+                    }
+                }
                 Ok(DecodedLog::Ignored(reason)) => {
                     // Terminal: never credit, never retry, never wedge the
                     // cursor. Debug, not warn: a dust attacker controls this.
@@ -359,7 +395,7 @@ impl BaseRpc {
                 }
             }
         }
-        Ok(out)
+        Ok((out, removed))
     }
 }
 
@@ -406,6 +442,11 @@ pub struct ScanReport {
     pub backlog_blocks: i64,
     /// Finality tag of the head this tick scanned (`safe` or `finalized`).
     pub head_tag: String,
+    /// Reorg alarms this tick: transfers that had already credited an order
+    /// but are no longer carried by the chain (removed flag or missing
+    /// receipt). Each one is CRITICAL-logged; the operator must review the
+    /// credit. Root fix for the silent reorg persistence (audit A2-06).
+    pub reorg_alerts: usize,
 }
 
 /// Background service: poll Base for USDC transfers into the collector and
@@ -480,7 +521,6 @@ impl CreditsWatcherService {
             .spawn_read(openproxy_db::credits_ledger::last_scanned_block)
             .await
             .map_err(|e| format!("read watcher cursor: {e}"))?;
-
         let rpc = BaseRpc::new(
             self.config.rpc_url.clone(),
             Arc::clone(&self.upstream_client),
@@ -523,8 +563,82 @@ impl CreditsWatcherService {
             report.from_block = last;
             report.to_block = head;
         }
+        // Reorg audit (root fix, audit A2-06): the scanner polls with
+        // eth_getLogs and never re-reads a block it already scanned, so a
+        // reorg that DROPS an already-credited transfer would otherwise be
+        // invisible forever. Re-verify the receipts of every payment credited
+        // from a block in the reorgable (finalized, safe] zone and CRITICAL
+        // the ones the chain no longer carries. Non-fatal by design: an RPC
+        // hiccup must not hold the scan cursor.
+        match self.audit_reorged_credits(&pool, &rpc, head).await {
+            Ok(alerts) => report.reorg_alerts += alerts,
+            Err(e) => {
+                tracing::warn!(error = %e, "credits watcher reorg audit failed (non-fatal)")
+            }
+        }
         report.backlog_blocks = (head - report.to_block).max(0);
         Ok(report)
+    }
+
+    /// Re-verify credits that sit in the reorgable zone `(finalized, safe]`.
+    /// A payment credited from a `safe` block that a later reorg drops is a
+    /// CRITICAL: the ledger credit stands while the chain no longer carries
+    /// the transfer. Capped at [`MAX_REORG_AUDIT_RECEIPTS`] receipts per tick;
+    /// as `finalized` advances, verified payments leave the zone naturally.
+    async fn audit_reorged_credits(
+        &self,
+        pool: &Arc<DbPool>,
+        rpc: &BaseRpc,
+        safe_head: i64,
+    ) -> Result<usize, String> {
+        let finalized = match rpc.block_number("finalized").await {
+            Ok(Some(n)) => n,
+            // No finalized tag to audit against: nothing we can verify.
+            Ok(None) => return Ok(0),
+            // The audit must not fail the tick on a flaky method.
+            Err(e) => return Err(format!("finalized head unavailable: {e}")),
+        };
+        if finalized >= safe_head {
+            return Ok(0);
+        }
+        let rows = pool
+            .spawn_read(move |r| {
+                let mut stmt = r
+                    .prepare(
+                        "SELECT mp.tx_hash FROM matched_payments mp \
+                         JOIN credit_orders o ON o.id = mp.order_id \
+                         WHERE mp.outcome = 'credited' \
+                           AND mp.block_number > ?1 AND mp.block_number <= ?2 \
+                         ORDER BY mp.block_number DESC LIMIT 64",
+                    )
+                    .map_err(openproxy_db::error::map_db_error)?;
+                let rows = stmt
+                    .query_map(rusqlite::params![finalized, safe_head], |row| {
+                        row.get::<_, String>(0)
+                    })
+                    .map_err(openproxy_db::error::map_db_error)?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(openproxy_db::error::map_db_error)?;
+                Ok(rows)
+            })
+            .await
+            .map_err(|e| format!("read at-risk credits: {e}"))?;
+        let mut alerts = 0usize;
+        for tx_hash in rows {
+            match rpc.transaction_receipt(&tx_hash).await {
+                Ok(Some(true)) => {}
+                other => {
+                    alerts += 1;
+                    tracing::error!(
+                        tx_hash = %tx_hash,
+                        receipt = ?other,
+                        "CRITICAL: reorg dropped or reverted an on-chain transfer that already \
+                         credited an order — manual review required"
+                    );
+                }
+            }
+        }
+        Ok(alerts)
     }
 
     /// Fetch, decode and settle one inclusive block range, then advance the
@@ -537,7 +651,7 @@ impl CreditsWatcherService {
         to_block: i64,
         report: &mut ScanReport,
     ) -> Result<(), String> {
-        let mut transfers = rpc
+        let (mut transfers, removed_logs) = rpc
             .transfer_logs(
                 &self.config.usdc_address,
                 &self.config.collector_address,
@@ -549,6 +663,36 @@ impl CreditsWatcherService {
         // not let an OLD payment land after (and expire) a NEWER plan order.
         transfers.sort_by_key(|t| (t.block_number, t.log_index));
         report.logs_seen += transfers.len();
+
+        // Reorg observability: a `removed: true` log whose transfer already
+        // credited an order means the chain replaced that block. The credit
+        // stands but the operator must know — silent persistence is the bug
+        // (audit A2-06).
+        for (tx_hash, log_index) in removed_logs {
+            let lookup_tx = tx_hash.clone();
+            let outcome: Option<String> = pool
+                .spawn_read(move |r| {
+                    r.query_row(
+                        "SELECT outcome FROM matched_payments \
+                         WHERE tx_hash = ?1 AND log_index = ?2",
+                        rusqlite::params![lookup_tx, log_index],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(openproxy_db::error::map_db_error)
+                })
+                .await
+                .map_err(|e| format!("read removed log outcome: {e}"))?;
+            if outcome.as_deref() == Some("credited") {
+                report.reorg_alerts += 1;
+                tracing::error!(
+                    tx_hash = %tx_hash,
+                    log_index,
+                    "CRITICAL: reorg removed a log that already credited an order — \
+                     manual review required"
+                );
+            }
+        }
 
         // Block time (UTC) per block that carries transfers. Matching against
         // the chain clock, not the server wall clock, is what makes a delayed
@@ -647,6 +791,7 @@ impl crate::background::BackgroundService for CreditsWatcherService {
                                 order_expired = report.order_expired,
                                 backlog_blocks = report.backlog_blocks,
                                 head_tag = %report.head_tag,
+                                reorg_alerts = report.reorg_alerts,
                                 "credits watcher tick"
                             );
                         }

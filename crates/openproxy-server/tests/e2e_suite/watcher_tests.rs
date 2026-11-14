@@ -144,6 +144,27 @@ async fn rpc_entry(
                 .collect();
             json!({"jsonrpc": "2.0", "id": 1, "result": logs})
         }
+        "eth_getTransactionReceipt" => {
+            // Receipt exists (status 0x1) while the mock chain still carries
+            // a non-removed log for the tx; a dropped/reorged-out tx returns
+            // null — exactly what the reorg audit probes.
+            let tx = params
+                .as_array()
+                .and_then(|p| p.first())
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let known = state.logs.lock().iter().any(|l| {
+                l.get("transactionHash").and_then(Value::as_str) == Some(tx.as_str())
+                    && l.get("removed").and_then(Value::as_bool) != Some(true)
+            });
+            let result = if known {
+                json!({"status": "0x1"})
+            } else {
+                Value::Null
+            };
+            json!({"jsonrpc": "2.0", "id": 1, "result": result})
+        }
         _ => json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "unknown"}}),
     };
     axum::Json(payload).into_response()
@@ -764,4 +785,76 @@ async fn watcher_malformed_log_holds_cursor_e2e() {
         .await
         .expect("read cursor");
     assert_eq!(last, 200);
+}
+
+/// Root-fix regression (audit A2-06): a reorg that DROPS an already-credited
+/// transfer is detected instead of persisting silently. The polling scanner
+/// never re-reads scanned blocks, so the detection path is the post-scan
+/// receipt audit over the reorgable `(finalized, safe]` zone — the credit
+/// stands (operator decides the reversal) but the tick reports reorg_alerts
+/// and a CRITICAL is logged.
+#[tokio::test]
+async fn watcher_reorg_audit_flags_dropped_credit_e2e() {
+    let chain = Arc::new(MockChain::default());
+    let rpc_addr = spawn_mock_rpc(Arc::clone(&chain));
+    let h = TestHarness::new().await;
+    let mut cfg = h
+        .app_state
+        .config()
+        .credits
+        .clone()
+        .expect("credits config in harness");
+    cfg.rpc_url = format!("http://{rpc_addr}");
+
+    let plan = seed_plan(&h, 5.0, 5.0, 7).await;
+    let kid = h.admin_key_id.0;
+    let (status, order) = h
+        .oneshot_json(h.admin_request(
+            axum::http::Method::POST,
+            "/v1/credits/order",
+            json!({"tier_id": plan, "key_id": kid}).to_string(),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "plan order: {order}");
+    let amount_units = order["amount_units"].as_i64().expect("amount_units");
+
+    let service = openproxy_server::background::credits_watcher::CreditsWatcherService {
+        db_pool: Arc::clone(&h.db_pool),
+        config: cfg.clone(),
+        master_key: Arc::clone(&h.master_key),
+        upstream_client: Arc::clone(h.app_state.upstream_client()),
+    };
+
+    // Tick 1: head safe=100, finalized=100 — the transfer at block 100 is
+    // already finalized, credits normally, the audit zone is empty.
+    *chain.safe_block.lock() = Some(100);
+    *chain.finalized_block.lock() = Some(100);
+    *chain.logs.lock() = vec![transfer_log_at(amount_units, "0xfeedd00d", 0, 100)];
+    let t1 = service.tick().await.expect("tick 1");
+    assert_eq!(t1.credited, 1, "tick 1: {t1:?}");
+    assert_eq!(t1.reorg_alerts, 0, "nothing reorged yet: {t1:?}");
+
+    // Tick 2: safe advanced to 110 but finalized LAGS at 90 — block 100 now
+    // sits in the reorgable zone — and the chain no longer carries the tx
+    // (the reorg dropped it). The audit re-fetches the receipt and CRITICALs.
+    *chain.safe_block.lock() = Some(110);
+    *chain.finalized_block.lock() = Some(90);
+    chain.logs.lock().clear();
+    let t2 = service.tick().await.expect("tick 2");
+    assert_eq!(t2.reorg_alerts, 1, "dropped credit must be flagged: {t2:?}");
+
+    // The credit itself still stands (operator decides the reversal).
+    let balance = h
+        .db_pool
+        .spawn_read(move |r| openproxy_db::credits_ledger::balance_units(r, kid))
+        .await
+        .expect("balance");
+    assert_eq!(balance, 5_000_000, "credit stands; the flag is the fix");
+
+    // Tick 3: finalized catches up past the payment block — the payment left
+    // the audit zone, no repeated alarms.
+    *chain.safe_block.lock() = Some(120);
+    *chain.finalized_block.lock() = Some(120);
+    let t3 = service.tick().await.expect("tick 3");
+    assert_eq!(t3.reorg_alerts, 0, "verified payments leave the zone: {t3:?}");
 }

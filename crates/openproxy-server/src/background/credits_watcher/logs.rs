@@ -43,9 +43,13 @@ pub struct UsdcTransfer {
 pub(super) enum DecodedLog {
     /// Ours, well-formed and creditable.
     Transfer(UsdcTransfer),
-    /// Well-formed but never creditable (reorged, zero, or > `i64`). The
+    /// Well-formed but never creditable (zero, or > `i64`). The
     /// scanner advances past it; it is NOT a reason to retry the range.
     Ignored(&'static str),
+    /// Removed by a reorg: carries the best-effort `(tx_hash, log_index)`
+    /// identity so the scanner can cross-check it against payments that
+    /// already credited an order (a CRITICAL, not dust).
+    Removed(Option<String>, Option<i64>),
 }
 
 /// Strip a required `0x` prefix and enforce an exact hex length.
@@ -118,7 +122,16 @@ pub(super) fn decode_log(
     to_block: i64,
 ) -> Result<DecodedLog, String> {
     if log.get("removed").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Ok(DecodedLog::Ignored("log was removed by a reorg"));
+        // Best-effort identity for the reorg cross-check in the scanner.
+        let tx_hash = log
+            .get("transactionHash")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let log_index = log
+            .get("logIndex")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|raw| parse_quantity(raw).ok());
+        return Ok(DecodedLog::Removed(tx_hash, log_index));
     }
     let usdc = normalize_address(usdc, "configured usdc_address")?;
     let collector = normalize_address(collector, "configured collector_address")?;
