@@ -275,6 +275,7 @@ impl OAuthProvider for ZaiOAuthProvider {
             );
             apply_autoclaw_identity_headers(&mut req_ac);
 
+            #[allow(clippy::collapsible_if)]
             if let Ok((_status, ac_bytes)) =
                 crate::oauth::call_oauth(upstream_client, req_ac, "autoclaw oauth login").await
                 && let Ok(ac_json) = serde_json::from_slice::<serde_json::Value>(&ac_bytes)

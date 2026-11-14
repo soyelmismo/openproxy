@@ -185,4 +185,28 @@ mod tests {
         assert!(debug_str.contains("StoreOAuthTokensParams"));
         assert!(debug_str.contains("access_123"));
     }
+
+    #[test]
+    fn test_account_deserialization_defaults() {
+        let minimal_json = serde_json::json!({
+            "id": 42,
+            "provider_id": "openai",
+            "priority": 1,
+            "health_status": "healthy",
+            "auth_type": "api_key",
+            "created_at": "2026-01-01 00:00:00"
+        });
+
+        let account: Account = serde_json::from_value(minimal_json)
+            .expect("minimal json should deserialize into Account");
+
+        assert_eq!(account.id, AccountId::new(42));
+        assert_eq!(account.provider_id.as_ref(), "openai");
+        assert_eq!(account.health_status, HealthStatus::Healthy);
+        assert_eq!(account.priority, 1);
+        assert!(account.active);
+        assert!(account.quota_pools.is_none());
+        assert!(account.quota_model_details.is_none());
+        assert!(account.oauth_provider_specific.is_none());
+    }
 }
