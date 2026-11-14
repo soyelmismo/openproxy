@@ -96,6 +96,17 @@ fn attach_plan(conn: &Connection, key_id: i64, name: &str, credit_usd: f64, ttl_
     .expect("credit topup");
 }
 
+/// Anchor the fixed 5h window at an explicit age (seconds before now), so
+/// the tests control the window boundaries exactly.
+fn anchor_window(conn: &Connection, key_id: i64, started_secs_ago: i64) {
+    conn.execute(
+        "UPDATE api_key_quotas SET five_hour_started_at = datetime('now', ?1) \
+         WHERE api_key_id = ?2",
+        params![format!("-{started_secs_ago} seconds"), key_id],
+    )
+    .expect("anchor window");
+}
+
 #[test]
 fn no_row_means_unlimited() {
     let conn = fresh_conn();
@@ -105,7 +116,10 @@ fn no_row_means_unlimited() {
     let st = status(&conn, ApiIdAlias(key)).expect("ok");
     assert!(!st.enabled);
     assert!(st.plan.is_none());
-    assert!(check(&conn, ApiIdAlias(key)).expect("ok").is_none());
+    assert!(matches!(
+        check(&conn, ApiIdAlias(key)).expect("ok"),
+        QuotaCheck::Allow
+    ));
 }
 
 #[test]
@@ -136,7 +150,7 @@ fn upsert_roundtrip() {
 }
 
 #[test]
-fn spend_counts_only_served_rows_and_respects_windows() {
+fn spend_counts_only_inside_the_anchored_window() {
     let conn = fresh_conn();
     let key = make_key(&conn, "spend");
     upsert(
@@ -148,15 +162,36 @@ fn spend_counts_only_served_rows_and_respects_windows() {
         },
     )
     .expect("upsert");
-    insert_spend(&conn, key, 1.20, 6 * 3600); // 6h ago: outside the 5h window
-    insert_spend(&conn, key, 0.80, 3600); // 1h ago: inside
+    // The window opened 2h ago: it covers [now-2h, now+3h).
+    anchor_window(&conn, key, 2 * 3600);
+    insert_spend(&conn, key, 1.20, 6 * 3600); // 6h ago: BEFORE the anchor
+    insert_spend(&conn, key, 0.80, 3600); // 1h ago: inside the window
     insert_failed_attempt(&conn, key, 99.0); // never served: excluded
     let st = status(&conn, ApiIdAlias(key)).expect("ok");
     assert!(st.enabled);
-    assert!((st.week.spent_usd - 2.0).abs() < 1e-9);
-    assert!((st.five_hours.spent_usd - 0.80).abs() < 1e-9);
-    // Served 5h spend 0.80 < 1.0 cap -> allowed; week 2.0 < 5.0 -> allowed.
-    assert!(check(&conn, ApiIdAlias(key)).expect("ok").is_none());
+    assert!((st.week.spent_usd - 2.0).abs() < 1e-9, "the week saw both");
+    assert!(
+        (st.five_hours.spent_usd - 0.80).abs() < 1e-9,
+        "the fixed window counts from the anchor on, got {}",
+        st.five_hours.spent_usd
+    );
+    // The oldest spend still counting is the 1h-old one: 6h-old spend
+    // predates the anchor and is outside the window.
+    let oldest = chrono::NaiveDateTime::parse_from_str(
+        &st.five_hours.oldest_spend_at.expect("the anchored oldest spend"),
+        "%Y-%m-%d %H:%M:%S",
+    )
+    .expect("sqlite timestamp");
+    let age = chrono::Utc::now().naive_utc().timestamp() - oldest.timestamp();
+    assert!(
+        (3_000..=4_200).contains(&age),
+        "oldest spend ≈ 1h old, got {age}s"
+    );
+    // 0.80 < 1.0 cap -> allowed.
+    assert!(matches!(
+        check(&conn, ApiIdAlias(key)).expect("ok"),
+        QuotaCheck::Allow
+    ));
 }
 
 #[test]
@@ -172,23 +207,92 @@ fn check_reports_violated_window() {
         },
     )
     .expect("upsert");
-    insert_spend(&conn, key, 0.75, 60); // served 75c in the last hour
-    let v = check(&conn, ApiIdAlias(key))
-        .expect("ok")
-        .expect("violation");
+    // The window opened 30 minutes ago and the spend exhausted it.
+    anchor_window(&conn, key, 30 * 60);
+    insert_spend(&conn, key, 0.75, 60);
+    let QuotaCheck::Violated(v) = check(&conn, ApiIdAlias(key)).expect("ok") else {
+        panic!("expected a violation");
+    };
     assert_eq!(v.window, WINDOW_FIVE_HOURS);
     assert!((v.cap_usd - 0.50).abs() < 1e-9);
     assert!((v.spent_usd - 0.75).abs() < 1e-9);
-    // The rolling window frees up five hours after the OLDEST spend inside
-    // it: the violation carries that instant so the client honors a real
-    // Retry-After instead of polling blindly.
-    let resets = v.resets_at.expect("the derived reset instant");
+    // Fixed window: the whole cap frees at anchor + 5h, i.e. ~4h30 from now.
+    let resets = v.resets_at.expect("the anchored reset instant");
     let t = chrono::DateTime::parse_from_rfc3339(&resets).expect("iso instant");
     let secs = t.timestamp() - chrono::Utc::now().timestamp();
     assert!(
-        (17_800..=18_000).contains(&secs),
-        "oldest spend (60s ago) + 5h ≈ {secs}s from now"
+        (16_100..=16_300).contains(&secs),
+        "anchor (30m ago) + 5h ≈ {secs}s from now"
     );
+}
+
+#[test]
+fn the_first_request_opens_the_window_and_the_expired_one_frees_the_cap() {
+    let conn = fresh_conn();
+    let key = make_key(&conn, "anchor");
+    upsert(
+        &conn,
+        ApiIdAlias(key),
+        &QuotaCaps {
+            weekly_usd_cap: None,
+            five_hour_usd_cap: Some(0.50),
+        },
+    )
+    .expect("upsert");
+    // Exhausted spend inside a window that already closed: at 10:05 the cap
+    // was gone, the window that opened at 10:00 expires at 15:00.
+    anchor_window(&conn, key, 6 * 3600);
+    insert_spend(&conn, key, 0.75, 60 * 60);
+    // The expired window does not run a countdown and does not reject: the
+    // caller re-anchors and the fresh window starts at zero.
+    assert!(
+        matches!(
+            check(&conn, ApiIdAlias(key)).expect("ok"),
+            QuotaCheck::ReanchorNeeded
+        ),
+        "an expired window must ask for a re-anchor"
+    );
+    assert!(
+        anchor_five_hour_window(&conn, ApiIdAlias(key)).expect("ok"),
+        "the expired window re-anchored"
+    );
+    assert!(
+        !anchor_five_hour_window(&conn, ApiIdAlias(key)).expect("ok"),
+        "a live window is never re-anchored twice"
+    );
+    assert!(matches!(
+        check(&conn, ApiIdAlias(key)).expect("ok"),
+        QuotaCheck::Allow
+    ));
+}
+
+#[test]
+fn a_key_without_requests_has_no_running_window() {
+    let conn = fresh_conn();
+    let key = make_key(&conn, "idle");
+    upsert(
+        &conn,
+        ApiIdAlias(key),
+        &QuotaCaps {
+            weekly_usd_cap: None,
+            five_hour_usd_cap: Some(0.50),
+        },
+    )
+    .expect("upsert");
+    // No anchor: nothing counts and nothing runs — the first request opens it.
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    assert!((st.five_hours.spent_usd - 0.0).abs() < 1e-9);
+    assert!(st.five_hours.resets_at.is_none(), "no window, no countdown");
+    assert!(
+        matches!(
+            check(&conn, ApiIdAlias(key)).expect("ok"),
+            QuotaCheck::ReanchorNeeded
+        ),
+        "the check asks the caller to open the window"
+    );
+    assert!(anchor_five_hour_window(&conn, ApiIdAlias(key)).expect("ok"));
+    let st = status(&conn, ApiIdAlias(key)).expect("ok");
+    assert!(st.five_hours.resets_at.is_some(), "the window now runs");
 }
 
 #[test]
@@ -205,9 +309,9 @@ fn week_violation_carries_reset_time() {
     )
     .expect("upsert");
     insert_spend(&conn, key, 1.0, 10);
-    let v = check(&conn, ApiIdAlias(key))
-        .expect("ok")
-        .expect("violation");
+    let QuotaCheck::Violated(v) = check(&conn, ApiIdAlias(key)).expect("ok") else {
+        panic!("expected a violation");
+    };
     assert_eq!(v.window, WINDOW_WEEK);
     assert!(v.resets_at.is_some());
     // ISO-8601 shape: YYYY-MM-DDTHH:MM:SSZ
@@ -234,7 +338,10 @@ fn uncapped_windows_report_no_reset_and_disabled() {
     assert!(!st.enabled);
     assert!(st.week.resets_at.is_none());
     assert!(st.five_hours.resets_at.is_none());
-    assert!(check(&conn, ApiIdAlias(key)).expect("ok").is_none());
+    assert!(matches!(
+        check(&conn, ApiIdAlias(key)).expect("ok"),
+        QuotaCheck::Allow
+    ));
 }
 
 #[test]

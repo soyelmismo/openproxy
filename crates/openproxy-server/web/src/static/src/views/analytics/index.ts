@@ -214,8 +214,8 @@ interface AnalyticsQuotaWindow {
   spent: number;
   /** ISO instant the window resets; null = no scheduled reset. */
   targetIso: string | null;
-  /** Rolling window: capacity frees itself as old usage ages out. */
-  rolling: boolean;
+  /** Hint shown when the window has a cap but no running reset. */
+  idleHint: string;
 }
 
 // Provider-style quota window: percentage + usage bar + live countdown.
@@ -225,7 +225,7 @@ function quotaWindowHtml(w: AnalyticsQuotaWindow): TemplateResult {
   const numberClass = pct != null && pct >= 100 ? "used" : pct != null && pct > 80 ? "warn" : "available";
   const target = w.targetIso ? parseQuotaTs(w.targetIso) : null;
   const targetIso = target ? target.toISOString() : "";
-  const staticHint = pct == null ? "window off" : w.rolling ? "rolling window" : "next window";
+  const staticHint = pct == null ? "window off" : w.idleHint;
   return html`<div class="quota-window">
     <div class="quota-window-header">
       <span class="quota-window-title">${w.title}</span>
@@ -265,16 +265,17 @@ function planBalanceHtml(plan: PlanStatus): TemplateResult {
 }
 
 export function quotaWindowList(spend: KeyQuotaStatus): TemplateResult[] {
-  const fiveOldest = parseQuotaTs(spend.five_hours.oldest_spend_at);
-  const fiveTarget = fiveOldest ? new Date(fiveOldest.getTime() + 5 * 60 * 60 * 1000).toISOString() : null;
   const windows: TemplateResult[] = [];
   if (spend.plan) windows.push(planBalanceHtml(spend.plan));
   // A window without a cap has nothing to show: no bar, no phantom countdown.
+  // The 5h window runs only when its anchor is live: the backend sends
+  // `resets_at` (anchor + 5h) then; without it, no window is running and the
+  // next request opens one — there is no countdown ticking on an idle key.
   if (spend.five_hours.cap_usd != null) {
-    windows.push(quotaWindowHtml({ title: "5h Window", cap: spend.five_hours.cap_usd, spent: spend.five_hours.spent_usd, targetIso: fiveTarget, rolling: true }));
+    windows.push(quotaWindowHtml({ title: "5h Window", cap: spend.five_hours.cap_usd, spent: spend.five_hours.spent_usd, targetIso: spend.five_hours.resets_at, idleHint: "no window running" }));
   }
   if (spend.week.cap_usd != null) {
-    windows.push(quotaWindowHtml({ title: "Weekly Window", cap: spend.week.cap_usd, spent: spend.week.spent_usd, targetIso: spend.week.resets_at, rolling: false }));
+    windows.push(quotaWindowHtml({ title: "Weekly Window", cap: spend.week.cap_usd, spent: spend.week.spent_usd, targetIso: spend.week.resets_at, idleHint: "next window" }));
   }
   return windows;
 }

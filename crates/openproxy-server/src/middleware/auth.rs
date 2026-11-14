@@ -62,6 +62,11 @@ fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
 /// Reject the request with 429 when the key already spent its dollar cap in
 /// any enabled quota window. Keys without a quota row pass untouched.
 ///
+/// The fixed 5h window opens lazily with the key's first request: when the
+/// check reports a missing/expired anchor, the request re-anchors the window
+/// (a conditional write that only fires on expiry) and checks again — the
+/// fresh window starts at zero.
+///
 /// Payments-disabled build: no quota tables exist, so no key can ever have a
 /// cap and the check no-ops.
 async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), ApiError> {
@@ -72,7 +77,7 @@ async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), Api
     }
     #[cfg(feature = "payments")]
     {
-        let violation = state
+        let mut outcome = state
             .db_pool()
             .spawn_read(move |r| api_key_quotas::check(r, key_id))
             .await
@@ -80,7 +85,25 @@ async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), Api
                 tracing::error!(%e, "db error checking api key quota");
                 ApiError(CoreError::Internal("quota check failed".into()))
             })?;
-        let Some(violation) = violation else {
+        if matches!(outcome, api_key_quotas::QuotaCheck::ReanchorNeeded) {
+            state
+                .db_pool()
+                .spawn_write(move |w| api_key_quotas::anchor_five_hour_window(w, key_id))
+                .await
+                .map_err(|e| {
+                    tracing::error!(%e, "db error anchoring the 5h quota window");
+                    ApiError(CoreError::Internal("quota window anchor failed".into()))
+                })?;
+            outcome = state
+                .db_pool()
+                .spawn_read(move |r| api_key_quotas::check(r, key_id))
+                .await
+                .map_err(|e| {
+                    tracing::error!(%e, "db error re-checking api key quota");
+                    ApiError(CoreError::Internal("quota check failed".into()))
+                })?;
+        }
+        let api_key_quotas::QuotaCheck::Violated(violation) = outcome else {
             return Ok(());
         };
         tracing::warn!(
@@ -94,9 +117,7 @@ async fn enforce_key_quota(state: &AppState, key_id: ApiKeyId) -> Result<(), Api
             window: violation.window.to_string(),
             spent_usd: violation.spent_usd,
             cap_usd: violation.cap_usd,
-            resets_at: violation
-                .resets_at
-                .unwrap_or_else(|| "rolling window".into()),
+            resets_at: violation.resets_at.unwrap_or_else(|| "unknown reset".into()),
         }))
     }
 }

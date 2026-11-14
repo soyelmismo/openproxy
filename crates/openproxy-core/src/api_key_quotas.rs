@@ -1,5 +1,12 @@
-//! Per-API-key dollar quotas over two windows: rolling 5h and ISO week
-//! (Monday 00:00 UTC).
+//! Per-API-key dollar quotas over two windows: a fixed 5h window anchored to
+//! the key's first request, and the ISO week (Monday 00:00 UTC).
+//!
+//! The 5h window does NOT run on its own: it opens when the first request of
+//! the window arrives (`five_hour_started_at`), counts only the spend inside
+//! `[anchor, anchor + 5h)`, and releases its whole cap at `anchor + 5h` —
+//! "spent at 10:00, exhausted at 10:05, back at 15:00". A key that sends
+//! nothing has no window running and no countdown ticking. When the window
+//! expires, the next request re-anchors it and starts a fresh one.
 //!
 //! The monthly bound of a plan is NOT a quota window: it is the credited
 //! balance the buyer paid for. Spending draws the balance down to zero, so a
@@ -46,12 +53,11 @@ impl QuotaCaps {
 pub struct QuotaWindowStatus {
     pub cap_usd: Option<f64>,
     pub spent_usd: f64,
-    /// Fixed windows: ISO-8601 UTC instant when the window resets to zero.
-    /// `None` when the window has no cap (nothing to reset) and for the
-    /// rolling 5h window, whose capacity decays as old spend ages out.
+    /// ISO-8601 UTC instant when the window resets to zero. The week resets
+    /// at Monday 00:00; the 5h window resets at its anchor + 5h. `None` when
+    /// the window has no cap or no open window (nothing running to reset).
     pub resets_at: Option<String>,
-    /// Rolling 5h window only: timestamp of the oldest spend still inside
-    /// the window, i.e. when capacity starts being released.
+    /// Oldest spend still counting inside the window (UI info).
     pub oldest_spend_at: Option<String>,
 }
 
@@ -110,7 +116,6 @@ pub struct QuotaViolation {
 
 struct Boundaries {
     week_start: String,
-    five_hours_ago: String,
     next_monday: String,
 }
 
@@ -129,10 +134,8 @@ fn boundaries() -> Boundaries {
     let week_start = (today - Duration::days(days_from_monday)).and_time(chrono::NaiveTime::MIN);
     let next_monday =
         (today + Duration::days(7 - days_from_monday)).and_time(chrono::NaiveTime::MIN);
-    let five_hours_ago = (now - Duration::hours(5)).naive_utc();
     Boundaries {
         week_start: sqlite_ts(&week_start),
-        five_hours_ago: sqlite_ts(&five_hours_ago),
         next_monday: iso_ts(&next_monday),
     }
 }
@@ -234,18 +237,21 @@ pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
         });
     };
     let b = boundaries();
-    let (week_spent, five_hour_spent, oldest_5h): (f64, f64, Option<String>) = conn
-        .query_row(
+    let (week_spent, anchor, anchor_live, oldest_5h): (f64, Option<String>, i64, Option<String>) =
+        conn.query_row(
             "SELECT \
                COALESCE((SELECT SUM(u.cost_usd) FROM usage u \
                   WHERE u.api_key_id = ?1 AND u.client_response = 1 AND u.created_at >= ?2), 0.0), \
-               COALESCE((SELECT SUM(u.cost_usd) FROM usage u \
-                  WHERE u.api_key_id = ?1 AND u.client_response = 1 AND u.created_at >= ?3), 0.0), \
+               (SELECT five_hour_started_at FROM api_key_quotas WHERE api_key_id = ?1), \
+               (SELECT five_hour_started_at IS NOT NULL \
+                       AND five_hour_started_at > datetime('now', '-5 hours') \
+                  FROM api_key_quotas WHERE api_key_id = ?1), \
                (SELECT MIN(u.created_at) FROM usage u \
                   WHERE u.api_key_id = ?1 AND u.client_response = 1 \
-                    AND u.cost_usd > 0 AND u.created_at >= ?3)",
-            params![key_id.0, b.week_start, b.five_hours_ago],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    AND u.cost_usd > 0 AND u.created_at >= \
+                    (SELECT five_hour_started_at FROM api_key_quotas WHERE api_key_id = ?1))",
+            params![key_id.0, b.week_start],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .map_err(openproxy_db::error::map_db_error)?;
     let week = QuotaWindowStatus {
@@ -253,14 +259,38 @@ pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
         spent_usd: week_spent,
         // Only a capped window has something to reset: an uncapped window
         // printing "resets in ..." is exactly the phantom the UI must not show.
-        resets_at: caps.weekly_usd_cap.map(|_| b.next_monday),
+        resets_at: caps.weekly_usd_cap.map(|_| b.next_monday.clone()),
         oldest_spend_at: None,
     };
-    let five_hours = QuotaWindowStatus {
-        cap_usd: caps.five_hour_usd_cap,
-        spent_usd: five_hour_spent,
-        resets_at: None,
-        oldest_spend_at: oldest_5h,
+    // Fixed 5h window: it exists only while its anchor is live. The spend
+    // counts from the anchor on, and the whole cap frees at anchor + 5h.
+    let five_hours = match (&caps.five_hour_usd_cap, anchor_live != 0) {
+        (Some(cap), true) => {
+            let anchor_ts = anchor.expect("a live anchor");
+            let spent = conn
+                .query_row(
+                    "SELECT COALESCE(SUM(u.cost_usd), 0.0) FROM usage u \
+                     WHERE u.api_key_id = ?1 AND u.client_response = 1 AND u.created_at >= ?2",
+                    params![key_id.0, anchor_ts],
+                    |row| row.get::<_, f64>(0),
+                )
+                .map_err(openproxy_db::error::map_db_error)?;
+            let reset = chrono::NaiveDateTime::parse_from_str(&anchor_ts, "%Y-%m-%d %H:%M:%S")
+                .map(|naive| iso_ts(&(naive + Duration::hours(5))))
+                .unwrap_or_else(|_| iso_ts(&(Utc::now().naive_utc() + Duration::hours(5))));
+            QuotaWindowStatus {
+                cap_usd: Some(*cap),
+                spent_usd: spent,
+                resets_at: Some(reset),
+                oldest_spend_at: oldest_5h,
+            }
+        }
+        (cap, _) => QuotaWindowStatus {
+            cap_usd: *cap,
+            spent_usd: 0.0,
+            resets_at: None,
+            oldest_spend_at: None,
+        },
     };
     Ok(QuotaStatus {
         enabled: !caps.is_empty(),
@@ -270,39 +300,71 @@ pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
     })
 }
 
-/// Pre-flight check. Returns `Some(violation)` when the key already spent
-/// its cap in any enabled window (largest window first).
-pub fn check(conn: &Connection, key_id: ApiKeyId) -> Result<Option<QuotaViolation>> {
+/// Outcome of the pre-flight quota check.
+#[derive(Debug)]
+pub enum QuotaCheck {
+    /// Every enabled window has headroom: dispatch.
+    Allow,
+    /// The 5h window has no anchor or its fixed window already expired. The
+    /// caller must run [`anchor_five_hour_window`] (a write) and check again:
+    /// the fresh window opens at that moment with zero spend.
+    ReanchorNeeded,
+    /// A window reached its cap: the caller rejects with a 429 that carries
+    /// the window's reset instant.
+    Violated(QuotaViolation),
+}
+
+/// Pre-flight check. The weekly window is evaluated first (it is the larger
+/// one); then the fixed 5h window, which needs an anchor to exist.
+pub fn check(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaCheck> {
     let st = status(conn, key_id)?;
     if !st.enabled {
-        return Ok(None);
+        return Ok(QuotaCheck::Allow);
     }
-    let violated = [(WINDOW_WEEK, &st.week), (WINDOW_FIVE_HOURS, &st.five_hours)]
-        .into_iter()
-        .find_map(|(name, w)| match w.cap_usd {
-            Some(cap) if w.spent_usd >= cap => {
-                // The 5h window is rolling: it frees up five hours after the
-                // OLDEST spend still inside it, not at a fixed boundary.
-                // Deriving the instant lets the client honor a real
-                // Retry-After instead of polling blindly.
-                let resets_at = w.resets_at.clone().or_else(|| {
-                    w.oldest_spend_at.as_ref().map(|oldest| {
-                        chrono::NaiveDateTime::parse_from_str(oldest, "%Y-%m-%d %H:%M:%S")
-                            .map(|naive| naive + chrono::Duration::hours(5))
-                            .map(|t| t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
-                            .unwrap_or_else(|_| "rolling window".into())
-                    })
-                });
-                Some(QuotaViolation {
-                    window: name,
-                    spent_usd: w.spent_usd,
-                    cap_usd: cap,
-                    resets_at,
-                })
-            }
-            _ => None,
-        });
-    Ok(violated)
+    if let Some(cap) = st.week.cap_usd
+        && st.week.spent_usd >= cap
+    {
+        return Ok(QuotaCheck::Violated(QuotaViolation {
+            window: WINDOW_WEEK,
+            spent_usd: st.week.spent_usd,
+            cap_usd: cap,
+            resets_at: st.week.resets_at,
+        }));
+    }
+    if let Some(cap) = st.five_hours.cap_usd {
+        if st.five_hours.spent_usd >= cap {
+            return Ok(QuotaCheck::Violated(QuotaViolation {
+                window: WINDOW_FIVE_HOURS,
+                spent_usd: st.five_hours.spent_usd,
+                cap_usd: cap,
+                resets_at: st.five_hours.resets_at,
+            }));
+        }
+        // No anchor (first request ever, or the previous window expired and
+        // was cleared): the caller opens a fresh window and checks again.
+        if st.five_hours.resets_at.is_none() {
+            return Ok(QuotaCheck::ReanchorNeeded);
+        }
+    }
+    Ok(QuotaCheck::Allow)
+}
+
+/// Open (or re-open after expiry) the fixed 5h window for one key. The UPDATE
+/// is conditional, so two concurrent refreshes cannot re-anchor twice: the
+/// second one no longer matches the expired condition. Returns whether this
+/// call did the anchoring.
+pub fn anchor_five_hour_window(conn: &Connection, key_id: ApiKeyId) -> Result<bool> {
+    let updated = conn
+        .execute(
+            "UPDATE api_key_quotas SET five_hour_started_at = datetime('now'), \
+                    updated_at = datetime('now') \
+             WHERE api_key_id = ?1 AND five_hour_usd_cap IS NOT NULL \
+               AND (five_hour_started_at IS NULL \
+                    OR five_hour_started_at <= datetime('now', '-5 hours'))",
+            params![key_id.0],
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    Ok(updated > 0)
 }
 
 #[cfg(test)]
