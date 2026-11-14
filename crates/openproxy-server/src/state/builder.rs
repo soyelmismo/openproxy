@@ -164,6 +164,15 @@ impl AppState {
 
         let state = Self {
             config,
+            #[cfg(feature = "payments")]
+            checkout_batcher: crate::handlers::checkout_batch::CheckoutBatcher::new(Arc::clone(
+                &db_pool,
+            )),
+            #[cfg(feature = "payments")]
+            delivery_batcher: crate::handlers::delivery_batch::DeliveryBatcher::new(
+                Arc::clone(&db_pool),
+                Arc::clone(&master_key),
+            ),
             db_pool,
             master_key,
             services,
@@ -298,6 +307,15 @@ impl AppState {
 
         Self {
             config: config.clone(),
+            #[cfg(feature = "payments")]
+            checkout_batcher: crate::handlers::checkout_batch::CheckoutBatcher::new(Arc::clone(
+                &db_pool,
+            )),
+            #[cfg(feature = "payments")]
+            delivery_batcher: crate::handlers::delivery_batch::DeliveryBatcher::new(
+                Arc::clone(&db_pool),
+                Arc::clone(&master_key),
+            ),
             db_pool,
             master_key,
             services,

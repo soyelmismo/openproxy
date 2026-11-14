@@ -35,6 +35,10 @@ pub struct AppState {
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
     services: Arc<crate::services::Services>,
+    #[cfg(feature = "payments")]
+    checkout_batcher: crate::handlers::checkout_batch::CheckoutBatcher,
+    #[cfg(feature = "payments")]
+    delivery_batcher: crate::handlers::delivery_batch::DeliveryBatcher,
     adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>>,
     rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter>,
     inflight_limiter: Arc<openproxy_core::rate_limit::InFlightLimiter>,
@@ -92,6 +96,14 @@ pub struct BackfillStatus {
 }
 
 impl AppState {
+    #[cfg(feature = "payments")]
+    pub(crate) fn checkout_batcher(&self) -> &crate::handlers::checkout_batch::CheckoutBatcher {
+        &self.checkout_batcher
+    }
+    #[cfg(feature = "payments")]
+    pub(crate) fn delivery_batcher(&self) -> &crate::handlers::delivery_batch::DeliveryBatcher {
+        &self.delivery_batcher
+    }
     pub async fn shutdown_usage_worker(&self) -> openproxy_types::Result<()> {
         self.discovery_scheduler.cancel();
         self.supervisor.shutdown();
