@@ -363,4 +363,48 @@ mod tests {
         let invalid_json = serde_json::json!({ "data": [] });
         assert!(parse_custom_gemini_models(&invalid_json).is_none());
     }
+
+    #[test]
+    fn test_build_custom_headers() {
+        let bearer_buf = crate::upstream::format_bearer("secret-key");
+        let extra = vec![
+            ("Custom-Header".to_string(), "val1".to_string()),
+            ("X-OpenProxy-Internal".to_string(), "ignore".to_string()),
+        ];
+
+        // 1. Bearer auth
+        let h_bearer =
+            build_custom_headers(AdapterAuthType::Bearer, "secret-key", &bearer_buf, &extra);
+        assert_eq!(
+            h_bearer,
+            vec![
+                ("Authorization", "Bearer secret-key"),
+                ("Custom-Header", "val1")
+            ]
+        );
+
+        // 2. XApiKey auth
+        let h_xapi =
+            build_custom_headers(AdapterAuthType::XApiKey, "secret-key", &bearer_buf, &extra);
+        assert_eq!(
+            h_xapi,
+            vec![("x-api-key", "secret-key"), ("Custom-Header", "val1")]
+        );
+
+        // 3. GoogApiKey auth
+        let h_goog = build_custom_headers(
+            AdapterAuthType::GoogApiKey,
+            "secret-key",
+            &bearer_buf,
+            &extra,
+        );
+        assert_eq!(
+            h_goog,
+            vec![("x-goog-api-key", "secret-key"), ("Custom-Header", "val1")]
+        );
+
+        // 4. Empty API key produces no auth header
+        let h_empty = build_custom_headers(AdapterAuthType::Bearer, "", &bearer_buf, &extra);
+        assert_eq!(h_empty, vec![("Custom-Header", "val1")]);
+    }
 }
