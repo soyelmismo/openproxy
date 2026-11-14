@@ -461,7 +461,25 @@ fn settle_payment(
     }
     // 5. Credit the balance. A leveraged plan credits more than it charged
     //    (credit_units > amount minus jitter); 1:1 plans credit the price.
-    crate::credits::ledger::credit_topup(conn, key_id, order_id, credit_units, ttl_days, tx_hash)?;
+    //    ROOT FIX (fee-tolerance abuse): the tolerance exists to RECOGNIZE a
+    //    transfer short by an exchange fee, not to grant free credit — every
+    //    buyer can deliberately send `quoted - tolerance`, so a short payment
+    //    credits PRO RATA what it actually paid and an overpay never credits
+    //    more than the plan promises. Exact payments are unaffected
+    //    (`received == quoted` credits the full amount).
+    let credited_units = openproxy_db::credits_ledger::prorated_credit_units(
+        credit_units,
+        amount_units,
+        quoted_units,
+    );
+    crate::credits::ledger::credit_topup(
+        conn,
+        key_id,
+        order_id,
+        credited_units,
+        ttl_days,
+        tx_hash,
+    )?;
 
     // 5b. Shaping contract: a plan purchase applies the tier's allowlists +
     //     quota caps and LINKS the key to the tier (future plan edits
@@ -479,7 +497,8 @@ fn settle_payment(
     tracing::info!(
         %tx_hash,
         order_code = %order_code,
-        credited_units = credit_units,
+        credited_units,
+        promised_units = credit_units,
         quoted_units,
         received_units = amount_units,
         short_units,
@@ -489,7 +508,7 @@ fn settle_payment(
     Ok(PaymentOutcome::Credited {
         order_code,
         api_key_id: final_key_id,
-        credited_units: credit_units,
+        credited_units,
         minted_key,
         received_units: amount_units,
     })

@@ -309,13 +309,20 @@ fn a_transfer_short_by_the_exchange_fee_still_pays_the_order() {
     // Binance deducts its withdrawal fee from the sent amount: the buyer pays
     // the quoted 5.004103 and 4.804103 arrive. Within the configured
     // tolerance the order must credit — an exact-only matcher strands that
-    // money in the collector.
+    // money in the collector. ROOT-FIX INVARIANT: the credit is PRO RATA
+    // what arrived (the tolerance recognizes the fee, it does not subsidize
+    // it), so a deliberately short payment never yields free credit.
     let conn = test_conn();
     let key = seed_key(&conn, "tol1");
     let mk = mk();
     let order = paid_order(&conn, key, 5, 15);
     let fee = 200_000; // 0.2 USDC Base withdrawal fee
     let received = order.amount_units - fee;
+    let expected_credit = openproxy_db::credits_ledger::prorated_credit_units(
+        order.base_units,
+        received,
+        order.amount_units,
+    );
 
     let outcome = matcher::apply_payment(&conn, &mk, "0xshort", 0, 10, received, None, 250_000)
         .expect("apply");
@@ -327,12 +334,21 @@ fn a_transfer_short_by_the_exchange_fee_still_pays_the_order() {
             ..
         } => {
             assert_eq!(order_code, order.order_code);
-            assert_eq!(credited_units, order.base_units);
+            assert_eq!(credited_units, expected_credit);
             assert_eq!(received_units, received);
         }
         other => panic!("short transfer within tolerance must credit, got {other:?}"),
     }
-    assert_eq!(ledger::balance_units(&conn, key).unwrap(), 5 * USD);
+    assert_eq!(
+        ledger::balance_units(&conn, key).unwrap(),
+        expected_credit
+    );
+    // A deliberate `quoted - tolerance` payment buys ~tolerance less credit,
+    // never the full plan: the self-service discount is gone.
+    assert!(
+        expected_credit < order.base_units && order.base_units - expected_credit > 190_000,
+        "prorated credit must reflect the {fee}-unit shortfall"
+    );
 }
 
 #[test]
@@ -443,7 +459,14 @@ fn a_fee_short_payment_credits_when_plan_prices_separate_the_windows() {
         }
         other => panic!("short payment with one candidate must credit, got {other:?}"),
     }
-    assert_eq!(ledger::balance_units(&conn, key).unwrap(), 5 * USD);
+    // PRO RATA: the $5 order paid 0.2 short credits 5M × received/quoted,
+    // not the full 5M (root fix for the tolerance discount).
+    let expected_credit = openproxy_db::credits_ledger::prorated_credit_units(
+        cheap.base_units,
+        received,
+        cheap.amount_units,
+    );
+    assert_eq!(ledger::balance_units(&conn, key).unwrap(), expected_credit);
     let _ = dear; // still live and unpaid; nothing about it changed
 }
 
@@ -539,10 +562,23 @@ fn the_same_fee_short_log_credits_once_under_concurrent_delivery() {
             r.get(0)
         })
         .expect("key");
+    // PRO RATA: one short payment credits once, the prorated amount.
+    let quoted: i64 = conn
+        .query_row(
+            "SELECT amount_units FROM credit_orders WHERE api_key_id = ?1",
+            [key_id],
+            |r| r.get(0),
+        )
+        .expect("quoted");
+    let expected_credit = openproxy_db::credits_ledger::prorated_credit_units(
+        5 * USD,
+        short_amount,
+        quoted,
+    );
     assert_eq!(
         ledger::balance_units(&conn, ApiKeyId(key_id)).unwrap(),
-        5 * USD,
-        "credited exactly once"
+        expected_credit,
+        "credited exactly once, pro rata"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
