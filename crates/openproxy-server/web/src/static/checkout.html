@@ -80,7 +80,7 @@
   }
   .checkout-foot a { color: var(--color-text-muted); text-decoration: none; }
   .checkout-foot a:hover { color: var(--color-link); text-decoration: underline; }
-  /* Terms modal: /terms.html is a full document (own theme + design system),
+  /* Terms modal: /terms is a full document (own theme + design system),
      so it rides in an iframe — one source of truth, no duplicated copy. */
   #terms-modal .modal { max-width: 760px; }
   #terms-modal .modal-body { padding: 0; }
@@ -118,7 +118,7 @@
         </div>
         <label class="terms-check">
           <input type="checkbox" id="terms-check">
-          <span>I accept the <a href="/terms.html" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
+          <span>I accept the <a href="/terms" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
         <button id="create" class="btn primary" type="button">Create payment</button>
         <div class="field"><small>No refunds: the credited balance expires on the date shown for the plan you pick. Unused balance is not returned. Plan prices include a network-fee allowance — pay the exact amount shown. Your key keeps working without a plan — buy again anytime.</small></div>
@@ -157,7 +157,7 @@
           </div>
           <label class="terms-check">
           <input type="checkbox" id="terms-check-my">
-          <span>I accept the <a href="/terms.html" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
+          <span>I accept the <a href="/terms" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
         <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
         </div>
@@ -174,13 +174,13 @@
       <div class="err hidden" id="page-err"></div>
 
       <div class="checkout-foot">
-        <a href="/terms.html" data-modal="terms">Terms of Service</a>
+        <a href="/terms" data-modal="terms">Terms of Service</a>
         <a href="#faq" data-modal="faq">FAQ</a>
       </div>
   </div>
 </main>
 
-<!-- Terms modal: the real /terms.html document, loaded lazily on first open. -->
+<!-- Terms modal: the real /terms document, loaded lazily on first open. -->
 <div class="modal-bg hidden" id="terms-modal" role="dialog" aria-modal="true" aria-labelledby="terms-modal-title">
   <div class="modal">
     <div class="modal-header">
@@ -188,7 +188,7 @@
       <button type="button" class="close-btn" data-close aria-label="Close">&times;</button>
     </div>
     <div class="modal-body">
-      <iframe id="terms-frame" data-src="/terms.html" title="Terms of Service" loading="lazy"></iframe>
+      <iframe id="terms-frame" data-src="/terms" title="Terms of Service" loading="lazy"></iframe>
     </div>
   </div>
 </div>
@@ -211,7 +211,7 @@
       </details>
       <details>
         <summary>Can I cancel or get a refund?</summary>
-        <small>No. Credit is consumable software delivered in full the moment the payment confirms, so purchases cannot be cancelled, reversed or refunded (see the <a href="/terms.html" data-modal="terms">Terms of Service</a>).</small>
+        <small>No. Credit is consumable software delivered in full the moment the payment confirms, so purchases cannot be cancelled, reversed or refunded (see the <a href="/terms" data-modal="terms">Terms of Service</a>).</small>
       </details>
       <details>
         <summary>Where do I see what I have left?</summary>
