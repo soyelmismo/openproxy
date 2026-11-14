@@ -38,9 +38,8 @@ use std::sync::Arc;
 
 use crate::handlers::credits_qr;
 use crate::state::AppState;
+use openproxy_core::credits::CreateOrderRequest as CoreCreateOrder;
 use openproxy_core::credits::get_order;
-use openproxy_core::credits::matcher::{acknowledge_minted_key, reveal_minted_key_with_receipt};
-use openproxy_core::credits::{CreateOrderRequest as CoreCreateOrder, create_order_with_receipt};
 use openproxy_types::CoreError;
 use openproxy_types::ids::ApiKeyId;
 
@@ -128,6 +127,9 @@ struct PlanOffer {
     #[serde(skip_serializing_if = "Option::is_none")]
     credit_usd: Option<f64>,
     ttl_days: i64,
+    /// Seats still sellable (000130). `None` = unlimited; `Some(0)` = full.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seats_left: Option<i64>,
     models: Vec<String>,
     combos: Vec<String>,
 }
@@ -156,7 +158,19 @@ async fn plans(State(state): State<AppState>) -> Response {
     };
     let tiers = match state
         .db_pool()
-        .spawn_read(openproxy_core::credits::tiers::list)
+        .spawn_read(|r| {
+            // One read pass: the sellable tiers plus their seat availability
+            // (000130). `None` = unlimited; a full plan advertises 0 so the
+            // checkout can grey it out before the server rejects the order.
+            let tiers = openproxy_core::credits::tiers::list(r)?;
+            tiers
+                .iter()
+                .filter(|t| t.sellable())
+                .map(|t| {
+                    Ok::<_, openproxy_types::CoreError>((t.clone(), openproxy_core::credits::tiers::seats_left(r, t)?))
+                })
+                .collect::<openproxy_types::Result<Vec<_>>>()
+        })
         .await
     {
         Ok(t) => t,
@@ -164,14 +178,14 @@ async fn plans(State(state): State<AppState>) -> Response {
         Err(e) => return core_failure("plans", e),
     };
     let plans: Vec<PlanOffer> = tiers
-        .iter()
-        .filter(|t| t.sellable())
-        .map(|t| PlanOffer {
+        .into_iter()
+        .map(|(t, seats_left)| PlanOffer {
             tier_id: t.id,
             name: t.name.clone(),
             usd: t.price_usd.unwrap_or_default(),
             credit_usd: t.credit_usd,
             ttl_days: t.ttl_days,
+            seats_left,
             models: t.config.allowed_models.clone().unwrap_or_default(),
             combos: t
                 .config
@@ -355,23 +369,10 @@ async fn create_order_impl(
     // `create_order` derives price, lifetime and leveraged credit from the
     // tier inside its own transaction (0/0 placeholders are never used for a
     // tier order), so the handler never quotes a stale price.
-    let created = state
-        .db_pool()
-        .spawn_write(move |w| {
-            let Some(receipt) = receipt else {
-                // Only a Bearer-authenticated renewal can reach this branch.
-                return openproxy_core::credits::orders::create_order_with_window(
-                    w,
-                    api_key_id,
-                    None,
-                    0,
-                    0,
-                    Some(tid),
-                    window_secs,
-                );
-            };
-            create_order_with_receipt(
-                w,
+    let created = if let Some(receipt) = receipt {
+        state
+            .checkout_batcher()
+            .submit(
                 CoreCreateOrder {
                     api_key_id,
                     payer_email: None,
@@ -380,10 +381,25 @@ async fn create_order_impl(
                     tier_id: Some(tid),
                 },
                 window_secs,
-                &receipt,
+                receipt,
             )
-        })
-        .await;
+            .await
+    } else {
+        state
+            .db_pool()
+            .spawn_write(move |w| {
+                openproxy_core::credits::orders::create_order_with_window(
+                    w,
+                    api_key_id,
+                    None,
+                    0,
+                    0,
+                    Some(tid),
+                    window_secs,
+                )
+            })
+            .await
+    };
     let order = match created {
         Ok(o) => o,
         Err(e) => return core_failure("create_order", e),
@@ -397,8 +413,28 @@ async fn create_order_impl(
     // The ink is plain light (#f5f7fa): WHITE modules on the dark brand
     // background, as scanners expect. No CSS-variable indirection — the SVG
     // carries its own final color everywhere it is shown.
-    let qr_svg = match credits_qr::render(&qr_uri, "#f5f7fa") {
-        Ok(q) => q.svg,
+    //
+    // Render admission bounds CPU oversubscription, not correctness: a render
+    // is ~1-3 ms of blocking CPU, so 16 permits drain a 1500-order burst in
+    // well under a second while capping concurrent blocking tasks. 2 permits
+    // serialized the burst (1500 × ~2 ms / 2 ≈ 1.5 s of pure queue wait).
+    static QR_ADMISSION: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+        std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(16)));
+    let permit = Arc::clone(&QR_ADMISSION).acquire_owned().await;
+    let payload = qr_uri.clone();
+    // Classic QR (white background, black modules): the stylized
+    // light-on-dark variant defeated phone cameras and MetaMask in the field.
+    let qr_svg = match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        credits_qr::render_classic(&payload).map(|q| q.svg)
+    })
+    .await
+    {
+        Ok(Ok(svg)) => svg,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "qr render failed");
+            String::new()
+        }
         Err(e) => {
             tracing::warn!(error = %e, "qr render failed");
             String::new()
@@ -545,11 +581,7 @@ async fn reveal_key(
             );
         }
     };
-    let mk = Arc::clone(state.master_key());
-    let res = state
-        .db_pool()
-        .spawn_write(move |w| reveal_minted_key_with_receipt(w, mk.as_ref(), &code, &receipt))
-        .await;
+    let res = state.delivery_batcher().submit_reveal(code, receipt).await;
     match res {
         Ok(Some(key)) => Json(RevealResponse {
             key,
@@ -588,11 +620,7 @@ async fn ack_key(
             "ack requires the same Idempotency-Key used for the reveal",
         );
     };
-    match state
-        .db_pool()
-        .spawn_write(move |w| acknowledge_minted_key(w, &code, &receipt))
-        .await
-    {
+    match state.delivery_batcher().submit_ack(code, receipt).await {
         Ok(true) => Json(json!({ "ok": true })).into_response(),
         Ok(false) => gateway_error(
             StatusCode::CONFLICT,

@@ -65,7 +65,7 @@ mod logs;
 
 pub use self::logs::UsdcTransfer;
 use self::logs::{DecodedLog, TRANSFER_TOPIC, decode_log, parse_quantity};
-use openproxy_core::credits::matcher::{PaymentBlock, PaymentOutcome, apply_payment_at};
+use openproxy_core::credits::matcher::{PaymentBlock, PaymentOutcome};
 use openproxy_core::credits::orders::CONFIRMATION_GRACE_SECS;
 use openproxy_db::DbPool;
 use openproxy_types::config::CreditsConfig;
@@ -562,37 +562,50 @@ impl CreditsWatcherService {
                 entry.insert(ts);
             }
         }
-        for t in transfers {
-            let block_timestamp = *timestamps
-                .get(&t.block_number)
-                .ok_or("missing block timestamp for transfer")?;
+        // Bounded group commit preserves chain order and releases the writer
+        // between batches. A failed batch rolls back in full and holds the
+        // cursor, so retry cannot lose a transfer or publish a partial
+        // outcome. 64 per batch: each batch carries 64 matcher passes, so
+        // halving it doubles how often the writer is released for the
+        // checkout/delivery traffic that shares it.
+        for batch in transfers.chunks(64) {
+            let items = batch
+                .iter()
+                .map(|t| {
+                    Ok(openproxy_core::credits::matcher::PaymentInput {
+                        tx_hash: t.tx_hash.clone(),
+                        log_index: t.log_index,
+                        block: PaymentBlock {
+                            number: t.block_number,
+                            timestamp: *timestamps
+                                .get(&t.block_number)
+                                .ok_or("missing block timestamp for transfer")?,
+                        },
+                        amount_units: t.amount_units,
+                        from_address: Some(t.from_address.clone()),
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             let master = Arc::clone(&self.master_key);
             let tolerance_units = self.config.payment_tolerance_units;
-            let tx_hash = t.tx_hash.clone();
-            let from = t.from_address.clone();
-            let outcome = pool
+            let outcomes = pool
                 .spawn_write(move |w| {
-                    apply_payment_at(
+                    openproxy_core::credits::matcher::apply_payments_batch(
                         w,
                         &master,
-                        &tx_hash,
-                        t.log_index,
-                        PaymentBlock {
-                            number: t.block_number,
-                            timestamp: block_timestamp,
-                        },
-                        t.amount_units,
-                        Some(&from),
+                        &items,
                         tolerance_units,
                     )
                 })
                 .await
-                .map_err(|e| format!("apply payment: {e}"))?;
-            match outcome {
-                PaymentOutcome::Credited { .. } => report.credited += 1,
-                PaymentOutcome::AlreadySeen { .. } => report.already_seen += 1,
-                PaymentOutcome::OrderExpired { .. } => report.order_expired += 1,
-                PaymentOutcome::Unmatched { .. } => report.unmatched += 1,
+                .map_err(|e| format!("apply payment batch: {e}"))?;
+            for outcome in outcomes {
+                match outcome {
+                    PaymentOutcome::Credited { .. } => report.credited += 1,
+                    PaymentOutcome::AlreadySeen { .. } => report.already_seen += 1,
+                    PaymentOutcome::OrderExpired { .. } => report.order_expired += 1,
+                    PaymentOutcome::Unmatched { .. } => report.unmatched += 1,
+                }
             }
         }
 

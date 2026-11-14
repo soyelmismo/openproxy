@@ -34,6 +34,14 @@ pub fn router() -> Router<AppState> {
         .route("/catalog", get(admin_catalog))
         // Runtime master switch for the payment gateway (Config toggle).
         .route("/gateway", get(gateway_status).post(set_gateway))
+        // Registration quota: cap on distinct sold keys ("registrados /
+        // máximo" in the credits view). Hot-editable; only blocks NEW orders.
+        .route(
+            "/registration-quota",
+            get(registration_quota).post(set_registration_quota),
+        )
+        // Plan purchases on EXISTING keys (renew / change plan) — hot toggle.
+        .route("/renewals", get(renewals_status).post(set_renewals))
 }
 
 fn err(status: StatusCode, code: &str, message: &str) -> Response {
@@ -118,6 +126,9 @@ struct TierRequest {
     credit_usd: Option<f64>,
     #[serde(default)]
     ttl_days: i64,
+    /// Seat cap (000130): 0 = unlimited, positive = max sold keys.
+    #[serde(default)]
+    stock: i64,
 }
 
 async fn create_tier(State(state): State<AppState>, Json(req): Json<TierRequest>) -> Response {
@@ -125,6 +136,7 @@ async fn create_tier(State(state): State<AppState>, Json(req): Json<TierRequest>
         price_usd: req.price_usd,
         credit_usd: req.credit_usd,
         ttl_days: req.ttl_days,
+        stock: Some(req.stock),
     };
     match state
         .db_pool()
@@ -177,6 +189,9 @@ struct UpdateTierRequest {
     credit_usd: PatchField<f64>,
     #[serde(default)]
     ttl_days: PatchField<i64>,
+    /// Seat cap (000130): absent preserves the stored value.
+    #[serde(default)]
+    stock: PatchField<i64>,
 }
 
 async fn update_tier(
@@ -184,8 +199,10 @@ async fn update_tier(
     Path(id): Path<i64>,
     Json(req): Json<UpdateTierRequest>,
 ) -> Response {
-    let touches_plan =
-        req.price_usd.is_present() || req.credit_usd.is_present() || req.ttl_days.is_present();
+    let touches_plan = req.price_usd.is_present()
+        || req.credit_usd.is_present()
+        || req.ttl_days.is_present()
+        || req.stock.is_present();
     let res = state
         .db_pool()
         .spawn_write(move |w| {
@@ -222,6 +239,12 @@ async fn update_tier(
                     price_usd: req.price_usd.merge(current.price_usd),
                     credit_usd: req.credit_usd.merge(current.credit_usd),
                     ttl_days,
+                    // Seat cap: absent keeps the stored stock; an explicit
+                    // value (incl. 0 = unlimited) replaces it.
+                    stock: match req.stock {
+                        PatchField::Missing => None,
+                        PatchField::Present(v) => v,
+                    },
                 })
             } else {
                 None
@@ -451,6 +474,95 @@ async fn set_gateway(
         Err(e) => err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "gateway_failed",
+            &format!("{e}"),
+        ),
+    }
+}
+
+// ── registration quota ("registrados / máximo") ─────────────────────
+
+async fn registration_quota(State(state): State<AppState>) -> Response {
+    let res = state.db_pool().spawn_read(|r| {
+        let registered = openproxy_db::credits_ledger::count_customer_keys(r)?;
+        let max = openproxy_db::app_config::load_credits_registration_quota_from_db(r)?;
+        Ok::<_, openproxy_types::CoreError>(json!({
+            "registered": registered,
+            // None/<=0 = unlimited; the dashboard renders that as "sin límite".
+            "max": max.filter(|m| *m > 0),
+        }))
+    });
+    match res.await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "registration_quota_failed",
+            &format!("{e}"),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct RegistrationQuotaRequest {
+    /// `null` or `<= 0` clears the cap (unlimited).
+    max: Option<i64>,
+}
+
+async fn set_registration_quota(
+    State(state): State<AppState>,
+    Json(req): Json<RegistrationQuotaRequest>,
+) -> Response {
+    // Normalize: anything non-positive means "no cap", stored as 0.
+    let max = req.max.filter(|m| *m > 0).unwrap_or(0);
+    let res = state
+        .db_pool()
+        .spawn_write(move |w| {
+            openproxy_db::app_config::save_credits_registration_quota_to_db(w, max, 0)
+        })
+        .await;
+    match res {
+        Ok(()) => Json(json!({ "max": max })).into_response(),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "registration_quota_failed",
+            &format!("{e}"),
+        ),
+    }
+}
+
+// ── renewals: plan purchases on existing keys ────────────────────────
+
+async fn renewals_status(State(state): State<AppState>) -> Response {
+    let enabled = state
+        .db_pool()
+        .spawn_read(|r| {
+            openproxy_db::app_config::load_credits_renewals_enabled_from_db(r)
+                .map(|v| v.unwrap_or(true))
+        })
+        .await
+        .unwrap_or(true);
+    Json(json!({ "enabled": enabled })).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct RenewalsToggleRequest {
+    enabled: bool,
+}
+
+async fn set_renewals(
+    State(state): State<AppState>,
+    Json(req): Json<RenewalsToggleRequest>,
+) -> Response {
+    let res = state
+        .db_pool()
+        .spawn_write(move |w| {
+            openproxy_db::app_config::save_credits_renewals_enabled_to_db(w, req.enabled, 0)
+        })
+        .await;
+    match res {
+        Ok(()) => Json(json!({ "enabled": req.enabled })).into_response(),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "renewals_failed",
             &format!("{e}"),
         ),
     }

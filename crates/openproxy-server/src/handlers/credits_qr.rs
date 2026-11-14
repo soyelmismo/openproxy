@@ -30,6 +30,22 @@ pub struct StyledQr {
 /// # Errors
 /// Returns a message when the payload cannot be encoded at EC level M.
 pub fn render(payload: &str, accent: &str) -> Result<StyledQr, String> {
+    render_styled(payload, accent, false)
+}
+
+/// Render `payload` as a CLASSIC QR: solid white background, sharp black
+/// modules, square finders. Maximum decoder compatibility — the stylized
+/// light-on-dark variant defeated phone cameras in the field (Miguel's
+/// phone could not scan it and MetaMask refused to open the URI), so the
+/// checkout ships this plain variant. Same EC level and quiet zone.
+///
+/// # Errors
+/// Returns a message when the payload cannot be encoded at EC level M.
+pub fn render_classic(payload: &str) -> Result<StyledQr, String> {
+    render_styled(payload, "#000000", true)
+}
+
+fn render_styled(payload: &str, accent: &str, classic: bool) -> Result<StyledQr, String> {
     let code = QrCode::with_error_correction_level(payload.as_bytes(), EcLevel::M)
         .map_err(|e| format!("qr encode: {e}"))?;
     let width = code.width();
@@ -48,53 +64,76 @@ pub fn render(payload: &str, accent: &str) -> Result<StyledQr, String> {
         svg,
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {total} {total}" width="100%" height="100%" shape-rendering="geometricPrecision" role="img" aria-label="Payment QR code">"#
     );
+    // The classic variant carries its own solid white background: scanners
+    // want dark-on-light with a real quiet zone, not transparency over an
+    // unknown page paint.
+    if classic {
+        let _ = write!(
+            svg,
+            r##"<rect x="0" y="0" width="{total}" height="{total}" fill="#ffffff"/>"##
+        );
+    }
 
     let is_finder = |x: usize, y: usize| -> bool {
         let in_box = |ox: usize, oy: usize| x >= ox && x < ox + 7 && y >= oy && y < oy + 7;
         in_box(0, 0) || in_box(width - 7, 0) || in_box(0, width - 7)
     };
 
-    // Data modules: rounded dots in the accent red (finders are drawn apart).
+    // Data modules: rounded dots in the accent (finders are drawn apart).
+    // The classic variant uses SHARP squares: plain black-on-white with no
+    // shape games is what every decoder handles first.
+    let data_rx = if classic { "" } else { r#" rx="0.3""# };
     let _ = write!(svg, r#"<g fill="{accent}">"#);
     for y in 0..width {
         for x in 0..width {
             if !modules[y * width + x] || is_finder(x, y) {
                 continue;
             }
-            let cx = (x + quiet) as f64;
-            let cy = (y + quiet) as f64;
+            let cx = x + quiet;
+            let cy = y + quiet;
             let _ = write!(
                 svg,
-                r#"<rect x="{cx}" y="{cy}" width="1" height="1" rx="0.3"/>"#
+                r#"<rect x="{cx}" y="{cy}" width="1" height="1"{data_rx}/>"#
             );
         }
     }
     svg.push_str("</g>");
 
-    // Finder patterns: near-classic squares — a 7×7 ring with slightly
-    // softened corners and a 3×3 centre dot. Rounded ring shapes broke
-    // MetaMask's decoder; the square silhouette keeps the brand without it.
-    let _ = write!(svg, r#"<g fill="none" stroke="{accent}" stroke-width="1">"#);
+    // Finder patterns. The CLASSIC variant draws the spec silhouette as
+    // three nested SOLID squares (7×7 dark, 5×5 white, 3×3 dark): a stroked
+    // perimeter paints half a module OUTSIDE the grid (ink into the quiet
+    // zone) and leaves a 0.5-module outer ring — both poison decoders, which
+    // is why the stylized variant failed phones in the field. The stylized
+    // variant keeps its softened ring for the brand surfaces that still use
+    // it (transparent page background shows through the white separator).
     for (ox, oy) in [(0usize, 0usize), (width - 7, 0), (0, width - 7)] {
-        let cx = (ox + quiet) as f64;
-        let cy = (oy + quiet) as f64;
-        let _ = write!(
-            svg,
-            r#"<rect x="{cx}" y="{cy}" width="7" height="7" rx="1"/>"#
-        );
+        let fx = ox + quiet;
+        let fy = oy + quiet;
+        if classic {
+            let _ = write!(
+                svg,
+                r##"<g fill="{accent}"><rect x="{fx}" y="{fy}" width="7" height="7"/><rect x="{x1}" y="{y1}" width="5" height="5" fill="#ffffff"/><rect x="{x2}" y="{y2}" width="3" height="3"/></g>"##,
+                x1 = fx + 1,
+                y1 = fy + 1,
+                x2 = fx + 2,
+                y2 = fy + 2,
+            );
+        } else {
+            let ring_rx = r#" rx="1""#;
+            let _ = write!(
+                svg,
+                r#"<g fill="none" stroke="{accent}" stroke-width="1"><rect x="{fx}" y="{fy}" width="7" height="7"{ring_rx}/></g>"#
+            );
+            let centre_rx = r#" rx="0.5""#;
+            let _ = write!(
+                svg,
+                r#"<g fill="{accent}"><rect x="{cx}" y="{cy}" width="3" height="3"{centre_rx}/></g>"#,
+                cx = fx + 2,
+                cy = fy + 2,
+            );
+        }
     }
-    svg.push_str("</g>");
-
-    let _ = write!(svg, r#"<g fill="{accent}">"#);
-    for (ox, oy) in [(0usize, 0usize), (width - 7, 0), (0, width - 7)] {
-        let cx = (ox + quiet) as f64 + 2.0;
-        let cy = (oy + quiet) as f64 + 2.0;
-        let _ = write!(
-            svg,
-            r#"<rect x="{cx}" y="{cy}" width="3" height="3" rx="0.5"/>"#
-        );
-    }
-    svg.push_str("</g></svg>");
+    svg.push_str("</svg>");
 
     Ok(StyledQr {
         svg,
@@ -112,9 +151,7 @@ pub fn render(payload: &str, accent: &str) -> Result<StyledQr, String> {
 /// be reproduced to the last micro-unit.
 #[must_use]
 pub fn eip681_usdc(chain_id: u64, usdc: &str, to: &str, amount_units: i64) -> String {
-    format!(
-        "ethereum:{usdc}@{chain_id}/transfer?address={to}&uint256={amount_units}"
-    )
+    format!("ethereum:{usdc}@{chain_id}/transfer?address={to}&uint256={amount_units}")
 }
 
 #[cfg(test)]
@@ -178,5 +215,27 @@ mod tests {
         assert!(uri.contains("address=0x12c7ab78f21ba0253a21d34a0151d44ddb824950"));
         assert!(uri.contains("uint256=10987654"), "micro units are exact");
         assert!(!uri.contains("amount="), "no non-standard params");
+    }
+
+    /// El checkout envía el QR CLÁSICO (blanco/negro, cuadrados afilados):
+    /// la variante estilizada claro-sobre-oscuro no la escaneaban los móviles
+    /// ni MetaMask la abría. Mismo payload, misma densidad que `render`.
+    #[test]
+    fn sec_37c5309c() {
+        let uri = eip681_usdc(8453, USDC, COLLECTOR, 5_004_103);
+        let qr = render_classic(&uri).expect("classic render");
+        assert!(qr.svg.contains(r##"fill="#ffffff""##), "fondo blanco sólido");
+        assert!(qr.svg.contains(r##"fill="#000000""##), "módulos negros");
+        assert!(
+            !qr.svg.contains("rx="),
+            "sin esquinas redondeadas: cuadrados afilados"
+        );
+        let styled = render(&uri, "#e91d2a").expect("styled render");
+        assert_eq!(qr.modules, styled.modules, "misma matriz");
+        assert!(
+            qr.modules <= 53,
+            "densidad de escaneo intacta, got {}",
+            qr.modules
+        );
     }
 }

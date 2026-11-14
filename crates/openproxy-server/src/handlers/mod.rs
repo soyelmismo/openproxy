@@ -25,9 +25,13 @@ pub mod admin;
 pub mod audio;
 pub mod chat;
 #[cfg(feature = "payments")]
+pub mod checkout_batch;
+#[cfg(feature = "payments")]
 pub mod credits_gateway;
 #[cfg(feature = "payments")]
 pub mod credits_qr;
+#[cfg(feature = "payments")]
+pub mod delivery_batch;
 pub mod embeddings;
 pub mod images;
 pub mod messages;
