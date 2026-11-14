@@ -111,6 +111,34 @@ pub fn acknowledge_minted_key(conn: &Connection, code: &str, receipt: &str) -> R
     ack_in_tx(conn, code, receipt)
 }
 
+/// How long the encrypted plaintext of a minted key stays recoverable after
+/// the mint: the re-reveal (and with it the recovery link) stops working at
+/// that point even without an ack. The key itself stays fully valid — only
+/// the checkout's copy is erased, matching the "shown once" contract.
+pub const MINTED_KEY_TTL_SECS: i64 = 7 * 86_400;
+
+/// Null the ciphertext of minted keys whose delivery TTL ran out.
+///
+/// Without an ack the encrypted plaintext was re-revealable for ever: a
+/// leaked recovery link (?receipt=) could re-show the key weeks later when
+/// the buyer never completed the reveal. The sweep bounds that exposure to
+/// [`MINTED_KEY_TTL_SECS`]. Rows never minted, already acked (blob NULL) and
+/// rows whose TTL has not passed are untouched. Returns the number of blobs
+/// erased.
+///
+/// # Errors
+/// Propagates DB failures.
+pub fn sweep_expired_minted_ciphertexts(conn: &Connection) -> Result<usize> {
+    conn.execute(
+        "UPDATE credit_orders SET minted_key_encrypted = NULL \
+         WHERE minted_key_encrypted IS NOT NULL \
+           AND minted_at IS NOT NULL \
+           AND datetime(minted_at, ?1) < datetime('now')",
+        rusqlite::params![format!("+{MINTED_KEY_TTL_SECS} seconds")],
+    )
+    .map_err(openproxy_db::error::map_db_error)
+}
+
 /// One item of a grouped delivery write.
 #[derive(Debug, Clone)]
 pub enum DeliveryOp {

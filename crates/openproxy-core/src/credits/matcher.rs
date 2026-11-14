@@ -433,7 +433,8 @@ fn settle_payment(
             minted_key = Some(plaintext.clone());
             let blob = master_key.encrypt(&plaintext)?;
             conn.execute(
-                "UPDATE credit_orders SET minted_key_encrypted = ?1, status = 'minted', api_key_id = ?3 \
+                "UPDATE credit_orders SET minted_key_encrypted = ?1, status = 'minted', \
+                 minted_at = datetime('now'), api_key_id = ?3 \
                  WHERE id = ?2",
                 rusqlite::params![blob, order_id, final_key_id],
             )

@@ -59,6 +59,54 @@ fn retry_after_mint_and_ack_keeps_original_anonymous_target() {
 }
 
 #[test]
+fn minted_ciphertext_sweeps_after_ttl_and_reveal_dies_with_it() {
+    let conn = db();
+    let master = MasterKey::generate().unwrap();
+    let order = create(&conn);
+    matcher::apply_payment(
+        &conn,
+        &master,
+        "replay-ttl-fixture",
+        0,
+        100,
+        order.amount_units,
+        None,
+        250_000,
+    )
+    .unwrap();
+    let minted = create(&conn);
+    assert_eq!(minted.status, "minted");
+
+    // Fresh mint: the sweep must not touch it, reveal still works.
+    assert_eq!(super::sweep_expired_minted_ciphertexts(&conn).unwrap(), 0);
+    assert!(matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
+        .unwrap()
+        .is_some());
+
+    // Backdate the mint past the TTL: the sweep erases the checkout's copy,
+    // the settled order stays readable, but the plaintext is gone for good.
+    conn.execute(
+        "UPDATE credit_orders SET minted_at = datetime('now','-8 days') WHERE id=?1",
+        [minted.id],
+    )
+    .unwrap();
+    assert_eq!(super::sweep_expired_minted_ciphertexts(&conn).unwrap(), 1);
+    let blob: Option<String> = conn
+        .query_row(
+            "SELECT minted_key_encrypted FROM credit_orders WHERE id=?1",
+            [minted.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(blob.is_none());
+    assert!(matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
+        .unwrap()
+        .is_none());
+    // The settled order still replays by receipt (audit, plan history intact).
+    assert_eq!(create(&conn).id, order.id);
+}
+
+#[test]
 fn expired_retry_never_opens_a_second_payment_and_preserves_quote_window() {
     let conn = db();
     let first = create(&conn);

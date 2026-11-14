@@ -30,7 +30,10 @@ mod plan_grants;
 pub mod sweep;
 pub mod tiers;
 
-pub use delivery::{DeliveryOp, DeliveryOutcome, apply_delivery_batch};
+pub use delivery::{
+    DeliveryOp, DeliveryOutcome, MINTED_KEY_TTL_SECS, apply_delivery_batch,
+    sweep_expired_minted_ciphertexts,
+};
 pub use ledger::{BalanceView, ExpiringLot, SpendOutcome, TxRow};
 pub use matcher::{
     PaymentOutcome, acknowledge_minted_key, apply_payment, reveal_minted_key_with_receipt,
