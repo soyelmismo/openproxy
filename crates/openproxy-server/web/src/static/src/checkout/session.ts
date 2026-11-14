@@ -166,6 +166,19 @@ export function pendingReceipt(): string | null {
   return read(RECEIPT_KEY);
 }
 
+/**
+ * Seed a receipt that arrived in the URL (?receipt=… of a recovery link).
+ *
+ * The browser has no order snapshot for it, but the order POST that follows
+ * is idempotent per receipt server-side: reusing THIS receipt returns the
+ * original order (any state) instead of opening a second payable one. The
+ * in-flight marker makes `prepareCreate` reuse it at the next Buy press.
+ */
+export function seedReceipt(receipt: string): boolean {
+  if (!write(RECEIPT_KEY, receipt)) return false;
+  return write(CREATING_KEY, "1");
+}
+
 /** Clear the in-flight marker once the creation outcome is definitive. */
 export function endCreate(): void {
   memory.delete(CREATING_KEY);

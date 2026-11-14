@@ -34,12 +34,30 @@
   .checkout-tabs { display: flex; gap: 8px; margin: var(--space-4) 0; }
   .checkout-tabs .btn { margin-top: 0; flex: 1; }
   .qr { display: flex; justify-content: center; padding: var(--space-2) 0; }
-  /* QR: dark brand surface (#151413, the theme-init page background) with
-     WHITE modules — the ink color is baked into the SVG server-side
-     (#f5f7fa), scanners get the standard high-contrast pairing. */
+  /* Sold-out plans (per-plan stock, 000130): visibly unavailable; the radio
+     is disabled in the buy tab, and the server rejects the order anyway. */
+  .plan-card.sold-out { opacity: .55; }
+  .plan-card.sold-out .plan-radio { cursor: not-allowed; }
+  /* Recovery: the receipt is the ONLY capability that can claim this purchase
+     (the server binds the minted key to its hash). Surface it as a link the
+     buyer can save while the order is live — on any device. */
+  .recovery { margin-top: var(--space-2); padding: 8px 10px; border: 1px dashed var(--color-border); border-radius: 8px; }
+  .recovery small { color: var(--color-text-muted); display: block; margin-bottom: 6px; }
+  .recovery-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .recovery-row a { color: var(--color-link); word-break: break-all; font-size: 12px; }
+  .recovery-row .btn { flex: none; font-size: 11px; padding: 4px 10px; }
+  /* Cloudflare challenge interrupted the status poll: the payment itself is
+     on-chain and the server keeps matching blocks, but the page must reconnect. */
+  .cf { margin-top: var(--space-2); padding: 8px 10px; border-radius: 8px; background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .4); }
+  .cf small { display: block; margin-bottom: 6px; }
+  .cf .btn { font-size: 11px; padding: 4px 10px; }
+  /* QR: classic pairing — solid WHITE surface, BLACK modules. The stylized
+     dark variant defeated phone cameras in the field (unscannable, MetaMask
+     refused the URI); decoders want dark-on-light with a real quiet zone,
+     and the SVG now carries its own white background + black ink. */
   .qr svg {
     width: 240px; height: 240px;
-    background: #151413;
+    background: #ffffff;
     border-radius: var(--radius-lg);
   }
   .amount { text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .3px; color: var(--color-text); cursor: copy; }
@@ -132,6 +150,17 @@
         <div class="addr" id="addr" title="Tap to copy"></div>
         <div class="timer" id="timer"></div>
         <div class="status" id="pay-status">Waiting for the transfer on Base. This page updates by itself.</div>
+        <div class="recovery hidden" id="recovery">
+          <small><strong>Save this recovery link</strong> — it restores this purchase on any device if this tab is lost. The key itself is still shown once, here, after payment.</small>
+          <div class="recovery-row">
+            <a id="recovery-link" href="#"></a>
+            <button id="recovery-copy" class="btn btn-secondary" type="button">Copy</button>
+          </div>
+        </div>
+        <div class="cf hidden" id="cf-notice">
+          <small>Cloudflare's bot check interrupted the payment status updates. Your payment is safe — the transfer is matched on-chain even while this tab cannot reach the API. Reload the page to reconnect.</small>
+          <button id="cf-reload" class="btn btn-secondary" type="button">Reload page</button>
+        </div>
         <div class="field"><small>Send the exact amount shown (tap it to copy). Paying from an exchange such as Binance? It deducts its network fee from the transfer — the payment still credits the plan when it arrives up to 0.25 USDC short. The payment window closes when the timer runs out. No refunds.</small></div>
       </div>
 

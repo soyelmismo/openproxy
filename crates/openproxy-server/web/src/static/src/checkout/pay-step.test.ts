@@ -96,6 +96,8 @@ function mount(): void {
     <div id="addr"></div>
     <div id="timer"></div>
     <div id="pay-status"></div>
+    <div id="recovery" class="hidden"><a id="recovery-link"></a><button id="recovery-copy"></button></div>
+    <div id="cf-notice" class="hidden"><button id="cf-reload"></button></div>
     <div id="key" class="key hidden"></div>
     <button id="reveal"></button>
   `;

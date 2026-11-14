@@ -12,6 +12,11 @@ import { isFullAdmin } from "../../state/auth.js";
 import { bindRefresh } from "./shared.js";
 import { quotaBar, planCard } from "./quota.js";
 import { renderTiers } from "./tiers-admin.js";
+import {
+  refreshRegistrationQuota,
+  renderRegistrationQuota,
+  renderRenewalsCard,
+} from "./quota-admin.js";
 import { renderOrders, ensureOrdersLoaded } from "./orders-admin.js";
 import type { AdminTier, CreditsData, PlansResponse, QuotaStatus } from "./types.js";
 
@@ -29,7 +34,11 @@ async function loadData(): Promise<CreditsData> {
     const tiersP = api("/credits/tiers")
       .then((v) => v as AdminTier[])
       .catch(() => [] as AdminTier[]);
-    const [adminTiers] = await Promise.all([tiersP, ensureOrdersLoaded()]);
+    const [adminTiers] = await Promise.all([
+      tiersP,
+      ensureOrdersLoaded(),
+      refreshRegistrationQuota(),
+    ]);
     return { adminTiers };
   }
   const [quota, plans] = await Promise.all([
@@ -53,6 +62,8 @@ function renderAdminView(data: CreditsData): TemplateResult {
         Plans and the order ledger. Each plan carries its own leveraged credit,
         lifetime and model allowlist.
       </p>
+      ${renderRegistrationQuota()}
+      ${renderRenewalsCard()}
       ${renderTiers(data)}
       ${renderOrders()}
     </div>

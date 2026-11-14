@@ -27,7 +27,7 @@
 
 import { $, hide, show } from "./dom.js";
 import type { CheckoutOrder, OrderStatus } from "./api.js";
-import { getJson, postJson } from "./api.js";
+import { requestJson, postJson } from "./api.js";
 import {
   clearOrder,
   endCreate,
@@ -46,6 +46,15 @@ const POLL_SLOW_MS = 60_000;
 const POLL_TIMEOUT_MS = 15_000;
 /** Server default when the order omits the field (matches the matcher). */
 const DEFAULT_GRACE_SECS = 600;
+
+/** The reload button wires once, on the first paint (the DOM exists then —
+ *  module top-level would run before the test fixtures mount). */
+let cfReloadWired = false;
+function wireCfReload(): void {
+  if (cfReloadWired) return;
+  cfReloadWired = true;
+  $("cf-reload").addEventListener("click", () => location.reload());
+}
 
 const LATE_STATUS =
   "Price window closed. Still checking for a late on-chain confirmation: " +
@@ -139,6 +148,40 @@ function clearCountdown(): void {
 }
 
 /**
+ * The receipt is the ONLY capability that can claim this purchase (the server
+ * binds the minted key to its hash), and it normally lives only in this tab's
+ * sessionStorage. Surface it as a recovery LINK the buyer can save: opening
+ * that link on any device seeds the same receipt, and the next Buy replays
+ * the original order server-side instead of starting a second payment.
+ */
+function paintRecovery(): void {
+  const box = $("recovery");
+  const receipt = loadReceipt();
+  if (!receipt) {
+    // No receipt (renewal / restore mid-flight): nothing recoverable to show.
+    box.classList.add("hidden");
+    return;
+  }
+  const url =
+    location.origin + location.pathname + "?receipt=" + encodeURIComponent(receipt);
+  const link = $<HTMLAnchorElement>("recovery-link");
+  link.href = url;
+  link.textContent = url;
+  attachCopy($("recovery-copy"), url);
+  box.classList.remove("hidden");
+}
+
+/**
+ * Cloudflare's edge challenge (403) or a 5xx outage answers the status poll
+ * with non-JSON HTML. The payment itself is on-chain and the server watcher
+ * keeps matching blocks without this tab, so the notice never claims loss —
+ * it only asks the buyer to reload once the challenge passes.
+ */
+function showCfNotice(on: boolean): void {
+  $("cf-notice").classList.toggle("hidden", !on);
+}
+
+/**
  * Paint the payment step (QR, amount, leverage line, address).
  * Returns whether the snapshot is DURABLE: the caller must not settle the
  * "creation in flight" marker before that is true, or a reload would orphan a
@@ -150,6 +193,8 @@ export function renderPayStep(o: CheckoutOrder): boolean {
   clearTimers();
   lateWatch = false;
   order = o;
+  showCfNotice(false);
+  wireCfReload();
   const durable = saveOrder(o);
   show("qr");
   show("amount");
@@ -176,6 +221,9 @@ export function renderPayStep(o: CheckoutOrder): boolean {
   }
   $("addr").textContent = o.collector_address;
   attachCopy($("addr"), o.collector_address);
+  // The receipt → recovery link, whatever the order's clock says: an expired
+  // order is exactly when the buyer is most likely to close the tab.
+  paintRecovery();
   // A resumed order (refresh days later) must not pretend the price still
   // holds; it says what is actually happening instead.
   $("pay-status").textContent =
@@ -217,6 +265,7 @@ function renderLateStep(o: CheckoutOrder): boolean {
   clearTimers();
   lateWatch = true;
   order = o;
+  showCfNotice(false);
   const durable = saveOrder(o); // a refresh must resume THIS watch
   const qr = $("qr");
   qr.innerHTML = ""; // never re-serve a stale QR from a previous order
@@ -227,6 +276,8 @@ function renderLateStep(o: CheckoutOrder): boolean {
   document.getElementById("amount-credit")?.remove();
   $("timer").textContent = "Expired";
   $("pay-status").textContent = LATE_STATUS;
+  // The receipt stays claimable by a late confirmation — keep the link.
+  paintRecovery();
   return durable;
 }
 
@@ -298,7 +349,20 @@ async function pollOnce(gen: number): Promise<void> {
   watchdogTimer = watchdog;
   let st: OrderStatus | null = null;
   try {
-    st = await getJson<OrderStatus>("v1/credits/order/" + o.order_code);
+    // requestJson (not getJson) so a Cloudflare edge challenge is visible:
+    // it answers 403/503 with non-JSON HTML, while our own API errors always
+    // carry a JSON body. The chain keeps retrying either way — the transfer
+    // is matched on-chain by the watcher, not by this tab.
+    const res = await requestJson<OrderStatus>("v1/credits/order/" + o.order_code);
+    if (!res.ok) {
+      const challenged =
+        res.body.error == null && (res.status === 403 || res.status === 503);
+      showCfNotice(challenged);
+      schedulePoll(gen, nextDelay(o));
+      return;
+    }
+    showCfNotice(false);
+    st = res.body as OrderStatus;
   } catch {
     st = null; // transient (network/5xx): retry on the next beat
   } finally {

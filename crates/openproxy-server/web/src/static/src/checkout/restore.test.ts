@@ -43,6 +43,8 @@ const CHECKOUT_DOM = `
     <div class="addr" id="addr"></div>
     <div class="timer" id="timer"></div>
     <div class="status" id="pay-status"></div>
+    <div id="recovery" class="hidden"><a id="recovery-link"></a><button id="recovery-copy"></button></div>
+    <div id="cf-notice" class="hidden"><button id="cf-reload"></button></div>
     <div class="field" id="send-note"><small>Send the exact amount shown.</small></div>
   </div>
   <div id="step-key" class="hidden"><div id="key" class="key hidden"></div><button id="reveal"></button></div>

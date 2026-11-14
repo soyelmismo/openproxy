@@ -9,7 +9,9 @@
 <ul>
   <li>Prices are per plan, never per request.</li>
   <li>Unused balance does not carry over past the plan's expiry date.</li>
-  <li>A payment that arrives after the price window closes but within the confirmation grace still credits the plan; one that arrives later is not credited and is not owed a plan.</li>
+  <li>While the checkout page is open, your exact payment amount is reserved for 15 minutes and the reservation is held for 10 more minutes while the network confirms your transfer. If you send the payment while the checkout is open, the plan always credits.</li>
+  <li>You do not need to keep the page open for the credit to land: the transfer is matched on-chain by its exact amount, and reloading the page (or reopening the payment link on any device) reveals your key. A temporary network or bot-check interruption never voids a payment you already sent.</li>
+  <li>A payment sent after the checkout expired — for example, from a saved screenshot of an old QR code — matches no order: it is not credited and no plan is owed for it. Pay only from a live checkout page.</li>
 </ul>
 
 <h2>4. Payment</h2>

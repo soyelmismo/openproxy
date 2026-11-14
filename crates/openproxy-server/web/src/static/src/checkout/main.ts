@@ -16,8 +16,38 @@ import { initMyKey } from "./mykey.js";
 import { initBuy } from "./buy.js";
 import { initCheckoutModals } from "./modals.js";
 import { err, hide, show } from "./dom.js";
-import { loadKey, loadOrder, pendingReceipt } from "./session.js";
+import { loadKey, loadOrder, pendingReceipt, seedReceipt } from "./session.js";
 import { enterOrder, showKey } from "./pay-step.js";
+
+/**
+ * A recovery link (?receipt=…) seeds the receipt of a purchase created on
+ * another device/tab: the buyer picks the plan and presses Buy, and the POST
+ * reuses THIS receipt — the server replays the original order (any state)
+ * instead of opening a second payable amount. A local snapshot always wins:
+ * its own receipt is the capability for ITS reveal and must not be overwritten
+ * by a pasted link.
+ */
+function seedFromRecoveryLink(): void {
+  const receipt = new URLSearchParams(location.search).get("receipt");
+  if (!receipt) return;
+  // Strip it from the address bar: a refresh must not keep re-seeding after
+  // the buyer moved on (the live order keeps painting its own recovery link).
+  history.replaceState(null, "", location.pathname);
+  if (loadKey() || loadOrder()) return;
+  if (!seedReceipt(receipt)) {
+    err(
+      "buy-err",
+      "This browser could not store the recovery receipt (private mode or " +
+        "storage disabled). Enable site storage and reopen the link.",
+    );
+    return;
+  }
+  err(
+    "buy-err",
+    "Recovery link detected. Pick the plan you were buying and press Buy — " +
+      "the original order is restored, no second payment is required.",
+  );
+}
 
 /** A refresh must resume where the buyer was, not restart at step 1. */
 function restore(): boolean {
@@ -57,4 +87,5 @@ loadCatalog();
 initMyKey();
 initBuy();
 initCheckoutModals();
+seedFromRecoveryLink();
 restore();

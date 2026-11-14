@@ -16,6 +16,13 @@ function formatUsd(v: number): string {
   return "$" + (Number.isInteger(v) ? String(v) : v.toFixed(2));
 }
 
+/** "(X seats available)" / "(sold out)" / "per plan" (unlimited). */
+function seatsText(plan: PlansResponse["plans"][number]): string {
+  if (plan.seats_left == null) return "per plan";
+  if (plan.seats_left === 0) return "(sold out)";
+  return "(" + plan.seats_left + (plan.seats_left === 1 ? " seat" : " seats") + " available)";
+}
+
 function planCard(plan: PlansResponse["plans"][number], radioName: string): HTMLLabelElement {
   const card = document.createElement("label");
   card.className = "plan-card";
@@ -52,7 +59,8 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   }
   card.appendChild(head);
 
-  // Row 2: the price is the hero of the card.
+  // Row 2: the price is the hero of the card; the seat availability replaces
+  // the old "per plan" filler (000130) so scarcity is visible before buying.
   const priceRow = document.createElement("div");
   priceRow.className = "plan-price-row";
   const price = document.createElement("span");
@@ -60,10 +68,11 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   price.textContent = formatUsd(plan.usd);
   const per = document.createElement("span");
   per.className = "plan-per";
-  per.textContent = "per plan";
+  per.textContent = seatsText(plan);
   priceRow.appendChild(price);
   priceRow.appendChild(per);
   card.appendChild(priceRow);
+  if (plan.seats_left === 0) card.classList.add("sold-out");
 
   // Row 3: the two facts that define the plan, as a spec strip.
   const stats = document.createElement("dl");
@@ -133,18 +142,32 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   return card;
 }
 
-function renderCards(containerId: string, radioName: string, plans: PlansResponse["plans"]): void {
+function renderCards(
+  containerId: string,
+  radioName: string,
+  plans: PlansResponse["plans"],
+  allowSoldOut: boolean,
+): void {
   const el = $<HTMLDivElement>(containerId);
   el.innerHTML = "";
   el.classList.add("plan-grid");
+  let firstSelectable = -1;
   plans.forEach((plan, i) => {
     const card = planCard(plan, radioName);
-    if (i === 0) {
-      const input = card.querySelector<HTMLInputElement>("input[type=radio]");
-      if (input) {
-        input.checked = true;
-        card.classList.add("selected");
-      }
+    const full = plan.seats_left === 0;
+    const input = card.querySelector<HTMLInputElement>("input[type=radio]");
+    if (full && !allowSoldOut && input) {
+      // Client-side seat block: a sold-out plan cannot even be selected in
+      // the buy tab (the server rejects it anyway). The renew tab keeps it
+      // selectable — renewing the plan a key already holds takes no seat.
+      input.disabled = true;
+      card.classList.add("sold-out");
+    } else if (firstSelectable === -1) {
+      firstSelectable = i;
+    }
+    if (i === firstSelectable && input) {
+      input.checked = true;
+      card.classList.add("selected");
     }
     el.appendChild(card);
   });
@@ -162,8 +185,11 @@ export function loadCatalog(): void {
       if (plans.length === 0) {
         throw new Error("no plans are available right now");
       }
-      renderCards("usd", "plan-buy", plans);
-      renderCards("my-usd", "plan-renew", plans);
+      renderCards("usd", "plan-buy", plans, false);
+      renderCards("my-usd", "plan-renew", plans, true);
+      if (plans.every((plan) => plan.seats_left === 0)) {
+        err("page-err", "All plans are sold out right now — new signups are closed.");
+      }
     })
     .catch((e: Error) => {
       err("page-err", "Could not load plans: " + e.message);

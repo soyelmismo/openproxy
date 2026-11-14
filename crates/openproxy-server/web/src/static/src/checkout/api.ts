@@ -12,6 +12,8 @@ export interface PlanOffer {
   credit_usd?: number;
   /** Plan lifetime: the credited balance expires this many days after payment. */
   ttl_days: number;
+  /** Seats still sellable. Absent = unlimited; 0 = sold out. */
+  seats_left?: number | null;
   /** Model ids the plan unlocks (display only). */
   models: string[];
   /** Combo ids the plan unlocks (display names, no `combo:` prefix). */
@@ -69,8 +71,11 @@ export interface ApiResult<T> {
   body: T & { error?: { code?: string; message?: string } };
 }
 
-/** Fetch JSON with the HTTP status preserved. Never cached. */
-async function requestJson<T>(url: string, init?: RequestInit): Promise<ApiResult<T>> {
+/** Fetch JSON with the HTTP status preserved. Never cached.
+ * Exported for the payment poll: the poll must SEE the status code to tell a
+ * Cloudflare edge challenge (403/503 HTML, no JSON body) apart from our own
+ * API errors (always JSON). */
+export async function requestJson<T>(url: string, init?: RequestInit): Promise<ApiResult<T>> {
   const r = await fetch(url, {
     cache: "no-store",
     ...init,

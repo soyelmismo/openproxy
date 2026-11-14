@@ -34,7 +34,8 @@ function syncScalars(): void {
   const price = (document.getElementById("tier-price") as HTMLInputElement | null)?.value ?? tierDraft.price;
   const credit = (document.getElementById("tier-credit") as HTMLInputElement | null)?.value ?? tierDraft.credit;
   const ttlDays = (document.getElementById("tier-ttl") as HTMLInputElement | null)?.value ?? tierDraft.ttlDays;
-  setTierDraft({ ...tierDraft, name, weekly, fiveHour, price, credit, ttlDays });
+  const stock = (document.getElementById("tier-stock") as HTMLInputElement | null)?.value ?? tierDraft.stock;
+  setTierDraft({ ...tierDraft, name, weekly, fiveHour, price, credit, ttlDays, stock });
 }
 
 function filtered(): CatalogModel[] {
@@ -103,6 +104,11 @@ async function saveTier(): Promise<void> {
     showToast("TTL must be at least 1 day", "error");
     return;
   }
+  const stock = d.stock.trim() === "" ? 0 : parseInt(d.stock, 10);
+  if (!Number.isInteger(stock) || stock < 0) {
+    showToast("stock must be 0 (unlimited) or a positive seat count", "error");
+    return;
+  }
   // Split the merged selection: catalog combo ids are always `combo:<name>`
   // (models never carry the prefix), so the tier API gets clean fields.
   const comboNames = d.models
@@ -121,6 +127,7 @@ async function saveTier(): Promise<void> {
     price_usd: Number.isFinite(price) && price > 0 ? price : null,
     credit_usd: Number.isFinite(credit) && credit > 0 ? credit : null,
     ttl_days: ttlDays,
+    stock,
   };
   try {
     if (d.id == null) {
@@ -170,6 +177,9 @@ function body(): TemplateResult {
       <div><label style="font-size:11px;color:var(--color-text-muted);display:block">TTL days</label>
         <input id="tier-ttl" .value=${d.ttlDays} placeholder="30" style="max-width:70px"
                @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, ttlDays: (e.target as HTMLInputElement).value }); }}></div>
+      <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Seats</label>
+        <input id="tier-stock" .value=${d.stock} placeholder="∞" style="max-width:70px"
+               @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, stock: (e.target as HTMLInputElement).value }); }}></div>
       <div><label style="font-size:11px;color:var(--color-text-muted);display:block">Weekly cap USD</label>
         <input id="tier-weekly" .value=${d.weekly} placeholder="none" style="max-width:100px"
                @input=${(e: Event) => { if (tierDraft) setTierDraft({ ...tierDraft, weekly: (e.target as HTMLInputElement).value }); }}></div>
@@ -249,14 +259,14 @@ function body(): TemplateResult {
       <button class="secondary" @click=${() => closeEditor()}>Cancel</button>
     </div>
     <div style="font-size:11px;color:var(--color-text-muted);margin-top:8px">
-      A plan is the product: price, credit (leverage), TTL days. Its allowlist forces only_whitelisted on the buyer's key: the credit can only reach these models. Blank price = draft (not for sale).
+      A plan is the product: price, credit (leverage), TTL days. Seats (000130) caps how many keys the plan can sell: 0 or blank = unlimited; a sold-out plan stops selling at the checkout. Blank price = draft (not for sale).
       Saving an existing tier re-shapes every linked key immediately.
     </div>`;
 }
 
 function openTierEditor(tier: AdminTier | null): void {
   setTierDraft(tier == null
-    ? { id: null, name: "", models: [], weekly: "", fiveHour: "", active: true, price: "", credit: "", ttlDays: "30" }
+    ? { id: null, name: "", models: [], weekly: "", fiveHour: "", active: true, price: "", credit: "", ttlDays: "30", stock: "" }
     : {
         id: tier.id,
         name: tier.name,
@@ -270,6 +280,7 @@ function openTierEditor(tier: AdminTier | null): void {
         price: tier.price_usd == null ? "" : String(tier.price_usd),
         credit: tier.credit_usd == null ? "" : String(tier.credit_usd),
         ttlDays: String(tier.ttl_days ?? 30),
+        stock: tier.stock > 0 ? String(tier.stock) : "",
       });
   resetTierCatalogBrowser();
   kindFilter = "all";
@@ -325,7 +336,7 @@ export function renderTiers(data: CreditsData): TemplateResult {
               <td style="padding:6px 8px;color:var(--color-text-muted);font-size:12px">
                 ${t.config.weekly_usd_cap ?? "∞"} / ${t.config.five_hour_usd_cap ?? "∞"}
               </td>
-              <td style="padding:6px 8px">${t.price_usd != null ? `$${t.price_usd}` : "draft"} · ${t.key_count} keys</td>
+              <td style="padding:6px 8px">${t.price_usd != null ? `$${t.price_usd}` : "draft"} · ${t.key_count} keys${t.stock > 0 ? ` · ${t.key_count}/${t.stock} seats` : ""}</td>
               <td style="padding:6px 8px">${t.active ? "yes" : "no"}</td>
               <td style="padding:6px 0 6px 8px;white-space:nowrap">
                 <button class="secondary" style="padding:2px 8px" @click=${() => openTierEditor(t)}>edit</button>

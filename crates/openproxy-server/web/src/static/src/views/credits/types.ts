@@ -54,6 +54,8 @@ export interface AdminTier {
   price_usd: number | null;
   credit_usd: number | null;
   ttl_days: number;
+  /** Seat cap (000130): max sold keys; 0 = unlimited. */
+  stock: number;
   /** Live keys inheriting this tier (an edit re-shapes exactly these). */
   key_count: number;
 }
@@ -103,6 +105,8 @@ export interface TierDraft {
   price: string;
   credit: string;
   ttlDays: string;
+  /** Seat cap (blank = unlimited). */
+  stock: string;
 }
 
 export interface CreditsData {
