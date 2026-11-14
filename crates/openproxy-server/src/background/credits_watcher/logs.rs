@@ -285,10 +285,16 @@ mod tests {
 
     #[test]
     fn removed_logs_are_skipped_not_credited() {
-        // A reorg is not a malformed log: nothing was paid, advance.
-        let mut l = log(COLLECTOR, "989680", "0x0");
+        // A reorg is not a malformed log: nothing was paid, advance. ROOT-FIX
+        // INVARIANT: the removed flag now carries the (tx_hash, log_index)
+        // identity out of the decoder so the scanner can cross-check it
+        // against payments that already credited an order (audit A2-06).
+        let mut l = log(COLLECTOR, "989680", "0x7");
         l["removed"] = serde_json::json!(true);
-        ignored(&l);
+        assert_eq!(
+            decode_log(&l, USDC, COLLECTOR, 0, 100).unwrap(),
+            DecodedLog::Removed(Some(TX.to_string()), Some(7))
+        );
     }
 
     #[test]

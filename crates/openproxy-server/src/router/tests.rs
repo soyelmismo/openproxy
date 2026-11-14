@@ -193,10 +193,13 @@ async fn test_csp_pins_ws_origin_to_host_header() {
     let state = make_state().await;
     let app = build_router(state);
 
+    // NOTE: /v1/* serves the STRICT public-money CSP (no ws pinning); the
+    // WebSocket-capable surface is the admin SPA, so the ws pinning contract
+    // is asserted on /admin (root-fix regression for the scoped CSP).
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/v1/health")
+                .uri("/admin")
                 .header("host", "listo.click")
                 .body(axum::body::Body::empty())
                 .unwrap(),
