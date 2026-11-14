@@ -816,6 +816,12 @@ async fn me_rotate_key(State(state): State<AppState>, headers: HeaderMap) -> Res
         Ok(v) => v,
         Err(e) => return core_failure("me.rotate", e),
     };
+    // ROOT FIX (stale-credential window, audit A4-02): the api-key cache
+    // kept the OLD hash valid for up to 60 s after rotation, so a stolen
+    // key kept authenticating (and buying) right through the rotation that
+    // was supposed to kill it. Drop the cache the same second, exactly like
+    // the admin regenerate endpoint does.
+    state.invalidate_api_key_cache(None);
     Json(json!({
         "rotated": true,
         "api_key_id": row.id.0,
