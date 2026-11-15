@@ -24,13 +24,21 @@ pub async fn oauth_device_code(
         .await?;
 
     let pool = std::sync::Arc::clone(s.db_pool());
+    let master_key = std::sync::Arc::clone(s.master_key());
     let provider_clone = provider.clone();
     let dar_clone = dar.clone();
     tokio::task::spawn_blocking(move || -> Result<(), CoreError> {
         let w = pool
             .try_writer_for(openproxy_db::conn::ADMIN_LOCK_TIMEOUT)
             .ok_or_else(|| CoreError::Internal("writer lock timeout".into()))?;
-        openproxy_core::oauth::tickets::create_ticket(&w, &provider_clone, &dar_clone)?;
+        // Security (audit H-4): the device_code is a bearer secret; the
+        // ticket row stores only its hash plus a MasterKey-sealed blob.
+        openproxy_core::oauth::tickets::create_ticket(
+            &w,
+            master_key.as_ref(),
+            &provider_clone,
+            &dar_clone,
+        )?;
         Ok(())
     })
     .await
@@ -48,12 +56,16 @@ pub async fn oauth_device_code(
 
 async fn validate_active_ticket(s: &AppState, device_code: &str) -> Result<(), ApiError> {
     let pool = std::sync::Arc::clone(s.db_pool());
+    let master_key = std::sync::Arc::clone(s.master_key());
     let device_code = device_code.to_string();
     tokio::task::spawn_blocking(move || -> Result<(), ApiError> {
         let r = pool
             .try_reader_for(std::time::Duration::from_secs(5))
             .ok_or_else(|| ApiError(CoreError::Internal("reader lock timeout".into())))?;
-        match openproxy_core::oauth::tickets::lookup_active(&r, &device_code)? {
+        // Security (audit H-4): the lookup hashes the supplied code; the
+        // master key only recovers the sealed copy for the returned struct.
+        match openproxy_core::oauth::tickets::lookup_active(&r, master_key.as_ref(), &device_code)?
+        {
             openproxy_core::oauth::tickets::TicketStatus::Active(_) => Ok(()),
             openproxy_core::oauth::tickets::TicketStatus::Expired => Err(ApiError(
                 CoreError::Validation("device_code has expired; restart the OAuth flow".into()),
