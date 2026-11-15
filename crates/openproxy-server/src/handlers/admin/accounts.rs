@@ -50,17 +50,77 @@ pub fn router() -> axum::Router<AppState> {
         )
 }
 
+/// `true` when a `provider_specific` JSON key names a credential. Matched on
+/// substrings so future provider metadata that adds e.g. `refresh_token`
+/// stays redacted without touching this list.
+fn is_credential_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key.contains("token")
+        || key.contains("secret")
+        || key.contains("api_key")
+        || key.contains("password")
+        || key.contains("credential")
+        || key.contains("jwt")
+}
+
+/// Replace the value of every credential-shaped key with `[redacted]`,
+/// recursing into nested objects and arrays.
+fn redact_credential_keys(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, entry) in map.iter_mut() {
+                if is_credential_key(key) {
+                    *entry = serde_json::Value::String("[redacted]".to_string());
+                } else {
+                    redact_credential_keys(entry);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                redact_credential_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// ROOT FIX (security audit, OP-16): `row_to_account` decrypts
+/// `oauth_provider_specific`, which carries live credentials (zai
+/// access/refresh tokens and API key, kiro client_secret, ...). The list
+/// endpoint is a casual GET rendered by the dashboard, which only needs the
+/// non-secret metadata (`user_id`, `name`, `region`, reset counters), so the
+/// credential-shaped fields are redacted before serialization. Revealing a
+/// live credential stays on the audited path (`GET /{id}/api-key` +
+/// `audit_secret_read`).
+fn redact_account_credentials(mut account: core_accounts::Account) -> serde_json::Value {
+    if let Some(specific) = account.oauth_provider_specific.take() {
+        let redacted = match serde_json::from_str::<serde_json::Value>(&specific) {
+            Ok(mut value) => {
+                redact_credential_keys(&mut value);
+                value.to_string()
+            }
+            // Not parseable JSON: the blob is opaque, redact it wholesale.
+            Err(_) => "\"[redacted]\"".to_string(),
+        };
+        account.oauth_provider_specific = Some(redacted.into_boxed_str());
+    }
+    serde_json::to_value(&account).unwrap_or(serde_json::Value::Null)
+}
+
 pub async fn list_accounts(
     State(s): State<AppState>,
     Query(q): Query<AccountListQuery>,
-) -> Result<Json<Vec<core_accounts::Account>>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     crate::error::run_blocking(move || {
         let provider = q.provider_id.map(ProviderId::new);
         let list = s
             .services()
             .accounts
             .list(provider.as_ref(), s.master_key().as_ref())?;
-        Ok(Json(list))
+        Ok(Json(serde_json::Value::Array(
+            list.into_iter().map(redact_account_credentials).collect(),
+        )))
     })
     .await
 }
