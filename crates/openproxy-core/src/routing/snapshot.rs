@@ -18,12 +18,13 @@
 //! is identical to SQLite's `datetime()` comparison.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 
 use openproxy_db::DbPool;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::ids::{AccountId, ModelRowId};
 use openproxy_types::{CoreError, ProviderId, RateLimitScope, Result};
+use parking_lot::{Mutex, RwLock};
 
 use super::{RoutingPlan, build_synthetic_combo};
 
@@ -41,8 +42,8 @@ struct TargetRow {
 pub struct RoutingSnapshot {
     /// `model_id` -> lowest-`id` active model (`ORDER BY id ASC LIMIT 1`).
     models_by_name: HashMap<String, ModelRowIdProvider>,
-    /// `(provider_id, model_id)` -> lowest-`id` active model.
-    models_by_provider_name: HashMap<(String, String), ModelRowIdProvider>,
+    /// `provider_id` -> (`model_id` -> lowest-`id` active model).
+    models_by_provider_name: HashMap<String, HashMap<String, ModelRowIdProvider>>,
     /// provider id -> (active, rate_limit_scope).
     providers: HashMap<String, (bool, RateLimitScope)>,
     /// account id -> (provider_id, is_healthy).
@@ -117,7 +118,9 @@ fn build(pool: &DbPool) -> Result<RoutingSnapshot> {
                 provider_id: ProviderId::new(provider_id.clone()),
             };
             snap.models_by_provider_name
-                .entry((provider_id, model_id.clone()))
+                .entry(provider_id)
+                .or_default()
+                .entry(model_id.clone())
                 .or_insert_with(|| entry.clone());
             snap.models_by_name.entry(model_id).or_insert(entry);
         }
@@ -278,20 +281,30 @@ fn millis_now() -> u64 {
 }
 
 /// Current snapshot, rebuilding when `data_version` moved since the last
-/// build. Uses the pool reader for both the probe and the rebuild: readers
-/// are a small mutex pool, so the rebuild holds one reader briefly — same
-/// cost class as the SELECTs this snapshot replaces.
-fn db_key(pool: &DbPool) -> String {
-    pool.path().to_string_lossy().into_owned()
-}
-
+/// build. Uses a shared `SNAP.read()` lock on the hot path when versions
+/// match, escalating to `SNAP.write()` and `REBUILD.lock()` only when state
+/// or file metadata drifts.
 fn get_snapshot(pool: &DbPool) -> Result<Arc<RoutingSnapshot>> {
-    let key = db_key(pool);
+    let path_cow = pool.path().to_string_lossy();
     let (config_v, cooldown_v, file_v, write_v) = probe_versions(pool);
     {
-        let mut guard = SNAP.write().unwrap_or_else(|e| e.into_inner());
+        let guard = SNAP.read();
+        if let Some(st) = guard.as_ref()
+            && st.db_key == path_cow.as_ref()
+            && st.file_version == file_v
+            && st.config_version == config_v
+            && (st.cooldown_version == cooldown_v
+                || millis_now()
+                    .saturating_sub(last_rebuilt().load(std::sync::atomic::Ordering::Acquire))
+                    < MIN_REBUILD.as_millis() as u64)
+        {
+            return Ok(Arc::clone(&st.snap));
+        }
+    }
+    {
+        let mut guard = SNAP.write();
         if let Some(st) = guard.as_mut()
-            && st.db_key == key
+            && st.db_key == path_cow.as_ref()
         {
             // External-writer probe. The file moved; classify the change:
             //   - write_epoch also moved -> our own commit explains the
@@ -333,11 +346,12 @@ fn get_snapshot(pool: &DbPool) -> Result<Arc<RoutingSnapshot>> {
             }
         }
     }
-    let _build_guard = REBUILD.lock().unwrap_or_else(|e| e.into_inner());
+    let key = path_cow.into_owned();
+    let _build_guard = REBUILD.lock();
     let (config_v, cooldown_v, file_v, write_v) = probe_versions(pool);
     {
-        let mut guard = SNAP.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(st) = guard.as_mut()
+        let guard = SNAP.read();
+        if let Some(st) = guard.as_ref()
             && st.db_key == key
             && st.file_version == file_v
             && st.write_epoch == write_v
@@ -348,7 +362,7 @@ fn get_snapshot(pool: &DbPool) -> Result<Arc<RoutingSnapshot>> {
         }
     }
     let snap = Arc::new(build(pool)?);
-    *SNAP.write().unwrap_or_else(|e| e.into_inner()) = Some(SnapshotState {
+    *SNAP.write() = Some(SnapshotState {
         db_key: key,
         config_version: config_v,
         cooldown_version: cooldown_v,
@@ -378,7 +392,7 @@ fn strip_prefix<'a>(snap: &RoutingSnapshot, model_str: &'a str) -> (&'a str, Opt
     }
 }
 
-fn target_row_active(snap: &RoutingSnapshot, r: &TargetRow, now: &str) -> bool {
+fn target_row_active(snap: &RoutingSnapshot, r: &TargetRow, now: Option<&str>) -> bool {
     if !r.target.active || !r.provider_active {
         return false;
     }
@@ -389,8 +403,8 @@ fn target_row_active(snap: &RoutingSnapshot, r: &TargetRow, now: &str) -> bool {
         (Some(_), _) if !r.model_active => return false,
         _ => {}
     }
-    if let Some(c) = r.cooldown_until.as_deref()
-        && c > now
+    if let (Some(c), Some(now_val)) = (r.cooldown_until.as_deref(), now)
+        && c > now_val
     {
         return false;
     }
@@ -401,11 +415,11 @@ fn target_row_active(snap: &RoutingSnapshot, r: &TargetRow, now: &str) -> bool {
     true
 }
 
-/// `datetime('now')` in SQLite's `YYYY-MM-DD HH:MM:SS` format.
-fn now_str(pool: &DbPool) -> String {
-    let conn = pool.reader();
-    conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0))
-        .unwrap_or_default()
+/// Current UTC timestamp in SQLite's `YYYY-MM-DD HH:MM:SS` format, computed
+/// in-memory without acquiring a SQLite reader connection.
+#[inline]
+fn now_utc_str() -> String {
+    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// Snapshot-based `resolve_with_options`. Falls back to `Err` only when the
@@ -430,14 +444,17 @@ pub fn resolve_with_options_snap(
 
     let combo_name = stripped.strip_prefix("combo:").unwrap_or(stripped);
     if let Some(combo) = snap.combos_by_name.get(combo_name) {
-        let now = now_str(pool);
         let rows = snap
             .combo_targets
             .get(&combo.id.0)
-            .map_or(&[][..], |v| v.as_slice());
+            .map_or(&[][..], Vec::as_slice);
+        let now = rows
+            .iter()
+            .any(|r| r.cooldown_until.is_some())
+            .then(now_utc_str);
         let mut targets: Vec<ComboTarget> = rows
             .iter()
-            .filter(|r| target_row_active(&snap, r, &now))
+            .filter(|r| target_row_active(&snap, r, now.as_deref()))
             .map(|r| r.target.clone())
             .collect();
         if let Some(aid) = account_override {
@@ -471,7 +488,8 @@ fn try_resolve_direct(
 ) -> Option<RoutingPlan> {
     let model = if let Some(prefix) = provider_prefix {
         snap.models_by_provider_name
-            .get(&(prefix.to_string(), model_id.to_string()))
+            .get(prefix)
+            .and_then(|by_model| by_model.get(model_id))
     } else {
         snap.models_by_name.get(model_id)
     }?;
