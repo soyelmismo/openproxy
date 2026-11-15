@@ -42,19 +42,6 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64
     (cost, tps)
 }
 
-fn truncate_sanitized(sanitized: &str, max_len: usize) -> String {
-    if sanitized.len() <= max_len {
-        return sanitized.to_string();
-    }
-    let mut idx = max_len;
-    while idx > 0 && !sanitized.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    let mut s = String::with_capacity(idx + 14);
-    s.push_str(&sanitized[..idx]);
-    s.push_str("...[truncated]");
-    s
-}
 
 pub fn redact_error_msg(raw: &str) -> String {
     // Canonical redaction lives in openproxy_types::redaction: this copy used

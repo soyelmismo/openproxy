@@ -293,27 +293,27 @@ mod account_list_masking_tests {
             _master_key: &db::MasterKey,
             _input: openproxy_core::admin::CreateAccountInput,
         ) -> Result<AccountId, CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn bulk_create_accounts(
             &self,
             _master_key: &db::MasterKey,
             _input: openproxy_core::admin::BulkCreateAccountsInput,
         ) -> Result<Vec<AccountId>, CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn delete_account(&self, _id: AccountId) -> Result<(), CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn set_account_health(
             &self,
             _id: AccountId,
             _health: openproxy_core::accounts::HealthStatus,
         ) -> Result<(), CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn set_account_active(&self, _id: AccountId, _active: bool) -> Result<(), CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn update_account_api_key(
             &self,
@@ -321,27 +321,27 @@ mod account_list_masking_tests {
             _id: AccountId,
             _input: openproxy_core::admin::UpdateAccountApiKeyInput,
         ) -> Result<(), CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn get_account_api_key(
             &self,
             _master_key: &db::MasterKey,
             _id: AccountId,
         ) -> Result<String, CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn update_account_label(
             &self,
             _id: AccountId,
             _input: openproxy_core::admin::UpdateAccountLabelInput,
         ) -> Result<(), CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
         fn reorder_accounts(
             &self,
             _input: openproxy_core::admin::ReorderAccountsInput,
         ) -> Result<(), CoreError> {
-            unimplemented!("not needed for the listing test")
+            Err(CoreError::Internal("not needed for the listing test".into()))
         }
     }
 

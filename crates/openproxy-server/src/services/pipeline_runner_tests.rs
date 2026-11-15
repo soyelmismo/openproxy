@@ -620,14 +620,22 @@ async fn test_app_router_e2e_pii_user_field_redacted_upstream() {
 
     let pool = Arc::new(DbPool::test_pool_with_prefix("pii-e2e").expect("pool"));
     let master_key = Arc::new(MasterKey::generate().expect("mk"));
-    let mut config = AppConfig::default();
-    config.pii = serde_json::from_value(serde_json::json!({
-        "pii_enabled": true,
-        "pii_entities": ["email"]
-    }))
-    .expect("pii config");
-    config.retries.max_attempts = 1;
-    config.racing.max_race_size = 1;
+    let config = AppConfig {
+        pii: serde_json::from_value(serde_json::json!({
+            "pii_enabled": true,
+            "pii_entities": ["email"]
+        }))
+        .expect("pii config"),
+        retries: openproxy_types::config::RetriesConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+        racing: openproxy_types::config::RacingConfig {
+            max_race_size: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(Vec::new())));
     let state = AppState::for_test(config, Arc::clone(&pool), Arc::clone(&master_key), adapters);

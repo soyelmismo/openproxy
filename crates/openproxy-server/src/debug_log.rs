@@ -182,27 +182,26 @@ fn spawn_file_logger_task(
                             // Security (audit H-12): rotate on SIZE, not only
                             // on the 12 h tick — the warn loop that fills the
                             // shared disk is bounded by this cap.
-                            if written_since_rotation.saturating_add(batch_bytes) > max_bytes {
-                                if let Ok(new_file) = tokio::fs::OpenOptions::new()
+                            if written_since_rotation.saturating_add(batch_bytes) > max_bytes
+                                && let Ok(new_file) = tokio::fs::OpenOptions::new()
                                     .create(true)
                                     .write(true)
                                     .truncate(true)
                                     .open(&path)
                                     .await
+                            {
+                                #[cfg(unix)]
                                 {
-                                    #[cfg(unix)]
-                                    {
-                                        use std::os::unix::fs::PermissionsExt;
-                                        if let Ok(meta) = new_file.metadata().await {
-                                            let mut perms = meta.permissions();
-                                            perms.set_mode(perms.mode() & 0o600);
-                                            let _ =
-                                                tokio::fs::set_permissions(&path, perms).await;
-                                        }
+                                    use std::os::unix::fs::PermissionsExt;
+                                    if let Ok(meta) = new_file.metadata().await {
+                                        let mut perms = meta.permissions();
+                                        perms.set_mode(perms.mode() & 0o600);
+                                        let _ =
+                                            tokio::fs::set_permissions(&path, perms).await;
                                     }
-                                    file = new_file;
-                                    written_since_rotation = 0;
                                 }
+                                file = new_file;
+                                written_since_rotation = 0;
                             }
                             for line in lines {
                                 let _ = file.write_all(line.as_bytes()).await;
@@ -645,16 +644,17 @@ mod size_cap_tests {
     use super::*;
 
     fn entry_with_message(message: &str) -> Arc<DebugLogEntry> {
-        Arc::new(DebugLogEntry {
+        let entry = DebugLogEntry {
             seq: 1,
             timestamp: chrono::Utc::now(),
-            level: "WARN".into(),
-            target: "test".into(),
+            level: "WARN",
+            target: "test".to_string(),
             message: message.to_string(),
             request_id: None,
             trace_id: None,
             span_path: None,
-        })
+        };
+        Arc::new(entry)
     }
 
     /// Audit H-12: the file writer must rotate on SIZE, not only on the 12 h

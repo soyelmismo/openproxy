@@ -125,6 +125,11 @@ impl AuthFailureLimiter {
     }
 }
 
+/// Build the `/v1` failure limiter with the public-surface policy.
+pub fn public_auth_limiter() -> AuthFailureLimiter {
+    AuthFailureLimiter::new(PUBLIC_AUTH_MAX_FAILURES, PUBLIC_AUTH_WINDOW)
+}
+
 /// Outermost `/v1` middleware: throttle unauthenticated brute force.
 ///
 /// Wraps the whole public API router (including `GET /v1/models`, which
@@ -168,7 +173,7 @@ pub async fn public_auth_throttle_middleware(
         // middleware still performs full validation on the passed request.
         let known_good_key = crate::middleware::auth::extract_bearer_or_api_key_token(req.headers())
             .is_some_and(|token| {
-                let key_hash = openproxy_core::api_keys::hash_key(&token);
+                let key_hash = openproxy_core::api_keys::hash_key(token);
                 state.get_cached_api_key(&key_hash).is_some()
             });
         if !known_good_key {
