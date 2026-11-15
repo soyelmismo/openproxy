@@ -422,8 +422,38 @@ impl ThinkStreamExtractor {
     /// or active think state exists.
     #[inline]
     pub fn has_active_state_or_tag(&self, text: &str) -> bool {
-        self.inside_think || !self.tag_buffer.is_empty() || text.contains('<')
+        if self.inside_think || !self.tag_buffer.is_empty() {
+            return true;
+        }
+        may_contain_think_tag_or_partial(text)
     }
+}
+
+#[inline]
+fn may_contain_think_tag_or_partial(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for idx in memchr::memchr_iter(b'<', bytes) {
+        let tail = &bytes[idx + 1..];
+        if tail.is_empty() || tail[0] == b'"' {
+            return true;
+        }
+        let b0 = tail[0].to_ascii_lowercase();
+        if b0 == b't' {
+            if tail.len() == 1 || tail[1] == b'"' || tail[1].eq_ignore_ascii_case(&b'h') {
+                return true;
+            }
+        } else if b0 == b'r' {
+            if tail.len() == 1 || tail[1] == b'"' || tail[1].eq_ignore_ascii_case(&b'e') {
+                return true;
+            }
+        } else if b0 == b'/'
+            && tail.len() >= 3
+            && (tail[1..3].eq_ignore_ascii_case(b"th") || tail[1..3].eq_ignore_ascii_case(b"re"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 impl crate::streaming::StreamingChunkStage for ThinkStreamExtractor {

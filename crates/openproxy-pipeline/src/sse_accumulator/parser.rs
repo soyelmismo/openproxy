@@ -7,13 +7,25 @@ use super::types::{ToolCallProbe, ToolCallProbeOuter};
 /// Decode standard JSON string escape sequences into the destination byte buffer.
 pub fn decode_json_escape_into(raw: &str, out: &mut Vec<u8>) {
     let bytes = raw.as_bytes();
-    if !bytes.contains(&b'\\') {
+    let Some(first_bs) = memchr::memchr(b'\\', bytes) else {
         out.extend_from_slice(bytes);
         return;
+    };
+    out.reserve(bytes.len());
+    if first_bs > 0 {
+        out.extend_from_slice(&bytes[..first_bs]);
     }
-    let mut i = 0;
+    let mut i = first_bs;
     while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+        let Some(rel) = memchr::memchr(b'\\', &bytes[i..]) else {
+            out.extend_from_slice(&bytes[i..]);
+            break;
+        };
+        if rel > 0 {
+            out.extend_from_slice(&bytes[i..i + rel]);
+            i += rel;
+        }
+        if i + 1 < bytes.len() {
             match bytes[i + 1] {
                 b'"' => {
                     out.push(b'"');
@@ -83,7 +95,7 @@ pub fn decode_json_escape_into(raw: &str, out: &mut Vec<u8>) {
                 }
             }
         } else {
-            out.push(bytes[i]);
+            out.push(b'\\');
             i += 1;
         }
     }
@@ -117,6 +129,7 @@ pub(crate) fn find_delta_object(payload: &str) -> Option<usize> {
 pub(crate) struct DeltaFields<'a> {
     pub content: Option<&'a str>,
     pub reasoning_content: Option<&'a str>,
+    pub has_tool_calls: bool,
 }
 
 /// Locate a string's closing quote, skipping escaped quotes and backslashes.
@@ -175,6 +188,10 @@ pub(crate) fn extract_delta_fields(payload: &str) -> DeltaFields<'_> {
                 if depth != 1 {
                     continue;
                 }
+                if key == b"tool_calls" {
+                    fields.has_tool_calls = true;
+                    continue;
+                }
                 let destination = match key {
                     b"content" if !seen_content => {
                         seen_content = true;
@@ -193,7 +210,7 @@ pub(crate) fn extract_delta_fields(payload: &str) -> DeltaFields<'_> {
                     *destination = payload.get(value + 1..end);
                     i = end + 1;
                 }
-                if seen_content && seen_reasoning {
+                if seen_content && seen_reasoning && fields.has_tool_calls {
                     break;
                 }
             }
