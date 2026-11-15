@@ -324,6 +324,35 @@ fn client_allowed(path: &str, method: &axum::http::Method) -> bool {
     }
 }
 
+/// Whether the admin-auth throttle lets this request through.
+///
+/// Security (audit H-11): behind a reverse proxy WITHOUT `trusted_proxies`
+/// configured, every Internet client shares the proxy's loopback IP in the
+/// failure counter, so 20 anonymous failures locked the legitimate operator
+/// out of the whole admin surface for 60 s — renewable forever, a cheap
+/// remote DoS of the dashboard and the admin API. The escape hatch: a
+/// CACHED valid key still authenticates while its IP is blocked (verified
+/// against the in-memory key cache only — no DB — so brute force with
+/// unknown keys stays blocked without touching SQLite), and its success
+/// clears the budget via `record_success`. Unknown or absent credentials
+/// get the early 429 as before.
+fn admin_throttle_allows(
+    state: &AppState,
+    headers: &HeaderMap,
+    client_ip: std::net::IpAddr,
+) -> bool {
+    if !state.admin_limiter().is_blocked(client_ip) {
+        return true;
+    }
+    extract_bearer_token(headers)
+        .ok()
+        .flatten()
+        .is_some_and(|token| {
+            let key_hash = openproxy_core::api_keys::hash_key(token);
+            state.get_cached_api_key(&key_hash).is_some()
+        })
+}
+
 pub async fn admin_auth_middleware(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -339,7 +368,7 @@ pub async fn admin_auth_middleware(
         &state.config().server.trusted_proxies,
     )
     .unwrap_or_else(|| addr.ip());
-    if state.admin_limiter().is_blocked(client_ip_for_throttle) {
+    if !admin_throttle_allows(&state, req.headers(), client_ip_for_throttle) {
         return crate::error::ApiError(openproxy_types::CoreError::RateLimited {
             provider: "admin_auth_throttle".into(),
             retry_after_ms: 60_000,
@@ -650,5 +679,82 @@ mod limiter_tests {
             limiter.is_blocked(blocked_ip),
             "BLOCKED IP must remain blocked after spoofed-IP flood — clear() regression"
         );
+    }
+}
+
+#[cfg(test)]
+mod throttle_escape_hatch_tests {
+    use super::*;
+    use crate::state::AppState;
+
+    async fn test_state() -> AppState {
+        let dir = openproxy_db::testing::TempDir::new("admin-throttle-test").expect("mkdir");
+        let pool = std::sync::Arc::new(
+            openproxy_db::DbPool::open(&dir.join("admin-throttle.db")).expect("open"),
+        );
+        {
+            let mut w = pool.writer();
+            openproxy_db::migrations::run(&mut w).expect("migrations");
+        }
+        let mk = openproxy_db::MasterKey::generate().unwrap();
+        let adapters = std::sync::Arc::new(parking_lot::RwLock::new(std::sync::Arc::new(
+            openproxy_adapters::adapters::builtin_adapters(),
+        )));
+        AppState::for_test(
+            openproxy_core::AppConfig::default(),
+            pool,
+            std::sync::Arc::new(mk),
+            adapters,
+        )
+    }
+
+    /// Audit H-11: a blocked IP with a CACHED valid key must pass the
+    /// throttle (shared-NAT lockout), while unknown keys and headerless
+    /// requests stay blocked without a database lookup.
+    #[tokio::test]
+    async fn blocked_ip_with_cached_valid_key_passes_throttle() {
+        let state = test_state().await;
+        let ip: std::net::IpAddr = "203.0.113.90".parse().unwrap();
+
+        // Seed + cache a valid manage key.
+        let plaintext = format!("op_live_admin_ok_{}", std::process::id());
+        {
+            let w = state.db_pool().writer();
+            let key_hash = openproxy_core::api_keys::hash_key(&plaintext);
+            w.execute(
+                "INSERT OR REPLACE INTO api_keys (key_hash, key_prefix, label, scopes_json, created_by) \
+                 VALUES (?1, ?2, 'throttle', '[\"manage\"]', 'throttle-test')",
+                rusqlite::params![key_hash, &plaintext[..plaintext.len().min(12)]],
+            )
+            .expect("insert key");
+        }
+        let key = openproxy_core::api_keys::get_by_hash(
+            &state.db_pool().writer(),
+            &openproxy_core::api_keys::hash_key(&plaintext),
+        )
+        .expect("fetch key")
+        .expect("key present");
+        state.cache_api_key(std::sync::Arc::new(key));
+
+        // Not blocked yet: everything passes.
+        assert!(admin_throttle_allows(&state, &HeaderMap::new(), ip));
+
+        // Trip the throttle for this IP.
+        for _ in 0..ADMIN_AUTH_MAX_FAILURES {
+            state.admin_limiter().record_failure(ip);
+        }
+        assert!(state.admin_limiter().is_blocked(ip));
+
+        // Headerless and unknown-key requests are blocked (fast 429).
+        assert!(!admin_throttle_allows(&state, &HeaderMap::new(), ip));
+        let mut bad = HeaderMap::new();
+        bad.insert("authorization", "Bearer op_live_unknownkey".parse().unwrap());
+        assert!(!admin_throttle_allows(&state, &bad, ip));
+
+        // The cached valid key passes the throttle and would clear the
+        // budget through record_success in the middleware.
+        let mut good = HeaderMap::new();
+        good.insert("authorization", format!("Bearer {plaintext}").parse().unwrap());
+        assert!(admin_throttle_allows(&state, &good, ip), "cached valid key must pass while blocked");
     }
 }
