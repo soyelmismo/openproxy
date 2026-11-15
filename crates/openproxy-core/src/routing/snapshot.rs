@@ -285,12 +285,12 @@ fn millis_now() -> u64 {
 /// match, escalating to `SNAP.write()` and `REBUILD.lock()` only when state
 /// or file metadata drifts.
 fn get_snapshot(pool: &DbPool) -> Result<Arc<RoutingSnapshot>> {
-    let path_cow = pool.path().to_string_lossy();
+    let path_str = pool.path_str();
     let (config_v, cooldown_v, file_v, write_v) = probe_versions(pool);
     {
         let guard = SNAP.read();
         if let Some(st) = guard.as_ref()
-            && st.db_key == path_cow.as_ref()
+            && st.db_key == path_str
             && st.file_version == file_v
             && st.config_version == config_v
             && (st.cooldown_version == cooldown_v
@@ -304,7 +304,7 @@ fn get_snapshot(pool: &DbPool) -> Result<Arc<RoutingSnapshot>> {
     {
         let mut guard = SNAP.write();
         if let Some(st) = guard.as_mut()
-            && st.db_key == path_cow.as_ref()
+            && st.db_key == path_str
         {
             // External-writer probe. The file moved; classify the change:
             //   - write_epoch also moved -> our own commit explains the
@@ -346,7 +346,7 @@ fn get_snapshot(pool: &DbPool) -> Result<Arc<RoutingSnapshot>> {
             }
         }
     }
-    let key = path_cow.into_owned();
+    let key = path_str.to_owned();
     let _build_guard = REBUILD.lock();
     let (config_v, cooldown_v, file_v, write_v) = probe_versions(pool);
     {

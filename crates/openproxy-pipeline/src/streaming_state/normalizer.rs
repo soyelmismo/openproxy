@@ -273,9 +273,7 @@ pub(crate) fn apply_reasoning_normalizations(
     let has_nested_sse = p.contains("data:");
     if !has_tool_calls
         && (!has_content
-            || (!unicode_escaped
-                && !has_nested_sse
-                && !think_extractor.has_active_state_or_tag(p)))
+            || (!unicode_escaped && !has_nested_sse && !think_extractor.has_active_state_or_tag(p)))
     {
         return normalized;
     }

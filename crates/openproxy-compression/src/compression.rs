@@ -75,11 +75,6 @@ fn string_content_identity(msg: &OpenAIMessage) -> Option<(usize, usize)> {
     }
 }
 
-/// Pre-compression snapshot of one message: the string content identity
-/// (`(ptr, len)` when the content is a plain string) plus its char and BPE
-/// token counts, kept so untouched messages skip re-estimation afterwards.
-type PreSnapshot = (Option<(usize, usize)>, usize, usize);
-
 /// Char and token counts before and after a `TextCompressor`, as unified
 /// `CompressionStats`. Reuses pre-compression BPE token counts for messages
 /// whose string buffer pointer and length were untouched by the compressor.
@@ -87,7 +82,8 @@ pub fn measure_compression<C: TextCompressor>(
     messages: &mut Vec<OpenAIMessage>,
     compressor: &C,
 ) -> CompressionStats {
-    let mut pre_snapshots: Vec<PreSnapshot> = Vec::with_capacity(messages.len());
+    let mut pre_snapshots: Vec<(Option<(usize, usize)>, usize, usize)> =
+        Vec::with_capacity(messages.len());
     let mut original_chars = 0usize;
     let mut original_tokens = 0usize;
 

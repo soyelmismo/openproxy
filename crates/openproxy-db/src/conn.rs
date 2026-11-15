@@ -43,6 +43,12 @@ pub struct DbPool {
     /// extra owned `Connection`, since `Connection` is not `Clone` and a second
     /// handle requires opening the file again.
     path: Arc<Path>,
+    /// Pre-computed `<path>-wal` sidecar path so [`DbPool::file_version`] can
+    /// stat the WAL file without allocating an `OsString` on every request.
+    wal_path: Arc<Path>,
+    /// Pre-computed UTF-8 string representation of `path` for zero-allocation
+    /// cache key comparisons on the routing hot path.
+    path_str: Arc<str>,
     synchronous: SqliteSynchronous,
     /// Monotonic epoch bumped by the writer connection's commit hook on
     /// every COMMIT. Read-side caches (routing snapshot, account cache) key
@@ -210,6 +216,11 @@ impl DbPool {
             .ok()
             .map(|c| Arc::new(Mutex::new(c)));
 
+        let mut wal_os = path.as_os_str().to_os_string();
+        wal_os.push("-wal");
+        let wal_path: Arc<Path> = Arc::from(std::path::Path::new(&wal_os));
+        let path_str: Arc<str> = Arc::from(path.to_string_lossy().as_ref());
+
         Ok(Self {
             writer: Arc::new(Mutex::new(writer)),
             readers: Arc::new(readers),
@@ -217,6 +228,8 @@ impl DbPool {
             read_admission: Arc::new(tokio::sync::Semaphore::new(num_readers)),
             write_admission: Arc::new(tokio::sync::Semaphore::new(1)),
             path: Arc::from(path),
+            wal_path,
+            path_str,
             synchronous,
             epoch,
             probe,
@@ -249,6 +262,8 @@ impl DbPool {
             read_admission: pool.read_admission,
             write_admission: pool.write_admission,
             path: pool.path,
+            wal_path: pool.wal_path,
+            path_str: pool.path_str,
             synchronous: pool.synchronous,
             epoch: pool.epoch,
             probe: pool.probe,
@@ -465,6 +480,13 @@ impl DbPool {
         &self.path
     }
 
+    /// Pre-computed string representation of the SQLite database path for
+    /// zero-allocation snapshot cache lookups.
+    #[inline]
+    pub fn path_str(&self) -> &str {
+        &self.path_str
+    }
+
     /// Epoch bumped by the writer's commit hook. Cheap read-side cache
     /// invalidation: `load + compare` replaces a `PRAGMA data_version`
     /// round-trip and also sees commits made by this process.
@@ -482,7 +504,9 @@ impl DbPool {
     /// WAL mode writes go to `<db>-wal`, not the main file, until a
     /// checkpoint — so both mtimes must be tracked. A missing WAL (fresh DB,
     /// just-checkpointed) reports 0 and is fine.
+    #[inline]
     pub fn file_version(&self) -> (u64, u64) {
+        #[inline]
         fn mtime_nanos(p: &std::path::Path) -> u64 {
             std::fs::metadata(p)
                 .and_then(|m| m.modified())
@@ -490,12 +514,7 @@ impl DbPool {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_nanos() as u64)
         }
-        let mut wal_path = self.path.as_os_str().to_os_string();
-        wal_path.push("-wal");
-        (
-            mtime_nanos(&self.path),
-            mtime_nanos(std::path::Path::new(&wal_path)),
-        )
+        (mtime_nanos(&self.path), mtime_nanos(&self.wal_path))
     }
 
     /// `PRAGMA data_version` read on the dedicated probe connection: moves
