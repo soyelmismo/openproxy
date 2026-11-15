@@ -94,7 +94,7 @@ const SSE_PAYLOAD: &str = concat!(
 
 // Harness
 
-fn drive(codec: Option<Codec>, frames: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+pub(super) fn drive(codec: Option<Codec>, frames: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     let mut headers = HeaderMap::new();
     if let Some(codec) = codec
         && let Ok(value) = HeaderValue::from_str(codec.as_str())
@@ -131,7 +131,7 @@ fn drain(decoding: &mut BodyDecoding, collected: &mut Vec<u8>) -> Result<(), Str
     Err("decoder made no progress".to_string())
 }
 
-fn frames_of(bytes: &[u8], size: usize) -> Vec<Vec<u8>> {
+pub(super) fn frames_of(bytes: &[u8], size: usize) -> Vec<Vec<u8>> {
     bytes.chunks(size.max(1)).map(<[u8]>::to_vec).collect()
 }
 

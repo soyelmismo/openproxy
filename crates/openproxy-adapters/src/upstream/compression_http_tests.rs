@@ -55,7 +55,7 @@ fn request_is_complete(request: &[u8]) -> bool {
 /// Serve one request, replying with whatever `handler` builds from the raw
 /// request bytes. The handler sees the exact bytes on the wire, which is how
 /// the negotiation assertions are made.
-async fn spawn_responder<F>(handler: F) -> std::net::SocketAddr
+pub(super) async fn spawn_responder<F>(handler: F) -> std::net::SocketAddr
 where
     F: Fn(&[u8]) -> Vec<u8> + Send + 'static,
 {
@@ -122,7 +122,7 @@ fn head(status_line: &str, headers: &[(&str, &str)]) -> Vec<u8> {
     out
 }
 
-fn body_response(status_line: &str, headers: &[(&str, String)], body: &[u8]) -> Vec<u8> {
+pub(super) fn body_response(status_line: &str, headers: &[(&str, String)], body: &[u8]) -> Vec<u8> {
     let mut out = format!("HTTP/1.1 {status_line}\r\n").into_bytes();
     for (name, value) in headers {
         out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
