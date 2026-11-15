@@ -1,0 +1,132 @@
+From 73a06388b0762a891a1f291acf532f308a3dd1a4 Mon Sep 17 00:00:00 2001
+From: soyelmismo <thinkboutme@protonmail.com>
+Date: Sun, 15 Nov 2026 04:00:56 +0000
+Subject: [PATCH] ux(minimalism): [MIN-04] eliminar bloque CSS legacy de toasts
+ y reglas duplicadas de sidebar-footer
+
+---
+ .../src/static/styles/components/cards.css    | 76 -------------------
+ .../src/static/styles/components/forms.css    | 10 ---
+ .../src/static/styles/components/toasts.css   |  4 +-
+ 3 files changed, 1 insertion(+), 89 deletions(-)
+
+diff --git a/crates/openproxy-server/web/src/static/styles/components/cards.css b/crates/openproxy-server/web/src/static/styles/components/cards.css
+index 982e1af..6b97081 100644
+--- a/crates/openproxy-server/web/src/static/styles/components/cards.css
++++ b/crates/openproxy-server/web/src/static/styles/components/cards.css
+@@ -1,79 +1,3 @@
+-
+-.toast-container {
+-  position: fixed;
+-  bottom: var(--space-6);
+-  right: var(--space-6);
+-  display: flex;
+-  flex-direction: column;
+-  gap: var(--space-2);
+-  z-index: var(--z-toast);
+-  pointer-events: none;
+-  max-width: 440px;
+-  width: calc(100vw - 2 * var(--space-6));
+-  align-items: flex-end;
+-}
+-
+-@media (max-width: 768px) {
+-  .toast-container {
+-    bottom: max(var(--space-3), env(safe-area-inset-bottom));
+-    right: max(var(--space-3), env(safe-area-inset-right));
+-    left: max(var(--space-3), env(safe-area-inset-left));
+-    width: auto;
+-    max-width: 100%;
+-    align-items: stretch;
+-  }
+-}
+-
+-.toast {
+-  display: flex;
+-  align-items: center;
+-  justify-content: space-between;
+-  gap: var(--space-3);
+-  padding: 0.75rem 1rem;
+-  font-size: var(--fs-sm);
+-  font-weight: 500;
+-  pointer-events: auto;
+-  transform: translateX(30px);
+-  opacity: 0;
+-  transition: transform var(--t-base), opacity var(--t-base);
+-  border: var(--border-w) var(--border-style) var(--color-border);
+-  background: var(--color-surface);
+-  color: var(--color-text);
+-  border-radius: var(--radius-sm);
+-  box-shadow: var(--shadow-lg);
+-  max-width: 100%;
+-  box-sizing: border-box;
+-  word-break: break-word;
+-}
+-.toast.show { transform: translateX(0); opacity: 1; }
+-.toast-content {
+-  flex: 1;
+-  min-width: 0;
+-  line-height: 1.4;
+-}
+-.toast-close {
+-  background: transparent;
+-  border: none;
+-  color: inherit;
+-  opacity: 0.8;
+-  cursor: pointer;
+-  padding: 0 0.25rem;
+-  font-size: 1.25rem;
+-  line-height: 1;
+-  display: inline-flex;
+-  align-items: center;
+-  justify-content: center;
+-  transition: opacity var(--t-fast);
+-}
+-.toast-close:hover {
+-  opacity: 1;
+-}
+-.toast-success { background: var(--color-success-soft); color: var(--color-success); border-color: var(--color-success); }
+-.toast-error   { background: var(--color-error-soft);   color: var(--color-error);   border-color: var(--color-error);   }
+-.toast-info    { background: var(--color-info-soft);    color: var(--color-info);    border-color: var(--color-info);    }
+-.toast-warning { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn);    }
+-.toast-warn    { background: var(--color-warn-soft);    color: var(--color-warn);    border-color: var(--color-warn);    }
+-
+ .banner {
+   padding: 0.9rem 1.1rem;
+   border: var(--border-w) var(--border-style) var(--color-border);
+diff --git a/crates/openproxy-server/web/src/static/styles/components/forms.css b/crates/openproxy-server/web/src/static/styles/components/forms.css
+index c21d03a..0ed1d1d 100644
+--- a/crates/openproxy-server/web/src/static/styles/components/forms.css
++++ b/crates/openproxy-server/web/src/static/styles/components/forms.css
+@@ -137,16 +137,6 @@ button.close-btn {
+   transform: rotate(15deg);
+ }
+ 
+-.sidebar-footer {
+-  display: flex;
+-  align-items: center;
+-  justify-content: space-between;
+-  gap: var(--space-2);
+-  margin-top: auto;
+-}
+-.sidebar-toggle { flex: 1; }
+-body.sidebar-collapsed .sidebar-toggle { text-align: center; }
+-
+ .logs-recording-toggle {
+   display: inline-flex;
+   align-items: center;
+diff --git a/crates/openproxy-server/web/src/static/styles/components/toasts.css b/crates/openproxy-server/web/src/static/styles/components/toasts.css
+index be181f7..f281e9d 100644
+--- a/crates/openproxy-server/web/src/static/styles/components/toasts.css
++++ b/crates/openproxy-server/web/src/static/styles/components/toasts.css
+@@ -1,6 +1,4 @@
+-/* Toasts — transient status messages.
+-   Loaded after components/cards.css (which still owns the legacy toast block) so these rules
+-   are the authoritative presentation: bounded stack, readable severity on both themes,
++/* Toasts — transient status messages: bounded stack, readable severity on both themes,
+    URL/JSON wrapping with a scroll cap, and a real 24px dismiss target. */
+ 
+ .toast-container {
+-- 
+2.34.1
+
