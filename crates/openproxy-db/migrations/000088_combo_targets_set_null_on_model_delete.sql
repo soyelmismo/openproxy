@@ -12,7 +12,7 @@
 -- Gate F1 reconnection logic automatically rebinds `model_row_id`
 -- via `upstream_model_id`.
 --
--- Also ensure antseed provider has prune_models = 1 so its models are pruned
+-- Also ensure the volatile P2P provider has prune_models = 1 so its models are pruned
 -- normally from the provider catalog while combos preserve ghost targets.
 
 PRAGMA foreign_keys = OFF;

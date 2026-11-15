@@ -21,7 +21,7 @@ const CASES: &[(&str, i64, u64, u32)] = &[
     ("zai", 9779734, 20_000, 8_000),
     ("stepfun", 9874199, 60_000, 8_000),
     ("tiprouter", 14394928, 60_000, 8_000),
-    ("antseed", 15172980, 60_000, 8_000),
+    ("marketplace", 15100000, 60_000, 8_000),
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

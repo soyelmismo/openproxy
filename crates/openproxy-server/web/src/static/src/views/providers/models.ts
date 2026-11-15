@@ -286,7 +286,7 @@ export function renderProviderModelSettings(
       : html``}
 
     <div class="auto-activate-bar" style="margin-top: 1rem; display: flex; gap: 2rem; align-items: center; flex-wrap: wrap;">
-      <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="When enabled (default), models omitted from upstream /models are deleted (unless pinned in combos). Disable for volatile/P2P providers like antseed to retain all discovered models.">
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0; font-weight: normal; cursor: pointer;" title="When enabled (default), models omitted from upstream /models are deleted (unless pinned in combos). Disable for volatile/P2P upstreams to retain all discovered models.">
         <input type="checkbox"
                .checked=${provider.prune_models !== false}
                @change=${(e: Event) => onTogglePruneModels(provider.id, e)}>

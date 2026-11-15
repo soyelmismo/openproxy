@@ -65,9 +65,9 @@ export interface ResolvedPricing {
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
-/** Agent token mix used by the margin router (antseed-margin-router
- *  dashboard): 89.1% of input tokens are cache hits, and the router spends
- *  29.3 / 3871.7 output tokens per input token. */
+/** Agent token mix used by the margin router: 89.1% of input tokens are
+ *  cache hits, and the router spends 29.3 / 3871.7 output tokens per input
+ *  token. */
 export const AGENT_CACHE_HIT_RATIO = 0.891;
 export const AGENT_OUTPUT_RATIO = 29.3 / 3871.7;
 

@@ -113,7 +113,7 @@ describe("buildKeyBodyFromForm", () => {
     const form = track(makeKeyForm({
       scopes: ["chat"],
       blProviders: " openai , groq , ,  ",
-      allowedProviders: " xkiro , antseed , , ",
+      allowedProviders: " xkiro , beta , , ",
       blModels: "gpt-4*,*-preview",
     }));
     const body = buildKeyBodyFromForm(form);

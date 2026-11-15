@@ -492,7 +492,7 @@ fn historical_rows_report_not_charged_or_unknown_never_the_price() {
     );
 }
 
-/// Política antseed-cancel: una fila 499 (cancel del cliente) factura los
+/// Política marketplace-cancel: una fila 499 (cancel del cliente) factura los
 /// prompt tokens a precio de input uncached (no llegó el bloque de usage con
 /// el reparto de caché) + los tokens entregados en vuelo. Los demás errores
 /// siguen en coste 0.

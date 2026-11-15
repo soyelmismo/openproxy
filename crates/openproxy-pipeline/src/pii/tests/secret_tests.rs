@@ -334,7 +334,7 @@ fn test_shell_variable_spellings_and_sshpass_are_not_secrets() {
     assert_eq!(session.restore_text(&red), script);
 }
 
-/// Real incident (Antseed session, 2026-11-08): the CLI flag regex read the
+/// Real incident (2026-11-08): the CLI flag regex read the
 /// `-p` inside `step-5-preview` as a flag and redacted the word `review`,
 /// turning every model slug into `step-5-psec_0b3dd3a1`. The agent then
 /// wrote that placeholder into its pricing config and the network answered

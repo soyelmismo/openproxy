@@ -255,7 +255,7 @@ pub struct Provider {
     #[serde(default = "default_prompt_cache_ttl")]
     pub prompt_cache_ttl: Box<str>,
     /// Whether models missing from upstream discovery are pruned from DB.
-    /// Default true. Disabled for volatile P2P sources (e.g. antseed).
+    /// Default true. Disabled for volatile P2P sources.
     #[serde(default = "default_true")]
     pub prune_models: bool,
     /// Per-provider opt-in (audit H-3): when true, this provider's upstream

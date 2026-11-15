@@ -12,7 +12,7 @@ fn test_sanitize_tool_call_arguments_valid_json() {
 
 #[test]
 fn test_sanitize_tool_call_arguments_trailing_characters() {
-    // Exact symptom seen in NVIDIA NIM and Antseed logs:
+    // Exact symptom seen in NVIDIA NIM and other upstream logs:
     // trailing characters after valid JSON document at col 7186 / char 7185
     let trailing = r#"{"AbsolutePath":"/root/file.rs"} trailing extra data after json"#;
     let sanitized = sanitize_tool_call_arguments(trailing);

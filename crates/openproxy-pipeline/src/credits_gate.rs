@@ -404,7 +404,7 @@ impl Pipeline {
         // an error row and charge the customer for a request the upstream
         // never answered.
         //
-        // Client cancels (499) ARE billable since the antseed-cancel policy:
+        // Client cancels (499) ARE billable since the marketplace-cancel policy:
         // the seller never aborts its upstream, so a cut stream still costs us
         // full input + full generation via the seller's NeedAuth claim. The
         // user pays the in-flight delivered tokens + full prompt at the

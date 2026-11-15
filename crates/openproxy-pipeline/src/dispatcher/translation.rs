@@ -105,7 +105,7 @@ pub(crate) fn translate_non_streaming_body(
 
 /// Populates `usage` in `OpenAIResponse` using BPE tokenizer (tiktoken cl100k_base)
 /// if the upstream omitted it or returned zeros. This guarantees downstream clients
-/// (like Antseed sellers) always receive realistic, non-zero token accounting.
+/// (like marketplace sellers) always receive realistic, non-zero token accounting.
 /// Returns (prompt_estimated, completion_estimated) for persisted provenance.
 pub(crate) fn ensure_usage_populated(
     resp: &mut OpenAIResponse,
