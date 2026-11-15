@@ -83,7 +83,7 @@ enum DictMatchIter<'a> {
     Automaton(aho_corasick::FindIter<'a, 'a>),
 }
 
-impl<'a> Iterator for DictMatchIter<'a> {
+impl Iterator for DictMatchIter<'_> {
     type Item = DictMatch;
 
     #[inline]
@@ -264,7 +264,7 @@ impl StreamingWindowReplacer {
         };
         if dict.patterns.is_empty() {
             return chunk.to_string();
-        };
+        }
 
         let input: std::borrow::Cow<'_, str> = if self.pending.is_empty() {
             if chunk.is_empty() {

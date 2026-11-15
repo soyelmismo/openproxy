@@ -94,7 +94,7 @@ pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String>
         let key_str = k.as_str();
         let value = if is_sensitive(key_str) {
             REDACTED_PLACEHOLDER.to_string()
-        } else if let Some(v) = headers.get_all(k).iter().last() {
+        } else if let Some(v) = headers.get_all(k).iter().next_back() {
             // `to_str()` errs on non-ASCII; legacy behaviour dropped those
             // silently (empty string) — keep it, plus the value cap.
             truncate_header_value(v.to_str().unwrap_or("")).into_owned()
