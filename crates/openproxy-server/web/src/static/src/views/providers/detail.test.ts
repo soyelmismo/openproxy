@@ -3,6 +3,14 @@ import { render } from "lit-html";
 import type { TemplateResult } from "lit-html";
 import type { Account, Provider } from "../../lib/types/api.js";
 
+vi.mock("../../state/api.js", () => ({ api: vi.fn() }));
+vi.mock("../../state/reactive.js", () => ({ requestUpdate: vi.fn() }));
+vi.mock("../../components/toast.js", () => ({ showToast: vi.fn() }));
+vi.mock("../../lib/show-confirm.js", () => ({
+  showConfirm: vi.fn(async () => true),
+  showPrompt: vi.fn(async () => null),
+}));
+
 function makeTestAccount(overrides: Partial<Account> = {}): Account {
   return {
     id: 1,
@@ -269,5 +277,50 @@ describe("provider detail header extra_headers handling", () => {
     const codexPlanTags = Array.from(container.querySelectorAll(".account-plan")).map(el => el.textContent?.trim());
     expect(codexPlanTags).toEqual(["Plus"]);
     expect(container.textContent).not.toContain("Codex / ChatGPT");
+  });
+});
+
+describe("provider loopback toggle", () => {
+  it("renders the checkbox checked only when allow_loopback is true", async () => {
+    setupMatchMedia();
+    const { renderDetailHeader } = await import("./detail.js");
+
+    const htmlOff = toString(renderDetailHeader(makeProvider()));
+    expect(htmlOff).toContain("loopback-toggle");
+    const containerOff = document.createElement("div");
+    render(renderDetailHeader(makeProvider()), containerOff);
+    const off = containerOff.querySelector<HTMLInputElement>(".loopback-toggle");
+    expect(off).not.toBeNull();
+    expect(off!.checked).toBe(false);
+
+    const containerOn = document.createElement("div");
+    render(renderDetailHeader(makeProvider({ allow_loopback: true })), containerOn);
+    const on = containerOn.querySelector<HTMLInputElement>(".loopback-toggle");
+    expect(on!.checked).toBe(true);
+  });
+
+  it("PATCHes allow_loopback on change and confirms before enabling", async () => {
+    setupMatchMedia();
+    const apiMod = await import("../../state/api.js");
+    const confirmMod = await import("../../lib/show-confirm.js");
+    const { renderDetailHeader } = await import("./detail.js");
+
+    vi.mocked(confirmMod.showConfirm).mockResolvedValue(true as never);
+    vi.mocked(apiMod.api).mockResolvedValue([] as never);
+
+    const container = document.createElement("div");
+    render(renderDetailHeader(makeProvider()), container);
+    const box = container.querySelector<HTMLInputElement>(".loopback-toggle")!;
+    box.checked = true;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(vi.mocked(apiMod.api)).toHaveBeenCalledWith(
+        "/providers/minimax",
+        { method: "PATCH", body: JSON.stringify({ allow_loopback: true }) },
+      );
+    });
+    expect(confirmMod.showConfirm).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(apiMod.api).mock.calls.length).toBeGreaterThan(0);
   });
 });

@@ -197,6 +197,39 @@ async function onChangePromptCacheTtl(
   }
 }
 
+async function onToggleAllowLoopback(
+  providerId: string,
+  next: boolean,
+): Promise<void> {
+  if (next) {
+    const ok = await showConfirm({
+      title: 'Allow loopback upstream',
+      message:
+        `Allow provider "${providerId}" to dial loopback / private upstreams?\n\n` +
+        `Only enable this for local development backends on this host ` +
+        `(127.0.0.1, 10.x, 192.168.x). It widens the SSRF dial surface ` +
+        `for this provider only.`,
+      danger: true,
+      confirmLabel: 'Allow loopback',
+    });
+    if (!ok) return;
+  }
+  try {
+    await api('/providers/' + encodeURIComponent(providerId), {
+      method: 'PATCH',
+      body: JSON.stringify({ allow_loopback: next }),
+    });
+    showToast(
+      `Loopback upstreams ${next ? 'allowed for' : 'blocked for'} ${providerId}`,
+      'success',
+    );
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating allow_loopback');
+  }
+}
+
 async function onRefreshProvider(
   providerId: string,
   e: Event | null,
@@ -449,6 +482,23 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
             </div>
           `
           : html``}
+        <label
+          class="chip loopback-chip${provider.allow_loopback ? ' combo-chip' : ''}"
+          title="Allow loopback / private upstreams (SSRF opt-in per provider). Only for local development backends on this host."
+          style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 2px 8px;"
+        >
+          <input
+            type="checkbox"
+            class="loopback-toggle"
+            .checked=${provider.allow_loopback === true}
+            @change=${(e: Event) => {
+              const target = e.target instanceof HTMLInputElement ? e.target : null;
+              if (!target) return;
+              void onToggleAllowLoopback(provider.id, target.checked);
+            }}
+          />
+          loopback
+        </label>
         ${provider.extra_headers_json
           ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
           : html``}

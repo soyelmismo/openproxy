@@ -130,6 +130,79 @@ async fn patch_provider_sets_notif_keyword_only_over_http() {
 }
 
 #[tokio::test]
+async fn patch_provider_sets_allow_loopback_over_http() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+    openproxy_db::providers::create(
+        &state.db_pool().writer(),
+        openproxy_db::providers::NewProvider {
+            id: &openproxy_types::ProviderId::new("w2loop"),
+            name: "W2 Loopback",
+            base_url: "https://example.invalid",
+            auth_type: openproxy_types::AuthType::Bearer,
+            format: openproxy_types::ProviderFormat::Openai,
+            extra_headers_json: None,
+            auto_activate_keyword: None,
+            rate_limit_scope: openproxy_types::RateLimitScope::Account,
+        },
+    )
+    .unwrap();
+
+    let read_flag = |state: &AppState| -> i64 {
+        state
+            .db_pool()
+            .with_conn(|c| {
+                c.query_row(
+                    "SELECT allow_loopback FROM providers WHERE id = 'w2loop'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap()
+    };
+    assert_eq!(read_flag(&state), 0);
+    let app = axum::Router::new()
+        .nest(
+            "/admin/providers",
+            crate::handlers::admin::providers::router(),
+        )
+        .with_state(state.clone());
+
+    let (s1, _) = test_req(
+        &app,
+        "PATCH",
+        "/admin/providers/w2loop",
+        Some(&plaintext),
+        Some(serde_json::json!({"allow_loopback": true})),
+    )
+    .await;
+    assert_eq!(s1, StatusCode::OK);
+    assert_eq!(read_flag(&state), 1);
+
+    let (s2, _) = test_req(
+        &app,
+        "PATCH",
+        "/admin/providers/w2loop",
+        Some(&plaintext),
+        Some(serde_json::json!({"allow_loopback": false})),
+    )
+    .await;
+    assert_eq!(s2, StatusCode::OK);
+    assert_eq!(read_flag(&state), 0);
+
+    let (s3, _) = test_req(
+        &app,
+        "PATCH",
+        "/admin/providers/w2loop",
+        Some(&plaintext),
+        Some(serde_json::json!({"allow_loopback": 1})),
+    )
+    .await;
+    assert!(s3.is_client_error());
+    assert_eq!(read_flag(&state), 0);
+}
+
+#[tokio::test]
 async fn test_get_provider_icon_endpoint_and_caching() {
     use axum::http::Request;
     use tower::ServiceExt;

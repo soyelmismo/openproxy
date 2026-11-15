@@ -38,6 +38,7 @@ export interface Provider {
   direct_first?: boolean;
   stream_mode?: 'auto' | 'streaming' | 'unary';
   prompt_cache_ttl?: string;
+  allow_loopback?: boolean;
   prune_models?: boolean;
 }
 
@@ -67,6 +68,7 @@ export interface UpdateProviderInput {
   proxy_rotation_mode?: string;
   stream_mode?: 'auto' | 'streaming' | 'unary';
   prompt_cache_ttl?: string;
+  allow_loopback?: boolean;
 }
 
 export interface ModelQuotaDetail {
