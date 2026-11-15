@@ -216,6 +216,41 @@ mod tests {
     }
 
     #[test]
+    fn strip_date_and_version_suffix_edge_cases() {
+        // strip_date_suffix (-YYYY-MM-DD, len 11)
+        assert_eq!(
+            strip_date_suffix("gpt-4-turbo-2024-04-09"),
+            Some("gpt-4-turbo")
+        );
+        assert_eq!(strip_date_suffix("model-2024-01-01"), Some("model"));
+        assert_eq!(strip_date_suffix("short"), None);
+        assert_eq!(strip_date_suffix("model-2024_04_09"), None);
+        assert_eq!(strip_date_suffix("model-2024-04-9a"), None);
+        assert_eq!(strip_date_suffix("model-2024-4-09"), None);
+
+        // strip_4digit_suffix (-NNNN, len 5)
+        assert_eq!(
+            strip_4digit_suffix("mistral-large-2407"),
+            Some("mistral-large")
+        );
+        assert_eq!(strip_4digit_suffix("model-1234"), Some("model"));
+        assert_eq!(strip_4digit_suffix("model-123"), None);
+        assert_eq!(strip_4digit_suffix("model-12345"), None);
+        assert_eq!(strip_4digit_suffix("model_1234"), None);
+        assert_eq!(strip_4digit_suffix("model-123a"), None);
+
+        // strip_version_suffix (-vN)
+        assert_eq!(
+            strip_version_suffix("deepseek-chat-v1"),
+            Some("deepseek-chat")
+        );
+        assert_eq!(strip_version_suffix("model-v25"), Some("model"));
+        assert_eq!(strip_version_suffix("model-v"), None);
+        assert_eq!(strip_version_suffix("model-va"), None);
+        assert_eq!(strip_version_suffix("model_v1"), None);
+    }
+
+    #[test]
     fn strip_compact_yyyymmdd_edge_cases() {
         // Valid compact form with 19xx or 20xx
         assert_eq!(
