@@ -106,7 +106,11 @@ async fn drop_closes_connection_instead_of_leaving_a_driver_task() {
     });
     let mut response = UpstreamClient::for_test_cooperative()
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             profile(),
             CancellationToken::new(),
         )
@@ -133,7 +137,11 @@ async fn idle_chunk_timeout_and_body_cancel_preserve_phase() {
         let cancel = CancellationToken::new();
         let mut response = UpstreamClient::for_test_cooperative()
             .call(
-                UpstreamRequest::get(format!("http://{addr}/")),
+                {
+                    let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                    req.is_streaming = true;
+                    req
+                },
                 profile(),
                 cancel.clone(),
             )
@@ -269,7 +277,11 @@ async fn gzip_decoding_and_nonstreaming_bounds_are_preserved() {
     });
     let response = UpstreamClient::for_test_cooperative()
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             profile(),
             CancellationToken::new(),
         )
@@ -390,7 +402,11 @@ async fn drop_after_terminator_arrived_keeps_connection() {
     let client = UpstreamClient::for_test_cooperative();
     let mut response = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             profile(),
             CancellationToken::new(),
         )
@@ -401,7 +417,11 @@ async fn drop_after_terminator_arrived_keeps_connection() {
     drop(response);
     let response = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             profile(),
             CancellationToken::new(),
         )

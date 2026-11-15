@@ -24,13 +24,22 @@ pub fn bearer_header_value(
 
 impl UpstreamRequest {
     /// Build a simple GET with no headers / body.
+    ///
+    /// Security (audit H-2): unary helpers default to `is_streaming: false`,
+    /// so the response body is bounded by the transport's
+    /// `NON_STREAMING_BODY_LIMIT_BYTES` (32 MiB) instead of the streaming
+    /// limit (`u64::MAX`). Every caller of `get`/`get_json`/`delete`/
+    /// `post_json` collects the body; only callers that pipe chunks (the
+    /// artifact downloaders) opt back into streaming explicitly. Previously a
+    /// compromised or malicious upstream could buffer an unbounded amount of
+    /// memory through these helpers (bounded only by time, 120-300 s).
     pub fn get(url: impl Into<String>) -> Self {
         Self {
             method: Method::GET,
             url: url.into(),
             headers: HeaderMap::new(),
             body: None,
-            is_streaming: true,
+            is_streaming: false,
             proxy: None,
             proxy_status: None,
         }
@@ -70,19 +79,27 @@ impl UpstreamRequest {
     }
 
     /// Build a simple DELETE with no headers / body.
+    ///
+    /// Security (audit H-2): see [`UpstreamRequest::get`] — unary helpers
+    /// default to the bounded, non-streaming transport limit.
     pub fn delete(url: impl Into<String>) -> Self {
         Self {
             method: Method::DELETE,
             url: url.into(),
             headers: HeaderMap::new(),
             body: None,
-            is_streaming: true,
+            is_streaming: false,
             proxy: None,
             proxy_status: None,
         }
     }
 
     /// Build a POST with a JSON body and a `Content-Type: application/json` header.
+    ///
+    /// Security (audit H-2): see [`UpstreamRequest::get`] — unary helpers
+    /// default to the bounded, non-streaming transport limit. Streaming
+    /// chat requests are built by the pipeline dispatcher, which sets
+    /// `is_streaming` explicitly from the request parameters.
     pub fn post_json(url: impl Into<String>, body: Bytes) -> Self {
         let mut headers = HeaderMap::with_capacity(1);
         headers.insert(
@@ -94,7 +111,7 @@ impl UpstreamRequest {
             url: url.into(),
             headers,
             body: Some(body),
-            is_streaming: true,
+            is_streaming: false,
             proxy: None,
             proxy_status: None,
         }
