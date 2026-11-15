@@ -180,6 +180,13 @@ pub fn restore_extra_tables(
     extra_tables: &BTreeMap<String, Vec<serde_json::Value>>,
 ) -> Result<()> {
     for (table_name, rows) in extra_tables {
+        // Security (audit H-15): the blacklist guarded the EXPORT side only —
+        // a crafted or replayed bundle could write rows into tables that are
+        // excluded by design (telemetry, ephemeral state, device tickets),
+        // forging internal state. The restore honors the same policy.
+        if TABLE_BLACKLIST.contains(&table_name.as_str()) {
+            continue;
+        }
         let cols = match get_table_columns(tx, table_name) {
             Ok(c) if !c.is_empty() => c,
             _ => continue, // Target DB does not have this table, skip gracefully
@@ -203,12 +210,18 @@ pub fn restore_extra_tables(
 
             let placeholders: Vec<String> =
                 (1..=matching_cols.len()).map(|i| format!("?{i}")).collect();
+            // Security (audit H-15): bundle-controlled identifiers are
+            // quoted with doubled embedded quotes, so a table or column name
+            // carrying `"` cannot escape its quoted position in the SQL text.
+            // (The PRAGMA table_info gate and rusqlite's single-statement
+            // prepare already reject multi-statement payloads; this closes
+            // the remaining identifier-injection surface for good.)
+            let quoted_table = table_name.replace('"', "\"\"");
             let insert_sql = format!(
-                "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
-                table_name,
+                "INSERT OR REPLACE INTO \"{quoted_table}\" ({}) VALUES ({})",
                 matching_cols
                     .iter()
-                    .map(|c| format!("\"{c}\""))
+                    .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
                     .collect::<Vec<_>>()
                     .join(", "),
                 placeholders.join(", ")
@@ -331,4 +344,74 @@ pub fn export_extra_tables(conn: &Connection) -> Result<BTreeMap<String, Vec<ser
     }
 
     Ok(extra_tables)
+}
+
+#[cfg(test)]
+mod restore_hardening_tests {
+    use super::*;
+
+    /// Audit H-15: blacklisted tables (telemetry, ephemeral state, device
+    /// tickets) must be skipped on RESTORE, not only on export — a crafted
+    /// bundle could otherwise forge rows in tables the backup design
+    /// excludes.
+    #[test]
+    fn blacklisted_tables_are_skipped_on_restore() {
+        let mut conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE usage (id INTEGER PRIMARY KEY, payload TEXT);
+             CREATE TABLE oauth_device_tickets (ticket TEXT PRIMARY KEY);",
+        )
+        .expect("schema");
+        let tx = conn.transaction().expect("tx");
+
+        let mut bundle = BTreeMap::new();
+        bundle.insert(
+            "usage".to_string(),
+            vec![serde_json::json!({"id": 1, "payload": "forged"})],
+        );
+        bundle.insert(
+            "oauth_device_tickets".to_string(),
+            vec![serde_json::json!({"ticket": "forged"})],
+        );
+
+        restore_extra_tables(&tx, &bundle).expect("restore");
+        tx.commit().expect("commit");
+
+        let usage_rows: i64 =
+            conn.query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0)).expect("count");
+        assert_eq!(usage_rows, 0, "blacklisted table 'usage' must not be written");
+        let tickets: i64 = conn
+            .query_row("SELECT COUNT(*) FROM oauth_device_tickets", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(tickets, 0, "blacklisted table must not be written");
+    }
+
+    /// Audit H-15: bundle-controlled identifiers with embedded double quotes
+    /// must be rejected (PRAGMA gate) — never interpolated raw into the SQL.
+    #[test]
+    fn quote_carrying_table_names_are_rejected_not_injected() {
+        let mut conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch("CREATE TABLE real_table (id INTEGER PRIMARY KEY);")
+            .expect("schema");
+        let tx = conn.transaction().expect("tx");
+
+        let mut bundle = BTreeMap::new();
+        bundle.insert(
+            "x\") VALUES (1); DROP TABLE real_table; --".to_string(),
+            vec![serde_json::json!({"id": 1})],
+        );
+
+        // The PRAGMA gate cannot parse the payload as a table, so the table
+        // is skipped gracefully — and real_table must survive untouched.
+        restore_extra_tables(&tx, &bundle).expect("restore");
+        tx.commit().expect("commit");
+        let tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='real_table'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(tables, 1, "no SQL injection through identifiers");
+    }
 }
