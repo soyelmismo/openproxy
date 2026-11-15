@@ -3,10 +3,84 @@
 use super::crud::{get_proxy, update_proxy_status};
 use super::models::{FreeProxy, SHARED_PROXY_CLIENT};
 use futures::StreamExt;
-use openproxy_adapters::upstream::{ResolvedTimeouts, TimeoutProfile, UpstreamRequest};
+use openproxy_adapters::upstream::{
+    ResolvedTimeouts, TimeoutProfile, UpstreamRequest, is_private_or_reserved,
+};
 use openproxy_db::DbPool;
 use rusqlite::Connection;
 use std::sync::Arc;
+
+/// Validate a proxy probe target URL (audit H-2).
+///
+/// The probe is sent THROUGH third-party proxies, so a probe target that
+/// points at private/reserved space turns the whole free-proxy fleet into a
+/// blind internal scanner. The save path (the admin handler) validates, but
+/// `app_config` is restorable from a backup bundle — so the value is
+/// validated again at EVERY use (defense in depth: a planted or
+/// directly-DB-written URL never reaches the probe).
+///
+/// Checks: non-empty, http(s) scheme, host present, and the host is (or
+/// resolves ONLY to) a public address.
+pub async fn validate_probe_url(url: &str) -> std::result::Result<(), String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("url cannot be empty".into());
+    }
+    let parsed: http::Uri = trimmed
+        .parse()
+        .map_err(|_| "invalid URL format".to_string())?;
+    match parsed.scheme_str() {
+        Some("http" | "https") => {}
+        _ => return Err("URL scheme must be http or https".into()),
+    }
+    let host = parsed
+        .host()
+        .ok_or_else(|| "URL must contain a host".to_string())?;
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+
+    let port = parsed.port_u16().unwrap_or(match parsed.scheme_str() {
+        Some("https") => 443,
+        _ => 80,
+    });
+
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if is_private_or_reserved(&ip) {
+            return Err(format!(
+                "url host '{host}' is a private/reserved IP and is not allowed"
+            ));
+        }
+        return Ok(());
+    }
+    let addrs = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| format!("failed to resolve url host '{host}': {e}"))?;
+    for addr in addrs {
+        if is_private_or_reserved(&addr.ip()) {
+            return Err(format!(
+                "url host '{host}' resolves to a private/reserved IP and is not allowed"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate a loaded probe target, mapping rejection to `None`.
+async fn validated_probe_target(raw: &str) -> Option<String> {
+    match validate_probe_url(raw).await {
+        Ok(()) => Some(raw.to_string()),
+        Err(reason) => {
+            tracing::warn!(
+                url = %raw,
+                reason = %reason,
+                "proxy probe target rejected (not a public http(s) host); skipping this round"
+            );
+            None
+        }
+    }
+}
 
 pub async fn test_proxy_connection(
     test_url: &str,
@@ -91,7 +165,7 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
     const LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let id_owned = id.to_string();
 
-    let (test_url, type_host_port_user_pass) = {
+    let (raw_test_url, type_host_port_user_pass) = {
         let pool = Arc::clone(&db_pool);
         let id = id_owned.clone();
         tokio::task::spawn_blocking(move || -> crate::error::Result<_> {
@@ -107,6 +181,15 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
         })
         .await
         .map_err(|e| crate::error::CoreError::Internal(format!("spawn_blocking join: {e}")))??
+    };
+
+    // Security (audit H-2): revalidate the stored probe target at every use
+    // — a value planted via a restored backup or written straight to the DB
+    // must never turn the probe into an internal scanner.
+    let Some(test_url) = validated_probe_target(&raw_test_url).await else {
+        return Err(crate::error::CoreError::Internal(
+            "proxy probe target rejected: not a public http(s) host".to_string(),
+        ));
     };
 
     let (r#type, host, port, username, password) = type_host_port_user_pass;
@@ -260,7 +343,7 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
     const CONCURRENT_PROBES: usize = 60;
     const MAX_BATCHES: usize = 30;
 
-    let test_url = {
+    let raw_test_url = {
         let pool = Arc::clone(&db_pool);
         match tokio::task::spawn_blocking(move || -> crate::error::Result<String> {
             let r = pool.try_reader_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
@@ -283,6 +366,11 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
                 return;
             }
         }
+    };
+
+    // Security (audit H-2): revalidate the stored probe target at every use.
+    let Some(test_url) = validated_probe_target(&raw_test_url).await else {
+        return;
     };
 
     for _ in 0..MAX_BATCHES {
@@ -386,6 +474,41 @@ pub(crate) fn build_probe_request(test_url: &str, proxy_url: String) -> Upstream
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit H-2: the probe target must be revalidated at every use. The
+    /// literal-IP and scheme cases are synchronous and fully covered here;
+    /// the DNS path is exercised by the server's adversarial tests.
+    #[tokio::test]
+    async fn validate_probe_url_rejects_private_and_non_http_targets() {
+        // Private / reserved literals: the whole point of the check.
+        for bad in [
+            "http://127.0.0.1:8787/trace",
+            "http://10.0.0.5/trace",
+            "http://192.168.1.10/trace",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]/trace",
+            "http://[fd00::1]/trace",
+            "http://0.0.0.0/trace",
+        ] {
+            let err = validate_probe_url(bad).await.expect_err(bad);
+            assert!(
+                err.contains("private/reserved"),
+                "{bad}: unexpected reason: {err}"
+            );
+        }
+        // Scheme / shape.
+        assert!(validate_probe_url("").await.is_err());
+        assert!(
+            validate_probe_url("ftp://cloudflare.com/trace")
+                .await
+                .is_err()
+        );
+        assert!(validate_probe_url("not a url").await.is_err());
+        // A public literal is fine.
+        validate_probe_url("https://1.1.1.1/cdn-cgi/trace")
+            .await
+            .expect("public literal must pass");
+    }
 
     #[test]
     fn test_probe_request_sets_connection_close() {

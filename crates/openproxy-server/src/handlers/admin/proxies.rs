@@ -228,55 +228,13 @@ pub async fn update_proxy_test_url(
         )));
     }
 
-    let parsed_url: axum::http::Uri = url
-        .parse()
-        .map_err(|_| ApiError(CoreError::Validation("invalid URL format".into())))?;
-
-    match parsed_url.scheme_str() {
-        Some("http" | "https") => {}
-        _ => {
-            return Err(ApiError(CoreError::Validation(
-                "URL scheme must be http or https".into(),
-            )));
-        }
-    }
-
-    let host = parsed_url
-        .host()
-        .ok_or_else(|| ApiError(CoreError::Validation("URL must contain a host".into())))?;
-    let host = host
-        .strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host);
-
-    let port = parsed_url
-        .port_u16()
-        .unwrap_or_else(|| match parsed_url.scheme_str() {
-            Some("https") => 443,
-            _ => 80,
-        });
-
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        if is_private_or_reserved(&ip) {
-            return Err(ApiError(CoreError::Validation(format!(
-                "url host '{host}' resolves to a private/reserved IP and is not allowed"
-            ))));
-        }
-    } else {
-        let addrs = tokio::net::lookup_host((host, port)).await.map_err(|e| {
-            ApiError(CoreError::Validation(format!(
-                "failed to resolve url host '{host}': {e}"
-            )))
-        })?;
-
-        for addr in addrs {
-            if is_private_or_reserved(&addr.ip()) {
-                return Err(ApiError(CoreError::Validation(format!(
-                    "url host '{host}' resolves to a private/reserved IP and is not allowed"
-                ))));
-            }
-        }
-    }
+    // Security (audit H-2): the probe target is validated on SAVE and, since
+    // a restored backup can carry a planted `app_config`, RE-VALIDATED at
+    // every use by the tester. Both paths share this validator so they can
+    // never drift apart.
+    openproxy_core::free_proxies::validate_probe_url(url)
+        .await
+        .map_err(|reason| ApiError(CoreError::Validation(reason)))?;
 
     let conn_arc = s.db_pool().writer_arc();
     let url_str = url.to_string();
