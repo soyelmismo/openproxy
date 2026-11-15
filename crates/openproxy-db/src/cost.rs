@@ -57,18 +57,10 @@ fn truncate_sanitized(sanitized: &str, max_len: usize) -> String {
 }
 
 pub fn redact_error_msg(raw: &str) -> String {
-    static RE_SK: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"sk-[A-Za-z0-9_\-]{10,}"));
-    static RE_XAPIKEY: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)x-api-key:\s*\S+"));
-    static RE_BEARER: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)Authorization:\s*Bearer\s+\S+"));
-
-    let sanitized = RE_SK.replace_all(raw, "sk-[REDACTED]");
-    let sanitized = RE_XAPIKEY.replace_all(&sanitized, "x-api-key: [REDACTED]");
-    let sanitized = RE_BEARER.replace_all(&sanitized, "Authorization: Bearer [REDACTED]");
-
-    truncate_sanitized(&sanitized, 2048)
+    // Canonical redaction lives in openproxy_types::redaction: this copy used
+    // to miss the `op_live_` pattern (the product's own key format) and the
+    // JWT/Google-key/Bearer families, leaking them into usage.error_msg.
+    openproxy_types::redaction::sanitize_error_message(raw)
 }
 
 fn prepare_usage_error_msg(error_msg: Option<&String>) -> Option<String> {

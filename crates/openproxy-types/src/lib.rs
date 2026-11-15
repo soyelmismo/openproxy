@@ -2,6 +2,7 @@
 
 #[macro_use]
 pub mod macros;
+pub mod redaction;
 pub use macros::FromDb;
 pub mod time;
 pub use time::now_ms;
