@@ -640,13 +640,12 @@ async fn client_cancel_with_partial_usage_row_bills_the_key() {
         row.2
     );
 
-    let lane = match harness
+    let crate::credits_gate::CreditAdmission::Open(Some(lane)) = harness
         .pipeline
         .admit_credit_request(&harness.request().0)
         .await
-    {
-        crate::credits_gate::CreditAdmission::Open(Some(lane)) => lane,
-        _ => panic!("a granted key with a fresh balance must admit"),
+    else {
+        panic!("a granted key with a fresh balance must admit");
     };
     let result = crate::PipelineResult {
         status_code: 499,

@@ -42,7 +42,7 @@ async fn test_run_test_for_model_cancellation() {
     let attribution = crate::handlers::admin::model_tester::resolve_tester_api_key_id(&state, None)
         .await
         .unwrap();
-    let (r, _) = run_test_for_model(
+    let (r, _) = Box::pin(run_test_for_model(
         &state,
         model_row_id,
         None,
@@ -50,7 +50,7 @@ async fn test_run_test_for_model_cancellation() {
         attribution,
         TestOptions::default(),
         Some(rx),
-    )
+    ))
     .await;
     assert_eq!(r.status, 0);
     assert_eq!(r.error_msg.as_deref(), Some("Cancel"));

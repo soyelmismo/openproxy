@@ -47,7 +47,7 @@ fn count(db: &Connection, table: &str) -> i64 {
 fn payment_batch_commits_once_and_replay_cannot_double_credit() {
     let (db, master, items) = fixture();
     let commits = Arc::new(AtomicUsize::new(0));
-    let n = commits.clone();
+    let n = std::sync::Arc::clone(&commits);
     db.commit_hook(Some(move || {
         n.fetch_add(1, Ordering::SeqCst);
         false

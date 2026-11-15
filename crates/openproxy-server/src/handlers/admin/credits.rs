@@ -308,7 +308,7 @@ async fn list_orders(
             // stripped, so '_' kept acting as a single-char wildcard and a
             // search for `OP_____1` enumerated order codes by pattern.
             let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-            let like = format!("%{}%", escaped);
+            let like = format!("%{escaped}%");
             let q_key = q.parse::<i64>().ok();
             let where_clause = if q.is_empty() {
                 String::new()
