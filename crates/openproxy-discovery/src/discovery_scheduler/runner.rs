@@ -52,12 +52,18 @@ pub(crate) async fn run_one_tick(
         return;
     };
 
-    let adapter = match (&adapter, &provider_row) {
+    let mut adapter = match (&adapter, &provider_row) {
         (ProviderAdapterEnum::Custom(_), Some(row)) => ProviderAdapterEnum::Custom(Box::new(
             openproxy_adapters::adapters::CustomAdapter::from_provider_row(row),
         )),
         _ => adapter,
     };
+    // The scheduler builds builtin adapters from defaults; apply the
+    // per-provider loopback opt-in from the live row so discovery dials obey
+    // the same SSRF policy as the chat dispatch path (migration 000135).
+    if let Some(cfg) = adapter.config_mut() {
+        cfg.allow_loopback = p_row.allow_loopback;
+    }
 
     let result = admin::refresh_models(
         db_pool,
