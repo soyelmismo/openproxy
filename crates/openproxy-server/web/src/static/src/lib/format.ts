@@ -27,6 +27,13 @@ export function formatCost(usd: unknown): string {
   return "$" + (Number(usd) || 0).toFixed(4);
 }
 
+/** Usage cost, not a prepaid-ledger debit. Missing pricing stays unknown. */
+export function formatUsageCost(usd: unknown, exact = false): string {
+  if (typeof usd !== "number" || !Number.isFinite(usd)) return "—";
+  const digits = exact || (Math.abs(usd) > 0 && Math.abs(usd) < 0.0001) ? 6 : 4;
+  return "$" + usd.toFixed(digits);
+}
+
 export function formatMs(ms: unknown): string {
   if (ms == null) return "—";
   return Math.round(Number(ms)) + "ms";

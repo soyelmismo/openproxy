@@ -4,6 +4,25 @@
 // OrderStatus / ledger rows). Money surface: keep the types tight, never let
 // the browser cache a response that may carry a plaintext key.
 
+import type { PricingSchedule } from "../lib/pricing-schedule.js";
+
+/** One entry of `PlanOffer.model_pricing`: the model's REAL public rates, so
+ *  the checkout can turn the plan's credited balance into a token estimate.
+ *  Not the upstream cost, not the price paid for the plan. */
+export interface ModelPricing {
+  name: string;
+  /** True when `name` is a combo id rather than a model id. */
+  combo: boolean;
+  pricing_input_per_1m: number | null;
+  pricing_output_per_1m: number | null;
+  pricing_cached_per_1m: number | null;
+  /** Time-of-day tariff of the combo. The shape is the shared schedule
+   *  contract (`lib/pricing-schedule.ts`: ISO weekdays 1=Mon…7=Sun, half-open
+   *  UTC windows, "YYYY-MM-DD" off-peak dates); the checkout normalises it
+   *  before pricing and withholds the estimate when it does not parse. */
+  pricing_schedule?: PricingSchedule | null;
+}
+
 export interface PlanOffer {
   tier_id: number;
   name: string;
@@ -18,6 +37,9 @@ export interface PlanOffer {
   models: string[];
   /** Combo ids the plan unlocks (display names, no `combo:` prefix). */
   combos: string[];
+  /** Rates of the models above. Optional: an older gateway omits it and the
+   *  cards simply show no token estimate. */
+  model_pricing?: ModelPricing[];
 }
 
 export interface PlansResponse {

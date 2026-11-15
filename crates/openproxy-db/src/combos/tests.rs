@@ -7,6 +7,7 @@ use openproxy_types::ProviderId;
 use openproxy_types::combos::Strategy;
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ComboId, ComboTargetId, ModelRowId};
+use openproxy_types::pricing_schedule::PricingSchedule;
 use std::path::PathBuf;
 
 fn fresh_pool() -> (DbPool, PathBuf) {
@@ -793,4 +794,79 @@ fn combo_pricing_is_a_pair_plus_cached_and_survives_a_clone() {
     assert_eq!(cleared.pricing_input_per_1m, None);
     assert_eq!(cleared.pricing_output_per_1m, None);
     assert_eq!(cleared.pricing_cached_per_1m, None);
+}
+
+fn weekday_schedule() -> PricingSchedule {
+    use openproxy_types::pricing_schedule::{PeakClock, PeakWindow, PricingRate};
+    PricingSchedule {
+        timezone: "UTC".to_string(),
+        peak: PricingRate {
+            input_per_1m: 6.0,
+            output_per_1m: 24.0,
+            cached_per_1m: Some(3.0),
+        },
+        off_peak: PricingRate {
+            input_per_1m: 2.0,
+            output_per_1m: 8.0,
+            cached_per_1m: None,
+        },
+        peak_windows: vec![PeakWindow {
+            days: vec![1, 2, 3, 4, 5],
+            start: PeakClock::parse("01:00").expect("start"),
+            end: PeakClock::parse("04:00").expect("end"),
+        }],
+        off_peak_dates: Vec::new(),
+    }
+}
+
+#[test]
+fn combo_pricing_schedule_persists_clones_and_clears() {
+    let (pool, _path) = fresh_pool();
+    let mut conn = pool.writer();
+    let id = create_combo(&conn, "scheduled-combo", Strategy::Priority, 1).expect("create");
+
+    update_combo_pricing_schedule(&conn, id, Some(&weekday_schedule())).expect("set schedule");
+    let stored = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(stored.pricing_schedule, Some(weekday_schedule()));
+
+    // A legacy flat price is independent of the calendar: setting one must not
+    // disable the schedule, and clearing the schedule must reveal it again.
+    update_combo_pricing(&conn, id, Some(1.0), Some(2.0), None).expect("set flat price");
+    let both = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(both.pricing_schedule, Some(weekday_schedule()));
+    assert_eq!(both.pricing_input_per_1m, Some(1.0));
+
+    // Cloning carries the calendar, not a reference to the source row.
+    let cloned = clone_combo(&mut conn, id, Some("scheduled-copy")).expect("clone");
+    let copy = get_combo(&conn, cloned).unwrap().unwrap();
+    assert_eq!(copy.pricing_schedule, Some(weekday_schedule()));
+    update_combo_pricing_schedule(&conn, cloned, None).expect("clear copy schedule");
+    assert_eq!(
+        get_combo(&conn, cloned).unwrap().unwrap().pricing_schedule,
+        None
+    );
+    assert_eq!(
+        get_combo(&conn, id).unwrap().unwrap().pricing_schedule,
+        Some(weekday_schedule()),
+        "clearing the copy must not touch the source"
+    );
+
+    // An invalid calendar never reaches the database and never disturbs the
+    // stored one: a partial or unbillable tariff would change the bill silently.
+    let mut overlapping = weekday_schedule();
+    overlapping
+        .peak_windows
+        .push(overlapping.peak_windows[0].clone());
+    assert!(update_combo_pricing_schedule(&conn, id, Some(&overlapping)).is_err());
+    assert_eq!(
+        get_combo(&conn, id).unwrap().unwrap().pricing_schedule,
+        Some(weekday_schedule())
+    );
+
+    // Clearing drops the calendar; the flat price stays as the fallback.
+    update_combo_pricing_schedule(&conn, id, None).expect("clear schedule");
+    let cleared = get_combo(&conn, id).unwrap().unwrap();
+    assert_eq!(cleared.pricing_schedule, None);
+    assert_eq!(cleared.pricing_input_per_1m, Some(1.0));
+    assert_eq!(cleared.pricing_output_per_1m, Some(2.0));
 }

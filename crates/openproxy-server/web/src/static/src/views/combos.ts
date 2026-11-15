@@ -24,6 +24,8 @@ import {
 } from "./combos/subcombo-group.js";
 import { renderCombosList, loadComboHealth } from "./combos/combos-list.js";
 import { showTargetPrefixesModal } from "./combos/target-prefixes-modal.js";
+import { showPricingScheduleEditor } from "./combos/pricing-schedule-editor.js";
+import { parsePricingSchedule, resolvePricing } from "../lib/pricing-schedule.js";
 import { renderClientProfileSelect } from "../components/client-profile-select.js";
 import type { ClientProfile } from "../lib/types/client-profile.js";
 
@@ -166,6 +168,68 @@ function renderPricingBar(combo: Combo): TemplateResult {
         @change=${(e: Event) => void patchComboPricingFromBar((e.target as HTMLElement).closest(".combo-pricing-bar"))}>
     </label>
     ${hasPrice ? html`<span class="muted">${t("combos.detail.pricing_own")}</span>` : html`<span class="muted">${t("combos.detail.pricing_inherit")}</span>`}
+  </div>`;
+}
+
+function fmtRate(n: number): string {
+  if (n === 0) return "$0";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  if (n < 1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+}
+
+function fmtRemaining(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  const seconds = total % 60;
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  if (days > 0) return `${days}d ${pad(hours)}:${pad(minutes)}`;
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+/** Status + entry point for the peak/off-peak schedule. Invalid stored
+ *  schedules are surfaced as unavailable — never silently rendered as the
+ *  flat price, which would hide a billing misconfiguration. */
+function renderPricingSchedulePanel(combo: Combo): TemplateResult {
+  const open = (): void =>
+    showPricingScheduleEditor({ combo, onSaved: () => void refreshComboDetail() });
+  const parsed = parsePricingSchedule(combo.pricing_schedule);
+
+  if (parsed.status === "invalid") {
+    return html`<div class="combo-schedule-panel is-invalid">
+      <span class="combo-schedule-label">${t("combos.detail.pricing_schedule")}</span>
+      <span class="combo-schedule-warn">Schedule unavailable: ${parsed.reason ?? "invalid value"}</span>
+      <button type="button" class="small" @click=${open}>Fix schedule</button>
+    </div>`;
+  }
+
+  if (!parsed.schedule) {
+    return html`<div class="combo-schedule-panel">
+      <span class="combo-schedule-label">${t("combos.detail.pricing_schedule")}</span>
+      <span class="muted">No peak/off-peak schedule — flat price.</span>
+      <button type="button" class="small" @click=${open}>Add schedule</button>
+    </div>`;
+  }
+
+  const now = Date.now();
+  const resolved = resolvePricing(parsed.schedule, now);
+  const remaining = resolved.nextTransitionMs != null
+    ? fmtRemaining(resolved.nextTransitionMs - now)
+    : null;
+  return html`<div class="combo-schedule-panel">
+    <span class="combo-schedule-label">${t("combos.detail.pricing_schedule")}</span>
+    <span class="combo-band-pill ${resolved.band === "peak" ? "is-peak" : "is-offpeak"}">
+      ${resolved.band === "peak" ? "peak now" : "off-peak now"}
+    </span>
+    <span class="muted">
+      ${fmtRate(resolved.rates.input_per_1m)} in / ${fmtRate(resolved.rates.output_per_1m)} out per 1M UTC
+    </span>
+    ${remaining && resolved.nextBand
+      ? html`<span class="muted">→ ${resolved.nextBand === "peak" ? "peak" : "off-peak"} in ${remaining}</span>`
+      : html`<span class="muted">no transition</span>`}
+    <button type="button" class="small" @click=${open}>Edit schedule</button>
   </div>`;
 }
 
@@ -959,6 +1023,7 @@ function renderComboDetail(): TemplateResult {
       ${renderSanitizeResponseBar(combo)}
       ${renderPricingBar(combo)}
     </div>
+    ${renderPricingSchedulePanel(combo)}
     ${(pmHasParams || cdHasParams) ? html`<div class="combo-settings-params">
       ${pmHasParams ? renderPriorityModeParams(combo) : html``}
       ${cdHasParams ? renderCooldownParams(combo) : html``}

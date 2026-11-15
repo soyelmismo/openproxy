@@ -4,6 +4,7 @@ use openproxy_types::combos::PriorityMode;
 use openproxy_types::config::CooldownMode;
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::ids::{ComboId, ComboTargetId};
+use openproxy_types::pricing_schedule::PricingSchedule;
 use rusqlite::{Connection, params};
 
 define_column_updaters! {
@@ -47,6 +48,7 @@ define_column_updaters! {
     pub(crate) fn raw_update_combo_pricing(input: Option<f64>) => "pricing_input_per_1m";
     pub(crate) fn raw_update_combo_pricing_output(output: Option<f64>) => "pricing_output_per_1m";
     pub(crate) fn raw_update_combo_pricing_cached(cached: Option<f64>) => "pricing_cached_per_1m";
+    pub(crate) fn raw_update_combo_pricing_schedule(schedule: Option<&str>) => "pricing_schedule";
 }
 
 /// Set the combo's own list price. Input and output are all-or-nothing: both
@@ -86,6 +88,29 @@ pub fn update_combo_pricing(
     raw_update_combo_pricing(conn, id, input_per_1m)?;
     raw_update_combo_pricing_output(conn, id, output_per_1m)?;
     raw_update_combo_pricing_cached(conn, id, cached_per_1m)
+}
+
+/// Replace (or clear, with `None`) the combo's time-of-day price schedule.
+///
+/// The schedule is validated with [`PricingSchedule::validate`] before anything
+/// is written, so an unbillable tariff (non-UTC timezone, negative rate, empty
+/// or overlapping windows) never reaches the database and never silently turns
+/// a priced combo into an unpriced one. The flat `pricing_*` columns are left
+/// alone: a schedule *wins* over them at billing time, and clearing the
+/// schedule must reveal the previous flat price again.
+pub fn update_combo_pricing_schedule(
+    conn: &Connection,
+    id: ComboId,
+    schedule: Option<&PricingSchedule>,
+) -> Result<()> {
+    let Some(schedule) = schedule else {
+        return raw_update_combo_pricing_schedule(conn, id, None);
+    };
+    schedule.validate()?;
+    let json = serde_json::to_string(schedule).map_err(|e| {
+        CoreError::Validation(format!("pricing_schedule could not be serialized: {e}"))
+    })?;
+    raw_update_combo_pricing_schedule(conn, id, Some(&json))
 }
 
 pub fn update_target_weight(

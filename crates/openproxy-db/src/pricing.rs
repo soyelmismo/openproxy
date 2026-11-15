@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+/// Combo-level pricing: flat rates and time-of-day schedules.
+pub mod schedule;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum PriceKind {
@@ -259,48 +262,20 @@ pub fn lookup_with_db(conn: &Connection, provider: &str, model: &str) -> Option<
         .or_else(|| lookup_static_variants(provider, model))
 }
 
-/// The combo's own list price, when the operator set one.
+/// The combo's flat list price, when the operator set one.
 ///
-/// A combo price is a *pair*: both input and output rates or neither
-/// (`update_combo_pricing` enforces it), so a half-priced row never leaks a
-/// partial bill. The cached-input rate is optional and hangs off that pair: it
-/// only exists while the pair does.
-pub fn lookup_combo_price(conn: &Connection, combo_id: i64) -> Option<Price> {
-    use rusqlite::OptionalExtension;
-    let result: Result<Option<(f64, f64, Option<f64>)>, _> = conn
-        .query_row(
-            "SELECT pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m \
-             FROM combos WHERE id = ?1 \
-               AND pricing_input_per_1m IS NOT NULL \
-               AND pricing_output_per_1m IS NOT NULL",
-            rusqlite::params![combo_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional();
-    result.ok().flatten().map(|(input, output, cached)| Price {
-        input_per_1m: input,
-        output_per_1m: output,
-        cached_per_1m: cached,
-        ..Default::default()
-    })
-}
-
-/// Price that governs one request.
-///
-/// When the request was routed through a combo that carries its own price,
-/// that price is the bill — the target models' rates are irrelevant (several
-/// upstreams publish no pricing at all, and the combo is the product sold).
-/// Without a combo price the lookup falls back to the target model's price.
-pub fn lookup_for_request(
-    conn: &Connection,
-    provider: &str,
-    model: &str,
-    combo_id: Option<i64>,
-) -> Option<Price> {
-    combo_id
-        .and_then(|id| lookup_combo_price(conn, id))
-        .or_else(|| lookup_with_db(conn, provider, model))
-}
+/// See [`schedule::lookup_combo_price`]: this re-export is the legacy accessor
+/// that ignores a combo's
+/// [`openproxy_types::pricing_schedule::PricingSchedule`] entirely. Billing
+/// paths use [`lookup_for_request_at`] (or
+/// [`lookup_for_request_conservative`] to reserve credits) so a combo that only
+/// carries a schedule is still priced.
+pub use schedule::lookup_combo_price;
+pub use schedule::{
+    combo_is_scheduled, lookup_combo_price_at, lookup_combo_price_conservative, lookup_for_request,
+    lookup_for_request_at, lookup_for_request_conservative, lookup_for_usage_at,
+    parse_usage_timestamp,
+};
 
 crate::def_table_select!(
     pricing_select,

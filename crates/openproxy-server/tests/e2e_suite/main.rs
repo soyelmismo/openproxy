@@ -17,6 +17,7 @@
 pub mod checkout_admin_tests;
 mod credits_tests;
 pub mod harness;
+pub mod plan_pricing_tests;
 pub mod systemone_tests;
 pub mod tier1_features;
 pub mod tier2_boundaries;

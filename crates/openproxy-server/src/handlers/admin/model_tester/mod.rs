@@ -190,7 +190,7 @@ pub async fn test_model(
             .await
             .map_err(ApiError)?;
 
-    let (r, debug_payload) = run_test_for_model(
+    let (r, debug_payload) = Box::pin(run_test_for_model(
         &s,
         model_row_id,
         account_id,
@@ -198,7 +198,7 @@ pub async fn test_model(
         attribution,
         TestOptions::default(),
         cancel_rx,
-    )
+    ))
     .await;
     Ok(Json(serde_json::json!({
         "row_id": r.row_id,

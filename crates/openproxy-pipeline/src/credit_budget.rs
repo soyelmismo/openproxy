@@ -368,7 +368,10 @@ fn load_credit_state(
         });
     }
     let balance_units = openproxy_db::credits_ledger::balance_units(conn, key_id)?;
-    let price = pricing::lookup_for_request(conn, provider, model_id, Some(combo_id));
+    // Admission, not billing: the request may start in one band and finish in
+    // another, so the reservation bounds the most expensive one. The row is
+    // billed later at the band of its own instant.
+    let price = pricing::lookup_for_request_conservative(conn, provider, model_id, Some(combo_id));
     Ok(CreditState {
         governed: true,
         balance_units,

@@ -90,6 +90,7 @@ type UsageRow = (
     Option<u32>,
     Option<u32>,
     Option<i64>,
+    Option<String>,
 );
 
 fn resolve_recompute_price(
@@ -97,7 +98,25 @@ fn resolve_recompute_price(
     provider_id: &str,
     model_id: &str,
     combo_id: Option<i64>,
+    created_at: Option<&str>,
 ) -> Option<crate::pricing::Price> {
+    // A time-of-day combo has no single rate: its band is a function of the
+    // instant the row was billed at, which `usage.created_at` records. Resolve
+    // it there — never at today's band — and skip the row when the timestamp or
+    // the persisted schedule is unreadable, because inventing a tariff is worse
+    // than leaving the row at zero.
+    if let Some(combo_id) = combo_id
+        && crate::pricing::combo_is_scheduled(conn, combo_id) == Some(true)
+    {
+        let billed_at = created_at.and_then(crate::pricing::parse_usage_timestamp);
+        return crate::pricing::lookup_for_usage_at(
+            conn,
+            provider_id,
+            model_id,
+            Some(combo_id),
+            billed_at,
+        );
+    }
     // A combo that carries its own list price bills every row it routed at
     // that rate; the member models' prices never enter the bill.
     if let Some(combo_id) = combo_id
@@ -145,7 +164,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
     let rows: Vec<UsageRow> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens, audio_ms, combo_id \
+                "SELECT id, provider_id, upstream_model_id, prompt_tokens, completion_tokens, audio_ms, combo_id, created_at \
                  FROM usage \
                  WHERE cost_usd = 0.0 \
                    AND status_code >= 200 AND status_code < 400 \
@@ -162,6 +181,7 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
                     row.get::<_, Option<u32>>(4)?,
                     row.get::<_, Option<u32>>(5)?,
                     row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ))
             })
             .map_err(openproxy_db::error::map_db_error)?;
@@ -173,10 +193,24 @@ pub fn recompute_costs(conn: &Connection) -> Result<usize> {
         let mut stmt = conn
             .prepare("UPDATE usage SET cost_usd = ?1 WHERE id = ?2")
             .map_err(openproxy_db::error::map_db_error)?;
-        for (id, provider_id, model_id, prompt_tokens, completion_tokens, audio_ms, combo_id) in
-            &rows
+        for (
+            id,
+            provider_id,
+            model_id,
+            prompt_tokens,
+            completion_tokens,
+            audio_ms,
+            combo_id,
+            created_at,
+        ) in &rows
         {
-            let price = resolve_recompute_price(conn, provider_id, model_id, *combo_id);
+            let price = resolve_recompute_price(
+                conn,
+                provider_id,
+                model_id,
+                *combo_id,
+                created_at.as_deref(),
+            );
             if let Some(cost) =
                 compute_usage_row_cost(price, *prompt_tokens, *completion_tokens, *audio_ms)
             {

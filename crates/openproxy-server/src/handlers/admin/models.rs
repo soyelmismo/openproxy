@@ -144,6 +144,24 @@ pub async fn catalog(
                         entry["pricing_cached_per_1m"] = serde_json::json!(cached);
                     }
                 }
+                // A time-of-day combo has no single rate, so publishing the flat
+                // columns alone would advertise a tariff that changes at the next
+                // window edge. Publish the calendar, the band covering *this*
+                // instant, and the instant it was resolved at — the same band
+                // `record_row_at` would bill a request arriving right now.
+                if let Some(schedule) = c.pricing_schedule.as_ref() {
+                    let as_of = chrono::Utc::now();
+                    let rate = schedule.rate_at(as_of);
+                    entry["pricing_schedule"] = serde_json::json!(schedule);
+                    entry["pricing_input_per_1m"] = serde_json::json!(rate.input_per_1m);
+                    entry["pricing_output_per_1m"] = serde_json::json!(rate.output_per_1m);
+                    entry["pricing_cached_per_1m"] = match rate.cached_per_1m {
+                        Some(cached) => serde_json::json!(cached),
+                        // `null` means "cache reads bill at the input rate".
+                        None => serde_json::Value::Null,
+                    };
+                    entry["pricing_as_of"] = serde_json::json!(as_of.timestamp());
+                }
                 data.push(entry);
             }
             let count = data.len();

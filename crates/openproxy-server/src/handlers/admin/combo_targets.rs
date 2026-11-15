@@ -95,7 +95,7 @@ async fn run_and_format_single_combo_target(
     cancel_rx: Option<tokio::sync::watch::Receiver<Option<openproxy_types::CancelReason>>>,
     attribution: openproxy_types::ids::ApiKeyId,
 ) -> serde_json::Value {
-    let (r, _) = run_test_for_model(
+    let (r, _) = Box::pin(run_test_for_model(
         s,
         t.model_row_id.unwrap_or(ModelRowId(0)).0,
         t.account_id,
@@ -109,7 +109,7 @@ async fn run_and_format_single_combo_target(
             allowed_accounts: t.selected_accounts.as_deref(),
         },
         cancel_rx,
-    )
+    ))
     .await;
 
     let mut obj = serde_json::json!({
@@ -195,7 +195,7 @@ async fn run_fan_out_combo_tests(
                         "skipped": true,
                     });
                 }
-                run_and_format_single_combo_target(s, &t, cancel_rx, attribution).await
+                Box::pin(run_and_format_single_combo_target(s, &t, cancel_rx, attribution)).await
             }
         });
         futures::future::join_all(tasks).await

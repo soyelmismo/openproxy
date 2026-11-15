@@ -1,8 +1,7 @@
 // components/log-row.ts — single row of the live-logs table (declarative, takes AttemptState).
 
 import { html, type TemplateResult } from 'lit-html';
-import { formatContext, formatAudioDuration } from "../lib/format.js";
-import { chargeView } from "../lib/charge.js";
+import { formatContext, formatAudioDuration, formatUsageCost } from "../lib/format.js";
 import { getStageLabel } from "../lib/constants.js";
 import { icons, endpointIcon } from "../lib/icons.js";
 import type { AttemptState } from "../state/live-logs-store.js";
@@ -119,16 +118,10 @@ function buildLogRowCells(
   
   if (has("cost")) {
     if (row) {
-      // What the ledger really charged — never the calculated price, which
-      // stays as secondary data in the tooltip.
-      const charge = chargeView(row);
       const audioNote = row.endpoint_kind === "audio" && row.audio_ms != null
         ? ` · ${formatAudioDuration(row.audio_ms)} de audio`
         : "";
-      // The amount and the verdict are two spans: without a separator they
-      // render glued together ("$0.0000No cobrado"). The middle dot matches the
-      // mobile card and the tooltip wording, so no new CSS is needed.
-      cells.push(html`<span class="log-cost log-cost--${charge.state}" title="${charge.title}${audioNote}"><span class="log-cost-amount">${charge.amountText}</span> · <span class="log-cost-state">${charge.label}</span></span>`);
+      cells.push(html`<span class="log-cost" title="Cost: ${formatUsageCost(row.cost_usd, true)}${audioNote}">${formatUsageCost(row.cost_usd)}</span>`);
     } else {
       cells.push(html`<span class="log-cost">—</span>`);
     }
@@ -211,9 +204,7 @@ function buildMobileCardView(
     const pct = row.compression_savings_pct < 1 ? row.compression_savings_pct.toFixed(2) : Math.round(row.compression_savings_pct).toString();
     extraBadge = html`<span class="log-compression" style="color: var(--color-success)">${icons.lightning()} ${pct}%</span>`;
   } else if (row) {
-    // Mobile: charged amount + verdict, same source as the desktop column.
-    const charge = chargeView(row);
-    extraBadge = html`<span class="log-cost log-cost--${charge.state}" title="${charge.title}">${charge.amountText} · ${charge.label}</span>`;
+    extraBadge = html`<span class="log-cost" title="Cost: ${formatUsageCost(row.cost_usd, true)}">${formatUsageCost(row.cost_usd)}</span>`;
   }
 
   const pii = row?.pii_redacted;

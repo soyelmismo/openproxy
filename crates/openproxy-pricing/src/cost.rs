@@ -139,6 +139,7 @@ fn build_recent_usage_row(
     trace_id: String,
     cost_usd: f64,
     error_msg: Option<String>,
+    created_at: String,
 ) -> openproxy_types::usage::RecentUsageRow {
     openproxy_types::usage::RecentUsageRow {
         id: UsageId(rowid),
@@ -152,7 +153,7 @@ fn build_recent_usage_row(
         completion_tokens: input.completion_tokens,
         cached_tokens: input.cached_tokens,
         cost_usd: Some(cost_usd),
-        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        created_at,
         connect_ms: input.connect_ms,
         ttft_ms: input.ttft_ms,
         // PERF: the dashboard fetches these on demand via GET /admin/usage/:id,
@@ -193,6 +194,7 @@ fn execute_usage_insert(
     cost_usd: f64,
     tps: Option<f64>,
     error_msg_db: (Option<String>, Option<String>),
+    created_at: &str,
 ) -> Result<i64> {
     let (err_raw, err_redacted) = error_msg_db;
     let req_body = input
@@ -234,8 +236,8 @@ fn execute_usage_insert(
              ) VALUES (\
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, \
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-                ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, \
-                ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45\
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, \
+                ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46\
              )",
             params![
                 input.request_id.to_string(),
@@ -261,6 +263,7 @@ fn execute_usage_insert(
                 i64::from(input.race_attempts),
                 i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
                 key_id,
+                created_at,
                 req_body,
                 resp_body,
                 req_headers,
@@ -305,12 +308,18 @@ fn execute_usage_insert(
 /// Insert a usage row. Returns the new UsageId.
 pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     // A combo with its own price bills at that price; otherwise the target
-    // model's rate applies. Never a blend of both.
-    let price = pricing::lookup_for_request(
+    // model's rate applies. Never a blend of both. The instant is captured once
+    // and truncated to the second that `usage.created_at` stores, so the band
+    // this row is priced at is the band its own timestamp reads back as.
+    use chrono::Timelike;
+    let now = chrono::Utc::now();
+    let billed_at = now.with_nanosecond(0).unwrap_or(now);
+    let price = pricing::lookup_for_request_at(
         conn,
         input.provider_id.as_str(),
         &input.upstream_model_id,
         input.combo_id.map(|c| c.0),
+        billed_at,
     );
     warn_missing_pricing(input, price.as_ref());
     // Audio rows carry their billable quantity in `audio_ms`, not in the token
@@ -343,7 +352,14 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
     let db_err_msgs = sanitize_db_error_msg(input.error_msg.as_deref());
     let error_msg_redacted = db_err_msgs.1.clone();
 
-    let rowid = execute_usage_insert(conn, input, cost_usd, tps, db_err_msgs)?;
+    let rowid = execute_usage_insert(
+        conn,
+        input,
+        cost_usd,
+        tps,
+        db_err_msgs,
+        &billed_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+    )?;
     let row = build_recent_usage_row(
         rowid,
         input,
@@ -351,6 +367,7 @@ pub fn record(conn: &Connection, input: &UsageInput) -> Result<UsageId> {
         input.trace_id.clone(),
         cost_usd,
         error_msg_redacted,
+        billed_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
     );
     openproxy_types::usage::publish_usage_row(row);
 

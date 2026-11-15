@@ -10,6 +10,7 @@ import { state } from "../state/index.js";
 import { api } from "../state/api.js";
 import { html, render, type TemplateResult } from "lit-html";
 import type { Combo, CreateComboInput, PriorityMode, CooldownMode } from "../lib/types/api.js";
+import type { PricingSchedule } from "../lib/pricing-schedule.js";
 import { requestUpdate } from "../state/reactive.js";
 import { showToast } from "../components/toast.js";
 import { ensureModalRoot, showApiError } from "../lib/ui-utils.js";
@@ -476,6 +477,37 @@ export async function testAllTargets(comboId: number, e: Event | null): Promise<
   } finally {
     busy.release();
   }
+}
+
+// -- Peak/off-peak pricing schedule ---------------------------------------
+//
+// The PATCH body distinguishes three states: omitted (leave the stored
+// schedule untouched), `null` (explicitly clear it, back to the flat combo
+// price) and an object (replace it). The editor always saves one of the
+// latter two, so it never accidentally preserves a schedule the operator
+// meant to remove.
+
+/** Build the `pricing_schedule` fragment for `PATCH /combos/:id`.
+ *  `undefined` means "field not touched" and yields an empty body. */
+export function pricingSchedulePatchBody(
+  schedule: PricingSchedule | null | undefined,
+): Record<string, unknown> {
+  if (schedule === undefined) return {};
+  return { pricing_schedule: schedule };
+}
+
+/** Persist a combo's schedule (or clear it with `null`). Keeps the list
+ *  state in sync; the detail view refreshes through the editor callback. */
+export async function saveComboPricingSchedule(
+  comboId: number,
+  schedule: PricingSchedule | null,
+): Promise<void> {
+  await api("/combos/" + comboId, {
+    method: "PATCH",
+    body: JSON.stringify(pricingSchedulePatchBody(schedule)),
+  });
+  const combo = (state.combos || []).find((c) => c.id === comboId);
+  if (combo) combo.pricing_schedule = schedule;
 }
 
 // Re-exported for the detail view, which reads `Combo.priority_mode` / `cooldown_mode` as

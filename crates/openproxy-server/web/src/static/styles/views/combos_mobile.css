@@ -437,3 +437,33 @@
   .combo-target-card-row .target-actions-wrap button .target-action-label { display: none; }
   .combo-target-card-row .col-target-test-status { grid-column: 1 / -1; }
 }
+
+/* Pricing schedule panel + UTC editor: stack controls so nothing overflows
+   a phone-width modal. */
+@media (max-width: 768px) {
+  .combo-schedule-panel {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .combo-schedule-panel .small {
+    margin-left: 0;
+    align-self: flex-start;
+  }
+  .ps-modal { width: 100%; max-width: none; }
+  .ps-modal .modal-body { max-height: 75vh; }
+  .ps-rates-grid { grid-template-columns: 1fr; }
+  .ps-rate-group { grid-template-columns: 1fr; }
+  .ps-window {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ps-window-times { justify-content: space-between; }
+  .ps-remove {
+    margin-left: 0;
+    align-self: flex-end;
+  }
+  .ps-date-row { align-items: stretch; }
+  .ps-date-label { min-width: 0; }
+  .ps-preset-row { align-items: flex-start; }
+}

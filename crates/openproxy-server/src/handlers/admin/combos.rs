@@ -321,16 +321,70 @@ fn apply_combo_general_updates(
     Ok(())
 }
 
+/// Read the PATCH body's `pricing_schedule` key.
+///
+/// `Ignore` (key absent) preserves the stored calendar, `Reset` (`null`) clears
+/// it and reveals the flat `pricing_*` price, and `Set` replaces it. The
+/// calendar is validated here — before the transaction opens — so an unbillable
+/// one can never be half-applied.
+fn parse_pricing_schedule(
+    body: &serde_json::Value,
+) -> Result<UpdateField<openproxy_types::pricing_schedule::PricingSchedule>, ApiError> {
+    match body.get("pricing_schedule") {
+        None => Ok(UpdateField::Ignore),
+        Some(serde_json::Value::Null) => Ok(UpdateField::Reset),
+        Some(value) => {
+            let schedule = serde_json::from_value::<
+                openproxy_types::pricing_schedule::PricingSchedule,
+            >(value.clone())
+            .map_err(|e| {
+                ApiError(CoreError::Validation(format!(
+                    "pricing_schedule is not a valid schedule: {e}"
+                )))
+            })?;
+            schedule.validate()?;
+            Ok(UpdateField::Set(schedule))
+        }
+    }
+}
+
+fn apply_pricing_schedule(
+    w: &rusqlite::Connection,
+    id: ComboId,
+    schedule: UpdateField<openproxy_types::pricing_schedule::PricingSchedule>,
+) -> Result<(), ApiError> {
+    match schedule {
+        UpdateField::Ignore => Ok(()),
+        UpdateField::Reset => Ok(core_combos::update_combo_pricing_schedule(w, id, None)?),
+        UpdateField::Set(schedule) => Ok(core_combos::update_combo_pricing_schedule(
+            w,
+            id,
+            Some(&schedule),
+        )?),
+    }
+}
+
 pub async fn update_combo(
     State(s): State<AppState>,
     Path(id): Path<i64>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     crate::error::run_blocking(move || {
-        let w = s.db_pool().writer();
+        let mut w = s.db_pool().writer();
         let combo_id = ComboId(id);
-        apply_combo_general_updates(&w, combo_id, &body)?;
-        apply_combo_cooldown_updates(&w, combo_id, &body)?;
+        // Parse and validate the schedule first: a bad tariff aborts the whole
+        // PATCH before the first write.
+        let schedule = parse_pricing_schedule(&body)?;
+        // One transaction for the whole PATCH: a later field failing (unique
+        // name, invalid rate) must not leave the earlier ones applied.
+        let tx = w
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
+        apply_combo_general_updates(&tx, combo_id, &body)?;
+        apply_combo_cooldown_updates(&tx, combo_id, &body)?;
+        apply_pricing_schedule(&tx, combo_id, schedule)?;
+        tx.commit()
+            .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
         Ok(Json(serde_json::json!({ "id": id })))
     })
     .await
@@ -412,5 +466,106 @@ mod tests {
             UpdateField::Ignore
         );
         assert!(parse_nullable_f64(&obj, "invalid").is_err());
+    }
+
+    fn schedule_body() -> serde_json::Value {
+        use openproxy_types::pricing_schedule::{
+            PeakClock, PeakWindow, PricingRate, PricingSchedule,
+        };
+        serde_json::to_value(PricingSchedule {
+            timezone: "UTC".to_string(),
+            peak: PricingRate {
+                input_per_1m: 6.0,
+                output_per_1m: 24.0,
+                cached_per_1m: Some(3.0),
+            },
+            off_peak: PricingRate {
+                input_per_1m: 2.0,
+                output_per_1m: 8.0,
+                cached_per_1m: None,
+            },
+            peak_windows: vec![
+                PeakWindow {
+                    days: vec![1, 2, 3, 4, 5],
+                    start: PeakClock::parse("01:00").expect("start"),
+                    end: PeakClock::parse("04:00").expect("end"),
+                },
+                PeakWindow {
+                    days: vec![1, 2, 3, 4, 5],
+                    start: PeakClock::parse("06:00").expect("start"),
+                    end: PeakClock::parse("10:00").expect("end"),
+                },
+            ],
+            off_peak_dates: vec![
+                openproxy_types::pricing_schedule::OffPeakDate::parse("2026-12-25").expect("date"),
+            ],
+        })
+        .expect("serialize schedule")
+    }
+
+    /// PATCH is partial: the key must distinguish "leave the calendar alone"
+    /// from "remove it", or a client editing a cooldown would silently wipe the
+    /// combo's tariff (and a client clearing it would silently keep it).
+    #[test]
+    fn test_parse_pricing_schedule_partial_patch() {
+        assert!(matches!(
+            parse_pricing_schedule(&json!({ "name": "renamed" })).unwrap(),
+            UpdateField::Ignore
+        ));
+        assert!(matches!(
+            parse_pricing_schedule(&json!({ "pricing_schedule": null })).unwrap(),
+            UpdateField::Reset
+        ));
+        let set = parse_pricing_schedule(&json!({ "pricing_schedule": schedule_body() }))
+            .expect("valid schedule");
+        let UpdateField::Set(schedule) = set else {
+            panic!("an object must replace the calendar");
+        };
+        schedule
+            .validate()
+            .expect("round-tripped schedule is valid");
+        assert_eq!(schedule.peak_windows.len(), 2);
+        assert_eq!(schedule.peak.cached_per_1m, Some(3.0));
+        assert_eq!(schedule.off_peak.cached_per_1m, None);
+    }
+
+    /// A calendar that cannot bill is rejected before the transaction opens:
+    /// non-UTC timezone, overlapping windows, a missing rate pair, unknown
+    /// fields, and a malformed date all have to fail loudly.
+    #[test]
+    fn test_parse_pricing_schedule_rejects_unbillable_calendars() {
+        let mut bad_tz = schedule_body();
+        bad_tz["timezone"] = json!("Europe/Madrid");
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": bad_tz })).is_err());
+
+        let mut overlap = schedule_body();
+        overlap["peak_windows"] = json!([
+            { "days": [1], "start": "01:00", "end": "04:00" },
+            { "days": [1], "start": "03:00", "end": "05:00" }
+        ]);
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": overlap })).is_err());
+
+        let mut no_windows = schedule_body();
+        no_windows["peak_windows"] = json!([]);
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": no_windows })).is_err());
+
+        let mut negative = schedule_body();
+        negative["off_peak"]["input_per_1m"] = json!(-1.0);
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": negative })).is_err());
+
+        let mut missing_pair = schedule_body();
+        missing_pair["peak"]
+            .as_object_mut()
+            .expect("object")
+            .remove("output_per_1m");
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": missing_pair })).is_err());
+
+        let mut bad_date = schedule_body();
+        bad_date["off_peak_dates"] = json!(["2026-02-30"]);
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": bad_date })).is_err());
+
+        let mut unknown = schedule_body();
+        unknown["surprise"] = json!(true);
+        assert!(parse_pricing_schedule(&json!({ "pricing_schedule": unknown })).is_err());
     }
 }

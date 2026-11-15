@@ -1,0 +1,176 @@
+
+  /* Solo layout de página; TODO el look viene del design system del panel
+     (app.css): .card/.card-title/.field/.btn/.modal y sus tokens
+     --space/--fs/--radius/--color. */
+  body { display: flex; justify-content: center; padding: 40px 16px; }
+  main.checkout { width: 100%; max-width: 480px; }
+  /* Card surface: the same look section.card gets in the panel (layout.css),
+     restated for this div-based card. */
+  main.checkout .card {
+    background: var(--color-surface);
+    border: var(--border-w) var(--border-style) var(--color-border-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-4);
+  }
+  main.checkout .card-title {
+    font-family: var(--font-display, inherit);
+    font-size: var(--fs-xl); font-weight: 700;
+    color: var(--color-text-emphasis);
+  }
+  main.checkout .card-subtitle {
+    color: var(--color-text-muted); font-size: var(--fs-sm);
+    line-height: 1.5; margin-top: var(--space-1); margin-bottom: var(--space-3);
+  }
+  .checkout-tabs { display: flex; gap: 8px; margin: var(--space-4) 0; }
+  .checkout-tabs .btn { margin-top: 0; flex: 1; }
+  .qr { display: flex; justify-content: center; padding: var(--space-2) 0; }
+  /* Sold-out plans (per-plan stock, 000130): visibly unavailable; the radio
+     is disabled in the buy tab, and the server rejects the order anyway. */
+  .plan-card.sold-out { opacity: .55; }
+  .plan-card.sold-out .plan-radio { cursor: not-allowed; }
+  /* Recovery: the receipt is the ONLY capability that can claim this purchase
+     (the server binds the minted key to its hash). Surface it as a link the
+     buyer can save while the order is live — on any device. */
+  .recovery { margin-top: var(--space-2); padding: 8px 10px; border: 1px dashed var(--color-border); border-radius: 8px; }
+  .recovery small { color: var(--color-text-muted); display: block; margin-bottom: 6px; }
+  .recovery-row { display: flex; gap: 8px; align-items: center; min-width: 0; }
+  .recovery-row a { color: var(--color-link); word-break: break-all; font-size: 12px; }
+  .recovery-row .btn { flex: none; font-size: 11px; padding: 4px 10px; }
+  /* Cloudflare challenge interrupted the status poll: the payment itself is
+     on-chain and the server keeps matching blocks, but the page must reconnect. */
+  .cf { margin-top: var(--space-2); padding: 8px 10px; border-radius: 8px; background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .4); }
+  .cf small { display: block; margin-bottom: 6px; }
+  .cf .btn { font-size: 11px; padding: 4px 10px; }
+  /* QR: classic pairing — solid WHITE surface, BLACK modules. The stylized
+     dark variant defeated phone cameras in the field (unscannable, MetaMask
+     refused the URI); decoders want dark-on-light with a real quiet zone,
+     and the SVG now carries its own white background + black ink. */
+  .qr svg {
+    width: 240px; height: 240px;
+    background: #ffffff;
+    border-radius: var(--radius-lg);
+  }
+  .amount { text-align: center; font-size: 26px; font-weight: 700; letter-spacing: .3px; color: var(--color-text); cursor: copy; }
+  .amount:hover { text-decoration: underline dotted var(--color-text-muted); text-underline-offset: 4px; }
+  .amount.copied, .addr.copied { color: var(--color-success); }
+  .addr { text-align: center; color: var(--color-text-muted); font-size: var(--fs-xs); word-break: break-all; margin: 4px 0 10px; cursor: copy; }
+  .timer { text-align: center; font-variant-numeric: tabular-nums; font-size: var(--fs-sm); color: var(--color-warn); }
+  .status { text-align: center; color: var(--color-text-muted); font-size: var(--fs-sm); margin-top: 8px; }
+  .err { color: var(--color-error); font-size: var(--fs-sm); margin-top: 12px; }
+  .key {
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--fs-sm);
+    background: var(--color-surface-2); border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-sm); padding: 12px; word-break: break-all; margin: 10px 0;
+  }
+  .hidden { display: none; }
+  .history-row { margin-bottom: 4px; font-size: var(--fs-xs); color: var(--color-text-muted); }
+  .checkout-login { text-align: right; font-size: var(--fs-xs); margin-bottom: var(--space-2); }
+  .checkout-login a { color: var(--color-text-muted); text-decoration: none; }
+  .checkout-login a:hover { color: var(--color-link); text-decoration: underline; }
+  .terms-check {
+    display: flex; gap: 8px; align-items: flex-start;
+    font-size: var(--fs-xs); color: var(--color-text-muted); line-height: 1.5;
+    margin: var(--space-3) 0;
+  }
+  .terms-check input { margin-top: 2px; flex: none; }
+  .terms-check a, .checkout-foot a, .faq a { color: var(--color-link); }
+  /* Legal / help copy under the primary action: readable, never a wall. */
+  .field small { display: block; line-height: 1.55; }
+  .checkout-foot {
+    display: flex; justify-content: center; gap: var(--space-3);
+    margin-top: var(--space-4); padding-top: var(--space-3);
+    border-top: var(--border-w) var(--border-style) var(--color-border);
+    font-size: var(--fs-xs);
+  }
+  .checkout-foot a { color: var(--color-text-muted); text-decoration: none; }
+  .checkout-foot a:hover { color: var(--color-link); text-decoration: underline; }
+  /* Terms modal: the content is injected server-side into the page itself —
+     no iframe, no fetch, no second URL that could fail. Same typography the
+     standalone /terms page uses. */
+  #terms-modal .modal { max-width: 680px; }
+  #terms-modal .modal-body { overflow-y: auto; }
+  .terms-modal-body h2 { font-size: var(--fs-md); margin: var(--space-4) 0 var(--space-2); }
+  .terms-modal-body h2:first-child { margin-top: 0; }
+  .terms-modal-body p { font-size: var(--fs-sm); color: var(--color-text); margin: 0 0 var(--space-2); }
+  .terms-modal-body li { font-size: var(--fs-sm); margin-bottom: 4px; }
+  .terms-modal-body .terms-meta { font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: var(--space-4); }
+  /* FAQ modal: the same <details> pattern the dashboard uses. */
+  #faq-modal .modal { max-width: 620px; }
+  .faq details { border-bottom: var(--border-w) var(--border-style) var(--color-border-soft); }
+  .faq details:last-child { border-bottom: 0; }
+  .faq summary {
+    cursor: pointer; font-size: var(--fs-sm); color: var(--color-text);
+    padding: var(--space-3) 0; list-style: none; display: flex; justify-content: space-between; gap: var(--space-2);
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "+"; color: var(--color-text-muted); font-weight: 600; }
+  .faq details[open] summary::after { content: "−"; }
+  .faq summary:hover { color: var(--color-link); }
+  .faq details small { display: block; padding: 0 0 var(--space-3); color: var(--color-text-muted); line-height: 1.55; font-size: var(--fs-xs); }
+  /* ---- Plan cards: token estimate on the model pills ---------------------
+     The card is a div (its access row holds buttons, and a labelable element
+     inside a <label> is invalid HTML + a tap would select the plan); the inner
+     label is the selection surface. A priced model pill is a <button> that
+     carries the estimate inline; the panel (role=tooltip, appended to <body>)
+     explains where the number comes from. */
+  .plan-card { cursor: default; }
+  .plan-card-select {
+    display: grid; gap: 0.75rem; min-width: 0; cursor: pointer;
+  }
+  .plan-card.sold-out .plan-card-select { cursor: not-allowed; }
+  /* The radio still owns keyboard focus: keep the design-system focus ring,
+     now that the head lives inside the inner label. */
+  .plan-card input:focus-visible ~ .plan-card-select .plan-head .plan-radio {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  .plan-models button.chip {
+    display: inline-flex; align-items: baseline; gap: 0.4rem;
+    max-width: 100%; min-width: 0; text-align: left; cursor: pointer;
+    font-family: var(--font-mono); font-size: var(--fs-2xs); line-height: 1.5;
+  }
+  .plan-models button.chip:hover,
+  .plan-models button.chip[aria-expanded="true"] {
+    color: var(--color-text);
+    border-color: var(--color-primary);
+    background: var(--color-primary-soft);
+  }
+  .plan-models button.chip:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+  .plan-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .plan-est-badge {
+    flex: none; padding-left: 0.4rem; border-left: 1px solid var(--color-border);
+    color: var(--color-success); font-variant-numeric: tabular-nums;
+  }
+  .plan-models button.chip.combo-chip .plan-est-badge { color: var(--color-primary); }
+  /* Collapsed rows: the design-system rule counts `span` siblings, and a priced
+     pill is a button — count children instead (same cut, higher specificity). */
+  .plan-models:not(.expanded) > .chip:nth-child(n + 6) { display: none; }
+
+  /* The estimate panel: fixed + appended to <body>, so the card (or a scroll
+     container) can never clip it. Non-interactive, so it never steals hover. */
+  .plan-est-pop {
+    position: fixed; z-index: var(--z-dropdown, 100);
+    width: max-content; max-width: 280px;
+    padding: 10px 12px;
+    border: var(--border-w) var(--border-style) var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    box-shadow: var(--shadow-md);
+    font-size: var(--fs-xs); line-height: 1.45;
+    pointer-events: none;
+  }
+  .plan-est-title {
+    font-family: var(--font-mono); font-size: var(--fs-2xs);
+    color: var(--color-text-muted); word-break: break-all;
+  }
+  .plan-est-headline { margin-top: 2px; font-size: var(--fs-sm); font-weight: 700; }
+  .plan-est-rates { display: grid; gap: 2px; margin: 6px 0 0; }
+  .plan-est-rates > div { display: flex; gap: 6px; justify-content: space-between; }
+  .plan-est-rates dt { color: var(--color-text-muted); }
+  .plan-est-rates dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .plan-est-note { margin: 6px 0 0; font-size: var(--fs-2xs); color: var(--color-text-muted); }

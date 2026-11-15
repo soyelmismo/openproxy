@@ -140,9 +140,7 @@
   color: var(--color-text-muted);
 }
 
-/* The cell now carries the verdict word next to the amount ("$0.0000 ·
-   No cobrado"): 70px only ever fitted the bare price and the two spans ran
-   together. 110px keeps both readable on one line without wrapping. */
+/* One usage cost, with full precision available in the tooltip. */
 .log-row .log-cost {
   flex: 0 0 110px;
   width: 110px;

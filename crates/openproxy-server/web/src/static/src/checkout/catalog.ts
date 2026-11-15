@@ -6,9 +6,15 @@
 // amounts anymore: every checkout buys a specific tier. Both pickers (buy tab
 // and plan-renew tab) render the same cards from one renderer; the radio input
 // inside each card keeps the native semantics and carries the "tier:N" value.
+//
+// Model pills carry the token estimate the credited balance buys on that model
+// (`model_pricing`, see token-estimate.ts): inline on the pill, explained in a
+// popover on hover/focus/tap (model-estimate-popover.ts).
 
 import { $, err, hide } from "./dom.js";
-import { getJson, type PlansResponse } from "./api.js";
+import { getJson, type ModelPricing, type PlansResponse } from "./api.js";
+import { buildModelEstimate } from "./token-estimate.js";
+import { attachModelEstimate, closeModelEstimate } from "./model-estimate-popover.js";
 
 const COLLAPSED_VISIBLE = 7;
 
@@ -23,20 +29,77 @@ function seatsText(plan: PlansResponse["plans"][number]): string {
   return "(" + plan.seats_left + (plan.seats_left === 1 ? " seat" : " seats") + " available)";
 }
 
-function planCard(plan: PlansResponse["plans"][number], radioName: string): HTMLLabelElement {
-  const card = document.createElement("label");
+/** Key of one access entry: models and combos can share a display name. */
+function pricingKey(name: string, combo: boolean): string {
+  return (combo ? "combo:" : "model:") + name;
+}
+
+/** `model_pricing` → lookup by (name, combo). Duplicates: last one wins. */
+function pricingIndex(plan: PlansResponse["plans"][number]): Map<string, ModelPricing> {
+  const index = new Map<string, ModelPricing>();
+  for (const entry of plan.model_pricing ?? []) {
+    if (!entry || typeof entry.name !== "string" || entry.name === "") continue;
+    index.set(pricingKey(entry.name, entry.combo === true), entry);
+  }
+  return index;
+}
+
+/**
+ * One access pill. With pricing it is a BUTTON: it carries the token estimate
+ * inline and opens the explanation panel. Without pricing (older gateway, or a
+ * model the gateway has no rate for) it stays a plain span — the checkout
+ * never invents a number.
+ */
+function modelChip(
+  item: { name: string; combo: boolean },
+  pricing: ModelPricing | undefined,
+  creditUsd: number,
+): HTMLElement {
+  const baseClass = "chip plan-model" + (item.combo ? " combo-chip" : "");
+  if (!pricing) {
+    const plain = document.createElement("span");
+    plain.className = baseClass;
+    plain.textContent = item.name;
+    return plain;
+  }
+  const estimate = buildModelEstimate(creditUsd, pricing);
+  const pill = document.createElement("button");
+  pill.type = "button";
+  pill.className = baseClass + " plan-model-priced";
+  const label = document.createElement("span");
+  label.className = "plan-model-name";
+  label.textContent = item.name;
+  const badge = document.createElement("span");
+  badge.className = "plan-est-badge";
+  badge.textContent = estimate.badge;
+  pill.appendChild(label);
+  pill.appendChild(badge);
+  attachModelEstimate(pill, estimate.popover);
+  return pill;
+}
+
+function planCard(plan: PlansResponse["plans"][number], radioName: string): HTMLElement {
+  // The card is a DIV, not a label: the access row holds buttons, and a
+  // labelable element inside a <label> is invalid HTML (and would let a tap on
+  // a pill select the plan). The selection surface is the inner label.
+  const card = document.createElement("div");
   card.className = "plan-card";
 
   const input = document.createElement("input");
   input.type = "radio";
   input.name = radioName;
   input.value = "tier:" + plan.tier_id;
+  input.id = "plan-" + radioName + "-" + plan.tier_id;
   input.addEventListener("change", () => {
     for (const other of card.parentElement?.querySelectorAll<HTMLInputElement>("input[type=radio]") ?? []) {
       other.closest(".plan-card")?.classList.toggle("selected", other.checked);
     }
   });
   card.appendChild(input);
+
+  const select = document.createElement("label");
+  select.className = "plan-card-select";
+  select.htmlFor = input.id;
 
   // Row 1: selection dot + plan name, leverage badge on the far right.
   const head = document.createElement("div");
@@ -57,7 +120,7 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
     mult.textContent = Math.round(credited / plan.usd) + "\u00d7";
     head.appendChild(mult);
   }
-  card.appendChild(head);
+  select.appendChild(head);
 
   // Row 2: the price is the hero of the card; the seat availability replaces
   // the old "per plan" filler (000130) so scarcity is visible before buying.
@@ -71,7 +134,7 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   per.textContent = seatsText(plan);
   priceRow.appendChild(price);
   priceRow.appendChild(per);
-  card.appendChild(priceRow);
+  select.appendChild(priceRow);
   if (plan.seats_left === 0) card.classList.add("sold-out");
 
   // Row 3: the two facts that define the plan, as a spec strip.
@@ -83,7 +146,9 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   creditDt.textContent = "Credit";
   const creditDd = document.createElement("dd");
   creditDd.className = "plan-credit";
-  creditDd.textContent = formatUsd(credited ?? plan.usd);
+  // `??` and not `||`: a plan that credits 0 is still 0, not the price.
+  const creditUsd = plan.credit_usd ?? plan.usd;
+  creditDd.textContent = formatUsd(creditUsd);
   creditStat.appendChild(creditDt);
   creditStat.appendChild(creditDd);
   stats.appendChild(creditStat);
@@ -97,7 +162,8 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
   ttlStat.appendChild(ttlDt);
   ttlStat.appendChild(ttlDd);
   stats.appendChild(ttlStat);
-  card.appendChild(stats);
+  select.appendChild(stats);
+  card.appendChild(select);
 
   // Row 4: what the plan unlocks.
   const access = document.createElement("div");
@@ -109,15 +175,13 @@ function planCard(plan: PlansResponse["plans"][number], radioName: string): HTML
 
   const models = document.createElement("div");
   models.className = "plan-models";
+  const pricing = pricingIndex(plan);
   const items: Array<{ name: string; combo: boolean }> = [
     ...plan.models.map((m) => ({ name: m, combo: false })),
     ...plan.combos.map((c) => ({ name: c, combo: true })),
   ];
   for (const item of items) {
-    const chip = document.createElement("span");
-    chip.className = "chip plan-model" + (item.combo ? " combo-chip" : "");
-    chip.textContent = item.name;
-    models.appendChild(chip);
+    models.appendChild(modelChip(item, pricing.get(pricingKey(item.name, item.combo)), creditUsd));
   }
   if (items.length > COLLAPSED_VISIBLE) {
     const more = document.createElement("button");
@@ -149,6 +213,9 @@ function renderCards(
   allowSoldOut: boolean,
 ): void {
   const el = $<HTMLDivElement>(containerId);
+  // The cards own the pills' popovers: dropping the DOM must drop the panel
+  // too, or it would linger with its listeners after a re-render.
+  closeModelEstimate();
   el.innerHTML = "";
   el.classList.add("plan-grid");
   let firstSelectable = -1;

@@ -173,6 +173,14 @@ pub fn clone_combo(
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(crate::error::map_db_error)?;
 
+    // The schedule is stored as JSON, so it is re-serialized instead of copied
+    // column-to-column: the clone carries the same tariff, never a pointer to
+    // the source combo's row.
+    let schedule_json = source_combo
+        .pricing_schedule
+        .as_ref()
+        .and_then(|schedule| serde_json::to_string(schedule).ok());
+
     let result = tx.execute(
         "INSERT INTO combos(
             name, strategy, race_size, context_window, max_output_tokens,
@@ -180,8 +188,9 @@ pub fn clone_combo(
             cooldown_factor, lkgp_exploration_rate, selection_window_secs,
             preventive_rate_limit, decision_model, decision_timeout_ms,
             modality_gate, sanitize_response, real_model_id, purge_reasoning,
-            pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m,
+            pricing_schedule
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
         params![
             new_name,
             source_combo.strategy.as_str(),
@@ -205,6 +214,7 @@ pub fn clone_combo(
             source_combo.pricing_input_per_1m,
             source_combo.pricing_output_per_1m,
             source_combo.pricing_cached_per_1m,
+            schedule_json,
         ],
     );
 

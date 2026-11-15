@@ -190,3 +190,47 @@
   .mc-empty { display: block !important; text-align: center; }
   .mc-empty::before { display: none; }
 }
+
+/* Peak / off-peak band + next-transition countdown (pricing schedules). */
+.mc-band-cell { white-space: nowrap; }
+.mc-band {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: var(--border-w, 1px) var(--border-style, solid) transparent;
+}
+.mc-band.is-peak {
+  color: var(--color-warning, #b45309);
+  background: color-mix(in srgb, var(--color-warning, #b45309) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-warning, #b45309) 35%, transparent);
+}
+.mc-band.is-offpeak {
+  color: var(--color-success, #15803d);
+  background: color-mix(in srgb, var(--color-success, #15803d) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-success, #15803d) 35%, transparent);
+}
+.mc-band.is-unavailable {
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border-color: var(--color-border-soft);
+  font-weight: 500;
+}
+.mc-countdown {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+.mc-band-next {
+  margin-left: 4px;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+@media (max-width: 760px) {
+  .mc-band-cell { white-space: normal; flex-wrap: wrap; justify-content: flex-end; }
+  .mc-countdown { margin-left: 0; }
+}

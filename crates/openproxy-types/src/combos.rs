@@ -96,6 +96,13 @@ pub struct Combo {
     /// rate, never at a percentage of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing_cached_per_1m: Option<f64>,
+    /// Time-of-day tariff for this combo. When present it wins over the flat
+    /// `pricing_*` trio above — even when those are unset — and every request
+    /// bills the band that covers its billing instant (see
+    /// [`crate::pricing_schedule::PricingSchedule::rate_at`]). `None` keeps the
+    /// flat price, i.e. the legacy behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_schedule: Option<crate::pricing_schedule::PricingSchedule>,
 }
 
 fn default_target_weight() -> i32 {
@@ -234,6 +241,7 @@ impl Default for Combo {
             pricing_input_per_1m: None,
             pricing_output_per_1m: None,
             pricing_cached_per_1m: None,
+            pricing_schedule: None,
         }
     }
 }
@@ -485,6 +493,7 @@ mod tests {
             pricing_input_per_1m: None,
             pricing_output_per_1m: None,
             pricing_cached_per_1m: None,
+            pricing_schedule: None,
         };
 
         // Default: inherits combo (Flat 60s) -> not disabled

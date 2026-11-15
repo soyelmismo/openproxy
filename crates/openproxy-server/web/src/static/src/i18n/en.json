@@ -577,6 +577,7 @@
   "combos.detail.pricing_cached": "cached",
   "combos.detail.pricing_cached_hint": "USD per 1M cached input tokens, the same unit as in and out. Blank bills cache reads at the input rate.",
   "combos.detail.pricing_cached_default": "same as input",
+  "combos.detail.pricing_schedule": "Peak schedule",
   "combos.detail.real_model_id": "Real Model ID",
   "combos.detail.real_model_id_hint": "Custom model string returned in the payload (e.g. gemini-3.5-flash-lite, claude-sonnet-4-6). When left empty, returns the requested model name.",
   "combos.detail.real_model_id_placeholder": "e.g. gemini-3.5-flash-lite",

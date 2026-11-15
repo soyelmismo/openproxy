@@ -76,6 +76,11 @@ pub use providers::{
     ProviderFormatDescriptor, ProviderMetadata, RateLimitScope,
 };
 pub mod combos;
+pub mod pricing_schedule;
+pub use pricing_schedule::{
+    MAX_OFF_PEAK_DATES, MAX_PEAK_WINDOWS, OffPeakDate, PeakClock, PeakWindow, PricingRate,
+    PricingSchedule, SCHEDULE_TIMEZONE,
+};
 pub use capabilities::{
     ModelCapabilities, find_substring_match, infer_capabilities, infer_context_length,
     infer_default_output_modalities, infer_family, infer_input_modalities,

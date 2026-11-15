@@ -506,6 +506,7 @@ impl Pipeline {
             decision_timeout_ms: None,
             modality_gate: None,
             sanitize_response: None,
+            pricing_schedule: None,
             real_model_id: None,
             purge_reasoning: None,
             pricing_input_per_1m: None,

@@ -174,7 +174,7 @@ impl PipelineStage for DispatchStage {
             CoreError::Internal("missing resolved_timeouts in pipeline context".into())
         })?;
 
-        let mut result = ctx
+        let mut result = Box::pin(ctx
             .pipeline
             .dispatcher
             .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
@@ -192,7 +192,7 @@ impl PipelineStage for DispatchStage {
                 race_size,
                 trace_id,
                 is_streaming: ctx.is_streaming.unwrap_or(false),
-            })
+            }))
             .await;
 
         let starter_depleted = zai_route.as_ref().is_some_and(|prepared| {
@@ -257,7 +257,7 @@ impl PipelineStage for DispatchStage {
             {
                 return fail_stage!(ctx, target, &error, Some(model));
             }
-            result = ctx
+            result = Box::pin(ctx
                 .pipeline
                 .dispatcher
                 .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
@@ -275,7 +275,7 @@ impl PipelineStage for DispatchStage {
                     race_size,
                     trace_id: ctx.trace_id.clone(),
                     is_streaming: ctx.is_streaming.unwrap_or(false),
-                })
+                }))
                 .await;
         }
 

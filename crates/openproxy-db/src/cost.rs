@@ -82,6 +82,7 @@ fn insert_usage_record(
     tps: Option<f64>,
     error_msg_for_db: Option<&str>,
     error_msg_redacted_for_db: Option<&str>,
+    created_at: &str,
 ) -> openproxy_types::Result<i64> {
     let request_id = input.request_id.to_string();
 
@@ -116,8 +117,8 @@ fn insert_usage_record(
              ) VALUES (\
                 ?1,  ?2,  ?3,  ?4,  ?5,  ?6,  ?7,  ?8,  ?9,  ?10, \
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, \
-                ?21, ?22, ?23, datetime('now'), ?24, ?25, ?26, ?27, ?28, ?29, \
-                ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47\
+                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, \
+                ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48\
              )",
             params![
                 request_id,
@@ -143,6 +144,7 @@ fn insert_usage_record(
                 i64::from(input.race_attempts),
                 i64::from(input.has_flag(USAGE_FLAG_RACE_LOST)),
                 key_id,
+                created_at,
                 input
                     .request_body_json
                     .as_ref()
@@ -214,19 +216,47 @@ fn warn_missing_pricing_once(provider_id: &str, upstream_model_id: &str) {
     }
 }
 
+/// The `usage.created_at` column format (UTC, whole seconds), matching what
+/// [`pricing::parse_usage_timestamp`] reads back.
+fn usage_created_at(billed_at: chrono::DateTime<chrono::Utc>) -> String {
+    billed_at.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 /// Persists a usage row and returns `(UsageId, RecentUsageRow)` so callers can release
 /// the database connection lock before broadcasting the row, eliminating lock contention (AGENTS.md §4.3).
 pub fn record_row(
     conn: &Connection,
     input: &UsageInput,
 ) -> openproxy_types::Result<(UsageId, RecentUsageRow)> {
+    record_row_at(conn, input, chrono::Utc::now())
+}
+
+/// [`record_row`], billed at an explicit instant.
+///
+/// One snapshot per request: `billed_at` is truncated to the second *before* the
+/// band is resolved, and that same truncated instant is what gets written to
+/// `usage.created_at`. Re-pricing the row from its own timestamp therefore
+/// reproduces exactly this band — no request is ever charged a tariff its own
+/// stored timestamp contradicts, even when the wall clock crosses a window
+/// boundary between pricing and insert.
+pub fn record_row_at(
+    conn: &Connection,
+    input: &UsageInput,
+    billed_at: chrono::DateTime<chrono::Utc>,
+) -> openproxy_types::Result<(UsageId, RecentUsageRow)> {
+    use chrono::Timelike;
+    let billed_at = billed_at.with_nanosecond(0).unwrap_or(billed_at);
+    let created_at = usage_created_at(billed_at);
     // A combo with its own price bills at that price; otherwise the target
-    // model's rate applies. Never a blend of both.
-    let price = pricing::lookup_for_request(
+    // model's rate applies. Never a blend of both. A combo whose schedule is
+    // unreadable yields no price at all, which records `cost_usd = NULL`
+    // instead of charging a tariff nobody agreed to.
+    let price = pricing::lookup_for_request_at(
         conn,
         input.provider_id.as_str(),
         &input.upstream_model_id,
         input.combo_id.map(|c| c.0),
+        billed_at,
     );
     if price.is_none()
         && (input.prompt_tokens.unwrap_or(0) > 0 || input.completion_tokens.unwrap_or(0) > 0)
@@ -270,6 +300,7 @@ pub fn record_row(
             tps,
             error_msg_for_db.as_deref(),
             error_msg_for_db.as_deref(),
+            &created_at,
         )?;
         // Same transaction: the row can never carry a debit marker without the
         // amount that debit actually moved (`None` = no debit was attempted).
@@ -292,7 +323,7 @@ pub fn record_row(
         completion_tokens: input.completion_tokens,
         cached_tokens: input.cached_tokens,
         cost_usd,
-        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        created_at: billed_at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         connect_ms: input.connect_ms,
         ttft_ms: input.ttft_ms,
         request_body_json: None,
@@ -367,9 +398,11 @@ fn update_backfill_price(
     use pricing::PriceKind;
     // Rows that ran through a priced combo are billed by the combo pass; the
     // model fallback must never overwrite them with the target model's rate.
+    // A combo with a schedule is priced by time of day and is excluded here for
+    // the same reason: the target model's flat rate is not its bill.
     const NOT_A_PRICED_COMBO: &str = "AND (combo_id IS NULL OR combo_id NOT IN \
-         (SELECT id FROM combos WHERE pricing_input_per_1m IS NOT NULL \
-            AND pricing_output_per_1m IS NOT NULL))";
+         (SELECT id FROM combos WHERE (pricing_input_per_1m IS NOT NULL \
+            AND pricing_output_per_1m IS NOT NULL) OR pricing_schedule IS NOT NULL))";
     match price {
         // Audio rows bill on `audio_ms` at an hourly rate; the token formula
         // below would price them at zero forever.
@@ -448,34 +481,98 @@ fn update_backfill_combo_price(
     .map_err(crate::error::map_db_error)
 }
 
-pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usize> {
-    // 1. Combo prices first: a combo that carries its own rate bills every row
-    //    it routed, whatever the target models cost.
-    let combo_prices: Vec<(i64, pricing::Price)> = {
+/// Re-price one scheduled combo's zero-cost rows at the band each was billed in.
+///
+/// A time-of-day price has no single rate: the band is a function of the instant
+/// the row was billed at, and `usage.created_at` is that instant. Rows whose
+/// timestamp cannot be read — and every row of a combo whose persisted schedule
+/// no longer parses — are skipped, never re-priced at today's band. Rewriting
+/// history with a tariff that never applied is worse than leaving it at zero.
+type ScheduledUsageRow = (i64, Option<String>, Option<u32>, Option<u32>, Option<u32>);
+
+fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types::Result<usize> {
+    let rows: Vec<ScheduledUsageRow> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, pricing_input_per_1m, pricing_output_per_1m FROM combos \
-                 WHERE pricing_input_per_1m IS NOT NULL \
-                   AND pricing_output_per_1m IS NOT NULL",
+                "SELECT id, created_at, prompt_tokens, completion_tokens, cached_tokens \
+                 FROM usage \
+                 WHERE combo_id = ?1 AND prompt_tokens > 0 \
+                   AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+            )
+            .map_err(crate::error::map_db_error)?;
+        let mapped = stmt
+            .query_map(params![combo_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .map_err(crate::error::map_db_error)?;
+        mapped.filter_map(std::result::Result::ok).collect()
+    };
+    let mut updated = 0;
+    for (usage_id, created_at, prompt_tokens, completion_tokens, cached_tokens) in rows {
+        let billed_at = created_at
+            .as_deref()
+            .and_then(pricing::parse_usage_timestamp);
+        let Some(price) = pricing::lookup_for_usage_at(conn, "", "", Some(combo_id), billed_at)
+        else {
+            continue;
+        };
+        let Some(cost) = pricing::compute_cost_opt_with_cache(
+            Some(price),
+            prompt_tokens.unwrap_or(0),
+            completion_tokens.unwrap_or(0),
+            cached_tokens,
+        ) else {
+            continue;
+        };
+        conn.execute(
+            "UPDATE usage SET cost_usd = ?1 WHERE id = ?2",
+            params![cost, usage_id],
+        )
+        .map_err(crate::error::map_db_error)?;
+        updated += 1;
+    }
+    Ok(updated)
+}
+
+pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usize> {
+    // 1. Combo prices first: a combo that carries its own rate bills every row
+    //    it routed, whatever the target models cost. A scheduled combo has no
+    //    single rate, so its rows are re-priced one by one at their own instant.
+    let combo_prices: Vec<(i64, Option<pricing::Price>, bool)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, pricing_input_per_1m, pricing_output_per_1m, pricing_schedule \
+                 FROM combos \
+                 WHERE (pricing_input_per_1m IS NOT NULL \
+                        AND pricing_output_per_1m IS NOT NULL) \
+                    OR pricing_schedule IS NOT NULL",
             )
             .map_err(crate::error::map_db_error)?;
         let rows = stmt
             .query_map([], |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    pricing::Price {
-                        input_per_1m: r.get(1)?,
-                        output_per_1m: r.get(2)?,
+                let input: Option<f64> = r.get(1)?;
+                let output: Option<f64> = r.get(2)?;
+                let scheduled: Option<String> = r.get(3)?;
+                let flat = match (input, output) {
+                    (Some(input_per_1m), Some(output_per_1m)) => Some(pricing::Price {
+                        input_per_1m,
+                        output_per_1m,
                         ..Default::default()
-                    },
-                ))
+                    }),
+                    _ => None,
+                };
+                Ok((r.get::<_, i64>(0)?, flat, scheduled.is_some()))
             })
             .map_err(crate::error::map_db_error)?;
         rows.filter_map(std::result::Result::ok).collect()
     };
     let mut total_updated = 0;
-    for (combo_id, price) in combo_prices {
-        total_updated += update_backfill_combo_price(conn, combo_id, price)?;
+    for (combo_id, flat, scheduled) in combo_prices {
+        if scheduled {
+            total_updated += backfill_scheduled_combo(conn, combo_id)?;
+        } else if let Some(price) = flat {
+            total_updated += update_backfill_combo_price(conn, combo_id, price)?;
+        }
     }
 
     // 2. Everything else falls back to the target model's price.
@@ -486,8 +583,8 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
              WHERE (prompt_tokens > 0 OR audio_ms > 0) \
                AND (cost_usd = 0.0 OR cost_usd IS NULL) \
                AND (combo_id IS NULL OR combo_id NOT IN \
-                    (SELECT id FROM combos WHERE pricing_input_per_1m IS NOT NULL \
-                       AND pricing_output_per_1m IS NOT NULL))",
+                    (SELECT id FROM combos WHERE (pricing_input_per_1m IS NOT NULL \
+                       AND pricing_output_per_1m IS NOT NULL) OR pricing_schedule IS NOT NULL))",
         )
         .map_err(crate::error::map_db_error)?;
 

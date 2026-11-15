@@ -26,6 +26,7 @@ fn ci(name: &str, strategy: &str) -> CreateComboInput {
         pricing_input_per_1m: None,
         pricing_output_per_1m: None,
         pricing_cached_per_1m: None,
+        pricing_schedule: None,
     }
 }
 

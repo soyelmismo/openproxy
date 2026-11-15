@@ -15,7 +15,7 @@ crate::def_table_select!(
      COALESCE(preventive_rate_limit, 0), decision_model, decision_timeout_ms, \
      max_output_tokens, modality_gate, sanitize_response, real_model_id, \
      purge_reasoning, pricing_input_per_1m, pricing_output_per_1m, \
-     pricing_cached_per_1m"
+     pricing_cached_per_1m, pricing_schedule"
 );
 pub(crate) use combo_select;
 
@@ -136,6 +136,7 @@ pub(crate) fn row_to_combo(row: &Row<'_>) -> rusqlite::Result<Combo> {
         pricing_input_per_1m: 21,
         pricing_output_per_1m: 22,
         pricing_cached_per_1m: 23,
+        pricing_schedule: @opt_json(24, openproxy_types::pricing_schedule::PricingSchedule),
     })
 }
 

@@ -1,0 +1,13 @@
+-- Time-of-day (peak / off-peak) pricing schedule for a combo.
+--
+-- Stores the JSON contract validated by
+-- `openproxy_types::pricing_schedule::PricingSchedule`: the UTC timezone, both
+-- bands' USD-per-1M rates, the ISO-weekday peak windows (overnight allowed) and
+-- the explicit off-peak dates.
+--
+-- NULL means "no schedule": the combo bills its flat `pricing_*` columns, or
+-- the target model's rate when those are NULL too. A non-NULL value wins over
+-- the flat columns even when they are unset, so a schedule-only combo is a
+-- valid, fully priced product. Writing a schedule never clears the flat
+-- columns, and editing the flat columns never clears the schedule.
+ALTER TABLE combos ADD COLUMN pricing_schedule TEXT;

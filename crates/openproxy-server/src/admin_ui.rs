@@ -125,18 +125,7 @@ const TERMS_SHELL_HEAD: &str = r#"<!doctype html>
 <title>Terms of Service — OpenProxy credits</title>
 <script src="/admin/dist/theme-init.js"></script>
 <link rel="stylesheet" href="/admin/dist/app.css">
-<style>
-  body { display: flex; justify-content: center; padding: 40px 16px; }
-  main.terms { width: 100%; max-width: 720px; }
-  .terms-nav { text-align: right; font-size: var(--fs-xs); margin-bottom: var(--space-2); }
-  .terms-nav a { color: var(--color-text-muted); }
-  .terms-body { padding: var(--space-3); }
-  .terms-body h2 { font-size: var(--fs-md); margin: var(--space-4) 0 var(--space-2); }
-  .terms-body h2:first-child { margin-top: 0; }
-  .terms-body p { font-size: var(--fs-sm); color: var(--color-text); margin: 0 0 var(--space-2); }
-  .terms-body li { font-size: var(--fs-sm); margin-bottom: 4px; }
-  .terms-meta { font-size: var(--fs-xs); color: var(--color-text-muted); margin-top: var(--space-4); }
-</style>
+<link rel="stylesheet" href="/admin/styles/terms.css">
 </head>
 <body>
 <main class="terms">
@@ -148,12 +137,12 @@ const TERMS_SHELL_HEAD: &str = r#"<!doctype html>
 "#;
 
 #[cfg(feature = "payments")]
-const TERMS_SHELL_FOOT: &str = r#"</div>
+const TERMS_SHELL_FOOT: &str = r"</div>
   </div>
 </main>
 </body>
 </html>
-"#;
+";
 
 /// Public terms page for the credits checkout (the T&C checkbox links to it).
 /// Static text: the no-refund disclaimer of the consumable software credit.
@@ -370,6 +359,40 @@ mod tests {
             )
             .await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[cfg(feature = "payments")]
+    #[tokio::test]
+    async fn money_pages_use_external_styles_compatible_with_strict_csp() {
+        let checkout = include_str!("../web/src/static/checkout.html");
+        for html in [checkout, TERMS_SHELL_HEAD, TERMS_BODY] {
+            assert!(
+                !html.contains("<style>"),
+                "inline CSS is blocked by money CSP"
+            );
+            assert!(
+                !html.contains("<script>"),
+                "inline JS is blocked by money CSP"
+            );
+        }
+        for (html, path) in [
+            (checkout, "styles/checkout.css"),
+            (TERMS_SHELL_HEAD, "styles/terms.css"),
+        ] {
+            assert!(html.contains(&format!("href=\"/admin/{path}\"")));
+            let response = serve_asset(
+                format!("/admin/{path}").parse().unwrap(),
+                Default::default(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                response.headers()[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/css")
+            );
         }
     }
 

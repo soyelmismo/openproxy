@@ -8,6 +8,17 @@ import type {
   ProviderId,
   Strategy,
 } from "./common";
+import type { PricingSchedule } from "../pricing-schedule.js";
+
+// Re-exported so views/handlers can pull the shared schedule types from the
+// domain barrel (`lib/types/api.js`) without a second import path.
+export type {
+  PricingBand,
+  PricingSchedule,
+  PricingWindow,
+  ResolvedPricing,
+  TokenRates,
+} from "../pricing-schedule.js";
 
 export interface Combo {
   id: ComboId;
@@ -37,6 +48,8 @@ export interface Combo {
   pricing_output_per_1m?: number | null;
   /** Combo list price, USD per 1M cached input tokens. Only valid with the pair. */
   pricing_cached_per_1m?: number | null;
+  /** Optional peak/off-peak schedule. `null`/missing keeps the flat price. */
+  pricing_schedule?: PricingSchedule | null;
 }
 
 export interface ComboTarget {
@@ -124,6 +137,8 @@ export interface CreateComboInput {
   pricing_input_per_1m?: number;
   pricing_output_per_1m?: number;
   pricing_cached_per_1m?: number | null;
+  /** Optional peak/off-peak schedule; omit to keep the legacy flat price. */
+  pricing_schedule?: PricingSchedule | null;
 }
 
 export interface AddTargetInput {

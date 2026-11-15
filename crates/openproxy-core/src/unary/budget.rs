@@ -210,6 +210,11 @@ fn report_overrun(quantity: &str, reported: Option<u32>, bound: u32) {
 /// Price one request before dispatch and return the bound it was admitted
 /// under.
 ///
+/// The price is the **conservative** one: for a combo with a peak/off-peak
+/// schedule it is the element-wise maximum of both bands, because the request
+/// may start in one band and be billed in the other. The usage row is later
+/// billed at the band of its own instant, which is never above this bound.
+///
 /// `local` is a [`HostLocal`] proof: the request will be served by an engine in
 /// this process and cannot reach a metered upstream. Such a request still gets
 /// its quantities bounded (for reporting), but no price is required — unless
@@ -248,21 +253,22 @@ pub async fn quote(
             // request based on missing evidence.
             pricing_store_readable(conn)?;
 
-            let price = match pricing::lookup_for_request(conn, &provider, &model, combo_id) {
-                Some(price) => price,
-                None if local => {
-                    // Host-local execution has no metered upstream cost, so
-                    // there is nothing to bill; the quantities are still
-                    // recorded so the row is not empty.
-                    tracing::debug!(
-                        provider = %provider,
-                        model = %model,
-                        "host-local target has no price: admitted at zero units"
-                    );
-                    return Ok(quantities.free_quote());
-                }
-                None => return Err(unpriced(&provider, &model)),
-            };
+            let price =
+                match pricing::lookup_for_request_conservative(conn, &provider, &model, combo_id) {
+                    Some(price) => price,
+                    None if local => {
+                        // Host-local execution has no metered upstream cost, so
+                        // there is nothing to bill; the quantities are still
+                        // recorded so the row is not empty.
+                        tracing::debug!(
+                            provider = %provider,
+                            model = %model,
+                            "host-local target has no price: admitted at zero units"
+                        );
+                        return Ok(quantities.free_quote());
+                    }
+                    None => return Err(unpriced(&provider, &model)),
+                };
 
             quantities.check_price_kind(price.kind, &provider, &model)?;
             let prompt_slot = quantities.prompt_slot(&provider, &model)?;

@@ -99,8 +99,7 @@ pub(super) async fn checkout_admission_middleware(
             .config()
             .credits
             .as_ref()
-            .map(|c| c.checkout_order_window_secs)
-            .unwrap_or(600);
+            .map_or(600, |c| c.checkout_order_window_secs);
         (state.checkout_admission().check_order(ip), window)
     } else {
         (state.checkout_admission().check_poll(ip), 60)

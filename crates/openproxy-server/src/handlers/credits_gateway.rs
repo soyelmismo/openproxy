@@ -76,6 +76,7 @@ async fn no_store(req: Request, next: Next) -> Response {
 }
 
 mod admission;
+mod plan_catalog;
 pub use admission::CheckoutAdmission;
 use admission::checkout_admission_middleware;
 
@@ -144,6 +145,7 @@ struct PlanOffer {
     seats_left: Option<i64>,
     models: Vec<String>,
     combos: Vec<String>,
+    model_pricing: Vec<plan_catalog::ModelPricing>,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,14 +177,31 @@ async fn plans(State(state): State<AppState>) -> Response {
             // (000130). `None` = unlimited; a full plan advertises 0 so the
             // checkout can grey it out before the server rejects the order.
             let tiers = openproxy_core::credits::tiers::list(r)?;
+            let catalog = plan_catalog::PlanCatalog::load(r)?;
             tiers
                 .iter()
                 .filter(|t| t.sellable())
                 .map(|t| {
-                    Ok::<_, openproxy_types::CoreError>((
-                        t.clone(),
-                        openproxy_core::credits::tiers::seats_left(r, t)?,
-                    ))
+                    let models = t.config.allowed_models.clone().unwrap_or_default();
+                    let combos: Vec<String> = t
+                        .config
+                        .allowed_combos
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|c| c.strip_prefix("combo:").unwrap_or(&c).to_string())
+                        .collect();
+                    Ok::<_, openproxy_types::CoreError>(PlanOffer {
+                        tier_id: t.id,
+                        name: t.name.clone(),
+                        usd: t.price_usd.unwrap_or_default(),
+                        credit_usd: t.credit_usd,
+                        ttl_days: t.ttl_days,
+                        seats_left: openproxy_core::credits::tiers::seats_left(r, t)?,
+                        model_pricing: catalog.prices(r, &models, &combos)?,
+                        models,
+                        combos,
+                    })
                 })
                 .collect::<openproxy_types::Result<Vec<_>>>()
         })
@@ -192,29 +211,9 @@ async fn plans(State(state): State<AppState>) -> Response {
         // Never turn a DB failure into "no plans available".
         Err(e) => return core_failure("plans", e),
     };
-    let plans: Vec<PlanOffer> = tiers
-        .into_iter()
-        .map(|(t, seats_left)| PlanOffer {
-            tier_id: t.id,
-            name: t.name.clone(),
-            usd: t.price_usd.unwrap_or_default(),
-            credit_usd: t.credit_usd,
-            ttl_days: t.ttl_days,
-            seats_left,
-            models: t.config.allowed_models.clone().unwrap_or_default(),
-            combos: t
-                .config
-                .allowed_combos
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|c| c.strip_prefix("combo:").unwrap_or(&c).to_string())
-                .collect(),
-        })
-        .collect();
     Json(PlansResponse {
         enabled: buying_open,
-        plans,
+        plans: tiers,
     })
     .into_response()
 }

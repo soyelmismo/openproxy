@@ -59,6 +59,11 @@ pub struct CreateComboInput {
     /// bill at the input rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing_cached_per_1m: Option<f64>,
+    /// Time-of-day tariff. When present it wins over the flat `pricing_*` trio
+    /// — even when those are unset — and each request bills the band covering
+    /// its billing instant. Absent means "flat price only".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing_schedule: Option<openproxy_types::pricing_schedule::PricingSchedule>,
 }
 
 impl CreateComboInput {
@@ -137,6 +142,12 @@ fn apply_combo_overrides(
             input.pricing_cached_per_1m,
         )?;
     }
+    if let Some(schedule) = input.pricing_schedule.as_ref() {
+        // Validated already by `create_combo`; written here so a create request
+        // carrying a schedule lands it in the same statement sequence as the
+        // rest of the overrides.
+        combos::update_combo_pricing_schedule(conn, combo_id, Some(schedule))?;
+    }
     Ok(())
 }
 
@@ -146,6 +157,11 @@ pub fn create_combo(conn: &Connection, input: &CreateComboInput) -> Result<Combo
     // 1 is the serial race window. `Strategy::Priority` ignores `race_size`
     // entirely, so this only matters for RoundRobin / Shuffle.
     let race_size = input.race_size.unwrap_or(1);
+    // A schedule is validated before the combo exists: an unbillable tariff must
+    // not leave a half-created combo behind for the operator to find and clean.
+    if let Some(schedule) = input.pricing_schedule.as_ref() {
+        schedule.validate()?;
+    }
     let combo_id = combos::create_combo(conn, &input.name, strategy, race_size)?;
 
     // Each override helper validates its own inputs and writes one UPDATE. A
