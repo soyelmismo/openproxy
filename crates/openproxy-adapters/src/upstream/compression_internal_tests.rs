@@ -137,7 +137,7 @@ mod codec_tests {
             HeaderValue::from_static("application/json"),
         );
 
-        let decoding = BodyDecoding::from_response(&headers).expect("decoder");
+        let decoding = BodyDecoding::from_response(&headers, false).expect("decoder");
         assert!(decoding.is_decoding());
         decoding.strip_decoded_headers(&mut headers);
 
@@ -155,7 +155,7 @@ mod codec_tests {
     fn plain_response_keeps_every_header() {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_LENGTH, HeaderValue::from_static("7"));
-        let decoding = BodyDecoding::from_response(&headers).expect("decoder");
+        let decoding = BodyDecoding::from_response(&headers, false).expect("decoder");
         assert!(!decoding.is_decoding());
         decoding.strip_decoded_headers(&mut headers);
         assert_eq!(
@@ -176,7 +176,7 @@ mod codec_tests {
 
     #[test]
     fn empty_body_with_content_encoding_is_not_a_decode_error() {
-        let mut decoding = BodyDecoding::from_response(&encoded("gzip")).expect("decoder");
+        let mut decoding = BodyDecoding::from_response(&encoded("gzip"), false).expect("decoder");
         assert!(decoding.finish().is_ok());
     }
 }

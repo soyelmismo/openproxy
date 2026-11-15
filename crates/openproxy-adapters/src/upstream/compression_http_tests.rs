@@ -628,3 +628,71 @@ async fn compressed_error_body_is_decoded_without_changing_status() {
     assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_eq!(response.collect().await.unwrap().as_ref(), payload);
 }
+
+// Security-audit reproductions (branch fix/security-audit).
+//
+// Both tests pin the memory invariants of the transport: a one-shot fetch
+// must ride the bounded transport, and a streaming request must never accept
+// a one-shot codec it did not advertise.
+
+/// VULN (audit): `upstream_get_bytes` — the shared helper behind every model
+/// discovery / quota / sync fetch — built its request with the streaming
+/// default, so the transport limit was `u64::MAX` and `collect()` buffered
+/// whatever the upstream cared to send. A 40 MiB body (over the 32 MiB
+/// non-streaming limit) must be rejected instead of collected.
+#[tokio::test]
+async fn one_shot_discovery_fetch_rejects_bodies_over_the_transport_limit() {
+    let oversize: Vec<u8> = vec![b'x'; 40 * 1024 * 1024];
+    let addr = spawn_responder(move |_| {
+        body_response(
+            "200 OK",
+            &[
+                ("content-type", "application/json".to_string()),
+                ("content-length", oversize.len().to_string()),
+            ],
+            &oversize,
+        )
+    })
+    .await;
+
+    let client = std::sync::Arc::new(UpstreamClient::new());
+    let result = crate::adapters::upstream_get_bytes(&client, &url(addr), &[]).await;
+    let err = result.expect_err("40 MiB body must be rejected by the one-shot fetch path");
+    assert!(
+        err.to_ascii_lowercase().contains("limit")
+            || err.to_ascii_lowercase().contains("exceed"),
+        "unexpected error text: {err}"
+    );
+}
+/// VULN (audit): a streaming request advertises only `gzip, deflate`; an
+/// upstream answering with a one-shot codec (`zstd`, `br`) would make the
+/// transport buffer the whole response until EOF. The codec must be rejected
+/// before any body byte is buffered.
+#[tokio::test]
+async fn streaming_request_rejects_one_shot_codec_response() {
+    let payload = b"streamed tokens";
+    let compressed = zstd::stream::encode_all(&payload[..], 3).expect("zstd encode");
+    let addr = spawn_responder(move |_| {
+        body_response(
+            "200 OK",
+            &[
+                ("content-type", "text/event-stream".to_string()),
+                ("content-encoding", "zstd".to_string()),
+                ("content-length", compressed.len().to_string()),
+            ],
+            &compressed,
+        )
+    })
+    .await;
+
+    let mut spec = UpstreamRequest::get(url(addr));
+    spec.is_streaming = true; // the chat streaming path
+    let result = UpstreamClient::new()
+        .call(spec, TimeoutProfile::OAuth, CancellationToken::new())
+        .await;
+    let err = result.expect_err("one-shot codec on a streaming request must be rejected");
+    assert!(
+        format!("{err:?}").to_ascii_lowercase().contains("zstd"),
+        "unexpected error: {err:?}"
+    );
+}

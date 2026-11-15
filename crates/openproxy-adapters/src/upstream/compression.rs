@@ -266,13 +266,27 @@ impl std::fmt::Debug for BodyDecoding {
 
 impl BodyDecoding {
     /// Build the decode state implied by the response headers.
-    pub(crate) fn from_response(headers: &HeaderMap) -> UpstreamResult<Self> {
+    ///
+    /// `is_streaming` is the request's streaming flag: a streaming request
+    /// only advertises the incrementally-decoded codecs, so a response that
+    /// arrives with a one-shot `content-encoding` (`br`, `zstd`) would have
+    /// to be buffered whole until EOF. That is rejected here, before any
+    /// body byte is read.
+    pub(crate) fn from_response(headers: &HeaderMap, is_streaming: bool) -> UpstreamResult<Self> {
         match response_codec(headers)? {
-            Some(codec) => Ok(Self {
-                stage: Some(Stage::new(codec)),
-                scratch: vec![0u8; INFLATE_CHUNK_BYTES],
-                ..Self::default()
-            }),
+            Some(codec) => {
+                if is_streaming && codec.kind() == CodecKind::OneShot {
+                    return Err(UpstreamError::Decode(format!(
+                        "streaming response with content-encoding `{}`: only `gzip, deflate` are advertised on streaming requests",
+                        codec.as_str()
+                    )));
+                }
+                Ok(Self {
+                    stage: Some(Stage::new(codec)),
+                    scratch: vec![0u8; INFLATE_CHUNK_BYTES],
+                    ..Self::default()
+                })
+            }
             None => Ok(Self::default()),
         }
     }
@@ -301,15 +315,23 @@ impl BodyDecoding {
             .as_ref()
             .is_some_and(|s| s.codec.kind() == CodecKind::OneShot);
         if is_one_shot {
-            // Accumulate raw compressed bytes; decompress in finish().
-            // Security (audit H-1): the accumulator enforces its own wire cap
-            // because streaming bodies are not bounded by the transport limit.
-            if self.pending.len() as u64 + raw.len() as u64 > MAX_COMPRESSED_BUFFER_BYTES {
+            // ROOT FIX (security audit): cap the compressed bytes buffered
+            // for the one-shot decode. Before this cap `pending` grew with
+            // whatever the upstream sent, unbounded even on the byte-limited
+            // transports. (Unifies the parallel audit's MAX_COMPRESSED_BUFFER_
+            // BYTES cap with this one — same 32 MiB ceiling, single name.)
+            if self
+                .pending
+                .len()
+                .saturating_add(raw.len()) as u64
+                > MAX_COMPRESSED_BUFFER_BYTES
+            {
                 return Err(UpstreamError::Decode(format!(
                     "{} compressed body exceeds {MAX_COMPRESSED_BUFFER_BYTES} buffered bytes",
                     self.stage.as_ref().map_or("br", |s| s.codec.as_str())
                 )));
             }
+            // Accumulate raw compressed bytes; decompress in finish().
             self.pending.extend_from_slice(raw);
             return Ok(());
         }
@@ -553,6 +575,12 @@ impl BodyDecoding {
             return Ok(None);
         }
         let mut out = Vec::new();
+        // ROOT FIX (security audit, merged with the parallel audit's H-1):
+        // bound the expansion *while* decompressing — `take` stops reading
+        // at the cap, so a compressed bomb never materializes more than the
+        // cap + 1 bytes of plaintext in memory before being rejected. The
+        // previous code decompressed the whole payload first and only
+        // checked the size afterwards.
         match codec {
             Codec::Brotli => {
                 let reader =

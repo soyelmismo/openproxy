@@ -522,7 +522,8 @@ fn wrap_upstream_response(
     is_streaming: bool,
 ) -> UpstreamResult<UpstreamResponse> {
     let (mut parts, body) = response.into_parts();
-    let decoding = super::compression::BodyDecoding::from_response(&parts.headers)?;
+    let decoding =
+        super::compression::BodyDecoding::from_response(&parts.headers, is_streaming)?;
     decoding.strip_decoded_headers(&mut parts.headers);
     let limit = if is_streaming {
         super::response::STREAMING_BODY_LIMIT_BYTES
