@@ -70,7 +70,7 @@ export function readString(o: Record<string, unknown> | null | undefined, k: str
 /** A `<section data-log-tab>` with a pretty-printed JSON viewer, for the
  *  Errors / Raw tabs. */
 export function jsonSection(title: string, value: unknown, tabKey: string): TemplateResult {
-  return html`<section class="log-detail-section" data-log-tab=${tabKey}>
+  return html`<section class="log-detail-section" role="tabpanel" data-log-tab=${tabKey}>
     <h4>${title}</h4>
     <pre class="json-viewer">${formatJson(value)}</pre>
   </section>`;
@@ -481,7 +481,7 @@ export function renderRequestTab(requestBody: unknown, createdAt?: string): Temp
         }
       }
     }
-    return html`<section class="log-detail-section" data-log-tab="request">
+    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="request">
       <h4>Request</h4>
       <p class="muted">No request body recorded.${expiryHint}</p>
     </section>`;
@@ -500,14 +500,14 @@ export function renderRequestTab(requestBody: unknown, createdAt?: string): Temp
 
   if (body != null && typeof body === "object" && !Array.isArray(body)) {
     const blocks = renderObjectRequestBody(body as Record<string, unknown>);
-    return html`<section class="log-detail-section" data-log-tab="request">
+    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="request">
       <h4>Request</h4>
       ${blocks}
     </section>`;
   }
 
 
-  return html`<section class="log-detail-section" data-log-tab="request">
+  return html`<section class="log-detail-section" role="tabpanel" data-log-tab="request">
     <h4>Request</h4>
     <details class="log-detail-collapsible" open>
       <summary>Raw request body</summary>
@@ -539,7 +539,7 @@ export function renderResponseTab(
       ? "Response body not captured (streaming request may have been interrupted)."
       : NO_RESPONSE_PLACEHOLDER_TEXT;
     placeholder += computeTtlExpiryHint(createdAt);
-    return html`<section class="log-detail-section" data-log-tab="response">
+    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="response">
       <h4>Response</h4>
       <p class="muted log-detail-placeholder">${placeholder}</p>
     </section>`;
@@ -566,7 +566,7 @@ export function renderResponseTab(
     if (parsed != null && typeof parsed === "object") {
       return renderResponseTab(parsed, streamingHint, createdAt, isPartial);
     }
-    return html`<section class="log-detail-section" data-log-tab="response">
+    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="response">
       <h4>Response</h4>
       ${partialBanner}
       ${rawResponseBodyBlock}
@@ -584,7 +584,7 @@ export function renderResponseTab(
         ? [renderDecisionResponseLog(response), renderRawResponseBlock(response)]
         : renderFallbackResponseBlocks(response);
 
-  return html`<section class="log-detail-section" data-log-tab="response">
+  return html`<section class="log-detail-section" role="tabpanel" data-log-tab="response">
     <h4>Response</h4>
     ${partialBanner}
     ${rawResponseBodyBlock}

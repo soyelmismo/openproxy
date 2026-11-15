@@ -46,8 +46,31 @@ export function toggleTheme(): Theme {
   return current;
 }
 
+let mediaSubscribed = false;
+
 // Bootstrap must be called before the first render to avoid a
 // flash of the wrong theme. Idempotent.
 export function bootstrapTheme(): void {
-  applyTheme(detectInitial());
+  const stored = readStored();
+  if (stored === "light" || stored === "dark") {
+    applyTheme(stored);
+  } else {
+    current = detectInitial();
+    document.documentElement.setAttribute("data-theme", current);
+    document.documentElement.style.colorScheme = current;
+    document.documentElement.style.backgroundColor = current === "dark" ? "#151413" : "#f5f7fa";
+  }
+  if (!mediaSubscribed && typeof window !== "undefined" && window.matchMedia) {
+    mediaSubscribed = true;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    mql.addEventListener?.("change", (e: MediaQueryListEvent) => {
+      const explicit = readStored();
+      if (explicit === "light" || explicit === "dark") return;
+      current = e.matches ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", current);
+      document.documentElement.style.colorScheme = current;
+      document.documentElement.style.backgroundColor = current === "dark" ? "#151413" : "#f5f7fa";
+      document.dispatchEvent(new CustomEvent("themechange", { detail: { theme: current } }));
+    });
+  }
 }

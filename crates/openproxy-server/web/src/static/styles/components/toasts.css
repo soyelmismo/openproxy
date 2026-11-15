@@ -1,6 +1,4 @@
-/* Toasts — transient status messages.
-   Loaded after components/cards.css (which still owns the legacy toast block) so these rules
-   are the authoritative presentation: bounded stack, readable severity on both themes,
+/* Toasts — transient status messages: bounded stack, readable severity on both themes,
    URL/JSON wrapping with a scroll cap, and a real 24px dismiss target. */
 
 .toast-container {

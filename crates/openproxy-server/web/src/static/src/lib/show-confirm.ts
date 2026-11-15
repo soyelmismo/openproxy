@@ -32,12 +32,14 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const { title, message, danger = false, confirmLabel = "Confirm", cancelLabel = "Cancel" } = options;
 
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const wrapper = document.createElement("div");
     document.body.appendChild(wrapper);
 
     const finish = (result: boolean): void => {
       window.removeEventListener("keydown", onKeydown, true);
       wrapper.remove();
+      if (opener && opener.isConnected) opener.focus();
       resolve(result);
     };
 
@@ -48,6 +50,19 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
       } else if (e.key === "Enter") {
         e.stopPropagation();
         finish(true);
+      } else if (e.key === "Tab") {
+        const focusables = Array.from(wrapper.querySelectorAll<HTMLElement>("button:not([disabled])"));
+        if (focusables.length > 0) {
+          const first = focusables[0]!;
+          const last = focusables[focusables.length - 1]!;
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
       }
     };
 
@@ -58,6 +73,7 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
         role="dialog"
         aria-modal="true"
         aria-labelledby=${DIALOG_ID + "-title"}
+        aria-describedby=${DIALOG_ID + "-body"}
         @click=${(e: Event) => {
           // Only backdrop clicks close (the .modal-bg itself).
           if (e.target === wrapper.firstElementChild) finish(false);
@@ -68,9 +84,9 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
             <h2 id=${DIALOG_ID + "-title"}>${title}</h2>
             <button type="button" class="close-btn" @click=${() => finish(false)} aria-label="Close">&times;</button>
           </div>
-          <div class="modal-body">${message}</div>
+          <div class="modal-body" id=${DIALOG_ID + "-body"}>${message}</div>
           <div class="modal-footer">
-            <button type="button" @click=${() => finish(false)}>${cancelLabel}</button>
+            <button type="button" class="cancel-btn" @click=${() => finish(false)}>${cancelLabel}</button>
             <button
               type="button"
               class=${danger ? "danger" : "primary"}
@@ -83,6 +99,10 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
 
     render(template, wrapper);
     window.addEventListener("keydown", onKeydown, true);
+    const initialBtn = wrapper.querySelector<HTMLButtonElement>(
+      danger ? ".modal-footer .cancel-btn" : ".modal-footer .primary",
+    );
+    initialBtn?.focus();
   });
 }
 
@@ -92,6 +112,7 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
  */
 export function showPrompt(title: string, message: string, initial = ""): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const wrapper = document.createElement("div");
     document.body.appendChild(wrapper);
 
@@ -102,6 +123,7 @@ export function showPrompt(title: string, message: string, initial = ""): Promis
       finished = true;
       window.removeEventListener("keydown", onKeydown, true);
       wrapper.remove();
+      if (opener && opener.isConnected) opener.focus();
       resolve(result);
     };
 
@@ -128,10 +150,11 @@ export function showPrompt(title: string, message: string, initial = ""): Promis
             <button type="button" class="close-btn" @click=${() => finish(null)} aria-label="Close">&times;</button>
           </div>
           <div class="modal-body">
-            <div>${message}</div>
+            <label for="show-prompt-input">${message}</label>
             <input
               type="text"
               id="show-prompt-input"
+              aria-label=${message || title}
               class="modal-input"
               .value=${initial}
               @input=${(e: Event) => { draft = (e.target as HTMLInputElement).value; }}

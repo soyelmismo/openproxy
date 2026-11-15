@@ -1,0 +1,172 @@
+From 7762837d9f457b8d3079285a54369eb61607bada Mon Sep 17 00:00:00 2001
+From: soyelmismo <thinkboutme@protonmail.com>
+Date: Sun, 15 Nov 2026 03:55:41 +0000
+Subject: [PATCH] ux(a11y): [A11Y-02] incorporar enlace de salto, landmarks
+ ARIA, jerarquia h1 y regiones aria-live
+
+---
+ .../web/src/static/src/components/shell.ts    | 10 +++++++-
+ .../web/src/static/src/components/sidebar.ts  | 11 +++++----
+ .../web/src/static/src/lib/view-utils.ts      |  4 ++--
+ .../src/static/src/state/server-reconnect.ts  | 11 ++++++---
+ .../web/src/static/src/views/login.ts         |  3 ++-
+ .../web/src/static/styles/base.css            | 24 +++++++++++++++++++
+ 6 files changed, 51 insertions(+), 12 deletions(-)
+
+diff --git a/crates/openproxy-server/web/src/static/src/components/shell.ts b/crates/openproxy-server/web/src/static/src/components/shell.ts
+index 6a9917c..c9ff7a4 100644
+--- a/crates/openproxy-server/web/src/static/src/components/shell.ts
++++ b/crates/openproxy-server/web/src/static/src/components/shell.ts
+@@ -6,6 +6,14 @@ import { renderSidebar } from "./sidebar.js";
+ export function mountShell(): void {
+   const app: HTMLElement | null = document.getElementById("app");
+   if (!app) return;
+-  render(html`<aside class="sidebar" id="sidebar"></aside><main id="main"></main><div id="workspace" hidden></div>`, app);
++  const skipToMain = (e: Event): void => {
++    e.preventDefault();
++    const main = document.getElementById("main");
++    if (main) main.focus();
++  };
++  render(
++    html`<a class="skip-link" href="#main" @click=${skipToMain}>Skip to main content</a><aside class="sidebar" id="sidebar" aria-label="Sidebar"></aside><main id="main" tabindex="-1"></main><div id="workspace" hidden></div>`,
++    app,
++  );
+   renderSidebar();
+ }
+diff --git a/crates/openproxy-server/web/src/static/src/components/sidebar.ts b/crates/openproxy-server/web/src/static/src/components/sidebar.ts
+index 55647a0..b4d18d9 100644
+--- a/crates/openproxy-server/web/src/static/src/components/sidebar.ts
++++ b/crates/openproxy-server/web/src/static/src/components/sidebar.ts
+@@ -218,8 +218,9 @@ export function renderSidebar(): void {
+       </div>
+       <div class="mobile-view-title" id="mobile-view-title"></div>
+       <div class="mobile-topbar-actions">
+-        <span class="health-dot ${dotClass}" title="Health: ${healthText}"></span>
++        <span class="health-dot ${dotClass}" title="Health: ${healthText}" aria-hidden="true"></span>
+         <button class="mobile-nav-toggle" type="button" data-action="toggleMobileNav"
++                aria-expanded=${mobileNavOpen ? "true" : "false"}
+                 aria-label=${mobileNavOpen ? "Close navigation" : "Open navigation"}>
+           ${mobileNavOpen ? icons.close() : icons.menu()}
+         </button>
+@@ -237,7 +238,7 @@ export function renderSidebar(): void {
+         <div class="brand">OpenProxy</div>
+         <button class="mobile-nav-close" type="button" data-action="toggleMobileNav" aria-label="Close menu">${icons.close()}</button>
+       </div>
+-      <nav @click=${handleNavClick}>${isFullAdmin() ? renderLink(HOME_LINK, collapsed) : html``}${
++      <nav aria-label="Main navigation" @click=${handleNavClick}>${isFullAdmin() ? renderLink(HOME_LINK, collapsed) : html``}${
+         isFullAdmin()
+           ? GROUPS.map((g: SidebarGroup) => html`
+               <div class="sidebar-nav-group">
+@@ -253,10 +254,10 @@ export function renderSidebar(): void {
+                 ${renderLink({ href: "#/playground", icon: "playground", label: "Playground" }, collapsed)}
+               </div>`
+       }</nav>
+-      <div class="health">
++      <div class="health" role="status" aria-live="polite">
+         ${collapsed
+-          ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}"><span class="health-dot ${dotClass}"></span></span>`
+-          : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}"></span> ${healthText}</span>`}
++          ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}" aria-label="Health: ${healthText}"><span class="health-dot ${dotClass}" aria-hidden="true"></span></span>`
++          : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}" aria-hidden="true"></span> ${healthText}</span>`}
+       </div>
+       <div class="sidebar-footer">
+         <button class="sidebar-toggle desktop-only" type="button" data-action="toggleSidebar"
+diff --git a/crates/openproxy-server/web/src/static/src/lib/view-utils.ts b/crates/openproxy-server/web/src/static/src/lib/view-utils.ts
+index 9f9ea2f..6dc71c6 100644
+--- a/crates/openproxy-server/web/src/static/src/lib/view-utils.ts
++++ b/crates/openproxy-server/web/src/static/src/lib/view-utils.ts
+@@ -53,11 +53,11 @@ export interface ViewFactoryOptions<T> {
+ }
+ 
+ const DEFAULT_LOADING = (): TemplateResult =>
+-  html`<div class="loading">Loading...</div>`;
++  html`<div class="loading" role="status" aria-live="polite" aria-busy="true">Loading...</div>`;
+ const DEFAULT_EMPTY = (): TemplateResult =>
+   html`<p class="empty">No data.</p>`;
+ const DEFAULT_ERROR = (err: unknown): TemplateResult =>
+-  html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`;
++  html`<div class="banner banner-error" role="alert">${err instanceof Error ? err.message : String(err)}</div>`;
+ 
+ /**
+  * Generic view lifecycle factory (Q15).
+diff --git a/crates/openproxy-server/web/src/static/src/state/server-reconnect.ts b/crates/openproxy-server/web/src/static/src/state/server-reconnect.ts
+index 648dec0..f0e4f0e 100644
+--- a/crates/openproxy-server/web/src/static/src/state/server-reconnect.ts
++++ b/crates/openproxy-server/web/src/static/src/state/server-reconnect.ts
+@@ -14,12 +14,17 @@ function createOverlay(): HTMLElement {
+   const el = document.createElement("div");
+   el.id = "server-reconnect-overlay";
+   el.className = "server-reconnect-overlay";
++  el.setAttribute("role", "alertdialog");
++  el.setAttribute("aria-modal", "true");
++  el.setAttribute("aria-live", "assertive");
++  el.setAttribute("aria-labelledby", "server-reconnect-title");
++  el.setAttribute("aria-describedby", "server-reconnect-desc");
+   el.innerHTML = `
+     <div class="server-reconnect-card">
+-      <div class="server-reconnect-spinner"></div>
++      <div class="server-reconnect-spinner" aria-hidden="true"></div>
+       <div class="server-reconnect-text">
+-        <h3>Server is restarting...</h3>
+-        <p>Reconnecting to OpenProxy. The page will reload automatically once online.</p>
++        <h3 id="server-reconnect-title">Server is restarting...</h3>
++        <p id="server-reconnect-desc">Reconnecting to OpenProxy. The page will reload automatically once online.</p>
+       </div>
+       <button type="button" class="server-reconnect-btn" id="server-reconnect-now-btn">Retry now</button>
+     </div>
+diff --git a/crates/openproxy-server/web/src/static/src/views/login.ts b/crates/openproxy-server/web/src/static/src/views/login.ts
+index be5af0a..48dfb9e 100644
+--- a/crates/openproxy-server/web/src/static/src/views/login.ts
++++ b/crates/openproxy-server/web/src/static/src/views/login.ts
+@@ -99,7 +99,7 @@ function renderLogin(): TemplateResult {
+   return html`
+     <div class="login-page">
+       <section class="card login-card">
+-        <h2 class="login-title">${t("login.title")}</h2>
++        <h1 class="login-title">${t("login.title")}</h1>
+         <form class="login-form" @submit=${onSubmit}>
+           <label class="config-field login-field">
+             <span class="config-label">${apiKeyLabel}</span>
+@@ -122,6 +122,7 @@ function renderLogin(): TemplateResult {
+             type="submit"
+             class="primary login-submit"
+             ?disabled=${submitting}
++            aria-busy=${submitting ? "true" : "false"}
+           >${submitting ? "…" : submitLabel}</button>
+         </form>
+         <div class="login-buy-block">
+diff --git a/crates/openproxy-server/web/src/static/styles/base.css b/crates/openproxy-server/web/src/static/styles/base.css
+index 730896b..808db4b 100644
+--- a/crates/openproxy-server/web/src/static/styles/base.css
++++ b/crates/openproxy-server/web/src/static/styles/base.css
+@@ -200,3 +200,27 @@ hr {
+ :focus:not(:focus-visible) {
+   outline: none;
+ }
++
++/* WCAG 2.4.1 Bypass Blocks: offscreen until focused via keyboard. */
++.skip-link {
++  position: fixed;
++  top: var(--space-2);
++  left: var(--space-2);
++  z-index: var(--z-toast);
++  padding: 0.45rem 0.85rem;
++  background: var(--color-primary);
++  color: var(--color-primary-fg);
++  font-weight: 600;
++  font-size: var(--fs-sm);
++  border-radius: var(--radius-sm);
++  box-shadow: var(--shadow-lg);
++  transform: translateY(-200%);
++  transition: transform var(--t-fast);
++}
++.skip-link:focus,
++.skip-link:focus-visible {
++  transform: translateY(0);
++  color: var(--color-primary-fg);
++  outline: 2px solid var(--color-text);
++  outline-offset: 2px;
++}
+-- 
+2.34.1
+

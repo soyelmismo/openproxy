@@ -7,7 +7,7 @@
   --color-surface-soft:  var(--color-surface-2);
   --color-text:         #17212b;
   --color-text-emphasis:#0d151c;
-  --color-text-muted:   #667085;
+  --color-text-muted:   #596375;
   --color-text-inverse: var(--c-canvas);
   --color-link:         var(--c-link);
   --color-link-hover:   #1d4ed8;
@@ -16,15 +16,15 @@
   --color-frame-ink:    #c7d0dc;
 
   --color-primary:        var(--c-dell-red);
-  --color-primary-hover:  #c91825;
+  --color-primary-hover:  #a8121b;
   --color-primary-fg:     var(--c-canvas);
-  --color-primary-soft:   #f6dada;
+  --color-primary-soft:   #f8e2e2;
 
-  --color-success:        #4d7c2a;
-  --color-success-soft:   #d8e2c8;
-  --color-warn:           #a86a00;
+  --color-success:        #356318;
+  --color-success-soft:   #e2ecd5;
+  --color-warn:           #855200;
   --color-warning:        var(--color-warn);
-  --color-warn-soft:      #f5d9b8;
+  --color-warn-soft:      #faebd7;
   --color-error:          #b21f1f;
   --color-error-soft:     #f3cdcd;
   --color-info:           #2b5a78;
@@ -92,7 +92,7 @@
   --color-status-err-soft:  var(--color-error-soft);
   --color-status-warn:      var(--color-warn);
   --color-status-warn-soft: var(--color-warn-soft);
-  --color-status-lost:      #78746e;
+  --color-status-lost:      #9e9990;
   --color-status-lost-soft: #262523;
 
   --color-status-ok-bright:    #4ade80;
@@ -177,7 +177,7 @@
     --color-status-err-soft:  var(--color-error-soft);
     --color-status-warn:      var(--color-warn);
     --color-status-warn-soft: var(--color-warn-soft);
-    --color-status-lost:      #78746e;
+    --color-status-lost:      #9e9990;
     --color-status-lost-soft: #262523;
 
     --color-status-ok-bright:    #4ade80;

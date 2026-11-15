@@ -99,7 +99,7 @@ function renderLogin(): TemplateResult {
   return html`
     <div class="login-page">
       <section class="card login-card">
-        <h2 class="login-title">${t("login.title")}</h2>
+        <h1 class="login-title">${t("login.title")}</h1>
         <form class="login-form" @submit=${onSubmit}>
           <label class="config-field login-field">
             <span class="config-label">${apiKeyLabel}</span>
@@ -122,6 +122,7 @@ function renderLogin(): TemplateResult {
             type="submit"
             class="primary login-submit"
             ?disabled=${submitting}
+            aria-busy=${submitting ? "true" : "false"}
           >${submitting ? "…" : submitLabel}</button>
         </form>
         <div class="login-buy-block">

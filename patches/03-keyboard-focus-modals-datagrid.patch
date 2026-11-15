@@ -1,0 +1,513 @@
+From 9598d051484e2f0d754e3c496f2f0fb0dbd6bdcd Mon Sep 17 00:00:00 2001
+From: soyelmismo <thinkboutme@protonmail.com>
+Date: Sun, 15 Nov 2026 04:00:04 +0000
+Subject: [PATCH] ux(a11y): [A11Y-03] restaurar anillos de foco, gestion de
+ foco en modales/menus y semantica WAI-ARIA en DataGrid y LogDetail
+
+---
+ .../src/static/src/components/context-menu.ts | 29 ++++++++++++-
+ .../src/static/src/components/data-grid.ts    | 17 +++++---
+ .../static/src/components/log-detail/index.ts | 14 +++----
+ .../static/src/components/log-detail/modal.ts | 41 ++++++++++++++-----
+ .../static/src/components/render-op-modal.ts  |  2 +
+ .../web/src/static/src/lib/show-confirm.ts    | 29 +++++++++++--
+ .../web/src/static/src/state/theme.ts         | 25 ++++++++++-
+ .../src/static/styles/components/cards.css    |  3 +-
+ .../static/styles/components/data-grid.css    |  4 ++
+ .../src/static/styles/components/modals.css   |  3 +-
+ 10 files changed, 138 insertions(+), 29 deletions(-)
+
+diff --git a/crates/openproxy-server/web/src/static/src/components/context-menu.ts b/crates/openproxy-server/web/src/static/src/components/context-menu.ts
+index f1cfb4b..bc3bb51 100644
+--- a/crates/openproxy-server/web/src/static/src/components/context-menu.ts
++++ b/crates/openproxy-server/web/src/static/src/components/context-menu.ts
+@@ -78,17 +78,44 @@ export function openContextMenu(opts: { x: number; y: number; items: readonly (C
+   el.appendChild(frag);
+   el.hidden = false;
+ 
++  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
++
+   // Clamp after layout so a menu near the bottom-right edge opens inward.
+   const w = el.offsetWidth, h = el.offsetHeight;
+   el.style.left = `${Math.max(8, Math.min(opts.x, window.innerWidth - w - 8))}px`;
+   el.style.top = `${Math.max(8, Math.min(opts.y, window.innerHeight - h - 8))}px`;
+ 
++  const enabledItems = (): HTMLButtonElement[] =>
++    Array.from(el.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)'));
++  enabledItems()[0]?.focus();
++
+   detach();
+   const onDocClick = (e: Event): void => {
+     if (!el.contains(e.target as Node)) closeContextMenu();
+   };
+   const onKey = (e: KeyboardEvent): void => {
+-    if (e.key === "Escape") { e.stopPropagation(); closeContextMenu(); }
++    if (e.key === "Escape") {
++      e.stopPropagation();
++      closeContextMenu();
++      if (opener && opener.isConnected) opener.focus();
++      return;
++    }
++    const items = enabledItems();
++    if (!items.length) return;
++    const cur = items.indexOf(document.activeElement as HTMLButtonElement);
++    if (e.key === "ArrowDown") {
++      e.preventDefault();
++      items[(cur + 1) % items.length]?.focus();
++    } else if (e.key === "ArrowUp") {
++      e.preventDefault();
++      items[(cur - 1 + items.length) % items.length]?.focus();
++    } else if (e.key === "Home") {
++      e.preventDefault();
++      items[0]?.focus();
++    } else if (e.key === "End") {
++      e.preventDefault();
++      items[items.length - 1]?.focus();
++    }
+   };
+   const onScrollOrResize = (): void => closeContextMenu();
+   // Listener is added after the current event finishes unwinding so the very
+diff --git a/crates/openproxy-server/web/src/static/src/components/data-grid.ts b/crates/openproxy-server/web/src/static/src/components/data-grid.ts
+index 9846d1a..6a99d02 100644
+--- a/crates/openproxy-server/web/src/static/src/components/data-grid.ts
++++ b/crates/openproxy-server/web/src/static/src/components/data-grid.ts
+@@ -394,6 +394,9 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
+     return html`
+       <div
+         class=${rowCls}
++        role="row"
++        aria-selected=${selectable ? (selected ? "true" : "false") : nothing}
++        aria-expanded=${props.expandedRow ? (s.expanded === key ? "true" : "false") : nothing}
+         data-row-key=${key}
+         data-i=${idx}
+         tabindex="-1"
+@@ -403,11 +406,12 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
+         ${props.columns.map((col, ci) => {
+           const isName = editing && renameText != null && ci === 0;
+           return html`
+-            <div class="dg-col" style=${col.max != null ? `max-width:${col.max}px` : nothing}>
++            <div class="dg-col" role="gridcell" style=${col.max != null ? `max-width:${col.max}px` : nothing}>
+               <div class="dg-inner">
+                 ${isName
+                   ? html`<input
+                       class="dg-rename"
++                      aria-label=${col.label || "Rename"}
+                       .value=${renameText}
+                       @keydown=${(e: KeyboardEvent) => {
+                         e.stopPropagation();
+@@ -424,13 +428,14 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
+           `;
+         })}
+         ${props.quickActions
+-          ? html`<div class="dg-col dg-actions">
++          ? html`<div class="dg-col dg-actions" role="gridcell">
+               <div class="dg-inner">
+                 ${props.quickActions(row).filter((a) => !a.when || a.when(row)).map((a) => html`
+                   <button
+                     type="button"
+                     class="dg-qa${a.danger ? " danger" : ""}"
+                     title=${a.title}
++                    aria-label=${a.title}
+                     @click=${(e: Event) => {
+                       e.stopPropagation();
+                       props.onAction(row, a.action, (e.currentTarget as HTMLElement).closest(".dg-row") as HTMLElement);
+@@ -471,6 +476,8 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
+   return html`
+     <div
+       class=${cls}
++      role="grid"
++      aria-multiselectable=${selectable ? "true" : "false"}
+       data-grid-id=${props.id}
+       tabindex="0"
+       .__dgConf=${{ mins: props.columns.map((c) => c.min ?? 0), folds: props.columns.map((c) => c.fold ?? 0), elastic: props.columns.findIndex((c) => c.elastic) }}
+@@ -514,9 +521,9 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
+       @keydown=${(e: KeyboardEvent) => onGridKeydown(e, props)}
+     >
+       <div class="dg-wrap">
+-        <div class="dg-head" aria-hidden="true">
+-          ${props.columns.map((c) => html`<div class="dg-col" style=${c.max != null ? `max-width:${c.max}px` : nothing}><div class="dg-inner">${c.label}</div></div>`)}
+-          ${props.quickActions ? html`<div class="dg-col dg-actions"><div class="dg-inner"></div></div>` : nothing}
++        <div class="dg-head" role="row">
++          ${props.columns.map((c) => html`<div class="dg-col" role="columnheader" style=${c.max != null ? `max-width:${c.max}px` : nothing}><div class="dg-inner">${c.label}</div></div>`)}
++          ${props.quickActions ? html`<div class="dg-col dg-actions" role="columnheader" aria-label="Actions"><div class="dg-inner"></div></div>` : nothing}
+         </div>
+         ${rows.length === 0 ? html`<div class="dg-empty">${empty}</div>` : rowsTpl}
+         ${winModel.hasPending
+diff --git a/crates/openproxy-server/web/src/static/src/components/log-detail/index.ts b/crates/openproxy-server/web/src/static/src/components/log-detail/index.ts
+index bc957b7..a6b4a00 100644
+--- a/crates/openproxy-server/web/src/static/src/components/log-detail/index.ts
++++ b/crates/openproxy-server/web/src/static/src/components/log-detail/index.ts
+@@ -70,7 +70,7 @@ export function readString(o: Record<string, unknown> | null | undefined, k: str
+ /** A `<section data-log-tab>` with a pretty-printed JSON viewer, for the
+  *  Errors / Raw tabs. */
+ export function jsonSection(title: string, value: unknown, tabKey: string): TemplateResult {
+-  return html`<section class="log-detail-section" data-log-tab=${tabKey}>
++  return html`<section class="log-detail-section" role="tabpanel" data-log-tab=${tabKey}>
+     <h4>${title}</h4>
+     <pre class="json-viewer">${formatJson(value)}</pre>
+   </section>`;
+@@ -481,7 +481,7 @@ export function renderRequestTab(requestBody: unknown, createdAt?: string): Temp
+         }
+       }
+     }
+-    return html`<section class="log-detail-section" data-log-tab="request">
++    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="request">
+       <h4>Request</h4>
+       <p class="muted">No request body recorded.${expiryHint}</p>
+     </section>`;
+@@ -500,14 +500,14 @@ export function renderRequestTab(requestBody: unknown, createdAt?: string): Temp
+ 
+   if (body != null && typeof body === "object" && !Array.isArray(body)) {
+     const blocks = renderObjectRequestBody(body as Record<string, unknown>);
+-    return html`<section class="log-detail-section" data-log-tab="request">
++    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="request">
+       <h4>Request</h4>
+       ${blocks}
+     </section>`;
+   }
+ 
+ 
+-  return html`<section class="log-detail-section" data-log-tab="request">
++  return html`<section class="log-detail-section" role="tabpanel" data-log-tab="request">
+     <h4>Request</h4>
+     <details class="log-detail-collapsible" open>
+       <summary>Raw request body</summary>
+@@ -539,7 +539,7 @@ export function renderResponseTab(
+       ? "Response body not captured (streaming request may have been interrupted)."
+       : NO_RESPONSE_PLACEHOLDER_TEXT;
+     placeholder += computeTtlExpiryHint(createdAt);
+-    return html`<section class="log-detail-section" data-log-tab="response">
++    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="response">
+       <h4>Response</h4>
+       <p class="muted log-detail-placeholder">${placeholder}</p>
+     </section>`;
+@@ -566,7 +566,7 @@ export function renderResponseTab(
+     if (parsed != null && typeof parsed === "object") {
+       return renderResponseTab(parsed, streamingHint, createdAt, isPartial);
+     }
+-    return html`<section class="log-detail-section" data-log-tab="response">
++    return html`<section class="log-detail-section" role="tabpanel" data-log-tab="response">
+       <h4>Response</h4>
+       ${partialBanner}
+       ${rawResponseBodyBlock}
+@@ -584,7 +584,7 @@ export function renderResponseTab(
+         ? [renderDecisionResponseLog(response), renderRawResponseBlock(response)]
+         : renderFallbackResponseBlocks(response);
+ 
+-  return html`<section class="log-detail-section" data-log-tab="response">
++  return html`<section class="log-detail-section" role="tabpanel" data-log-tab="response">
+     <h4>Response</h4>
+     ${partialBanner}
+     ${rawResponseBodyBlock}
+diff --git a/crates/openproxy-server/web/src/static/src/components/log-detail/modal.ts b/crates/openproxy-server/web/src/static/src/components/log-detail/modal.ts
+index 60fd642..b701c21 100644
+--- a/crates/openproxy-server/web/src/static/src/components/log-detail/modal.ts
++++ b/crates/openproxy-server/web/src/static/src/components/log-detail/modal.ts
+@@ -304,11 +304,11 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
+   const currentActiveTab = getActiveLogDetailTab();
+ 
+   return html`
+-    <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
++    <div id="log-detail-modal" class="modal-bg log-detail-modal" role="dialog" aria-modal="true" aria-labelledby="log-detail-modal-title" @click=${(e: Event) => closeLogDetailModal(e)}>
+       <div class="modal">
+         <div class="modal-header">
+           <div style="display:flex;align-items:center;gap:var(--space-2);min-width:0;flex:1 1 auto;overflow:hidden;">
+-            <h2 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
++            <h2 id="log-detail-modal-title" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
+             <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">${icons.copy()} Copy debug bundle</button>
+             <button type="button" class="log-detail-send-playground-btn" @click=${() => sendPayloadToPlayground(requestBody, provider, model)} title="Load this exact request payload into the Playground — messages, model and parameters preserved 1:1, ready to re-run or tweak.">${icons.play()} Send to playground</button>
+           </div>
+@@ -361,7 +361,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
+             ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
+             ${errors != null
+       ? jsonSection("Errors", errors, "errors")
+-      : html`<section class="log-detail-section" data-log-tab="errors">
++      : html`<section class="log-detail-section" role="tabpanel" data-log-tab="errors">
+                      <h4>Errors</h4>
+                      <p class="muted">No errors recorded.</p>
+                    </section>`}
+@@ -376,11 +376,11 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
+ function renderLogDetailTabs(currentTab: string, rawJson: unknown): TemplateResult {
+   return html`
+     <div class="tabs-toolbar tabs-and-actions-bar">
+-      <div class="tabs-group log-detail-tabs-group log-detail-tabs">
+-        <button class="detail-tab ${currentTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
+-        <button class="detail-tab ${currentTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
+-        <button class="detail-tab ${currentTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
+-        <button class="detail-tab ${currentTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
++      <div class="tabs-group log-detail-tabs-group log-detail-tabs" role="tablist" aria-label="Log detail sections">
++        <button type="button" role="tab" aria-selected=${currentTab === "request" ? "true" : "false"} class="detail-tab ${currentTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
++        <button type="button" role="tab" aria-selected=${currentTab === "response" ? "true" : "false"} class="detail-tab ${currentTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
++        <button type="button" role="tab" aria-selected=${currentTab === "errors" ? "true" : "false"} class="detail-tab ${currentTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
++        <button type="button" role="tab" aria-selected=${currentTab === "raw" ? "true" : "false"} class="detail-tab ${currentTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
+       </div>
+       <div class="tab-actions-right">
+         <label class="log-detail-markdown-toggle">
+@@ -414,7 +414,9 @@ export function logDetailTabClick(which: string, _e?: Event): void {
+ 
+   document.querySelectorAll(".tabs-toolbar .detail-tab, .tabs-and-actions-bar .detail-tab, .log-detail-tabs .detail-tab").forEach((btn) => {
+     const b = btn as HTMLElement;
+-    b.classList.toggle("active", b.getAttribute("data-arg1") === which);
++    const isActive = b.getAttribute("data-arg1") === which;
++    b.classList.toggle("active", isActive);
++    b.setAttribute("aria-selected", isActive ? "true" : "false");
+   });
+ }
+ 
+@@ -425,10 +427,22 @@ export function initializeLogDetailTabs(): void {
+ }
+ 
+ let pinnedSnapshot: LogDetailLog | null = null;
++let logDetailOpener: HTMLElement | null = null;
++
++function onLogDetailKeydown(e: KeyboardEvent): void {
++  if (e.key === "Escape") {
++    const m = document.getElementById("log-detail-modal");
++    if (m) {
++      e.stopPropagation();
++      removeLogDetailModal(m);
++    }
++  }
++}
+ 
+ /** Remove the `.log-detail-modal` element AND its wrapper host div, keeping `#modal-root`
+  *  clean so the next modal opens in a fresh wrapper. */
+ function removeLogDetailModal(m: HTMLElement): void {
++  window.removeEventListener("keydown", onLogDetailKeydown, true);
+   const wrapper = m.parentElement;
+   m.remove();
+   if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
+@@ -438,6 +452,10 @@ function removeLogDetailModal(m: HTMLElement): void {
+   clearPinnedIdentity();
+   pinnedSnapshot = null;
+   state.logs.selectedIdentity = null;
++  if (logDetailOpener && logDetailOpener.isConnected) {
++    logDetailOpener.focus();
++  }
++  logDetailOpener = null;
+ }
+ 
+ // Public API
+@@ -447,6 +465,7 @@ export async function openLogDetail(
+   traceId: string,
+   row?: unknown // AttemptState (from logs.ts)
+ ): Promise<void> {
++  logDetailOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+   const gen = bumpOpenLogDetailGeneration();
+   pinnedSnapshot = null;
+   const typedRow = row as Record<string, unknown> | undefined;
+@@ -492,9 +511,11 @@ export async function openLogDetail(
+     root.appendChild(wrapper);
+   }
+ 
+-
++  window.addEventListener("keydown", onLogDetailKeydown, true);
+   renderModal();
+   initializeLogDetailTabs();
++  const closeBtn = wrapper.querySelector<HTMLElement>(".close-btn");
++  closeBtn?.focus();
+ }
+ 
+ function renderModal() {
+diff --git a/crates/openproxy-server/web/src/static/src/components/render-op-modal.ts b/crates/openproxy-server/web/src/static/src/components/render-op-modal.ts
+index 700d12c..a406d9e 100644
+--- a/crates/openproxy-server/web/src/static/src/components/render-op-modal.ts
++++ b/crates/openproxy-server/web/src/static/src/components/render-op-modal.ts
+@@ -37,6 +37,7 @@ export interface OpModalHandle {
+ export function renderOpModal(props: OpModalProps): OpModalHandle {
+   const { title, body, actions, danger = false, onClose } = props;
+ 
++  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+   const root = ensureModalRoot();
+   const wrapper = document.createElement("div");
+   root.appendChild(wrapper);
+@@ -50,6 +51,7 @@ export function renderOpModal(props: OpModalProps): OpModalHandle {
+     window.removeEventListener("keydown", onKeydown, true);
+     render(html``, wrapper);
+     wrapper.remove();
++    if (opener && opener.isConnected) opener.focus();
+     if (onClose) onClose();
+   };
+ 
+diff --git a/crates/openproxy-server/web/src/static/src/lib/show-confirm.ts b/crates/openproxy-server/web/src/static/src/lib/show-confirm.ts
+index fe6aca4..50c8d5b 100644
+--- a/crates/openproxy-server/web/src/static/src/lib/show-confirm.ts
++++ b/crates/openproxy-server/web/src/static/src/lib/show-confirm.ts
+@@ -32,12 +32,14 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
+   return new Promise<boolean>((resolve) => {
+     const { title, message, danger = false, confirmLabel = "Confirm", cancelLabel = "Cancel" } = options;
+ 
++    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+     const wrapper = document.createElement("div");
+     document.body.appendChild(wrapper);
+ 
+     const finish = (result: boolean): void => {
+       window.removeEventListener("keydown", onKeydown, true);
+       wrapper.remove();
++      if (opener && opener.isConnected) opener.focus();
+       resolve(result);
+     };
+ 
+@@ -48,6 +50,19 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
+       } else if (e.key === "Enter") {
+         e.stopPropagation();
+         finish(true);
++      } else if (e.key === "Tab") {
++        const focusables = Array.from(wrapper.querySelectorAll<HTMLElement>("button:not([disabled])"));
++        if (focusables.length > 0) {
++          const first = focusables[0]!;
++          const last = focusables[focusables.length - 1]!;
++          if (e.shiftKey && document.activeElement === first) {
++            e.preventDefault();
++            last.focus();
++          } else if (!e.shiftKey && document.activeElement === last) {
++            e.preventDefault();
++            first.focus();
++          }
++        }
+       }
+     };
+ 
+@@ -58,6 +73,7 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
+         role="dialog"
+         aria-modal="true"
+         aria-labelledby=${DIALOG_ID + "-title"}
++        aria-describedby=${DIALOG_ID + "-body"}
+         @click=${(e: Event) => {
+           // Only backdrop clicks close (the .modal-bg itself).
+           if (e.target === wrapper.firstElementChild) finish(false);
+@@ -68,9 +84,9 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
+             <h2 id=${DIALOG_ID + "-title"}>${title}</h2>
+             <button type="button" class="close-btn" @click=${() => finish(false)} aria-label="Close">&times;</button>
+           </div>
+-          <div class="modal-body">${message}</div>
++          <div class="modal-body" id=${DIALOG_ID + "-body"}>${message}</div>
+           <div class="modal-footer">
+-            <button type="button" @click=${() => finish(false)}>${cancelLabel}</button>
++            <button type="button" class="cancel-btn" @click=${() => finish(false)}>${cancelLabel}</button>
+             <button
+               type="button"
+               class=${danger ? "danger" : "primary"}
+@@ -83,6 +99,10 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
+ 
+     render(template, wrapper);
+     window.addEventListener("keydown", onKeydown, true);
++    const initialBtn = wrapper.querySelector<HTMLButtonElement>(
++      danger ? ".modal-footer .cancel-btn" : ".modal-footer .primary",
++    );
++    initialBtn?.focus();
+   });
+ }
+ 
+@@ -92,6 +112,7 @@ export function showConfirm(options: ConfirmOptions): Promise<boolean> {
+  */
+ export function showPrompt(title: string, message: string, initial = ""): Promise<string | null> {
+   return new Promise<string | null>((resolve) => {
++    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+     const wrapper = document.createElement("div");
+     document.body.appendChild(wrapper);
+ 
+@@ -102,6 +123,7 @@ export function showPrompt(title: string, message: string, initial = ""): Promis
+       finished = true;
+       window.removeEventListener("keydown", onKeydown, true);
+       wrapper.remove();
++      if (opener && opener.isConnected) opener.focus();
+       resolve(result);
+     };
+ 
+@@ -128,10 +150,11 @@ export function showPrompt(title: string, message: string, initial = ""): Promis
+             <button type="button" class="close-btn" @click=${() => finish(null)} aria-label="Close">&times;</button>
+           </div>
+           <div class="modal-body">
+-            <div>${message}</div>
++            <label for="show-prompt-input">${message}</label>
+             <input
+               type="text"
+               id="show-prompt-input"
++              aria-label=${message || title}
+               class="modal-input"
+               .value=${initial}
+               @input=${(e: Event) => { draft = (e.target as HTMLInputElement).value; }}
+diff --git a/crates/openproxy-server/web/src/static/src/state/theme.ts b/crates/openproxy-server/web/src/static/src/state/theme.ts
+index 639c6ff..4c599a8 100644
+--- a/crates/openproxy-server/web/src/static/src/state/theme.ts
++++ b/crates/openproxy-server/web/src/static/src/state/theme.ts
+@@ -46,8 +46,31 @@ export function toggleTheme(): Theme {
+   return current;
+ }
+ 
++let mediaSubscribed = false;
++
+ // Bootstrap must be called before the first render to avoid a
+ // flash of the wrong theme. Idempotent.
+ export function bootstrapTheme(): void {
+-  applyTheme(detectInitial());
++  const stored = readStored();
++  if (stored === "light" || stored === "dark") {
++    applyTheme(stored);
++  } else {
++    current = detectInitial();
++    document.documentElement.setAttribute("data-theme", current);
++    document.documentElement.style.colorScheme = current;
++    document.documentElement.style.backgroundColor = current === "dark" ? "#151413" : "#f5f7fa";
++  }
++  if (!mediaSubscribed && typeof window !== "undefined" && window.matchMedia) {
++    mediaSubscribed = true;
++    const mql = window.matchMedia("(prefers-color-scheme: dark)");
++    mql.addEventListener?.("change", (e: MediaQueryListEvent) => {
++      const explicit = readStored();
++      if (explicit === "light" || explicit === "dark") return;
++      current = e.matches ? "dark" : "light";
++      document.documentElement.setAttribute("data-theme", current);
++      document.documentElement.style.colorScheme = current;
++      document.documentElement.style.backgroundColor = current === "dark" ? "#151413" : "#f5f7fa";
++      document.dispatchEvent(new CustomEvent("themechange", { detail: { theme: current } }));
++    });
++  }
+ }
+diff --git a/crates/openproxy-server/web/src/static/styles/components/cards.css b/crates/openproxy-server/web/src/static/styles/components/cards.css
+index ca6d76d..982e1af 100644
+--- a/crates/openproxy-server/web/src/static/styles/components/cards.css
++++ b/crates/openproxy-server/web/src/static/styles/components/cards.css
+@@ -275,7 +275,8 @@
+   color: var(--color-text);
+ }
+ .model-search-wrap input:focus {
+-  outline: none;
++  outline: 2px solid var(--color-primary);
++  outline-offset: 0;
+   border-color: var(--color-primary);
+   background: var(--color-surface-2);
+ }
+diff --git a/crates/openproxy-server/web/src/static/styles/components/data-grid.css b/crates/openproxy-server/web/src/static/styles/components/data-grid.css
+index 50a1ec4..a052ea1 100644
+--- a/crates/openproxy-server/web/src/static/styles/components/data-grid.css
++++ b/crates/openproxy-server/web/src/static/styles/components/data-grid.css
+@@ -6,6 +6,10 @@
+   outline: none;
+   container-type: inline-size;
+ }
++.dg:focus-visible .dg-wrap {
++  outline: 2px solid var(--color-primary);
++  outline-offset: 2px;
++}
+ 
+ .dg-wrap {
+   position: relative;
+diff --git a/crates/openproxy-server/web/src/static/styles/components/modals.css b/crates/openproxy-server/web/src/static/styles/components/modals.css
+index 3410cbd..5e28c09 100644
+--- a/crates/openproxy-server/web/src/static/styles/components/modals.css
++++ b/crates/openproxy-server/web/src/static/styles/components/modals.css
+@@ -175,7 +175,8 @@
+ }
+ .headers-strip-input:focus {
+   border-color: var(--color-primary);
+-  outline: none;
++  outline: 2px solid var(--color-primary);
++  outline-offset: 0;
+ }
+ .headers-editor-toolbar {
+   display: flex;
+-- 
+2.34.1
+

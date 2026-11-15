@@ -175,7 +175,8 @@
 }
 .headers-strip-input:focus {
   border-color: var(--color-primary);
-  outline: none;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
 }
 .headers-editor-toolbar {
   display: flex;

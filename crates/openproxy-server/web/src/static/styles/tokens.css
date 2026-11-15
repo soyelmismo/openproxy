@@ -19,7 +19,7 @@
 
 :root {
   /* Dell brand palette */
-  --c-dell-red:      #e91d2a;
+  --c-dell-red:      #c71620;
   --c-yellow-sticker:#fcc20f;
   --c-purple-stripe: #6a26a4;
 
@@ -47,7 +47,7 @@
   --color-surface-soft:  var(--color-surface-2);
   --color-text:         #17212b;
   --color-text-emphasis:#0d151c;
-  --color-text-muted:   #667085;
+  --color-text-muted:   #596375;
   --color-text-inverse: var(--c-canvas);
   --color-link:         var(--c-link);
   --color-link-hover:   #1d4ed8;
@@ -56,16 +56,16 @@
   --color-frame-ink:    #c7d0dc;
 
   --color-primary:      var(--c-dell-red);
-  --color-primary-hover:#c91825;
+  --color-primary-hover:#a8121b;
   --color-primary-fg:   var(--c-canvas);
 
-  --color-primary-soft: #f6dada;   /* hover/active bg */
+  --color-primary-soft: #f8e2e2;   /* hover/active bg */
 
-  --color-success:      #4d7c2a;   /* sage darkened for AA */
-  --color-success-soft: #d8e2c8;
-  --color-warn:         #a86a00;   /* peach dark */
+  --color-success:      #356318;   /* sage darkened for AA >= 4.5:1 on soft bg */
+  --color-success-soft: #e2ecd5;
+  --color-warn:         #855200;   /* peach darkened for AA >= 4.5:1 on soft bg */
   --color-warning:      var(--color-warn);
-  --color-warn-soft:    #f5d9b8;
+  --color-warn-soft:    #faebd7;
   --color-error:        #b21f1f;   /* salmon dark */
   --color-error-soft:   #f3cdcd;
   --color-info:         #2b5a78;   /* sky dark */
@@ -74,8 +74,8 @@
   /* On-chain payment accent: the indigo of "buy" affordances that lead to
      checkout. The QR itself is painted in the brand red (--c-dell-red) by
      credits_qr::render. */
-  --color-chain:        #6366f1;
-  --color-chain-hover:  #4f46e5;
+  --color-chain:        #4f46e5;
+  --color-chain-hover:  #4338ca;
   --color-chain-fg:     #ffffff;
 
   /* Status pills (log row) */

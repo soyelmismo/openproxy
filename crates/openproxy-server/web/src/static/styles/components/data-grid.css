@@ -6,6 +6,10 @@
   outline: none;
   container-type: inline-size;
 }
+.dg:focus-visible .dg-wrap {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
 
 .dg-wrap {
   position: relative;
@@ -356,4 +360,16 @@
   margin: 4px 2px;
   border: 0;
   border-top: var(--border-w) var(--border-style) var(--color-border);
+}
+
+@media (pointer: coarse) {
+  .dg-qa {
+    opacity: 1;
+    min-width: 32px;
+    min-height: 32px;
+  }
+  .ctx-menu button {
+    min-height: 44px;
+    padding: 8px 12px;
+  }
 }

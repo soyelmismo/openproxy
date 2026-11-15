@@ -20,6 +20,12 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 ///
 /// Returns `Err` only if the configured filter or layer set is invalid;
 /// the underlying `try_init` failure is propagated unchanged.
+/// Respect https://no-color.org/: when `NO_COLOR` is set to a non-empty value,
+/// disable ANSI escape sequences in terminal log output.
+pub fn no_color_requested() -> bool {
+    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+}
+
 pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     // Ring buffer first: DebugLogLayer must be able to push the moment the
     // subscriber is installed. Idempotent.
@@ -40,6 +46,7 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     // commits to the JSON arm's `S` and the Text arm cannot unify
     // (`DefaultFields`+`Format<Compact>` vs `JsonFields`+`Format<Json>`).
     let debug_filter = LevelFilter::WARN;
+    let ansi = !no_color_requested() && std::io::IsTerminal::is_terminal(&std::io::stdout());
 
     match config.format {
         LogFormat::Json => {
@@ -56,7 +63,12 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
         }
         LogFormat::Text => {
             tracing_subscriber::registry()
-                .with(fmt::layer().compact().with_filter(fmt_filter))
+                .with(
+                    fmt::layer()
+                        .compact()
+                        .with_ansi(ansi)
+                        .with_filter(fmt_filter),
+                )
                 .with(crate::debug_log::DebugLogLayer.with_filter(debug_filter))
                 .try_init()?;
         }

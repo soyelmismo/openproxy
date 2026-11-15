@@ -1,0 +1,167 @@
+From 69f19c37136d8349098296ab3fd177c83316b5fa Mon Sep 17 00:00:00 2001
+From: soyelmismo <thinkboutme@protonmail.com>
+Date: Sun, 15 Nov 2026 04:02:27 +0000
+Subject: [PATCH] ux(dx): [DX-06] implementar banderas CLI --help/--version,
+ soporte NO_COLOR y mensajes de error accionables
+
+---
+ crates/openproxy-server/src/main.rs      | 72 ++++++++++++++++++++++--
+ crates/openproxy-server/src/telemetry.rs | 14 ++++-
+ 2 files changed, 81 insertions(+), 5 deletions(-)
+
+diff --git a/crates/openproxy-server/src/main.rs b/crates/openproxy-server/src/main.rs
+index 948f897..f779694 100644
+--- a/crates/openproxy-server/src/main.rs
++++ b/crates/openproxy-server/src/main.rs
+@@ -92,9 +92,41 @@ fn resolve_config_path() -> String {
+     })
+ }
+ 
++fn render_cli_version() -> String {
++    format!("openproxy {}", env!("CARGO_PKG_VERSION"))
++}
++
++fn render_cli_help() -> String {
++    format!(
++        "{}\n\
++Headless multi-provider LLM proxy and admin dashboard.\n\n\
++USAGE:\n\
++  openproxy [OPTIONS]\n\n\
++OPTIONS:\n\
++  -h, --help         Print this help message and exit\n\
++  -V, --version      Print version information and exit\n\
++      --healthcheck  Probe the configured server.bind TCP port and exit 0/1\n\n\
++ENVIRONMENT:\n\
++  OPENPROXY_CONFIG                 Path to config.toml (default: ./config.toml or ~/.openproxy/config.toml)\n\
++  OPENPROXY_MASTER_KEY             32-byte hex or base64 key for credential encryption\n\
++  OPENPROXY_SERVER__ADMIN_BIND     Optional separate host:port for /admin/* endpoints\n\
++  OPENPROXY_COOLDOWN_SECS          Override target cooldown window in seconds\n\
++  OPENPROXY_STORAGE__READER_COUNT  SQLite read-pool size (0..=32)\n\
++  OPENPROXY_WORKER_THREADS         Tokio worker thread count (default: 4)\n\
++  RUST_LOG                         Log level filter (e.g. info, debug, openproxy=debug)\n\
++  NO_COLOR                         Disable ANSI color codes in text log output (https://no-color.org)",
++        render_cli_version()
++    )
++}
++
+ fn load_server_config() -> anyhow::Result<AppConfig> {
+     let config_path = resolve_config_path();
+-    let config = AppConfig::load_or_default(&config_path)?;
++    let config = AppConfig::load_or_default(&config_path).map_err(|e| {
++        anyhow::anyhow!(
++            "Failed to load configuration from '{config_path}': {e}\n\
++             Hint: verify TOML syntax against config.example.toml or set OPENPROXY_CONFIG=/path/to/config.toml."
++        )
++    })?;
+     openproxy_server::telemetry::init(&config.logging)?;
+     Ok(config)
+ }
+@@ -120,11 +152,21 @@ async fn run_server(state: openproxy_server::state::AppState) -> anyhow::Result<
+              unencrypted unless a TLS-terminating reverse proxy fronts this port."
+         );
+     }
+-    let listener = openproxy_server::listener::bind(&bind_addr).await?;
++    let listener = openproxy_server::listener::bind(&bind_addr).await.map_err(|e| {
++        anyhow::anyhow!(
++            "Cannot bind public listener on '{bind_addr}': {e}\n\
++             Hint: check if another openproxy instance is using this port or update [server].bind in config.toml."
++        )
++    })?;
+     tracing::info!(addr = %bind_addr, "openproxy listening");
+     let admin_listener = match admin_bind {
+         Some(admin_bind) => {
+-            let admin_listener = openproxy_server::listener::bind(&admin_bind).await?;
++            let admin_listener = openproxy_server::listener::bind(&admin_bind).await.map_err(|e| {
++                anyhow::anyhow!(
++                    "Cannot bind admin listener on '{admin_bind}': {e}\n\
++                     Hint: verify OPENPROXY_SERVER__ADMIN_BIND or [server].admin_bind is free and distinct from server.bind."
++                )
++            })?;
+             if !is_loopback_bind(&admin_bind) {
+                 tracing::warn!(addr = %admin_bind, "admin listener is NON-LOOPBACK over plain HTTP; use a TLS-terminating reverse proxy");
+             }
+@@ -366,6 +408,14 @@ fn main() -> anyhow::Result<()> {
+     if std::env::args().nth(1).as_deref() == Some("--embed-worker") {
+         return openproxy_adapters::embed_engine::run_worker().map_err(Into::into);
+     }
++    if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
++        println!("{}", render_cli_help());
++        return Ok(());
++    }
++    if std::env::args().skip(1).any(|a| a == "-V" || a == "--version") {
++        println!("{}", render_cli_version());
++        return Ok(());
++    }
+     // Healthcheck mode (OP-23): distroless containers have no shell, wget or
+     // curl, so the image's HEALTHCHECK invokes the binary itself. This runs a
+     // TCP connect against the configured bind address and exits 0/1 — usable
+@@ -385,7 +435,9 @@ fn main() -> anyhow::Result<()> {
+             .map_err(|e| anyhow::anyhow!("invalid bind address {bind:?}: {e}"))?;
+         match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)) {
+             Ok(_) => Ok(()),
+-            Err(e) => anyhow::bail!("healthcheck: cannot connect to {addr}: {e}"),
++            Err(e) => anyhow::bail!(
++                "healthcheck: cannot connect to {addr}: {e} (is openproxy running on {bind}?)"
++            ),
+         }
+     } else {
+         run_main()
+@@ -579,4 +631,16 @@ mod tests {
+         assert_eq!(std::env::var("MIMALLOC_ARENA_RESERVE").unwrap(), "65536");
+         assert_eq!(std::env::var("MIMALLOC_ABANDONED_PAGE_PURGE").unwrap(), "1");
+     }
++
++    #[test]
++    fn cli_help_and_version_include_essential_ergonomics() {
++        let version = render_cli_version();
++        assert!(version.starts_with("openproxy "));
++        let help = render_cli_help();
++        assert!(help.contains("--help"));
++        assert!(help.contains("--version"));
++        assert!(help.contains("--healthcheck"));
++        assert!(help.contains("OPENPROXY_CONFIG"));
++        assert!(help.contains("NO_COLOR"));
++    }
+ }
+diff --git a/crates/openproxy-server/src/telemetry.rs b/crates/openproxy-server/src/telemetry.rs
+index 2161d2f..c61ca7b 100644
+--- a/crates/openproxy-server/src/telemetry.rs
++++ b/crates/openproxy-server/src/telemetry.rs
+@@ -20,6 +20,12 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
+ ///
+ /// Returns `Err` only if the configured filter or layer set is invalid;
+ /// the underlying `try_init` failure is propagated unchanged.
++/// Respect https://no-color.org/: when `NO_COLOR` is set to a non-empty value,
++/// disable ANSI escape sequences in terminal log output.
++pub fn no_color_requested() -> bool {
++    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
++}
++
+ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
+     // Ring buffer first: DebugLogLayer must be able to push the moment the
+     // subscriber is installed. Idempotent.
+@@ -40,6 +46,7 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
+     // commits to the JSON arm's `S` and the Text arm cannot unify
+     // (`DefaultFields`+`Format<Compact>` vs `JsonFields`+`Format<Json>`).
+     let debug_filter = LevelFilter::WARN;
++    let ansi = !no_color_requested() && std::io::IsTerminal::is_terminal(&std::io::stdout());
+ 
+     match config.format {
+         LogFormat::Json => {
+@@ -56,7 +63,12 @@ pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
+         }
+         LogFormat::Text => {
+             tracing_subscriber::registry()
+-                .with(fmt::layer().compact().with_filter(fmt_filter))
++                .with(
++                    fmt::layer()
++                        .compact()
++                        .with_ansi(ansi)
++                        .with_filter(fmt_filter),
++                )
+                 .with(crate::debug_log::DebugLogLayer.with_filter(debug_filter))
+                 .try_init()?;
+         }
+-- 
+2.34.1
+

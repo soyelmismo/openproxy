@@ -37,6 +37,7 @@ export interface OpModalHandle {
 export function renderOpModal(props: OpModalProps): OpModalHandle {
   const { title, body, actions, danger = false, onClose } = props;
 
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const root = ensureModalRoot();
   const wrapper = document.createElement("div");
   root.appendChild(wrapper);
@@ -50,6 +51,7 @@ export function renderOpModal(props: OpModalProps): OpModalHandle {
     window.removeEventListener("keydown", onKeydown, true);
     render(html``, wrapper);
     wrapper.remove();
+    if (opener && opener.isConnected) opener.focus();
     if (onClose) onClose();
   };
 

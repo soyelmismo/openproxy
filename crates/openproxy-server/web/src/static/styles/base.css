@@ -200,3 +200,27 @@ hr {
 :focus:not(:focus-visible) {
   outline: none;
 }
+
+/* WCAG 2.4.1 Bypass Blocks: offscreen until focused via keyboard. */
+.skip-link {
+  position: fixed;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: var(--z-toast);
+  padding: 0.45rem 0.85rem;
+  background: var(--color-primary);
+  color: var(--color-primary-fg);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-200%);
+  transition: transform var(--t-fast);
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+  color: var(--color-primary-fg);
+  outline: 2px solid var(--color-text);
+  outline-offset: 2px;
+}

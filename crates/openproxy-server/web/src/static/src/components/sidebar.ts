@@ -218,8 +218,9 @@ export function renderSidebar(): void {
       </div>
       <div class="mobile-view-title" id="mobile-view-title"></div>
       <div class="mobile-topbar-actions">
-        <span class="health-dot ${dotClass}" title="Health: ${healthText}"></span>
+        <span class="health-dot ${dotClass}" title="Health: ${healthText}" aria-hidden="true"></span>
         <button class="mobile-nav-toggle" type="button" data-action="toggleMobileNav"
+                aria-expanded=${mobileNavOpen ? "true" : "false"}
                 aria-label=${mobileNavOpen ? "Close navigation" : "Open navigation"}>
           ${mobileNavOpen ? icons.close() : icons.menu()}
         </button>
@@ -237,7 +238,7 @@ export function renderSidebar(): void {
         <div class="brand">OpenProxy</div>
         <button class="mobile-nav-close" type="button" data-action="toggleMobileNav" aria-label="Close menu">${icons.close()}</button>
       </div>
-      <nav @click=${handleNavClick}>${isFullAdmin() ? renderLink(HOME_LINK, collapsed) : html``}${
+      <nav aria-label="Main navigation" @click=${handleNavClick}>${isFullAdmin() ? renderLink(HOME_LINK, collapsed) : html``}${
         isFullAdmin()
           ? GROUPS.map((g: SidebarGroup) => html`
               <div class="sidebar-nav-group">
@@ -253,10 +254,10 @@ export function renderSidebar(): void {
                 ${renderLink({ href: "#/playground", icon: "playground", label: "Playground" }, collapsed)}
               </div>`
       }</nav>
-      <div class="health">
+      <div class="health" role="status" aria-live="polite">
         ${collapsed
-          ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}"><span class="health-dot ${dotClass}"></span></span>`
-          : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}"></span> ${healthText}</span>`}
+          ? html`<span id="health-status" class=${legacyHealthClass} title="Health: ${healthText}" aria-label="Health: ${healthText}"><span class="health-dot ${dotClass}" aria-hidden="true"></span></span>`
+          : html`Health: <span id="health-status" class=${legacyHealthClass}><span class="health-dot ${dotClass}" aria-hidden="true"></span> ${healthText}</span>`}
       </div>
       <div class="sidebar-footer">
         <button class="sidebar-toggle desktop-only" type="button" data-action="toggleSidebar"
