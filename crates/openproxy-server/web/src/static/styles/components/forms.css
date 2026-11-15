@@ -137,16 +137,6 @@ button.close-btn {
   transform: rotate(15deg);
 }
 
-.sidebar-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  margin-top: auto;
-}
-.sidebar-toggle { flex: 1; }
-body.sidebar-collapsed .sidebar-toggle { text-align: center; }
-
 .logs-recording-toggle {
   display: inline-flex;
   align-items: center;
