@@ -352,3 +352,69 @@ async fn test_backup_endpoints_reject_read_only_scope() {
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
+
+/// VULN (audit, fix/security-audit): the restore handler replaced the whole
+/// `api_keys` table but never invalidated the in-memory API-key cache (60 s
+/// TTL), so keys deleted by the restored bundle kept authenticating for up
+/// to a minute after the restore (TOCTOU). The cache must be dropped as
+/// part of the restore.
+#[tokio::test]
+async fn test_restore_invalidates_the_api_key_cache() {
+    let tmp = tempdir();
+    let (state, token) = make_state_with_key(tmp.path()).await;
+
+    let app = crate::router::build_router(state.clone()).layer(axum::Extension(
+        axum::extract::connect_info::ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        ),
+    ));
+
+    // Warm the API-key cache with the live bootstrap key.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/accounts")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Restore a bundle whose api_keys list is empty: the live key is gone
+    // from the database.
+    let bundle = BackupBundle {
+        version: openproxy_types::backup::BACKUP_FORMAT_VERSION,
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        openproxy_version: "1.0.0".into(),
+        encrypted: false,
+        kdf: None,
+        kdf_salt: None,
+        kdf_iterations: None,
+        nonce: None,
+        ciphertext: None,
+        payload: Some(openproxy_types::backup::BackupPayload::default()),
+    };
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/api/backup/restore")
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&bundle).unwrap()))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // The same key must stop authenticating immediately, not after the
+    // cache TTL.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/admin/api/accounts")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "a key deleted by the restore must not authenticate from the stale cache"
+    );
+}

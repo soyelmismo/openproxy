@@ -202,6 +202,12 @@ pub async fn restore_backup_handler(
             Some(db_path),
         )?;
         state_clone.reload_runtime_config(&w);
+        // ROOT FIX (security audit): the restore swaps the whole `api_keys`
+        // table, but the in-memory API-key cache (60 s TTL) kept serving the
+        // pre-restore keys: a key deleted by the restored bundle kept
+        // authenticating for up to a minute after the restore. Drop the
+        // cache with the same operation, like revoke/delete/update do.
+        state_clone.invalidate_api_key_cache(None);
         Ok::<_, CoreError>(rep)
     })
     .await
