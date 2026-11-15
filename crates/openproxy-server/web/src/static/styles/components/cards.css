@@ -275,7 +275,8 @@
   color: var(--color-text);
 }
 .model-search-wrap input:focus {
-  outline: none;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 0;
   border-color: var(--color-primary);
   background: var(--color-surface-2);
 }

@@ -394,6 +394,9 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
     return html`
       <div
         class=${rowCls}
+        role="row"
+        aria-selected=${selectable ? (selected ? "true" : "false") : nothing}
+        aria-expanded=${props.expandedRow ? (s.expanded === key ? "true" : "false") : nothing}
         data-row-key=${key}
         data-i=${idx}
         tabindex="-1"
@@ -403,11 +406,12 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
         ${props.columns.map((col, ci) => {
           const isName = editing && renameText != null && ci === 0;
           return html`
-            <div class="dg-col" style=${col.max != null ? `max-width:${col.max}px` : nothing}>
+            <div class="dg-col" role="gridcell" style=${col.max != null ? `max-width:${col.max}px` : nothing}>
               <div class="dg-inner">
                 ${isName
                   ? html`<input
                       class="dg-rename"
+                      aria-label=${col.label || "Rename"}
                       .value=${renameText}
                       @keydown=${(e: KeyboardEvent) => {
                         e.stopPropagation();
@@ -424,13 +428,14 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
           `;
         })}
         ${props.quickActions
-          ? html`<div class="dg-col dg-actions">
+          ? html`<div class="dg-col dg-actions" role="gridcell">
               <div class="dg-inner">
                 ${props.quickActions(row).filter((a) => !a.when || a.when(row)).map((a) => html`
                   <button
                     type="button"
                     class="dg-qa${a.danger ? " danger" : ""}"
                     title=${a.title}
+                    aria-label=${a.title}
                     @click=${(e: Event) => {
                       e.stopPropagation();
                       props.onAction(row, a.action, (e.currentTarget as HTMLElement).closest(".dg-row") as HTMLElement);
@@ -471,6 +476,8 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
   return html`
     <div
       class=${cls}
+      role="grid"
+      aria-multiselectable=${selectable ? "true" : "false"}
       data-grid-id=${props.id}
       tabindex="0"
       .__dgConf=${{ mins: props.columns.map((c) => c.min ?? 0), folds: props.columns.map((c) => c.fold ?? 0), elastic: props.columns.findIndex((c) => c.elastic) }}
@@ -514,9 +521,9 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
       @keydown=${(e: KeyboardEvent) => onGridKeydown(e, props)}
     >
       <div class="dg-wrap">
-        <div class="dg-head" aria-hidden="true">
-          ${props.columns.map((c) => html`<div class="dg-col" style=${c.max != null ? `max-width:${c.max}px` : nothing}><div class="dg-inner">${c.label}</div></div>`)}
-          ${props.quickActions ? html`<div class="dg-col dg-actions"><div class="dg-inner"></div></div>` : nothing}
+        <div class="dg-head" role="row">
+          ${props.columns.map((c) => html`<div class="dg-col" role="columnheader" style=${c.max != null ? `max-width:${c.max}px` : nothing}><div class="dg-inner">${c.label}</div></div>`)}
+          ${props.quickActions ? html`<div class="dg-col dg-actions" role="columnheader" aria-label="Actions"><div class="dg-inner"></div></div>` : nothing}
         </div>
         ${rows.length === 0 ? html`<div class="dg-empty">${empty}</div>` : rowsTpl}
         ${winModel.hasPending

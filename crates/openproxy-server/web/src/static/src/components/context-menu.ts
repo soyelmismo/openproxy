@@ -78,17 +78,44 @@ export function openContextMenu(opts: { x: number; y: number; items: readonly (C
   el.appendChild(frag);
   el.hidden = false;
 
+  const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
   // Clamp after layout so a menu near the bottom-right edge opens inward.
   const w = el.offsetWidth, h = el.offsetHeight;
   el.style.left = `${Math.max(8, Math.min(opts.x, window.innerWidth - w - 8))}px`;
   el.style.top = `${Math.max(8, Math.min(opts.y, window.innerHeight - h - 8))}px`;
+
+  const enabledItems = (): HTMLButtonElement[] =>
+    Array.from(el.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)'));
+  enabledItems()[0]?.focus();
 
   detach();
   const onDocClick = (e: Event): void => {
     if (!el.contains(e.target as Node)) closeContextMenu();
   };
   const onKey = (e: KeyboardEvent): void => {
-    if (e.key === "Escape") { e.stopPropagation(); closeContextMenu(); }
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      closeContextMenu();
+      if (opener && opener.isConnected) opener.focus();
+      return;
+    }
+    const items = enabledItems();
+    if (!items.length) return;
+    const cur = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      items[(cur + 1) % items.length]?.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(cur - 1 + items.length) % items.length]?.focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      items[0]?.focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1]?.focus();
+    }
   };
   const onScrollOrResize = (): void => closeContextMenu();
   // Listener is added after the current event finishes unwinding so the very

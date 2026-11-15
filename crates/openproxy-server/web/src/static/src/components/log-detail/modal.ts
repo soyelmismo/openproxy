@@ -304,11 +304,11 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   const currentActiveTab = getActiveLogDetailTab();
 
   return html`
-    <div id="log-detail-modal" class="modal-bg log-detail-modal" @click=${(e: Event) => closeLogDetailModal(e)}>
+    <div id="log-detail-modal" class="modal-bg log-detail-modal" role="dialog" aria-modal="true" aria-labelledby="log-detail-modal-title" @click=${(e: Event) => closeLogDetailModal(e)}>
       <div class="modal">
         <div class="modal-header">
           <div style="display:flex;align-items:center;gap:var(--space-2);min-width:0;flex:1 1 auto;overflow:hidden;">
-            <h2 style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
+            <h2 id="log-detail-modal-title" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Log #${String(requestId)}</h2>
             <button type="button" class="log-detail-copy-bundle-btn" @click=${() => { void copyDebugBundle(); }} title="Copy a Markdown-formatted debug bundle with all request/response/error context — ready to paste into a bug report.">${icons.copy()} Copy debug bundle</button>
             <button type="button" class="log-detail-send-playground-btn" @click=${() => sendPayloadToPlayground(requestBody, provider, model)} title="Load this exact request payload into the Playground — messages, model and parameters preserved 1:1, ready to re-run or tweak.">${icons.play()} Send to playground</button>
           </div>
@@ -361,7 +361,7 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             ${renderResponseTab(response, isStreaming, createdAt, isPartial)}
             ${errors != null
       ? jsonSection("Errors", errors, "errors")
-      : html`<section class="log-detail-section" data-log-tab="errors">
+      : html`<section class="log-detail-section" role="tabpanel" data-log-tab="errors">
                      <h4>Errors</h4>
                      <p class="muted">No errors recorded.</p>
                    </section>`}
@@ -376,11 +376,11 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
 function renderLogDetailTabs(currentTab: string, rawJson: unknown): TemplateResult {
   return html`
     <div class="tabs-toolbar tabs-and-actions-bar">
-      <div class="tabs-group log-detail-tabs-group log-detail-tabs">
-        <button class="detail-tab ${currentTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
-        <button class="detail-tab ${currentTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
-        <button class="detail-tab ${currentTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
-        <button class="detail-tab ${currentTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
+      <div class="tabs-group log-detail-tabs-group log-detail-tabs" role="tablist" aria-label="Log detail sections">
+        <button type="button" role="tab" aria-selected=${currentTab === "request" ? "true" : "false"} class="detail-tab ${currentTab === "request" ? "active" : ""}" data-arg1="request" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("request", e)}>Request</button>
+        <button type="button" role="tab" aria-selected=${currentTab === "response" ? "true" : "false"} class="detail-tab ${currentTab === "response" ? "active" : ""}" data-arg1="response" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("response", e)}>Response</button>
+        <button type="button" role="tab" aria-selected=${currentTab === "errors" ? "true" : "false"} class="detail-tab ${currentTab === "errors" ? "active" : ""}" data-arg1="errors" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("errors", e)}>Errors</button>
+        <button type="button" role="tab" aria-selected=${currentTab === "raw" ? "true" : "false"} class="detail-tab ${currentTab === "raw" ? "active" : ""}" data-arg1="raw" data-action="logDetailTab" @click=${(e: Event) => logDetailTabClick("raw", e)}>Raw</button>
       </div>
       <div class="tab-actions-right">
         <label class="log-detail-markdown-toggle">
@@ -414,7 +414,9 @@ export function logDetailTabClick(which: string, _e?: Event): void {
 
   document.querySelectorAll(".tabs-toolbar .detail-tab, .tabs-and-actions-bar .detail-tab, .log-detail-tabs .detail-tab").forEach((btn) => {
     const b = btn as HTMLElement;
-    b.classList.toggle("active", b.getAttribute("data-arg1") === which);
+    const isActive = b.getAttribute("data-arg1") === which;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-selected", isActive ? "true" : "false");
   });
 }
 
@@ -425,10 +427,22 @@ export function initializeLogDetailTabs(): void {
 }
 
 let pinnedSnapshot: LogDetailLog | null = null;
+let logDetailOpener: HTMLElement | null = null;
+
+function onLogDetailKeydown(e: KeyboardEvent): void {
+  if (e.key === "Escape") {
+    const m = document.getElementById("log-detail-modal");
+    if (m) {
+      e.stopPropagation();
+      removeLogDetailModal(m);
+    }
+  }
+}
 
 /** Remove the `.log-detail-modal` element AND its wrapper host div, keeping `#modal-root`
  *  clean so the next modal opens in a fresh wrapper. */
 function removeLogDetailModal(m: HTMLElement): void {
+  window.removeEventListener("keydown", onLogDetailKeydown, true);
   const wrapper = m.parentElement;
   m.remove();
   if (wrapper && wrapper.children.length === 0 && wrapper.parentElement?.id === "modal-root") {
@@ -438,6 +452,10 @@ function removeLogDetailModal(m: HTMLElement): void {
   clearPinnedIdentity();
   pinnedSnapshot = null;
   state.logs.selectedIdentity = null;
+  if (logDetailOpener && logDetailOpener.isConnected) {
+    logDetailOpener.focus();
+  }
+  logDetailOpener = null;
 }
 
 // Public API
@@ -447,6 +465,7 @@ export async function openLogDetail(
   traceId: string,
   row?: unknown // AttemptState (from logs.ts)
 ): Promise<void> {
+  logDetailOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const gen = bumpOpenLogDetailGeneration();
   pinnedSnapshot = null;
   const typedRow = row as Record<string, unknown> | undefined;
@@ -492,9 +511,11 @@ export async function openLogDetail(
     root.appendChild(wrapper);
   }
 
-
+  window.addEventListener("keydown", onLogDetailKeydown, true);
   renderModal();
   initializeLogDetailTabs();
+  const closeBtn = wrapper.querySelector<HTMLElement>(".close-btn");
+  closeBtn?.focus();
 }
 
 function renderModal() {

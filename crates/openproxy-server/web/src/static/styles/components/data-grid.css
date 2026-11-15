@@ -6,6 +6,10 @@
   outline: none;
   container-type: inline-size;
 }
+.dg:focus-visible .dg-wrap {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
 
 .dg-wrap {
   position: relative;
