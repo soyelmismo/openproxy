@@ -182,12 +182,22 @@ pub async fn restore_backup_handler(
 
     let state_clone = s.clone();
     let report = tokio::task::spawn_blocking(move || {
+        // ROOT FIX (security audit): validate the version and run the whole
+        // KDF + AES-GCM decrypt BEFORE acquiring the pool's single writer.
+        // A crafted bundle with a huge `kdf_iterations` used to pin the
+        // writer (and every usage write, cooldown and billing update) for
+        // the entire KDF duration.
+        let payload = openproxy_core::backup::preflight_bundle(
+            &bundle,
+            opts.passphrase.as_deref(),
+        )?;
         let mut w = pool.writer();
         let db_path = pool.path();
-        let rep = openproxy_core::backup::restore_backup(
+        let rep = openproxy_core::backup::restore_payload(
             &mut w,
             master_key.as_ref(),
             &bundle,
+            &payload,
             &opts,
             Some(db_path),
         )?;

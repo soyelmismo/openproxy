@@ -11,7 +11,7 @@ mod error_contract_tests;
 
 pub use crypto::{decrypt_bundle_payload, encrypt_bundle_payload};
 pub use export::export_backup;
-pub use restore::restore_backup;
+pub use restore::{preflight_bundle, restore_backup, restore_payload};
 pub use validate::validate_backup;
 
 #[cfg(test)]

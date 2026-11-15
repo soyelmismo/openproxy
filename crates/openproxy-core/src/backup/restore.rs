@@ -15,6 +15,22 @@ pub fn restore_backup(
     options: &RestoreOptions,
     db_path: Option<&Path>,
 ) -> Result<RestoreReport> {
+    let payload = preflight_bundle(bundle, options.passphrase.as_deref())?;
+    restore_payload(conn, master_key, bundle, &payload, options, db_path)
+}
+
+/// Validate the bundle version and decrypt the payload WITHOUT touching the
+/// database.
+///
+/// ROOT FIX (security audit): split out of `restore_backup` so the caller
+/// (the admin handler) can run the whole version check + KDF + AES-GCM
+/// decrypt BEFORE acquiring the pool's single SQLite writer. Before, a
+/// bundle with a huge `kdf_iterations` pinned the writer — and with it every
+/// usage write, cooldown and billing update — for the whole KDF duration.
+pub fn preflight_bundle(
+    bundle: &BackupBundle,
+    passphrase: Option<&str>,
+) -> Result<openproxy_types::backup::BackupPayload> {
     // ROOT FIX (security audit): fail closed on future formats. A bundle
     // from a newer OpenProxy may carry fields this code does not know; the
     // previous `+ 1` allowance silently dropped them and restored a
@@ -26,7 +42,20 @@ pub fn restore_backup(
         )));
     }
 
-    let payload = decrypt_bundle_payload(bundle, options.passphrase.as_deref())?;
+    decrypt_bundle_payload(bundle, passphrase)
+}
+
+/// Apply an already-decrypted payload to the database. The safety backup,
+/// migrations and the transactional table swap all happen here, under the
+/// caller's connection.
+pub fn restore_payload(
+    conn: &mut Connection,
+    master_key: &MasterKey,
+    bundle: &BackupBundle,
+    payload: &openproxy_types::backup::BackupPayload,
+    options: &RestoreOptions,
+    db_path: Option<&Path>,
+) -> Result<RestoreReport> {
 
     // 1. Safety backup before making any changes
     let mut safety_backup_path = None;
