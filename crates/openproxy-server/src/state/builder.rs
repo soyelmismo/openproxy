@@ -69,6 +69,24 @@ impl AppState {
             }
             openproxy_types::config::EncryptionKeySource::Env => MasterKey::from_env()?,
         });
+
+        // Security (audit H-10): adopt legacy plaintext-JSON
+        // `oauth_provider_specific` rows into sealed blobs once at boot, so
+        // the read path can stay fail-closed (a value that does not
+        // authenticate as a blob is treated as absent, never trusted).
+        {
+            let (adopted, quarantined) = db::accounts::adopt_plaintext_oauth_provider_specific(
+                &db_pool.writer(),
+                &master_key,
+            )?;
+            if adopted > 0 || quarantined > 0 {
+                tracing::info!(
+                    adopted,
+                    quarantined,
+                    "oauth_provider_specific boot repair: legacy rows sealed, unreadable rows quarantined"
+                );
+            }
+        }
         let initial_adapters = Self::load_adapters(&db_pool)?;
         let adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>> =
             Arc::new(RwLock::new(Arc::new(initial_adapters)));

@@ -1,4 +1,5 @@
 use super::*;
+use openproxy_db::secrets::MasterKey;
 use openproxy_types::combos::{Combo, ComboTarget};
 use openproxy_types::error::{CoreError, Result};
 use openproxy_types::ids::*;
@@ -197,9 +198,10 @@ impl crate::repository::PipelineRepository for MockFailingComboRepo {
 
     fn get_antigravity_projects(
         &self,
+        master_key: &MasterKey,
         account_ids: &[i64],
     ) -> Result<std::collections::HashMap<i64, Box<str>>> {
-        self.inner.get_antigravity_projects(account_ids)
+        self.inner.get_antigravity_projects(master_key, account_ids)
     }
 
     fn get_providers_auth_type(
@@ -209,9 +211,14 @@ impl crate::repository::PipelineRepository for MockFailingComboRepo {
         self.inner.get_providers_auth_type(provider_ids)
     }
 
-    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {
+    fn update_antigravity_project_id(
+        &self,
+        master_key: &MasterKey,
+        account_id: i64,
+        new_project_id: &str,
+    ) -> Result<()> {
         self.inner
-            .update_antigravity_project_id(account_id, new_project_id)
+            .update_antigravity_project_id(master_key, account_id, new_project_id)
     }
 
     fn resolve_combo_to_targets(

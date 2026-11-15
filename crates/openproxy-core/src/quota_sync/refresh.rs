@@ -104,6 +104,7 @@ pub async fn refresh_single_account_quota(
     if provider_id_str == "codex" && access_token.is_some() {
         let pool = Arc::clone(db_pool);
         let up = Arc::clone(upstream_client);
+        let mk = Arc::clone(master_key);
         let tok = access_token.clone().unwrap_or_default();
         let prov_spec = provider_specific.clone();
         tokio::spawn(async move {
@@ -127,7 +128,12 @@ pub async fn refresh_single_account_quota(
             {
                 let _ = tokio::task::spawn_blocking(move || {
                     let w = pool.writer();
-                    openproxy_db::accounts::update_codex_reset_credits(&w, account_id.0, count)
+                    openproxy_db::accounts::update_codex_reset_credits(
+                        &w,
+                        mk.as_ref(),
+                        account_id.0,
+                        count,
+                    )
                 })
                 .await;
             }

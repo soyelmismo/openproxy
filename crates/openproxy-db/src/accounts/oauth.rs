@@ -35,26 +35,96 @@ crate::def_table_select!(
     "oauth_provider_specific"
 );
 
+/// AAD context that binds every `oauth_provider_specific` blob to the
+/// column it lives in (audit H-8).
+pub const PROVIDER_SPECIFIC_CTX: &str = "accounts.oauth_provider_specific";
+
 pub fn encrypt_oauth_provider_specific(value: &str, master_key: &MasterKey) -> Result<String> {
-    let blob = master_key.encrypt(value)?;
+    let blob = master_key.encrypt_ctx(value, PROVIDER_SPECIFIC_CTX)?;
     Ok(base64::Engine::encode(
         &base64::engine::general_purpose::STANDARD,
         &blob,
     ))
 }
 
+/// Decrypt a stored `oauth_provider_specific` value.
+///
+/// Security (audit H-10): this used to fall back to returning the stored
+/// string verbatim whenever base64 decoding or AES-GCM decryption failed,
+/// which made a tampered or attacker-planted plaintext value indistinguishable
+/// from a legitimate one. It is now fail-closed: only values that authenticate
+/// as blobs sealed for this column (v1, AAD-bound) or legacy v0 blobs decrypt;
+/// anything else yields `None`.
+///
+/// Legacy plaintext-JSON rows (written by paths that used to store the column
+/// unencrypted) are adopted into encrypted blobs once at boot by
+/// [`adopt_plaintext_oauth_provider_specific`].
 pub fn decrypt_oauth_provider_specific(
     encrypted_b64: Option<&str>,
     master_key: &MasterKey,
 ) -> Option<String> {
     let b64 = encrypted_b64?;
-    match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64) {
-        Ok(blob) => match master_key.decrypt(&blob) {
-            Ok(decrypted) => Some(decrypted),
-            Err(_) => Some(b64.to_string()),
-        },
-        Err(_) => Some(b64.to_string()),
+    let blob = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64).ok()?;
+    master_key.decrypt_ctx(&blob, PROVIDER_SPECIFIC_CTX).ok()
+}
+
+/// One-shot boot repair (audit H-10): adopt legacy plaintext-JSON
+/// `oauth_provider_specific` rows into MasterKey-sealed blobs so that
+/// [`decrypt_oauth_provider_specific`] can stay fail-closed.
+///
+/// A row is adopted when it does not decrypt as a blob but parses as JSON
+/// (the shape every writer of this column produces). Rows that neither
+/// decrypt nor parse are counted as quarantined and left untouched: reads
+/// treat them as "no provider metadata" instead of trusting the raw value.
+/// Returns `(adopted, quarantined)`.
+pub fn adopt_plaintext_oauth_provider_specific(
+    conn: &Connection,
+    master_key: &MasterKey,
+) -> Result<(usize, usize)> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, oauth_provider_specific FROM accounts \
+             WHERE oauth_provider_specific IS NOT NULL",
+        )
+        .map_err(crate::error::map_db_error_ctx("scan provider_specific"))?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(crate::error::map_db_error_ctx("scan provider_specific"))?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(crate::error::map_db_error_ctx("scan provider_specific"))?;
+    drop(stmt);
+
+    let mut adopted = 0usize;
+    let mut quarantined = 0usize;
+    for (id, raw) in rows {
+        if raw.is_empty() {
+            continue;
+        }
+        // Already a sealed blob (v0 or v1): nothing to do.
+        if decrypt_oauth_provider_specific(Some(&raw), master_key).is_some() {
+            continue;
+        }
+        match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(_) => {
+                let sealed = encrypt_oauth_provider_specific(&raw, master_key)?;
+                conn.execute(
+                    "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+                    params![sealed, id],
+                )
+                .map_err(crate::error::map_db_error_ctx("adopt provider_specific"))?;
+                adopted += 1;
+            }
+            Err(_) => {
+                quarantined += 1;
+                tracing::warn!(
+                    account_id = id,
+                    "oauth_provider_specific neither decrypts nor parses as JSON; \
+                     reads will treat it as absent (fail-closed)"
+                );
+            }
+        }
     }
+    Ok((adopted, quarantined))
 }
 
 /// `expires_at = NULL` is the designed "deadline unknown" state: undated
@@ -432,6 +502,7 @@ pub fn get_accounts_meta(conn: &Connection, account_ids: &[AccountId]) -> Result
 
 pub fn update_antigravity_project_id(
     conn: &Connection,
+    master_key: &MasterKey,
     account_id: i64,
     new_project_id: &str,
 ) -> Result<()> {
@@ -446,20 +517,41 @@ pub fn update_antigravity_project_id(
         .map_err(crate::error::map_db_error_ctx("query account"))?
         .flatten();
 
-    let mut meta: AntigravityMeta = current_json_opt
+    // Security (audit H-10): this used to parse the stored value as raw JSON
+    // — for an encrypted blob that parse always failed, so the update
+    // REPLACED the whole sealed payload with a plaintext `{"project_id":…}`
+    // (destroying every other field and leaving credentials at rest in the
+    // clear). The current value is now decrypted through the fail-closed
+    // helper, mutated as a JSON map (preserving fields this writer does not
+    // know about), and re-sealed for this column.
+    let current_json_opt = current_json_opt
+        .as_deref()
+        .and_then(|s| decrypt_oauth_provider_specific(Some(s), master_key));
+
+    let mut obj: serde_json::Map<String, serde_json::Value> = current_json_opt
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or(AntigravityMeta { project_id: None });
-    meta.project_id = Some(new_project_id.to_string());
-    let new_json_str = serde_json::to_string(&meta).map_err(|e| {
+        .unwrap_or_default();
+    // Migration 000065 semantics: rename a legacy camelCase `projectId`.
+    if let Some(v) = obj.remove("projectId")
+        && !obj.contains_key("project_id")
+    {
+        obj.insert("project_id".to_string(), v);
+    }
+    obj.insert(
+        "project_id".to_string(),
+        serde_json::Value::from(new_project_id),
+    );
+    let new_json_str = serde_json::to_string(&obj).map_err(|e| {
         CoreError::Internal(format!(
             "update_antigravity_project_id serialize for account {account_id}: {e}"
         ))
     })?;
+    let sealed = encrypt_oauth_provider_specific(&new_json_str, master_key)?;
 
     conn.execute(
         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-        params![new_json_str, account_id],
+        params![sealed, account_id],
     )
     .map_err(crate::error::map_db_error_ctx("update account"))?;
 
@@ -468,6 +560,7 @@ pub fn update_antigravity_project_id(
 
 pub fn update_codex_reset_credits(
     conn: &Connection,
+    master_key: &MasterKey,
     account_id: i64,
     reset_credits: u32,
 ) -> Result<()> {
@@ -482,6 +575,13 @@ pub fn update_codex_reset_credits(
         .map_err(crate::error::map_db_error_ctx("query account"))?
         .flatten();
 
+    // Security (audit H-10): same root cause as
+    // `update_antigravity_project_id` — read through the fail-closed decrypt,
+    // mutate, and write back sealed for this column.
+    let current_json_opt = current_json_opt
+        .as_deref()
+        .and_then(|s| decrypt_oauth_provider_specific(Some(s), master_key));
+
     let mut obj: serde_json::Map<String, serde_json::Value> = current_json_opt
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
@@ -495,10 +595,11 @@ pub fn update_codex_reset_credits(
             "update_codex_reset_credits serialize for account {account_id}: {e}"
         ))
     })?;
+    let sealed = encrypt_oauth_provider_specific(&new_json_str, master_key)?;
 
     conn.execute(
         "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-        params![new_json_str, account_id],
+        params![sealed, account_id],
     )
     .map_err(crate::error::map_db_error_ctx("update account"))?;
 

@@ -134,30 +134,213 @@ fn read_provider_meta_batch_returns_map_for_valid_ids() {
 fn update_antigravity_project_id_round_trips() {
     let conn = open_in_memory();
     seed_antigravity_provider(&conn);
+    let master = MasterKey::generate().unwrap();
     conn.execute(
         "INSERT INTO accounts (provider_id, oauth_provider_specific) VALUES ('antigravity', ?1)",
         [Some(r#"{"projectId":"old"}"#)],
     )
     .unwrap();
-    update_antigravity_project_id(&conn, 1, "new").unwrap();
+    // Boot repair adopts the legacy plaintext row into a sealed blob first.
+    let (adopted, quarantined) = adopt_plaintext_oauth_provider_specific(&conn, &master).unwrap();
+    assert_eq!((adopted, quarantined), (1, 0));
+    update_antigravity_project_id(&conn, &master, 1, "new").unwrap();
 
     assert_eq!(
-        read_antigravity_project(&conn, None, 1).unwrap().as_deref(),
+        read_antigravity_project(&conn, Some(&master), 1)
+            .unwrap()
+            .as_deref(),
         Some("new")
     );
-    let generic: Option<AntigravityMeta> = read_provider_meta(&conn, None, 1).unwrap();
+    let generic: Option<AntigravityMeta> = read_provider_meta(&conn, Some(&master), 1).unwrap();
     assert_eq!(generic.and_then(|m| m.project_id).as_deref(), Some("new"));
 
-    let raw: Option<Option<String>> = conn
+    // The stored value must be a sealed blob, not plaintext JSON.
+    let raw: String = conn
         .query_row(
             "SELECT oauth_provider_specific FROM accounts WHERE id = 1",
             [],
             |r| r.get(0),
         )
         .unwrap();
-    let val: serde_json::Value = serde_json::from_str(&raw.flatten().unwrap()).unwrap();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&raw).is_err(),
+        "column must not hold plaintext after the update"
+    );
+    let decrypted = decrypt_oauth_provider_specific(Some(&raw), &master).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
     assert!(val.get("projectId").is_none());
     assert_eq!(val["project_id"], "new");
+}
+
+#[test]
+fn decrypt_oauth_provider_specific_is_fail_closed() {
+    let master = MasterKey::generate().unwrap();
+
+    // v1 (current writer) round-trips.
+    let sealed = encrypt_oauth_provider_specific(r#"{"a":1}"#, &master).unwrap();
+    assert_eq!(
+        decrypt_oauth_provider_specific(Some(&sealed), &master).as_deref(),
+        Some(r#"{"a":1}"#)
+    );
+
+    // Legacy v0 blobs (sealed without AAD) still decrypt.
+    let legacy_blob = master.encrypt(r#"{"b":2}"#).unwrap();
+    let legacy_b64 =
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &legacy_blob);
+    assert_eq!(
+        decrypt_oauth_provider_specific(Some(&legacy_b64), &master).as_deref(),
+        Some(r#"{"b":2}"#)
+    );
+
+    // Security (audit H-10): an attacker-planted plaintext JSON value used to
+    // be returned verbatim by the raw fallback; it must now yield None.
+    assert_eq!(
+        decrypt_oauth_provider_specific(Some(r#"{"client_secret":"planted"}"#), &master),
+        None,
+        "planted plaintext must not be trusted"
+    );
+
+    // Garbage that is neither base64-blob nor JSON: None as well.
+    assert_eq!(
+        decrypt_oauth_provider_specific(Some("!!!not-base64!!!"), &master),
+        None
+    );
+    assert_eq!(decrypt_oauth_provider_specific(None, &master), None);
+}
+
+#[test]
+fn update_antigravity_project_id_preserves_sealed_fields() {
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let master = MasterKey::generate().unwrap();
+    // Store the payload the OAuth store produces: sealed, with extra fields
+    // beyond project_id.
+    let sealed = encrypt_oauth_provider_specific(
+        r#"{"project_id":"old","refresh_marker":"keep-me"}"#,
+        &master,
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO accounts (provider_id, oauth_provider_specific) VALUES ('antigravity', ?1)",
+        [Some(sealed)],
+    )
+    .unwrap();
+
+    update_antigravity_project_id(&conn, &master, 1, "fresh-project").unwrap();
+
+    let raw: String = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let decrypted = decrypt_oauth_provider_specific(Some(&raw), &master)
+        .expect("row must still decrypt after the update");
+    let val: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
+    assert_eq!(val["project_id"], "fresh-project");
+    assert_eq!(
+        val["refresh_marker"], "keep-me",
+        "the update must not destroy the other sealed fields"
+    );
+}
+
+#[test]
+fn update_codex_reset_credits_seals_the_column() {
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    conn.execute(
+        "INSERT INTO providers (id, name, base_url, auth_type, format) \
+         VALUES ('codex', 'Codex', 'https://example.com', 'oauth', 'openai')",
+        [],
+    )
+    .unwrap();
+    let master = MasterKey::generate().unwrap();
+    let sealed = encrypt_oauth_provider_specific(r#"{"workspaceId":"ws-1"}"#, &master).unwrap();
+    conn.execute(
+        "INSERT INTO accounts (provider_id, oauth_provider_specific) VALUES ('codex', ?1)",
+        [Some(sealed)],
+    )
+    .unwrap();
+
+    update_codex_reset_credits(&conn, &master, 1, 7).unwrap();
+
+    let raw: String = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&raw).is_err(),
+        "the codex update must not downgrade the column to plaintext"
+    );
+    let decrypted = decrypt_oauth_provider_specific(Some(&raw), &master).unwrap();
+    let val: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
+    assert_eq!(val["workspaceId"], "ws-1");
+    assert_eq!(val["reset_credits"], 7);
+}
+
+#[test]
+fn adopt_plaintext_oauth_provider_specific_adopts_and_quarantines() {
+    let conn = open_in_memory();
+    seed_antigravity_provider(&conn);
+    let master = MasterKey::generate().unwrap();
+    let sealed = encrypt_oauth_provider_specific(r#"{"already":"sealed"}"#, &master).unwrap();
+    conn.execute(
+        "INSERT INTO accounts (provider_id, oauth_provider_specific) VALUES
+         ('antigravity', ?1), ('antigravity', ?2), ('antigravity', ?3)",
+        rusqlite::params![
+            sealed,
+            r#"{"legacy":"plaintext-row"}"#,
+            "@@@neither-json-nor-blob@@@"
+        ],
+    )
+    .unwrap();
+
+    let (adopted, quarantined) = adopt_plaintext_oauth_provider_specific(&conn, &master).unwrap();
+    assert_eq!(adopted, 1, "exactly the plaintext JSON row is adopted");
+    assert_eq!(quarantined, 1, "exactly the garbage row is quarantined");
+
+    // Adopted row now decrypts; sealed row untouched; garbage left as-is.
+    for id in [1i64, 2i64] {
+        let raw: String = conn
+            .query_row(
+                "SELECT oauth_provider_specific FROM accounts WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            decrypt_oauth_provider_specific(Some(&raw), &master).is_some(),
+            "row {id} must decrypt after the sweep"
+        );
+    }
+    let adopted_val: serde_json::Value = {
+        let raw: String = conn
+            .query_row(
+                "SELECT oauth_provider_specific FROM accounts WHERE id = 2",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&decrypt_oauth_provider_specific(Some(&raw), &master).unwrap())
+            .unwrap()
+    };
+    assert_eq!(adopted_val["legacy"], "plaintext-row");
+    let garbage: String = conn
+        .query_row(
+            "SELECT oauth_provider_specific FROM accounts WHERE id = 3",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(garbage, "@@@neither-json-nor-blob@@@");
+
+    // Idempotent: a second sweep adopts nothing.
+    let (adopted2, quarantined2) = adopt_plaintext_oauth_provider_specific(&conn, &master).unwrap();
+    assert_eq!((adopted2, quarantined2), (0, 1));
 }
 
 #[test]

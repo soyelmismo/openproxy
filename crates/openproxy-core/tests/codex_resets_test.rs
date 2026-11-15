@@ -196,16 +196,22 @@ async fn test_codex_resets_validation_fails_for_non_codex_or_api_key() {
 
 #[tokio::test]
 async fn test_codex_resets_update_db_meta() {
-    let (pool, _master_key) = setup_test_db();
+    let (pool, master_key) = setup_test_db();
     let w = pool.writer();
+    // Seed the column the way the OAuth store does: sealed for the column.
+    let sealed = openproxy_db::accounts::encrypt_oauth_provider_specific(
+        r#"{"workspaceId":"ws-abc"}"#,
+        &master_key,
+    )
+    .unwrap();
     w.execute(
         "INSERT INTO accounts (id, provider_id, auth_type, label, oauth_provider_specific)
-         VALUES (10, 'codex', 'oauth', 'Codex Account', '{\"workspaceId\":\"ws-abc\"}')",
-        [],
+         VALUES (10, 'codex', 'oauth', 'Codex Account', ?1)",
+        [&sealed],
     )
     .unwrap();
 
-    openproxy_db::accounts::update_codex_reset_credits(&w, 10, 3).unwrap();
+    openproxy_db::accounts::update_codex_reset_credits(&w, &master_key, 10, 3).unwrap();
 
     let raw: String = w
         .query_row(
@@ -215,7 +221,15 @@ async fn test_codex_resets_update_db_meta() {
         )
         .unwrap();
 
-    let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    // Security (audit H-10): the update must re-seal, not store plaintext.
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&raw).is_err(),
+        "oauth_provider_specific must not be plaintext after the update"
+    );
+    let decrypted =
+        openproxy_db::accounts::decrypt_oauth_provider_specific(Some(&raw), &master_key)
+            .expect("sealed value must decrypt with the master key");
+    let parsed: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
     assert_eq!(parsed["workspaceId"], "ws-abc");
     assert_eq!(parsed["reset_credits"], 3);
 }

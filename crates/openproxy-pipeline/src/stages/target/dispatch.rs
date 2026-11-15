@@ -334,9 +334,12 @@ async fn try_lazy_fetch_antigravity_project(
             tracing::info!("Successfully fetched antigravity projectId: {}", pid);
             custom_meta.antigravity_project = Some(pid.clone());
             if let Some(account_id) = current.target.account_id {
+                let mk = std::sync::Arc::clone(&pipeline.config.master_key);
                 let result = pipeline
                     .async_repo()
-                    .run(move |repo| repo.update_antigravity_project_id(account_id.0, &pid))
+                    .run(move |repo| {
+                        repo.update_antigravity_project_id(mk.as_ref(), account_id.0, &pid)
+                    })
                     .await;
                 if let Err(e) = result {
                     tracing::error!("Failed to update antigravity project id in db: {}", e);

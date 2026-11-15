@@ -194,9 +194,7 @@ pub async fn restore_backup_handler(
         let rep = openproxy_core::backup::restore_payload(
             &mut w,
             master_key.as_ref(),
-            &bundle,
             &payload,
-            &opts,
             Some(db_path),
         )?;
         state_clone.reload_runtime_config(&w);

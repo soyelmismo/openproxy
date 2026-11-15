@@ -417,7 +417,7 @@ impl Pipeline {
                     .unwrap_or_default();
                 let id_values: Vec<i64> = account_ids.iter().map(|a| a.0).collect();
                 let antigravity_map = repo
-                    .get_antigravity_projects(&id_values)
+                    .get_antigravity_projects(&master_key, &id_values)
                     .unwrap_or_default();
 
                 let combo_cache = load_candidate_combos(repo, &eligible, &providers_map);

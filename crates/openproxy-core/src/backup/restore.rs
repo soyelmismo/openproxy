@@ -16,7 +16,7 @@ pub fn restore_backup(
     db_path: Option<&Path>,
 ) -> Result<RestoreReport> {
     let payload = preflight_bundle(bundle, options.passphrase.as_deref())?;
-    restore_payload(conn, master_key, bundle, &payload, options, db_path)
+    restore_payload(conn, master_key, &payload, db_path)
 }
 
 /// Validate the bundle version and decrypt the payload WITHOUT touching the
@@ -48,12 +48,15 @@ pub fn preflight_bundle(
 /// Apply an already-decrypted payload to the database. The safety backup,
 /// migrations and the transactional table swap all happen here, under the
 /// caller's connection.
+///
+/// The bundle and the restore options were consumed by
+/// [`preflight_bundle`] (version gate, KDF, AES-GCM decrypt) before the
+/// caller took the DB writer; they are intentionally NOT parameters here so
+/// no future caller can reintroduce the writer-pinning window.
 pub fn restore_payload(
     conn: &mut Connection,
     master_key: &MasterKey,
-    bundle: &BackupBundle,
     payload: &openproxy_types::backup::BackupPayload,
-    options: &RestoreOptions,
     db_path: Option<&Path>,
 ) -> Result<RestoreReport> {
     // 1. Safety backup before making any changes
