@@ -79,9 +79,9 @@ fn has_non_null_key(bytes: &[u8], key: &[u8]) -> bool {
                 i += 1;
             }
             let is_null = bytes[i..].starts_with(b"null")
-                && bytes
-                    .get(i + 4)
-                    .is_some_and(|&b| matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n'));
+                && bytes.get(i + 4).is_some_and(|&b| {
+                    matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+                });
             if !is_null {
                 return true;
             }
