@@ -120,7 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install minimum supported Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, pinned (audit H-19)
         with:
           toolchain: '1.96.0'
       - name: Cache cargo
@@ -163,7 +163,7 @@ jobs:
           PY
 
       - name: Install pinned Rust toolchain (rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, pinned (audit H-19)
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt,clippy
@@ -217,11 +217,11 @@ jobs:
     needs: [frontend, rust-checks]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, pinned (audit H-19)
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@9299c56f1fb893650f348425bb02c3acf492ebd2 # cargo-llvm-cov, pinned (audit H-19)
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: 'crates'
@@ -382,7 +382,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain + target
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, pinned (audit H-19)
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
@@ -669,7 +669,7 @@ jobs:
           cache-dependency-path: crates/openproxy-server/web/pnpm-lock.yaml
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, pinned (audit H-19)
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
