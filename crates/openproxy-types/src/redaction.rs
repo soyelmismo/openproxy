@@ -31,8 +31,9 @@ static RE_APIKEY: LazyLock<regex::Regex> =
     LazyLock::new(|| crate::static_regex!(r"(?i)api-key:\s*\S+"));
 static RE_AUTH_BEARER: LazyLock<regex::Regex> =
     LazyLock::new(|| crate::static_regex!(r"(?i)authorization:\s*bearer\s+\S+"));
-static RE_AUTH_SCHEME: LazyLock<regex::Regex> =
-    LazyLock::new(|| crate::static_regex!(r"(?i)authorization:\s*(basic|token|digest|mutual)\s+\S+"));
+static RE_AUTH_SCHEME: LazyLock<regex::Regex> = LazyLock::new(|| {
+    crate::static_regex!(r"(?i)authorization:\s*(basic|token|digest|mutual)\s+\S+")
+});
 static RE_AUTH_BARE: LazyLock<regex::Regex> =
     LazyLock::new(|| crate::static_regex!(r"(?i)authorization:\s*[A-Za-z0-9._~+/=-]{16,}"));
 static RE_BARE_BEARER: LazyLock<regex::Regex> =
@@ -116,12 +117,18 @@ mod tests {
     fn redacts_every_credential_family() {
         let cases: &[(&str, &str)] = &[
             ("bad key sk-abcdefghijklmnopqrst", "bad key sk-[REDACTED]"),
-            ("leak op_live_abcdefghijklmnopqrst", "leak op_live_[REDACTED]"),
+            (
+                "leak op_live_abcdefghijklmnopqrst",
+                "leak op_live_[REDACTED]",
+            ),
             (
                 "x-api-key: sk-abcdefghijklmnopqrst",
                 "x-api-key: [REDACTED]",
             ),
-            ("api-key: 32chars0000000000000000000000", "api-key: [REDACTED]"),
+            (
+                "api-key: 32chars0000000000000000000000",
+                "api-key: [REDACTED]",
+            ),
             (
                 "Authorization: Bearer eyJhbGciOi.eyJzdWIiOi.c2ln",
                 "Authorization: Bearer [REDACTED]",
@@ -144,7 +151,10 @@ mod tests {
     fn redacts_jwt_access_tokens_whole() {
         let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
         let out = redact_secrets(&format!("OAuth refresh failed: token {jwt} expired"));
-        assert!(!out.contains(".SflKxw"), "whole token must be redacted: {out}");
+        assert!(
+            !out.contains(".SflKxw"),
+            "whole token must be redacted: {out}"
+        );
         assert!(out.contains("[REDACTED]"), "must carry the marker: {out}");
     }
 

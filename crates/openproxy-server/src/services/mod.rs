@@ -82,7 +82,10 @@ impl AccountService {
         for account in &mut accounts {
             if let Some(specific) = account.oauth_provider_specific.as_deref()
                 && let Ok(mut value) = serde_json::from_str::<serde_json::Value>(specific)
-                && value.get("client_secret").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty())
+                && value
+                    .get("client_secret")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty())
             {
                 if let Some(secret_value) = value.get_mut("client_secret") {
                     *secret_value = serde_json::Value::String("[REDACTED]".to_string());
@@ -293,27 +296,37 @@ mod account_list_masking_tests {
             _master_key: &db::MasterKey,
             _input: openproxy_core::admin::CreateAccountInput,
         ) -> Result<AccountId, CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn bulk_create_accounts(
             &self,
             _master_key: &db::MasterKey,
             _input: openproxy_core::admin::BulkCreateAccountsInput,
         ) -> Result<Vec<AccountId>, CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn delete_account(&self, _id: AccountId) -> Result<(), CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn set_account_health(
             &self,
             _id: AccountId,
             _health: openproxy_core::accounts::HealthStatus,
         ) -> Result<(), CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn set_account_active(&self, _id: AccountId, _active: bool) -> Result<(), CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn update_account_api_key(
             &self,
@@ -321,27 +334,35 @@ mod account_list_masking_tests {
             _id: AccountId,
             _input: openproxy_core::admin::UpdateAccountApiKeyInput,
         ) -> Result<(), CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn get_account_api_key(
             &self,
             _master_key: &db::MasterKey,
             _id: AccountId,
         ) -> Result<String, CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn update_account_label(
             &self,
             _id: AccountId,
             _input: openproxy_core::admin::UpdateAccountLabelInput,
         ) -> Result<(), CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
         fn reorder_accounts(
             &self,
             _input: openproxy_core::admin::ReorderAccountsInput,
         ) -> Result<(), CoreError> {
-            Err(CoreError::Internal("not needed for the listing test".into()))
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
         }
     }
 
@@ -354,7 +375,10 @@ mod account_list_masking_tests {
         let mk = db::MasterKey::generate().expect("mk");
         let listed = service.list(None, &mk).expect("list");
         assert_eq!(listed.len(), 1);
-        let specific = listed[0].oauth_provider_specific.as_deref().expect("specific");
+        let specific = listed[0]
+            .oauth_provider_specific
+            .as_deref()
+            .expect("specific");
         assert!(
             !specific.contains("super-secret-value"),
             "client_secret must be masked: {specific}"

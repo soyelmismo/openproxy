@@ -187,10 +187,8 @@ pub async fn restore_backup_handler(
         // A crafted bundle with a huge `kdf_iterations` used to pin the
         // writer (and every usage write, cooldown and billing update) for
         // the entire KDF duration.
-        let payload = openproxy_core::backup::preflight_bundle(
-            &bundle,
-            opts.passphrase.as_deref(),
-        )?;
+        let payload =
+            openproxy_core::backup::preflight_bundle(&bundle, opts.passphrase.as_deref())?;
         let mut w = pool.writer();
         let db_path = pool.path();
         let rep = openproxy_core::backup::restore_payload(

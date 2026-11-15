@@ -452,7 +452,11 @@ fn test_propagate_antigravity_headers_never_forwards_credentials() {
             .find(|(name, _)| name.eq_ignore_ascii_case(k))
             .map(|(_, v)| v.as_str())
     };
-    assert_eq!(find("x-goog-api-key"), None, "credential headers must never be forwarded");
+    assert_eq!(
+        find("x-goog-api-key"),
+        None,
+        "credential headers must never be forwarded"
+    );
     assert_eq!(find("x-goog-authorization"), None);
     assert_eq!(find("x-goog-access-token"), None);
     assert_eq!(find("x-goog-new-feature"), Some("enabled"));

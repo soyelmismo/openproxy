@@ -377,11 +377,17 @@ mod restore_hardening_tests {
         restore_extra_tables(&tx, &bundle).expect("restore");
         tx.commit().expect("commit");
 
-        let usage_rows: i64 =
-            conn.query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0)).expect("count");
-        assert_eq!(usage_rows, 0, "blacklisted table 'usage' must not be written");
+        let usage_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(
+            usage_rows, 0,
+            "blacklisted table 'usage' must not be written"
+        );
         let tickets: i64 = conn
-            .query_row("SELECT COUNT(*) FROM oauth_device_tickets", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM oauth_device_tickets", [], |r| {
+                r.get(0)
+            })
             .expect("count");
         assert_eq!(tickets, 0, "blacklisted table must not be written");
     }

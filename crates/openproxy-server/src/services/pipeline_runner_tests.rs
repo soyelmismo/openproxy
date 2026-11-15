@@ -776,7 +776,10 @@ async fn test_app_router_e2e_pii_user_field_redacted_upstream() {
     let redacted_uid = upstream_json["metadata"]["user_id"]
         .as_str()
         .expect("metadata.user_id present");
-    assert_ne!(redacted_user, "alice@corp.com", "user must be pseudonymised");
+    assert_ne!(
+        redacted_user, "alice@corp.com",
+        "user must be pseudonymised"
+    );
     assert_ne!(
         redacted_uid, "bob@corp.com",
         "metadata.user_id must be pseudonymised"

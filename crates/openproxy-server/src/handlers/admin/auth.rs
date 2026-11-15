@@ -748,13 +748,22 @@ mod throttle_escape_hatch_tests {
         // Headerless and unknown-key requests are blocked (fast 429).
         assert!(!admin_throttle_allows(&state, &HeaderMap::new(), ip));
         let mut bad = HeaderMap::new();
-        bad.insert("authorization", "Bearer op_live_unknownkey".parse().unwrap());
+        bad.insert(
+            "authorization",
+            "Bearer op_live_unknownkey".parse().unwrap(),
+        );
         assert!(!admin_throttle_allows(&state, &bad, ip));
 
         // The cached valid key passes the throttle and would clear the
         // budget through record_success in the middleware.
         let mut good = HeaderMap::new();
-        good.insert("authorization", format!("Bearer {plaintext}").parse().unwrap());
-        assert!(admin_throttle_allows(&state, &good, ip), "cached valid key must pass while blocked");
+        good.insert(
+            "authorization",
+            format!("Bearer {plaintext}").parse().unwrap(),
+        );
+        assert!(
+            admin_throttle_allows(&state, &good, ip),
+            "cached valid key must pass while blocked"
+        );
     }
 }

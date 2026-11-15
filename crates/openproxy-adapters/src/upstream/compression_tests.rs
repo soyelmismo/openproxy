@@ -101,8 +101,7 @@ pub(super) fn drive(codec: Option<Codec>, frames: &[Vec<u8>]) -> Result<Vec<u8>,
     {
         headers.insert(header::CONTENT_ENCODING, value);
     }
-    let mut decoding =
-        BodyDecoding::from_response(&headers, false).map_err(|e| e.to_string())?;
+    let mut decoding = BodyDecoding::from_response(&headers, false).map_err(|e| e.to_string())?;
     let mut collected: Vec<u8> = Vec::new();
     for frame in frames {
         decoding.push(frame).map_err(|e| e.to_string())?;
@@ -652,7 +651,9 @@ fn one_shot_pending_buffer_is_capped() {
     let cap = 32 * 1024 * 1024usize;
     let mut buffered = 0usize;
     while buffered < cap {
-        decoding.push(&chunk).expect("push within the cap must succeed");
+        decoding
+            .push(&chunk)
+            .expect("push within the cap must succeed");
         buffered += chunk.len();
     }
     assert!(

@@ -362,10 +362,7 @@ mod tests {
     fn test_resolve_client_ip_spoofed_x_real_ip_loses_to_xff() {
         let mut headers = HeaderMap::new();
         headers.insert("x-real-ip", "9.9.9.9".parse().unwrap());
-        headers.insert(
-            "x-forwarded-for",
-            "9.9.9.9, 198.51.100.42".parse().unwrap(),
-        );
+        headers.insert("x-forwarded-for", "9.9.9.9, 198.51.100.42".parse().unwrap());
         let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
         let trusted = vec!["127.0.0.0/8".to_string()];
 

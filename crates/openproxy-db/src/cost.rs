@@ -42,7 +42,6 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64
     (cost, tps)
 }
 
-
 pub fn redact_error_msg(raw: &str) -> String {
     // Canonical redaction lives in openproxy_types::redaction: this copy used
     // to miss the `op_live_` pattern (the product's own key format) and the

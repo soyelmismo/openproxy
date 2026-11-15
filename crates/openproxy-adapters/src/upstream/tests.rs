@@ -456,7 +456,11 @@ async fn headers_timeout_fires_on_silent_http_server() {
     // this test pins; unary requests use the total deadline instead.
     req.is_streaming = true;
     let res = client
-        .call(req, custom_profile(200, 5_000, 5_000, 30_000), CancellationToken::new())
+        .call(
+            req,
+            custom_profile(200, 5_000, 5_000, 30_000),
+            CancellationToken::new(),
+        )
         .await;
     assert!(matches!(
         res.unwrap_err(),

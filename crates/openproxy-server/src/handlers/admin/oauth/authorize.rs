@@ -102,8 +102,9 @@ pub async fn oauth_authorize(
                                 // above) was accepted silently. Bind the
                                 // exchange to the state WE generated in
                                 // build_auth_url.
-                                let Some((code_verifier_val, state_redirect)) =
-                                    s_clone.oauth_states().consume(&provider_name, state_val.trim())
+                                let Some((code_verifier_val, state_redirect)) = s_clone
+                                    .oauth_states()
+                                    .consume(&provider_name, state_val.trim())
                                 else {
                                     tracing::warn!(
                                         provider = %provider_name,

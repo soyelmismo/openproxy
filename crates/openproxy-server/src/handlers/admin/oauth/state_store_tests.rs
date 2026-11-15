@@ -35,8 +35,21 @@ fn unknown_state_yields_none_for_every_provider_including_zai() {
         );
     }
     // And the pair the server DID issue still resolves exactly once.
-    store.insert("zai", "issued-state", "verifier-z", "http://localhost:18432/auth/callback-zai");
-    let pair = store.consume("zai", "issued-state").expect("issued state resolves");
-    assert_eq!(pair, ("verifier-z".to_string(), "http://localhost:18432/auth/callback-zai".to_string()));
+    store.insert(
+        "zai",
+        "issued-state",
+        "verifier-z",
+        "http://localhost:18432/auth/callback-zai",
+    );
+    let pair = store
+        .consume("zai", "issued-state")
+        .expect("issued state resolves");
+    assert_eq!(
+        pair,
+        (
+            "verifier-z".to_string(),
+            "http://localhost:18432/auth/callback-zai".to_string()
+        )
+    );
     assert!(store.consume("zai", "issued-state").is_none(), "single use");
 }

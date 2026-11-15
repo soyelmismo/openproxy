@@ -69,20 +69,23 @@ pub async fn oauth_exchange(
 
     let state_val = state_val_opt.unwrap_or(state_param);
 
-    let (code_verifier, redirect_uri) = s.oauth_states().consume(&provider, state_val).ok_or_else(|| {
-            // Security (audit H-10, OP-19): the zai provider used to fall back
-            // to an empty verifier and a hardcoded redirect_uri when the
-            // state was unknown, expiring or already used — accepting
-            // authorization codes from flows this server never initiated. An
-            // attacker could social-engineer the operator into exchanging an
-            // attacker-controlled zai code, planting the attacker's tokens
-            // and routing the gateway's prompts through the attacker's
-            // account. The state is now binding for EVERY provider.
-            ApiError(CoreError::Validation(
-                "unknown, expired or already-used 'state'; restart the authorization flow".into(),
-            ))
-        },
-    )?;
+    let (code_verifier, redirect_uri) =
+        s.oauth_states()
+            .consume(&provider, state_val)
+            .ok_or_else(|| {
+                // Security (audit H-10, OP-19): the zai provider used to fall back
+                // to an empty verifier and a hardcoded redirect_uri when the
+                // state was unknown, expiring or already used — accepting
+                // authorization codes from flows this server never initiated. An
+                // attacker could social-engineer the operator into exchanging an
+                // attacker-controlled zai code, planting the attacker's tokens
+                // and routing the gateway's prompts through the attacker's
+                // account. The state is now binding for EVERY provider.
+                ApiError(CoreError::Validation(
+                    "unknown, expired or already-used 'state'; restart the authorization flow"
+                        .into(),
+                ))
+            })?;
     let account_id_input = input.get("account_id").and_then(serde_json::Value::as_i64);
 
     let registry = s.oauth_provider_registry();

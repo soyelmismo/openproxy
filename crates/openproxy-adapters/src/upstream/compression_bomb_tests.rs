@@ -237,10 +237,7 @@ async fn http_brotli_bomb_rejected_with_bounded_memory() {
             &[
                 ("content-type", "application/json".to_string()),
                 ("content-encoding", "br".to_string()),
-                (
-                    "content-length",
-                    BROTLI_BOMB.len().to_string(),
-                ),
+                ("content-length", BROTLI_BOMB.len().to_string()),
             ],
             BROTLI_BOMB,
         )
@@ -250,7 +247,11 @@ async fn http_brotli_bomb_rejected_with_bounded_memory() {
     let mut spec = UpstreamRequest::get(format!("http://{addr}/models"));
     spec.is_streaming = false;
     let response = UpstreamClient::new()
-        .call(spec, TimeoutProfile::ModelDiscovery, CancellationToken::new())
+        .call(
+            spec,
+            TimeoutProfile::ModelDiscovery,
+            CancellationToken::new(),
+        )
         .await
         .expect("call ok");
     assert_eq!(response.status.as_u16(), 200);

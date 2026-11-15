@@ -712,10 +712,9 @@ mod size_cap_tests {
         assert!(!parsed.debug_log_enabled);
         assert_eq!(parsed.debug_log_max_bytes, 1_048_576);
         // Omitted keys fall back to the defaults (backward compatibility).
-        let legacy: openproxy_core::config::LoggingConfig = serde_json::from_value(
-            serde_json::json!({"format": "text", "level": "warn"}),
-        )
-        .expect("legacy parse");
+        let legacy: openproxy_core::config::LoggingConfig =
+            serde_json::from_value(serde_json::json!({"format": "text", "level": "warn"}))
+                .expect("legacy parse");
         assert!(legacy.debug_log_enabled);
         assert_eq!(legacy.debug_log_max_bytes, 64 * 1024 * 1024);
     }

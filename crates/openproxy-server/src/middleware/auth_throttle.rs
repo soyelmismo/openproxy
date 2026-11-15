@@ -104,8 +104,11 @@ impl AuthFailureLimiter {
     /// enough slots — i.e. every surviving entry is still inside its window,
     /// which only happens under a sustained spoofed-IP flood.
     fn evict_lowest_failures(&self, n: usize) {
-        let mut lowest: Vec<(u32, std::net::IpAddr)> =
-            self.failures.iter().map(|e| (e.value().0, *e.key())).collect();
+        let mut lowest: Vec<(u32, std::net::IpAddr)> = self
+            .failures
+            .iter()
+            .map(|e| (e.value().0, *e.key()))
+            .collect();
         lowest.sort_unstable_by_key(|a| a.0);
         for (_, ip) in lowest.into_iter().take(n) {
             self.failures.remove(&ip);
@@ -171,11 +174,13 @@ pub async fn public_auth_throttle_middleware(
         // without touching the database, while a key that authenticated
         // successfully in the last 60 s is cached and passes. Downstream
         // middleware still performs full validation on the passed request.
-        let known_good_key = crate::middleware::auth::extract_bearer_or_api_key_token(req.headers())
-            .is_some_and(|token| {
-                let key_hash = openproxy_core::api_keys::hash_key(token);
-                state.get_cached_api_key(&key_hash).is_some()
-            });
+        let known_good_key = crate::middleware::auth::extract_bearer_or_api_key_token(
+            req.headers(),
+        )
+        .is_some_and(|token| {
+            let key_hash = openproxy_core::api_keys::hash_key(token);
+            state.get_cached_api_key(&key_hash).is_some()
+        });
         if !known_good_key {
             return Err(ApiError(CoreError::RateLimited {
                 provider: "public_auth_throttle".into(),

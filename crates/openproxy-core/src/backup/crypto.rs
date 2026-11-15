@@ -35,7 +35,9 @@ pub const MAX_KDF_ITERATIONS: u32 = 10_000_000;
 /// Clamp an attacker-controllable `kdf_iterations` bundle field to the
 /// bounded range. `None` (field absent) keeps the project default.
 pub fn clamp_kdf_iterations(declared: Option<u32>) -> u32 {
-    declared.unwrap_or(DEFAULT_KDF_ITERATIONS).min(MAX_KDF_ITERATIONS)
+    declared
+        .unwrap_or(DEFAULT_KDF_ITERATIONS)
+        .min(MAX_KDF_ITERATIONS)
 }
 const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
@@ -377,6 +379,9 @@ mod tests {
             MAX_KDF_ITERATIONS
         );
         // Legit counts (including the debug default) pass through untouched.
-        assert_eq!(clamp_kdf_iterations(Some(DEFAULT_KDF_ITERATIONS)), DEFAULT_KDF_ITERATIONS);
+        assert_eq!(
+            clamp_kdf_iterations(Some(DEFAULT_KDF_ITERATIONS)),
+            DEFAULT_KDF_ITERATIONS
+        );
     }
 }

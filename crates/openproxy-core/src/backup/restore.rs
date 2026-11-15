@@ -56,7 +56,6 @@ pub fn restore_payload(
     options: &RestoreOptions,
     db_path: Option<&Path>,
 ) -> Result<RestoreReport> {
-
     // 1. Safety backup before making any changes
     let mut safety_backup_path = None;
     if let Some(path) = db_path

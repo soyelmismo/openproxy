@@ -1,8 +1,8 @@
 pub mod auth;
 pub(crate) mod auth_sanitization;
+pub mod auth_throttle;
 pub mod compression;
 pub mod h2c;
-pub mod auth_throttle;
 pub mod rate_limit;
 pub mod request_id;
 pub mod routing;

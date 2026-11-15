@@ -12,12 +12,17 @@
 #![cfg(test)]
 
 use crate::state::AppState;
-use axum::{Router, body::Body, http::{Request, StatusCode}};
+use axum::{
+    Router,
+    body::Body,
+    http::{Request, StatusCode},
+};
 use tower::ServiceExt;
 
 async fn make_app() -> AppState {
     let dir = openproxy_db::testing::TempDir::new("v1-throttle-test").expect("mkdir");
-    let pool = std::sync::Arc::new(openproxy_db::DbPool::open(&dir.join("throttle.db")).expect("open"));
+    let pool =
+        std::sync::Arc::new(openproxy_db::DbPool::open(&dir.join("throttle.db")).expect("open"));
     {
         let mut w = pool.writer();
         openproxy_db::migrations::run(&mut w).expect("migrations");
@@ -100,7 +105,11 @@ async fn failed_v1_auth_attempts_are_throttled_per_ip() {
     // blocked (another client behind the same NAT must not be locked out),
     // and its success clears the failure budget.
     let status = get_v1_models(&app, Some(&plaintext)).await;
-    assert_eq!(status, StatusCode::OK, "cached valid key must pass while blocked");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "cached valid key must pass while blocked"
+    );
     let status = get_v1_models(&app, Some("op_live_invalidkey")).await;
     assert_eq!(
         status,

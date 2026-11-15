@@ -320,12 +320,7 @@ impl BodyDecoding {
             // whatever the upstream sent, unbounded even on the byte-limited
             // transports. (Unifies the parallel audit's MAX_COMPRESSED_BUFFER_
             // BYTES cap with this one — same 32 MiB ceiling, single name.)
-            if self
-                .pending
-                .len()
-                .saturating_add(raw.len()) as u64
-                > MAX_COMPRESSED_BUFFER_BYTES
-            {
+            if self.pending.len().saturating_add(raw.len()) as u64 > MAX_COMPRESSED_BUFFER_BYTES {
                 return Err(UpstreamError::Decode(format!(
                     "{} compressed body exceeds {MAX_COMPRESSED_BUFFER_BYTES} buffered bytes",
                     self.stage.as_ref().map_or("br", |s| s.codec.as_str())
@@ -583,22 +578,15 @@ impl BodyDecoding {
         // checked the size afterwards.
         match codec {
             Codec::Brotli => {
-                let reader =
-                    brotli_decompressor::Decompressor::new(&raw[..], INFLATE_CHUNK_BYTES);
-                std::io::Read::read_to_end(
-                    &mut reader.take(oneshot_decode_cap()),
-                    &mut out,
-                )
-                .map_err(|e| UpstreamError::Decode(format!("br body: {e}")))?;
+                let reader = brotli_decompressor::Decompressor::new(&raw[..], INFLATE_CHUNK_BYTES);
+                std::io::Read::read_to_end(&mut reader.take(oneshot_decode_cap()), &mut out)
+                    .map_err(|e| UpstreamError::Decode(format!("br body: {e}")))?;
             }
             Codec::Zstd => {
                 let reader = zstd::stream::read::Decoder::new(&raw[..])
                     .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
-                std::io::Read::read_to_end(
-                    &mut reader.take(oneshot_decode_cap()),
-                    &mut out,
-                )
-                .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
+                std::io::Read::read_to_end(&mut reader.take(oneshot_decode_cap()), &mut out)
+                    .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
             }
             _ => unreachable!("finish_one_shot called with incremental codec"),
         }

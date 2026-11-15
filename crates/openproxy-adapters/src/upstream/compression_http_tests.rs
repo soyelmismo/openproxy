@@ -659,8 +659,7 @@ async fn one_shot_discovery_fetch_rejects_bodies_over_the_transport_limit() {
     let result = crate::adapters::upstream_get_bytes(&client, &url(addr), &[]).await;
     let err = result.expect_err("40 MiB body must be rejected by the one-shot fetch path");
     assert!(
-        err.to_ascii_lowercase().contains("limit")
-            || err.to_ascii_lowercase().contains("exceed"),
+        err.to_ascii_lowercase().contains("limit") || err.to_ascii_lowercase().contains("exceed"),
         "unexpected error text: {err}"
     );
 }

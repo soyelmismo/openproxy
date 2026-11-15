@@ -228,11 +228,15 @@ mod header_denylist_tests {
         assert!(req.headers.get("te").is_none());
         assert!(req.headers.get("upgrade").is_none());
         assert_eq!(
-            req.headers.get("x-custom-header").and_then(|v| v.to_str().ok()),
+            req.headers
+                .get("x-custom-header")
+                .and_then(|v| v.to_str().ok()),
             Some("value")
         );
         assert_eq!(
-            req.headers.get("authorization").and_then(|v| v.to_str().ok()),
+            req.headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok()),
             Some("Bearer tok")
         );
     }
