@@ -26,7 +26,7 @@ pub(crate) fn collect_network_finance_candidates<'a>(
     syntax_protected: &[Range<usize>],
     candidates: &mut Vec<Candidate<'a>>,
 ) {
-    if entities.contains(&PiiEntity::Email) {
+    if entities.contains(&PiiEntity::Email) && (text.contains('@') || !text.is_ascii()) {
         for m in REGEX_EMAIL.find_iter(text) {
             let s = m.as_str();
             // URL-encoded npm scopes (`@scope%2Fpackage@1.2.3.patch`) and
@@ -82,160 +82,173 @@ pub(crate) fn collect_network_finance_candidates<'a>(
                 });
             }
         }
-        for m in REGEX_IBAN_CANDIDATE.find_iter(text) {
-            let s = m.as_str();
-            if is_valid_iban(s) && !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-                candidates.push(Candidate {
-                    start: m.start(),
-                    end: m.end(),
-                    entity: PiiEntity::CreditCard,
-                    matched_text: s,
-                });
+        if text.len() >= 15 {
+            for m in REGEX_IBAN_CANDIDATE.find_iter(text) {
+                let s = m.as_str();
+                if is_valid_iban(s) && !is_in_protected_range(syntax_protected, m.start(), m.end())
+                {
+                    candidates.push(Candidate {
+                        start: m.start(),
+                        end: m.end(),
+                        entity: PiiEntity::CreditCard,
+                        matched_text: s,
+                    });
+                }
             }
         }
     }
 
     if entities.contains(&PiiEntity::Ip) {
-        for m in REGEX_IPV4.find_iter(text) {
-            let s = m.as_str();
-            let is_semver = m.start() > 0
-                && (text.as_bytes()[m.start() - 1] == b'v'
-                    || text.as_bytes()[m.start() - 1] == b'V');
-            if is_semver {
-                continue;
-            }
-            if m.start() > 1
-                && text.as_bytes()[m.start() - 1] == b'.'
-                && text.as_bytes()[m.start() - 2].is_ascii_digit()
-            {
-                continue;
-            }
-            if m.end() + 1 < text.len()
-                && text.as_bytes()[m.end()] == b'.'
-                && text.as_bytes()[m.end() + 1].is_ascii_digit()
-            {
-                continue;
-            }
+        if text.contains('.') {
+            for m in REGEX_IPV4.find_iter(text) {
+                let s = m.as_str();
+                let is_semver = m.start() > 0
+                    && (text.as_bytes()[m.start() - 1] == b'v'
+                        || text.as_bytes()[m.start() - 1] == b'V');
+                if is_semver {
+                    continue;
+                }
+                if m.start() > 1
+                    && text.as_bytes()[m.start() - 1] == b'.'
+                    && text.as_bytes()[m.start() - 2].is_ascii_digit()
+                {
+                    continue;
+                }
+                if m.end() + 1 < text.len()
+                    && text.as_bytes()[m.end()] == b'.'
+                    && text.as_bytes()[m.end() + 1].is_ascii_digit()
+                {
+                    continue;
+                }
 
-            if Ipv4Addr::from_str(s).is_ok()
-                && !is_in_protected_range(syntax_protected, m.start(), m.end())
-            {
-                candidates.push(Candidate {
-                    start: m.start(),
-                    end: m.end(),
-                    entity: PiiEntity::Ip,
-                    matched_text: s,
-                });
+                if Ipv4Addr::from_str(s).is_ok()
+                    && !is_in_protected_range(syntax_protected, m.start(), m.end())
+                {
+                    candidates.push(Candidate {
+                        start: m.start(),
+                        end: m.end(),
+                        entity: PiiEntity::Ip,
+                        matched_text: s,
+                    });
+                }
             }
         }
 
-        for m in REGEX_IPV6.find_iter(text) {
-            if m.start() > 0 {
-                let prev = text.as_bytes()[m.start() - 1];
-                if prev == b':' || prev.is_ascii_hexdigit() {
+        if text.contains(':') {
+            for m in REGEX_IPV6.find_iter(text) {
+                if m.start() > 0 {
+                    let prev = text.as_bytes()[m.start() - 1];
+                    if prev == b':' || prev.is_ascii_hexdigit() {
+                        continue;
+                    }
+                }
+                if m.end() < text.len() {
+                    let next = text.as_bytes()[m.end()];
+                    if next == b':' || next.is_ascii_hexdigit() {
+                        continue;
+                    }
+                }
+                let s = m.as_str();
+                // Rust, C++ and Python path separators are not compressed
+                // addresses: `db::skills_store` and `openproxy-adapters::eac`
+                // start or end with `::` glued to an identifier, which no real
+                // address does. Matching them corrupts the payload with an IPv6
+                // placeholder the restore stage cannot detach from its token.
+                if s.starts_with("::")
+                    && m.start() > 0
+                    && is_ident_byte(text.as_bytes()[m.start() - 1])
+                {
                     continue;
                 }
-            }
-            if m.end() < text.len() {
-                let next = text.as_bytes()[m.end()];
-                if next == b':' || next.is_ascii_hexdigit() {
+                if s.ends_with("::")
+                    && m.end() < text.len()
+                    && is_ident_byte(text.as_bytes()[m.end()])
+                {
                     continue;
                 }
-            }
-            let s = m.as_str();
-            // Rust, C++ and Python path separators are not compressed
-            // addresses: `db::skills_store` and `openproxy-adapters::eac`
-            // start or end with `::` glued to an identifier, which no real
-            // address does. Matching them corrupts the payload with an IPv6
-            // placeholder the restore stage cannot detach from its token.
-            if s.starts_with("::") && m.start() > 0 && is_ident_byte(text.as_bytes()[m.start() - 1])
-            {
-                continue;
-            }
-            if s.ends_with("::") && m.end() < text.len() && is_ident_byte(text.as_bytes()[m.end()])
-            {
-                continue;
-            }
-            if s == "::" {
-                let attached = text[..m.start()]
-                    .chars()
-                    .next_back()
-                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
-                    || text[m.end()..]
+                if s == "::" {
+                    let attached = text[..m.start()]
                         .chars()
+                        .next_back()
+                        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                        || text[m.end()..]
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                    let previous_word = text[..m.start()]
+                        .trim_end_matches(|c: char| c.is_whitespace() || c == ':' || c == '=')
+                        .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
                         .next()
-                        .is_some_and(|c| c.is_alphanumeric() || c == '_');
-                let previous_word = text[..m.start()]
-                    .trim_end_matches(|c: char| c.is_whitespace() || c == ':' || c == '=')
-                    .rsplit(|c: char| !c.is_alphanumeric() && c != '_')
-                    .next()
-                    .unwrap_or("");
-                let network_context = [
-                    "ip",
-                    "ipv6",
-                    "host",
-                    "address",
-                    "bind",
-                    "listen",
-                    "listening",
-                    "interface",
-                    "gateway",
-                    "ip_address",
-                    "bind_address",
-                ]
-                .iter()
-                .any(|label| previous_word.eq_ignore_ascii_case(label));
-                if attached || (text.trim() != "::" && !network_context) {
-                    continue;
+                        .unwrap_or("");
+                    let network_context = [
+                        "ip",
+                        "ipv6",
+                        "host",
+                        "address",
+                        "bind",
+                        "listen",
+                        "listening",
+                        "interface",
+                        "gateway",
+                        "ip_address",
+                        "bind_address",
+                    ]
+                    .iter()
+                    .any(|label| previous_word.eq_ignore_ascii_case(label));
+                    if attached || (text.trim() != "::" && !network_context) {
+                        continue;
+                    }
                 }
-            }
-            if s.contains(':')
-                && Ipv6Addr::from_str(s).is_ok()
-                && !is_in_protected_range(syntax_protected, m.start(), m.end())
-            {
-                candidates.push(Candidate {
-                    start: m.start(),
-                    end: m.end(),
-                    entity: PiiEntity::Ip,
-                    matched_text: s,
-                });
+                if s.contains(':')
+                    && Ipv6Addr::from_str(s).is_ok()
+                    && !is_in_protected_range(syntax_protected, m.start(), m.end())
+                {
+                    candidates.push(Candidate {
+                        start: m.start(),
+                        end: m.end(),
+                        entity: PiiEntity::Ip,
+                        matched_text: s,
+                    });
+                }
             }
         }
     }
 
     if entities.contains(&PiiEntity::Phone) {
-        for m in REGEX_PHONE_INTL.find_iter(text) {
-            if m.start() > 0 && text.as_bytes()[m.start() - 1].is_ascii_alphanumeric() {
-                continue;
-            }
-            if m.end() < text.len() && text.as_bytes()[m.end()].is_ascii_digit() {
-                continue;
-            }
-            if m.end() < text.len() {
-                let tail = &text[m.end()..];
-                if tail.starts_with('-') || tail.starts_with('.') || tail.starts_with(' ') {
-                    let trimmed = tail.trim_start_matches(['-', '.', ' ']);
-                    if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
-                        continue;
+        if text.contains('+') || !text.is_ascii() {
+            for m in REGEX_PHONE_INTL.find_iter(text) {
+                if m.start() > 0 && text.as_bytes()[m.start() - 1].is_ascii_alphanumeric() {
+                    continue;
+                }
+                if m.end() < text.len() && text.as_bytes()[m.end()].is_ascii_digit() {
+                    continue;
+                }
+                if m.end() < text.len() {
+                    let tail = &text[m.end()..];
+                    if tail.starts_with('-') || tail.starts_with('.') || tail.starts_with(' ') {
+                        let trimmed = tail.trim_start_matches(['-', '.', ' ']);
+                        if trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+                            continue;
+                        }
                     }
                 }
-            }
 
-            let s = m.as_str();
-            let digit_count = s
-                .chars()
-                .filter(|c| c.is_ascii_digit() || ('\u{FF10}'..='\u{FF19}').contains(c))
-                .count();
-            if (7..=15).contains(&digit_count)
-                && !REGEX_DATE_OR_TIME.is_match(s)
-                && !is_in_protected_range(syntax_protected, m.start(), m.end())
-            {
-                candidates.push(Candidate {
-                    start: m.start(),
-                    end: m.end(),
-                    entity: PiiEntity::Phone,
-                    matched_text: s,
-                });
+                let s = m.as_str();
+                let digit_count = s
+                    .chars()
+                    .filter(|c| c.is_ascii_digit() || ('\u{FF10}'..='\u{FF19}').contains(c))
+                    .count();
+                if (7..=15).contains(&digit_count)
+                    && !REGEX_DATE_OR_TIME.is_match(s)
+                    && !is_in_protected_range(syntax_protected, m.start(), m.end())
+                {
+                    candidates.push(Candidate {
+                        start: m.start(),
+                        end: m.end(),
+                        entity: PiiEntity::Phone,
+                        matched_text: s,
+                    });
+                }
             }
         }
 

@@ -68,8 +68,14 @@ impl PiiEngine {
         if text.is_empty() || self.entities.is_empty() {
             return text.to_string();
         }
-
         session.seed_existing_placeholders(text);
+        self.redact_text_seeded(text, session)
+    }
+
+    fn redact_text_seeded(&self, text: &str, session: &mut PiiSession) -> String {
+        if text.is_empty() || self.entities.is_empty() {
+            return text.to_string();
+        }
 
         let syntax_protected = self.find_syntax_protected_ranges(text);
         let code_protected = self.find_code_protected_ranges(text);
@@ -110,33 +116,32 @@ impl PiiEngine {
         // transparent-but-distracting. Re-apply every mapping to the
         // remaining occurrences, longest original first so a shorter value
         // can never corrupt a longer placeholder.
-        let mut mappings: Vec<(String, String)> = Vec::new();
+        let mut mappings: Vec<(&str, &str)> = Vec::with_capacity(non_overlapping.len());
         for cand in &non_overlapping {
             if let Some(placeholder) = session.forward.get(cand.matched_text)
                 && !mappings
                     .iter()
-                    .any(|(original, _)| original == cand.matched_text)
+                    .any(|(original, _)| *original == cand.matched_text)
             {
-                mappings.push((cand.matched_text.to_string(), placeholder.clone()));
+                mappings.push((cand.matched_text, placeholder.as_str()));
             }
         }
-        mappings.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
-        for (original, placeholder) in &mappings {
-            if placeholder.contains(original.as_str()) {
-                // Replacing would corrupt the synthetic value itself.
+        if mappings.len() > 1 {
+            mappings.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
+        }
+        for &(original, placeholder) in &mappings {
+            if !out.contains(original) || placeholder.contains(original) {
+                // Fast skip if `out` doesn't contain `original` or replacing would corrupt the synthetic value itself.
                 continue;
             }
-            let shadowed = mappings.iter().any(|(other_original, other_placeholder)| {
+            let shadowed = mappings.iter().any(|&(other_original, other_placeholder)| {
                 other_original != original
-                    && (other_original.contains(original.as_str())
-                        || other_placeholder.contains(original.as_str()))
+                    && (other_original.contains(original) || other_placeholder.contains(original))
             });
             if shadowed {
                 continue;
             }
-            if out.contains(original.as_str()) {
-                out = out.replace(original.as_str(), placeholder.as_str());
-            }
+            out = out.replace(original, placeholder);
         }
 
         out
@@ -265,7 +270,7 @@ impl PiiEngine {
     /// is itself serialized JSON (`tool_calls.arguments`) is parsed, redacted
     /// and re-serialized, so the output escaping stays valid.
     pub fn redact_json_value(&self, val: &mut serde_json::Value, session: &mut PiiSession) {
-        self.redact_json_value_internal(val, session, false);
+        self.redact_json_value_internal(val, session, false, false);
     }
 
     fn redact_json_value_internal(
@@ -273,6 +278,7 @@ impl PiiEngine {
         val: &mut serde_json::Value,
         session: &mut PiiSession,
         in_payload: bool,
+        preseeded: bool,
     ) {
         match val {
             serde_json::Value::String(s) => {
@@ -287,18 +293,22 @@ impl PiiEngine {
                     || (trimmed.starts_with('[') && trimmed.ends_with(']')))
                     && let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(s)
                 {
-                    self.redact_json_value_internal(&mut parsed, session, true);
+                    self.redact_json_value_internal(&mut parsed, session, true, preseeded);
                     if let Ok(serialized) = serde_json::to_string(&parsed) {
                         *s = serialized;
                         return;
                     }
                 }
-                let redacted = self.redact_text(s, session);
+                let redacted = if preseeded {
+                    self.redact_text_seeded(s, session)
+                } else {
+                    self.redact_text(s, session)
+                };
                 *s = redacted;
             }
             serde_json::Value::Array(arr) => {
                 for item in arr {
-                    self.redact_json_value_internal(item, session, in_payload);
+                    self.redact_json_value_internal(item, session, in_payload, preseeded);
                 }
             }
             serde_json::Value::Object(map) => {
@@ -336,13 +346,13 @@ impl PiiEngine {
                                 continue;
                             }
                         }
-                        self.redact_json_value_internal(v, session, true);
+                        self.redact_json_value_internal(v, session, true, preseeded);
                     } else {
                         if Self::is_multimodal_or_metadata_field(k, v) {
                             continue;
                         }
                         let child_in_payload = k == "arguments";
-                        self.redact_json_value_internal(v, session, child_in_payload);
+                        self.redact_json_value_internal(v, session, child_in_payload, preseeded);
                     }
                 }
             }
@@ -405,18 +415,18 @@ impl PiiEngine {
                 let is_tool_msg = cloned.role == "tool";
 
                 if let Some(ref mut content) = cloned.content {
-                    self.redact_json_value_internal(content, session, is_tool_msg);
+                    self.redact_json_value_internal(content, session, is_tool_msg, true);
                 }
 
                 for (k, v) in &mut cloned.extra {
                     if k == "reasoning_content" || k == "thought" {
-                        self.redact_json_value(v, session);
+                        self.redact_json_value_internal(v, session, false, true);
                     }
                 }
 
                 if let Some(ref mut tool_calls) = cloned.tool_calls {
                     for tc in tool_calls.iter_mut() {
-                        self.redact_json_value(tc, session);
+                        self.redact_json_value_internal(tc, session, false, true);
                     }
                 }
 

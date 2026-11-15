@@ -1,8 +1,8 @@
 //! Streaming window replacer and SSE chunk restoration stage.
 
 use crate::streaming::{StreamAction, StreamingChunkStage};
-use aho_corasick::{AhoCorasick, MatchKind};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use aho_corasick::{AhoCorasick, AhoCorasickKind, MatchKind};
+use std::collections::{BTreeSet, HashMap};
 
 mod contact;
 use contact::{contact_kind, extends_contact_left, extends_contact_right};
@@ -57,18 +57,114 @@ fn json_escape_string(s: &str) -> String {
     }
 }
 
+#[derive(Debug)]
+struct ReplacerDictionary {
+    automaton: Option<AhoCorasick>,
+    patterns: Vec<String>,
+    replacements: Vec<String>,
+    first_byte_mask: [u64; 256],
+    prefix_first_bytes: [bool; 256],
+    max_len: usize,
+}
+
+#[derive(Clone, Copy)]
+struct DictMatch {
+    pat_idx: usize,
+    start: usize,
+    end: usize,
+}
+
+enum DictMatchIter<'a> {
+    Bitmask {
+        dict: &'a ReplacerDictionary,
+        input: &'a [u8],
+        pos: usize,
+    },
+    Automaton(aho_corasick::FindIter<'a, 'a>),
+}
+
+impl<'a> Iterator for DictMatchIter<'a> {
+    type Item = DictMatch;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            DictMatchIter::Bitmask { dict, input, pos } => {
+                let len = input.len();
+                let mut cur = *pos;
+                while cur < len {
+                    let mut mask = dict.first_byte_mask[input[cur] as usize];
+                    while mask != 0 {
+                        let pat_idx = mask.trailing_zeros() as usize;
+                        mask &= mask - 1;
+                        let pat_bytes = dict.patterns[pat_idx].as_bytes();
+                        let end = cur + pat_bytes.len();
+                        if end <= len && input[cur..end].eq_ignore_ascii_case(pat_bytes) {
+                            *pos = end.max(cur + 1);
+                            return Some(DictMatch {
+                                pat_idx,
+                                start: cur,
+                                end,
+                            });
+                        }
+                    }
+                    cur += 1;
+                }
+                *pos = len;
+                None
+            }
+            DictMatchIter::Automaton(iter) => iter.next().map(|m| DictMatch {
+                pat_idx: m.pattern().as_usize(),
+                start: m.start(),
+                end: m.end(),
+            }),
+        }
+    }
+}
+
+impl ReplacerDictionary {
+    #[inline]
+    fn find_iter<'a>(&'a self, input: &'a str) -> DictMatchIter<'a> {
+        if let Some(ref ac) = self.automaton {
+            DictMatchIter::Automaton(ac.find_iter(input))
+        } else {
+            DictMatchIter::Bitmask {
+                dict: self,
+                input: input.as_bytes(),
+                pos: 0,
+            }
+        }
+    }
+
+    #[inline]
+    fn has_prefix_ignore_ascii_case(&self, s: &str) -> bool {
+        let s_len = s.len();
+        if s_len == 0 || s_len >= self.max_len {
+            return false;
+        }
+        let s_bytes = s.as_bytes();
+        if !self.prefix_first_bytes[s_bytes[0].to_ascii_lowercase() as usize] {
+            return false;
+        }
+        for pat in &self.patterns {
+            if pat.len() <= s_len {
+                break;
+            }
+            if pat.as_bytes()[..s_len].eq_ignore_ascii_case(s_bytes) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// Placeholders split across SSE chunk boundaries (chunk 1 has `alex.turn`,
 /// chunk 2 has `er1@fastmail.com`) are buffered until the match is decidable,
 /// so restoration stays O(N) through one Aho-Corasick automaton.
 #[derive(Debug, Clone)]
 pub struct StreamingWindowReplacer {
-    mapping: HashMap<String, String>,
-    automaton: Option<AhoCorasick>,
-    patterns: Vec<String>,
-    replacements: Vec<String>,
-    prefixes: HashSet<String>,
+    dict: Option<std::sync::Arc<ReplacerDictionary>>,
     pending: String,
-    max_len: usize,
     last_char: Option<char>,
 }
 
@@ -76,13 +172,8 @@ impl StreamingWindowReplacer {
     pub fn new(mapping: HashMap<String, String>) -> Self {
         if mapping.is_empty() {
             return Self {
-                mapping,
-                automaton: None,
-                patterns: Vec::new(),
-                replacements: Vec::new(),
-                prefixes: HashSet::new(),
+                dict: None,
                 pending: String::new(),
-                max_len: 0,
                 last_char: None,
             };
         }
@@ -96,34 +187,47 @@ impl StreamingWindowReplacer {
         });
 
         let max_len = pairs.first().map_or(0, |(k, _)| k.len());
-        let patterns: Vec<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
-        let replacements: Vec<String> = pairs.iter().map(|(_, v)| v.clone()).collect();
-
-        let mut prefixes = HashSet::new();
-        for pat in &patterns {
-            for (byte_idx, _) in pat.char_indices() {
-                if byte_idx > 0 {
-                    prefixes.insert(pat[..byte_idx].to_ascii_lowercase());
+        let mut patterns = Vec::with_capacity(pairs.len());
+        let mut replacements = Vec::with_capacity(pairs.len());
+        let mut first_byte_mask = [0u64; 256];
+        let mut prefix_first_bytes = [false; 256];
+        for (idx, (k, v)) in pairs.into_iter().enumerate() {
+            if let Some(&first_byte) = k.as_bytes().first() {
+                let lower = first_byte.to_ascii_lowercase() as usize;
+                let upper = first_byte.to_ascii_uppercase() as usize;
+                if k.len() > 1 {
+                    prefix_first_bytes[lower] = true;
+                }
+                if idx < 64 {
+                    first_byte_mask[lower] |= 1u64 << idx;
+                    first_byte_mask[upper] |= 1u64 << idx;
                 }
             }
+            patterns.push(k);
+            replacements.push(v);
         }
 
-        let automaton = AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .match_kind(MatchKind::LeftmostLongest)
-            .build(&patterns)
-            .ok();
-
-        let mapping = pairs.into_iter().collect();
+        let automaton = if patterns.len() > 64 {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .match_kind(MatchKind::LeftmostLongest)
+                .kind(Some(AhoCorasickKind::ContiguousNFA))
+                .build(&patterns)
+                .ok()
+        } else {
+            None
+        };
 
         Self {
-            mapping,
-            automaton,
-            patterns,
-            replacements,
-            prefixes,
+            dict: Some(std::sync::Arc::new(ReplacerDictionary {
+                automaton,
+                patterns,
+                replacements,
+                first_byte_mask,
+                prefix_first_bytes,
+                max_len,
+            })),
             pending: String::new(),
-            max_len,
             last_char: None,
         }
     }
@@ -137,7 +241,7 @@ impl StreamingWindowReplacer {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.mapping.is_empty()
+        self.dict.is_none()
     }
 
     pub fn process(&mut self, chunk: &str) -> String {
@@ -155,19 +259,22 @@ impl StreamingWindowReplacer {
     }
 
     fn process_internal(&mut self, chunk: &str, is_eof: bool) -> String {
-        let Some(ref ac) = self.automaton else {
+        let Some(ref dict) = self.dict else {
+            return chunk.to_string();
+        };
+        if dict.patterns.is_empty() {
             return chunk.to_string();
         };
 
-        let input = if self.pending.is_empty() {
+        let input: std::borrow::Cow<'_, str> = if self.pending.is_empty() {
             if chunk.is_empty() {
                 return String::new();
             }
-            chunk.to_string()
+            std::borrow::Cow::Borrowed(chunk)
         } else {
             let mut s = std::mem::take(&mut self.pending);
             s.push_str(chunk);
-            s
+            std::borrow::Cow::Owned(s)
         };
 
         if input.is_empty() {
@@ -178,36 +285,35 @@ impl StreamingWindowReplacer {
         let undecidable_start = if is_eof {
             None
         } else {
-            let mut start = len.saturating_sub(self.max_len.saturating_sub(1));
+            let mut start = len.saturating_sub(dict.max_len.saturating_sub(1));
             while !input.is_char_boundary(start) {
                 start += 1;
             }
             input[start..].char_indices().find_map(|(offset, _)| {
                 let pos = start + offset;
-                self.prefixes
-                    .contains(&input[pos..].to_ascii_lowercase())
+                dict.has_prefix_ignore_ascii_case(&input[pos..])
                     .then_some(pos)
             })
         };
         let mut out = String::with_capacity(len + 32);
         let mut last_end = 0;
 
-        for mat in ac.find_iter(&input) {
+        for mat in dict.find_iter(input.as_ref()) {
             // A complete short alias can still be the beginning of a longer
             // placeholder: `Alex ` + `Vance`. Do not emit the first-name alias
             // before the full-name match can be decided on the next chunk.
-            if undecidable_start.is_some_and(|start| mat.start() >= start) {
+            if undecidable_start.is_some_and(|start| mat.start >= start) {
                 break;
             }
-            if mat.start() < last_end {
+            if mat.start < last_end {
                 continue;
             }
 
-            let pat_idx = mat.pattern().as_usize();
-            let pat = &self.patterns[pat_idx];
+            let pat_idx = mat.pat_idx;
+            let pat = &dict.patterns[pat_idx];
 
-            let mat_start = mat.start();
-            let mat_end = mat.end();
+            let mat_start = mat.start;
+            let mat_end = mat.end;
 
             // 1. Check LEFT boundary
             let prev_char = if mat_start > 0 {
@@ -232,7 +338,7 @@ impl StreamingWindowReplacer {
             if mat_end == len {
                 if !is_eof {
                     let candidate = &input[mat_start..];
-                    let is_prefix = self.prefixes.contains(&candidate.to_ascii_lowercase());
+                    let is_prefix = dict.has_prefix_ignore_ascii_case(candidate);
                     let pat_ends_token = pat.ends_with(is_token_char);
                     if is_prefix || pat_ends_token {
                         out.push_str(&input[last_end..mat_start]);
@@ -263,7 +369,7 @@ impl StreamingWindowReplacer {
             }
 
             out.push_str(&input[last_end..mat_start]);
-            out.push_str(&self.replacements[pat_idx]);
+            out.push_str(&dict.replacements[pat_idx]);
             last_end = mat_end;
             if let Some(c) = out.chars().next_back() {
                 self.last_char = Some(c);
@@ -278,7 +384,7 @@ impl StreamingWindowReplacer {
             return out;
         }
 
-        if is_eof || self.max_len == 0 {
+        if is_eof || dict.max_len == 0 {
             out.push_str(trailing);
             if let Some(c) = out.chars().next_back() {
                 self.last_char = Some(c);
@@ -287,8 +393,8 @@ impl StreamingWindowReplacer {
         }
 
         // Avoid O(N^2): limit scan to the last max_len bytes
-        let scan_start = if trailing.len() >= self.max_len {
-            let mut idx = trailing.len() - (self.max_len - 1);
+        let scan_start = if trailing.len() >= dict.max_len {
+            let mut idx = trailing.len() - (dict.max_len - 1);
             while idx < trailing.len() && !trailing.is_char_boundary(idx) {
                 idx += 1;
             }
@@ -303,7 +409,7 @@ impl StreamingWindowReplacer {
         for (offset, _) in trailing[scan_start..].char_indices() {
             let abs_offset = scan_start + offset;
             let suffix = &trailing[abs_offset..];
-            if suffix.len() < self.max_len && self.prefixes.contains(&suffix.to_ascii_lowercase()) {
+            if dict.has_prefix_ignore_ascii_case(suffix) {
                 split_point = Some(abs_offset);
                 break;
             }
@@ -352,14 +458,17 @@ impl PiiRestorationStage {
             .map(|(k, v)| (k.clone(), json_escape_string(v)))
             .collect();
 
+        let content_template = StreamingWindowReplacer::new(mapping);
+        let raw_replacer = content_template.clone();
+
         Self {
-            content_template: StreamingWindowReplacer::new(mapping.clone()),
+            content_template,
             tool_template: StreamingWindowReplacer::new(tool_mapping),
             content_replacers: HashMap::new(),
             reasoning_replacers: HashMap::new(),
             text_replacers: HashMap::new(),
             tool_replacers: HashMap::new(),
-            raw_replacer: StreamingWindowReplacer::new(mapping),
+            raw_replacer,
             raw_stream: false,
             buffered_json: String::new(),
         }

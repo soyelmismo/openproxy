@@ -25,6 +25,9 @@ use super::Candidate;
 /// value that is one of them is a variable reference, not a secret: masking
 /// it renames the variable and breaks every read of it.
 fn assigned_identifiers(text: &str) -> HashSet<&str> {
+    if !text.contains('=') {
+        return HashSet::new();
+    }
     REGEX_CODE_ASSIGNMENT
         .captures_iter(text)
         .filter_map(|cap| cap.get(1))
@@ -35,6 +38,9 @@ fn assigned_identifiers(text: &str) -> HashSet<&str> {
 /// True when the value reads a variable bound in this payload, in any of the
 /// spellings code uses: bare `token`, shell `$token`, template `${token}`.
 fn is_variable_reference(val: &str, bound: &HashSet<&str>) -> bool {
+    if bound.is_empty() {
+        return false;
+    }
     if bound.contains(val) {
         return true;
     }
@@ -66,33 +72,39 @@ fn is_module_path(val: &str) -> bool {
 /// i18n and UI field suffixes: `api_key_label`, `token_title`, `secret_hint`
 /// hold the text a human reads on screen, not the credential itself.
 fn is_ui_label_key(key: &str) -> bool {
+    if !key.contains('_') {
+        return false;
+    }
     const SUFFIXES: &[&str] = &[
-        "label",
-        "title",
-        "hint",
-        "placeholder",
-        "text",
-        "message",
-        "tooltip",
-        "desc",
-        "description",
-        "name",
-        "prompt",
-        "help",
+        "_label",
+        "_title",
+        "_hint",
+        "_placeholder",
+        "_text",
+        "_message",
+        "_tooltip",
+        "_desc",
+        "_description",
+        "_name",
+        "_prompt",
+        "_help",
     ];
     let lower = key.to_ascii_lowercase();
-    SUFFIXES.iter().any(|s| lower.ends_with(&format!("_{s}")))
+    SUFFIXES.iter().any(|s| lower.ends_with(s))
 }
 
 /// A short quoted value whose words are all Capitalized or ALL-CAPS
 /// (`API Key`) is UI copy, not a credential: secrets do not carry spaces and
 /// Title Case. Two or three words max, letters and spaces only.
 fn is_titlecase_ui_label(val: &str) -> bool {
-    let words: Vec<&str> = val.split_whitespace().collect();
-    if !(2..=3).contains(&words.len()) || val.len() > 24 {
+    if val.len() > 24 || !val.contains(' ') {
         return false;
     }
     if !val.bytes().all(|b| b.is_ascii_alphabetic() || b == b' ') {
+        return false;
+    }
+    let words: Vec<&str> = val.split_whitespace().collect();
+    if !(2..=3).contains(&words.len()) {
         return false;
     }
     words.iter().all(|w| {
@@ -129,110 +141,130 @@ pub(crate) fn collect_secret_candidates<'a>(
     candidates: &mut Vec<Candidate<'a>>,
 ) {
     let bound_names = assigned_identifiers(text);
-    for cap in REGEX_SECRET_BEARER.captures_iter(text) {
-        if let Some(m) = cap.get(1) {
-            let start = m.start();
-            let raw = m.as_str();
-            let trimmed = raw.trim_end_matches('.');
-            let end = start + trimmed.len();
-            if trimmed.len() >= 20 && !is_in_protected_range(syntax_protected, start, end) {
+    if text.contains("Bearer") {
+        for cap in REGEX_SECRET_BEARER.captures_iter(text) {
+            if let Some(m) = cap.get(1) {
+                let start = m.start();
+                let raw = m.as_str();
+                let trimmed = raw.trim_end_matches('.');
+                let end = start + trimmed.len();
+                if trimmed.len() >= 20 && !is_in_protected_range(syntax_protected, start, end) {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: trimmed,
+                    });
+                }
+            }
+        }
+    }
+    if text.contains("AKIA") || text.contains("ASIA") || text.contains("AROA") {
+        for m in REGEX_SECRET_AWS.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
                 candidates.push(Candidate {
-                    start,
-                    end,
+                    start: m.start(),
+                    end: m.end(),
                     entity: PiiEntity::Secret,
-                    matched_text: trimmed,
+                    matched_text: m.as_str(),
                 });
             }
         }
     }
-    for m in REGEX_SECRET_AWS.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains("sk-") {
+        for m in REGEX_SECRET_OPENAI.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
+        }
+        if text.contains("sk-ant-") {
+            for m in REGEX_SECRET_ANTHROPIC.find_iter(text) {
+                if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                    candidates.push(Candidate {
+                        start: m.start(),
+                        end: m.end(),
+                        entity: PiiEntity::Secret,
+                        matched_text: m.as_str(),
+                    });
+                }
+            }
         }
     }
-    for m in REGEX_SECRET_OPENAI.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains("gh") || text.contains("github_pat_") {
+        for m in REGEX_SECRET_GITHUB.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
         }
     }
-    for m in REGEX_SECRET_ANTHROPIC.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains("xox") {
+        for m in REGEX_SECRET_SLACK.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
         }
     }
-    for m in REGEX_SECRET_GITHUB.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains("AIzaSy") {
+        for m in REGEX_SECRET_GOOGLE.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
         }
     }
-    for m in REGEX_SECRET_SLACK.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains("cf") {
+        for m in REGEX_SECRET_CLOUDFLARE.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
         }
     }
-    for m in REGEX_SECRET_GOOGLE.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains(':') {
+        for m in REGEX_SECRET_TELEGRAM.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
         }
     }
-    for m in REGEX_SECRET_CLOUDFLARE.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
-        }
-    }
-    for m in REGEX_SECRET_TELEGRAM.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
-        }
-    }
-    for m in REGEX_SECRET_PRIVATE_KEY_PEM.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
+    if text.contains("PRIVATE") || text.contains("PuTTY") {
+        for m in REGEX_SECRET_PRIVATE_KEY_PEM.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: m.as_str(),
+                });
+            }
         }
     }
     for cap in REGEX_SECRET_LABELED.captures_iter(text) {
@@ -288,29 +320,32 @@ pub(crate) fn collect_secret_candidates<'a>(
             }
         }
     }
-    for cap in REGEX_URL_SENSITIVE_PARAM.captures_iter(text) {
-        if let Some(val_m) = cap.get(1) {
-            let val = val_m.as_str();
-            let trimmed_val = val.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
-            // `?token={session_token}` reads a variable, not a credential.
-            if is_variable_reference(trimmed_val, &bound_names)
-                || is_code_expression(text, val_m.end())
-                || is_module_path(trimmed_val)
-            {
-                continue;
-            }
-            let start = val_m.start();
-            let end = start + trimmed_val.len();
-            if trimmed_val.len() >= 6
-                && is_valid_secret_value("token", trimmed_val)
-                && !is_in_protected_range(syntax_protected, start, end)
-            {
-                candidates.push(Candidate {
-                    start,
-                    end,
-                    entity: PiiEntity::Secret,
-                    matched_text: trimmed_val,
-                });
+    if text.contains('=') && (text.contains('?') || text.contains('&')) {
+        for cap in REGEX_URL_SENSITIVE_PARAM.captures_iter(text) {
+            if let Some(val_m) = cap.get(1) {
+                let val = val_m.as_str();
+                let trimmed_val =
+                    val.trim_end_matches(['\\', ';', ',', '.', ')', ']', '}', '"', '\'']);
+                // `?token={session_token}` reads a variable, not a credential.
+                if is_variable_reference(trimmed_val, &bound_names)
+                    || is_code_expression(text, val_m.end())
+                    || is_module_path(trimmed_val)
+                {
+                    continue;
+                }
+                let start = val_m.start();
+                let end = start + trimmed_val.len();
+                if trimmed_val.len() >= 6
+                    && is_valid_secret_value("token", trimmed_val)
+                    && !is_in_protected_range(syntax_protected, start, end)
+                {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: trimmed_val,
+                    });
+                }
             }
         }
     }
@@ -339,74 +374,84 @@ pub(crate) fn collect_secret_candidates<'a>(
             });
         }
     }
-    for m in REGEX_SECRET_JWT.find_iter(text) {
-        if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: m.as_str(),
-            });
-        }
-    }
-    for cap in REGEX_URI_USERINFO_PASSWORD.captures_iter(text) {
-        if let Some(pass_m) = cap.get(1) {
-            let start = pass_m.start();
-            let end = pass_m.end();
-            let pass_str = pass_m.as_str();
-            if !is_in_protected_range(syntax_protected, start, end) {
+    if text.contains("eyJ") {
+        for m in REGEX_SECRET_JWT.find_iter(text) {
+            if !is_in_protected_range(syntax_protected, m.start(), m.end()) {
                 candidates.push(Candidate {
-                    start,
-                    end,
-                    entity: PiiEntity::Secret,
-                    matched_text: pass_str,
-                });
-            }
-        }
-    }
-    for cap in REGEX_DSN_PASSWORD.captures_iter(text) {
-        if let Some(pass_m) = cap.get(1) {
-            let start = pass_m.start();
-            let end = pass_m.end();
-            let pass_str = pass_m.as_str();
-            if is_valid_secret_value("password", pass_str)
-                && !is_in_protected_range(syntax_protected, start, end)
-            {
-                candidates.push(Candidate {
-                    start,
-                    end,
-                    entity: PiiEntity::Secret,
-                    matched_text: pass_str,
-                });
-            }
-        }
-    }
-    for cap in REGEX_SECRET_PASSWORD_HASH.captures_iter(text) {
-        if let Some(hash_m) = cap.get(1) {
-            let start = hash_m.start();
-            let end = hash_m.end();
-            let hash_str = hash_m.as_str();
-            if !is_in_protected_range(syntax_protected, start, end) {
-                candidates.push(Candidate {
-                    start,
-                    end,
-                    entity: PiiEntity::Secret,
-                    matched_text: hash_str,
-                });
-            }
-        }
-    }
-    for cap in REGEX_SECRET_BASIC_AUTH.captures_iter(text) {
-        if let Some(m) = cap.get(1) {
-            let start = m.start();
-            let end = m.end();
-            if !is_in_protected_range(syntax_protected, start, end) {
-                candidates.push(Candidate {
-                    start,
-                    end,
+                    start: m.start(),
+                    end: m.end(),
                     entity: PiiEntity::Secret,
                     matched_text: m.as_str(),
                 });
+            }
+        }
+    }
+    if text.contains("://") {
+        for cap in REGEX_URI_USERINFO_PASSWORD.captures_iter(text) {
+            if let Some(pass_m) = cap.get(1) {
+                let start = pass_m.start();
+                let end = pass_m.end();
+                let pass_str = pass_m.as_str();
+                if !is_in_protected_range(syntax_protected, start, end) {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: pass_str,
+                    });
+                }
+            }
+        }
+    }
+    if text.contains('@') && text.contains(':') {
+        for cap in REGEX_DSN_PASSWORD.captures_iter(text) {
+            if let Some(pass_m) = cap.get(1) {
+                let start = pass_m.start();
+                let end = pass_m.end();
+                let pass_str = pass_m.as_str();
+                if is_valid_secret_value("password", pass_str)
+                    && !is_in_protected_range(syntax_protected, start, end)
+                {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: pass_str,
+                    });
+                }
+            }
+        }
+    }
+    if text.contains('$') {
+        for cap in REGEX_SECRET_PASSWORD_HASH.captures_iter(text) {
+            if let Some(hash_m) = cap.get(1) {
+                let start = hash_m.start();
+                let end = hash_m.end();
+                let hash_str = hash_m.as_str();
+                if !is_in_protected_range(syntax_protected, start, end) {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: hash_str,
+                    });
+                }
+            }
+        }
+    }
+    if text.contains("Basic") {
+        for cap in REGEX_SECRET_BASIC_AUTH.captures_iter(text) {
+            if let Some(m) = cap.get(1) {
+                let start = m.start();
+                let end = m.end();
+                if !is_in_protected_range(syntax_protected, start, end) {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: m.as_str(),
+                    });
+                }
             }
         }
     }
@@ -420,58 +465,63 @@ pub(crate) fn collect_secret_candidates<'a>(
             });
         }
     }
-    for cap in REGEX_SECRET_CLI_FLAGS.captures_iter(text) {
-        let m = cap.get(1).or_else(|| cap.get(2));
-        if let Some(m) = m {
-            let start = m.start();
-            let end = m.end();
-            let val = m.as_str();
-            // `-p openproxy-server` is a package name, not a credential:
-            // lowercase identifiers joined by separators carry no secret.
-            if is_package_name(val) || is_variable_reference(val, &bound_names) {
-                continue;
-            }
-            // Group 1 is the bare `-p` flag; group 2 is `-u user:pass`, where
-            // the `user:` context makes a credential explicit. A bare
-            // lowercase word behind `-p` is a slug fragment
-            // (`step-5-preview` = `-p` + `review`), unless it is quoted:
-            // `-p'apipassword'` is an explicit credential.
-            let quoted = m.start() > 0 && matches!(text.as_bytes()[m.start() - 1], b'\'' | b'"');
-            if cap.get(1).is_some() && !quoted && is_plain_lowercase_word(val) {
-                continue;
-            }
-            if is_valid_secret_value("-p", val)
-                && !is_in_protected_range(syntax_protected, start, end)
-            {
-                candidates.push(Candidate {
-                    start,
-                    end,
-                    entity: PiiEntity::Secret,
-                    matched_text: val,
-                });
+    if text.contains("-p") || text.contains("-u") {
+        for cap in REGEX_SECRET_CLI_FLAGS.captures_iter(text) {
+            let m = cap.get(1).or_else(|| cap.get(2));
+            if let Some(m) = m {
+                let start = m.start();
+                let end = m.end();
+                let val = m.as_str();
+                // `-p openproxy-server` is a package name, not a credential:
+                // lowercase identifiers joined by separators carry no secret.
+                if is_package_name(val) || is_variable_reference(val, &bound_names) {
+                    continue;
+                }
+                // Group 1 is the bare `-p` flag; group 2 is `-u user:pass`, where
+                // the `user:` context makes a credential explicit. A bare
+                // lowercase word behind `-p` is a slug fragment
+                // (`step-5-preview` = `-p` + `review`), unless it is quoted:
+                // `-p'apipassword'` is an explicit credential.
+                let quoted =
+                    m.start() > 0 && matches!(text.as_bytes()[m.start() - 1], b'\'' | b'"');
+                if cap.get(1).is_some() && !quoted && is_plain_lowercase_word(val) {
+                    continue;
+                }
+                if is_valid_secret_value("-p", val)
+                    && !is_in_protected_range(syntax_protected, start, end)
+                {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: val,
+                    });
+                }
             }
         }
     }
-    for cap in REGEX_SECRET_SSHPASS.captures_iter(text) {
-        let m = cap.get(1).or_else(|| cap.get(2));
-        if let Some(m) = m {
-            let start = m.start();
-            let end = m.end();
-            let val = m.as_str();
-            // `sshpass -p$SSH_PASS` reads a variable, not a credential.
-            if is_variable_reference(val, &bound_names) {
-                continue;
-            }
-            if !val.is_empty()
-                && is_valid_secret_value("-p_sshpass", val)
-                && !is_in_protected_range(syntax_protected, start, end)
-            {
-                candidates.push(Candidate {
-                    start,
-                    end,
-                    entity: PiiEntity::Secret,
-                    matched_text: val,
-                });
+    if text.contains("sshpass") {
+        for cap in REGEX_SECRET_SSHPASS.captures_iter(text) {
+            let m = cap.get(1).or_else(|| cap.get(2));
+            if let Some(m) = m {
+                let start = m.start();
+                let end = m.end();
+                let val = m.as_str();
+                // `sshpass -p$SSH_PASS` reads a variable, not a credential.
+                if is_variable_reference(val, &bound_names) {
+                    continue;
+                }
+                if !val.is_empty()
+                    && is_valid_secret_value("-p_sshpass", val)
+                    && !is_in_protected_range(syntax_protected, start, end)
+                {
+                    candidates.push(Candidate {
+                        start,
+                        end,
+                        entity: PiiEntity::Secret,
+                        matched_text: val,
+                    });
+                }
             }
         }
     }
@@ -502,31 +552,34 @@ pub(crate) fn collect_secret_candidates<'a>(
             });
         }
     }
-    for cap in REGEX_NATIONAL_ID_CL.captures_iter(text) {
-        if let (Some(m_full), Some(m_digits), Some(m_verif)) = (cap.get(0), cap.get(1), cap.get(2))
-        {
-            let verif_char = m_verif.as_str().chars().next().unwrap_or('?');
-            if is_valid_chilean_rut(m_digits.as_str(), verif_char)
-                && !is_in_protected_range(syntax_protected, m_full.start(), m_full.end())
+    if text.contains('-') {
+        for cap in REGEX_NATIONAL_ID_CL.captures_iter(text) {
+            if let (Some(m_full), Some(m_digits), Some(m_verif)) =
+                (cap.get(0), cap.get(1), cap.get(2))
             {
-                candidates.push(Candidate {
-                    start: m_full.start(),
-                    end: m_full.end(),
-                    entity: PiiEntity::Secret,
-                    matched_text: m_full.as_str(),
-                });
+                let verif_char = m_verif.as_str().chars().next().unwrap_or('?');
+                if is_valid_chilean_rut(m_digits.as_str(), verif_char)
+                    && !is_in_protected_range(syntax_protected, m_full.start(), m_full.end())
+                {
+                    candidates.push(Candidate {
+                        start: m_full.start(),
+                        end: m_full.end(),
+                        entity: PiiEntity::Secret,
+                        matched_text: m_full.as_str(),
+                    });
+                }
             }
         }
-    }
-    for m in REGEX_NATIONAL_ID_US.find_iter(text) {
-        let s = m.as_str();
-        if is_valid_ssn(s) && !is_in_protected_range(syntax_protected, m.start(), m.end()) {
-            candidates.push(Candidate {
-                start: m.start(),
-                end: m.end(),
-                entity: PiiEntity::Secret,
-                matched_text: s,
-            });
+        for m in REGEX_NATIONAL_ID_US.find_iter(text) {
+            let s = m.as_str();
+            if is_valid_ssn(s) && !is_in_protected_range(syntax_protected, m.start(), m.end()) {
+                candidates.push(Candidate {
+                    start: m.start(),
+                    end: m.end(),
+                    entity: PiiEntity::Secret,
+                    matched_text: s,
+                });
+            }
         }
     }
 }

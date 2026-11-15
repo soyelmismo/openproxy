@@ -90,23 +90,18 @@ fn truncate_header_value(v: &str) -> std::borrow::Cow<'_, str> {
 /// the legacy `v.to_str().unwrap_or("")` behaviour of the original call site.
 pub fn redact_sensitive_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    for (k, v) in headers {
+    for k in headers.keys() {
         let key_str = k.as_str();
-
         let value = if is_sensitive(key_str) {
             REDACTED_PLACEHOLDER.to_string()
-        } else {
+        } else if let Some(v) = headers.get_all(k).iter().last() {
             // `to_str()` errs on non-ASCII; legacy behaviour dropped those
             // silently (empty string) — keep it, plus the value cap.
             truncate_header_value(v.to_str().unwrap_or("")).into_owned()
-        };
-
-        if let Some(existing) = out.get_mut(key_str) {
-            // Duplicate headers (multiple `Set-Cookie`) yield sequentially; legacy behaviour overwrites.
-            *existing = value;
         } else {
-            out.insert(key_str.to_string(), value);
-        }
+            String::new()
+        };
+        out.insert(key_str.to_string(), value);
     }
     out
 }

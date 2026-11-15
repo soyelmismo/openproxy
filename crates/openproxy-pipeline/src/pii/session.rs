@@ -78,11 +78,18 @@ impl PiiSession {
         }
 
         // Bracketed format: <ENTITY_N>
-        if text.contains('<') && text.contains('>') {
-            for entity in PiiEntity::ALL {
-                let prefix = format!("<{}_", entity.placeholder_prefix());
+        if text.contains('<') && text.contains('>') && text.contains('_') {
+            const BRACKET_PREFIXES: [(PiiEntity, &str); 6] = [
+                (PiiEntity::Email, "<EMAIL_"),
+                (PiiEntity::Phone, "<PHONE_"),
+                (PiiEntity::CreditCard, "<CREDIT_CARD_"),
+                (PiiEntity::Secret, "<KEY_"),
+                (PiiEntity::Ip, "<IP_"),
+                (PiiEntity::Person, "<PERSON_"),
+            ];
+            for (entity, prefix) in BRACKET_PREFIXES {
                 let mut curr = 0;
-                while let Some(rel) = text[curr..].find(&prefix) {
+                while let Some(rel) = text[curr..].find(prefix) {
                     let start_idx = curr + rel + prefix.len();
                     if let Some(rel_gt) = text[start_idx..].find('>') {
                         let num_str = &text[start_idx..start_idx + rel_gt];
@@ -99,40 +106,44 @@ impl PiiSession {
         }
 
         // Person placeholders: (P\d+) or [P\d+]
-        for (open, close) in [(" (P", ')'), (" [P", ']')] {
-            let mut curr = 0;
-            while let Some(rel) = text[curr..].find(open) {
-                let start_idx = curr + rel + open.len();
-                if let Some(rel_close) = text[start_idx..].find(close) {
-                    let num_str = &text[start_idx..start_idx + rel_close];
-                    if let Ok(n) = num_str.parse::<usize>() {
-                        let c = self.counts.entry(PiiEntity::Person).or_insert(0);
-                        *c = (*c).max(n);
+        if text.contains(" (P") || text.contains(" [P") {
+            for (open, close) in [(" (P", ')'), (" [P", ']')] {
+                let mut curr = 0;
+                while let Some(rel) = text[curr..].find(open) {
+                    let start_idx = curr + rel + open.len();
+                    if let Some(rel_close) = text[start_idx..].find(close) {
+                        let num_str = &text[start_idx..start_idx + rel_close];
+                        if let Ok(n) = num_str.parse::<usize>() {
+                            let c = self.counts.entry(PiiEntity::Person).or_insert(0);
+                            *c = (*c).max(n);
+                        }
+                        curr = next_char_boundary(text, start_idx + rel_close + 1);
+                    } else {
+                        break;
                     }
-                    curr = next_char_boundary(text, start_idx + rel_close + 1);
-                } else {
-                    break;
                 }
             }
         }
 
         // Email placeholders: @(outlook|fastmail).com
-        for domain in ["@outlook.com", "@fastmail.com"] {
-            let mut curr = 0;
-            while let Some(rel) = text[curr..].find(domain) {
-                let end_name = curr + rel;
-                let prefix_str = &text[..end_name];
-                let digit_start = prefix_str
-                    .char_indices()
-                    .rfind(|&(_, c)| !c.is_ascii_digit())
-                    .map_or(0, |(idx, c)| idx + c.len_utf8());
-                if digit_start < end_name
-                    && let Ok(n) = prefix_str[digit_start..end_name].parse::<usize>()
-                {
-                    let c = self.counts.entry(PiiEntity::Email).or_insert(0);
-                    *c = (*c).max(n);
+        if text.contains('@') {
+            for domain in ["@outlook.com", "@fastmail.com"] {
+                let mut curr = 0;
+                while let Some(rel) = text[curr..].find(domain) {
+                    let end_name = curr + rel;
+                    let prefix_str = &text[..end_name];
+                    let digit_start = prefix_str
+                        .char_indices()
+                        .rfind(|&(_, c)| !c.is_ascii_digit())
+                        .map_or(0, |(idx, c)| idx + c.len_utf8());
+                    if digit_start < end_name
+                        && let Ok(n) = prefix_str[digit_start..end_name].parse::<usize>()
+                    {
+                        let c = self.counts.entry(PiiEntity::Email).or_insert(0);
+                        *c = (*c).max(n);
+                    }
+                    curr = next_char_boundary(text, end_name + domain.len());
                 }
-                curr = next_char_boundary(text, end_name + domain.len());
             }
         }
 
@@ -156,22 +167,24 @@ impl PiiSession {
         }
 
         // Secret placeholders: sec_...{c} or sk-...{c}
-        for sec_prefix in ["sec_", "sk-proj-", "sk-", "op_live_", "op_test_"] {
-            let mut curr = 0;
-            while let Some(rel) = text[curr..].find(sec_prefix) {
-                let start = curr + rel + sec_prefix.len();
-                let token = text[start..]
-                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-                    .next()
-                    .unwrap_or("");
-                if token.len() >= 2 {
-                    let suffix = &token[token.len() - 2..];
-                    if let Ok(n) = suffix.parse::<usize>() {
-                        let c = self.counts.entry(PiiEntity::Secret).or_insert(0);
-                        *c = (*c).max(n);
+        if text.contains('_') || text.contains("sk-") {
+            for sec_prefix in ["sec_", "sk-proj-", "sk-", "op_live_", "op_test_"] {
+                let mut curr = 0;
+                while let Some(rel) = text[curr..].find(sec_prefix) {
+                    let start = curr + rel + sec_prefix.len();
+                    let token = text[start..]
+                        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .next()
+                        .unwrap_or("");
+                    if token.len() >= 2 {
+                        let suffix = &token[token.len() - 2..];
+                        if let Ok(n) = suffix.parse::<usize>() {
+                            let c = self.counts.entry(PiiEntity::Secret).or_insert(0);
+                            *c = (*c).max(n);
+                        }
                     }
+                    curr = next_char_boundary(text, start + token.len());
                 }
-                curr = next_char_boundary(text, start + token.len());
             }
         }
 
