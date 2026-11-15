@@ -118,6 +118,9 @@ fn trim_trailing_ws_in_place(out: &mut String, from: usize) {
 // Technique 2: Dedup system prompts
 
 pub fn dedup_system_prompt(msgs: &mut Messages) -> Vec<&'static str> {
+    if msgs.iter().filter(|m| m.role == "system").count() <= 1 {
+        return Vec::new();
+    }
     let mut applied = Vec::new();
     let mut seen_prefixes: Vec<String> = Vec::new();
     let mut i = 0;
@@ -256,9 +259,28 @@ pub fn replace_image_urls(msgs: &mut Messages) -> Vec<&'static str> {
 
 // Technique 6: Clean invisible unicode & BOM
 
+#[inline]
 fn has_invisible_or_crlf(text: &str) -> bool {
-    const INVISIBLE: [char; 6] = ['\u{200B}', '\u{200C}', '\u{200D}', '\u{FEFF}', '\0', '\r'];
-    text.chars().any(|c| INVISIBLE.contains(&c))
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0 || b == b'\r' {
+            return true;
+        }
+        if b == 0xE2
+            && i + 2 < bytes.len()
+            && bytes[i + 1] == 0x80
+            && (0x8B..=0x8D).contains(&bytes[i + 2])
+        {
+            return true;
+        }
+        if b == 0xEF && i + 2 < bytes.len() && bytes[i + 1] == 0xBB && bytes[i + 2] == 0xBF {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 fn clean_text_unicode(text: &str) -> Option<String> {
@@ -413,34 +435,33 @@ pub fn compact_json(msgs: &mut Messages) -> Vec<&'static str> {
 pub fn collapse_ascii_separators(msgs: &mut Messages) -> Vec<&'static str> {
     let mut applied = Vec::new();
     for msg in msgs.iter_mut() {
-        if mutate_message_text(msg, |text| {
-            let collapsed = collapse_separator_runs(text);
-            if collapsed == text {
-                None
-            } else {
-                Some(collapsed)
-            }
-        }) {
+        if mutate_message_text(msg, try_collapse_separator_runs) {
             applied.push("lite::collapse_separators");
         }
     }
     applied
 }
 
-const SEPARATOR_CHARS: &[u8; 6] = b"-=*#_~";
+#[inline]
+fn is_separator_byte(b: u8) -> bool {
+    matches!(b, b'-' | b'=' | b'*' | b'#' | b'_' | b'~')
+}
 
 fn has_long_separator_run(bytes: &[u8]) -> bool {
-    for &sep in SEPARATOR_CHARS {
-        let mut count = 0;
-        for &b in bytes {
-            if b == sep {
-                count += 1;
-                if count >= 12 {
-                    return true;
-                }
-            } else {
-                count = 0;
+    if bytes.len() < 12 {
+        return false;
+    }
+    let mut prev = 0u8;
+    let mut count = 0usize;
+    for &b in bytes {
+        if b == prev && is_separator_byte(b) {
+            count += 1;
+            if count >= 12 {
+                return true;
             }
+        } else {
+            prev = b;
+            count = 1;
         }
     }
     false
@@ -458,9 +479,9 @@ fn flush_char_run(out: &mut String, ch: char, count: usize) {
     }
 }
 
-fn collapse_separator_runs(s: &str) -> String {
+fn try_collapse_separator_runs(s: &str) -> Option<String> {
     if !has_long_separator_run(s.as_bytes()) {
-        return s.to_string();
+        return None;
     }
 
     let mut out = String::with_capacity(s.len());
@@ -481,7 +502,7 @@ fn collapse_separator_runs(s: &str) -> String {
     if let Some(prev_ch) = cur_char {
         flush_char_run(&mut out, prev_ch, cur_count);
     }
-    out
+    if out == s { None } else { Some(out) }
 }
 
 /// Aplica las técnicas deterministas y 100% lossless (zero semantic loss):

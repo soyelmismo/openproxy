@@ -24,6 +24,7 @@ const THINK_CLOSE_TAGS: &[&str] = &["</think>", "</thinking>", "</reasoning>", "
 const THINK_OPEN_TAGS_BYTES: &[&[u8]] = &[b"<think>", b"<thinking>", b"<reasoning>", b"<thought>"];
 
 /// Find the first case-insensitive match of a needle in a haystack without allocating.
+#[inline]
 fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
@@ -33,10 +34,24 @@ fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
     }
     let haystack_bytes = haystack.as_bytes();
     let needle_bytes = needle.as_bytes();
+    let first_lo = needle_bytes[0].to_ascii_lowercase();
+    let first_hi = needle_bytes[0].to_ascii_uppercase();
+    let limit = haystack_bytes.len() - needle_bytes.len();
+    let mut pos = 0;
 
-    haystack_bytes
-        .windows(needle_bytes.len())
-        .position(|w| w.eq_ignore_ascii_case(needle_bytes))
+    while pos <= limit {
+        let offset = if first_lo == first_hi {
+            memchr::memchr(first_lo, &haystack_bytes[pos..=limit])?
+        } else {
+            memchr::memchr2(first_lo, first_hi, &haystack_bytes[pos..=limit])?
+        };
+        let idx = pos + offset;
+        if haystack_bytes[idx..idx + needle_bytes.len()].eq_ignore_ascii_case(needle_bytes) {
+            return Some(idx);
+        }
+        pos = idx + 1;
+    }
+    None
 }
 
 #[inline]
@@ -259,40 +274,72 @@ fn append_think_segment_reasoning(reasoning: &mut String, think_text: &str) {
 /// is trimmed from the reasoning. An unclosed block extends to the end of the
 /// string.
 pub fn extract_think_from_content(content: &str) -> ExtractedThink {
-    let mut result = ExtractedThink::default();
-    let mut remaining = content;
+    let Some((first_idx, _)) = find_earliest_tag(content, THINK_OPEN_TAGS) else {
+        let trimmed = content.trim_start_matches('\n');
+        let cleaned = strip_orphaned_close_tags(trimmed.to_string());
+        let final_content = if cleaned.starts_with('\n') {
+            cleaned.trim_start_matches('\n').to_string()
+        } else {
+            cleaned
+        };
+        return ExtractedThink {
+            content: final_content,
+            reasoning: String::new(),
+        };
+    };
+
+    let mut result = ExtractedThink {
+        content: String::with_capacity(content.len()),
+        reasoning: String::new(),
+    };
+    let (content_before, think_text, mut remaining) = parse_think_segment(content, first_idx);
+    result.content.push_str(content_before);
+    append_think_segment_reasoning(&mut result.reasoning, think_text);
 
     while let Some((tag_idx, _tag_name)) = find_earliest_tag(remaining, THINK_OPEN_TAGS) {
-        let (content_before, think_text, rest) = parse_think_segment(remaining, tag_idx);
-        result.content.push_str(content_before);
-        append_think_segment_reasoning(&mut result.reasoning, think_text);
+        let (cb, tt, rest) = parse_think_segment(remaining, tag_idx);
+        result.content.push_str(cb);
+        append_think_segment_reasoning(&mut result.reasoning, tt);
         remaining = rest;
     }
     result.content.push_str(remaining);
 
-    result.content = strip_orphaned_close_tags(&result.content);
-
-    result.content = result.content.trim_start_matches('\n').to_string();
+    result.content = strip_orphaned_close_tags(result.content);
+    if result.content.starts_with('\n') {
+        let trim_len = result.content.len() - result.content.trim_start_matches('\n').len();
+        result.content.drain(..trim_len);
+    }
 
     result
 }
 
 /// Find the earliest occurrence of any of the given tags in `s`.
+/// Uses a single SIMD `memchr_iter(b'<', ...)` pass when all tags start with `<`.
 /// Returns `(byte_offset, tag_string)`.
+#[inline]
 fn find_earliest_tag<'a>(s: &str, tags: &[&'a str]) -> Option<(usize, &'a str)> {
-    tags.iter()
-        .filter_map(|tag| find_ignore_ascii_case(s, tag).map(|pos| (pos, *tag)))
-        .min_by_key(|(pos, _)| *pos)
+    let bytes = s.as_bytes();
+    for idx in memchr::memchr_iter(b'<', bytes) {
+        let tail = &bytes[idx..];
+        for &tag in tags {
+            let tag_bytes = tag.as_bytes();
+            if tail.len() >= tag_bytes.len()
+                && tail[..tag_bytes.len()].eq_ignore_ascii_case(tag_bytes)
+            {
+                return Some((idx, tag));
+            }
+        }
+    }
+    None
 }
 
 /// Remove a close tag that has no matching open tag before it. Providers emit
 /// stray duplicates like `<think>reasoning</think>\n\n</think>`, leaving the
 /// second one as orphaned content.
-fn strip_orphaned_close_tags(content: &str) -> String {
-    if !content.contains('<') {
-        return content.to_string();
+fn strip_orphaned_close_tags(mut result: String) -> String {
+    if find_earliest_tag(&result, THINK_CLOSE_TAGS).is_none() {
+        return result;
     }
-    let mut result = content.to_string();
     for (i, close_tag) in THINK_CLOSE_TAGS.iter().enumerate() {
         while let Some(pos) = find_ignore_ascii_case(&result, close_tag) {
             let open_tag = THINK_OPEN_TAGS[i];
@@ -316,7 +363,7 @@ pub struct ThinkStreamExtractor {
     /// Trailing bytes that may be a partial tag, e.g. `"<thin"`.
     tag_buffer: String,
     /// Set on entering a think block, so the matching close tag is known.
-    close_tag: Option<String>,
+    close_tag: Option<&'static str>,
 }
 
 impl ThinkStreamExtractor {
@@ -375,8 +422,38 @@ impl ThinkStreamExtractor {
     /// or active think state exists.
     #[inline]
     pub fn has_active_state_or_tag(&self, text: &str) -> bool {
-        self.inside_think || !self.tag_buffer.is_empty() || text.contains('<')
+        if self.inside_think || !self.tag_buffer.is_empty() {
+            return true;
+        }
+        may_contain_think_tag_or_partial(text)
     }
+}
+
+#[inline]
+fn may_contain_think_tag_or_partial(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for idx in memchr::memchr_iter(b'<', bytes) {
+        let tail = &bytes[idx + 1..];
+        if tail.is_empty() || tail[0] == b'"' {
+            return true;
+        }
+        let b0 = tail[0].to_ascii_lowercase();
+        if b0 == b't' {
+            if tail.len() == 1 || tail[1] == b'"' || tail[1].eq_ignore_ascii_case(&b'h') {
+                return true;
+            }
+        } else if b0 == b'r' {
+            if tail.len() == 1 || tail[1] == b'"' || tail[1].eq_ignore_ascii_case(&b'e') {
+                return true;
+            }
+        } else if b0 == b'/'
+            && tail.len() >= 3
+            && (tail[1..3].eq_ignore_ascii_case(b"th") || tail[1..3].eq_ignore_ascii_case(b"re"))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 impl crate::streaming::StreamingChunkStage for ThinkStreamExtractor {
@@ -400,8 +477,11 @@ impl ThinkStreamExtractor {
         let Some((tag_pos, tag_str)) = find_earliest_tag(input, THINK_OPEN_TAGS) else {
             let safe_len = find_safe_split_point(input);
             let content = safe_slice_to(input, safe_len).to_string();
-            self.tag_buffer = safe_slice_from(input, safe_len).to_string();
-            let cleaned = strip_orphaned_close_tags(&content);
+            let tail = safe_slice_from(input, safe_len);
+            if !tail.is_empty() {
+                self.tag_buffer.push_str(tail);
+            }
+            let cleaned = strip_orphaned_close_tags(content);
             return (cleaned, String::new());
         };
 
@@ -411,7 +491,7 @@ impl ThinkStreamExtractor {
         let close_tag = THINK_OPEN_TAGS
             .iter()
             .position(|&ot| tag_str.eq_ignore_ascii_case(ot))
-            .map(|i| THINK_CLOSE_TAGS[i].to_string());
+            .map(|i| THINK_CLOSE_TAGS[i]);
 
         self.close_tag = close_tag;
         self.inside_think = true;
@@ -430,15 +510,12 @@ impl ThinkStreamExtractor {
     }
 
     fn process_inside_think(&mut self, input: &str) -> (String, String) {
-        let close_tag = match &self.close_tag {
-            Some(ct) => ct.clone(),
-            None => {
-                self.inside_think = false;
-                return (input.to_string(), String::new());
-            }
+        let Some(close_tag) = self.close_tag else {
+            self.inside_think = false;
+            return (input.to_string(), String::new());
         };
 
-        match find_ignore_ascii_case(input, &close_tag) {
+        match find_ignore_ascii_case(input, close_tag) {
             Some(pos) => {
                 let mut reasoning = safe_slice_to(input, pos).to_string();
                 let after_close = safe_slice_from(input, pos + close_tag.len());
@@ -456,9 +533,12 @@ impl ThinkStreamExtractor {
                 (more_content, reasoning)
             }
             None => {
-                let safe_len = find_safe_split_point_close(input, &close_tag);
+                let safe_len = find_safe_split_point_close(input, close_tag);
                 let reasoning = safe_slice_to(input, safe_len).to_string();
-                self.tag_buffer = safe_slice_from(input, safe_len).to_string();
+                let tail = safe_slice_from(input, safe_len);
+                if !tail.is_empty() {
+                    self.tag_buffer.push_str(tail);
+                }
                 (String::new(), reasoning)
             }
         }
@@ -483,12 +563,13 @@ fn is_partial_open_tag_tail(tail: &str) -> bool {
 /// Latest byte offset in `input` that splits before a possible partial
 /// opening tag, so the tail can be buffered until the rest of the tag lands.
 fn find_safe_split_point(input: &str) -> usize {
-    if !input.contains('<') {
+    let max_tag_len = 11usize; // "<reasoning>".len()
+    let check_len = std::cmp::min(max_tag_len.saturating_sub(1), input.len());
+    let tail_start = input.len() - check_len;
+    if !input.as_bytes()[tail_start..].contains(&b'<') {
         return input.len();
     }
 
-    let max_tag_len = THINK_OPEN_TAGS.iter().map(|t| t.len()).max().unwrap_or(0);
-    let check_len = std::cmp::min(max_tag_len.saturating_sub(1), input.len());
     (1..=check_len)
         .rev()
         .map(|partial_len| input.len() - partial_len)
@@ -500,11 +581,12 @@ fn find_safe_split_point(input: &str) -> usize {
 
 /// Same as [`find_safe_split_point`], for a partial `close_tag` tail.
 fn find_safe_split_point_close(input: &str, close_tag: &str) -> usize {
-    if !input.contains('<') {
+    let check_len = std::cmp::min(close_tag.len() - 1, input.len());
+    let tail_start = input.len() - check_len;
+    if !input.as_bytes()[tail_start..].contains(&b'<') {
         return input.len();
     }
 
-    let check_len = std::cmp::min(close_tag.len() - 1, input.len());
     for partial_len in (1..=check_len).rev() {
         let split_byte = input.len() - partial_len;
         if !input.is_char_boundary(split_byte) {

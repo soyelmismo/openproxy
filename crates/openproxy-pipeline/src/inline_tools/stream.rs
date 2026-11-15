@@ -69,8 +69,9 @@ impl StreamingChunkStage for InlineToolStreamExtractor {
         if !self.inside_tool_call
             && self.tool_buffer.is_empty()
             && self.partial_tag_buffer.is_empty()
-            && !payload.contains('<')
-            && !payload.contains("[TOOL_CALLS]")
+            && !payload.contains("\\u")
+            && !payload.contains("\\U")
+            && !may_contain_inline_tool_or_partial(payload)
         {
             if self.emitted_tool_call {
                 const TARGETS: [(&str, &str); 4] = [
@@ -408,6 +409,37 @@ fn find_close_tag_in_buffer(buffer: &str, expected_close: &str) -> Option<usize>
     None
 }
 
+#[inline]
+fn may_contain_inline_tool_or_partial(payload: &str) -> bool {
+    let bytes = payload.as_bytes();
+    for idx in memchr::memchr_iter(b'<', bytes) {
+        let tail = &bytes[idx + 1..];
+        if tail.is_empty() || tail[0] == b'"' || tail[0] == 0xEF {
+            return true;
+        }
+        let b0 = tail[0].to_ascii_lowercase();
+        if matches!(b0, b't' | b'f' | b'i' | b'c' | b'a') {
+            if tail.len() == 1 || tail[1] == b'"' {
+                return true;
+            }
+            let b1 = tail[1].to_ascii_lowercase();
+            if matches!(
+                (b0, b1),
+                (b't', b'o') | (b'f', b'u') | (b'i', b'n') | (b'c', b'a') | (b'a', b'c')
+            ) {
+                return true;
+            }
+        }
+    }
+    for idx in memchr::memchr_iter(b'[', bytes) {
+        let tail = &bytes[idx + 1..];
+        if tail.is_empty() || tail[0] == b'"' || tail[0].eq_ignore_ascii_case(&b't') {
+            return true;
+        }
+    }
+    false
+}
+
 fn extract_trailing_partial_tag_prefix(s: &str) -> (&str, &str) {
     if s.is_empty() {
         return (s, "");
@@ -424,22 +456,28 @@ fn extract_trailing_partial_tag_prefix(s: &str) -> (&str, &str) {
     if let Some(start) = candidate_start {
         let suffix = &s[start..];
         if !suffix.contains('>') && !suffix.contains(']') && suffix.len() <= 1024 {
-            let suffix_lower = suffix.to_ascii_lowercase();
+            let suffix_bytes = suffix.as_bytes();
             let matches_prefix = TOOL_TAG_CANDIDATES.iter().any(|(open, _)| {
-                let open_lower = open.to_ascii_lowercase();
-                if open_lower.starts_with(&suffix_lower) {
+                let open_bytes = open.as_bytes();
+                if open_bytes.len() >= suffix_bytes.len()
+                    && open_bytes[..suffix_bytes.len()].eq_ignore_ascii_case(suffix_bytes)
+                {
                     return true;
                 }
-                if suffix_lower.starts_with(&open_lower) {
-                    let after_tag = &suffix[open.len()..];
-                    let next_b = after_tag.as_bytes().first();
+                if suffix_bytes.len() >= open_bytes.len()
+                    && suffix_bytes[..open_bytes.len()].eq_ignore_ascii_case(open_bytes)
+                {
+                    let next_b = suffix_bytes.get(open_bytes.len());
                     return next_b
                         .is_none_or(|&b| b.is_ascii_whitespace() || b == b'/' || b == b'>');
                 }
                 false
             }) || {
-                let marker = "[tool_calls]";
-                marker.starts_with(&suffix_lower) || suffix_lower.starts_with(marker)
+                const MARKER: &[u8] = b"[tool_calls]";
+                (MARKER.len() >= suffix_bytes.len()
+                    && MARKER[..suffix_bytes.len()].eq_ignore_ascii_case(suffix_bytes))
+                    || (suffix_bytes.len() >= MARKER.len()
+                        && suffix_bytes[..MARKER.len()].eq_ignore_ascii_case(MARKER))
             };
             if matches_prefix {
                 return (&s[..start], suffix);
@@ -489,8 +527,24 @@ fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
     if haystack.len() < needle.len() {
         return None;
     }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let first_lo = needle_bytes[0].to_ascii_lowercase();
+    let first_hi = needle_bytes[0].to_ascii_uppercase();
+    let limit = haystack_bytes.len() - needle_bytes.len();
+    let mut pos = 0;
+
+    while pos <= limit {
+        let offset = if first_lo == first_hi {
+            memchr::memchr(first_lo, &haystack_bytes[pos..=limit])?
+        } else {
+            memchr::memchr2(first_lo, first_hi, &haystack_bytes[pos..=limit])?
+        };
+        let idx = pos + offset;
+        if haystack_bytes[idx..idx + needle_bytes.len()].eq_ignore_ascii_case(needle_bytes) {
+            return Some(idx);
+        }
+        pos = idx + 1;
+    }
+    None
 }

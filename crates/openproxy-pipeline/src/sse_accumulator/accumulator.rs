@@ -374,7 +374,7 @@ impl crate::streaming::StreamingChunkStage for ResponseAccumulator {
         if let Some(content) = fields.content {
             self.append_content(content);
         }
-        if payload.contains("\"tool_calls\"") {
+        if fields.has_tool_calls {
             self.append_delta_tool_calls_if_present(payload);
         }
         // Preserve content -> tools -> reasoning priority at the byte cap.

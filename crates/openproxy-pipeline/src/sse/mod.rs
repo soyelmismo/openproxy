@@ -251,18 +251,22 @@ pub(crate) fn parse_sse_data_or_done(line: &str) -> SseDataOrDone<'_> {
 /// Deserialize an SSE payload as JSON, returning
 /// `CoreError::Parse("<provider> sse json: ...")`.
 ///
-/// Goes through `serde_json::Value` first so literal duplicate object keys
-/// collapse (last one wins) instead of tripping serde's `duplicate field`
-/// check. Free-tier gateways emit malformed usage blocks; the proxy must
-/// tolerate upstream variance (the raw payload is forwarded untouched).
+/// Attempts direct single-pass `serde_json::from_str` first to avoid
+/// allocating an intermediate `serde_json::Value` DOM tree on well-formed
+/// chunks. Falls back to `Value` deserialization only if `from_str` fails
+/// (e.g., when upstream gateways emit literal duplicate object keys that
+/// `Value` collapses to last-wins).
 #[inline]
 pub(crate) fn parse_provider_json<T, S>(payload: S, provider: &str) -> Result<T>
 where
     T: for<'de> serde::Deserialize<'de>,
     S: AsRef<str>,
 {
-    let value: Value =
-        serde_json::from_str(payload.as_ref()).ctx_parse(format!("{provider} sse json"))?;
+    let raw = payload.as_ref();
+    if let Ok(parsed) = serde_json::from_str::<T>(raw) {
+        return Ok(parsed);
+    }
+    let value: Value = serde_json::from_str(raw).ctx_parse(format!("{provider} sse json"))?;
     serde_json::from_value(value).ctx_parse(format!("{provider} sse json"))
 }
 

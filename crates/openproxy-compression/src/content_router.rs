@@ -140,12 +140,18 @@ pub fn detect(content: &str) -> ContentType {
 /// [`ContentType::SourceCode`] and [`ContentType::PlainText`] have no
 /// shape-specific compressor and return `None`.
 pub fn route_content(content: &str) -> Option<(String, &'static str)> {
-    match detect(content) {
-        ContentType::JsonArray => smart_crusher::crush_json_string(content),
-        ContentType::GitDiff => diff_compressor::compress_diff_string(content),
-        ContentType::BuildOutput => log_compressor::compress_log_string(content),
-        _ => None,
+    if content.trim_start().starts_with('[')
+        && let Ok(res) = smart_crusher::try_route_json_array(content)
+    {
+        return res;
     }
+    if is_git_diff(content) {
+        return diff_compressor::compress_diff_string(content);
+    }
+    if is_build_output(content) {
+        return log_compressor::compress_log_string(content);
+    }
+    None
 }
 
 fn route_single_message(msg: &mut OpenAIMessage) -> Option<String> {

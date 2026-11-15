@@ -65,11 +65,11 @@ fn normalize_choice_content(
                 return true;
             }
             (
-                unwrapped_content.map(|c| c.into_owned()),
-                unwrapped_reasoning.map(|r| r.into_owned()),
+                unwrapped_content,
+                unwrapped_reasoning.map(std::borrow::Cow::into_owned),
             )
         } else {
-            (Some(content_cow.to_string()), None)
+            (Some(std::borrow::Cow::Borrowed(content_cow.as_ref())), None)
         };
 
     if let Some(r) = direct_reasoning {
@@ -82,7 +82,7 @@ fn normalize_choice_content(
     }
 
     if let Some(c) = target_content {
-        let (clean_content, extracted_reasoning) = think_extractor.process(&c);
+        let (clean_content, extracted_reasoning) = think_extractor.process(c.as_ref());
         let has_native_reasoning =
             delta.reasoning_content.is_some() || delta.extra.contains_key("reasoning_content");
         if !extracted_reasoning.is_empty() && !has_native_reasoning {
@@ -258,22 +258,22 @@ pub(crate) fn apply_reasoning_normalizations(
 
     // Role-only and finish chunks carry neither key, so the JSON parse
     // is skipped entirely.
-    // Escapes may hide property names or think tags from raw-byte probes.
-    // Fall back to serde rather than interpreting JSON with substring tests.
-    let escaped = p.contains('\\');
-    let has_content = escaped || p.contains("\"content\"");
-    let has_tool_calls = escaped || p.contains("\"tool_calls\"");
+    // Only Unicode escapes (\uXXXX) can hide ASCII property names, "data:", or
+    // "<think>" tags from raw-byte probes; standard escapes (\n, \t, \", \\) cannot.
+    let unicode_escaped = p.contains("\\u") || p.contains("\\U");
+    let has_content = unicode_escaped || p.contains("\"content\"");
+    let has_tool_calls = unicode_escaped || p.contains("\"tool_calls\"");
     if !has_content && !has_tool_calls {
         return normalized;
     }
 
     // Every tool delta must initialize/update its accumulator, including the
-    // first one. Only unescaped ordinary text that has no think tags and no nested SSE
+    // first one. Only ordinary text without unicode escapes, think tags, or nested SSE
     // can bypass deserialization.
     let has_nested_sse = p.contains("data:");
     if !has_tool_calls
         && (!has_content
-            || (!escaped && !has_nested_sse && !think_extractor.has_active_state_or_tag(p)))
+            || (!unicode_escaped && !has_nested_sse && !think_extractor.has_active_state_or_tag(p)))
     {
         return normalized;
     }

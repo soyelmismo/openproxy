@@ -7,6 +7,72 @@
 
 use openproxy_types::message::OpenAIMessage;
 
+/// Estimate tokens for a single `OpenAIMessage` without cloning `content` when
+/// `tool_calls` is absent.
+pub(crate) fn estimate_single_message_tokens(msg: &OpenAIMessage) -> u32 {
+    let mut total: u32 = 0;
+    let has_tool_args = msg.tool_calls.as_ref().is_some_and(|calls| {
+        calls.iter().any(|tc| {
+            tc.get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+        })
+    });
+    if has_tool_args {
+        let text = message_content_to_text(msg);
+        if !text.is_empty() {
+            total = total.saturating_add(count_tokens(&text));
+        }
+    } else {
+        let cow = msg.extract_text_cow();
+        if !cow.is_empty() {
+            total = total.saturating_add(count_tokens(&cow));
+        }
+    }
+    if let Some(name) = &msg.name {
+        total = total.saturating_add(count_tokens(name));
+    }
+    // Reasoning in historical assistant turns is part of the submitted
+    // context, not just visible content. Aliases must not count twice.
+    if let Some(reasoning) = msg
+        .extra
+        .get("reasoning_content")
+        .or_else(|| msg.extra.get("reasoning"))
+        .and_then(serde_json::Value::as_str)
+    {
+        total = total.saturating_add(count_tokens(reasoning));
+    }
+    if let Some(calls) = &msg.tool_calls {
+        for call in calls {
+            total = total.saturating_add(4);
+            if let Some(name) = call
+                .pointer("/function/name")
+                .and_then(serde_json::Value::as_str)
+            {
+                total = total.saturating_add(count_tokens(name));
+            }
+        }
+    }
+
+    // Add standard image vision token allowance (~800 tokens per image part)
+    if let Some(serde_json::Value::Array(parts)) = &msg.content {
+        for part in parts {
+            let is_image = part
+                .get("type")
+                .and_then(|v| v.as_str())
+                .is_some_and(|t| t == "image_url" || t == "input_image" || t == "image")
+                || part.get("image_url").is_some();
+            if is_image {
+                total += 800;
+            }
+        }
+    }
+
+    // 4 tokens of role framing: <|im_start|>role\ncontent<|im_end|>\n.
+    total + 4
+}
+
 /// Estimate prompt tokens from string and array-of-parts (Anthropic-style
 /// `[{type:"text",text:"..."}]`) content across every message role, plus 4
 /// tokens of framing overhead per message (`<|im_start|>role\n...<|im_end|>`).
@@ -15,51 +81,7 @@ use openproxy_types::message::OpenAIMessage;
 pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
     let mut total: u32 = 0;
     for msg in messages {
-        let text = message_content_to_text(msg);
-        if !text.is_empty() {
-            total = total.saturating_add(count_tokens(&text));
-        }
-        if let Some(name) = &msg.name {
-            total = total.saturating_add(count_tokens(name));
-        }
-        // Reasoning in historical assistant turns is part of the submitted
-        // context, not just visible content. Aliases must not count twice.
-        if let Some(reasoning) = msg
-            .extra
-            .get("reasoning_content")
-            .or_else(|| msg.extra.get("reasoning"))
-            .and_then(serde_json::Value::as_str)
-        {
-            total = total.saturating_add(count_tokens(reasoning));
-        }
-        if let Some(calls) = &msg.tool_calls {
-            for call in calls {
-                total = total.saturating_add(4);
-                if let Some(name) = call
-                    .pointer("/function/name")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    total = total.saturating_add(count_tokens(name));
-                }
-            }
-        }
-
-        // Add standard image vision token allowance (~800 tokens per image part)
-        if let Some(serde_json::Value::Array(parts)) = &msg.content {
-            for part in parts {
-                let is_image = part
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|t| t == "image_url" || t == "input_image" || t == "image")
-                    || part.get("image_url").is_some();
-                if is_image {
-                    total += 800;
-                }
-            }
-        }
-
-        // 4 tokens of role framing: <|im_start|>role\ncontent<|im_end|>\n.
-        total += 4;
+        total = total.saturating_add(estimate_single_message_tokens(msg));
     }
     total
 }

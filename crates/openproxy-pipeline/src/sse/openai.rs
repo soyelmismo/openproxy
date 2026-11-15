@@ -64,6 +64,41 @@ struct OpenAiDeltaProbe {
     reasoning_content: Option<String>,
 }
 
+#[inline]
+fn has_non_null_key(bytes: &[u8], key: &[u8]) -> bool {
+    let mut pos = 0;
+    while let Some(idx) = memchr::memmem::find(&bytes[pos..], key) {
+        let after_key = pos + idx + key.len();
+        let mut i = after_key;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b':' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let is_null = bytes[i..].starts_with(b"null")
+                && bytes.get(i + 4).is_some_and(|&b| {
+                    matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n')
+                });
+            if !is_null {
+                return true;
+            }
+        }
+        pos = after_key;
+    }
+    false
+}
+
+#[inline]
+fn sse_openai_probe_needed(payload: &str) -> bool {
+    let bytes = payload.as_bytes();
+    has_non_null_key(bytes, b"\"finish_reason\"")
+        || has_non_null_key(bytes, b"\"usage\"")
+        || has_non_null_key(bytes, b"\"reasoning_content\"")
+}
+
 /// Parse a single SSE line from an OpenAI-compatible upstream.
 ///
 /// Returns `Ok(None)` for empty lines, comments, and `[DONE]` sentinels.
@@ -74,15 +109,12 @@ pub fn parse_openai_sse_line(line: &str) -> Result<Option<UpstreamSseChunk>> {
         super::SseDataOrDone::Done => return Ok(Some(UpstreamSseChunk::done())),
         super::SseDataOrDone::Skip => return Ok(None),
     };
-    // Fast path: the probe only ever reads `usage`, `finish_reason` and
-    // `delta.reasoning_content`. A memchr scan for the three key names costs
-    // ~30ns per chunk and skips the serde parse (~2-4µs) on the >90% of
-    // chunks that are pure content deltas. Substring match is sound here:
-    // a false positive just takes the slow path and parses as before.
-    if !(payload.contains("\"usage\"")
-        || payload.contains("\"finish_reason\"")
-        || payload.contains("\"reasoning_content\""))
-    {
+    // Fast path: the probe only ever reads non-null `usage`, `finish_reason`
+    // and `delta.reasoning_content`. Standard OpenAI chunks include
+    // `"finish_reason":null` (and often `"usage":null`) on every token delta;
+    // scanning for non-null values skips full JSON deserialization on >95% of
+    // streaming chunks.
+    if !sse_openai_probe_needed(payload) {
         return Ok(Some(UpstreamSseChunk {
             raw_payload: Some(payload.to_string()),
             payload: Value::Null,

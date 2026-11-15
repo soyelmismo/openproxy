@@ -41,50 +41,59 @@ pub fn find_syntax_protected_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
 
     // URLs (https://..., ftp://..., postgres://...).
-    for m in REGEX_URL.find_iter(text) {
-        let url_str = m.as_str();
-        let mut carveouts: Vec<Range<usize>> = Vec::new();
+    if text.contains("://") {
+        for m in REGEX_URL.find_iter(text) {
+            let url_str = m.as_str();
+            let mut carveouts: Vec<Range<usize>> = Vec::new();
 
-        // Password in userinfo: postgres://user:password@host.
-        if let Some(cap) = REGEX_URI_USERINFO_PASSWORD.captures(url_str)
-            && let Some(pass_m) = cap.get(1)
-        {
-            carveouts.push(m.start() + pass_m.start()..m.start() + pass_m.end());
-        }
-
-        // Sensitive query parameters: https://host/path?token=SECRET_VALUE&...
-        for cap in REGEX_URL_SENSITIVE_PARAM.captures_iter(url_str) {
-            if let Some(param_val) = cap.get(1) {
-                carveouts.push(m.start() + param_val.start()..m.start() + param_val.end());
+            // Password in userinfo: postgres://user:password@host.
+            if url_str.contains('@')
+                && let Some(cap) = REGEX_URI_USERINFO_PASSWORD.captures(url_str)
+                && let Some(pass_m) = cap.get(1)
+            {
+                carveouts.push(m.start() + pass_m.start()..m.start() + pass_m.end());
             }
-        }
 
-        if carveouts.is_empty() {
-            ranges.push(m.range());
-        } else {
-            carveouts.sort_by_key(|r| r.start);
-            let mut curr = m.start();
-            for r in carveouts {
-                if r.start > curr {
-                    ranges.push(curr..r.start);
+            // Sensitive query parameters: https://host/path?token=SECRET_VALUE&...
+            if url_str.contains('=') {
+                for cap in REGEX_URL_SENSITIVE_PARAM.captures_iter(url_str) {
+                    if let Some(param_val) = cap.get(1) {
+                        carveouts.push(m.start() + param_val.start()..m.start() + param_val.end());
+                    }
                 }
-                curr = curr.max(r.end);
             }
-            if curr < m.end() {
-                ranges.push(curr..m.end());
+
+            if carveouts.is_empty() {
+                ranges.push(m.range());
+            } else {
+                carveouts.sort_by_key(|r| r.start);
+                let mut curr = m.start();
+                for r in carveouts {
+                    if r.start > curr {
+                        ranges.push(curr..r.start);
+                    }
+                    curr = curr.max(r.end);
+                }
+                if curr < m.end() {
+                    ranges.push(curr..m.end());
+                }
             }
         }
     }
 
     // Data URIs: data:image/jpeg;base64,...
-    for m in REGEX_DATA_URI.find_iter(text) {
-        ranges.push(m.range());
+    if text.contains(";base64,") {
+        for m in REGEX_DATA_URI.find_iter(text) {
+            ranges.push(m.range());
+        }
     }
 
     // JSON keys: "key":
-    for cap in REGEX_JSON_KEY.captures_iter(text) {
-        if let Some(key_match) = cap.get(1) {
-            ranges.push(key_match.range());
+    if text.contains('"') && text.contains(':') {
+        for cap in REGEX_JSON_KEY.captures_iter(text) {
+            if let Some(key_match) = cap.get(1) {
+                ranges.push(key_match.range());
+            }
         }
     }
 
@@ -94,16 +103,26 @@ pub fn find_syntax_protected_ranges(text: &str) -> Vec<Range<usize>> {
 /// Fenced and inline code blocks, so the heuristics do not fire on code
 /// variables, types or syntax.
 pub fn find_code_protected_ranges(text: &str) -> Vec<Range<usize>> {
+    let has_backtick = text.contains('`');
+    let has_tilde_fence = text.contains("~~~");
+    if !has_backtick && !has_tilde_fence {
+        return Vec::new();
+    }
+
     let mut ranges = Vec::new();
 
     // Fenced blocks ```...``` and ~~~...~~~
-    for m in REGEX_FENCED_CODE.find_iter(text) {
-        ranges.push(m.range());
+    if text.contains("```") || has_tilde_fence {
+        for m in REGEX_FENCED_CODE.find_iter(text) {
+            ranges.push(m.range());
+        }
     }
 
     // Inline `...`
-    for m in REGEX_INLINE_CODE.find_iter(text) {
-        ranges.push(m.range());
+    if has_backtick {
+        for m in REGEX_INLINE_CODE.find_iter(text) {
+            ranges.push(m.range());
+        }
     }
 
     merge_ranges(ranges)

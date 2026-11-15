@@ -67,19 +67,64 @@ impl TextCompressor for CompressionMode {
     }
 }
 
+#[inline]
+fn string_content_identity(msg: &OpenAIMessage) -> Option<(usize, usize)> {
+    match &msg.content {
+        Some(serde_json::Value::String(s)) => Some((s.as_ptr() as usize, s.len())),
+        _ => None,
+    }
+}
+
+type PreSnapshot = (Option<(usize, usize)>, usize, usize);
+
 /// Char and token counts before and after a `TextCompressor`, as unified
-/// `CompressionStats`.
+/// `CompressionStats`. Reuses pre-compression BPE token counts for messages
+/// whose string buffer pointer and length were untouched by the compressor.
 pub fn measure_compression<C: TextCompressor>(
     messages: &mut Vec<OpenAIMessage>,
     compressor: &C,
 ) -> CompressionStats {
-    let original_chars = count_content_chars(messages);
-    let original_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+    let mut pre_snapshots: Vec<PreSnapshot> = Vec::with_capacity(messages.len());
+    let mut original_chars = 0usize;
+    let mut original_tokens = 0usize;
+
+    for msg in messages.iter() {
+        let id = string_content_identity(msg);
+        let chars = msg.extract_text_cow().len();
+        let tokens = crate::token_estimate::estimate_single_message_tokens(msg) as usize;
+        original_chars += chars;
+        original_tokens += tokens;
+        pre_snapshots.push((id, chars, tokens));
+    }
 
     let techniques = compressor.compress(messages);
+    if techniques.is_empty() {
+        return CompressionStats::new(
+            original_chars,
+            original_chars,
+            original_tokens,
+            original_tokens,
+            techniques,
+        );
+    }
 
-    let compressed_chars = count_content_chars(messages);
-    let compressed_tokens = crate::token_estimate::estimate_prompt_tokens(messages) as usize;
+    let mut compressed_chars = 0usize;
+    let mut compressed_tokens = 0usize;
+    for msg in messages.iter() {
+        let post_id = string_content_identity(msg);
+        if let Some(id) = post_id
+            && let Some(&(_, chars, tokens)) = pre_snapshots
+                .iter()
+                .find(|&&(pre_id, _, _)| pre_id == Some(id))
+        {
+            compressed_chars += chars;
+            compressed_tokens += tokens;
+        } else {
+            compressed_chars += msg.extract_text_cow().len();
+            compressed_tokens +=
+                crate::token_estimate::estimate_single_message_tokens(msg) as usize;
+        }
+    }
 
     CompressionStats::new(
         original_chars,

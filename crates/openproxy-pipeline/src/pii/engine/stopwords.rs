@@ -338,11 +338,21 @@ const STOPWORDS: &[&str] = &[
 
 #[inline]
 pub fn is_stopword(word: &str) -> bool {
+    if word.len() > 24 {
+        return false;
+    }
     if word.bytes().all(|b| !b.is_ascii_uppercase()) {
         STOPWORDS.binary_search(&word).is_ok()
     } else {
-        let lower = word.to_ascii_lowercase();
-        STOPWORDS.binary_search(&lower.as_str()).is_ok()
+        let mut buf = [0u8; 24];
+        let slice = &mut buf[..word.len()];
+        slice.copy_from_slice(word.as_bytes());
+        slice.make_ascii_lowercase();
+        if let Ok(lower) = std::str::from_utf8(slice) {
+            STOPWORDS.binary_search(&lower).is_ok()
+        } else {
+            false
+        }
     }
 }
 
