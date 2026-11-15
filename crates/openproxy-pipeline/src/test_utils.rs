@@ -107,9 +107,6 @@ pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
     let pool = DbPool::test_pool_with_prefix("openproxy-pipeline-test").expect("open pool");
     let extra = pool.open_connection().expect("open extra");
     let conn = Arc::new(parking_lot::Mutex::new(extra));
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let path = pool.path().to_path_buf();
     (pool, conn, path)
 }
@@ -382,6 +379,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> Pipe
             extra_headers: Vec::new(),
             anonymous_fallback: false,
             rate_limit_scope: "account".into(),
+            allow_loopback: false,
         },
         call_count: None,
         fail_fetch: false,

@@ -315,6 +315,7 @@ impl OpenCodeAdapter {
                 name: name.into(),
                 anonymous_fallback: true,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: base_url.into(),
                 auth_type: crate::adapters::AdapterAuthType::Bearer,
                 format: crate::adapters::AdapterFormat::Mixed,

@@ -172,6 +172,7 @@ pub(crate) fn plain_adapter(provider_id: &str, format: AdapterFormat) -> Provide
             extra_headers: vec![],
             anonymous_fallback: false,
             rate_limit_scope: "none".to_string(),
+            allow_loopback: false,
         },
     )))
 }

@@ -70,6 +70,7 @@ impl HordeAdapter {
                 name: "AI Horde".into(),
                 anonymous_fallback: true,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: "https://aihorde.net/api/v2".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,

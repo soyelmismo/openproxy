@@ -22,4 +22,7 @@ bytes = { workspace = true }
 
 [dev-dependencies]
 openproxy-core = { path = "../openproxy-core", features = ["ssrf-bypass"] }
+# Test-only SSRF bypass for the mock upstreams (same pattern as the server
+# crate); see the note in openproxy-server/Cargo.toml.
+openproxy-adapters = { path = "../openproxy-adapters", features = ["ssrf-bypass"] }
 httpmock = { workspace = true }

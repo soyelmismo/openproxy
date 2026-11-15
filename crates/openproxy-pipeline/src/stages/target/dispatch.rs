@@ -192,6 +192,7 @@ impl PipelineStage for DispatchStage {
                 race_size,
                 trace_id,
                 is_streaming: ctx.is_streaming.unwrap_or(false),
+                allow_loopback: adapter.config().allow_loopback,
             })
             .await;
 
@@ -275,6 +276,7 @@ impl PipelineStage for DispatchStage {
                     race_size,
                     trace_id: ctx.trace_id.clone(),
                     is_streaming: ctx.is_streaming.unwrap_or(false),
+                    allow_loopback: adapter.config().allow_loopback,
                 })
                 .await;
         }

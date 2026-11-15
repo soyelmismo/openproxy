@@ -62,6 +62,7 @@ impl AntigravityAdapter {
                 name: "Google Antigravity".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: DEFAULT_ANTIGRAVITY_BASE_URL.into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Gemini,

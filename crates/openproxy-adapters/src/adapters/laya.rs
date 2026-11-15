@@ -17,6 +17,7 @@ impl LayaAdapter {
                 name: "Laya (Self-Hosted)".into(),
                 anonymous_fallback: true,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: "http://localhost:8770/v1".into(),
                 auth_type: AdapterAuthType::None,
                 format: AdapterFormat::SystemOne,

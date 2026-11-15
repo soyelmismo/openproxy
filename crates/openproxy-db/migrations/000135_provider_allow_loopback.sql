@@ -1,0 +1,22 @@
+-- 000135_provider_allow_loopback.sql
+--
+-- Per-provider opt-in for loopback upstreams (audit H-3).
+--
+-- OPENPROXY_ALLOW_PRIVATE_UPSTREAMS used to be the knob for the local
+-- development backend (contrib/laya-server binds 127.0.0.1). It is a
+-- PROCESS-GLOBAL relaxation: once set, EVERY provider's upstream may be
+-- loopback — one operator's local-dev need widens the dial surface for the
+-- whole gateway (a misconfigured or hostile custom provider row can then
+-- reach services on the host's loopback interface).
+--
+-- The opt-in is now a per-provider column: only rows the operator explicitly
+-- marks can dial loopback, and the request path enforces it end-to-end
+-- (ResolvedTarget -> DispatchParams -> UpstreamRequest -> connector
+-- task-local). The environment variable is removed; migrating deployments
+-- that relied on it must set the flag on the specific provider rows that
+-- point at loopback backends.
+--
+-- Default 0: existing and restored providers keep today's behavior (loopback
+-- blocked by the SSRF filter).
+
+ALTER TABLE providers ADD COLUMN allow_loopback INTEGER NOT NULL DEFAULT 0;

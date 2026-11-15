@@ -89,6 +89,9 @@ impl UpstreamDispatcher {
 
         let mut upstream_request =
             UpstreamRequest::post_json(params.url.to_string(), params.body_bytes.clone());
+        // Security (audit H-3): the per-provider loopback opt-in travels on
+        // the request itself; there is no process-wide knob.
+        upstream_request.allow_loopback = params.allow_loopback;
         match self
             .resolve_and_assign_proxy(&params.req, params.target)
             .await

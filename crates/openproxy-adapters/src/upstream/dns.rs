@@ -103,8 +103,9 @@ fn ensure_dns_sweep_started() {
 }
 
 /// Resolve `host:port` and require EVERY address to be public, regardless
-/// of `OPENPROXY_ALLOW_PRIVATE_UPSTREAMS` (which relaxes the check for LOOPBACK upstreams only
-/// for operator-configured provider upstreams, not for user-supplied URLs).
+/// of the per-request loopback opt-in (`CALL_ALLOW_LOOPBACK` relaxes the
+/// check for LOOPBACK upstreams only, for operator-configured provider
+/// upstreams, not for user-supplied URLs).
 ///
 /// The addresses are stored in the shared DNS cache, so a subsequent
 /// [`UpstreamClient`](super::UpstreamClient) call for the same
@@ -131,21 +132,20 @@ pub async fn resolve_public_host(host: &str, port: u16) -> io::Result<Vec<Socket
 /// async DNS, with a simple in-memory cache (5m TTL) to avoid
 /// hitting getaddrinfo on every fresh dial.
 pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-    // ROOT FIX (audit A6-01): the env var used to disable the whole
-    // private/reserved filter in production builds. It now admits LOOPBACK
-    // upstreams only (the documented local-backend use case); RFC1918,
+    // ROOT FIX (audit A6-01 + H-3): the process-global env var is gone. The
+    // per-request `CALL_ALLOW_LOOPBACK` task-local (set from the provider
+    // row's `allow_loopback`) admits LOOPBACK upstreams only; RFC1918,
     // link-local metadata and every other reserved range stay blocked.
     let allow_all = cfg!(test) || cfg!(feature = "ssrf-bypass");
-    let allow_loopback = !allow_all
-        && std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
-            .is_ok_and(|v| v == "true" || v == "1");
+    let allow_loopback = !allow_all && super::connector::call_allows_loopback();
     let addr_allowed =
         |ip: std::net::IpAddr| !is_private_or_reserved(&ip) || (allow_loopback && ip.is_loopback());
 
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if !allow_all && !addr_allowed(ip) {
             return Err(io::Error::other(
-                "all resolved addresses are private/reserved (SSRF block). OPENPROXY_ALLOW_PRIVATE_UPSTREAMS admits loopback upstreams only.",
+                "all resolved addresses are private/reserved (SSRF block). A provider row with \
+                 allow_loopback = 1 admits loopback upstreams for that provider only.",
             ));
         }
         return Ok(vec![SocketAddr::new(ip, port)]);
@@ -161,7 +161,8 @@ pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<Socket
         for addr in &addrs {
             if !addr_allowed(addr.ip()) {
                 return Err(io::Error::other(
-                    "all resolved addresses are private/reserved (SSRF block). OPENPROXY_ALLOW_PRIVATE_UPSTREAMS admits loopback upstreams only.",
+                    "all resolved addresses are private/reserved (SSRF block). A provider row with \
+                     allow_loopback = 1 admits loopback upstreams for that provider only.",
                 ));
             }
         }

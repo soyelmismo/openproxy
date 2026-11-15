@@ -17,6 +17,12 @@ pub struct ProviderAdapterConfig {
     pub extra_headers: Vec<(String, String)>,
     pub anonymous_fallback: bool,
     pub rate_limit_scope: String,
+    /// Per-provider loopback opt-in (audit H-3). True only for custom
+    /// adapters built from a provider row whose `allow_loopback` column is
+    /// set; built-in providers never opt in. The pipeline dispatcher copies
+    /// it onto every upstream request for this provider, and the connector
+    /// admits loopback addresses ONLY for those requests.
+    pub allow_loopback: bool,
 }
 
 impl ProviderAdapterConfig {
@@ -602,6 +608,7 @@ mod tests {
                     extra_headers: Vec::new(),
                     anonymous_fallback: false,
                     rate_limit_scope: "none".into(),
+                    allow_loopback: false,
                 },
                 generation: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
                 pinned: None,
@@ -764,6 +771,7 @@ mod tests {
                 extra_headers: Vec::new(),
                 anonymous_fallback: false,
                 rate_limit_scope: "none".into(),
+                allow_loopback: false,
             }),
         ));
         let pinned = original.pinned_for_request();

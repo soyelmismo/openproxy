@@ -93,6 +93,7 @@ impl CommandCodeGoAdapter {
                 extra_headers: vec![],
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
             },
         }
     }

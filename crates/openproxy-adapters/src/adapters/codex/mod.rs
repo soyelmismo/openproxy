@@ -69,6 +69,7 @@ impl CodexAdapter {
                 name: "Codex".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: "https://chatgpt.com/backend-api/codex".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Responses,

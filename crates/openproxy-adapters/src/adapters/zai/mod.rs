@@ -49,6 +49,7 @@ impl ZaiAdapter {
                 name: "Z.ai (ZCode)".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: ZAI_DEFAULT_BASE_URL.into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Anthropic,

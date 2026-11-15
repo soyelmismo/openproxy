@@ -369,6 +369,7 @@ pub async fn build_world(cfg: &Config, upstream_url: &str) -> anyhow::Result<Wor
                 rate_limit_scope: None,
                 stream_mode: None,
                 prompt_cache_ttl: None,
+                allow_loopback: None,
             },
         )?;
         admin::create_account(

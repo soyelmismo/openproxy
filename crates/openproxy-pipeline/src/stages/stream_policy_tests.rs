@@ -97,6 +97,7 @@ async fn formatting_stage_uses_policy_not_client_mode_or_sink() {
                         extra_headers: headers,
                         anonymous_fallback: false,
                         rate_limit_scope: "none".into(),
+                        allow_loopback: false,
                     },
                 )));
                 let mut config =

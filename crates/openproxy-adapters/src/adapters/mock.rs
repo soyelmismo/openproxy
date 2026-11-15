@@ -23,6 +23,7 @@ impl MockAdapter {
                 extra_headers: Vec::new(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
             },
             call_count: None,
             models_to_return: None,

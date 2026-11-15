@@ -31,6 +31,7 @@ async fn test_tier3_combo_resolution_failover_cooldown_body() {
                 rate_limit_scope: None,
                 stream_mode: None,
                 prompt_cache_ttl: None,
+                allow_loopback: None,
             },
         )
         .unwrap();

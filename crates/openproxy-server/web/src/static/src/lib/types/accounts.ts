@@ -50,6 +50,9 @@ export interface CreateProviderInput {
   extra_headers_json: string | null;
   stream_mode?: 'auto' | 'streaming' | 'unary';
   prompt_cache_ttl?: string;
+  /** Per-provider loopback opt-in (audit H-3). Local development backends
+   *  only; absent = leave the stored value alone. */
+  allow_loopback?: boolean;
 }
 
 export interface UpdateProviderInput {

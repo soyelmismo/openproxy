@@ -42,6 +42,7 @@ impl UpstreamRequest {
             is_streaming: false,
             proxy: None,
             proxy_status: None,
+            allow_loopback: false,
         }
     }
 
@@ -91,6 +92,7 @@ impl UpstreamRequest {
             is_streaming: false,
             proxy: None,
             proxy_status: None,
+            allow_loopback: false,
         }
     }
 
@@ -114,6 +116,7 @@ impl UpstreamRequest {
             is_streaming: false,
             proxy: None,
             proxy_status: None,
+            allow_loopback: false,
         }
     }
 
@@ -134,6 +137,7 @@ impl UpstreamRequest {
             is_streaming: false,
             proxy: None,
             proxy_status: None,
+            allow_loopback: false,
         }
     }
 }

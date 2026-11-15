@@ -239,9 +239,6 @@ async fn dispatch_upstream_streaming_errors_without_sink() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -406,9 +403,6 @@ async fn dispatch_upstream_streaming_emits_done_on_metadata_only_stream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -574,9 +568,6 @@ async fn dispatch_upstream_streaming_emits_done_on_empty_content_stream() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dispatch_upstream_streaming_errors_on_empty_eof_stream() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 

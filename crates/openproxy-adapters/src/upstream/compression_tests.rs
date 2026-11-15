@@ -612,8 +612,11 @@ fn one_shot_zstd_bomb_does_not_materialize_the_full_expansion() {
 
     // Stream-encode 512 MiB of zeros without ever holding the plaintext.
     let mut encoder = zstd::stream::Encoder::new(Vec::new(), 3).expect("zstd encoder");
+    // Heap-allocated (clippy::large_stack_arrays): an 8 MiB stack array would
+    // blow the very test-thread stack this suite runs on.
+    let zeros: Box<[u8]> = vec![0u8; 8 * 1024 * 1024].into_boxed_slice();
     for _ in 0..64 {
-        std::io::Write::write_all(&mut encoder, &[0u8; 8 * 1024 * 1024]).expect("zstd write");
+        std::io::Write::write_all(&mut encoder, &zeros).expect("zstd write");
     }
     let compressed = encoder.finish().expect("zstd finish");
     assert!(

@@ -81,6 +81,7 @@ impl TestMockAdapter {
                 extra_headers: vec![],
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
             },
         }
     }
@@ -178,6 +179,7 @@ async fn make_test_state(dir: &std::path::Path, adapter: &TestMockAdapter) -> Ap
                 rate_limit_scope: None,
                 stream_mode: None,
                 prompt_cache_ttl: None,
+                allow_loopback: None,
             },
         )
         .expect("prov");
@@ -254,9 +256,6 @@ async fn call_refresh(
 
 #[tokio::test]
 async fn e2e_discovery_and_delete_on_disappear() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let (addr, mock) = spawn_mock(vec![]).await;
     let adapter = TestMockAdapter::new("e2e-mock", &format!("http://{addr}"));
     let tmp = TempDir::new("openproxy-e2e-discovery").expect("tmp");

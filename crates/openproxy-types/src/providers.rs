@@ -258,6 +258,13 @@ pub struct Provider {
     /// Default true. Disabled for volatile P2P sources (e.g. antseed).
     #[serde(default = "default_true")]
     pub prune_models: bool,
+    /// Per-provider opt-in (audit H-3): when true, this provider's upstream
+    /// may be a loopback address (local development backends). Every other
+    /// provider keeps the SSRF loopback block, regardless of any process-wide
+    /// configuration. There is deliberately no environment-variable escape
+    /// hatch anymore.
+    #[serde(default)]
+    pub allow_loopback: bool,
 }
 
 fn default_prompt_cache_ttl() -> Box<str> {

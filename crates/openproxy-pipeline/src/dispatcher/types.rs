@@ -86,6 +86,10 @@ pub(crate) struct DispatchParams<'a> {
     pub race_size: u8,
     pub trace_id: String,
     pub is_streaming: bool,
+    /// Per-provider loopback opt-in (audit H-3): copied from the target's
+    /// adapter config onto the upstream request; the connector admits
+    /// loopback dials only for requests that carry it.
+    pub allow_loopback: bool,
 }
 
 pub(crate) struct NonStreamingSuccessArgs {

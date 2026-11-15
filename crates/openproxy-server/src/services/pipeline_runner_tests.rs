@@ -176,6 +176,7 @@ async fn setup_test_env(cut_p1_midstream: bool) -> TestEnv {
                             rate_limit_scope: None,
                             stream_mode: None,
                             prompt_cache_ttl: None,
+                            allow_loopback: None,
                         },
                     )?;
 
@@ -698,6 +699,7 @@ async fn test_app_router_e2e_pii_user_field_redacted_upstream() {
                         rate_limit_scope: None,
                         stream_mode: None,
                         prompt_cache_ttl: None,
+                        allow_loopback: None,
                     },
                 )?;
                 openproxy_core::admin::create_account(

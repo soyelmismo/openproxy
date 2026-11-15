@@ -216,10 +216,6 @@ async fn test_account_rotation_on_rate_limit_sequential() {
     use crate::test_utils::{MockAdapter, fresh_pool, make_request};
     use openproxy_adapters::adapters::{AdapterFormat, ProviderAdapterEnum};
 
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
-
     let count_acc1 = Arc::new(AtomicUsize::new(0));
     let count_acc2 = Arc::new(AtomicUsize::new(0));
 
@@ -367,10 +363,6 @@ async fn test_account_rotation_after_race_exhaustion() {
     use crate::stage::{PipelineChain, PipelineStageEnum};
     use crate::test_utils::{MockAdapter, fresh_pool, make_request};
     use openproxy_adapters::adapters::{AdapterFormat, ProviderAdapterEnum};
-
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
 
     let count_lane1 = Arc::new(AtomicUsize::new(0));
     let count_lane2 = Arc::new(AtomicUsize::new(0));
@@ -527,10 +519,6 @@ async fn test_model_scoped_rate_limit_skips_same_model() {
     use crate::stage::{PipelineChain, PipelineStageEnum};
     use crate::test_utils::{MockAdapter, fresh_pool, make_request};
     use openproxy_adapters::adapters::{AdapterFormat, ProviderAdapterEnum};
-
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
 
     let count_m1 = Arc::new(AtomicUsize::new(0));
     let count_m2 = Arc::new(AtomicUsize::new(0));

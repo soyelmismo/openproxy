@@ -479,3 +479,77 @@ async fn test_adversarial_dial_phase_ipv6_to_ipv4_transparent_fallback() {
 
     drop(accept_task.await);
 }
+
+/// Audit H-3: the per-request loopback opt-in must admit loopback and
+/// NOTHING else. These drive the pure filter core directly, independent of
+/// the cfg-gated test bypass.
+#[test]
+fn audit_h3_per_request_loopback_policy() {
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().expect("addr")
+    }
+
+    // No opt-in: every private/reserved range is blocked.
+    let res = filter_addrs_under_policy(
+        vec![addr("127.0.0.1:8080"), addr("10.0.0.5:443")],
+        false,
+        false,
+    );
+    assert!(res.is_err(), "loopback must be blocked without the opt-in");
+
+    // With the per-request opt-in: loopback passes…
+    let kept = filter_addrs_under_policy(
+        vec![
+            addr("127.0.0.1:8080"),
+            addr("[::1]:8443"),
+            addr("1.1.1.1:443"),
+        ],
+        false,
+        true,
+    )
+    .expect("loopback + public must pass under the opt-in");
+    assert_eq!(kept.len(), 3, "loopback v4/v6 and public all dial");
+
+    // …but RFC1918 / link-local / metadata stay blocked even WITH the opt-in.
+    let res = filter_addrs_under_policy(
+        vec![
+            addr("192.168.1.10:80"),
+            addr("169.254.169.254:80"),
+            addr("10.1.2.3:80"),
+        ],
+        false,
+        true,
+    );
+    assert!(
+        res.is_err(),
+        "the loopback opt-in must not admit RFC1918/link-local ranges"
+    );
+
+    // Mixed list: only the loopback + public entries survive.
+    let kept = filter_addrs_under_policy(
+        vec![
+            addr("127.0.0.1:9"),
+            addr("169.254.169.254:80"),
+            addr("93.184.216.34:443"),
+        ],
+        false,
+        true,
+    )
+    .expect("mixed list has dialable entries");
+    assert_eq!(kept.len(), 2);
+    assert!(kept.contains(&addr("127.0.0.1:9")));
+    assert!(kept.contains(&addr("93.184.216.34:443")));
+}
+
+/// The task-local default is "not allowed": anything dialing outside the
+/// transports' scope (pre-warmers, ad-hoc sockets) never gets the relaxation.
+#[tokio::test]
+async fn audit_h3_unset_task_local_means_no_loopback() {
+    assert!(!call_allows_loopback());
+    CALL_ALLOW_LOOPBACK
+        .scope(true, async {
+            assert!(call_allows_loopback());
+        })
+        .await;
+    assert!(!call_allows_loopback(), "scope must not leak");
+}
