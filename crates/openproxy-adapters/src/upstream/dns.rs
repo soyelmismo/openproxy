@@ -54,21 +54,29 @@ pub fn is_private_or_reserved(ip: &IpAddr) -> bool {
     }
 }
 
-pub(crate) fn cache_key(host: &str, port: u16) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    host.hash(&mut hasher);
-    port.hash(&mut hasher);
-    hasher.finish()
+/// Cache key: the literal `host:port` string.
+///
+/// Security (audit H-5): the key used to be a 64-bit `DefaultHasher`
+/// (SipHash-1-3 with the FIXED default keys) digest of `(host, port)`. Any
+/// party able to trigger resolutions — e.g. the `/v1/images` fetch path via
+/// `resolve_public_host`, which SEEDS this cache — could precompute, offline
+/// and against the public binary, a colliding `(attacker_host, port)` pair
+/// for a victim host's digest and seed the victim's entry with
+/// attacker-controlled addresses: the next dial to the victim (a plaintext
+/// `http://` custom provider, carrying its Bearer credential) would connect
+/// to the attacker. A literal string key removes collision space entirely.
+pub(crate) fn cache_key(host: &str, port: u16) -> String {
+    format!("{host}:{port}")
 }
 
 static DNS_CACHE: std::sync::LazyLock<
-    dashmap::DashMap<u64, (Vec<SocketAddr>, std::time::Instant)>,
+    dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
 > = std::sync::LazyLock::new(dashmap::DashMap::new);
 static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 const DNS_TTL: std::time::Duration = std::time::Duration::from_mins(5);
 
-fn get_cached_dns(cache_key: u64) -> Option<Vec<SocketAddr>> {
-    let entry = DNS_CACHE.get(&cache_key)?;
+fn get_cached_dns(cache_key: &str) -> Option<Vec<SocketAddr>> {
+    let entry = DNS_CACHE.get(cache_key)?;
     if std::time::Instant::now() < entry.1 {
         Some(entry.0.clone())
     } else {
@@ -145,7 +153,7 @@ pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<Socket
     }
 
     let key = cache_key(host, port);
-    if let Some(cached) = get_cached_dns(key) {
+    if let Some(cached) = get_cached_dns(&key) {
         return Ok(cached);
     }
 
