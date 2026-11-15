@@ -4,11 +4,19 @@
 //! the raw TCP socket address (`ConnectInfo`) sees only the proxy's IP (typically
 //! loopback `127.0.0.1` or a private gateway).
 //!
-//! To prevent IP spoofing, proxy forwarding headers (`X-Real-IP`, `X-Forwarded-For`,
-//! and RFC 7239 `Forwarded`) are ONLY inspected when the immediate TCP peer address
-//! is a trusted proxy. By default, all loopback addresses (`127.0.0.0/8` and `::1`)
-//! are trusted. Additional IP addresses or CIDRs can be configured in
-//! `server.trusted_proxies`.
+//! To prevent IP spoofing, proxy forwarding headers (`X-Forwarded-For`,
+//! RFC 7239 `Forwarded`, and `X-Real-IP`) are ONLY inspected when the
+//! immediate TCP peer address is a trusted proxy. Loopback is NOT trusted
+//! by default: an operator who runs openproxy behind a reverse proxy on the
+//! same host must list the proxy's IP in `server.trusted_proxies` (see
+//! [`is_trusted_proxy`]).
+//!
+//! Header precedence is spoof-resistance-ordered (audit H-4): the
+//! rightmost-untrusted `X-Forwarded-For` / `Forwarded` entry wins over
+//! `X-Real-IP`, because nginx only overwrites `X-Real-IP` when explicitly
+//! configured with `proxy_set_header X-Real-IP $remote_addr;` — otherwise it
+//! forwards the client-supplied value verbatim, which made per-IP rate
+//! limits, the admin-auth throttle and audit logs attacker-choosable.
 
 use axum::http::HeaderMap;
 use std::net::{IpAddr, SocketAddr};
@@ -82,14 +90,20 @@ pub fn parse_ip_or_bracketed(val: &str) -> Option<IpAddr> {
 
 /// Resolve the real client IP address from request headers and TCP peer address.
 ///
-/// If `peer_addr` is trusted (loopback or in `trusted_proxies`):
-/// 1. `X-Real-IP` header (single value overwritten by the proxy).
-/// 2. **Rightmost-untrusted** IP in `X-Forwarded-For`: each proxy appends
+/// If `peer_addr` is trusted (in `trusted_proxies`):
+/// 1. **Rightmost-untrusted** IP in `X-Forwarded-For`: each proxy appends
 ///    the address it received the request from, so the rightmost entry NOT
 ///    belonging to a trusted proxy is the client. The leftmost entry is
 ///    fully client-controlled and must never be used (OP-08: spoofing of
 ///    audit-log IPs and per-IP rate-limit buckets).
-/// 3. Last `for=` entry in RFC 7239 `Forwarded` (same rightmost logic).
+/// 2. Last `for=` entry in RFC 7239 `Forwarded` (same rightmost logic).
+/// 3. `X-Real-IP` — ONLY as a fallback when no proxy-appended chain exists.
+///    Security (audit H-4): `X-Real-IP` must not take precedence over the
+///    XFF/Forwarded chains. nginx forwards a client-supplied `X-Real-IP`
+///    verbatim unless the operator explicitly configures
+///    `proxy_set_header X-Real-IP $remote_addr;`, so trusting it first let a
+///    client behind a trusted proxy choose its own IP for per-IP rate
+///    limits, the admin-auth throttle and audit logs.
 /// 4. Fallback: `peer_addr` IP.
 ///
 /// If `peer_addr` is not trusted, returns `peer_addr` IP directly (anti-spoofing).
@@ -102,16 +116,9 @@ pub fn resolve_client_ip(
     let is_trusted = peer_ip.is_some_and(|ip| is_trusted_proxy(ip, trusted_proxies));
 
     if is_trusted {
-        // 1. X-Real-IP: a single value your proxy overwrites on every hop.
-        if let Some(real_ip) = headers
-            .get("x-real-ip")
-            .and_then(|v| v.to_str().ok())
-            .and_then(parse_ip_or_bracketed)
-        {
-            return Some(real_ip);
-        }
-
-        // 2. X-Forwarded-For, rightmost-untrusted (see doc comment).
+        // 1. X-Forwarded-For, rightmost-untrusted (see doc comment): the
+        //    spoof-resistant source, because the trusted proxy appends the
+        //    real peer to this chain.
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
             let entries: Vec<Option<IpAddr>> = xff.split(',').map(parse_ip_or_bracketed).collect();
             if let Some(ip) = rightmost_untrusted(&entries, trusted_proxies) {
@@ -119,7 +126,7 @@ pub fn resolve_client_ip(
             }
         }
 
-        // 3. RFC 7239 Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43 —
+        // 2. RFC 7239 Forwarded: for=192.0.2.60;proto=http;by=203.0.113.43 —
         //    multiple comma-separated sections may each carry a for=; the
         //    rightmost non-trusted one wins, mirroring XFF semantics.
         if let Some(forwarded) = headers.get("forwarded").and_then(|v| v.to_str().ok()) {
@@ -137,6 +144,16 @@ pub fn resolve_client_ip(
             if let Some(ip) = rightmost_untrusted(&entries, trusted_proxies) {
                 return Some(ip);
             }
+        }
+
+        // 3. X-Real-IP — fallback only (audit H-4: must not override the
+        //    proxy-appended chains above; see the module docs).
+        if let Some(real_ip) = headers
+            .get("x-real-ip")
+            .and_then(|v| v.to_str().ok())
+            .and_then(parse_ip_or_bracketed)
+        {
+            return Some(real_ip);
         }
     }
 
@@ -335,5 +352,41 @@ mod tests {
 
         let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
         assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 99))));
+    }
+
+    /// Audit H-4: a client behind a trusted proxy spoofs `X-Real-IP` while
+    /// the proxy (nginx WITHOUT `proxy_set_header X-Real-IP …`) appends the
+    /// real client IP to `X-Forwarded-For`. The proxy-appended chain must
+    /// win: `X-Real-IP` is only a fallback for deployments with no chain.
+    #[test]
+    fn test_resolve_client_ip_spoofed_x_real_ip_loses_to_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "9.9.9.9".parse().unwrap());
+        headers.insert(
+            "x-forwarded-for",
+            "9.9.9.9, 198.51.100.42".parse().unwrap(),
+        );
+        let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
+        let trusted = vec!["127.0.0.0/8".to_string()];
+
+        let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
+        assert_eq!(
+            resolved,
+            Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))),
+            "the proxy-appended XFF entry must override a spoofable X-Real-IP"
+        );
+    }
+
+    /// Audit H-4: X-Real-IP remains the fallback when no XFF/Forwarded
+    /// chain exists (proxies configured to only set X-Real-IP).
+    #[test]
+    fn test_resolve_client_ip_x_real_ip_fallback_without_chain() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "198.51.100.7".parse().unwrap());
+        let peer = "127.0.0.1:8787".parse::<SocketAddr>().unwrap();
+        let trusted = vec!["127.0.0.0/8".to_string()];
+
+        let resolved = resolve_client_ip(&headers, Some(&peer), &trusted);
+        assert_eq!(resolved, Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 7))));
     }
 }
