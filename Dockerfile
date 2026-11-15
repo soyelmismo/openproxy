@@ -43,7 +43,13 @@ RUN case "${TARGETARCH}" in \
     echo "${ORT_SHA256}  /tmp/ort/ort.tgz" | sha256sum -c - && \
     tar -xzf /tmp/ort/ort.tgz --wildcards --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
 
-FROM gcr.io/distroless/cc:nonroot AS runtime
+# Security (OP-09, audit H-9): pin the runtime base by digest. The
+# `nonroot` tag is mutable — a rebuilt upstream tag silently changes the
+# runtime image every CI run. Digest verified against the registry
+# (multi-arch index: amd64, arm/v7, arm64/v8, ppc64le, riscv64, s390x) on
+# 2026-11-15. Bump deliberately after reviewing the new image, like the
+# fetcher stage above.
+FROM gcr.io/distroless/cc@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
 
 ARG TARGETARCH
 
