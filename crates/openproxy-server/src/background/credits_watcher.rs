@@ -659,6 +659,37 @@ impl CreditsWatcherService {
                 to_block,
             )
             .await?;
+        // Range-reachability probe (audit round 2, V-03/A4-09): `eth_getLogs`
+        // behind a load balancer can be served by a node that lags behind the
+        // one that answered `finality_head`, silently missing the range's
+        // logs; the tick would then mark the chunk as scanned and its payments
+        // are lost with no error, no unmatched row, nothing. One extra round
+        // trip verifies the serving infrastructure can actually produce the
+        // range's END BLOCK before the cursor advances; a node that cannot
+        // fails the tick, the cursor is held and the next tick rescans the
+        // same range. (Residual risk: when the probe and the getLogs land on
+        // differently-lagged nodes behind the same LB the window narrows but
+        // does not close — a dedicated RPC endpoint or sticky sessions close
+        // it fully.)
+        let probed = rpc
+            .block_number(&format!("0x{to_block:x}"))
+            .await
+            .map_err(|e| format!("range probe for block {to_block}: {e}"))?;
+        match probed {
+            Some(n) if n == to_block => {}
+            Some(n) => {
+                return Err(format!(
+                    "rpc returned block {n} for the end of the scanned range \
+                     (expected {to_block}); cursor held, will rescan"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "rpc does not know block {to_block} (the end of the scanned \
+                     range); cursor held, will rescan"
+                ));
+            }
+        }
         // Apply in chain order: a provider that returns logs out of order must
         // not let an OLD payment land after (and expire) a NEWER plan order.
         transfers.sort_by_key(|t| (t.block_number, t.log_index));
