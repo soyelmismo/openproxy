@@ -458,9 +458,13 @@ impl Pipeline {
         if posted
             && (usage_backed || !delivered)
             && let Some(reservation_id) = lane.reservation_id()
-            && let Err(error) =
-                reservation::close_after_settle(Arc::clone(&self.conn), reservation_id, delivered)
-                    .await
+            && let Err(error) = reservation::close_after_settle(
+                Arc::clone(&self.conn),
+                reservation_id,
+                key,
+                delivered,
+            )
+            .await
         {
             tracing::warn!(
                 %error,

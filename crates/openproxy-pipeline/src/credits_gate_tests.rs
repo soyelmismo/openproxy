@@ -9,6 +9,7 @@
 
 use super::*;
 use openproxy_types::CancelReason;
+use openproxy_types::CoreError;
 use openproxy_types::ids::{ApiKeyId, ComboId, ComboTargetId, RequestId};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -862,4 +863,79 @@ async fn delivered_without_a_usage_row_leaves_the_intent_open_for_recovery() {
     assert_eq!(state, "settled");
     assert_eq!(outcome.as_deref(), Some("recovered_partial"));
     harness.assert_lane_free().await;
+}
+
+/// SECURITY REGRESSION (audit round 2, V-01/A5-1): a client that received part
+/// of a stream and then closed the socket (499) must be billed for the output
+/// it already received. The `CreditStreamGuard` checkpoints the cost of every
+/// delivered chunk into `credit_reservations.generated_units`, and the crash
+/// reconciliation bills exactly that evidence — the owner settlement of a
+/// client disconnect must do the same, or "receive tokens, drop the socket"
+/// becomes a free-output primitive that also bypasses the 5h/weekly windows
+/// (their sums only count `client_response = 1` rows).
+#[tokio::test]
+async fn client_disconnect_mid_stream_bills_the_delivered_checkpoint() {
+    let upstream = Upstream::start(UpstreamMode::Ok).await;
+    let harness = Harness::start(&upstream, Some(KEY_GRANT_UNITS), false);
+    let (req, _cancel) = harness.request();
+    let request_id = req.request_id.to_string();
+
+    let lane = match harness.pipeline.admit_credit_request(&req).await {
+        crate::credits_gate::CreditAdmission::Open(Some(lane)) => lane,
+        crate::credits_gate::CreditAdmission::Open(None) => {
+            panic!("a granted key is credit-governed and must admit")
+        }
+        crate::credits_gate::CreditAdmission::Denied(_) => {
+            panic!("a granted key with a fresh balance must admit")
+        }
+    };
+
+    // The stream handed chunks to the client and the guard checkpointed their
+    // cost (what `CreditStreamGuard` persists every CHECKPOINT_EVERY_BYTES).
+    openproxy_db::reservations::checkpoint(
+        &harness.pool.writer(),
+        harness.key_id,
+        &request_id,
+        1,
+        400,
+    )
+    .expect("checkpoint the delivered output");
+
+    // The client closes the socket: the dispatcher settles a 499 with
+    // Cancelled(ClientDisconnected). The tracker also recorded a failed usage
+    // row (client_response = 0), which is what usage_tuple carries here.
+    let result = crate::PipelineResult {
+        status_code: 499,
+        error: Some(CoreError::Cancelled(CancelReason::ClientDisconnected)),
+        final_response: None,
+        attempts: 1,
+        usage_tuple: Some((req.request_id.clone(), 1, harness.target_id)),
+    };
+
+    let before = harness.balance();
+    harness.pipeline.settle_credit_request(lane, &result).await;
+    harness.assert_lane_free().await;
+
+    assert_eq!(
+        harness.balance(),
+        before - 400,
+        "the durable delivered-output checkpoint must be billed on a 499 close"
+    );
+    let (state, outcome, charged): (String, Option<String>, i64) = harness
+        .pool
+        .writer()
+        .query_row(
+            "SELECT state, outcome, charged_units FROM credit_reservations \
+             WHERE request_id = ?1 ORDER BY id DESC LIMIT 1",
+            [&request_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("durable intent row");
+    assert_eq!(state, "settled", "a charged partial delivery settles");
+    assert_eq!(
+        outcome.as_deref(),
+        Some("recovered_partial"),
+        "the audit trail must name the partial charge"
+    );
+    assert_eq!(charged, 400);
 }
