@@ -303,12 +303,17 @@ async fn list_orders(
         .db_pool()
         .spawn_read(move |r| {
             // Filter: exact status / key id, substring for code and email.
-            let like = format!("%{}%", q.replace('%', ""));
+            // Security (audit H-13): neutralise BOTH LIKE wildcards ('%' and
+            // '_') and pin the escape character — previously only '%' was
+            // stripped, so '_' kept acting as a single-char wildcard and a
+            // search for `OP_____1` enumerated order codes by pattern.
+            let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            let like = format!("%{}%", escaped);
             let q_key = q.parse::<i64>().ok();
             let where_clause = if q.is_empty() {
                 String::new()
             } else {
-                " WHERE (order_code LIKE ?1 OR payer_email LIKE ?1 OR LOWER(status) = LOWER(?1)                  OR (?2 IS NOT NULL AND api_key_id = ?2))".to_string()
+                " WHERE (order_code LIKE ?1 ESCAPE '\\' OR payer_email LIKE ?1 ESCAPE '\\' OR LOWER(status) = LOWER(?1)                  OR (?2 IS NOT NULL AND api_key_id = ?2))".to_string()
             };
             let total: i64 = if q.is_empty() {
                 r.query_row("SELECT COUNT(*) FROM credit_orders", [], |row| row.get(0))
