@@ -149,6 +149,7 @@ impl ProviderAdapter for OpenRouterAdapter {
             &[("Authorization", &auth)],
             "data",
             "openrouter",
+            self.config().allow_loopback,
             map_openrouter_entry,
         )
         .await

@@ -116,6 +116,7 @@ impl ProviderAdapter for GeminiAdapter {
             &[("x-goog-api-key", api_key)],
             "models",
             "gemini",
+            self.config().allow_loopback,
             |m| {
                 let full_name = m.get("name").and_then(|v| v.as_str())?;
                 let id = full_name.strip_prefix("models/").unwrap_or(full_name);

@@ -124,8 +124,13 @@ impl ProviderAdapter for EacAdapter {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        match crate::adapters::discovery::upstream_get_json(upstream_client, &url, &header_refs)
-            .await
+        match crate::adapters::discovery::upstream_get_json(
+            upstream_client,
+            &url,
+            &header_refs,
+            self.config().allow_loopback,
+        )
+        .await
         {
             Ok(json) => {
                 if let Some(arr) = json.get("data").and_then(|v| v.as_array()) {

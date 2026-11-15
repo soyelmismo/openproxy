@@ -133,7 +133,7 @@ impl ProviderAdapter for ClineAdapter {
             openproxy_types::error::CoreError::Internal("missing models_url".into())
         })?;
 
-        let body = upstream_get_json(upstream_client, &url, &[])
+        let body = upstream_get_json(upstream_client, &url, &[], self.config().allow_loopback)
             .await
             .map_err(openproxy_types::error::CoreError::UpstreamConnection)?;
 

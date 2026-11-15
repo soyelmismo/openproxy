@@ -167,6 +167,7 @@ pub async fn fetch_opencode_models(
             ("Authorization", &auth),
             ("User-Agent", crate::spoofer::OPENCODE_UA),
         ],
+        adapter.config().allow_loopback,
     )
     .await
     .ctx_upstream(format!("{} /models", adapter.id()))?;

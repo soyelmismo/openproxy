@@ -656,7 +656,7 @@ async fn one_shot_discovery_fetch_rejects_bodies_over_the_transport_limit() {
     .await;
 
     let client = std::sync::Arc::new(UpstreamClient::new());
-    let result = crate::adapters::upstream_get_bytes(&client, &url(addr), &[]).await;
+    let result = crate::adapters::upstream_get_bytes(&client, &url(addr), &[], false).await;
     let err = result.expect_err("40 MiB body must be rejected by the one-shot fetch path");
     assert!(
         err.to_ascii_lowercase().contains("limit") || err.to_ascii_lowercase().contains("exceed"),

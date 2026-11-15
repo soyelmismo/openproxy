@@ -259,6 +259,7 @@ impl ProviderAdapter for HordeAdapter {
             &self.config.base_url,
             &header_refs,
             "text",
+            self.config.allow_loopback,
         )
         .await;
         discovered.extend(
@@ -267,6 +268,7 @@ impl ProviderAdapter for HordeAdapter {
                 &self.config.base_url,
                 &header_refs,
                 "image",
+                self.config.allow_loopback,
             )
             .await,
         );

@@ -392,6 +392,7 @@ pub trait ProviderAdapter: Send + Sync {
                 api_key,
                 self.id().as_str(),
                 target_format,
+                self.config().allow_loopback,
             )
             .await
         }

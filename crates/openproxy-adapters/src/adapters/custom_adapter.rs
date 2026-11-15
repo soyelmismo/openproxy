@@ -197,7 +197,7 @@ impl ProviderAdapter for CustomAdapter {
             &self.config.extra_headers,
         );
 
-        let body = upstream_get_json(upstream_client, &url, &headers)
+        let body = upstream_get_json(upstream_client, &url, &headers, self.config.allow_loopback)
             .await
             .map_err(|e| {
                 CoreError::UpstreamConnection(format!("{} /models: {e}", self.config.id))

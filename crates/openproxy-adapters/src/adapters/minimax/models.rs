@@ -432,6 +432,7 @@ pub async fn fetch_minimax_models_pipeline(
             trimmed,
             "minimax",
             TargetFormat::Anthropic,
+            false,
         )
         .await
         && !models.is_empty()

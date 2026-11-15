@@ -39,12 +39,18 @@ async fn handle_upstream_error_response(
 }
 
 /// Fetch raw bytes from an upstream URL via the shared `UpstreamClient`.
+///
+/// `allow_loopback` mirrors the per-provider SSRF opt-in (migration 000135):
+/// model discovery dials whatever `base_url` the provider row declares, so it
+/// must carry the same flag the chat dispatch path uses.
 pub async fn upstream_get_bytes(
     upstream_client: &Arc<UpstreamClient>,
     url: &str,
     headers: &[(&str, &str)],
+    allow_loopback: bool,
 ) -> std::result::Result<bytes::Bytes, String> {
     let mut req = UpstreamRequest::get(url);
+    req.allow_loopback = allow_loopback;
     req.headers.insert(
         http::header::ACCEPT,
         http::HeaderValue::from_static("application/json, text/plain, */*"),
@@ -68,8 +74,9 @@ pub(crate) async fn upstream_get_json(
     upstream_client: &Arc<UpstreamClient>,
     url: &str,
     headers: &[(&str, &str)],
+    allow_loopback: bool,
 ) -> std::result::Result<serde_json::Value, String> {
-    let bytes = upstream_get_bytes(upstream_client, url, headers).await?;
+    let bytes = upstream_get_bytes(upstream_client, url, headers, allow_loopback).await?;
     serde_json::from_slice(&bytes).map_err(|e| format!("{url}: parse: {e}"))
 }
 
@@ -140,6 +147,7 @@ pub(crate) async fn fetch_openai_compatible_models_with_mapper<F>(
     headers: &[(&str, &str)],
     array_key: &str,
     error_prefix: &str,
+    allow_loopback: bool,
     mapper: F,
 ) -> Result<Vec<DiscoveredModel>>
 where
@@ -151,6 +159,7 @@ where
         headers,
         array_key,
         error_prefix,
+        allow_loopback,
         mapper,
     )
     .await
@@ -163,6 +172,7 @@ pub(crate) async fn fetch_openai_models(
     api_key: &str,
     provider_name: &str,
     target_format: TargetFormat,
+    allow_loopback: bool,
 ) -> Result<Vec<DiscoveredModel>> {
     let auth = crate::upstream::format_bearer(api_key);
     fetch_openai_compatible_models_with_mapper(
@@ -171,6 +181,7 @@ pub(crate) async fn fetch_openai_models(
         &[("Authorization", &auth)],
         "data",
         provider_name,
+        allow_loopback,
         |m| {
             let entry: OpenAIModelEntry = serde::Deserialize::deserialize(m).ok()?;
             Some(build_discovered_model_with(entry.id, target_format))
@@ -185,12 +196,13 @@ pub(crate) async fn fetch_models_with_auth<F>(
     headers: &[(&str, &str)],
     array_key: &str,
     error_prefix: &str,
+    allow_loopback: bool,
     mapper: F,
 ) -> Result<Vec<DiscoveredModel>>
 where
     F: Fn(&serde_json::Value) -> Option<DiscoveredModel>,
 {
-    let body = upstream_get_json(upstream_client, url, headers)
+    let body = upstream_get_json(upstream_client, url, headers, allow_loopback)
         .await
         .ctx_upstream(format!("{error_prefix} /models"))?;
 
@@ -318,7 +330,7 @@ mod streaming_cap_tests {
         });
 
         let client = std::sync::Arc::new(crate::upstream::UpstreamClient::new());
-        let err = upstream_get_bytes(&client, &format!("http://{addr}/models"), &[])
+        let err = upstream_get_bytes(&client, &format!("http://{addr}/models"), &[], false)
             .await
             .expect_err("body past the 32 MiB transport cap must be rejected");
         assert!(

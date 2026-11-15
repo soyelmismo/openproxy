@@ -133,6 +133,7 @@ impl ProviderAdapter for CloudflareWorkersAIAdapter {
             &[("Authorization", &auth)],
             "result",
             "cloudflare",
+            self.config().allow_loopback,
             |raw| {
                 let name = raw.get("name")?.as_str()?;
                 let max_tokens = raw

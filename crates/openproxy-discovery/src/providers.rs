@@ -173,9 +173,10 @@ pub async fn fetch_favicon_raw(
         upstream_client: &std::sync::Arc<openproxy_adapters::upstream::UpstreamClient>,
         url: &str,
     ) -> Option<(&'static str, Vec<u8>)> {
-        let bytes = openproxy_adapters::adapters::upstream_get_bytes(upstream_client, url, &[])
-            .await
-            .ok()?;
+        let bytes =
+            openproxy_adapters::adapters::upstream_get_bytes(upstream_client, url, &[], false)
+                .await
+                .ok()?;
         let mime = validate_favicon_bytes(&bytes)?;
         Some((mime, bytes.to_vec()))
     }

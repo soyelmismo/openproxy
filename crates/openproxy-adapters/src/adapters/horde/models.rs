@@ -84,9 +84,12 @@ pub(crate) async fn fetch_horde_cluster_models(
     base_url: &str,
     header_refs: &[(&str, &str)],
     model_type: &'static str,
+    allow_loopback: bool,
 ) -> Vec<DiscoveredModel> {
     let url = format!("{base_url}/status/models?type={model_type}");
-    let Ok(json_val) = crate::adapters::upstream_get_json(upstream_client, &url, header_refs).await
+    let Ok(json_val) =
+        crate::adapters::upstream_get_json(upstream_client, &url, header_refs, allow_loopback)
+            .await
     else {
         return Vec::new();
     };
