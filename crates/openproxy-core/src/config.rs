@@ -207,6 +207,15 @@ impl AppConfig {
                 "server.admin_bind must be nonempty and different from server.bind".into(),
             ));
         }
+        // The money-path numbers (tolerance, chunk size, windows, addresses)
+        // feed the matcher and the chain scanner directly: a typo must fail
+        // the load here, not surface later as mispriced payments (audit
+        // round 2, V-02/A4-07).
+        if let Some(credits) = &self.credits
+            && let Err(message) = credits.validate()
+        {
+            return Err(CoreError::Config(message));
+        }
         Ok(())
     }
 
@@ -257,6 +266,73 @@ mod tests {
         cfg.storage.reader_count = 0;
         cfg.server.admin_bind = Some(cfg.server.bind.clone());
         assert!(cfg.validate().is_err());
+    }
+
+    /// A valid credits section passes; every money-path typo the matcher or
+    /// the scanner would otherwise silently absorb must fail the load
+    /// (audit round 2, V-02/A4-07).
+    #[test]
+    fn credits_money_path_numbers_are_validated_at_load() {
+        let mut cfg = AppConfig::default();
+        cfg.credits = Some(openproxy_types::config::CreditsConfig {
+            rpc_url: "https://base.example".into(),
+            usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            collector_address: "0x12c7ab78f21ba0253a21d34a0151d44ddb824950".into(),
+            payment_window_minutes: 15,
+            scan_interval_secs: 30,
+            ttl_days: vec![7, 30],
+            chain_id: 8453,
+            max_block_chunk: 500,
+            payment_tolerance_units: 250_000,
+            checkout_order_creations_per_ip: 30,
+            checkout_order_window_secs: 600,
+            checkout_poll_per_ip_per_min: 240,
+        });
+        assert!(cfg.validate().is_ok(), "a sane credits section must load");
+
+        // A giant tolerance would let one near-worthless transfer pay any
+        // live order: rejected instead of silently repricing every plan.
+        cfg.credits.as_mut().unwrap().payment_tolerance_units = i64::MAX;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().payment_tolerance_units = -1;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().payment_tolerance_units = 250_000;
+
+        // A negative tolerance is clamped by the matcher, but a chunk the
+        // node always rejects wedges the cursor: fail the load instead.
+        cfg.credits.as_mut().unwrap().max_block_chunk = 0;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().max_block_chunk = 1_000_000;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().max_block_chunk = 500;
+
+        // A truncated collector address becomes an eth_getLogs topic that
+        // matches nothing: the funnel looks empty instead of broken.
+        cfg.credits.as_mut().unwrap().collector_address = "0x1234".into();
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().collector_address =
+            "0x12c7ab78f21ba0253a21d34a0151d44ddb824950".into();
+
+        // Zero window / zero interval / zero admission budgets are typos.
+        cfg.credits.as_mut().unwrap().payment_window_minutes = 0;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().payment_window_minutes = 1_441;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().payment_window_minutes = 15;
+        cfg.credits.as_mut().unwrap().scan_interval_secs = 0;
+        assert!(cfg.validate().is_err());
+        cfg.credits.as_mut().unwrap().scan_interval_secs = 30;
+        cfg.credits
+            .as_mut()
+            .unwrap()
+            .checkout_order_creations_per_ip = 0;
+        assert!(cfg.validate().is_err());
+        cfg.credits
+            .as_mut()
+            .unwrap()
+            .checkout_order_creations_per_ip = 30;
+
+        assert!(cfg.validate().is_ok(), "restored values must load again");
     }
 
     #[test]

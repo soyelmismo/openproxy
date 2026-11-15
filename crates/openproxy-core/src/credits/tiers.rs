@@ -128,13 +128,29 @@ pub fn get(conn: &Connection, id: i64) -> openproxy_types::Result<Option<CreditT
 /// # Errors
 /// Propagates DB failures.
 pub fn seats_taken(conn: &Connection, tier_id: i64) -> openproxy_types::Result<i64> {
+    // ROOT FIX (seat oversell, audit A1-02): an anonymous order whose window
+    // expired can STILL be paid for CONFIRMATION_GRACE_SECS longer (the
+    // matcher accepts `status IN ('pending','expired')` inside the grace so a
+    // late confirmation never strands the buyer's money). Counting only
+    // `pending` orders freed the seat while the right to buy it lived on, so
+    // buyer B took the "free" seat and a late-paying buyer A oversold the
+    // plan. The grace window here mirrors the matcher's exactly.
+    let grace = format!(
+        "+{} seconds",
+        crate::credits::orders::CONFIRMATION_GRACE_SECS
+    );
     conn.query_row(
-        "SELECT \
-           (SELECT COUNT(*) FROM api_keys k \
-             WHERE k.tier_id = ?1 AND k.kind = 'customer') \
-         + (SELECT COUNT(*) FROM credit_orders o \
-             WHERE o.tier_id = ?1 AND o.status = 'pending' AND o.api_key_id IS NULL)",
-        params![tier_id],
+        &format!(
+            "SELECT \
+               (SELECT COUNT(*) FROM api_keys k \
+                 WHERE k.tier_id = ?1 AND k.kind = 'customer') \
+             + (SELECT COUNT(*) FROM credit_orders o \
+                 WHERE o.tier_id = ?1 AND o.api_key_id IS NULL \
+                   AND (o.status = 'pending' \
+                        OR (o.status = 'expired' \
+                            AND datetime(o.expires_at, ?2) >= datetime('now'))))"
+        ),
+        params![tier_id, grace],
         |row| row.get(0),
     )
     .map_err(openproxy_db::error::map_db_error)

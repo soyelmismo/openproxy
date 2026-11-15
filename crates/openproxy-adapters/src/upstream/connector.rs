@@ -207,18 +207,25 @@ async fn dns_phase(
 }
 
 fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, PhasedConnectorError> {
-    let allow_private = cfg!(test)
-        || cfg!(feature = "ssrf-bypass")
-        || std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
+    // ROOT FIX (audit A6-01): OPENPROXY_ALLOW_PRIVATE_UPSTREAMS used to
+    // disable the WHOLE private/reserved filter at runtime in production
+    // builds (no feature flag, no recompile — one env var and RFC1918,
+    // link-local cloud metadata and every other reserved range became
+    // dialable). It is now a scoping knob for local development backends
+    // (contrib/laya-server binds 127.0.0.1): with the variable set, only
+    // LOOPBACK addresses are admitted; the private/reserved space stays
+    // blocked. Test builds and the ssrf-bypass feature keep their existing
+    // full bypass.
+    let allow_all = cfg!(test) || cfg!(feature = "ssrf-bypass");
+    let allow_loopback = !allow_all
+        && std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
             .is_ok_and(|v| v == "true" || v == "1");
 
-    if allow_private {
+    if allow_all {
         if cfg!(test) {
             tracing::debug!("SSRF: filter disabled in test build");
         } else {
-            tracing::debug!(
-                "SSRF: private upstream connections allowed via OPENPROXY_ALLOW_PRIVATE_UPSTREAMS"
-            );
+            tracing::debug!("SSRF: filter disabled via ssrf-bypass feature");
         }
         return Ok(addrs);
     }
@@ -227,6 +234,13 @@ fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Phas
         .into_iter()
         .filter(|a| {
             if is_private_or_reserved(&a.ip()) {
+                if allow_loopback && a.ip().is_loopback() {
+                    tracing::debug!(
+                        addr = %a,
+                        "SSRF: loopback upstream admitted via OPENPROXY_ALLOW_PRIVATE_UPSTREAMS"
+                    );
+                    return true;
+                }
                 tracing::warn!(addr = %a, "SSRF: skipping private/reserved address");
                 false
             } else {
@@ -239,7 +253,7 @@ fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Phas
         return Err(PhasedConnectorError {
             phase: UpstreamPhase::Dial,
             kind: PhasedErrorKind::Io(io::Error::other(
-                "all resolved addresses are private/reserved (SSRF block). Set OPENPROXY_ALLOW_PRIVATE_UPSTREAMS=true to allow.",
+                "all resolved addresses are private/reserved (SSRF block). OPENPROXY_ALLOW_PRIVATE_UPSTREAMS admits loopback upstreams only.",
             )),
         });
     }

@@ -445,6 +445,7 @@ mod tests {
         let price = Some(Price {
             input_per_1m: 2.0,
             output_per_1m: 4.0,
+            cached_per_1m: None,
             kind: PriceKind::Video,
             audio_per_hour: None,
         });

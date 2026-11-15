@@ -231,7 +231,37 @@ pub fn restore_extra_tables(
                             params_vec.push(Box::new(rusqlite::types::Null));
                         }
                     }
-                    serde_json::Value::String(s) => params_vec.push(Box::new(s.clone())),
+                    serde_json::Value::String(s) => {
+                        // ROOT FIX (asymmetric serialization, audit A6-02):
+                        // the export path encodes every BLOB as the string
+                        // "base64:<…>" (see `val_ref_to_json`), but the
+                        // restore used to insert that marker string as TEXT.
+                        // Money-table blobs — above all the AES-GCM ciphertext
+                        // of an anonymous order's minted key — came back as
+                        // text, so after a routine backup/restore the reveal
+                        // of an already-PAID order failed ("Invalid column
+                        // type Text"), leaving the buyer with no self-service
+                        // access to what they paid for. Decode the marker
+                        // symmetrically; a failed decode keeps the string as
+                        // it was so non-blob text columns are unaffected.
+                        if let Some(encoded) = s.strip_prefix("base64:") {
+                            use base64::Engine;
+                            match base64::engine::general_purpose::STANDARD.decode(encoded) {
+                                Ok(bytes) => {
+                                    params_vec.push(Box::new(bytes));
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        column = %col,
+                                        "backup restore: invalid base64 blob marker kept as text"
+                                    );
+                                    params_vec.push(Box::new(s.clone()));
+                                }
+                            }
+                        } else {
+                            params_vec.push(Box::new(s.clone()));
+                        }
+                    }
                     serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
                         params_vec.push(Box::new(val.to_string()));
                     }

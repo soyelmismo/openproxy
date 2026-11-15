@@ -153,6 +153,12 @@ function clearCountdown(): void {
  * sessionStorage. Surface it as a recovery LINK the buyer can save: opening
  * that link on any device seeds the same receipt, and the next Buy replays
  * the original order server-side instead of starting a second payment.
+ *
+ * ROOT FIX (capability in the URL, audit A5-01): the receipt rides in the
+ * URL FRAGMENT, never in the query string. A query string is sent to the
+ * server and lands in access logs, browser history and Referer headers —
+ * anyone reading them could reveal (and ack away) the paid key. The
+ * fragment never leaves the browser.
  */
 function paintRecovery(): void {
   const box = $("recovery");
@@ -163,7 +169,7 @@ function paintRecovery(): void {
     return;
   }
   const url =
-    location.origin + location.pathname + "?receipt=" + encodeURIComponent(receipt);
+    location.origin + location.pathname + "#receipt=" + encodeURIComponent(receipt);
   const link = $<HTMLAnchorElement>("recovery-link");
   link.href = url;
   link.textContent = url;

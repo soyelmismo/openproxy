@@ -484,10 +484,18 @@ impl AdminAuthLimiter {
     }
 
     /// `true` when `ip` exhausted its failure budget inside the window.
+    ///
+    /// ROOT FIX (permanent lockout, audit A4-03): the budget only counts
+    /// while its window is still live. Without the window check here, 20
+    /// failures blocked an IP FOREVER — the early 429 in the middleware made
+    /// `record_failure`/`record_success` unreachable, so nothing could ever
+    /// reset the counter (only a restart cured it; reproduced with the
+    /// legitimate admin still locked out 61 s later).
     pub fn is_blocked(&self, ip: std::net::IpAddr) -> bool {
-        self.failures
-            .get(&ip)
-            .is_some_and(|e| e.value().0 >= ADMIN_AUTH_MAX_FAILURES)
+        self.failures.get(&ip).is_some_and(|e| {
+            let (count, start) = e.value();
+            *count >= ADMIN_AUTH_MAX_FAILURES && start.elapsed() < ADMIN_AUTH_WINDOW
+        })
     }
 
     /// Count one failed attempt; resets the window when it expired.
@@ -636,6 +644,31 @@ mod limiter_tests {
         assert!(limiter.is_blocked(ip), "blocked at budget");
         limiter.record_success(ip);
         assert!(!limiter.is_blocked(ip), "success clears the budget");
+    }
+
+    /// Root-fix regression (audit A4-03): the block must expire with the
+    /// window. Before the fix, 20 failures locked an IP out of the admin
+    /// surface FOREVER (the middleware's early 429 made record_failure and
+    /// record_success unreachable, so no reset path existed short of a
+    /// restart).
+    #[test]
+    fn admin_auth_failure_throttle_expires_with_the_window() {
+        let limiter = std::sync::Arc::new(AdminAuthLimiter::new());
+        let ip: std::net::IpAddr = "203.0.113.78".parse().unwrap();
+        for _ in 0..ADMIN_AUTH_MAX_FAILURES {
+            limiter.record_failure(ip);
+        }
+        assert!(limiter.is_blocked(ip), "blocked at budget");
+        // Age every failure entry past the window, as time would.
+        let now = std::time::Instant::now();
+        limiter
+            .failures
+            .iter_mut()
+            .for_each(|mut e| *e.value_mut() = (ADMIN_AUTH_MAX_FAILURES, now - ADMIN_AUTH_WINDOW - std::time::Duration::from_secs(1)));
+        assert!(
+            !limiter.is_blocked(ip),
+            "the block must expire with the window instead of locking the IP forever"
+        );
     }
 
     #[test]

@@ -41,6 +41,7 @@ use crate::state::AppState;
 use openproxy_core::credits::CreateOrderRequest as CoreCreateOrder;
 use openproxy_core::credits::get_order;
 use openproxy_types::CoreError;
+use openproxy_types::config::CreditsConfig;
 use openproxy_types::ids::ApiKeyId;
 
 /// Header carrying the client-generated reveal receipt (UUID-like, >= 32
@@ -74,7 +75,123 @@ async fn no_store(req: Request, next: Next) -> Response {
     resp
 }
 
-pub fn router() -> Router<AppState> {
+/// Per-IP admission control for the checkout surface.
+///
+/// Root fix for the jitter-space exhaustion DoS (audit A1-01/A4-01): every
+/// order reserves one of only 10 000 live jitter slots per base price for
+/// its whole window + confirmation grace, and creation was free and
+/// anonymous, so ~10 000 unpaid POSTs closed the sales funnel of a price
+/// (reproduced: 10 000 orders → every buyer of that price got 503) and let
+/// an attacker squat the amount space. Two dedicated sliding windows bound
+/// what one origin can do:
+/// - **order creation** (`POST .../order`, `POST .../me/plan`):
+///   `checkout_order_creations_per_ip` per `checkout_order_window_secs`
+///   (default 30 / 10 min — a steady-state attacker holds ≈75 live orders,
+///   0.75% of a price's slot space, vs 10 000 before);
+/// - **read/reveal surface** (status poll, reveal, ack, rotate):
+///   `checkout_poll_per_ip_per_min` (default 240/min vs the UI's 12/min),
+///   which also bounds receipt brute-force on `/reveal`.
+pub struct CheckoutAdmission {
+    order: openproxy_core::rate_limit::SlidingWindowRateLimiter,
+    poll: openproxy_core::rate_limit::SlidingWindowRateLimiter,
+}
+
+impl CheckoutAdmission {
+    pub fn from_config(cfg: Option<&CreditsConfig>) -> Self {
+        let (order_max, order_window, poll_max) = match cfg {
+            Some(c) => (
+                c.checkout_order_creations_per_ip.max(1),
+                c.checkout_order_window_secs.max(1),
+                c.checkout_poll_per_ip_per_min.max(1),
+            ),
+            None => (30, 600, 240),
+        };
+        Self {
+            order: openproxy_core::rate_limit::SlidingWindowRateLimiter::new(
+                openproxy_core::rate_limit::RateLimitConfig {
+                    max_requests: order_max,
+                    window: std::time::Duration::from_secs(order_window),
+                    max_capacity: 100_000,
+                },
+            ),
+            poll: openproxy_core::rate_limit::SlidingWindowRateLimiter::new(
+                openproxy_core::rate_limit::RateLimitConfig {
+                    max_requests: poll_max,
+                    window: std::time::Duration::from_secs(60),
+                    max_capacity: 100_000,
+                },
+            ),
+        }
+    }
+
+    fn check_order(&self, ip: std::net::IpAddr) -> bool {
+        openproxy_core::rate_limit::RateLimiter::check(
+            &self.order,
+            openproxy_core::rate_limit::RateLimitKey::Ip(ip),
+        )
+    }
+
+    fn check_poll(&self, ip: std::net::IpAddr) -> bool {
+        openproxy_core::rate_limit::RateLimiter::check(
+            &self.poll,
+            openproxy_core::rate_limit::RateLimitKey::Ip(ip),
+        )
+    }
+}
+
+/// Admission-control middleware for the whole `/v1/credits` surface. Keys on
+/// the client IP (same resolution as the chat rate limiter: ConnectInfo +
+/// trusted proxies). Order creation gets the strict budget; everything else
+/// the poll budget. 429s carry the gateway error shape and `Retry-After`.
+async fn checkout_admission_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    if state.config().credits.is_none() {
+        // Gateway disabled: nothing to protect.
+        return next.run(req).await;
+    }
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0);
+    let ip = crate::client_ip::resolve_client_ip(
+        req.headers(),
+        peer.as_ref(),
+        &state.config().server.trusted_proxies,
+    )
+    .or_else(|| peer.map(|p| p.ip()))
+    .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    let path = req.uri().path();
+    let is_creation = req.method() == axum::http::Method::POST
+        && (path.ends_with("/order") || path.ends_with("/plan"));
+    let (allowed, retry_after_secs) = if is_creation {
+        let window = state
+            .config()
+            .credits
+            .as_ref()
+            .map(|c| c.checkout_order_window_secs)
+            .unwrap_or(600);
+        (state.checkout_admission().check_order(ip), window)
+    } else {
+        (state.checkout_admission().check_poll(ip), 60)
+    };
+    if !allowed {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [
+                (header::RETRY_AFTER, HeaderValue::from_str(&retry_after_secs.to_string()).unwrap_or(HeaderValue::from_static("60"))),
+                (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
+            ],
+            json!({"error": {"code": "rate_limited", "message": "too many checkout requests from this origin; slow down and retry later"}}).to_string(),
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
+pub fn router(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/plans", get(plans))
         .route("/order", post(create_checkout))
@@ -86,6 +203,12 @@ pub fn router() -> Router<AppState> {
         // Credit exists only as a plan; there is no prepaid balance to top up.
         .route("/me/plan", get(me_plan).post(me_buy_plan))
         .route("/me/rotate", post(me_rotate_key))
+        // Admission control (root fix for the jitter-space exhaustion DoS):
+        // strict per-IP budget on order creation, poll budget on the rest.
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            checkout_admission_middleware,
+        ))
         .layer(axum::middleware::from_fn(no_store))
 }
 
@@ -482,11 +605,13 @@ struct OrderStatusResponse {
     amount_units: i64,
     base_units: i64,
     ttl_days: i64,
-    api_key_id: Option<i64>,
+    /// Inclusion height, shown by the checkout UI ("confirmed in block N").
+    /// The tx hash itself is deliberately NOT exposed on this public,
+    /// code-addressable surface: it would link the buyer's order to a chain
+    /// transaction for anyone holding the code.
+    block_number: Option<i64>,
     expires_at: String,
     paid_at: Option<String>,
-    tx_hash: Option<String>,
-    block_number: Option<i64>,
     key_revealed: bool,
     no_refunds: bool,
 }
@@ -510,11 +635,9 @@ async fn order_status(State(state): State<AppState>, Path(code): Path<String>) -
             amount_units: o.amount_units,
             base_units: o.base_units,
             ttl_days: o.ttl_days,
-            api_key_id: o.api_key_id,
+            block_number: o.block_number,
             expires_at: o.expires_at,
             paid_at: o.paid_at,
-            tx_hash: o.tx_hash.clone(),
-            block_number: o.block_number,
             key_revealed: o.key_revealed,
             no_refunds: true,
         })
@@ -693,6 +816,12 @@ async fn me_rotate_key(State(state): State<AppState>, headers: HeaderMap) -> Res
         Ok(v) => v,
         Err(e) => return core_failure("me.rotate", e),
     };
+    // ROOT FIX (stale-credential window, audit A4-02): the api-key cache
+    // kept the OLD hash valid for up to 60 s after rotation, so a stolen
+    // key kept authenticating (and buying) right through the rotation that
+    // was supposed to kill it. Drop the cache the same second, exactly like
+    // the admin regenerate endpoint does.
+    state.invalidate_api_key_cache(None);
     Json(json!({
         "rotated": true,
         "api_key_id": row.id.0,

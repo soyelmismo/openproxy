@@ -126,6 +126,13 @@ pub const MINTED_KEY_TTL_SECS: i64 = 7 * 86_400;
 /// rows whose TTL has not passed are untouched. Returns the number of blobs
 /// erased.
 ///
+/// ROOT FIX (audit A3-01): the ciphertext is the buyer's ONLY self-service
+/// copy of the paid key, so it must outlive the fixed 7-day TTL whenever
+/// the balance the buyer paid for is still alive. A row is only wiped when
+/// BOTH the TTL has passed AND the order's credited lot is no longer active
+/// (expired, exhausted or missing): a buyer who paid for a 30-day plan and
+/// revealed on day 8 keeps the recovery path open for the whole plan.
+///
 /// # Errors
 /// Propagates DB failures.
 pub fn sweep_expired_minted_ciphertexts(conn: &Connection) -> Result<usize> {
@@ -133,7 +140,13 @@ pub fn sweep_expired_minted_ciphertexts(conn: &Connection) -> Result<usize> {
         "UPDATE credit_orders SET minted_key_encrypted = NULL \
          WHERE minted_key_encrypted IS NOT NULL \
            AND minted_at IS NOT NULL \
-           AND datetime(minted_at, ?1) < datetime('now')",
+           AND datetime(minted_at, ?1) < datetime('now') \
+           AND NOT EXISTS ( \
+               SELECT 1 FROM credit_transactions t \
+                WHERE t.order_id = credit_orders.id \
+                  AND t.status = 'active' \
+                  AND (t.expires_at IS NULL \
+                       OR datetime(t.expires_at) > datetime('now')))",
         rusqlite::params![format!("+{MINTED_KEY_TTL_SECS} seconds")],
     )
     .map_err(openproxy_db::error::map_db_error)

@@ -43,9 +43,13 @@ pub struct UsdcTransfer {
 pub(super) enum DecodedLog {
     /// Ours, well-formed and creditable.
     Transfer(UsdcTransfer),
-    /// Well-formed but never creditable (reorged, zero, or > `i64`). The
+    /// Well-formed but never creditable (zero, or > `i64`). The
     /// scanner advances past it; it is NOT a reason to retry the range.
     Ignored(&'static str),
+    /// Removed by a reorg: carries the best-effort `(tx_hash, log_index)`
+    /// identity so the scanner can cross-check it against payments that
+    /// already credited an order (a CRITICAL, not dust).
+    Removed(Option<String>, Option<i64>),
 }
 
 /// Strip a required `0x` prefix and enforce an exact hex length.
@@ -118,7 +122,16 @@ pub(super) fn decode_log(
     to_block: i64,
 ) -> Result<DecodedLog, String> {
     if log.get("removed").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Ok(DecodedLog::Ignored("log was removed by a reorg"));
+        // Best-effort identity for the reorg cross-check in the scanner.
+        let tx_hash = log
+            .get("transactionHash")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let log_index = log
+            .get("logIndex")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|raw| parse_quantity(raw).ok());
+        return Ok(DecodedLog::Removed(tx_hash, log_index));
     }
     let usdc = normalize_address(usdc, "configured usdc_address")?;
     let collector = normalize_address(collector, "configured collector_address")?;
@@ -272,10 +285,16 @@ mod tests {
 
     #[test]
     fn removed_logs_are_skipped_not_credited() {
-        // A reorg is not a malformed log: nothing was paid, advance.
-        let mut l = log(COLLECTOR, "989680", "0x0");
+        // A reorg is not a malformed log: nothing was paid, advance. ROOT-FIX
+        // INVARIANT: the removed flag now carries the (tx_hash, log_index)
+        // identity out of the decoder so the scanner can cross-check it
+        // against payments that already credited an order (audit A2-06).
+        let mut l = log(COLLECTOR, "989680", "0x7");
         l["removed"] = serde_json::json!(true);
-        ignored(&l);
+        assert_eq!(
+            decode_log(&l, USDC, COLLECTOR, 0, 100).unwrap(),
+            DecodedLog::Removed(Some(TX.to_string()), Some(7))
+        );
     }
 
     #[test]

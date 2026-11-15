@@ -451,6 +451,13 @@ impl TestHarness {
             chain_id: 8453,
             max_block_chunk: 500,
             payment_tolerance_units: 250_000,
+            // The suite drives hundreds of orders from a single loopback IP
+            // across parallel tests; production admission-control defaults
+            // (30 orders / 10 min / IP) would throttle it spuriously. The
+            // middleware itself has its own dedicated test with strict caps.
+            checkout_order_creations_per_ip: 100_000,
+            checkout_order_window_secs: 600,
+            checkout_poll_per_ip_per_min: 1_000_000,
         });
         let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(vec![])));
         let app_state = AppState::for_test(
@@ -645,6 +652,7 @@ impl TestHarness {
                         price_usd: None,
                         credit_usd: None,
                         ttl_days: 30,
+                        stock: None,
                     },
                 )?;
                 openproxy_core::credits::tiers::apply_to_key(

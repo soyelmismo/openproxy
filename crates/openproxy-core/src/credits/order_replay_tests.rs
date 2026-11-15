@@ -83,10 +83,32 @@ fn minted_ciphertext_sweeps_after_ttl_and_reveal_dies_with_it() {
         .unwrap()
         .is_some());
 
-    // Backdate the mint past the TTL: the sweep erases the checkout's copy,
-    // the settled order stays readable, but the plaintext is gone for good.
+    // Backdate the mint past the TTL. ROOT-FIX INVARIANT (audit A3-01): the
+    // ciphertext is the buyer's only self-service copy of a PAID key, so
+    // while the credited lot (7 days here) is still alive the sweep must
+    // NOT erase it — the buyer who reveals on day 8 still gets the key.
     conn.execute(
         "UPDATE credit_orders SET minted_at = datetime('now','-8 days') WHERE id=?1",
+        [minted.id],
+    )
+    .unwrap();
+    assert_eq!(
+        super::sweep_expired_minted_ciphertexts(&conn).unwrap(),
+        0,
+        "active paid lot: the recovery path must outlive the bare TTL"
+    );
+    assert!(
+        matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
+            .unwrap()
+            .is_some(),
+        "reveal on day 8 of a 7-day plan still delivers the paid key"
+    );
+
+    // Only once the paid balance itself is dead does the sweep erase the
+    // checkout's copy: the settled order stays readable, but the plaintext
+    // is gone for good.
+    conn.execute(
+        "UPDATE credit_transactions SET status='expired' WHERE order_id=?1",
         [minted.id],
     )
     .unwrap();

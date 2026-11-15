@@ -28,7 +28,12 @@ import { enterOrder, showKey } from "./pay-step.js";
  * by a pasted link.
  */
 function seedFromRecoveryLink(): void {
-  const receipt = new URLSearchParams(location.search).get("receipt");
+  // ROOT FIX (audit A5-01): read the receipt from the URL FRAGMENT. The
+  // fragment never reaches the server, proxies or Referer — unlike a query
+  // string, which used to deposit the full reveal capability in access
+  // logs and browser history.
+  const m = /[#&]receipt=([^&]+)/.exec(location.hash);
+  const receipt = m ? decodeURIComponent(m[1]) : null;
   if (!receipt) return;
   // Strip it from the address bar: a refresh must not keep re-seeding after
   // the buyer moved on (the live order keeps painting its own recovery link).

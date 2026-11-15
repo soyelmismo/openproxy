@@ -19,7 +19,10 @@
 //!    much billable output it produced before the last delivered chunk) → charge
 //!    exactly that, clamped to the live balance, recorded as `recovered_partial`
 //!    with `charged_units`. The admitted maximum is never charged: output the
-//!    model never produced is not billable.
+//!    model never produced is not billable. This rule applies both to the
+//!    crash reconciliation and to the owner settlement of a response the client
+//!    never fully received (audit round 2, V-01/A5-1: a mid-stream client
+//!    disconnect must not turn delivered output free).
 //! 3. Anything else (never dispatched, cancelled before delivery, or a stream
 //!    that started without any checkpoint) → close with nothing charged. No
 //!    evidence of an amount means no invented charge; the row keeps the full
@@ -41,7 +44,7 @@
 use openproxy_db::reservations as db;
 use openproxy_types::error::CoreError;
 use openproxy_types::ids::ComboTargetId;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::Arc;
 
 /// Counters for one reconciliation pass. Diagnostic: the caller only needs it
@@ -203,29 +206,85 @@ pub(super) async fn hold(
 pub(super) async fn close_after_settle(
     conn: Arc<parking_lot::Mutex<Connection>>,
     reservation_id: i64,
+    api_key_id: i64,
     billed: bool,
 ) -> openproxy_types::Result<()> {
     spawn(
         conn,
         move |conn| {
-            let (state, outcome, note) = if billed {
-                (
+            if billed {
+                return db::close(
+                    conn,
+                    reservation_id,
                     db::STATE_SETTLED,
                     db::OUTCOME_BILLED,
+                    0,
                     "owner settled the request",
                 )
-            } else {
-                (
-                    db::STATE_RELEASED,
-                    db::OUTCOME_UNBILLED,
-                    "owner settled without a billable response",
-                )
-            };
-            db::close(conn, reservation_id, state, outcome, 0, note).map(|_| ())
+                .map(|_| ());
+            }
+            close_unbilled(conn, reservation_id, api_key_id)
         },
         "credit intent close",
     )
     .await
+}
+
+/// `!delivered` close (audit round 2, V-01/A5-1): bill the durable
+/// delivered-output checkpoint before releasing.
+///
+/// The owner settlement of a response the client never fully received used to
+/// close the intent as `released/unbilled` unconditionally — even when the
+/// stream had already handed chunks to the client and the guard had
+/// checkpointed their cost. "Receive tokens, close the socket" was then a
+/// free-output primitive that also bypassed the 5h/weekly windows (their sums
+/// only count `client_response = 1` rows). The checkpoint is the same
+/// evidence the crash reconciliation bills, so it is billed here too.
+///
+/// One immediate transaction covers the read, the ledger debit and the close:
+/// either the charge and the close land together, or nothing does and the
+/// intent stays `held` for the next admission to reconcile (fail-closed, no
+/// double charge: `db::close` only ever flips a `held` row).
+fn close_unbilled(
+    conn: &Connection,
+    reservation_id: i64,
+    api_key_id: i64,
+) -> openproxy_types::Result<()> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(openproxy_db::error::map_db_error)?;
+    let observed: i64 = tx
+        .query_row(
+            "SELECT generated_units FROM credit_reservations WHERE id = ?1 AND state = 'held'",
+            [reservation_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(openproxy_db::error::map_db_error)?
+        .unwrap_or(0);
+    if observed <= 0 {
+        tx.commit().map_err(openproxy_db::error::map_db_error)?;
+        db::close(
+            conn,
+            reservation_id,
+            db::STATE_RELEASED,
+            db::OUTCOME_UNBILLED,
+            0,
+            "owner settled without a billable response",
+        )
+        .map(|_| ())
+    } else {
+        let charged = charge_observed(&tx, api_key_id, observed)?;
+        tx.commit().map_err(openproxy_db::error::map_db_error)?;
+        db::close(
+            conn,
+            reservation_id,
+            db::STATE_SETTLED,
+            db::OUTCOME_RECOVERED_PARTIAL,
+            charged,
+            "client disconnect after partial delivery: billed the durable checkpoint",
+        )
+        .map(|_| ())
+    }
 }
 
 /// Close the intent of a unary request once its usage row is durable.
@@ -238,10 +297,16 @@ pub(super) async fn close_unary(
     lane: Option<&super::CreditsLaneGuard>,
     billed: bool,
 ) {
-    let Some(reservation_id) = lane.and_then(super::CreditsLaneGuard::reservation_id) else {
+    let Some(guard) = lane else {
         return;
     };
-    if let Err(error) = close_after_settle(db_pool.writer_arc(), reservation_id, billed).await {
+    let Some(reservation_id) = guard.reservation_id() else {
+        return;
+    };
+    let key_id = guard.key_id();
+    if let Err(error) =
+        close_after_settle(db_pool.writer_arc(), reservation_id, key_id, billed).await
+    {
         tracing::warn!(
             %error,
             "credit settlement: unary intent left open for reconciliation"

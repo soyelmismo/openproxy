@@ -86,7 +86,7 @@ pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
 
     // The credit gateway (checkout/orders/QR) only exists with payments.
     #[cfg(feature = "payments")]
-    let v1_routes = v1_routes.nest("/credits", credits_gateway::router());
+    let v1_routes = v1_routes.nest("/credits", credits_gateway::router(state));
 
     axum::Router::new().nest("/v1", v1_routes)
 }

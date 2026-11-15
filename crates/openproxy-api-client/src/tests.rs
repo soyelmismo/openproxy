@@ -40,6 +40,7 @@ fn usage_filter_query_serializes_known_fields() {
         account_id: Some(AccountId::new(7)),
         combo_id: None,
         api_key_id: None,
+        key_kind: None,
         exclude_models: Vec::new(),
         exclude_providers: Vec::new(),
         scope_public: None,

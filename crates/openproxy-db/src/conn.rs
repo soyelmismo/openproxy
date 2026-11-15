@@ -173,6 +173,18 @@ impl DbPool {
             crate::error::map_db_error_ctx(format!("open {}", path.display())),
         )?;
 
+        // ROOT FIX (world-readable payment data, audit A6-03): SQLite
+        // creates the file with the process umask (typically 0644). The DB
+        // holds the complete payment dossier — payer emails, amounts, order
+        // states, tx hashes, receipt hashes, key hashes and the minted-key
+        // ciphertexts — so it must not be readable by every local user,
+        // exactly like the master key file (which already enforces 0600).
+        // WAL and -shm are created lazily by SQLite; tighten whatever
+        // exists now and let the sidecars inherit at creation via the
+        // tightened directory-checked default (they are recreated per
+        // session and re-tightened on every open).
+        restrict_db_file_permissions(path);
+
         configure_temp_dir(&writer, path);
         configure_connection(&writer, true, synchronous)?;
 
@@ -681,3 +693,41 @@ fn configure_connection(
 
 #[cfg(test)]
 mod tests;
+
+/// Tighten the payment database and its WAL/SHM sidecars to owner-only
+/// permissions (0600), mirroring the master key file rule.
+///
+/// ROOT FIX (audit A6-03): SQLite creates these files with the process
+/// umask (typically 0644 — verified: db AND wal were world-readable while
+/// holding payer emails, amounts, tx hashes, receipt hashes and minted-key
+/// ciphertexts). Failures are logged, never fatal: a read-only filesystem
+/// or an exotic platform must not prevent the server from starting.
+#[cfg(unix)]
+fn restrict_db_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut candidates = vec![path.to_path_buf()];
+    if let Some(stem) = path.file_name().and_then(|n| n.to_str()) {
+        candidates.push(path.with_file_name(format!("{stem}-wal")));
+        candidates.push(path.with_file_name(format!("{stem}-shm")));
+    }
+    for candidate in candidates {
+        let Ok(meta) = std::fs::metadata(&candidate) else {
+            continue;
+        };
+        let mode = meta.permissions().mode();
+        if mode & 0o077 != 0 {
+            let mut perms = meta.permissions();
+            perms.set_mode(mode & 0o600);
+            if let Err(e) = std::fs::set_permissions(&candidate, perms) {
+                tracing::warn!(
+                    path = %candidate.display(),
+                    error = %e,
+                    "could not restrict database file permissions to 0600"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn restrict_db_file_permissions(_path: &Path) {}

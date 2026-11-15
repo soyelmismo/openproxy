@@ -42,6 +42,11 @@ pub struct AppState {
     adapters: Arc<RwLock<Arc<Vec<adapters::ProviderAdapterEnum>>>>,
     rate_limiter: Arc<dyn openproxy_core::rate_limit::RateLimiter>,
     inflight_limiter: Arc<openproxy_core::rate_limit::InFlightLimiter>,
+    /// Per-IP admission control for the checkout surface (payments only):
+    /// strict budget on order creation, poll budget on status/reveal/ack.
+    /// Root fix for the jitter-space exhaustion DoS.
+    #[cfg(feature = "payments")]
+    checkout_admission: Arc<crate::handlers::credits_gateway::CheckoutAdmission>,
     upstream_client: Arc<UpstreamClient>,
     usage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::RecentUsageRow>,
     stage_tx: tokio::sync::broadcast::Sender<openproxy_types::usage::StageEvent>,
@@ -221,6 +226,12 @@ impl AppState {
     /// Borrow the per-key rate limiter.
     pub fn rate_limiter(&self) -> &(dyn openproxy_core::rate_limit::RateLimiter + 'static) {
         self.rate_limiter.as_ref()
+    }
+
+    /// Per-IP admission control for the checkout surface (payments only).
+    #[cfg(feature = "payments")]
+    pub fn checkout_admission(&self) -> &crate::handlers::credits_gateway::CheckoutAdmission {
+        self.checkout_admission.as_ref()
     }
 
     /// Per-key concurrent-request limiter (OP-03).

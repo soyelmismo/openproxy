@@ -72,10 +72,137 @@ pub struct CreditsConfig {
     /// headroom; a transfer short by more falls back to `unmatched`.
     #[serde(default = "default_payment_tolerance_units")]
     pub payment_tolerance_units: i64,
+    /// Checkout admission control (root fix for the jitter-space exhaustion
+    /// DoS): maximum order creations (`POST /v1/credits/order` and
+    /// `POST /v1/credits/me/plan`) per client IP inside
+    /// `checkout_order_window_secs`. Each order reserves a unique live
+    /// amount for its whole window + confirmation grace, and there are only
+    /// 10 000 jitter slots per base price, so unbounded free creation lets
+    /// one origin close the sales funnel of a price (~10k orders, reproduced)
+    /// and squat the amount space. The default caps one IP at 30 orders per
+    /// 10 minutes (≈ 75 live orders in steady state — 0.75% of a price's
+    /// slot space).
+    #[serde(default = "default_checkout_order_creations_per_ip")]
+    pub checkout_order_creations_per_ip: u32,
+    /// Window for [`CreditsConfig::checkout_order_creations_per_ip`], in
+    /// seconds.
+    #[serde(default = "default_checkout_order_window_secs")]
+    pub checkout_order_window_secs: u64,
+    /// Checkout admission control for the read/reveal surface
+    /// (`GET /v1/credits/order/{code}`, `reveal`, `ack`, `me/plan` GET,
+    /// `me/rotate`): maximum requests per client IP per minute. The default
+    /// (240) leaves the polling UI (one poll per 5 s = 12/min) two orders of
+    /// magnitude of headroom while bounding receipt brute-force attempts.
+    #[serde(default = "default_checkout_poll_per_ip_per_min")]
+    pub checkout_poll_per_ip_per_min: u32,
+}
+
+/// Upper bound for [`CreditsConfig::payment_tolerance_units`] (µUSDC). The
+/// tolerance is an exchange-fee allowance, not a discount policy: a value in
+/// the millions would let one near-worthless transfer pay any live order, so
+/// a typo this large must fail the load instead of silently repricing every
+/// plan at "whatever arrived".
+pub const MAX_PAYMENT_TOLERANCE_UNITS: i64 = 10_000_000;
+
+/// Upper bound for [`CreditsConfig::max_block_chunk`]. Public providers
+/// reject ranges above a few thousand blocks (some cap at 10), so a runaway
+/// value only ever produces `eth_getLogs` errors; it is a misconfiguration,
+/// not a throughput knob.
+pub const MAX_BLOCK_CHUNK: u32 = 10_000;
+
+/// `true` for a canonical 20-byte EVM address (`0x` + 40 hex characters).
+fn is_evm_address(s: &str) -> bool {
+    let body = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    body.len() == 40 && body.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+impl CreditsConfig {
+    /// Money-path sanity (audit round 2, V-02/A4-07): these numbers feed the
+    /// payment matcher and the chain scanner directly. An out-of-range value
+    /// must fail the configuration load — the old code accepted anything and
+    /// the failure surfaced later as a silently repriced plan (a giant
+    /// tolerance matches any short payment to any live order) or a watcher
+    /// that never advances its cursor (a chunk the node always rejects).
+    ///
+    /// The RPC endpoint is only checked for presence here: loopback HTTP is
+    /// legitimate in tests and local deployments, so transport security stays
+    /// an operational requirement rather than a load-time hard failure.
+    ///
+    /// # Errors
+    /// Returns a human-readable message naming the offending field.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.rpc_url.trim().is_empty() {
+            return Err("credits.rpc_url must not be empty".into());
+        }
+        if !is_evm_address(&self.usdc_address) {
+            return Err(format!(
+                "credits.usdc_address must be a 20-byte hex address, got {:?}",
+                self.usdc_address
+            ));
+        }
+        if !is_evm_address(&self.collector_address) {
+            return Err(format!(
+                "credits.collector_address must be a 20-byte hex address, got {:?}",
+                self.collector_address
+            ));
+        }
+        if self.chain_id == 0 {
+            return Err("credits.chain_id must be a real EVM chain id (got 0)".into());
+        }
+        if self.payment_window_minutes == 0 || self.payment_window_minutes > 1_440 {
+            return Err(format!(
+                "credits.payment_window_minutes must be 1..=1440, got {}",
+                self.payment_window_minutes
+            ));
+        }
+        if self.scan_interval_secs == 0 {
+            return Err("credits.scan_interval_secs must be at least 1".into());
+        }
+        if self.max_block_chunk == 0 || self.max_block_chunk > MAX_BLOCK_CHUNK {
+            return Err(format!(
+                "credits.max_block_chunk must be 1..={MAX_BLOCK_CHUNK} blocks, got {}",
+                self.max_block_chunk
+            ));
+        }
+        if !(0..=MAX_PAYMENT_TOLERANCE_UNITS).contains(&self.payment_tolerance_units) {
+            return Err(format!(
+                "credits.payment_tolerance_units must be 0..={MAX_PAYMENT_TOLERANCE_UNITS} \
+                 (µUSDC), got {}",
+                self.payment_tolerance_units
+            ));
+        }
+        if self.checkout_order_creations_per_ip == 0 {
+            return Err(
+                "credits.checkout_order_creations_per_ip must be at least 1".into(),
+            );
+        }
+        if self.checkout_order_window_secs == 0 {
+            return Err("credits.checkout_order_window_secs must be at least 1".into());
+        }
+        if self.checkout_poll_per_ip_per_min == 0 {
+            return Err("credits.checkout_poll_per_ip_per_min must be at least 1".into());
+        }
+        Ok(())
+    }
 }
 
 fn default_max_block_chunk() -> u32 {
     500
+}
+
+fn default_checkout_order_creations_per_ip() -> u32 {
+    30
+}
+
+fn default_checkout_order_window_secs() -> u64 {
+    600
+}
+
+fn default_checkout_poll_per_ip_per_min() -> u32 {
+    240
 }
 
 fn default_payment_tolerance_units() -> i64 {

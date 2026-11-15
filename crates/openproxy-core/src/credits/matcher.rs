@@ -6,7 +6,11 @@
 //! 1. **Each log counts once.** `matched_payments (tx_hash, log_index)` PK
 //!    makes `apply_payment` idempotent across watcher restarts, re-scans and
 //!    duplicate deliveries — the INSERT either happens or tells us the log
-//!    was already processed.
+//!    was already processed. On top of that PK, the identity of a transfer is
+//!    ALSO pinned by `(tx_hash, amount_units)`: a reorg can re-include the
+//!    same transaction at a different log position, so a delivery of an
+//!    already-processed `tx_hash` under a shifted `log_index` is treated as a
+//!    replay, never as a second payment (double-credit root fix).
 //! 2. **Each order pays once.** The CAS UPDATE
 //!    `SET status='paid' WHERE id=? AND status='pending'` is the arbitrating
 //!    instruction: N concurrent deliveries of the same amount, or even the
@@ -230,7 +234,32 @@ fn settle_payment(
         ));
     }
     let tolerance_units = tolerance_units.max(0);
-    // 1. Idempotency gate: record the log. Already recorded → done.
+    // 1. Reorg-stable identity: `(tx_hash, log_index)` is NOT stable across a
+    //    chain reorg (the same transaction can be re-included at a different
+    //    position in the replacement block), while `(tx_hash, amount_units)`
+    //    identifies the same physical transfer. A delivery of an
+    //    already-processed transfer under a shifted log_index is a replay —
+    //    without this gate one real transfer could credit two orders.
+    let reorg_replay: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM matched_payments \
+             WHERE tx_hash = ?1 AND amount_units = ?2 AND log_index != ?3)",
+            rusqlite::params![tx_hash, amount_units, log_index],
+            |row| row.get(0),
+        )
+        .map_err(openproxy_db::error::map_db_error)?;
+    if reorg_replay {
+        tracing::warn!(
+            %tx_hash,
+            log_index,
+            amount_units,
+            "transfer already processed under a different log_index (reorg replay): not a new payment"
+        );
+        return Ok(PaymentOutcome::AlreadySeen {
+            tx_hash: tx_hash.to_string(),
+        });
+    }
+    // 1b. Idempotency gate: record the log. Already recorded → done.
     let inserted = conn
         .execute(
             "INSERT OR IGNORE INTO matched_payments \
@@ -461,7 +490,25 @@ fn settle_payment(
     }
     // 5. Credit the balance. A leveraged plan credits more than it charged
     //    (credit_units > amount minus jitter); 1:1 plans credit the price.
-    crate::credits::ledger::credit_topup(conn, key_id, order_id, credit_units, ttl_days, tx_hash)?;
+    //    ROOT FIX (fee-tolerance abuse): the tolerance exists to RECOGNIZE a
+    //    transfer short by an exchange fee, not to grant free credit — every
+    //    buyer can deliberately send `quoted - tolerance`, so a short payment
+    //    credits PRO RATA what it actually paid and an overpay never credits
+    //    more than the plan promises. Exact payments are unaffected
+    //    (`received == quoted` credits the full amount).
+    let credited_units = openproxy_db::credits_ledger::prorated_credit_units(
+        credit_units,
+        amount_units,
+        quoted_units,
+    );
+    crate::credits::ledger::credit_topup(
+        conn,
+        key_id,
+        order_id,
+        credited_units,
+        ttl_days,
+        tx_hash,
+    )?;
 
     // 5b. Shaping contract: a plan purchase applies the tier's allowlists +
     //     quota caps and LINKS the key to the tier (future plan edits
@@ -479,7 +526,8 @@ fn settle_payment(
     tracing::info!(
         %tx_hash,
         order_code = %order_code,
-        credited_units = credit_units,
+        credited_units,
+        promised_units = credit_units,
         quoted_units,
         received_units = amount_units,
         short_units,
@@ -489,7 +537,7 @@ fn settle_payment(
     Ok(PaymentOutcome::Credited {
         order_code,
         api_key_id: final_key_id,
-        credited_units: credit_units,
+        credited_units,
         minted_key,
         received_units: amount_units,
     })
