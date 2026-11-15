@@ -36,13 +36,13 @@ fn compress_with_filter(
 }
 
 fn compress_rtk_content(content_str: &str, techniques: &mut Vec<String>) -> Option<String> {
-    if content_str.trim().is_empty() || content_str.len() < 20 {
+    if content_str.len() < 20 || content_str.trim().is_empty() {
         return None;
     }
 
-    let detection = command_detector::detect(content_str);
-    if detection.id != "unknown"
-        && let Some(filter) = get_builtin_filter(&detection.id)
+    let detected_id = command_detector::detect_id(content_str);
+    if detected_id != "unknown"
+        && let Some(filter) = get_builtin_filter(detected_id)
         && let Some(filtered) = compress_with_filter(content_str, &filter, techniques)
     {
         return Some(filtered);
@@ -56,10 +56,7 @@ fn process_rtk_message(msg: &mut OpenAIMessage, all_techniques: &mut Vec<String>
         return;
     }
 
-    let mut msg_techniques = Vec::new();
-    if mutate_message_text(msg, |text| compress_rtk_content(text, &mut msg_techniques)) {
-        all_techniques.extend(msg_techniques);
-    }
+    mutate_message_text(msg, |text| compress_rtk_content(text, all_techniques));
 }
 
 /// Aplica compresión RTK a los mensajes. Retorna las técnicas aplicadas.

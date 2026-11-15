@@ -328,16 +328,10 @@ fn collect_stack_trace_indices(kinds: &[LineKind], selected: &mut Vec<usize>) {
 }
 
 fn collect_warning_indices(lines: &[&str], kinds: &[LineKind], selected: &mut Vec<usize>) {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
     let mut warning_seen: Vec<u64> = Vec::with_capacity(MAX_WARNINGS);
     for (i, (kind, line)) in kinds.iter().zip(lines.iter()).enumerate() {
         if *kind == LineKind::Warning && warning_seen.len() < MAX_WARNINGS {
-            let key_str = dedup_key(line);
-            let mut hasher = DefaultHasher::new();
-            key_str.hash(&mut hasher);
-            let key = hasher.finish();
+            let key = hash_dedup_key(line);
             if !warning_seen.contains(&key) {
                 selected.push(i);
                 warning_seen.push(key);
@@ -362,7 +356,7 @@ fn collect_summary_and_header_indices(kinds: &[LineKind], selected: &mut Vec<usi
 /// 4. All Summary + Header lines.
 /// 5. Sort, dedup, truncate to MAX_TOTAL_LINES.
 fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
-    let mut selected: Vec<usize> = Vec::with_capacity(MAX_TOTAL_LINES);
+    let mut selected: Vec<usize> = Vec::with_capacity(MAX_TOTAL_LINES.min(lines.len()));
     collect_error_indices(kinds, &mut selected);
     collect_stack_trace_indices(kinds, &mut selected);
     collect_warning_indices(lines, kinds, &mut selected);
@@ -374,11 +368,55 @@ fn select_lines(lines: &[&str], kinds: &[LineKind]) -> Vec<usize> {
     selected
 }
 
+fn hash_dedup_key(line: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::Hasher;
+
+    let mut hasher = DefaultHasher::new();
+    if let Some(byte_idx) = memchr::memchr2(b':', b'=', line.as_bytes()) {
+        let sep_end = byte_idx + 1;
+        let (prefix, rest) = line.split_at(sep_end);
+        hasher.write(prefix.as_bytes());
+        hash_normalized_trailing(rest, &mut hasher);
+    } else {
+        hash_normalized_trailing(line, &mut hasher);
+    }
+    hasher.write_u8(0xff);
+    hasher.finish()
+}
+
+fn hash_normalized_trailing<H: std::hash::Hasher>(s: &str, hasher: &mut H) {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some(next_i) = scan_hex_run(bytes, i)
+            .or_else(|| scan_digit_run(bytes, i))
+            .or_else(|| scan_path_run(bytes, i))
+        {
+            hasher.write_u8(b'*');
+            i = next_i;
+        } else {
+            let b = bytes[i];
+            if b.is_ascii() {
+                hasher.write_u8(b);
+                i += 1;
+            } else if let Some(ch) = s[i..].chars().next() {
+                let len = ch.len_utf8();
+                hasher.write(&bytes[i..i + len]);
+                i += len;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 /// Dedup key for a warning line: splits on the first `:` or `=`, then replaces
 /// digit runs, hex literals (`0x...`) and paths (`/...`) in the trailing region
 /// with `*`, keeping the prefix verbatim. Without a separator the whole line
 /// is normalized. That collapses `warning: unused variable at line 12` and
 /// `warning: unused variable at line 99` into one bucket.
+#[cfg(test)]
 fn dedup_key(line: &str) -> String {
     if let Some((byte_idx, ch)) = line.char_indices().find(|&(_, c)| c == ':' || c == '=') {
         let sep_end = byte_idx + ch.len_utf8();
@@ -437,6 +475,7 @@ fn scan_path_run(bytes: &[u8], i: usize) -> Option<usize> {
 /// Normalize the trailing region of a dedup key: replace digit runs, hex
 /// literals, and filesystem paths with `*`. Operates on bytes/char boundaries
 /// so it's UTF-8 safe and zero-alloc.
+#[cfg(test)]
 fn normalize_trailing(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = String::with_capacity(s.len());

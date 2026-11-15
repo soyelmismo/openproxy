@@ -5,10 +5,28 @@ pub(crate) fn contains_case_insensitive_ascii(haystack: &str, needle: &str) -> b
     if haystack.len() < needle.len() {
         return false;
     }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    let first_lo = needle_bytes[0].to_ascii_lowercase();
+    let first_hi = needle_bytes[0].to_ascii_uppercase();
+    let limit = haystack_bytes.len() - needle_bytes.len();
+    let mut pos = 0;
+
+    while pos <= limit {
+        let Some(offset) = (if first_lo == first_hi {
+            memchr::memchr(first_lo, &haystack_bytes[pos..=limit])
+        } else {
+            memchr::memchr2(first_lo, first_hi, &haystack_bytes[pos..=limit])
+        }) else {
+            return false;
+        };
+        let idx = pos + offset;
+        if haystack_bytes[idx..idx + needle_bytes.len()].eq_ignore_ascii_case(needle_bytes) {
+            return true;
+        }
+        pos = idx + 1;
+    }
+    false
 }
 
 #[cfg(test)]

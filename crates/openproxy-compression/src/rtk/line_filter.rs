@@ -529,15 +529,15 @@ fn apply_line_filtering_pipeline(
         }
 
         if has_keep {
-            let any_kept = line_spans.iter().any(|&(start, end)| {
+            let mut kept_spans = Vec::with_capacity(line_spans.len());
+            for &(start, end) in line_spans.iter() {
                 let l = &result[start..end];
-                filter.keep_patterns.iter().any(|r| r.is_match(l))
-            });
-            if any_kept {
-                line_spans.retain(|&(start, end)| {
-                    let l = &result[start..end];
-                    filter.keep_patterns.iter().any(|r| r.is_match(l))
-                });
+                if filter.keep_patterns.iter().any(|r| r.is_match(l)) {
+                    kept_spans.push((start, end));
+                }
+            }
+            if !kept_spans.is_empty() {
+                *line_spans = kept_spans;
                 applied.push(filter.rule_keep);
                 modified = true;
             }
@@ -676,17 +676,22 @@ fn strip_ansi(text: &str) -> Cow<'_, str> {
     ANSI_BUF.with_borrow_mut(|out| {
         out.clear();
         out.reserve(bytes.len());
-        out.extend_from_slice(&bytes[..first_esc]);
+        if first_esc > 0 {
+            out.extend_from_slice(&bytes[..first_esc]);
+        }
         let mut i = first_esc;
         while i < bytes.len() {
-            if bytes[i] == 0x1B {
-                if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
-                    i = skip_csi_sequence(bytes, i);
-                } else {
-                    i += 1;
-                }
+            let Some(rel) = memchr::memchr(0x1B, &bytes[i..]) else {
+                out.extend_from_slice(&bytes[i..]);
+                break;
+            };
+            if rel > 0 {
+                out.extend_from_slice(&bytes[i..i + rel]);
+                i += rel;
+            }
+            if i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                i = skip_csi_sequence(bytes, i);
             } else {
-                out.push(bytes[i]);
                 i += 1;
             }
         }

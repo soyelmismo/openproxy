@@ -92,6 +92,23 @@ pub fn crush_json_string(text: &str) -> Option<(String, &'static str)> {
     try_lossless_route(&arr, text.len()).or_else(|| try_lossy_route(&arr, text.len()))
 }
 
+/// Single-parse entry point for `content_router::route_content`:
+/// Returns `Ok(result)` if `text` is a valid JSON array of ≥ `MIN_ITEMS` elements
+/// (matching `ContentType::JsonArray`), or `Err(())` if it is not a JSON array
+/// of ≥ `MIN_ITEMS` elements so the caller can fall through to other detectors.
+pub(crate) fn try_route_json_array(text: &str) -> Result<Option<(String, &'static str)>, ()> {
+    let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(text) else {
+        return Err(());
+    };
+    if arr.len() < MIN_ITEMS {
+        return Err(());
+    }
+    if !arr.iter().all(Value::is_object) {
+        return Ok(None);
+    }
+    Ok(try_lossless_route(&arr, text.len()).or_else(|| try_lossy_route(&arr, text.len())))
+}
+
 /// Compresses JSON tool result arrays: `role == "tool"` messages whose content
 /// parses as an array of ≥ 5 objects. Non-tool messages, non-JSON content,
 /// non-arrays, short arrays and arrays holding non-object items are skipped.

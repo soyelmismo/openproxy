@@ -36,41 +36,45 @@ pub const DETECTORS: &[DetectorFn] = &[
     detect_generic_error,
 ];
 
-/// Extrae el comando de las primeras líneas del texto.
-pub fn extract_command(text: &str) -> Option<String> {
+/// Extrae el comando de las primeras líneas del texto sin asignar en heap.
+pub fn extract_command_str(text: &str) -> Option<&str> {
+    const KNOWN: [&str; 20] = [
+        "git",
+        "cargo",
+        "npm",
+        "pnpm",
+        "yarn",
+        "docker",
+        "kubectl",
+        "ls",
+        "grep",
+        "rg",
+        "find",
+        "cat",
+        "make",
+        "terraform",
+        "systemctl",
+        "ps",
+        "df",
+        "du",
+        "curl",
+        "wget",
+    ];
     for line in text.lines().take(4) {
         let trimmed = line.trim().trim_start_matches("$ ");
         if !trimmed.is_empty() {
-            // Primer token
             let first_word = trimmed.split_whitespace().next()?;
-            let known = [
-                "git",
-                "cargo",
-                "npm",
-                "pnpm",
-                "yarn",
-                "docker",
-                "kubectl",
-                "ls",
-                "grep",
-                "rg",
-                "find",
-                "cat",
-                "make",
-                "terraform",
-                "systemctl",
-                "ps",
-                "df",
-                "du",
-                "curl",
-                "wget",
-            ];
-            if known.contains(&first_word) {
-                return Some(trimmed.to_string());
+            if KNOWN.contains(&first_word) {
+                return Some(trimmed);
             }
         }
     }
     None
+}
+
+/// Extrae el comando de las primeras líneas del texto.
+pub fn extract_command(text: &str) -> Option<String> {
+    extract_command_str(text).map(ToString::to_string)
 }
 
 fn find_best_match(text: &str, cmd_ref: Option<&str>) -> Option<(&'static str, f64)> {
@@ -86,12 +90,18 @@ fn find_best_match(text: &str, cmd_ref: Option<&str>) -> Option<(&'static str, f
     best
 }
 
+/// Zero-allocation fast path returning only the static rule ID.
+pub fn detect_id(text: &str) -> &'static str {
+    let cmd_ref = extract_command_str(text);
+    find_best_match(text, cmd_ref).map_or("unknown", |(id, _)| id)
+}
+
 /// Detecta el comando en el texto. Retorna el mejor match.
 pub fn detect(text: &str) -> Detection {
-    let command = extract_command(text);
-    let cmd_ref = command.as_deref();
+    let cmd_str = extract_command_str(text);
+    let command = cmd_str.map(ToString::to_string);
 
-    if let Some((id, conf)) = find_best_match(text, cmd_ref) {
+    if let Some((id, conf)) = find_best_match(text, cmd_str) {
         Detection {
             id: id.to_string(),
             confidence: conf,
