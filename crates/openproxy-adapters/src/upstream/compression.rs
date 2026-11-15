@@ -555,7 +555,7 @@ impl BodyDecoding {
         let mut out = Vec::new();
         match codec {
             Codec::Brotli => {
-                let mut reader =
+                let reader =
                     brotli_decompressor::Decompressor::new(&raw[..], INFLATE_CHUNK_BYTES);
                 std::io::Read::read_to_end(
                     &mut reader.take(oneshot_decode_cap()),
@@ -564,7 +564,7 @@ impl BodyDecoding {
                 .map_err(|e| UpstreamError::Decode(format!("br body: {e}")))?;
             }
             Codec::Zstd => {
-                let mut reader = zstd::stream::read::Decoder::new(&raw[..])
+                let reader = zstd::stream::read::Decoder::new(&raw[..])
                     .map_err(|e| UpstreamError::Decode(format!("zstd body: {e}")))?;
                 std::io::Read::read_to_end(
                     &mut reader.take(oneshot_decode_cap()),

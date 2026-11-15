@@ -1,4 +1,3 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 
