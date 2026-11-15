@@ -5,6 +5,28 @@ use openproxy_adapters::upstream::UpstreamRequest;
 
 /// Inserta los pares (k, v) que parseen como `HeaderName`/`HeaderValue`.
 /// Los malformados se descartan.
+///
+/// Security (audit H-6): los nombres de cabecera configurables por el
+/// operador (los `extra_headers` de un proveedor custom llegan aquí vía
+/// `params.headers`) se filtran contra una denylist de cabeceras de framing
+/// y hop-by-hop. Un `content-length` o `transfer-encoding` ajeno desincroniza
+/// el pool HTTP/1.1 keep-alive hacia el upstream (request smuggling de primer
+/// orden contra el propio gateway); un `host` ajeno al SNI habilita confusión
+/// de virtual-host en CDNs. `hyper 1.x` revalida parte del framing, pero la
+/// denegación en la frontera es la corrección de raíz.
+const FORBIDDEN_UPSTREAM_HEADERS: &[&str] = &[
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "upgrade",
+    "host",
+];
+
 pub(crate) fn populate_upstream_headers(
     upstream_request: &mut UpstreamRequest,
     headers: &[(String, String)],
@@ -12,6 +34,10 @@ pub(crate) fn populate_upstream_headers(
     upstream_request.headers.reserve(headers.len());
     for (k, v) in headers {
         if k.to_ascii_lowercase().starts_with("x-openproxy-") {
+            continue;
+        }
+        let lower = k.to_ascii_lowercase();
+        if FORBIDDEN_UPSTREAM_HEADERS.contains(&lower.as_str()) {
             continue;
         }
         if let (Ok(name), Ok(mut value)) = (
@@ -165,5 +191,49 @@ mod ensure_usage_tests {
         assert_eq!(u.prompt_tokens, 42);
         assert_eq!(u.completion_tokens, 18);
         assert_eq!(u.total_tokens, 60);
+    }
+}
+
+#[cfg(test)]
+mod header_denylist_tests {
+    use super::*;
+
+    /// Security (audit H-6): framing / hop-by-hop headers configured as
+    /// provider `extra_headers` must never reach the upstream request.
+    #[test]
+    fn populate_upstream_headers_drops_hop_by_hop_and_framing() {
+        let mut req = UpstreamRequest::post_json("http://upstream.test/", bytes::Bytes::new());
+        populate_upstream_headers(
+            &mut req,
+            &[
+                ("content-length".to_string(), "0".to_string()),
+                ("transfer-encoding".to_string(), "chunked".to_string()),
+                ("connection".to_string(), "close".to_string()),
+                ("host".to_string(), "evil.cdn.example".to_string()),
+                ("keep-alive".to_string(), "timeout=1".to_string()),
+                ("te".to_string(), "trailers".to_string()),
+                ("upgrade".to_string(), "websocket".to_string()),
+                // Case-insensitive rejection.
+                ("Content-Length".to_string(), "999".to_string()),
+                // Legitimate custom headers still pass through.
+                ("x-custom-header".to_string(), "value".to_string()),
+                ("authorization".to_string(), "Bearer tok".to_string()),
+            ],
+        );
+        assert!(req.headers.get("content-length").is_none());
+        assert!(req.headers.get("transfer-encoding").is_none());
+        assert!(req.headers.get("connection").is_none());
+        assert!(req.headers.get("host").is_none());
+        assert!(req.headers.get("keep-alive").is_none());
+        assert!(req.headers.get("te").is_none());
+        assert!(req.headers.get("upgrade").is_none());
+        assert_eq!(
+            req.headers.get("x-custom-header").and_then(|v| v.to_str().ok()),
+            Some("value")
+        );
+        assert_eq!(
+            req.headers.get("authorization").and_then(|v| v.to_str().ok()),
+            Some("Bearer tok")
+        );
     }
 }
