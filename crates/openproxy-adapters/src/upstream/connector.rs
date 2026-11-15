@@ -233,15 +233,36 @@ fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Phas
     // Test builds and the ssrf-bypass feature keep their existing full
     // bypass.
     let allow_all = cfg!(test) || cfg!(feature = "ssrf-bypass");
+    // Per-provider opt-in (migration 000135): loopback dials, plus the
+    // trusted local ranges the operator opted in for. Link-local (IMDS) and
+    // everything else reserved stays blocked even WITH the opt-in.
     let allow_loopback = !allow_all && call_allows_loopback();
     filter_addrs_under_policy(addrs, allow_all, allow_loopback)
+}
+
+/// The per-provider `allow_loopback` opt-in admits the host-local ranges a
+/// local development backend can live on: loopback, RFC1918 (10/8, 172.16/12,
+/// 192.168/16) and IPv6 unique-local (the fd00::/7 tailnet).
+/// Cloud metadata lives on link-local (169.254/16) and documentation/multicast
+/// ranges are never legitimate backends — those stay blocked regardless of
+/// the opt-in.
+fn provider_opt_in_admits(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+        // IPv4-mapped forms resolve to their embedded v4 decision.
+        IpAddr::V6(v6) => match v6.to_ipv4() {
+            Some(v4) => v4.is_loopback() || v4.is_private(),
+            None => v6.is_loopback() || v6.is_unique_local(),
+        },
+    }
 }
 
 /// Pure address-filter core, unit-tested independently of the cfg-gated
 /// bypasses (audit H-3 contract):
 /// * `allow_all`  — test/ssrf-bypass builds: everything dials.
-/// * `allow_loopback` — per-request opt-in: loopback dials, every other
-///   private/reserved range still blocked.
+/// * `allow_loopback` — per-provider opt-in: loopback and the operator-opted
+///   local ranges (RFC1918 + ULA) dial; link-local (IMDS) and every other
+///   reserved range stays blocked.
 /// * neither — the SSRF filter blocks all private/reserved ranges.
 fn filter_addrs_under_policy(
     addrs: Vec<SocketAddr>,
@@ -256,10 +277,10 @@ fn filter_addrs_under_policy(
         .into_iter()
         .filter(|a| {
             if is_private_or_reserved(&a.ip()) {
-                if allow_loopback && a.ip().is_loopback() {
+                if allow_loopback && provider_opt_in_admits(&a.ip()) {
                     tracing::debug!(
                         addr = %a,
-                        "SSRF: loopback upstream admitted via per-provider allow_loopback"
+                        "SSRF: local upstream admitted via per-provider allow_loopback"
                     );
                     return true;
                 }
@@ -276,7 +297,8 @@ fn filter_addrs_under_policy(
             phase: UpstreamPhase::Dial,
             kind: PhasedErrorKind::Io(io::Error::other(
                 "all resolved addresses are private/reserved (SSRF block). A provider row with \
-                 allow_loopback = 1 admits loopback upstreams for that provider only.",
+                 allow_loopback = 1 admits loopback and local tailnet (RFC1918/ULA) upstreams \
+                 for that provider only.",
             )),
         });
     }

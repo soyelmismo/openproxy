@@ -497,32 +497,34 @@ fn audit_h3_per_request_loopback_policy() {
     );
     assert!(res.is_err(), "loopback must be blocked without the opt-in");
 
-    // With the per-request opt-in: loopback passes…
+    // With the per-provider opt-in: loopback, RFC1918 and ULA pass…
     let kept = filter_addrs_under_policy(
         vec![
             addr("127.0.0.1:8080"),
             addr("[::1]:8443"),
-            addr("1.1.1.1:443"),
+            addr("10.0.0.1:443"),
+            addr("10.0.0.5:443"),
         ],
         false,
         true,
     )
-    .expect("loopback + public must pass under the opt-in");
-    assert_eq!(kept.len(), 3, "loopback v4/v6 and public all dial");
+    .expect("loopback, RFC1918/ULA and public must pass under the opt-in");
+    assert_eq!(
+        kept.len(),
+        4,
+        "loopback v4/v6, RFC1918/ULA and public all dial"
+    );
 
-    // …but RFC1918 / link-local / metadata stay blocked even WITH the opt-in.
+    // …but link-local (IMDS) and documentation ranges stay blocked even WITH
+    // the opt-in.
     let res = filter_addrs_under_policy(
-        vec![
-            addr("192.168.1.10:80"),
-            addr("169.254.169.254:80"),
-            addr("10.1.2.3:80"),
-        ],
+        vec![addr("169.254.169.254:80"), addr("10.1.2.3:80")],
         false,
         true,
     );
     assert!(
         res.is_err(),
-        "the loopback opt-in must not admit RFC1918/link-local ranges"
+        "the loopback opt-in must not admit link-local (IMDS) or documentation ranges"
     );
 
     // Mixed list: only the loopback + public entries survive.
