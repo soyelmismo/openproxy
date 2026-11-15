@@ -63,13 +63,24 @@ impl CooperativeH1Transport {
         }
     }
 
-    async fn connect(&self, uri: &Uri, timeouts: PhasedTimeouts) -> UpstreamResult<Idle> {
+    async fn connect(
+        &self,
+        uri: &Uri,
+        timeouts: PhasedTimeouts,
+        allow_loopback: bool,
+    ) -> UpstreamResult<Idle> {
         let mut connector = ObservedConnector(self.connector.clone());
+        // Scope the task-locals from the request parameters, not from a
+        // task-local re-read: the cooperative dial runs inline on whatever
+        // task polls this future, which carries no ambient scope. Relying on
+        // `call_allows_loopback()` here made every cooperative dial see
+        // "no opt-in" and block loopback/RFC1918 even for providers whose row
+        // explicitly opted in (migration 000135).
         let io = CALL_PROXY
             .scope(
                 None,
                 CALL_ALLOW_LOOPBACK.scope(
-                    super::connector::call_allows_loopback(),
+                    allow_loopback,
                     CALL_TIMEOUTS.scope(timeouts, connector.call(uri.clone())),
                 ),
             )
@@ -154,7 +165,10 @@ impl UpstreamTransport for CooperativeH1Transport {
                 let reused = pooled.is_some();
                 let mut conn = match pooled.take() {
                     Some(idle) => idle,
-                    None => self.connect(&uri, connector_timeouts).await?,
+                    None => {
+                        self.connect(&uri, connector_timeouts, allow_loopback)
+                            .await?
+                    }
                 };
                 progress.0.send_replace(Some(conn.flush.clone()));
                 match send_on(&mut conn, req).await {

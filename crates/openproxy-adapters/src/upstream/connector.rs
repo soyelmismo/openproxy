@@ -249,11 +249,24 @@ fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Phas
 fn provider_opt_in_admits(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
-        // IPv4-mapped forms resolve to their embedded v4 decision.
-        IpAddr::V6(v6) => match v6.to_ipv4() {
-            Some(v4) => v4.is_loopback() || v4.is_private(),
-            None => v6.is_loopback() || v6.is_unique_local(),
-        },
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                // The mapped form dials the embedded v4 address, so the v4
+                // decision is the honest one.
+                v4.is_loopback() || v4.is_private()
+            } else if v6.is_loopback() {
+                // Real IPv6 loopback (::1).
+                true
+            } else if v6.to_ipv4().is_some() {
+                // Deprecated IPv4-compatible form (audit H-5): it merely
+                // hides an arbitrary v4 literal and the dial goes to the
+                // IPv6, which reaches nothing. Never admitted, even with
+                // the opt-in.
+                false
+            } else {
+                v6.is_unique_local()
+            }
+        }
     }
 }
 

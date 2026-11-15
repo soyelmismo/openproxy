@@ -501,7 +501,7 @@ fn audit_h3_per_request_loopback_policy() {
     let kept = filter_addrs_under_policy(
         vec![
             addr("127.0.0.1:8080"),
-            addr("[::1]:8443"),
+            addr("[fc00:10:240::36]:8443"),
             addr("10.0.0.1:443"),
             addr("10.0.0.5:443"),
         ],
@@ -512,19 +512,25 @@ fn audit_h3_per_request_loopback_policy() {
     assert_eq!(
         kept.len(),
         4,
-        "loopback v4/v6, RFC1918/ULA and public all dial"
+        "loopback v4/v6, ULA and RFC1918 all dial under the opt-in"
     );
 
-    // …but link-local (IMDS) and documentation ranges stay blocked even WITH
-    // the opt-in.
+    // …but link-local (IMDS) and the deprecated IPv4-compatible-embedded
+    // forms (::b hides 127.0.0.1, 2001:db8::1 hides
+    // 169.254.169.254) stay blocked even WITH the opt-in. RFC1918 literals such
+    // as 10.1.2.3 DO dial under the opt-in.
     let res = filter_addrs_under_policy(
-        vec![addr("169.254.169.254:80"), addr("10.1.2.3:80")],
+        vec![
+            addr("169.254.169.254:80"),
+            addr("[::b]:80"),
+            addr("[2001:db8::1]:80"),
+        ],
         false,
         true,
     );
     assert!(
         res.is_err(),
-        "the loopback opt-in must not admit link-local (IMDS) or documentation ranges"
+        "the loopback opt-in must not admit link-local (IMDS) or IPv4-compatible-embedded forms"
     );
 
     // Mixed list: only the loopback + public entries survive.
