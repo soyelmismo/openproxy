@@ -53,11 +53,11 @@ export interface ViewFactoryOptions<T> {
 }
 
 const DEFAULT_LOADING = (): TemplateResult =>
-  html`<div class="loading">Loading...</div>`;
+  html`<div class="loading" role="status" aria-live="polite" aria-busy="true">Loading...</div>`;
 const DEFAULT_EMPTY = (): TemplateResult =>
   html`<p class="empty">No data.</p>`;
 const DEFAULT_ERROR = (err: unknown): TemplateResult =>
-  html`<div class="banner banner-error">${err instanceof Error ? err.message : String(err)}</div>`;
+  html`<div class="banner banner-error" role="alert">${err instanceof Error ? err.message : String(err)}</div>`;
 
 /**
  * Generic view lifecycle factory (Q15).

@@ -14,12 +14,17 @@ function createOverlay(): HTMLElement {
   const el = document.createElement("div");
   el.id = "server-reconnect-overlay";
   el.className = "server-reconnect-overlay";
+  el.setAttribute("role", "alertdialog");
+  el.setAttribute("aria-modal", "true");
+  el.setAttribute("aria-live", "assertive");
+  el.setAttribute("aria-labelledby", "server-reconnect-title");
+  el.setAttribute("aria-describedby", "server-reconnect-desc");
   el.innerHTML = `
     <div class="server-reconnect-card">
-      <div class="server-reconnect-spinner"></div>
+      <div class="server-reconnect-spinner" aria-hidden="true"></div>
       <div class="server-reconnect-text">
-        <h3>Server is restarting...</h3>
-        <p>Reconnecting to OpenProxy. The page will reload automatically once online.</p>
+        <h3 id="server-reconnect-title">Server is restarting...</h3>
+        <p id="server-reconnect-desc">Reconnecting to OpenProxy. The page will reload automatically once online.</p>
       </div>
       <button type="button" class="server-reconnect-btn" id="server-reconnect-now-btn">Retry now</button>
     </div>
