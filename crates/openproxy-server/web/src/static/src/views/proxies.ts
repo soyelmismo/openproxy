@@ -221,11 +221,12 @@ function renderKpisDashboard(total: number, alive: number, dead: number, avgLate
 }
 
 function renderFilterBar(search: string, protocol: string, source: string, status: string, uniqueProtocols: string[], uniqueSources: string[]): TemplateResult {
+  const hasFilters = Boolean(search || protocol || source || status);
   return html`
     <div class="cx-filterbar">
       <input
         class="cx-filter-search"
-        type="text"
+        type="search"
         .value=${search}
         placeholder=${t("proxies.filter.search_placeholder")}
         aria-label=${t("proxies.filter.search_placeholder")}
@@ -246,6 +247,17 @@ function renderFilterBar(search: string, protocol: string, source: string, statu
           <option value="alive" ?selected=${status === "alive"}>${t("proxies.status.alive")}</option>
           <option value="dead" ?selected=${status === "dead"}>${t("proxies.status.dead")}</option>
         </select>
+        ${hasFilters ? html`
+          <button type="button" class="secondary small" @click=${() => {
+            if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+            filterSearch = "";
+            filterProtocol = "";
+            filterSource = "";
+            filterStatus = "";
+            currentPage = 1;
+            fetchFilteredProxies();
+          }}>Reset</button>
+        ` : ""}
       </div>
     </div>
   `;
