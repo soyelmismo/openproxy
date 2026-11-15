@@ -220,6 +220,7 @@ impl AppState {
             api_key_cache,
             ws_tickets: Arc::new(super::WsTicketStore::new()),
             admin_limiter: Arc::new(crate::handlers::admin::auth::AdminAuthLimiter::new()),
+            public_auth_limiter: Arc::new(crate::middleware::auth_throttle::AuthFailureLimiter::new(20, std::time::Duration::from_secs(60))),
             oauth_states: Arc::new(crate::handlers::admin::oauth::OAuthStateStore::new()),
         };
 
@@ -380,6 +381,7 @@ impl AppState {
             api_key_cache,
             ws_tickets: Arc::new(super::WsTicketStore::new()),
             admin_limiter: Arc::new(crate::handlers::admin::auth::AdminAuthLimiter::new()),
+            public_auth_limiter: Arc::new(crate::middleware::auth_throttle::AuthFailureLimiter::new(20, std::time::Duration::from_secs(60))),
             oauth_states: Arc::new(crate::handlers::admin::oauth::OAuthStateStore::new()),
         }
     }

@@ -43,7 +43,7 @@ impl ValidatedApiToken {
     }
 }
 
-fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn extract_bearer_or_api_key_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())

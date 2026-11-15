@@ -456,8 +456,10 @@ pub async fn admin_auth_middleware(
 /// (~190 bits) makes brute force impractical, but the throttle removes the
 /// cheap resource-exhaustion and log-flooding paths.
 pub struct AdminAuthLimiter {
-    /// client IP -> (failures in window, window start)
-    failures: dashmap::DashMap<std::net::IpAddr, (u32, std::time::Instant)>,
+    /// Shared per-IP failure budget (extracted to
+    /// `middleware::auth_throttle::AuthFailureLimiter` so the public `/v1`
+    /// throttle reuses the same algorithm and eviction hardening).
+    failures: crate::middleware::auth_throttle::AuthFailureLimiter,
     /// key id -> live WebSocket streams
     ws_streams: dashmap::DashMap<openproxy_types::ids::ApiKeyId, usize>,
 }
@@ -478,7 +480,10 @@ impl Default for AdminAuthLimiter {
 impl AdminAuthLimiter {
     pub fn new() -> Self {
         Self {
-            failures: dashmap::DashMap::new(),
+            failures: crate::middleware::auth_throttle::AuthFailureLimiter::new(
+                ADMIN_AUTH_MAX_FAILURES,
+                ADMIN_AUTH_WINDOW,
+            ),
             ws_streams: dashmap::DashMap::new(),
         }
     }
@@ -492,80 +497,17 @@ impl AdminAuthLimiter {
     /// reset the counter (only a restart cured it; reproduced with the
     /// legitimate admin still locked out 61 s later).
     pub fn is_blocked(&self, ip: std::net::IpAddr) -> bool {
-        self.failures.get(&ip).is_some_and(|e| {
-            let (count, start) = e.value();
-            *count >= ADMIN_AUTH_MAX_FAILURES && start.elapsed() < ADMIN_AUTH_WINDOW
-        })
+        self.failures.is_blocked(ip)
     }
 
     /// Count one failed attempt; resets the window when it expired.
     pub fn record_failure(&self, ip: std::net::IpAddr) {
-        use dashmap::mapref::entry::Entry;
-        // Bound the map under a spoofed-IP flood. Security: previously this
-        // called `clear()`, which wiped the failure counters for active IPs
-        // too — a flood of 100,001 unique spoofed IPs would unblock an IP
-        // that was already throttled. We now drop only entries whose window
-        // has expired (the only ones that were going to be reaped anyway),
-        // preserving active failure counters and the throttle they back.
-        // If even after eviction we are still at the cap, drop the entries
-        // with the LOWEST failure count — those have not tripped the throttle
-        // and dropping them does not unblock anyone.
-        if self.failures.len() >= 100_000 {
-            self.evict_expired_failures();
-            if self.failures.len() >= 100_000 {
-                self.evict_oldest_failures(10_000);
-            }
-        }
-        let now = std::time::Instant::now();
-        match self.failures.entry(ip) {
-            Entry::Occupied(mut o) => {
-                let (count, start) = o.get_mut();
-                if start.elapsed() >= ADMIN_AUTH_WINDOW {
-                    *count = 1;
-                    *start = now;
-                } else {
-                    *count += 1;
-                }
-            }
-            Entry::Vacant(v) => {
-                v.insert((1, now));
-            }
-        }
+        self.failures.record_failure(ip);
     }
 
     /// A successful authentication clears the IP's failure budget.
     pub fn record_success(&self, ip: std::net::IpAddr) {
-        self.failures.remove(&ip);
-    }
-
-    /// Drop every failure-counter entry whose window has expired. Called when
-    /// the DashMap approaches its bound; preserves every active counter.
-    fn evict_expired_failures(&self) {
-        let now = std::time::Instant::now();
-        self.failures
-            .retain(|_, (_, start)| now.duration_since(*start) < ADMIN_AUTH_WINDOW);
-    }
-
-    /// Drop the `n` failure-counter entries with the LOWEST failure count.
-    /// Only invoked when [`evict_expired_failures`] could not free enough
-    /// slots — i.e. every surviving entry is still inside its 60-second
-    /// window, which only happens under a sustained spoofed-IP flood.
-    /// We evict the lowest-count entries because:
-    ///   * an entry with count < ADMIN_AUTH_MAX_FAILURES has not tripped the
-    ///     throttle, so dropping it does NOT unblock anyone;
-    ///   * a blocked IP (count >= ADMIN_AUTH_MAX_FAILURES) is preserved, so
-    ///     the throttle it backs survives the flood.
-    fn evict_oldest_failures(&self, n: usize) {
-        let mut lowest: Vec<(u32, std::net::IpAddr)> = self
-            .failures
-            .iter()
-            .map(|e| (e.value().0, *e.key()))
-            .collect();
-        // Sort ascending by failure count — lowest first.
-        lowest.sort_unstable_by_key(|a| a.0);
-        for (_, ip) in lowest.into_iter().take(n) {
-            self.failures.remove(&ip);
-        }
+        self.failures.record_success(ip);
     }
 
     /// Acquire one WebSocket stream slot for `key`, or `None` when the key
@@ -660,14 +602,7 @@ mod limiter_tests {
         }
         assert!(limiter.is_blocked(ip), "blocked at budget");
         // Age every failure entry past the window, as time would.
-        let now = std::time::Instant::now();
-        limiter.failures.iter_mut().for_each(|mut e| {
-            *e.value_mut() = (
-                ADMIN_AUTH_MAX_FAILURES,
-                now.checked_sub(ADMIN_AUTH_WINDOW + std::time::Duration::from_secs(1))
-                    .unwrap_or(now),
-            )
-        });
+        limiter.failures.age_entries_past_window_for_test();
         assert!(
             !limiter.is_blocked(ip),
             "the block must expire with the window instead of locking the IP forever"
