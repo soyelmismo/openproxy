@@ -245,6 +245,11 @@ impl WarmupStrategy for AntigravityWarmupStrategy {
 
         for url in &endpoints {
             let mut req = UpstreamRequest::post_json(*url, payload.clone());
+            // The warmup mirrors a real streaming client request (SSE) so the
+            // upstream sees the same traffic shape; keep the streaming
+            // transport semantics for it under the one-shot-by-default
+            // builders.
+            req.is_streaming = true;
             if let Ok(v) = http::HeaderValue::from_str(&format!("Bearer {}", account.access_token))
             {
                 req.headers.insert(http::header::AUTHORIZATION, v);
