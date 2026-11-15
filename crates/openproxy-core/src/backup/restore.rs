@@ -15,7 +15,11 @@ pub fn restore_backup(
     options: &RestoreOptions,
     db_path: Option<&Path>,
 ) -> Result<RestoreReport> {
-    if bundle.version == 0 || bundle.version > BACKUP_FORMAT_VERSION + 1 {
+    // ROOT FIX (security audit): fail closed on future formats. A bundle
+    // from a newer OpenProxy may carry fields this code does not know; the
+    // previous `+ 1` allowance silently dropped them and restored a
+    // semantically truncated state instead of refusing.
+    if bundle.version == 0 || bundle.version > BACKUP_FORMAT_VERSION {
         return Err(CoreError::Validation(format!(
             "Unsupported backup format version: {}. Expected <= {}",
             bundle.version, BACKUP_FORMAT_VERSION

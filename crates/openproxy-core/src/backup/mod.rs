@@ -18,8 +18,11 @@ pub use validate::validate_backup;
 mod tests {
     use super::*;
     use openproxy_db::MasterKey;
-    use openproxy_types::backup::RestoreOptions;
+    use openproxy_types::backup::{
+        BACKUP_FORMAT_VERSION, BackupBundle, BackupPayload, RestoreOptions,
+    };
     use rusqlite::Connection;
+    use std::collections::BTreeMap;
 
     fn setup_test_db() -> Connection {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -277,5 +280,95 @@ mod tests {
             )
             .unwrap();
         assert_eq!(custom_cfg, "{\"enabled\": true}");
+    }
+
+    /// VULN (audit, fix/security-audit): `restore_extra_tables` ignored
+    /// TABLE_BLACKLIST (it only guarded exports), so a crafted bundle could
+    /// INSERT OR REPLACE rows into operational tables that are explicitly
+    /// excluded from backups (cooldowns, usage, oauth device tickets, ...).
+    #[test]
+    fn test_restore_rejects_blacklisted_extra_tables() {
+        let master_key = MasterKey::generate().unwrap();
+        let mut dst_conn = setup_test_db();
+
+        let bundle = BackupBundle {
+            version: BACKUP_FORMAT_VERSION,
+            exported_at: chrono::Utc::now().to_rfc3339(),
+            openproxy_version: "1.0.0".into(),
+            encrypted: false,
+            kdf: None,
+            kdf_salt: None,
+            kdf_iterations: None,
+            nonce: None,
+            ciphertext: None,
+            payload: Some(BackupPayload {
+                extra_tables: BTreeMap::from([(
+                    "target_cooldowns".to_string(),
+                    vec![serde_json::json!({
+                        "combo_target_id": 424242,
+                        "cooldown_until": "2099-01-01T00:00:00Z",
+                        "reason": "injected-by-bundle",
+                        "failure_count": 9,
+                    })],
+                )]),
+                ..Default::default()
+            }),
+        };
+
+        restore_backup(
+            &mut dst_conn,
+            &master_key,
+            &bundle,
+            &RestoreOptions::default(),
+            None,
+        )
+        .unwrap();
+
+        let injected: i64 = dst_conn
+            .query_row(
+                "SELECT COUNT(*) FROM target_cooldowns WHERE combo_target_id = 424242",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            injected, 0,
+            "a blacklisted table must never be restored from a bundle"
+        );
+    }
+
+    /// VULN (audit, fix/security-audit): the restore accepted a bundle
+    /// declaring a FUTURE format version (BACKUP_FORMAT_VERSION + 1) and
+    /// silently ignored the fields it did not know, restoring a
+    /// semantically-truncated state instead of failing closed.
+    #[test]
+    fn test_restore_rejects_future_format_version() {
+        let master_key = MasterKey::generate().unwrap();
+        let mut dst_conn = setup_test_db();
+
+        let bundle = BackupBundle {
+            version: BACKUP_FORMAT_VERSION + 1,
+            exported_at: chrono::Utc::now().to_rfc3339(),
+            openproxy_version: "1.0.0".into(),
+            encrypted: false,
+            kdf: None,
+            kdf_salt: None,
+            kdf_iterations: None,
+            nonce: None,
+            ciphertext: None,
+            payload: Some(BackupPayload::default()),
+        };
+
+        let err = restore_backup(
+            &mut dst_conn,
+            &master_key,
+            &bundle,
+            &RestoreOptions::default(),
+            None,
+        );
+        assert!(
+            err.is_err(),
+            "a future format version must fail closed, got {err:?}"
+        );
     }
 }
