@@ -4,8 +4,17 @@ use openproxy_types::message::{OpenAIChoice, OpenAIMessage, OpenAIResponse};
 
 /// Exercise the real formatting -> HTTP upstream -> dispatcher -> client path.
 /// The upstream is a local echo fixture, so no real PII leaves this machine.
-#[tokio::test]
-async fn pii_http_roundtrip_unary_and_streaming() {
+///
+/// Runs on a big-stack thread (see [`crate::test_utils::run_with_big_stack`]):
+/// this is the full e2e pipeline future, which needs ~2.05 MiB of stack in
+/// debug — the libtest thread default is 2 MiB, so a plain `#[tokio::test]`
+/// aborts the whole harness with a stack overflow.
+#[test]
+fn pii_http_roundtrip_unary_and_streaming() {
+    crate::test_utils::run_with_big_stack(pii_http_roundtrip_body);
+}
+
+async fn pii_http_roundtrip_body() {
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

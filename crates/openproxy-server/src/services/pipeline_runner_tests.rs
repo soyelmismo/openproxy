@@ -415,27 +415,64 @@ async fn test_bridge_fifo_order_responses_format() {
     assert!(!wire.contains("[DONE]"));
 }
 
-#[tokio::test]
-async fn test_bridge_failure_before_output_retries_safely() {
+#[test]
+fn test_bridge_failure_before_output_retries_safely() {
     // When socket closes before any byte is committed to the client stream sink,
     // pipeline MUST allow a fresh attempt instead of committing an error.
-    let (wire, hits1, hits2) = run_runner_bridge_with_cut(false, TargetFormat::Openai).await;
+    //
+    // Runs on a big-stack thread: this test drives the FULL e2e pipeline
+    // future (router -> runner -> adapter -> bridge), which needs ~2 MiB of
+    // stack in debug builds, while libtest gives each test thread the
+    // `std::thread` default of 2 MiB — a plain `#[tokio::test]` aborted the
+    // whole harness with a stack overflow (measured peak 2.05 MiB; the same
+    // body passes with RUST_MIN_STACK=2150000). Mirrors
+    // `run_with_big_stack` in the e2e suite.
+    run_with_big_stack(|| async {
+        let (wire, hits1, hits2) = run_runner_bridge_with_cut(false, TargetFormat::Openai).await;
 
-    assert_eq!(hits1, 2, "first target must retry before any output");
-    assert_eq!(hits2, 0, "successful same-target retry needs no fallback");
+        assert_eq!(hits1, 2, "first target must retry before any output");
+        assert_eq!(hits2, 0, "successful same-target retry needs no fallback");
 
-    assert!(
-        wire.contains("replacement-chunk"),
-        "successful replacement output from second target must be streamed: {wire}"
-    );
-    assert!(
-        wire.contains("[DONE]"),
-        "successful stream must terminate with [DONE]: {wire}"
-    );
-    assert!(
-        !wire.contains("\"error\":"),
-        "no error frame should be emitted when retry succeeds: {wire}"
-    );
+        assert!(
+            wire.contains("replacement-chunk"),
+            "successful replacement output from second target must be streamed: {wire}"
+        );
+        assert!(
+            wire.contains("[DONE]"),
+            "successful stream must terminate with [DONE]: {wire}"
+        );
+        assert!(
+            !wire.contains("\"error\":"),
+            "no error frame should be emitted when retry succeeds: {wire}"
+        );
+    });
+}
+
+/// Runs an async test body on a dedicated thread with a large stack.
+///
+/// Debug builds never merge async frames, so a full e2e pipeline future
+/// peaks just above the 2 MiB stack libtest gives each test thread. This is
+/// depth, not infinite recursion — a bigger stack for the tests that need
+/// it, mirroring `run_with_big_stack` in `tests/e2e_suite/main.rs`.
+fn run_with_big_stack<F, Fut>(body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            // current_thread + enable_all mirrors `#[tokio::test]`'s default,
+            // so the test keeps its timing and spawning semantics.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(body());
+        })
+        .expect("spawn big-stack test thread")
+        .join()
+        .expect("test thread panicked");
 }
 
 #[tokio::test]

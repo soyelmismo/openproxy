@@ -441,6 +441,19 @@ fn run_main() -> anyhow::Result<()> {
         // 16-32 thread stacks and thread-local mimalloc pools.
         builder.worker_threads(4);
     }
+    // Security/robustness (audit H-11): a full pipeline request (adapter +
+    // bridge + decision + streaming translation, awaited into each other)
+    // peaks at ~2 MiB of stack in DEBUG builds, because unoptimized async
+    // frames never merge. `std::thread`'s default stack for tokio workers
+    // is exactly 2 MiB, so every worker thread sat precisely on the
+    // overflow edge: one more nesting level (or a debug deployment) and a
+    // request would SIGSEGV the worker with "has overflowed its stack".
+    // Measured peak: 2.05 MiB (the same body the e2e tests run); 16 MiB
+    // leaves an order of magnitude of headroom. The stack is reserved
+    // address space — pages are only committed as the pipeline actually
+    // descends, so the cost of the extra headroom is virtual memory, not
+    // RSS.
+    builder.thread_stack_size(16 * 1024 * 1024);
     let runtime = builder.build()?;
 
     runtime.block_on(async {
