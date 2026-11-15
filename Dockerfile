@@ -75,10 +75,11 @@ VOLUME ["/var/lib/openproxy"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/local/bin/openproxy", "--healthcheck", "--config", "/etc/openproxy/config.toml"]
 
-# Security/ops (audit H-20): the binary reads OPENPROXY_CONFIG (never a
-# --config flag — the old CMD argument was silently discarded, so a plain
-# `docker run` fell back to ./config.toml defaults: loopback bind inside the
-# container and a master-key crash loop). docker-compose.yml already sets the
-# env; the image default now does the same for plain `docker run`.
+# Security/ops (audit H-20 + this audit): the binary reads OPENPROXY_CONFIG
+# and, since the --config parsing fix, honors the CMD's --config flag as
+# well (previously the flag was silently discarded, so a plain `docker run`
+# fell back to ./config.toml defaults: loopback bind inside the container
+# and a master-key crash loop). The ENV makes the config explicit for every
+# invocation style; the CMD keeps the flag for operators who override it.
 ENV OPENPROXY_CONFIG=/etc/openproxy/config.toml
 ENTRYPOINT ["/usr/local/bin/openproxy"]
