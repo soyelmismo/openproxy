@@ -32,7 +32,7 @@ button.danger:hover:not(:disabled) {
   background: var(--color-error-soft);
   color: var(--color-error);
 }
-button.small { padding: 0.2rem 0.5rem; font-size: var(--fs-xs); }
+button.small { padding: 0.2rem 0.5rem; font-size: var(--fs-xs); min-height: 24px; }
 .btn {
   display: inline-flex;
   align-items: center;
@@ -89,6 +89,8 @@ button.close-btn {
   font-size: 1.2rem;
   line-height: 1;
   padding: 0 var(--space-2);
+  min-width: 28px;
+  min-height: 28px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -183,9 +185,9 @@ button.close-btn {
   position: relative;
   display: inline-flex;
   align-items: center;
-  width: 40px;
-  height: 22px;
-  border-radius: 11px;
+  width: 42px;
+  height: 24px;
+  border-radius: 12px;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
   cursor: pointer;
@@ -203,7 +205,7 @@ button.close-btn {
 }
 .toggle-btn .toggle-thumb {
   position: absolute;
-  top: 2px;
+  top: 3px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -212,14 +214,26 @@ button.close-btn {
   transition: transform 0.2s;
 }
 .toggle-btn.on .toggle-thumb {
-  transform: translateX(19px);
+  transform: translateX(21px);
 }
 .toggle-btn.off .toggle-thumb {
-  transform: translateX(2px);
+  transform: translateX(3px);
 }
 .toggle-btn:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  button.close-btn,
+  .theme-toggle {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  button.small,
+  .btn-sm {
+    min-height: 36px;
+  }
 }
 
 /* Shared .actions button-bar. The mobile grid override

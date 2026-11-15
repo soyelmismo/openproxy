@@ -361,3 +361,15 @@
   border: 0;
   border-top: var(--border-w) var(--border-style) var(--color-border);
 }
+
+@media (pointer: coarse) {
+  .dg-qa {
+    opacity: 1;
+    min-width: 32px;
+    min-height: 32px;
+  }
+  .ctx-menu button {
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+}
