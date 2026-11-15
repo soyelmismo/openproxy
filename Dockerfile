@@ -70,9 +70,10 @@ VOLUME ["/var/lib/openproxy"]
 
 # Security (OP-23): real HEALTHCHECK. Distroless has no shell/wget/curl, so
 # the binary checks itself: `openproxy --healthcheck` TCP-connects to the
-# configured bind address and exits 0/1.
+# configured bind address and exits 0/1. The same --config flag as the CMD
+# so the check targets the address the server actually binds.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/usr/local/bin/openproxy", "--healthcheck"]
+    CMD ["/usr/local/bin/openproxy", "--healthcheck", "--config", "/etc/openproxy/config.toml"]
 
 # Security/ops (audit H-20): the binary reads OPENPROXY_CONFIG (never a
 # --config flag — the old CMD argument was silently discarded, so a plain

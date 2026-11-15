@@ -77,7 +77,30 @@ fn configure_allocator() {
     }
 }
 
+/// `--config <path>` (or `--config=<path>`) from the command line.
+///
+/// ROOT FIX (security audit): the container image's CMD passes
+/// `--config /etc/openproxy/config.toml`, but the binary never parsed the
+/// flag: the shipped config (bind, file-based master key, DB path inside
+/// the VOLUME) was silently ignored and the process fell back to defaults
+/// (loopback bind, `~/.openproxy/data.db` outside the volume, env key).
+fn config_path_from_args() -> Option<String> {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(path) = arg.strip_prefix("--config=") {
+            return Some(path.to_string());
+        }
+        if arg == "--config" {
+            return args.next();
+        }
+    }
+    None
+}
+
 fn resolve_config_path() -> String {
+    if let Some(path) = config_path_from_args() {
+        return path;
+    }
     env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| {
         let home_cfg = env::var("HOME")
             .ok()
