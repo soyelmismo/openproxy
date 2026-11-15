@@ -348,6 +348,12 @@ impl AppState {
                 {
                     adapter.append_extra_headers(map.into_iter().collect());
                 }
+                // Per-provider loopback opt-in (migration 000135) applies to
+                // built-in adapters too, not only Custom ones: without this the
+                // column is dead weight for every provider backed by code.
+                if let Some(cfg) = adapter.config_mut() {
+                    cfg.allow_loopback = p.allow_loopback;
+                }
                 if p.stream_mode.as_ref() != "auto" {
                     adapter.append_extra_headers(vec![(
                         "x-openproxy-stream-mode".into(),

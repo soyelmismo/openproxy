@@ -178,6 +178,18 @@ async fn patch_provider_sets_allow_loopback_over_http() {
     .await;
     assert_eq!(s1, StatusCode::OK);
     assert_eq!(read_flag(&state), 1);
+    // The PATCH rebuilds the adapter registry: the flag must reach the
+    // runtime AdapterConfig (dispatch passes it into UpstreamRequest).
+    let adapter = state
+        .adapters()
+        .iter()
+        .find(|a| a.id().as_str() == "w2loop")
+        .expect("custom adapter for w2loop present after rebuild")
+        .clone();
+    assert!(
+        adapter.config().allow_loopback,
+        "allow_loopback must flow from the provider row into the adapter config"
+    );
 
     let (s2, _) = test_req(
         &app,
