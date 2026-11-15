@@ -2,8 +2,6 @@ use crate::handlers::admin::{ApiError, AppState, CoreError};
 
 use axum::{Json, extract::State};
 
-use super::get_oauth_redirect_uri;
-
 pub async fn autoclaw_captcha_config(
     State(s): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
@@ -85,8 +83,21 @@ pub async fn autoclaw_verify_captcha(
     let now = openproxy_types::now_unix_secs_str();
     let sign = openproxy_oauth::oauth::minimax::md5::md5_hex(format!("{APP_ID}&{now}&{APP_KEY}"));
 
+    // Security (audit H-1): the loopback callback the user's browser is told
+    // to redirect to (navigate_uri) must point at a listener THIS server
+    // owns. The URI used to be a fixed port (18432) that any other local
+    // process could squat ahead of us; the listener now binds an ephemeral
+    // port first, the URI is derived from the port the OS actually gave us,
+    // and the two can never drift apart.
+    let (listener, loopback_port) = super::bind_ephemeral().await.map_err(|e| {
+        ApiError(CoreError::Internal(format!(
+            "zai loopback listener bind failed: {e}"
+        )))
+    })?;
+    let navigate_uri = super::navigate_uri_for_port(loopback_port);
+
     let payload = serde_json::json!({
-        "navigate_uri": "http://localhost:18432/auth/callback-zai",
+        "navigate_uri": navigate_uri,
         "source_id": "autoclaw",
         "device_id": "b1b01c10-91dc-4a25-9d32-d17b5f5bbd9b",
         "ali_captcha_verify_param": input.verify_param
@@ -150,10 +161,18 @@ pub async fn autoclaw_verify_captcha(
     let json: serde_json::Value = serde_json::from_slice(&resp_bytes)
         .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?;
 
+    // Register the state and serve exactly one callback connection on the
+    // ephemeral listener. The state is bound to the loopback URI actually
+    // negotiated above, so the listener's exchange (which validates and
+    // consumes it) uses the same redirect the upstream saw.
     if let Some(state_val) = input.state {
-        let redirect_uri = get_oauth_redirect_uri(&s);
         s.oauth_states()
-            .insert("zai", &state_val, "", &redirect_uri);
+            .insert("zai", &state_val, "", &navigate_uri);
+        super::spawn_single_shot_handler(s.clone(), listener, loopback_port, "zai".to_string());
+    } else {
+        // No dashboard-supplied state: nothing to bind the listener to, and
+        // an unbound listener would accept any code. Drop it (fail closed).
+        drop(listener);
     }
 
     Ok(Json(json))

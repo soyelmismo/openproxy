@@ -77,7 +77,7 @@ impl OAuthStateStore {
     /// Drop the single oldest entry. Returns whether something was removed.
     fn evict_oldest(&self) -> bool {
         let mut oldest: Option<((String, String), std::time::Instant)> = None;
-        for entry in self.entries.iter() {
+        for entry in &self.entries {
             let created = entry.value().2;
             if oldest
                 .as_ref()

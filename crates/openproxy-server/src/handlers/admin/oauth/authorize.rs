@@ -6,7 +6,7 @@ use axum::{
 };
 use openproxy_core::oauth::{OAuthProvider, OAuthProviderEnum};
 
-use super::{get_oauth_redirect_uri, resolve_or_create_oauth_account, save_oauth_token_and_notify};
+use super::get_oauth_redirect_uri;
 
 fn validate_authorize_flow(
     provider: &str,
@@ -50,104 +50,11 @@ pub async fn oauth_authorize(
     s.oauth_states()
         .insert(&provider, &state, &code_verifier, &redirect_uri);
 
-    if provider == "zai" {
-        let bind_ports = [18432, 19654, 19723, 53699];
-        for port in bind_ports {
-            let addr = format!("127.0.0.1:{port}");
-            if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
-                let s_clone = s.clone();
-                let provider_name = provider.clone();
-                tokio::spawn(async move {
-                    if let Ok((mut stream, _)) = listener.accept().await {
-                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                        let mut buf = [0u8; 4096];
-                        if let Ok(n) = stream.read(&mut buf).await {
-                            let req_str = String::from_utf8_lossy(&buf[..n]);
-                            let mut code = None;
-                            let mut state_param = None;
-                            if let Some(first_line) = req_str.lines().next()
-                                && let Some(target) = first_line.split_whitespace().nth(1)
-                                && let Some(query_idx) = target.find('?')
-                            {
-                                for pair in target[query_idx + 1..].split('&') {
-                                    if let Some((k, v)) = pair.split_once('=') {
-                                        if k == "code" {
-                                            code = Some(v.to_string());
-                                        } else if k == "state" {
-                                            state_param = Some(v.to_string());
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let (Some(code_val), Some(state_val)) = (code, state_param) {
-                                let actual_code = code_val.trim();
-                                let Ok(account_id) =
-                                    resolve_or_create_oauth_account(&s_clone, &provider_name, None)
-                                        .await
-                                else {
-                                    return;
-                                };
-                                let registry = s_clone.oauth_provider_registry();
-                                let Some(provider_impl) = registry.get(&provider_name) else {
-                                    return;
-                                };
-                                let redirect_uri =
-                                    format!("http://localhost:{port}/auth/callback-zai");
-                                // Security (audit H-10, OP-19): the loopback
-                                // listener used to discard the echoed state
-                                // and exchange with an empty verifier, so a
-                                // code from a flow this server never
-                                // initiated (redirected to any open port
-                                // above) was accepted silently. Bind the
-                                // exchange to the state WE generated in
-                                // build_auth_url.
-                                let Some((code_verifier_val, state_redirect)) = s_clone
-                                    .oauth_states()
-                                    .consume(&provider_name, state_val.trim())
-                                else {
-                                    tracing::warn!(
-                                        provider = %provider_name,
-                                        "zai loopback callback rejected: unknown/expired/used state"
-                                    );
-                                    return;
-                                };
-                                let _ = state_redirect;
-                                if let Ok(token) = provider_impl
-                                    .exchange_code(
-                                        actual_code,
-                                        &code_verifier_val,
-                                        s_clone.upstream_client(),
-                                        &redirect_uri,
-                                    )
-                                    .await
-                                {
-                                    let _ = save_oauth_token_and_notify(
-                                        &s_clone,
-                                        &provider_name,
-                                        &provider_impl,
-                                        account_id,
-                                        &token,
-                                        None,
-                                    )
-                                    .await;
-                                }
-                            }
-
-                            let html = "<!doctype html><html><body style='font-family:sans-serif;text-align:center;padding:50px;'><h2>Authorization successful!</h2><p>You can close this tab and return to OpenProxy.</p><script>window.close();</script></body></html>";
-                            let resp = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                html.len(),
-                                html
-                            );
-                            let _ = stream.write_all(resp.as_bytes()).await;
-                        }
-                    }
-                });
-                break;
-            }
-        }
-    }
+    // Security (audit H-1): the zai provider used to ALSO bind one of four
+    // fixed loopback ports here (first-bind-wins) so a local process could
+    // squat them and capture the browser redirect. The loopback listener now
+    // lives where the callback URI is actually negotiated with the upstream
+    // — `verify-captcha`, on an ephemeral port — see `zai_loopback`.
 
     Ok(Json(serde_json::json!({
         "authorization_url": auth_url,

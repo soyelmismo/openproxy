@@ -5,6 +5,7 @@ mod device;
 mod exchange;
 mod state_store;
 mod support;
+mod zai_loopback;
 
 pub use authorize::oauth_authorize;
 pub use autoclaw::{VerifyCaptchaInput, autoclaw_captcha_config, autoclaw_verify_captcha};
@@ -16,6 +17,7 @@ pub use state_store::OAuthStateStore;
 pub(crate) use support::{
     get_oauth_redirect_uri, resolve_or_create_oauth_account, save_oauth_token_and_notify,
 };
+pub(crate) use zai_loopback::{bind_ephemeral, navigate_uri_for_port, spawn_single_shot_handler};
 
 // Sibling handler module, reachable as `super::providers` from submodules.
 use super::{AppState, providers};
