@@ -82,7 +82,6 @@ pub async fn oauth_authorize(
 
                             if let (Some(code_val), Some(state_val)) = (code, state_param) {
                                 let actual_code = code_val.trim();
-                                let _effective_state = state_val.trim();
                                 let Ok(account_id) =
                                     resolve_or_create_oauth_account(&s_clone, &provider_name, None)
                                         .await
@@ -95,11 +94,28 @@ pub async fn oauth_authorize(
                                 };
                                 let redirect_uri =
                                     format!("http://localhost:{port}/auth/callback-zai");
-                                let code_verifier_val = "";
+                                // Security (audit H-10, OP-19): the loopback
+                                // listener used to discard the echoed state
+                                // and exchange with an empty verifier, so a
+                                // code from a flow this server never
+                                // initiated (redirected to any open port
+                                // above) was accepted silently. Bind the
+                                // exchange to the state WE generated in
+                                // build_auth_url.
+                                let Some((code_verifier_val, state_redirect)) =
+                                    s_clone.oauth_states().consume(&provider_name, state_val.trim())
+                                else {
+                                    tracing::warn!(
+                                        provider = %provider_name,
+                                        "zai loopback callback rejected: unknown/expired/used state"
+                                    );
+                                    return;
+                                };
+                                let _ = state_redirect;
                                 if let Ok(token) = provider_impl
                                     .exchange_code(
                                         actual_code,
-                                        code_verifier_val,
+                                        &code_verifier_val,
                                         s_clone.upstream_client(),
                                         &redirect_uri,
                                     )
