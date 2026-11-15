@@ -11,9 +11,6 @@
 -- When the model reappears on subsequent upstream discovery, the
 -- Gate F1 reconnection logic automatically rebinds `model_row_id`
 -- via `upstream_model_id`.
---
--- Also ensure the volatile P2P provider has prune_models = 1 so its models are pruned
--- normally from the provider catalog while combos preserve ghost targets.
 
 PRAGMA foreign_keys = OFF;
 
@@ -63,8 +60,6 @@ CREATE INDEX idx_combo_targets_sub_combo_id
 CREATE INDEX idx_combo_targets_upstream_model_id
   ON combo_targets(provider_id, upstream_model_id)
   WHERE upstream_model_id IS NOT NULL;
-
-UPDATE providers SET prune_models = 1 WHERE id = 'antseed';
 
 PRAGMA foreign_keys = ON;
 PRAGMA foreign_key_check;
