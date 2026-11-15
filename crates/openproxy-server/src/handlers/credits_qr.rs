@@ -22,6 +22,7 @@ use std::fmt::Write as _;
 pub struct StyledQr {
     pub svg: String,
     pub modules: usize,
+    #[cfg(test)]
     payload_len: usize,
 }
 
@@ -138,6 +139,7 @@ fn render_styled(payload: &str, accent: &str, classic: bool) -> Result<StyledQr,
     Ok(StyledQr {
         svg,
         modules: width,
+        #[cfg(test)]
         payload_len: payload.len(),
     })
 }
@@ -224,7 +226,10 @@ mod tests {
     fn sec_37c5309c() {
         let uri = eip681_usdc(8453, USDC, COLLECTOR, 5_004_103);
         let qr = render_classic(&uri).expect("classic render");
-        assert!(qr.svg.contains(r##"fill="#ffffff""##), "fondo blanco sólido");
+        assert!(
+            qr.svg.contains(r##"fill="#ffffff""##),
+            "fondo blanco sólido"
+        );
         assert!(qr.svg.contains(r##"fill="#000000""##), "módulos negros");
         assert!(
             !qr.svg.contains("rx="),

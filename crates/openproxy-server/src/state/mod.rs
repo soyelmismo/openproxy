@@ -12,6 +12,10 @@
 mod background;
 mod builder;
 mod init;
+mod last_used;
+#[cfg(test)]
+mod last_used_tests;
+mod read_flights;
 #[cfg(test)]
 mod tests;
 mod ws_tickets;
@@ -35,6 +39,8 @@ pub struct AppState {
     db_pool: Arc<db::DbPool>,
     master_key: Arc<MasterKey>,
     services: Arc<crate::services::Services>,
+    read_flights: Arc<read_flights::ReadFlights>,
+    last_used: Arc<last_used::LastUsedBatcher>,
     #[cfg(feature = "payments")]
     checkout_batcher: crate::handlers::checkout_batch::CheckoutBatcher,
     #[cfg(feature = "payments")]
@@ -62,6 +68,7 @@ pub struct AppState {
     quota_protection_cell: Arc<parking_lot::RwLock<openproxy_types::config::QuotaProtectionConfig>>,
     pii_config_cell: Arc<parking_lot::RwLock<openproxy_types::config::PiiConfig>>,
     modality_routing_cell: Arc<parking_lot::RwLock<openproxy_types::config::ModalityRoutingConfig>>,
+    error_masking_cell: Arc<parking_lot::RwLock<openproxy_types::config::TargetErrorMaskingConfig>>,
     notifications_enabled_cell: Arc<AtomicBool>,
     selection_registry: Arc<openproxy_types::SelectionRegistry>,
     circuit_breaker: openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry,
@@ -101,6 +108,12 @@ pub struct BackfillStatus {
 }
 
 impl AppState {
+    pub(crate) async fn touch_last_used_batched(
+        &self,
+        key: openproxy_types::ids::ApiKeyId,
+    ) -> openproxy_types::Result<()> {
+        self.last_used.touch(Arc::clone(&self.db_pool), key).await
+    }
     #[cfg(feature = "payments")]
     pub(crate) fn checkout_batcher(&self) -> &crate::handlers::checkout_batch::CheckoutBatcher {
         &self.checkout_batcher
@@ -108,6 +121,9 @@ impl AppState {
     #[cfg(feature = "payments")]
     pub(crate) fn delivery_batcher(&self) -> &crate::handlers::delivery_batch::DeliveryBatcher {
         &self.delivery_batcher
+    }
+    pub(crate) fn read_flights(&self) -> Arc<read_flights::ReadFlights> {
+        Arc::clone(&self.read_flights)
     }
     pub async fn shutdown_usage_worker(&self) -> openproxy_types::Result<()> {
         self.discovery_scheduler.cancel();
@@ -454,6 +470,14 @@ impl AppState {
         *self.modality_routing_cell.write() = config;
     }
 
+    pub fn error_masking(&self) -> openproxy_types::config::TargetErrorMaskingConfig {
+        *self.error_masking_cell.read()
+    }
+
+    pub fn set_error_masking(&self, config: openproxy_types::config::TargetErrorMaskingConfig) {
+        *self.error_masking_cell.write() = config;
+    }
+
     pub fn notifications_enabled(&self) -> bool {
         self.notifications_enabled_cell
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -544,6 +568,9 @@ impl AppState {
         }
         if let Ok(Some(modality)) = db::app_config::load_modality_routing_from_db(conn) {
             self.set_modality_routing(modality);
+        }
+        if let Ok(Some(masking)) = db::app_config::load_error_masking_from_db(conn) {
+            self.set_error_masking(masking);
         }
         if let Ok(Some(notif)) = db::app_config::load_notifications_enabled_from_db(conn) {
             self.set_notifications_enabled(notif);

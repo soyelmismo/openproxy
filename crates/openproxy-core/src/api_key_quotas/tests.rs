@@ -179,11 +179,13 @@ fn spend_counts_only_inside_the_anchored_window() {
     // The oldest spend still counting is the 1h-old one: 6h-old spend
     // predates the anchor and is outside the window.
     let oldest = chrono::NaiveDateTime::parse_from_str(
-        &st.five_hours.oldest_spend_at.expect("the anchored oldest spend"),
+        &st.five_hours
+            .oldest_spend_at
+            .expect("the anchored oldest spend"),
         "%Y-%m-%d %H:%M:%S",
     )
     .expect("sqlite timestamp");
-    let age = chrono::Utc::now().naive_utc().timestamp() - oldest.timestamp();
+    let age = chrono::Utc::now().timestamp() - oldest.and_utc().timestamp();
     assert!(
         (3_000..=4_200).contains(&age),
         "oldest spend ≈ 1h old, got {age}s"

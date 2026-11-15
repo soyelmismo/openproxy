@@ -46,6 +46,9 @@ export interface ConfigPayload {
     enabled?: boolean | null;
     threshold_percentage?: number | null;
   } | null;
+  error_masking?: {
+    enabled?: boolean;
+  };
   modality_routing?: {
     enabled?: boolean | null;
     fallback_to_text_only?: boolean | null;

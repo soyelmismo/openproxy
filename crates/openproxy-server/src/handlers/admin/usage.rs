@@ -73,12 +73,11 @@ fn parse_exclude_list(raw: Option<&str>) -> Vec<String> {
 }
 
 pub fn router() -> axum::Router<AppState> {
-    let router =
-        axum::Router::new().route("/summary", axum::routing::get(usage_summary));
+    let router = axum::Router::new().route("/summary", axum::routing::get(usage_summary));
     // The plan-quota view only exists with payments (api_key_quotas).
     #[cfg(feature = "payments")]
     let router = router.route("/quota", axum::routing::get(usage_quota));
-    let router = router
+    router
         .route("/by-model", axum::routing::get(usage_by_model))
         .route("/by-provider", axum::routing::get(usage_by_provider))
         .route("/by-combo", axum::routing::get(usage_by_combo))
@@ -97,8 +96,7 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/recompute-costs",
             axum::routing::post(recompute_usage_costs),
-        );
-    router
+        )
 }
 
 /// GET /admin/api/usage/quota — the caller's own dollar-quota status.
@@ -129,7 +127,7 @@ macro_rules! analytics_handler {
             State(s): State<AppState>,
             identity: Option<axum::Extension<super::auth::AdminIdentity>>,
             Query(mut q): Query<UsageQuery>,
-        ) -> Result<Json<$res_ty>, ApiError> {
+        ) -> Result<axum::response::Response, ApiError> {
             // Security: Enforce tenant isolation for API keys without full "manage" scope.
             // If the key has only "analytics" scope, its queries are strictly scoped to its own key id
             // and projected onto the public space (combo aliases / whitelisted catalog entries).
@@ -137,13 +135,16 @@ macro_rules! analytics_handler {
                 apply_tenant_and_public_scope(id, &mut q)?;
             }
 
-            crate::error::run_blocking(move || {
-                let f = q.into_filter()?;
-                let result =
-                    run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| $core_fn(conn, fl))?;
-                Ok(Json(result))
-            })
-            .await
+            let key = format!("analytics:{}:{q:?}", $tag);
+            s.read_flights()
+                .json(key, move || {
+                    let f = q.into_filter()?;
+                    let result = run_analytics_query_with_filter(&s, &f, $tag, |conn, fl| {
+                        $core_fn(conn, fl)
+                    })?;
+                    Ok(Json(result))
+                })
+                .await
         }
     };
 }
@@ -196,7 +197,7 @@ pub async fn usage_summary(
     State(s): State<AppState>,
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
     Query(mut q): Query<UsageQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     // No identity = dev bypass or the master key: full payload.
     let operator = identity
         .as_ref()
@@ -205,27 +206,29 @@ pub async fn usage_summary(
         apply_tenant_and_public_scope(id, &mut q)?;
     }
 
-    crate::error::run_blocking(move || {
-        let f = q.into_filter()?;
-        let summary: core_usage::UsageSummary =
-            run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
-                core_usage::summary(conn, fl)
-            })?;
-        let value = if operator {
-            serde_json::to_value(summary)
-        } else {
-            Ok(serde_json::json!({
-                "unique_requests": summary.unique_requests,
-                "total_prompt_tokens": summary.total_prompt_tokens,
-                "total_completion_tokens": summary.total_completion_tokens,
-                "total_cached_tokens": summary.total_cached_tokens,
-                "total_cost_usd": summary.total_cost_usd,
-            }))
-        }
-        .map_err(|e| ApiError(CoreError::Internal(format!("summary serialize: {e}"))))?;
-        Ok(Json(value))
-    })
-    .await
+    let key = format!("analytics:summary:{operator}:{q:?}");
+    s.read_flights()
+        .json(key, move || {
+            let f = q.into_filter()?;
+            let summary: core_usage::UsageSummary =
+                run_analytics_query_with_filter(&s, &f, "summary", |conn, fl| {
+                    core_usage::summary(conn, fl)
+                })?;
+            let value = if operator {
+                serde_json::to_value(summary)
+            } else {
+                Ok(serde_json::json!({
+                    "unique_requests": summary.unique_requests,
+                    "total_prompt_tokens": summary.total_prompt_tokens,
+                    "total_completion_tokens": summary.total_completion_tokens,
+                    "total_cached_tokens": summary.total_cached_tokens,
+                    "total_cost_usd": summary.total_cost_usd,
+                }))
+            }
+            .map_err(|e| ApiError(CoreError::Internal(format!("summary serialize: {e}"))))?;
+            Ok(Json(value))
+        })
+        .await
 }
 
 analytics_handler!(
@@ -294,7 +297,7 @@ pub async fn usage_errors(
         apply_tenant_and_public_scope(id, &mut q)?;
     }
 
-    crate::error::run_blocking(move || {
+    crate::error::run_bulk_read_blocking(move || {
         let f = q.into_filter()?;
         let result = run_analytics_query_with_filter(&s, &f, "errors", |conn, fl| {
             core_usage::errors(conn, fl, ERRORS_DEFAULT_LIMIT)
@@ -339,7 +342,7 @@ pub async fn usage_recent(
         )));
     }
 
-    crate::error::run_blocking(move || {
+    crate::error::run_bulk_read_blocking(move || {
         let since_id = q.since_id.unwrap_or(0).clamp(0, USAGE_RECENT_MAX_SINCE_ID);
         let limit = q
             .limit
@@ -403,7 +406,7 @@ pub async fn usage_detail(
             "forbidden: usage detail requires manage scope".into(),
         )));
     }
-    crate::error::run_blocking(move || {
+    crate::error::run_bulk_read_blocking(move || {
         let r = s.db_pool().reader();
 
         let row = fetch_usage_detail(&r, &q)?;
@@ -646,7 +649,7 @@ impl UsageQuery {
         // An empty value or `all` means "no ownership filter"; anything else
         // must parse to a known kind instead of matching nothing silently.
         let key_kind = match self.api_key_kind.as_deref() {
-            None | Some("") | Some("all") => None,
+            None | Some("" | "all") => None,
             Some(raw) => Some(
                 raw.parse::<core_usage::analytics::filter::KeyKind>()
                     .map_err(|e| ApiError(CoreError::Validation(e)))?,

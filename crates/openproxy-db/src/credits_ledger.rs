@@ -253,8 +253,7 @@ pub fn prorated_credit_units(credit_units: i64, received_units: i64, quoted_unit
     if received >= quoted_units {
         return credit;
     }
-    let prorated =
-        (i128::from(credit) * i128::from(received)) / i128::from(quoted_units);
+    let prorated = (i128::from(credit) * i128::from(received)) / i128::from(quoted_units);
     let prorated = i64::try_from(prorated).unwrap_or(i64::MAX);
     prorated.clamp(0, credit)
 }
@@ -279,7 +278,8 @@ pub fn reconcile(conn: &Connection) -> openproxy_types::Result<ReconcileReport> 
              FROM credit_orders WHERE status IN ('paid', 'minted')",
         )
         .map_err(crate::error::map_db_error)?;
-    let orders: Vec<(i64, i64, i64, Option<String>, Option<i64>)> = stmt
+    type PaidOrder = (i64, i64, i64, Option<String>, Option<i64>);
+    let orders: Vec<PaidOrder> = stmt
         .query_map([], |row| {
             Ok((
                 row.get(0)?,

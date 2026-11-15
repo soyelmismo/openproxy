@@ -51,6 +51,7 @@ impl AppState {
         let quota_protection_cell = Arc::new(RwLock::new(config.quota_protection.clone()));
         let pii_config_cell = Arc::new(RwLock::new(config.pii.clone()));
         let modality_routing_cell = Arc::new(RwLock::new(config.modality_routing));
+        let error_masking_cell = Arc::new(RwLock::new(config.error_masking));
         let notifications_enabled_cell = Arc::new(AtomicBool::new(notifications_enabled));
         openproxy_core::notifications::set_enabled(notifications_enabled);
 
@@ -124,8 +125,11 @@ impl AppState {
             ),
         );
         #[cfg(feature = "payments")]
-        let checkout_admission = Arc::new(crate::handlers::credits_gateway::CheckoutAdmission::
-            from_config(config.credits.as_ref()));
+        let checkout_admission = Arc::new(
+            crate::handlers::credits_gateway::CheckoutAdmission::from_config(
+                config.credits.as_ref(),
+            ),
+        );
         // The persisted overrides (if any) are applied by
         // `AppState::reload_runtime_config` once the DB is open, so a live
         // retune survives a restart without editing config.toml.
@@ -167,6 +171,7 @@ impl AppState {
 
         let state = Self {
             config,
+            last_used: Arc::new(super::last_used::LastUsedBatcher::default()),
             #[cfg(feature = "payments")]
             checkout_batcher: crate::handlers::checkout_batch::CheckoutBatcher::new(Arc::clone(
                 &db_pool,
@@ -179,6 +184,7 @@ impl AppState {
             db_pool,
             master_key,
             services,
+            read_flights: Arc::new(super::read_flights::ReadFlights::default()),
             adapters,
             rate_limiter,
             inflight_limiter,
@@ -198,6 +204,7 @@ impl AppState {
             quota_protection_cell,
             pii_config_cell,
             modality_routing_cell,
+            error_masking_cell,
             notifications_enabled_cell,
             selection_registry,
             circuit_breaker,
@@ -279,8 +286,11 @@ impl AppState {
             ),
         );
         #[cfg(feature = "payments")]
-        let checkout_admission = Arc::new(crate::handlers::credits_gateway::CheckoutAdmission::
-            from_config(config.credits.as_ref()));
+        let checkout_admission = Arc::new(
+            crate::handlers::credits_gateway::CheckoutAdmission::from_config(
+                config.credits.as_ref(),
+            ),
+        );
         // The persisted overrides (if any) are applied by
         // `AppState::reload_runtime_config` once the DB is open, so a live
         // retune survives a restart without editing config.toml.
@@ -315,6 +325,7 @@ impl AppState {
 
         Self {
             config: config.clone(),
+            last_used: Arc::new(super::last_used::LastUsedBatcher::default()),
             #[cfg(feature = "payments")]
             checkout_batcher: crate::handlers::checkout_batch::CheckoutBatcher::new(Arc::clone(
                 &db_pool,
@@ -327,6 +338,7 @@ impl AppState {
             db_pool,
             master_key,
             services,
+            read_flights: Arc::new(super::read_flights::ReadFlights::default()),
             adapters,
             rate_limiter,
             inflight_limiter,
@@ -350,6 +362,7 @@ impl AppState {
             quota_protection_cell: Arc::new(RwLock::new(config.quota_protection)),
             pii_config_cell: Arc::new(RwLock::new(config.pii)),
             modality_routing_cell: Arc::new(RwLock::new(config.modality_routing)),
+            error_masking_cell: Arc::new(RwLock::new(config.error_masking)),
             notifications_enabled_cell: Arc::new(AtomicBool::new(
                 db::app_config::NOTIFICATIONS_ENABLED_DEFAULT,
             )),

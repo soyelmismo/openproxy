@@ -22,6 +22,12 @@ export interface LogDetailLog {
   completion_tokens_estimated?: boolean;
   tokens_per_sec?: number | null;
   cost_usd?: number | null;
+  /** Micro-USD actually charged (null = no durable proof of an amount). */
+  charged_units?: number | null;
+  /** Exactly-once debit marker; `true` does not imply a positive amount. */
+  credits_debited?: boolean;
+  /** Server-derived charge verdict: charged | not_charged | unknown. */
+  charge_state?: string | null;
   is_streaming?: boolean;
   stream_complete?: boolean;
   /** Compression savings in tokens (0.0–100.0) or null when off. */

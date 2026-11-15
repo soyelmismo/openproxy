@@ -159,7 +159,7 @@ pub async fn update_api_key(
     let pool = Arc::clone(s.db_pool());
     #[cfg(feature = "payments")]
     let state_for_cache = s.clone();
-    let _ = crate::error::run_blocking(move || {
+    crate::error::run_blocking(move || {
         let label = body.get("label").and_then(|v| v.as_str());
         let scopes_owned: Option<Vec<String>> =
             body.get("scopes").and_then(|v| v.as_array()).map(|a| {

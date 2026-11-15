@@ -1,0 +1,21 @@
+-- Durable proof of the money a usage row actually moved.
+--
+-- `credits_debited` is only an exactly-once *marker*: `debit_usage` sets it
+-- after attempting the debit, including the cases where nothing was charged —
+-- a key with no prepaid credits debits 0 and still marks the row, and a
+-- credit-based key only pays `min(cost_usd, balance)`, so an overrun charges
+-- the remainder while `cost_usd` keeps the full price. Neither `cost_usd` (the
+-- calculated price) nor the marker can answer "how much was really charged?".
+--
+-- `charged_units` is that answer, in integer micro-USD (1e-6 USD, the ledger's
+-- own unit), written in the same transaction as the debit. It is never derived
+-- from `cost_usd` and never backfilled: rows that existed before this column
+-- keep NULL, which the API reports as "unknown" (marker set, amount not
+-- recorded) or "not charged" (marker clear, so no debit ever ran). NULL with
+-- the marker set must stay unknown forever — inventing an amount from the
+-- price would turn a guess into a billing claim.
+--
+-- Universal column: like `credits_debited`, it always exists; only the debit
+-- code that writes it is feature-gated.
+ALTER TABLE usage ADD COLUMN charged_units INTEGER
+    CHECK (charged_units IS NULL OR charged_units >= 0);

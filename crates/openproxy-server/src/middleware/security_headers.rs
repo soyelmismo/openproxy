@@ -130,10 +130,7 @@ fn is_panel_path(path: &str) -> bool {
 
 /// Whether the path belongs to the public, anonymous money surface.
 fn is_public_money_surface(path: &str) -> bool {
-    path == "/checkout"
-        || path == "/checkout.js"
-        || path == "/terms"
-        || path.starts_with("/v1/")
+    path == "/checkout" || path == "/checkout.js" || path == "/terms" || path.starts_with("/v1/")
 }
 
 /// Axum middleware fn: see module docs.

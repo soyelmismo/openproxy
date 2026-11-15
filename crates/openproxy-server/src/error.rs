@@ -27,7 +27,7 @@ impl From<CoreError> for ApiError {
     }
 }
 
-/// Execute synchronous administrative work without blocking a Tokio worker.
+/// Execute synchronous work without blocking a Tokio worker.
 pub(crate) async fn run_blocking<T, F>(operation: F) -> Result<T, ApiError>
 where
     T: Send + 'static,
@@ -40,6 +40,32 @@ where
                 "blocking task failed: {error}"
             )))
         })?
+}
+
+/// Bound expensive catalog/analytics reads before entering the blocking pool.
+/// Routing and administrative mutations must not queue behind these bulk reads.
+///
+/// The cap bounds CPU oversubscription (each permit runs a SQL aggregate on a
+/// 4-core host), not correctness. 2 serialized the whole analytics cohort: at
+/// ~6 ms per query, 286 concurrent readers queued ~0.9 s each — the queue
+/// wait, not the query, was the p99. 8 keeps aggregates off the reactor's
+/// critical path while draining a cohort several times faster.
+pub(crate) async fn run_bulk_read_blocking<T, F>(operation: F) -> Result<T, ApiError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, ApiError> + Send + 'static,
+{
+    static ADMISSION: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(8)));
+    let permit = std::sync::Arc::clone(&ADMISSION)
+        .acquire_owned()
+        .await
+        .map_err(|e| ApiError(CoreError::Internal(format!("bulk read admission: {e}"))))?;
+    run_blocking(move || {
+        let _permit = permit;
+        operation()
+    })
+    .await
 }
 
 impl ApiError {
@@ -152,10 +178,12 @@ impl IntoResponse for ApiError {
         // A rate-limited client must be told when to come back, like any
         // generic rate limiter: the quota path carries the window's reset
         // instant, the upstream path its retry hint.
-        if let Some(retry_after) = retry_after_value(&self.0) {
-            if let Ok(value) = axum::http::HeaderValue::from_str(&retry_after) {
-                response.headers_mut().insert(axum::http::header::RETRY_AFTER, value);
-            }
+        if let Some(retry_after) = retry_after_value(&self.0)
+            && let Ok(value) = axum::http::HeaderValue::from_str(&retry_after)
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
         }
         response
     }
@@ -182,6 +210,11 @@ fn retry_after_value(err: &CoreError) -> Option<String> {
         CoreError::RateLimited { retry_after_ms, .. } => {
             Some((*retry_after_ms).div_ceil(1000).max(1).to_string())
         }
+        // Masked upstream pressure: the hint survives without the provider.
+        CoreError::MaskedUpstream {
+            retry_after_ms: Some(ms),
+            ..
+        } => Some((*ms).div_ceil(1000).max(1).to_string()),
         _ => None,
     }
 }
@@ -227,7 +260,10 @@ mod tests {
             .to_str()
             .expect("ascii");
         let secs: u64 = header.parse().expect("numeric retry-after");
-        assert!((250..=300).contains(&secs), "seconds until reset, got {secs}");
+        assert!(
+            (250..=300).contains(&secs),
+            "seconds until reset, got {secs}"
+        );
     }
 
     #[test]
@@ -246,6 +282,29 @@ mod tests {
             .to_str()
             .expect("ascii");
         assert_eq!(header, "2", "1500ms rounds up to 2s");
+    }
+
+    #[test]
+    fn masked_upstream_keeps_the_retry_hint_and_drops_the_detail() {
+        let err = ApiError(CoreError::MaskedUpstream {
+            status: 429,
+            message: "The model is temporarily rate limited. Retry after the indicated delay."
+                .into(),
+            retry_after_ms: Some(90_000),
+        });
+        let message = err.sanitized_message();
+        let response = err.into_response();
+        assert_eq!(response.status().as_u16(), 429);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .expect("retry-after")
+                .to_str()
+                .expect("ascii"),
+            "90"
+        );
+        assert!(!message.contains("provider"), "{message}");
     }
 
     #[test]

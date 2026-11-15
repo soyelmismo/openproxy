@@ -21,123 +21,135 @@ pub use super::model_tester::{
 pub async fn catalog(
     State(s): State<AppState>,
     identity: Option<axum::Extension<super::auth::AdminIdentity>>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     let key = identity.as_ref().and_then(|id| id.key.clone());
-    crate::error::run_blocking(move || {
-        let raw_models = s
-            .services()
-            .models
-            .list_active_all(std::time::Duration::from_secs(5))?;
-        let raw_combos = s.services().combos.list_combos()?;
+    let flight_key = format!(
+        "catalog:{}",
+        crate::handlers::models::catalog_scope(key.as_deref())
+    );
+    s.read_flights()
+        .json(flight_key, move || {
+            let raw_models = s
+                .services()
+                .models
+                .list_active_all(std::time::Duration::from_secs(5))?;
+            let raw_combos = s.services().combos.list_combos()?;
 
-        let rows = crate::handlers::models::filter_models_for_key(raw_models, key.as_deref());
-        let combo_rows = crate::handlers::models::filter_combos_for_key(raw_combos, key.as_deref());
+            let rows = crate::handlers::models::filter_models_for_key(raw_models, key.as_deref());
+            let combo_rows =
+                crate::handlers::models::filter_combos_for_key(raw_combos, key.as_deref());
 
-        // Pricing map: one pass over the models.dev sync table, exact
-        // (provider, model) first, normalized model id as fallback.
-        let pool = std::sync::Arc::clone(s.db_pool());
-        let conn = pool
-            .try_reader_for(std::time::Duration::from_secs(5))
-            .ok_or_else(|| ApiError(CoreError::Internal("reader lock timeout".into())))?;
-        let mut pricing_exact: std::collections::HashMap<
-            (String, String),
-            (f64, f64, Option<f64>),
-        > = std::collections::HashMap::new();
-        let mut pricing_normalized: std::collections::HashMap<String, (f64, f64, Option<f64>)> =
-            std::collections::HashMap::new();
-        {
-            let mut stmt = conn
-                .prepare_cached(
-                    "SELECT provider_id, model_id, model_id_normalized, \
+            // Pricing map: one pass over the models.dev sync table, exact
+            // (provider, model) first, normalized model id as fallback.
+            let pool = std::sync::Arc::clone(s.db_pool());
+            let conn = pool
+                .try_reader_for(std::time::Duration::from_secs(5))
+                .ok_or_else(|| ApiError(CoreError::Internal("reader lock timeout".into())))?;
+            let mut pricing_exact: std::collections::HashMap<
+                (String, String),
+                (f64, f64, Option<f64>),
+            > = std::collections::HashMap::new();
+            let mut pricing_normalized: std::collections::HashMap<String, (f64, f64, Option<f64>)> =
+                std::collections::HashMap::new();
+            {
+                let mut stmt = conn
+                    .prepare_cached(
+                        "SELECT provider_id, model_id, model_id_normalized, \
                      pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m \
                      FROM model_capabilities_sync WHERE pricing_input_per_1m IS NOT NULL",
-                )
-                .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
-            let mapped = stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, f64>(3)?,
-                        row.get::<_, f64>(4)?,
-                        row.get::<_, Option<f64>>(5)?,
-                    ))
-                })
-                .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
-            for r in mapped {
-                let (prov, model, normalized, inp, out, cached) =
-                    r.map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
-                pricing_exact
-                    .entry((prov, model))
-                    .or_insert((inp, out, cached));
-                if let Some(norm) = normalized {
-                    pricing_normalized.entry(norm).or_insert((inp, out, cached));
+                    )
+                    .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
+                let mapped = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, f64>(3)?,
+                            row.get::<_, f64>(4)?,
+                            row.get::<_, Option<f64>>(5)?,
+                        ))
+                    })
+                    .map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
+                for r in mapped {
+                    let (prov, model, normalized, inp, out, cached) =
+                        r.map_err(|e| ApiError(openproxy_db::error::map_db_error(e)))?;
+                    pricing_exact
+                        .entry((prov, model))
+                        .or_insert((inp, out, cached));
+                    if let Some(norm) = normalized {
+                        pricing_normalized.entry(norm).or_insert((inp, out, cached));
+                    }
                 }
             }
-        }
 
-        let mut data: Vec<serde_json::Value> = Vec::with_capacity(rows.len() + combo_rows.len());
-        for m in &rows {
-            let mut entry = crate::handlers::models::build_model_entry(m);
-            let price = pricing_exact
-                .get(&(m.provider_id.to_string(), m.model_id.to_string()))
-                .or_else(|| pricing_normalized.get(&m.model_id.to_string()));
-            if let Some((inp, out, cached)) = price {
-                entry["pricing_input_per_1m"] = serde_json::json!(inp);
-                entry["pricing_output_per_1m"] = serde_json::json!(out);
-                if let Some(c) = cached {
-                    entry["pricing_cached_per_1m"] = serde_json::json!(c);
+            // Combo resolution acquires its own readers. Release pricing's
+            // connection before nested lookups or serializing a large catalog.
+            drop(conn);
+            let mut data: Vec<serde_json::Value> =
+                Vec::with_capacity(rows.len() + combo_rows.len());
+            for m in &rows {
+                let mut entry = crate::handlers::models::build_model_entry(m);
+                let price = pricing_exact
+                    .get(&(m.provider_id.to_string(), m.model_id.to_string()))
+                    .or_else(|| pricing_normalized.get(&m.model_id.to_string()));
+                if let Some((inp, out, cached)) = price {
+                    entry["pricing_input_per_1m"] = serde_json::json!(inp);
+                    entry["pricing_output_per_1m"] = serde_json::json!(out);
+                    if let Some(c) = cached {
+                        entry["pricing_cached_per_1m"] = serde_json::json!(c);
+                    }
                 }
+                data.push(entry);
             }
-            data.push(entry);
-        }
-        for c in &combo_rows {
-            let effective_cw = s
-                .services()
-                .combos
-                .compute_effective_context_window(c.id)
-                .ok()
-                .flatten()
-                .or(c.context_window);
-            let effective_mot = s
-                .services()
-                .combos
-                .compute_effective_max_output_tokens(c.id)
-                .ok()
-                .flatten()
-                .or(c.max_output_tokens);
-            let effective_caps = s
-                .services()
-                .combos
-                .compute_effective_capabilities(c.id)
-                .ok()
-                .flatten();
-            // One entry per combo, under its bare routing name. The
-            // `combo:<name>` virtual id stays accepted by routing but is no
-            // longer advertised: listing both doubles every combo in the UI.
-            let mut entry = crate::handlers::models::build_combo_entry(
-                c,
-                Some(&c.name),
-                effective_cw,
-                effective_mot,
-                effective_caps.as_ref(),
-            );
-            // A combo with its own price is billed at that rate, so the
-            // catalog shows it instead of leaving the row unpriced.
-            if let (Some(input), Some(output)) = (c.pricing_input_per_1m, c.pricing_output_per_1m) {
-                entry["pricing_input_per_1m"] = serde_json::json!(input);
-                entry["pricing_output_per_1m"] = serde_json::json!(output);
-                if let Some(cached) = c.pricing_cached_per_1m {
-                    entry["pricing_cached_per_1m"] = serde_json::json!(cached);
+            for c in &combo_rows {
+                let effective_cw = s
+                    .services()
+                    .combos
+                    .compute_effective_context_window(c.id)
+                    .ok()
+                    .flatten()
+                    .or(c.context_window);
+                let effective_mot = s
+                    .services()
+                    .combos
+                    .compute_effective_max_output_tokens(c.id)
+                    .ok()
+                    .flatten()
+                    .or(c.max_output_tokens);
+                let effective_caps = s
+                    .services()
+                    .combos
+                    .compute_effective_capabilities(c.id)
+                    .ok()
+                    .flatten();
+                // One entry per combo, under its bare routing name. The
+                // `combo:<name>` virtual id stays accepted by routing but is no
+                // longer advertised: listing both doubles every combo in the UI.
+                let mut entry = crate::handlers::models::build_combo_entry(
+                    c,
+                    Some(&c.name),
+                    effective_cw,
+                    effective_mot,
+                    effective_caps.as_ref(),
+                );
+                // A combo with its own price is billed at that rate, so the
+                // catalog shows it instead of leaving the row unpriced.
+                if let (Some(input), Some(output)) =
+                    (c.pricing_input_per_1m, c.pricing_output_per_1m)
+                {
+                    entry["pricing_input_per_1m"] = serde_json::json!(input);
+                    entry["pricing_output_per_1m"] = serde_json::json!(output);
+                    if let Some(cached) = c.pricing_cached_per_1m {
+                        entry["pricing_cached_per_1m"] = serde_json::json!(cached);
+                    }
                 }
+                data.push(entry);
             }
-            data.push(entry);
-        }
-        let count = data.len();
-        Ok(Json(serde_json::json!({ "count": count, "data": data })))
-    })
-    .await
+            let count = data.len();
+            Ok(Json(serde_json::json!({ "count": count, "data": data })))
+        })
+        .await
 }
 
 pub fn router() -> axum::Router<AppState> {

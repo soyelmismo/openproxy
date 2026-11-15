@@ -47,7 +47,7 @@ pub(crate) struct InterprocessLease {
 
 impl InterprocessLease {
     /// Path of the lock file this lease holds. Diagnostics and tests only.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "payments"))]
     #[must_use]
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -197,7 +197,7 @@ impl super::CreditsAdmissionGate {
 
 /// Blocking acquisition used by the regression test that runs a real child
 /// process. Test-only: never waits for cancellation.
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 pub(crate) fn acquire_blocking_for_test(
     db_path: &Path,
     key_id: i64,
@@ -206,7 +206,7 @@ pub(crate) fn acquire_blocking_for_test(
 }
 
 /// Lock file path for assertions. Test-only.
-#[cfg(test)]
+#[cfg(all(test, feature = "payments"))]
 pub(crate) fn lock_file_path_for_test(
     db_path: &Path,
     key_id: i64,

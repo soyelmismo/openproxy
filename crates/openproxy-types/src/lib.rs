@@ -92,7 +92,7 @@ pub use config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
     IDLE_CHUNK_RETRYABLE_DEFAULT, MaintenanceConfig, ModalityRoutingConfig, PiiConfig, PiiEntity,
     QuotaProtectionConfig, RacingConfig, RetriesConfig, ServerConfig, SmartWarmupConfig,
-    SqliteSynchronous, StorageConfig, TimeoutsConfig,
+    SqliteSynchronous, StorageConfig, TargetErrorMaskingConfig, TimeoutsConfig,
 };
 pub use quota::{
     AccountQuota, ModelQuotaDetail, QuotaPool, QuotaPoolStatus, QuotaSource, now_unix_secs_str,

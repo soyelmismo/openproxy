@@ -37,6 +37,8 @@ pub struct DbPool {
     writer: Arc<Mutex<Connection>>,
     readers: Arc<Vec<Arc<Mutex<Connection>>>>,
     next_reader: Arc<AtomicUsize>,
+    read_admission: Arc<tokio::sync::Semaphore>,
+    write_admission: Arc<tokio::sync::Semaphore>,
     /// Path of the SQLite file. [`DbPool::open_connection`] needs it to open an
     /// extra owned `Connection`, since `Connection` is not `Clone` and a second
     /// handle requires opening the file again.
@@ -212,6 +214,8 @@ impl DbPool {
             writer: Arc::new(Mutex::new(writer)),
             readers: Arc::new(readers),
             next_reader: Arc::new(AtomicUsize::new(0)),
+            read_admission: Arc::new(tokio::sync::Semaphore::new(num_readers)),
+            write_admission: Arc::new(tokio::sync::Semaphore::new(1)),
             path: Arc::from(path),
             synchronous,
             epoch,
@@ -242,6 +246,8 @@ impl DbPool {
             writer: pool.writer,
             readers: pool.readers,
             next_reader: pool.next_reader,
+            read_admission: pool.read_admission,
+            write_admission: pool.write_admission,
             path: pool.path,
             synchronous: pool.synchronous,
             epoch: pool.epoch,
@@ -403,8 +409,16 @@ impl DbPool {
         F: FnOnce(&Connection) -> std::result::Result<R, CoreError> + Send + 'static,
         R: Send + 'static,
     {
+        // Queue asynchronously before occupying a blocking thread. Keep the
+        // permit inside the closure: cancelling the future cannot release it
+        // while a non-cancellable SQLite operation is still running.
+        let permit = Arc::clone(&self.read_admission)
+            .acquire_owned()
+            .await
+            .map_err(|e| CoreError::Internal(format!("read admission: {e}")))?;
         let pool = self.clone();
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let guard = pool.reader();
             f(&guard)
         })
@@ -412,15 +426,23 @@ impl DbPool {
         .map_err(|e| CoreError::Internal(format!("spawn_read join error: {e}")))?
     }
 
-    /// Execute a write closure on a background thread via `tokio::task::spawn_blocking`,
-    /// acquiring the serialized writer guard within that thread. Prevents retaining locks across `.await` points.
+    /// Execute a write on the blocking pool after asynchronous admission.
+    /// Only one admitted write per pool occupies a blocking worker. Tokio
+    /// reuses its threads; queued writers do not each consume a thread.
+    /// The closure owns the permit so cancellation cannot admit another write
+    /// while the non-cancellable operation is still running.
     pub async fn spawn_write<F, R>(&self, f: F) -> std::result::Result<R, CoreError>
     where
         F: FnOnce(&mut Connection) -> std::result::Result<R, CoreError> + Send + 'static,
         R: Send + 'static,
     {
+        let permit = Arc::clone(&self.write_admission)
+            .acquire_owned()
+            .await
+            .map_err(|e| CoreError::Internal(format!("write admission: {e}")))?;
         let pool = self.clone();
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let mut guard = pool.writer();
             f(&mut guard)
         })
@@ -669,7 +691,7 @@ fn configure_connection(
             "PRAGMA foreign_keys = ON; \
              PRAGMA busy_timeout = 5000; \
              PRAGMA synchronous = {sync_val}; \
-             PRAGMA wal_autocheckpoint = 250; \
+             PRAGMA wal_autocheckpoint = 1000; \
              PRAGMA mmap_size = 0; \
              PRAGMA cache_size = -512; \
              PRAGMA temp_store = FILE;",
@@ -679,7 +701,7 @@ fn configure_connection(
             "PRAGMA foreign_keys = ON; \
              PRAGMA busy_timeout = 5000; \
              PRAGMA synchronous = {sync_val}; \
-             PRAGMA wal_autocheckpoint = 250; \
+             PRAGMA wal_autocheckpoint = 1000; \
              PRAGMA mmap_size = 0; \
              PRAGMA cache_size = -256; \
              PRAGMA temp_store = FILE;",

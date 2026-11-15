@@ -3,6 +3,7 @@ use super::{
     TimeoutsConfig, core_db,
 };
 use axum::{Json, extract::State};
+use openproxy_types::config::TargetErrorMaskingConfig;
 
 /// Read-only view of the relevant `AppConfig` sections.
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +23,8 @@ pub struct RuntimeConfigResponse {
     pub pii: openproxy_types::config::PiiConfig,
     /// Input-modality routing (image requests restricted to vision targets).
     pub modality_routing: openproxy_types::config::ModalityRoutingConfig,
+    /// Upstream target failures masked for combo callers.
+    pub error_masking: TargetErrorMaskingConfig,
     pub pii_enabled: bool,
     pub pii_reversible: bool,
     pub pii_redact_logs: bool,
@@ -62,6 +65,10 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/modality-routing",
             axum::routing::get(get_runtime_modality_routing).put(put_runtime_modality_routing),
+        )
+        .route(
+            "/error-masking",
+            axum::routing::get(get_runtime_error_masking).put(put_runtime_error_masking),
         )
         .route(
             "/maintenance",
@@ -126,6 +133,7 @@ pub async fn get_runtime_config(
         pii_entities: pii.pii_entities.clone(),
         pii,
         modality_routing: s.modality_routing(),
+        error_masking: s.error_masking(),
         notifications_enabled: s.notifications_enabled(),
         max_concurrent_per_key: s.max_concurrent_per_key(),
         max_concurrent_global: s.max_concurrent_global(),
@@ -290,6 +298,27 @@ runtime_config_put!(
             "updated modality_routing via admin API"
         ),
         response: serde_json::to_value(body).unwrap_or_default(),
+    }
+);
+
+pub async fn get_runtime_error_masking(
+    State(s): State<AppState>,
+) -> Result<Json<TargetErrorMaskingConfig>, ApiError> {
+    Ok(Json(s.error_masking()))
+}
+
+runtime_config_put!(
+    put_runtime_error_masking(body: TargetErrorMaskingConfig) {
+        save: core_db::app_config::save_error_masking_to_db,
+        state: set_error_masking,
+        log: tracing::info!(
+            enabled = body.enabled,
+            "updated error_masking via admin API"
+        ),
+        response: serde_json::json!({
+            "enabled": body.enabled,
+            "applies_to": "next_request",
+        }),
     }
 );
 

@@ -2,6 +2,7 @@
 
 import { html, type TemplateResult } from 'lit-html';
 import { formatContext, formatAudioDuration } from "../lib/format.js";
+import { chargeView } from "../lib/charge.js";
 import { getStageLabel } from "../lib/constants.js";
 import { icons, endpointIcon } from "../lib/icons.js";
 import type { AttemptState } from "../state/live-logs-store.js";
@@ -99,9 +100,13 @@ function buildLogRowCells(
     } else if (row) {
       const ptEst = row.prompt_tokens_estimated ? "≈" : "";
       const ctEst = row.completion_tokens_estimated ? "≈" : "";
+      // The cell rounds to `k`; the tooltip keeps the exact counts so a billing
+      // question can always be answered to the token.
+      const exact = `Prompt ${row.prompt_tokens ?? 0}${row.prompt_tokens_estimated ? " (estimated)" : ""} · `
+        + `Completion ${row.completion_tokens ?? 0}${row.completion_tokens_estimated ? " (estimated)" : ""}`;
       const title = (row.prompt_tokens_estimated || row.completion_tokens_estimated)
-        ? "Tokens marked ≈ are estimated (upstream didn't report usage)"
-        : "Tokens reported by upstream";
+        ? `${exact} — tokens marked ≈ are estimated (upstream didn't report usage)`
+        : `${exact} — tokens reported by upstream`;
       cells.push(html`<span class="log-tokens" title="${title}">${ptEst}${formatContext(row.prompt_tokens)}${icons.arrowDown()} ${ctEst}${formatContext(row.completion_tokens)}${icons.arrowUp()}</span>`);
     } else {
       cells.push(html`<span class="log-tokens">—</span>`);
@@ -114,10 +119,16 @@ function buildLogRowCells(
   
   if (has("cost")) {
     if (row) {
-      const costTitle = row.endpoint_kind === "audio" && row.audio_ms != null
-        ? `$${(row.cost_usd || 0).toFixed(6)} for ${formatAudioDuration(row.audio_ms)} of audio`
+      // What the ledger really charged — never the calculated price, which
+      // stays as secondary data in the tooltip.
+      const charge = chargeView(row);
+      const audioNote = row.endpoint_kind === "audio" && row.audio_ms != null
+        ? ` · ${formatAudioDuration(row.audio_ms)} de audio`
         : "";
-      cells.push(html`<span class="log-cost" title="${costTitle}">$${(row.cost_usd || 0).toFixed(4)}</span>`);
+      // The amount and the verdict are two spans: without a separator they
+      // render glued together ("$0.0000No cobrado"). The middle dot matches the
+      // mobile card and the tooltip wording, so no new CSS is needed.
+      cells.push(html`<span class="log-cost log-cost--${charge.state}" title="${charge.title}${audioNote}"><span class="log-cost-amount">${charge.amountText}</span> · <span class="log-cost-state">${charge.label}</span></span>`);
     } else {
       cells.push(html`<span class="log-cost">—</span>`);
     }
@@ -172,6 +183,7 @@ function buildMobileCardView(
     }
   }
 
+  let tokensTitle = "";
   let tokensText = "—";
   if (row && row.endpoint_kind === "audio") {
     tokensText = formatAudioDuration(row.audio_ms);
@@ -181,6 +193,8 @@ function buildMobileCardView(
     const pt = row.prompt_tokens != null ? `${ptEst}${formatContext(row.prompt_tokens)}↓` : "—↓";
     const ct = row.completion_tokens != null ? `${ctEst}${formatContext(row.completion_tokens)}↑` : "—↑";
     tokensText = `${pt} ${ct}`;
+    tokensTitle = `Prompt ${row.prompt_tokens ?? 0}${row.prompt_tokens_estimated ? " (estimated)" : ""} · `
+      + `Completion ${row.completion_tokens ?? 0}${row.completion_tokens_estimated ? " (estimated)" : ""}`;
   }
 
   const latencyText = `${attempt.elapsedMsAtEvent}ms`;
@@ -196,8 +210,10 @@ function buildMobileCardView(
   } else if (row && row.compression_savings_pct != null && row.compression_savings_pct > 0) {
     const pct = row.compression_savings_pct < 1 ? row.compression_savings_pct.toFixed(2) : Math.round(row.compression_savings_pct).toString();
     extraBadge = html`<span class="log-compression" style="color: var(--color-success)">${icons.lightning()} ${pct}%</span>`;
-  } else if (row && row.cost_usd != null && row.cost_usd > 0) {
-    extraBadge = html`<span class="log-cost" style="color: var(--color-primary)">$${row.cost_usd.toFixed(4)}</span>`;
+  } else if (row) {
+    // Mobile: charged amount + verdict, same source as the desktop column.
+    const charge = chargeView(row);
+    extraBadge = html`<span class="log-cost log-cost--${charge.state}" title="${charge.title}">${charge.amountText} · ${charge.label}</span>`;
   }
 
   const pii = row?.pii_redacted;
@@ -212,7 +228,7 @@ function buildMobileCardView(
           <span class="log-time-short">${timeShort}</span>
         </div>
         <div class="m-line-right">
-          <span class="log-tokens-tag">${tokensText}</span>
+          <span class="log-tokens-tag" title="${tokensTitle}">${tokensText}</span>
           <span class="log-latency-tag">${latencyText}</span>
         </div>
       </div>

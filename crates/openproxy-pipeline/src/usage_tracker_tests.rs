@@ -114,6 +114,93 @@ async fn pending_jobs(tracker: &UsageTracker) -> Vec<crate::worker::BackgroundJo
     .unwrap()
 }
 
+#[tokio::test]
+async fn cancelled_usage_records_bpe_and_tools_without_calling_them_reported() {
+    let mut tracker = make_test_tracker();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    let mut builder = make_test_builder(&tracker, &combo, &target);
+    let request = Arc::make_mut(&mut builder.req.openai_request);
+    *request = serde_json::from_value(serde_json::json!({
+        "messages": [{"role":"user", "content":"Hello world"}],
+        "tools": [{"type":"function", "function":{"name":"lookup", "description":"find the invoice ".repeat(100)}}]
+    })).unwrap();
+    let expected = openproxy_compression::token_estimate::estimate_request_prompt_tokens(request);
+    assert!(expected > 100);
+    let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
+    builder.err(&err).status_code(499).record().await.unwrap();
+    assert!(receiver.try_recv().is_ok());
+    let jobs = pending_jobs(&tracker).await;
+    let crate::worker::BackgroundJob::RecordAttempt { usage_input, .. } = &jobs[0] else {
+        panic!("missing usage");
+    };
+    assert_eq!(usage_input.prompt_tokens, Some(expected));
+    assert!(usage_input.has_flag(openproxy_types::usage::USAGE_FLAG_PROMPT_ESTIMATED));
+    assert_eq!(usage_input.status_code, 499);
+    assert_eq!(
+        usage_input.error_msg.as_deref(),
+        Some("cancelled: client_disconnected")
+    );
+}
+
+#[tokio::test]
+async fn cancelled_usage_keeps_upstream_count_instead_of_bpe_estimate() {
+    let mut tracker = make_test_tracker();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    let err = CoreError::Cancelled(openproxy_types::CancelReason::ClientDisconnected);
+    make_test_builder(&tracker, &combo, &target)
+        .err(&err)
+        .status_code(499)
+        .prompt_tokens_opt(Some(130000))
+        .record()
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_ok());
+    let jobs = pending_jobs(&tracker).await;
+    let crate::worker::BackgroundJob::RecordAttempt { usage_input, .. } = &jobs[0] else {
+        panic!("missing usage");
+    };
+    assert_eq!(usage_input.prompt_tokens, Some(130000));
+    assert!(!usage_input.has_flag(openproxy_types::usage::USAGE_FLAG_PROMPT_ESTIMATED));
+}
+
+#[tokio::test]
+async fn unary_bpe_fallback_keeps_estimation_flags_in_usage_log() {
+    let mut tracker = make_test_tracker();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+    tracker.background_tx = sender;
+    let (combo, target) = make_test_combo_and_target();
+    let builder = make_test_builder(&tracker, &combo, &target);
+    let mut response: openproxy_types::OpenAIResponse = serde_json::from_value(serde_json::json!({
+        "id":"test", "object":"chat.completion", "created":0, "model":"test",
+        "choices":[{"index":0,"message":{"role":"assistant","content":"Hello world"},"finish_reason":"stop"}]
+    })).unwrap();
+    let estimated = crate::dispatcher::unary::ensure_usage_populated(
+        &mut response,
+        &builder.req.openai_request,
+    );
+    let usage = response.usage.unwrap();
+    builder
+        .status_code(200)
+        .prompt_tokens_opt(Some(usage.prompt_tokens))
+        .completion_tokens_opt(Some(usage.completion_tokens))
+        .usage_estimated(estimated)
+        .record()
+        .await
+        .unwrap();
+    assert!(receiver.try_recv().is_ok());
+    let jobs = pending_jobs(&tracker).await;
+    let crate::worker::BackgroundJob::RecordAttempt { usage_input, .. } = &jobs[0] else {
+        panic!("missing usage");
+    };
+    assert!(usage_input.has_flag(openproxy_types::usage::USAGE_FLAG_PROMPT_ESTIMATED));
+    assert!(usage_input.has_flag(openproxy_types::usage::USAGE_FLAG_COMPLETION_ESTIMATED));
+    assert_eq!(usage_input.completion_tokens, Some(2));
+}
+
 #[test]
 fn compute_completion_tokens_reported_by_upstream() {
     let tracker = make_test_tracker();
@@ -210,6 +297,7 @@ async fn test_concurrent_compression_stats_isolation() {
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
@@ -310,6 +398,7 @@ async fn test_high_concurrency_compression_stats_isolation() {
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
@@ -321,7 +410,9 @@ async fn test_high_concurrency_compression_stats_isolation() {
     for i in 0..num_requests {
         let is_compressible = i % 2 == 0;
         let content = if is_compressible {
-            "hello   world   this   is   a   test   \n".repeat(50)
+            // This fixture removes separate whitespace tokens. A trailing
+            // newline can merge with spaces in BPE and save chars but no tokens.
+            "hello   world   this   is   a   test   ".repeat(50)
         } else {
             "short text".to_string()
         };
@@ -434,6 +525,7 @@ async fn test_compression_stats_empty_requests() {
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);
@@ -478,6 +570,7 @@ async fn test_compression_stats_failed_requests_and_cloned_retries() {
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let pipeline = crate::Pipeline::new(conn_arc, cfg);

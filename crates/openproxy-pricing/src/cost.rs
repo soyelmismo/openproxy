@@ -175,6 +175,11 @@ fn build_recent_usage_row(
         flags: input.flags,
         audio_ms: input.audio_ms,
         session_hash: input.session_hash,
+        // This path prices and inserts a usage row; it never touches a credit
+        // balance, so no debit ran and nothing was charged. `None` + marker
+        // clear is the truthful pair (the dashboard renders "not charged").
+        charged_units: None,
+        credits_debited: false,
     }
 }
 

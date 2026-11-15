@@ -111,7 +111,14 @@ mod ensure_usage_tests {
             usage: None,
         };
 
-        ensure_usage_populated(&mut resp, &messages);
+        let estimated = ensure_usage_populated(
+            &mut resp,
+            &openproxy_types::OpenAIRequest {
+                messages,
+                ..Default::default()
+            },
+        );
+        assert_eq!(estimated, (true, true));
 
         assert!(resp.usage.is_some());
         let u = resp.usage.unwrap();
@@ -145,7 +152,14 @@ mod ensure_usage_tests {
             }),
         };
 
-        ensure_usage_populated(&mut resp, &messages);
+        let estimated = ensure_usage_populated(
+            &mut resp,
+            &openproxy_types::OpenAIRequest {
+                messages,
+                ..Default::default()
+            },
+        );
+        assert_eq!(estimated, (false, false));
 
         let u = resp.usage.unwrap();
         assert_eq!(u.prompt_tokens, 42);

@@ -264,9 +264,8 @@ pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
     };
     // Fixed 5h window: it exists only while its anchor is live. The spend
     // counts from the anchor on, and the whole cap frees at anchor + 5h.
-    let five_hours = match (&caps.five_hour_usd_cap, anchor_live != 0) {
-        (Some(cap), true) => {
-            let anchor_ts = anchor.expect("a live anchor");
+    let five_hours = match (&caps.five_hour_usd_cap, anchor_live != 0, anchor) {
+        (Some(cap), true, Some(anchor_ts)) => {
             let spent = conn
                 .query_row(
                     "SELECT COALESCE(SUM(u.cost_usd), 0.0) FROM usage u \
@@ -276,8 +275,10 @@ pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
                 )
                 .map_err(openproxy_db::error::map_db_error)?;
             let reset = chrono::NaiveDateTime::parse_from_str(&anchor_ts, "%Y-%m-%d %H:%M:%S")
-                .map(|naive| iso_ts(&(naive + Duration::hours(5))))
-                .unwrap_or_else(|_| iso_ts(&(Utc::now().naive_utc() + Duration::hours(5))));
+                .map_or_else(
+                    |_| iso_ts(&(Utc::now().naive_utc() + Duration::hours(5))),
+                    |naive| iso_ts(&(naive + Duration::hours(5))),
+                );
             QuotaWindowStatus {
                 cap_usd: Some(*cap),
                 spent_usd: spent,
@@ -285,7 +286,7 @@ pub fn status(conn: &Connection, key_id: ApiKeyId) -> Result<QuotaStatus> {
                 oldest_spend_at: oldest_5h,
             }
         }
-        (cap, _) => QuotaWindowStatus {
+        (cap, _, _) => QuotaWindowStatus {
             cap_usd: *cap,
             spent_usd: 0.0,
             resets_at: None,

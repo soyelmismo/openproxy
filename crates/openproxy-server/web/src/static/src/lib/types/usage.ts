@@ -177,6 +177,17 @@ export interface RecentUsageRow {
   api_key_id?: number | null;
   /** Audio duration in milliseconds; set only on transcription rows. */
   audio_ms?: number | null;
+  /**
+   * Micro-USD the credit ledger actually charged for this row, written in the
+   * same transaction as the debit. `null`/absent = no durable proof of an
+   * amount (historical row, or no debit attempted) — never infer it from
+   * `cost_usd`, which is the calculated price.
+   */
+  charged_units?: number | null;
+  /** Exactly-once debit marker; `true` does not imply a positive amount. */
+  credits_debited?: boolean;
+  /** Server-derived verdict from the two fields above. */
+  charge_state?: "charged" | "not_charged" | "unknown";
   created_at: string;
 }
 

@@ -331,7 +331,8 @@ impl UpstreamDispatcher {
         }
 
         // Guarantee robust BPE token estimation if upstream omitted usage or returned 0
-        ensure_usage_populated(&mut openai_response, &params.req.openai_request.messages);
+        let usage_estimated =
+            ensure_usage_populated(&mut openai_response, &params.req.openai_request);
 
         // If a system prefix was injected dynamically into this target, discount its tokens
         // from usage.prompt_tokens so the downstream client observes exact, untampered billing.
@@ -397,6 +398,7 @@ impl UpstreamDispatcher {
                 response_headers,
                 response_body_raw: recorded_response_body,
                 openai_response,
+                usage_estimated,
             },
         )
         .await

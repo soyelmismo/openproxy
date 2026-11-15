@@ -63,6 +63,10 @@ pub mod upstream_dispatcher;
 pub mod usage_tracker;
 pub mod worker;
 
+#[cfg(test)]
+#[path = "error_masking_tests.rs"]
+mod error_masking_tests;
+
 pub use response_ext::ResponseExt;
 
 #[cfg(feature = "benchmark-profile")]

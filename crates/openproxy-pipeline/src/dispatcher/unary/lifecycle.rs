@@ -225,6 +225,7 @@ impl UpstreamDispatcher {
         .is_streaming(false)
         .stream_complete(true)
         .client_response(true)
+        .usage_estimated(args.usage_estimated)
         .stop_reason(None)
         .record()
         .await

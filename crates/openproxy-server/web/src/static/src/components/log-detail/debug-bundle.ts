@@ -5,6 +5,7 @@ import { html, render } from "lit-html";
 import { showToast } from "../toast.js";
 import { copyToClipboard } from "../../lib/clipboard.js";
 import { state } from "../../state/index.js";
+import { chargeView } from "../../lib/charge.js";
 import { liveLogsStore } from "../../state/live-logs-store.js";
 import type { LogDetailLog } from "./state.js";
 
@@ -206,7 +207,15 @@ export function buildDebugBundle(log: LogDetailLog): string {
   lines.push(`- **Streaming:** ${String(log.is_streaming ?? false)}`);
   lines.push(`- **Stream complete:** ${String(log.stream_complete ?? false)}`);
   lines.push(`- **Total ms:** ${String(log.total_ms ?? "—")}`);
-  lines.push(`- **Cost USD:** ${String(log.cost_usd ?? "—")}`);
+  lines.push(`- **Cost USD:** ${String(log.cost_usd ?? "—")} (calculated price)`);
+  // What the ledger actually charged. A price is not a payment: say "unknown"
+  // for rows older than the charge ledger instead of echoing the price.
+  const charge = chargeView(log);
+  lines.push(
+    charge.state === "unknown"
+      ? "- **Charged:** unknown — no recorded amount (row older than the charge ledger)"
+      : `- **Charged:** ${charge.amountText} (${charge.label})`,
+  );
   lines.push(`- **Prompt tokens:** ${String(log.prompt_tokens ?? "—")}${log.prompt_tokens_estimated ? " (estimated)" : ""}`);
   lines.push(`- **Completion tokens:** ${String(log.completion_tokens ?? "—")}${log.completion_tokens_estimated ? " (estimated)" : ""}`);
   lines.push(`- **API key ID:** ${String(log.api_key_id ?? "—")}`);

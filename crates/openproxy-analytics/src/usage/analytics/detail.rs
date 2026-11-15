@@ -8,9 +8,9 @@ use openproxy_types::ids::{
     AccountId, ApiKeyId, ComboId, ComboTargetId, ModelRowId, ProviderId, UsageId,
 };
 use openproxy_types::usage::{
-    USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED, USAGE_FLAG_IS_STREAMING,
-    USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED, USAGE_FLAG_RACE_LOST,
-    USAGE_FLAG_STREAM_COMPLETE,
+    ChargeState, USAGE_FLAG_CLIENT_RESPONSE, USAGE_FLAG_COMPLETION_ESTIMATED,
+    USAGE_FLAG_IS_STREAMING, USAGE_FLAG_PROMPT_ESTIMATED, USAGE_FLAG_PROXY_ROTATED,
+    USAGE_FLAG_RACE_LOST, USAGE_FLAG_STREAM_COMPLETE,
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,15 @@ pub struct UsageDetailRow {
     pub flags: u8,
     /// Audio duration in milliseconds, for transcription rows only.
     pub audio_ms: Option<i64>,
+    /// Micro-USD the ledger actually charged for this row. `None` = no durable
+    /// proof of an amount (row older than the column, or no debit attempted).
+    /// Never derived from `cost_usd`, which stays the calculated price.
+    pub charged_units: Option<i64>,
+    /// Exactly-once debit marker; `true` does not imply a positive amount.
+    pub credits_debited: bool,
+    /// The calculated price of the request. Secondary data: it is NOT the
+    /// amount charged (see `charged_units` / `charge_state`).
+    pub cost_usd: Option<f64>,
 }
 
 impl UsageDetailRow {
@@ -76,6 +85,13 @@ impl UsageDetailRow {
     #[inline]
     pub fn set_flag(&mut self, flag: u8) {
         self.flags |= flag;
+    }
+
+    /// What was really charged for this row, from the durable columns only.
+    #[must_use]
+    #[inline]
+    pub fn charge_state(&self) -> ChargeState {
+        ChargeState::derive(self.charged_units, self.credits_debited)
     }
 }
 
@@ -126,6 +142,15 @@ struct UsageDetailRowSerde {
     pub created_at: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub audio_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub charged_units: Option<i64>,
+    #[serde(default)]
+    pub credits_debited: bool,
+    /// Derived from the two fields above; ignored on the way in.
+    #[serde(default)]
+    pub charge_state: ChargeState,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cost_usd: Option<f64>,
 }
 
 impl Serialize for UsageDetailRow {
@@ -176,6 +201,10 @@ impl Serialize for UsageDetailRow {
             pii_redacted: self.pii_redacted.clone(),
             created_at: self.created_at.clone(),
             audio_ms: self.audio_ms,
+            charged_units: self.charged_units,
+            credits_debited: self.credits_debited,
+            charge_state: ChargeState::derive(self.charged_units, self.credits_debited),
+            cost_usd: self.cost_usd,
         };
         shadow.serialize(serializer)
     }
@@ -246,6 +275,9 @@ impl<'de> Deserialize<'de> for UsageDetailRow {
             created_at: shadow.created_at,
             flags,
             audio_ms: shadow.audio_ms,
+            charged_units: shadow.charged_units,
+            credits_debited: shadow.credits_debited,
+            cost_usd: shadow.cost_usd,
         })
     }
 }
@@ -313,6 +345,14 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
     let account_label: Option<String> = row.get(col_idx).unwrap_or(None);
     col_idx += 1;
     let combo_name: Option<String> = row.get(col_idx).unwrap_or(None);
+    col_idx += 1;
+    // Charge evidence and the calculated price, appended last in the SELECT.
+    // No premigration fallback: a missing column fails `prepare` anyway.
+    let charged_units: Option<i64> = row.get(col_idx)?;
+    col_idx += 1;
+    let credits_debited: i64 = row.get(col_idx)?;
+    col_idx += 1;
+    let cost_usd: Option<f64> = row.get(col_idx)?;
 
     if !(0..=i64::from(u16::MAX)).contains(&status_code) {
         return Err(rusqlite::Error::FromSqlConversionFailure(
@@ -394,6 +434,9 @@ fn row_to_usage_detail(row: &Row<'_>) -> rusqlite::Result<UsageDetailRow> {
         pii_redacted,
         flags,
         audio_ms,
+        charged_units,
+        credits_debited: credits_debited != 0,
+        cost_usd,
     })
 }
 
@@ -410,7 +453,8 @@ pub fn detail_by_id(conn: &Connection, id: i64) -> Result<Option<UsageDetailRow>
                     u.response_headers, u.error_message, u.client_response, \
                     u.prompt_tokens_estimated, u.completion_tokens_estimated, \
                     u.endpoint_kind, u.proxy_url, u.proxy_status, u.is_proxy_rotated, \
-                    u.pii_redacted, u.audio_ms, a.label, c.name \
+                    u.pii_redacted, u.audio_ms, a.label, c.name, \
+                    u.charged_units, u.credits_debited, u.cost_usd \
              FROM usage u \
              LEFT JOIN accounts a ON u.account_id = a.id \
              LEFT JOIN combos c ON u.combo_id = c.id \
@@ -439,7 +483,8 @@ pub fn detail_by_trace_id(conn: &Connection, trace_id: &str) -> Result<Option<Us
                     u.response_headers, u.error_message, u.client_response, \
                     u.prompt_tokens_estimated, u.completion_tokens_estimated, \
                     u.endpoint_kind, u.proxy_url, u.proxy_status, u.is_proxy_rotated, \
-                    u.pii_redacted, u.audio_ms, a.label, c.name \
+                    u.pii_redacted, u.audio_ms, a.label, c.name, \
+                    u.charged_units, u.credits_debited, u.cost_usd \
              FROM usage u \
              LEFT JOIN accounts a ON u.account_id = a.id \
              LEFT JOIN combos c ON u.combo_id = c.id \

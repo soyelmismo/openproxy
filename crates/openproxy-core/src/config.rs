@@ -6,7 +6,8 @@ use crate::error::{CoreError, Result};
 pub use openproxy_types::config::{
     CircuitBreakerConfig, CompressionMode, CooldownConfig, CooldownMode, EncryptionKeySource,
     MaintenanceConfig, ModalityRoutingConfig, PiiConfig, QuotaProtectionConfig, RacingConfig,
-    RetriesConfig, ServerConfig, SmartWarmupConfig, StorageConfig, TimeoutsConfig,
+    RetriesConfig, ServerConfig, SmartWarmupConfig, StorageConfig, TargetErrorMaskingConfig,
+    TimeoutsConfig,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -145,6 +146,9 @@ pub struct AppConfig {
     pub pii: PiiConfig,
     #[serde(default)]
     pub modality_routing: ModalityRoutingConfig,
+    /// Mask upstream target failures for requests routed through a combo.
+    #[serde(default)]
+    pub error_masking: TargetErrorMaskingConfig,
     /// On-chain credit top-ups (Base USDC). None disables the credits system.
     #[serde(default)]
     pub credits: Option<openproxy_types::config::CreditsConfig>,
@@ -273,21 +277,23 @@ mod tests {
     /// (audit round 2, V-02/A4-07).
     #[test]
     fn credits_money_path_numbers_are_validated_at_load() {
-        let mut cfg = AppConfig::default();
-        cfg.credits = Some(openproxy_types::config::CreditsConfig {
-            rpc_url: "https://base.example".into(),
-            usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
-            collector_address: "0x12c7ab78f21ba0253a21d34a0151d44ddb824950".into(),
-            payment_window_minutes: 15,
-            scan_interval_secs: 30,
-            ttl_days: vec![7, 30],
-            chain_id: 8453,
-            max_block_chunk: 500,
-            payment_tolerance_units: 250_000,
-            checkout_order_creations_per_ip: 30,
-            checkout_order_window_secs: 600,
-            checkout_poll_per_ip_per_min: 240,
-        });
+        let mut cfg = AppConfig {
+            credits: Some(openproxy_types::config::CreditsConfig {
+                rpc_url: "https://base.example".into(),
+                usdc_address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+                collector_address: "0x12c7ab78f21ba0253a21d34a0151d44ddb824950".into(),
+                payment_window_minutes: 15,
+                scan_interval_secs: 30,
+                ttl_days: vec![7, 30],
+                chain_id: 8453,
+                max_block_chunk: 500,
+                payment_tolerance_units: 250_000,
+                checkout_order_creations_per_ip: 30,
+                checkout_order_window_secs: 600,
+                checkout_poll_per_ip_per_min: 240,
+            }),
+            ..AppConfig::default()
+        };
         assert!(cfg.validate().is_ok(), "a sane credits section must load");
 
         // A giant tolerance would let one near-worthless transfer pay any

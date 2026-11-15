@@ -8,7 +8,9 @@ use crate::ids::ApiKeyId;
 use crate::validation::Validatable;
 use openproxy_db::error::map_db_error_ctx;
 use openproxy_types::{ResultExt, UpdateField};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, params};
+#[cfg(feature = "payments")]
+use rusqlite::{Transaction, TransactionBehavior};
 
 /// Create a new API key. Returns the persisted row plus the plaintext
 /// (shown to the user once and never re-derivable).

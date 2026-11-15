@@ -39,11 +39,7 @@ pub mod credits_ledger {
     }
 
     /// Spending without payments is never recorded (usage journal still is).
-    pub fn record_spend(
-        _conn: &Connection,
-        _api_key_id: i64,
-        _cost_units: i64,
-    ) -> Result<i64> {
+    pub fn record_spend(_conn: &Connection, _api_key_id: i64, _cost_units: i64) -> Result<i64> {
         Ok(0)
     }
 

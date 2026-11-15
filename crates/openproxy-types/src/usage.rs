@@ -313,6 +313,10 @@ pub fn publish_stage_event(event: StageEvent) {
     }
 }
 
+mod charge;
+
+pub use charge::ChargeState;
+
 #[derive(Debug, Clone)]
 pub struct RecentUsageRow {
     pub request_id: String,
@@ -351,6 +355,15 @@ pub struct RecentUsageRow {
     /// Groups dashboard rows into the conversation/session view; `None` when
     /// the request carried no session identity.
     pub session_hash: Option<u64>,
+    /// Micro-USD the ledger actually charged for this row, written in the same
+    /// transaction as the debit (`db::credits_billing::debit_usage`). `None`
+    /// means "no durable proof of an amount": the row predates the column, or
+    /// no debit was ever attempted for it. Never derived from `cost_usd`.
+    pub charged_units: Option<i64>,
+    /// Exactly-once debit marker. `true` means the debit path ran; it does NOT
+    /// imply a positive `charged_units` (a key without prepaid credits, or a
+    /// drained balance, debits 0 and still marks the row).
+    pub credits_debited: bool,
 }
 
 impl RecentUsageRow {
@@ -362,6 +375,13 @@ impl RecentUsageRow {
     #[inline]
     pub fn set_flag(&mut self, flag: u8) {
         self.flags |= flag;
+    }
+
+    /// What was really charged for this row, from the durable columns only.
+    #[must_use]
+    #[inline]
+    pub fn charge_state(&self) -> ChargeState {
+        ChargeState::derive(self.charged_units, self.credits_debited)
     }
 }
 
@@ -438,6 +458,13 @@ struct RecentUsageRowSerde<'a> {
         default
     )]
     pub session_hash: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub charged_units: Option<i64>,
+    #[serde(default)]
+    pub credits_debited: bool,
+    /// Derived from `charged_units` + `credits_debited`; ignored on the way in.
+    #[serde(default)]
+    pub charge_state: ChargeState,
 }
 
 impl Serialize for RecentUsageRow {
@@ -485,6 +512,9 @@ impl Serialize for RecentUsageRow {
             api_key_id: self.api_key_id,
             audio_ms: self.audio_ms,
             session_hash: self.session_hash,
+            charged_units: self.charged_units,
+            credits_debited: self.credits_debited,
+            charge_state: self.charge_state(),
         }
         .serialize(serializer)
     }
@@ -536,6 +566,8 @@ impl<'de> Deserialize<'de> for RecentUsageRow {
             api_key_id: s.api_key_id,
             audio_ms: s.audio_ms,
             session_hash: s.session_hash,
+            charged_units: s.charged_units,
+            credits_debited: s.credits_debited,
         })
     }
 }
@@ -698,6 +730,8 @@ mod tests {
             audio_ms: None,
             // Max u64: proves the wire keeps full 64-bit precision as a string.
             session_hash: Some(u64::MAX),
+            charged_units: Some(5_000),
+            credits_debited: true,
         };
 
         assert!(row.has_flag(USAGE_FLAG_IS_STREAMING));
@@ -717,5 +751,13 @@ mod tests {
         assert_eq!(deserialized.flags, row.flags);
         assert_eq!(deserialized.id, crate::ids::UsageId(42));
         assert_eq!(deserialized.session_hash, Some(u64::MAX));
+        // The charged amount and the marker survive the wire, and the derived
+        // verdict rides along so the UI never has to re-derive it.
+        assert!(json.contains("\"charged_units\":5000"));
+        assert!(json.contains("\"credits_debited\":true"));
+        assert!(json.contains("\"charge_state\":\"charged\""));
+        assert_eq!(deserialized.charged_units, Some(5_000));
+        assert!(deserialized.credits_debited);
+        assert_eq!(deserialized.charge_state(), ChargeState::Charged);
     }
 }

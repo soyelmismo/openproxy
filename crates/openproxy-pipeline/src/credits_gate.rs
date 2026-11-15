@@ -316,7 +316,7 @@ impl CreditsLaneGuard {
     }
 
     /// Test hook: proves admission really took the cross-process lock.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "payments"))]
     #[must_use]
     pub(crate) fn has_interprocess_lease(&self) -> bool {
         self.lease.is_some()
@@ -398,18 +398,32 @@ impl Pipeline {
         let db = lane.db_id();
         let key = lane.key_id();
 
-        // Only a delivered response is billable. Failure results also carry a
-        // `usage_tuple` (the tracker records the failed attempt), and marking
-        // one of those would flip `client_response` on an error row and charge
-        // the customer for a request the upstream never answered.
+        // Only a delivered response or a client cancel is billable. Failure
+        // results also carry a `usage_tuple` (the tracker records the failed
+        // attempt), and marking one of those would flip `client_response` on
+        // an error row and charge the customer for a request the upstream
+        // never answered.
+        //
+        // Client cancels (499) ARE billable since the antseed-cancel policy:
+        // the seller never aborts its upstream, so a cut stream still costs us
+        // full input + full generation via the seller's NeedAuth claim. The
+        // user pays the in-flight delivered tokens + full prompt at the
+        // uncached input rate (cost.rs bills 499 with cached_tokens = None).
+        // A cancel before dispatch records no usage row at all, so nothing is
+        // charged for it.
         let delivered = result.error.is_none() && (200..300).contains(&result.status_code);
-        let debit =
-            result
-                .usage_tuple
-                .filter(|_| delivered)
-                .map(|(request_id, attempt, target_id)| {
-                    PendingDebit::new(request_id.to_string(), attempt, target_id)
-                });
+        let client_cancelled = matches!(
+            result.error.as_ref(),
+            Some(CoreError::Cancelled(
+                openproxy_types::CancelReason::ClientDisconnected
+            ))
+        );
+        let debit = result
+            .usage_tuple
+            .filter(|_| delivered || client_cancelled)
+            .map(|(request_id, attempt, target_id)| {
+                PendingDebit::new(request_id.to_string(), attempt, target_id)
+            });
 
         let mut posted = true;
         let usage_backed = debit.is_some();
@@ -438,6 +452,36 @@ impl Pipeline {
             posted = false;
         }
 
+        // A usage tuple identifies an attempted write, not durable evidence.
+        // A lost 499 row must fall back to its delivered-output checkpoint.
+        let mut usage_backed = usage_backed;
+        if posted
+            && client_cancelled
+            && let Some(pending) = debit.as_ref()
+        {
+            let request_id = pending.request_id.clone();
+            let attempt = pending.attempt;
+            let target_id = pending.target_id;
+            match self
+                .read_db(move |conn| {
+                    conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM usage WHERE request_id = ?1 \
+                     AND attempt = ?2 AND combo_target_id = ?3 AND credits_debited = 1)",
+                        rusqlite::params![request_id, attempt, target_id.0],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .map_err(openproxy_db::error::map_db_error)
+                })
+                .await
+            {
+                Ok(recorded) => usage_backed = recorded,
+                Err(error) => {
+                    tracing::warn!(%error, "credit settlement: cancel debit evidence unavailable");
+                    posted = false;
+                }
+            }
+        }
+
         if posted {
             self.credits_gate.clear_pending_debit(db, key);
         } else if let Some(pending) = debit {
@@ -462,7 +506,9 @@ impl Pipeline {
                 Arc::clone(&self.conn),
                 reservation_id,
                 key,
-                delivered,
+                // A billed client cancel closes the intent as billed; a cancel
+                // without a usage row uses the delivered-output checkpoint.
+                delivered || (client_cancelled && usage_backed),
             )
             .await
         {
@@ -689,108 +735,8 @@ async fn admit_prepaid<D: CreditGateDb>(
     Ok(Some(lane))
 }
 
-/// Admit one **non-chat** request (audio, embeddings, images, systemone) under
-/// the same process-wide per-key lane and fail-closed policy chat uses.
-///
-/// Call it before touching the upstream and keep the returned guard until
-/// [`settle_unary_credit`] has persisted the usage row; dropping the guard
-/// without settling releases the lane and bills nothing, which is correct for
-/// a request that never produced a response.
-pub async fn admit_unary_credit(
-    db_pool: &DbPool,
-    api_key_id: Option<ApiKeyId>,
-) -> openproxy_types::Result<Option<CreditsLaneGuard>> {
-    admit_unary_credit_with_request(db_pool, api_key_id, RequestId::new(), None).await
-}
-
-/// Same, with the request id the usage row will carry and an optional
-/// maximum-cost quote.
-///
-/// Passing the real [`RequestId`] matters after a crash: the recovering
-/// admission looks the durable intent up against the `usage` table by that id
-/// and can bill the response that was actually delivered instead of releasing
-/// the intent. Without it the intent is still resolved (never left open), just
-/// without usage evidence to reconcile.
-pub async fn admit_unary_credit_with_request(
-    db_pool: &DbPool,
-    api_key_id: Option<ApiKeyId>,
-    request_id: RequestId,
-    budget_units: Option<i64>,
-) -> openproxy_types::Result<Option<CreditsLaneGuard>> {
-    admit_prepaid(db_pool, api_key_id, request_id.to_string(), 1, budget_units).await
-}
-
-/// Persist a unary usage row (whose insert applies its ledger debit) and only
-/// then release the key lane.
-///
-/// The error is deliberately returned rather than logged and dropped: a caller
-/// that cannot prove the charge was recorded must not answer as if it had
-/// been, or the next request would spend against a balance that misses this
-/// debit. When the journal append itself failed nothing durable exists, so the
-/// row is retained as a pending marker and the following admission for that key
-/// re-appends it (and is denied until that works).
-pub async fn settle_unary_credit(
-    db_pool: &DbPool,
-    lane: Option<CreditsLaneGuard>,
-    usage: UsageInput,
-) -> openproxy_types::Result<()> {
-    let gate = CreditsAdmissionGate::new();
-    let marker = PendingUnaryUsage::new(usage.clone());
-    let conn = db_pool.writer_arc();
-    let persisted = tokio::task::spawn_blocking(move || persist_unary_usage(&conn, &usage)).await;
-
-    let failure = match persisted {
-        Ok(Ok(())) => {
-            reservation::close_unary(db_pool, lane.as_ref(), true).await;
-            drop(lane);
-            return Ok(());
-        }
-        Ok(Err(UnaryPersistError::Journaled(error))) => {
-            // A durable copy exists and the next drain applies it exactly once,
-            // so the lane can go and no marker is needed.
-            reservation::close_unary(db_pool, lane.as_ref(), true).await;
-            tracing::warn!(
-                %error,
-                "credit settlement: unary usage not applied yet; left journaled"
-            );
-            error
-        }
-        Ok(Err(UnaryPersistError::Lost(error))) => {
-            // Nothing was written anywhere: keep the charge so the next
-            // admission re-appends it instead of trusting a balance that
-            // misses this debit.
-            match lane.as_ref() {
-                Some(lane) => {
-                    tracing::error!(
-                        %error,
-                        api_key_id = lane.key_id(),
-                        "credit settlement: unary usage lost; keeping the key closed"
-                    );
-                    gate.note_pending_unary_usage(lane.db_id(), lane.key_id(), marker);
-                }
-                None => {
-                    tracing::error!(%error, "credit settlement: unary usage lost");
-                }
-            }
-            error
-        }
-        Err(error) => {
-            // The blocking task never reported: treat it as lost. The retry
-            // de-duplicates by request id, so an append that did commit cannot
-            // become a second row.
-            if let Some(lane) = lane.as_ref() {
-                gate.note_pending_unary_usage(lane.db_id(), lane.key_id(), marker);
-            }
-            CoreError::Internal(format!(
-                "unary usage persistence task failed to run: {error}"
-            ))
-        }
-    };
-    // Releasing after the marker is set is what makes the next admission see
-    // the debt; the lock itself is never the safety net.
-    drop(lane);
-    Err(failure)
-}
+mod unary;
+pub use unary::{admit_unary_credit, admit_unary_credit_with_request, settle_unary_credit};
 
 // These tests seed credit tables directly: they only exist with payments.
 #[cfg(all(test, feature = "payments"))]

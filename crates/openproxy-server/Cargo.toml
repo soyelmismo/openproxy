@@ -42,6 +42,10 @@ benchmark-system-allocator = []
 name = "openproxy"
 path = "src/main.rs"
 
+[[example]]
+name = "bench_mixed_load"
+required-features = ["payments", "benchmark-sql"]
+
 [lib]
 name = "openproxy_server"
 path = "src/lib.rs"

@@ -79,9 +79,11 @@ fn minted_ciphertext_sweeps_after_ttl_and_reveal_dies_with_it() {
 
     // Fresh mint: the sweep must not touch it, reveal still works.
     assert_eq!(super::sweep_expired_minted_ciphertexts(&conn).unwrap(), 0);
-    assert!(matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
-        .unwrap()
-        .is_some());
+    assert!(
+        matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
+            .unwrap()
+            .is_some()
+    );
 
     // Backdate the mint past the TTL. ROOT-FIX INVARIANT (audit A3-01): the
     // ciphertext is the buyer's only self-service copy of a PAID key, so
@@ -121,9 +123,11 @@ fn minted_ciphertext_sweeps_after_ttl_and_reveal_dies_with_it() {
         )
         .unwrap();
     assert!(blob.is_none());
-    assert!(matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
-        .unwrap()
-        .is_none());
+    assert!(
+        matcher::reveal_minted_key_with_receipt(&conn, &master, &order.order_code, RECEIPT)
+            .unwrap()
+            .is_none()
+    );
     // The settled order still replays by receipt (audit, plan history intact).
     assert_eq!(create(&conn).id, order.id);
 }

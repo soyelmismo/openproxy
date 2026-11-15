@@ -1,7 +1,7 @@
 use super::*;
 use openproxy_types::CoreError;
 
-const EXPECTED_COLUMNS: [&str; 39] = [
+const EXPECTED_COLUMNS: [&str; 41] = [
     "id",
     "request_id",
     "trace_id",
@@ -41,6 +41,11 @@ const EXPECTED_COLUMNS: [&str; 39] = [
     "api_key_id",
     "audio_ms",
     "session_hash",
+    // Durable charge evidence: the amount the debit actually moved and the
+    // exactly-once marker. The dashboard's Cost column reads these, never
+    // `cost_usd`.
+    "charged_units",
+    "credits_debited",
 ];
 
 #[test]
@@ -53,7 +58,7 @@ fn test_projection_column_contract() {
     ];
     for sql in queries {
         let stmt = conn.prepare(sql).unwrap();
-        assert_eq!(stmt.column_count(), 39);
+        assert_eq!(stmt.column_count(), 41);
         assert_eq!(stmt.column_names(), EXPECTED_COLUMNS);
     }
 }
@@ -81,9 +86,11 @@ fn test_recent_queries_ordering_and_equivalence() {
         race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at,
         stop_reason, compression_savings_pct, compression_techniques, client_response,
         prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url,
-        proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms
+        proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms,
+        charged_units, credits_debited
     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)";
+              ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38,
+              ?39, ?40)";
 
     for id in [3i64, 1, 2] {
         let headers = serde_json::json!({"h": id.to_string()}).to_string();
@@ -128,6 +135,9 @@ fn test_recent_queries_ordering_and_equivalence() {
                 Some("pii-ok"),
                 Some(100 + id),
                 None::<i64>,
+                // id 2 carries a recorded charge (0.002 USD = 2000 micro-USD).
+                if id == 2 { Some(2_000i64) } else { None::<i64> },
+                i64::from(id == 2),
             ],
         )
         .unwrap();
@@ -165,6 +175,20 @@ fn test_recent_queries_ordering_and_equivalence() {
     assert_eq!(row_by_id2.compression_savings_pct, Some(20.0));
     assert_eq!(row_by_id2.pii_redacted.as_deref(), Some("pii-ok"));
     assert_eq!(row_by_id2.api_key_id, Some(102));
+    assert_eq!(row_by_id2.charged_units, Some(2_000));
+    assert!(row_by_id2.credits_debited);
+    assert_eq!(
+        row_by_id2.charge_state(),
+        openproxy_types::usage::ChargeState::Charged
+    );
+    // Rows with no recorded amount and no marker are "not charged", never a
+    // price-derived guess.
+    assert_eq!(all_asc[0].charged_units, None);
+    assert!(!all_asc[0].credits_debited);
+    assert_eq!(
+        all_asc[0].charge_state(),
+        openproxy_types::usage::ChargeState::NotCharged
+    );
 
     assert!(row_for_broadcast_by_id(&conn, 999).unwrap().is_none());
     assert!(recent(&conn, 0, 0).unwrap().is_empty());

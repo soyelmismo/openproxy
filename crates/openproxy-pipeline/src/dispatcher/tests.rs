@@ -145,6 +145,7 @@ async fn handle_non_2xx_response_wires_is_hard_skip_for_validation_required() {
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     };
     let dispatcher = UpstreamDispatcher::new(

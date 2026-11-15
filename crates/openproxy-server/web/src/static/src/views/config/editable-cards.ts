@@ -21,6 +21,7 @@ let livePiiReversible = true;
 let livePiiRedactLogs = true;
 let livePiiEntities: string[] = ["email", "phone", "ip", "credit_card", "secret", "person"];
 let liveNotificationsEnabled = true;
+let liveErrorMaskingEnabled = true;
 let liveModalityRoutingEnabled = true;
 let liveModalityRoutingFallback = true;
 let liveMaxConcurrentPerKey = 10;
@@ -49,6 +50,7 @@ export function applyServerConfig(payload: ConfigPayload): void {
   livePiiRedactLogs = p.pii_redact_logs ?? true;
   livePiiEntities = Array.from(new Set((p.pii_entities ?? ["email", "phone", "ip", "credit_card", "secret", "person"]).map(normalizePiiEntity)));
   liveNotificationsEnabled = payload.notifications_enabled ?? true;
+  liveErrorMaskingEnabled = payload.error_masking?.enabled ?? true;
   liveModalityRoutingEnabled = payload.modality_routing?.enabled ?? true;
   liveModalityRoutingFallback = payload.modality_routing?.fallback_to_text_only ?? true;
   liveMaxConcurrentPerKey = payload.max_concurrent_per_key ?? 10;
@@ -100,6 +102,12 @@ async function patchIdleChunkRetryable(val: boolean): Promise<boolean> {
 async function patchQuotaProtection(enabled: boolean, threshold: number): Promise<boolean> {
   const ok = await putConfig("/config/quota-protection", { enabled, threshold_percentage: threshold }, t("config.quota.toast.updated"));
   if (ok) { const cfg = getConfig(); if (cfg) cfg.quota_protection = { enabled, threshold_percentage: threshold }; }
+  return ok;
+}
+
+async function patchErrorMasking(enabled: boolean): Promise<boolean> {
+  const ok = await putConfig("/config/error-masking", { enabled }, t("config.masking.toast.updated"));
+  if (ok) { const cfg = getConfig(); if (cfg) cfg.error_masking = { enabled }; }
   return ok;
 }
 
@@ -265,6 +273,16 @@ export function renderNotificationsCard(): TemplateResult {
   return card(t("config.notifications.title"), html`
     <p class="muted">${t("config.notifications.description")}</p>
     ${renderToggle(t("config.notifications.enabled"), liveNotificationsEnabled, t("config.notifications.help_on"), t("config.notifications.help_off"), () => void patchNotificationsEnabled(!liveNotificationsEnabled))}
+  `);
+}
+
+export function renderErrorMaskingCard(): TemplateResult {
+  return card(t("config.masking.title"), html`
+    <p class="muted">${unsafeHTML(t("config.masking.description"))}</p>
+    ${renderToggle(t("config.masking.enabled"), liveErrorMaskingEnabled, t("config.masking.help_on"), t("config.masking.help_off"), async () => {
+      const next = !liveErrorMaskingEnabled;
+      if (await patchErrorMasking(next)) liveErrorMaskingEnabled = next;
+    }, "error_masking_enabled")}
   `);
 }
 

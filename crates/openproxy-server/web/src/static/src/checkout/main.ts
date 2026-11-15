@@ -20,7 +20,7 @@ import { loadKey, loadOrder, pendingReceipt, seedReceipt } from "./session.js";
 import { enterOrder, showKey } from "./pay-step.js";
 
 /**
- * A recovery link (?receipt=…) seeds the receipt of a purchase created on
+ * A recovery link (#receipt=…) seeds the receipt of a purchase created on
  * another device/tab: the buyer picks the plan and presses Buy, and the POST
  * reuses THIS receipt — the server replays the original order (any state)
  * instead of opening a second payable amount. A local snapshot always wins:
@@ -32,8 +32,7 @@ function seedFromRecoveryLink(): void {
   // fragment never reaches the server, proxies or Referer — unlike a query
   // string, which used to deposit the full reveal capability in access
   // logs and browser history.
-  const m = /[#&]receipt=([^&]+)/.exec(location.hash);
-  const receipt = m ? decodeURIComponent(m[1]) : null;
+  const receipt = new URLSearchParams(location.hash.slice(1)).get("receipt");
   if (!receipt) return;
   // Strip it from the address bar: a refresh must not keep re-seeding after
   // the buyer moved on (the live order keeps painting its own recovery link).

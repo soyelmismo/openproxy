@@ -1,22 +1,9 @@
-//! Token estimation with a real BPE tokenizer (tiktoken cl100k_base), the
-//! tokenizer OpenAI uses for GPT-4/GPT-3.5. It covers the two cases where a
-//! char-based estimate misleads:
+//! BPE fallback accounting when the upstream does not report usage.
 //!
-//! 1. **Upstreams that omit the `usage` block** (most streaming endpoints),
-//!    where estimation is the only source of a token count and
-//!    `cost_usd = 0` rows otherwise reach analytics.
-//! 2. **Compression savings**, where BPE is not linear in char count:
-//!    whitespace compresses to fewer tokens than its length suggests and
-//!    JSON braces tokenize unlike prose.
-//!
-//! The cl100k_base vocab (~1.6MB) is embedded at compile time and loaded once
-//! via `std::sync::LazyLock`. Tokenization is ~1-5µs per token, so a 100K-token
-//! prompt takes ~100-500ms: the estimator runs after the request completes and
-//! the savings path tokenizes only the diff, never the full conversation.
-//!
-//! Exact for OpenAI models, an approximation elsewhere: Claude's own BPE vocab
-//! typically lands within ±10% of cl100k_base on mixed English/code content,
-//! which is enough for cost tracking and savings.
+//! Text is tokenized with embedded cl100k_base, never characters divided by
+//! a constant. This remains an estimate for other model vocabularies and for
+//! chat/tool framing. Upstream-reported usage is the authoritative count.
+//! Media bytes are not text tokens; vision parts retain an explicit allowance.
 
 use openproxy_types::message::OpenAIMessage;
 
@@ -30,7 +17,31 @@ pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
     for msg in messages {
         let text = message_content_to_text(msg);
         if !text.is_empty() {
-            total += count_tokens(&text);
+            total = total.saturating_add(count_tokens(&text));
+        }
+        if let Some(name) = &msg.name {
+            total = total.saturating_add(count_tokens(name));
+        }
+        // Reasoning in historical assistant turns is part of the submitted
+        // context, not just visible content. Aliases must not count twice.
+        if let Some(reasoning) = msg
+            .extra
+            .get("reasoning_content")
+            .or_else(|| msg.extra.get("reasoning"))
+            .and_then(serde_json::Value::as_str)
+        {
+            total = total.saturating_add(count_tokens(reasoning));
+        }
+        if let Some(calls) = &msg.tool_calls {
+            for call in calls {
+                total = total.saturating_add(4);
+                if let Some(name) = call
+                    .pointer("/function/name")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    total = total.saturating_add(count_tokens(name));
+                }
+            }
         }
 
         // Add standard image vision token allowance (~800 tokens per image part)
@@ -49,6 +60,24 @@ pub fn estimate_prompt_tokens(messages: &[OpenAIMessage]) -> u32 {
 
         // 4 tokens of role framing: <|im_start|>role\ncontent<|im_end|>\n.
         total += 4;
+    }
+    total
+}
+
+/// Request-level fallback includes tool definitions and structured-output
+/// schemas, which are prompt context even though they are outside messages.
+/// Generation controls (temperature, max_tokens, model) are not prompt text.
+pub fn estimate_request_prompt_tokens(request: &openproxy_types::OpenAIRequest) -> u32 {
+    let mut total = estimate_prompt_tokens(&request.messages);
+    if let Some(tools) = request.tools.as_ref().filter(|tools| !tools.is_empty()) {
+        total = total.saturating_add(count_tokens(
+            &serde_json::to_string(tools).unwrap_or_default(),
+        ));
+    }
+    for key in ["functions", "response_format"] {
+        if let Some(schema) = request.extra.get(key).filter(|value| !value.is_null()) {
+            total = total.saturating_add(count_tokens(&schema.to_string()));
+        }
     }
     total
 }
@@ -194,9 +223,14 @@ pub fn estimate_completion_tokens_from_body(body: &serde_json::Value) -> u32 {
     total_tokens
 }
 
-/// Count tokens in a text string using a char-based heuristic (~4 chars/token).
+/// Count ordinary text, including literal special-token strings from users.
 fn count_tokens(text: &str) -> u32 {
-    estimate_tokens_heuristic(text)
+    u32::try_from(
+        tiktoken_rs::cl100k_base_singleton()
+            .encode_ordinary(text)
+            .len(),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 /// Concatenated text of an `OpenAIMessage`: `extract_text()` plus the
@@ -222,12 +256,13 @@ pub fn message_content_to_text(msg: &OpenAIMessage) -> String {
     text
 }
 
+#[cfg(test)]
 fn flush_whitespace_run(ws_run: usize) -> usize {
     if ws_run > 4 { ws_run / 10 } else { ws_run }
 }
 
-/// Char-based fallback (~4 chars/token Latin, ~2 CJK) for when the BPE encoder
-/// fails to initialize.
+/// Historical heuristic retained only to compare regression fixtures.
+#[cfg(test)]
 fn estimate_tokens_heuristic(text: &str) -> u32 {
     if text.is_empty() {
         return 0;
@@ -261,6 +296,7 @@ fn estimate_tokens_heuristic(text: &str) -> u32 {
 }
 
 /// Check if a character is in a CJK Unicode range.
+#[cfg(test)]
 fn is_cjk(ch: char) -> bool {
     let code = ch as u32;
     // CJK Unified Ideographs

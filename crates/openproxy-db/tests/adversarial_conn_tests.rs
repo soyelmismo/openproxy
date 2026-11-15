@@ -230,7 +230,7 @@ fn test_empirically_verify_sqlite_pragmas_on_writer_and_all_readers() {
 
         assert_eq!(mmap, 0, "Writer mmap_size must be 0");
         assert_eq!(temp, 1, "Writer temp_store must be 1 (FILE)");
-        assert_eq!(wal, 250, "Writer wal_autocheckpoint must be 250");
+        assert_eq!(wal, 1000, "Writer wal_autocheckpoint must be 1000");
         assert_eq!(cache, -512, "Writer cache_size must be -512 (512 KiB)");
     }
 
@@ -255,7 +255,7 @@ fn test_empirically_verify_sqlite_pragmas_on_writer_and_all_readers() {
 
             assert_eq!(mmap, 0, "Reader {idx} mmap_size must be 0");
             assert_eq!(temp, 1, "Reader {idx} temp_store must be 1 (FILE)");
-            assert_eq!(wal, 250, "Reader {idx} wal_autocheckpoint must be 250");
+            assert_eq!(wal, 1000, "Reader {idx} wal_autocheckpoint must be 1000");
             assert_eq!(
                 cache, -256,
                 "Reader {idx} cache_size must be -256 (256 KiB)"
@@ -281,7 +281,10 @@ fn test_empirically_verify_sqlite_pragmas_on_writer_and_all_readers() {
 
         assert_eq!(mmap, 0, "Extra connection mmap_size must be 0");
         assert_eq!(temp, 1, "Extra connection temp_store must be 1 (FILE)");
-        assert_eq!(wal, 250, "Extra connection wal_autocheckpoint must be 250");
+        assert_eq!(
+            wal, 1000,
+            "Extra connection wal_autocheckpoint must be 1000"
+        );
         assert_eq!(
             cache, -256,
             "Extra connection cache_size must be -256 (256 KiB)"
@@ -307,7 +310,7 @@ fn test_empirically_verify_sqlite_pragmas_on_writer_and_all_readers() {
 
         assert_eq!(mmap, 0);
         assert_eq!(temp, 1);
-        assert_eq!(wal, 250);
+        assert_eq!(wal, 1000);
         assert_eq!(cache, -512);
     }
 }

@@ -46,6 +46,7 @@ pub struct UsageRecordBuilder<'a> {
     pub(crate) proxy_status: Option<String>,
     pub(crate) is_proxy_rotated: bool,
     pub(crate) redact_logs: bool,
+    pub(crate) usage_estimated: (bool, bool),
 }
 
 impl<'a> UsageRecordBuilder<'a> {
@@ -87,7 +88,13 @@ impl<'a> UsageRecordBuilder<'a> {
             proxy_status: None,
             is_proxy_rotated: false,
             redact_logs: true,
+            usage_estimated: (false, false),
         }
+    }
+
+    pub fn usage_estimated(mut self, estimated: (bool, bool)) -> Self {
+        self.usage_estimated = estimated;
+        self
     }
 
     pub fn redact_logs(mut self, redact: bool) -> Self {
@@ -214,10 +221,10 @@ impl<'a> UsageRecordBuilder<'a> {
 
     fn compute_prompt_tokens(&self) -> (Option<u32>, bool) {
         match self.prompt_tokens {
-            Some(t) if t > 0 => (Some(t), false),
+            Some(t) if t > 0 => (Some(t), self.usage_estimated.0),
             _ => {
-                let est = openproxy_compression::token_estimate::estimate_prompt_tokens(
-                    &self.req.openai_request.messages,
+                let est = openproxy_compression::token_estimate::estimate_request_prompt_tokens(
+                    &self.req.openai_request,
                 );
                 if est > 0 {
                     tracing::debug!(
@@ -235,7 +242,7 @@ impl<'a> UsageRecordBuilder<'a> {
 
     pub(crate) fn compute_completion_tokens(&self) -> (Option<u32>, bool) {
         match self.completion_tokens {
-            Some(t) if t > 0 => (Some(t), false),
+            Some(t) if t > 0 => (Some(t), self.usage_estimated.1),
             _ => {
                 let Some(ref body) = self.response_body_json else {
                     return (None, false);

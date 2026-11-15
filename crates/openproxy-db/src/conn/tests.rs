@@ -2,6 +2,72 @@ use super::*;
 use openproxy_types::config::SqliteSynchronous;
 
 #[test]
+fn writer_runtime_shutdown_does_not_wait_for_pool_drop() {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let pool = DbPool::test_pool().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        assert_eq!(runtime.block_on(pool.spawn_write(|_| Ok(42))).unwrap(), 42);
+        // The pool intentionally outlives the runtime. An idle permanent
+        // spawn_blocking worker must not prevent runtime shutdown.
+        drop(runtime);
+        assert_eq!(pool.write_admission.available_permits(), 1);
+        drop(pool);
+        done_tx.send(()).unwrap();
+    });
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("runtime shutdown hung after spawn_write completed");
+    handle.join().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_writer_admission_survives_cancellation() {
+    let pool = DbPool::test_pool().unwrap();
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let first_pool = pool.clone();
+    let first = tokio::spawn(async move {
+        first_pool
+            .spawn_write(move |_| {
+                let _ = entered_tx.send(());
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+            .await
+    });
+    entered_rx.await.unwrap();
+    first.abort();
+    assert_eq!(pool.write_admission.available_permits(), 0);
+    let second_pool = pool.clone();
+    let second = tokio::spawn(async move { second_pool.spawn_write(|_| Ok(42)).await });
+    tokio::task::yield_now().await;
+    assert!(!second.is_finished());
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+        42
+    );
+    assert_eq!(pool.write_admission.available_permits(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn async_reader_admission_returns_permit_after_panic() {
+    let pool = DbPool::test_pool().unwrap();
+    let result: Result<()> = pool.spawn_read(|_| panic!("injected reader panic")).await;
+    assert!(result.is_err());
+    assert_eq!(pool.read_admission.available_permits(), pool.reader_count());
+    assert_eq!(pool.spawn_read(|_| Ok(7)).await.unwrap(), 7);
+}
+
+#[test]
 fn reader_count_is_explicit_and_bounded() {
     let directory = crate::testing::TempDir::new("reader-count").unwrap();
     let path = directory.path().join("db.sqlite");
@@ -45,7 +111,7 @@ fn open_creates_file_and_sets_pragmas() {
     let wal_autocheckpoint: i64 = conn
         .pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))
         .expect("wal_autocheckpoint");
-    assert_eq!(wal_autocheckpoint, 250);
+    assert_eq!(wal_autocheckpoint, 1000);
 
     let writer_cache: i64 = conn
         .pragma_query_value(None, "cache_size", |r| r.get(0))

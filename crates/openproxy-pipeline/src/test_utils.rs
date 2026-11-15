@@ -129,6 +129,7 @@ pub fn test_config(master_key: Arc<MasterKey>) -> PipelineConfig {
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }
@@ -372,6 +373,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> Pipe
         quota_protection: openproxy_types::config::QuotaProtectionConfig::default(),
         pii_config: openproxy_types::config::PiiConfig::default(),
         modality_routing: openproxy_types::config::ModalityRoutingConfig::default(),
+        error_masking: openproxy_types::config::TargetErrorMaskingConfig::default(),
         background_tx: tokio::sync::mpsc::channel(1).0,
     }
 }

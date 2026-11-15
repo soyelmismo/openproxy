@@ -13,7 +13,7 @@ import {
 } from "./shared.js";
 import {
   applyServerConfig,
-  renderCompressionCard, renderConcurrencyCard, renderIdleChunkCard, renderModalityCard, renderNotificationsCard,
+  renderCompressionCard, renderConcurrencyCard, renderErrorMaskingCard, renderIdleChunkCard, renderModalityCard, renderNotificationsCard,
   renderPiiCard, renderQuotaCard, renderRecordingTtlCard, renderTimeoutsCard,
 } from "./editable-cards.js";
 import { loadMaintenanceState, pollVacuumStatus, renderMaintenanceCard } from "./maintenance.js";
@@ -131,6 +131,7 @@ function renderConfig(): TemplateResult {
         <section class="config-group config-group-protection">
           <div class="config-group-grid">
             ${renderQuotaCard()}
+            ${renderErrorMaskingCard()}
             ${renderPiiCard()}
             ${creditsGateway ? creditsGateway.renderCreditsGatewayCard() : ''}
           </div>

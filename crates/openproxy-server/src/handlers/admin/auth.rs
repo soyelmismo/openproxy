@@ -661,10 +661,13 @@ mod limiter_tests {
         assert!(limiter.is_blocked(ip), "blocked at budget");
         // Age every failure entry past the window, as time would.
         let now = std::time::Instant::now();
-        limiter
-            .failures
-            .iter_mut()
-            .for_each(|mut e| *e.value_mut() = (ADMIN_AUTH_MAX_FAILURES, now - ADMIN_AUTH_WINDOW - std::time::Duration::from_secs(1)));
+        limiter.failures.iter_mut().for_each(|mut e| {
+            *e.value_mut() = (
+                ADMIN_AUTH_MAX_FAILURES,
+                now.checked_sub(ADMIN_AUTH_WINDOW + std::time::Duration::from_secs(1))
+                    .unwrap_or(now),
+            )
+        });
         assert!(
             !limiter.is_blocked(ip),
             "the block must expire with the window instead of locking the IP forever"

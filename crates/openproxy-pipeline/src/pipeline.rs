@@ -38,6 +38,9 @@ pub struct PipelineConfig {
     pub quota_protection: openproxy_types::config::QuotaProtectionConfig,
     pub pii_config: openproxy_types::config::PiiConfig,
     pub modality_routing: openproxy_types::config::ModalityRoutingConfig,
+    /// Replace a target failure with a generic message when the request was
+    /// routed through a real combo (see [`CoreError::masked_for_client`]).
+    pub error_masking: openproxy_types::config::TargetErrorMaskingConfig,
     pub background_tx: tokio::sync::mpsc::Sender<crate::worker::BackgroundJob>,
 }
 

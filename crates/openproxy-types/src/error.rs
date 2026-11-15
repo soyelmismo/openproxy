@@ -150,6 +150,24 @@ pub enum CoreError {
     /// Callers must apply backpressure or wait for draining workers.
     #[error("usage journal capacity exhausted; admission rejected")]
     JournalCapacityExhausted,
+
+    /// A target failure reduced to what a caller routed through a combo is
+    /// allowed to see.
+    ///
+    /// Built by [`CoreError::masked_for_client`] only: the real cause (provider
+    /// id, model id, upstream body, timeout phase, internal quota state) stays
+    /// in the `usage` row and the trace log, and never in the response. `status`
+    /// is the class the caller can act on (4xx for its own payload, 429 for
+    /// upstream pressure, 5xx for availability), never the raw upstream code
+    /// when that code would accuse the caller's own key.
+    #[error("{message}")]
+    MaskedUpstream {
+        status: u16,
+        message: String,
+        /// Upstream retry hint, preserved so the client keeps receiving
+        /// `Retry-After` without learning which provider asked for it.
+        retry_after_ms: Option<u64>,
+    },
 }
 
 impl CoreError {
@@ -293,6 +311,105 @@ impl CoreError {
         }
     }
 
+    /// True when the failure happened inside an upstream target: pressure from
+    /// a provider, a refused/failed HTTP call, a timeout, a connection loss or
+    /// a combo with no usable target left.
+    ///
+    /// These variants name the provider, the model, the internal quota state
+    /// and the upstream body, so they are the ones a public combo must never
+    /// leak verbatim.
+    #[inline]
+    #[must_use]
+    pub fn is_upstream_failure(&self) -> bool {
+        matches!(
+            self,
+            CoreError::UpstreamError { .. }
+                | CoreError::UpstreamTimeout { .. }
+                | CoreError::UpstreamConnection(_)
+                | CoreError::RateLimited { .. }
+                | CoreError::NoHealthyTargets(_)
+        )
+    }
+
+    /// True when the proxy itself is refusing the caller's own key: its prepaid
+    /// plan balance is spent or one of its quota windows is closed.
+    ///
+    /// These errors are produced by this proxy, never by a target, so they are
+    /// the one family the response filter must leave untouched: they are the
+    /// caller's own limits and its only actionable information.
+    #[inline]
+    #[must_use]
+    pub fn is_caller_quota_rejection(&self) -> bool {
+        matches!(
+            self,
+            CoreError::QuotaExceeded { .. } | CoreError::InsufficientCredits { .. }
+        )
+    }
+
+    /// Build the response a combo caller gets for an HTTP status that came out
+    /// of a target.
+    ///
+    /// The class is the status itself, so the same variant answered with `400`
+    /// or `500` produces different classes, and two different variants with the
+    /// same status produce the same one. The mapping keeps the status when it
+    /// is actionable and collapses the rest into availability, so a
+    /// provider-side `401`/`402`/`403` never accuses the caller's own key of an
+    /// operator-side credential or billing problem:
+    ///
+    /// - `400`, `413`, `422` → the payload was refused, keep the code;
+    /// - `404` → nothing matched the requested model/combo, keep the code;
+    /// - `408`, `504`, `529` → `504`, the model did not answer in time;
+    /// - `429` → `429` plus its `Retry-After`, retrying later is correct;
+    /// - anything else (`401`, `402`, `403`, `5xx`, capacity, internal) → `502`.
+    ///
+    /// `retry_after_ms` is carried through untouched: it is the only upstream
+    /// detail that helps the caller and reveals nothing about the provider.
+    #[must_use]
+    pub fn masked_upstream(status: u16, retry_after_ms: Option<u64>) -> CoreError {
+        const UNAVAILABLE: &str = "The model is temporarily unavailable. Retry the request.";
+        const TIMEOUT: &str = "The model did not respond in time. Retry the request.";
+        const RATE_LIMITED: &str =
+            "The model is temporarily rate limited. Retry after the indicated delay.";
+        const REJECTED: &str = "The request was rejected by the model provider.";
+        const NOT_FOUND: &str = "The requested model or combo was not found.";
+
+        let (status, message) = match status {
+            400 | 413 | 422 => (status, REJECTED),
+            404 => (404, NOT_FOUND),
+            408 | 504 | 529 => (504, TIMEOUT),
+            429 => (429, RATE_LIMITED),
+            _ => (502, UNAVAILABLE),
+        };
+        CoreError::MaskedUpstream {
+            status,
+            message: message.to_string(),
+            retry_after_ms,
+        }
+    }
+
+    /// Mask this error according to the status it would answer.
+    ///
+    /// Convenience over [`CoreError::masked_upstream`] for callers that hold the
+    /// error but not the recorded status. The pipeline prefers the recorded
+    /// `status_code`, which is the target's real one even when the error was
+    /// rebuilt into a different variant.
+    ///
+    /// Returns `None` when there is nothing to mask: no error response (a
+    /// caller that disconnected, `499`) is not something to rewrite.
+    #[must_use]
+    pub fn masked_for_client(&self) -> Option<CoreError> {
+        let source_status = self.http_status();
+        if source_status < 400 || source_status == 499 {
+            return None;
+        }
+        let retry_after_ms = match self {
+            CoreError::RateLimited { retry_after_ms, .. } => Some(*retry_after_ms),
+            CoreError::MaskedUpstream { retry_after_ms, .. } => *retry_after_ms,
+            _ => None,
+        };
+        Some(CoreError::masked_upstream(source_status, retry_after_ms))
+    }
+
     /// Produce a clone of the error.
     #[inline]
     pub fn clone_for_result(&self) -> CoreError {
@@ -318,6 +435,7 @@ impl CoreError {
             CoreError::Cancelled(CancelReason::ClientDisconnected) | CoreError::RaceLost => 499,
             CoreError::Cancelled(CancelReason::WatchdogTimeout) => 504,
             CoreError::ServiceUnavailable(_) | CoreError::JournalCapacityExhausted => 503,
+            CoreError::MaskedUpstream { status, .. } => *status,
             _ => 500,
         }
     }
@@ -355,6 +473,9 @@ impl CoreError {
             CoreError::ServiceUnavailable(_) => "service_unavailable",
             CoreError::NotFound { .. } => "not_found",
             CoreError::JournalCapacityExhausted => "journal_capacity_exhausted",
+            // One code for every masked target failure: the caller learns the
+            // class from the status, never the internal phase/variant.
+            CoreError::MaskedUpstream { .. } => "upstream_error",
         }
     }
 
@@ -494,208 +615,4 @@ impl<T> OptionExt<T> for Option<T> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_core_error_clone_and_codes() {
-        let err = CoreError::Database {
-            message: "disk full".into(),
-            source: None,
-        };
-        let cloned = err.clone();
-        assert_eq!(err.code(), cloned.code());
-        assert_eq!(err.http_status(), cloned.http_status());
-        assert_eq!(err.clone_for_result().code(), "database");
-
-        let distinct = [
-            CoreError::Auth("x".into()),
-            CoreError::Validation("x".into()),
-            CoreError::ProviderNotFound("x".into()),
-            CoreError::RaceLost,
-            CoreError::Cancelled(CancelReason::ClientDisconnected),
-        ];
-        let set: std::collections::HashSet<_> = distinct.iter().map(|e| e.code()).collect();
-        assert_eq!(set.len(), 5);
-    }
-
-    #[test]
-    fn test_from_code_and_message() {
-        assert!(
-            matches!(CoreError::from_code_and_message("auth", "bad token"), Some(CoreError::Auth(m)) if m == "bad token")
-        );
-        assert!(
-            matches!(CoreError::from_code_and_message("validation", "invalid"), Some(CoreError::Validation(m)) if m == "invalid")
-        );
-        assert!(
-            matches!(CoreError::from_code_and_message("provider_not_found", "or"), Some(CoreError::ProviderNotFound(m)) if m == "or")
-        );
-        assert!(
-            matches!(CoreError::from_code_and_message("service_unavailable", "ol"), Some(CoreError::ServiceUnavailable(m)) if m == "ol")
-        );
-        assert!(matches!(
-            CoreError::from_code_and_message("account_not_found", "42"),
-            Some(CoreError::AccountNotFound(42))
-        ));
-        assert!(CoreError::from_code_and_message("account_not_found", "nan").is_none());
-        assert!(matches!(
-            CoreError::from_code_and_message("combo_not_found", "10"),
-            Some(CoreError::ComboNotFound(10))
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("no_healthy_targets", "99"),
-            Some(CoreError::NoHealthyTargets(99))
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("watchdog_timeout", "t"),
-            Some(CoreError::Cancelled(CancelReason::WatchdogTimeout))
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("client_disconnected", "d"),
-            Some(CoreError::Cancelled(CancelReason::ClientDisconnected))
-        ));
-        assert!(matches!(
-            CoreError::from_code_and_message("race_lost", "l"),
-            Some(CoreError::RaceLost)
-        ));
-        assert!(
-            matches!(CoreError::from_code_and_message("not_found", "ticket not found: abc-123"), Some(CoreError::NotFound { what, id }) if what == "ticket" && id == "abc-123")
-        );
-        assert!(
-            matches!(CoreError::from_code_and_message("not_found", "user: 42"), Some(CoreError::NotFound { what, id }) if what == "user" && id == "42")
-        );
-        assert!(CoreError::from_code_and_message("unknown_code", "foo").is_none());
-    }
-
-    #[test]
-    fn test_http_status_mapping() {
-        let cases = [
-            (CoreError::Auth("x".into()), 401),
-            (CoreError::Validation("x".into()), 400),
-            (
-                CoreError::RateLimited {
-                    provider: "p".into(),
-                    retry_after_ms: 1000,
-                    is_proxy_rotated: false,
-                },
-                429,
-            ),
-            (CoreError::Cancelled(CancelReason::ClientDisconnected), 499),
-            (CoreError::Cancelled(CancelReason::WatchdogTimeout), 504),
-            (
-                CoreError::UpstreamTimeout {
-                    phase: "ttft".into(),
-                    ms: 100,
-                },
-                529,
-            ),
-        ];
-        for (err, status) in cases {
-            assert_eq!(err.http_status(), status);
-        }
-    }
-
-    #[test]
-    fn test_proxy_rotated_and_hard_skip() {
-        let cases = [
-            (
-                CoreError::upstream_error(500, "t", "m", "e", true),
-                true,
-                false,
-                None,
-            ),
-            (
-                CoreError::upstream_error(500, "t", "m", "e", false),
-                false,
-                false,
-                None,
-            ),
-            (
-                CoreError::RateLimited {
-                    provider: "t".into(),
-                    retry_after_ms: 0,
-                    is_proxy_rotated: true,
-                },
-                true,
-                false,
-                None,
-            ),
-            (
-                CoreError::RateLimited {
-                    provider: "t".into(),
-                    retry_after_ms: 0,
-                    is_proxy_rotated: false,
-                },
-                false,
-                false,
-                None,
-            ),
-            (CoreError::Auth("x".into()), false, false, None),
-            (
-                CoreError::upstream_error_with_skip(403, "ag", "g", "{}", false, true),
-                false,
-                true,
-                None,
-            ),
-            (
-                CoreError::upstream_error_classified(
-                    403,
-                    "ag",
-                    "g",
-                    "{}",
-                    false,
-                    crate::UpstreamErrorClass::ValidationRequired,
-                ),
-                false,
-                true,
-                Some(crate::UpstreamErrorClass::ValidationRequired),
-            ),
-        ];
-        for (err, rot, skip, cls) in cases {
-            assert_eq!(err.is_proxy_rotated(), rot);
-            assert_eq!(err.is_hard_skip(), skip);
-            if let Some(c) = cls {
-                assert_eq!(err.upstream_error_class(), Some(c));
-            }
-        }
-    }
-
-    #[test]
-    fn test_result_and_option_ext() {
-        let err: std::result::Result<(), &str> = Err("fail");
-        assert!(matches!(err.ctx_internal("io"), Err(CoreError::Internal(m)) if m == "io: fail"));
-        assert!(matches!(err.ctx_validation("f"), Err(CoreError::Validation(m)) if m == "f: fail"));
-        assert!(
-            matches!(err.ctx_not_found("it"), Err(CoreError::NotFound { what, id }) if what == "it" && id == "fail")
-        );
-        assert!(
-            matches!(err.ctx_upstream("c"), Err(CoreError::UpstreamConnection(m)) if m == "c: fail")
-        );
-        let ok: std::result::Result<u32, &str> = Ok(42);
-        assert_eq!(ok.ctx_internal("x").unwrap(), 42);
-
-        let none: Option<i32> = None;
-        assert!(
-            matches!(none.ctx_not_found("acc", "1"), Err(CoreError::NotFound { what, id }) if what == "acc" && id == "1")
-        );
-        assert!(matches!(none.ctx_validation("msg"), Err(CoreError::Validation(m)) if m == "msg"));
-        assert_eq!(Some(100).ctx_not_found("a", "1").unwrap(), 100);
-    }
-
-    #[test]
-    fn test_journal_capacity_exhausted() {
-        let err = CoreError::JournalCapacityExhausted;
-        assert!(err.is_journal_capacity_exhausted());
-        assert_eq!(
-            err.to_string(),
-            "usage journal capacity exhausted; admission rejected"
-        );
-        assert_eq!(err.http_status(), 503);
-        assert_eq!(err.code(), "journal_capacity_exhausted");
-        assert!(matches!(
-            CoreError::from_code_and_message("journal_capacity_exhausted", ""),
-            Some(CoreError::JournalCapacityExhausted)
-        ));
-        assert!(!CoreError::Internal("test".into()).is_journal_capacity_exhausted());
-    }
-}
+mod tests;

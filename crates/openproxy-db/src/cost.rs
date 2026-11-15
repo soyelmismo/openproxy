@@ -11,12 +11,24 @@ use std::sync::LazyLock;
 use crate::error::with_busy_retry;
 
 pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (Option<f64>, Option<f64>) {
-    let cost = if input.status_code >= 200 && input.status_code < 400 {
+    // Un cancel del cliente (499) SÍ factura: el seller no aborta su upstream
+    // cuando el buyer corta el stream, y reclama input completo + generación
+    // completa por NeedAuth. El bloque de usage final no llegó, así que no hay
+    // reparto de caché: todos los prompt tokens a input uncached + los tokens
+    // entregados en vuelo (estimados del acumulador parcial). El resto de
+    // errores sigue en 0: un upstream caído no se le cobra al usuario.
+    let billable =
+        (input.status_code >= 200 && input.status_code < 400) || input.status_code == 499;
+    let cost = if billable {
         pricing::compute_cost_opt_with_cache(
             price,
             input.prompt_tokens.unwrap_or(0),
             input.completion_tokens.unwrap_or(0),
-            input.cached_tokens,
+            if input.status_code == 499 {
+                None
+            } else {
+                input.cached_tokens
+            },
         )
     } else {
         Some(0.0)
@@ -250,7 +262,7 @@ pub fn record_row(
     };
     let error_msg_for_db = prepare_usage_error_msg(input.error_msg.as_ref());
 
-    let rowid = crate::credits_billing::transaction(conn, |conn| {
+    let (rowid, charged_units) = crate::credits_billing::transaction(conn, |conn| {
         let id = insert_usage_record(
             conn,
             input,
@@ -259,8 +271,13 @@ pub fn record_row(
             error_msg_for_db.as_deref(),
             error_msg_for_db.as_deref(),
         )?;
-        crate::credits_billing::debit_usage(conn, id)?;
-        Ok(id)
+        // Same transaction: the row can never carry a debit marker without the
+        // amount that debit actually moved (`None` = no debit was attempted).
+        #[cfg(feature = "payments")]
+        let charged = crate::credits_billing::debit_usage(conn, id)?;
+        #[cfg(not(feature = "payments"))]
+        let charged = crate::credits_billing::debit_usage(conn, id);
+        Ok((id, charged))
     })?;
 
     let row = RecentUsageRow {
@@ -296,6 +313,8 @@ pub fn record_row(
         api_key_id: input.api_key_id.map(|k| k.0),
         audio_ms: input.audio_ms,
         session_hash: input.session_hash,
+        charged_units,
+        credits_debited: charged_units.is_some(),
     };
 
     Ok((UsageId(rowid), row))
@@ -520,6 +539,8 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
     let api_key_id: Option<i64> = r.get(31)?;
     let audio_ms: Option<u32> = r.get(32)?;
     let session_hash: Option<i64> = r.get(33)?;
+    let charged_units: Option<i64> = r.get(34)?;
+    let credits_debited: i64 = r.get(35)?;
 
     let flags = ((race_lost != 0) as u8 * USAGE_FLAG_RACE_LOST)
         | ((is_streaming != 0) as u8 * USAGE_FLAG_IS_STREAMING)
@@ -562,6 +583,8 @@ fn map_recent_usage_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RecentUs
         api_key_id,
         audio_ms,
         session_hash: session_hash.map(|v| v as u64),
+        charged_units,
+        credits_debited: credits_debited != 0,
     })
 }
 
@@ -570,7 +593,8 @@ const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream
     error_msg, race_total, race_attempts, is_streaming, stream_complete, race_lost, created_at, \
     stop_reason, compression_savings_pct, compression_techniques, client_response, \
     prompt_tokens_estimated, completion_tokens_estimated, endpoint_kind, proxy_url, \
-    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash";
+    proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash, \
+    charged_units, credits_debited";
 
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     crate::credits_billing::transaction(conn, |conn| {
@@ -579,7 +603,13 @@ pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_typ
             params![row_id.0],
         )
         .map_err(crate::error::map_db_error_ctx("mark_client_response"))?;
-        crate::credits_billing::debit_usage(conn, row_id.0)
+        // The updated row (with its charged amount) is re-read and broadcast
+        // below, so the debit result itself is not needed here.
+        #[cfg(feature = "payments")]
+        let _charged = crate::credits_billing::debit_usage(conn, row_id.0)?;
+        #[cfg(not(feature = "payments"))]
+        let _charged = crate::credits_billing::debit_usage(conn, row_id.0);
+        Ok(())
     })?;
 
     if let Ok(mut stmt) = conn.prepare(&format!(
@@ -613,7 +643,10 @@ pub fn mark_winner_usage_row(
             .map_err(crate::error::map_db_error)?;
         drop(stmt);
         for id in ids {
-            crate::credits_billing::debit_usage(conn, id)?;
+            #[cfg(feature = "payments")]
+            let _charged = crate::credits_billing::debit_usage(conn, id)?;
+            #[cfg(not(feature = "payments"))]
+            let _charged = crate::credits_billing::debit_usage(conn, id);
         }
         Ok(())
     })?;

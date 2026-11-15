@@ -159,17 +159,49 @@ fn spawn_worker_with_canonical_coordinator(
             let batch_failures = Arc::clone(&failures);
             let batch_coord = Arc::clone(&worker_coord);
 
-            // spawn_blocking: SQLite es síncrono y no puede correr en el hilo de Tokio.
-            // Wakes only signal that the journal has work: one replay drains
-            // everything admitted so far, so the batch costs a single replay.
+            // Group-commit the whole channel batch: ONE transaction (one fsync)
+            // for every job that arrived while the previous batch drained,
+            // instead of one autocommit fsync per job. A synchronous=FULL
+            // commit costs ~3 ms on the reference host; with one commit per
+            // job the drain stream alone saturated the writer mutex and every
+            // spawn_write (checkout, delivery, watcher) queued behind it.
             let result = tokio::task::spawn_blocking(move || {
-                for job in batch {
+                let mut payloads = Vec::with_capacity(batch.len());
+                for job in &batch {
                     if matches!(job, BackgroundJob::JournalWake) {
                         continue;
                     }
-                    if let Err(error) = admit_job(&conn_clone, &job) {
-                        batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        tracing::error!(%error, "failed to admit usage job");
+                    match serde_json::to_string(job) {
+                        Ok(payload) => payloads.push(payload),
+                        Err(error) => {
+                            batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            tracing::error!(%error, "usage serialization failed");
+                        }
+                    }
+                }
+                if !payloads.is_empty() {
+                    let refs: Vec<&str> = payloads.iter().map(String::as_str).collect();
+                    let append =
+                        openproxy_db::usage_journal::append_batch(&mut conn_clone.lock(), &refs);
+                    match append {
+                        Ok(results) => {
+                            for result in results {
+                                if let Err(error) = result {
+                                    batch_failures
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    tracing::error!(%error, "failed to admit usage job");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            // The whole grouped append failed (no row landed):
+                            // count one failure per payload so the shutdown
+                            // report keeps reflecting the durable backlog.
+                            for _ in &payloads {
+                                batch_failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            tracing::error!(%error, "failed to admit usage job batch");
+                        }
                     }
                 }
                 if let Err(error) = replay_pending_with_coordinator(&conn_clone, &batch_coord) {
@@ -274,7 +306,10 @@ pub fn replay_pending_with_coordinator(
 
 /// Journal entries applied per transaction. One commit (one fsync with
 /// `synchronous=FULL`) covers the whole page instead of one per request.
-const REPLAY_BATCH: usize = 256;
+/// 128 keeps the writer lock held for milliseconds at a time so
+/// checkout/delivery/watcher writes interleave with the drain instead of
+/// queueing seconds behind one big replay.
+const REPLAY_BATCH: usize = 128;
 
 fn decode(id: i64, payload: &str) -> openproxy_types::Result<BackgroundJob> {
     serde_json::from_str(payload).map_err(|error| {

@@ -1,7 +1,7 @@
 use super::recent::map_usage_row;
 
 /// Minimal schema for the `usage` table, matching only the columns
-/// that `map_usage_row` reads (indices 0..=38).
+/// that `map_usage_row` reads (indices 0..=40).
 const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
     id INTEGER PRIMARY KEY,
     request_id TEXT NOT NULL,
@@ -41,7 +41,9 @@ const TEST_USAGE_SCHEMA: &str = "CREATE TABLE usage (
     pii_redacted TEXT,
     api_key_id INTEGER,
     audio_ms INTEGER,
-    session_hash INTEGER
+    session_hash INTEGER,
+    charged_units INTEGER,
+    credits_debited INTEGER NOT NULL DEFAULT 0
 )";
 
 #[test]
@@ -56,11 +58,13 @@ fn map_usage_row_basic() {
             race_total, race_attempts, is_streaming, stream_complete, race_lost,
             created_at, stop_reason, compression_savings_pct, compression_techniques,
             client_response, prompt_tokens_estimated, completion_tokens_estimated,
-            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash)
+            endpoint_kind, proxy_url, proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash,
+            charged_units, credits_debited)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                  ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
                  ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
+                 ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39,
+                 ?40, ?41)",
         rusqlite::params![
             42i64,
             "req-abc",
@@ -101,6 +105,8 @@ fn map_usage_row_basic() {
             Some(777i64),
             None::<i64>,
             Some(123_456i64),
+            Some(3_000i64),
+            1i64,
         ],
     )
     .unwrap();
@@ -132,6 +138,12 @@ fn map_usage_row_basic() {
     assert_eq!(row.flags, 14);
     assert_eq!(row.api_key_id, Some(777));
     assert_eq!(row.session_hash, Some(123_456));
+    assert_eq!(row.charged_units, Some(3_000));
+    assert!(row.credits_debited);
+    assert_eq!(
+        row.charge_state(),
+        openproxy_types::usage::ChargeState::Charged
+    );
 }
 
 #[test]
@@ -159,8 +171,9 @@ fn map_usage_row_negative_total_ms_returns_error() {
 }
 
 #[test]
-fn test_detail_by_id_includes_account_label() {
-    use super::detail::detail_by_id;
+fn detail_paths_carry_labels_the_calculated_price_and_the_real_charge() {
+    use super::detail::{detail_by_id, detail_by_trace_id};
+    use openproxy_types::usage::ChargeState;
 
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -212,28 +225,52 @@ fn test_detail_by_id_includes_account_label() {
             proxy_status TEXT,
             is_proxy_rotated INTEGER NOT NULL DEFAULT 0,
             pii_redacted TEXT,
-            audio_ms INTEGER
+            audio_ms INTEGER,
+            cost_usd REAL,
+            charged_units INTEGER,
+            credits_debited INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO accounts (id, label) VALUES (205, 'My Custom Account Label');
+        INSERT INTO combos (id, name) VALUES (7, 'My Combo Name');
+        INSERT INTO usage (id, request_id, trace_id, attempt, provider_id, account_id, combo_id,
+            upstream_model_id, status_code, total_ms, created_at, cost_usd, charged_units, credits_debited)
+        VALUES (1, 'req_1', 'tr_1', 1, 'minimax', 205, 7, 'MiniMax-M3.1', 200, 150,
+                '2026-09-27T10:00:00Z', 0.0146004, 14600, 1);
         INSERT INTO usage (id, request_id, trace_id, attempt, provider_id, account_id,
             upstream_model_id, status_code, total_ms, created_at)
-        VALUES (1, 'req_1', 'tr_1', 1, 'minimax', 205, 'MiniMax-M3.1', 200, 150, '2026-09-27T10:00:00Z');
-        INSERT INTO usage (id, request_id, trace_id, attempt, provider_id, account_id,
-            upstream_model_id, status_code, total_ms, created_at)
-        VALUES (2, 'req_2', 'tr_2', 1, 'minimax', NULL, 'MiniMax-M3.1', 200, 150, '2026-09-27T10:00:00Z');",
+        VALUES (2, 'req_2', 'tr_2', 1, 'minimax', NULL, 'MiniMax-M3.1', 200, 150,
+                '2026-09-27T10:00:00Z');",
     )
     .unwrap();
 
-    let detail1 = detail_by_id(&conn, 1).unwrap().expect("row 1 exists");
-    assert_eq!(detail1.account_id.map(|a| a.0), Some(205));
-    assert_eq!(
-        detail1.account_label.as_deref(),
-        Some("My Custom Account Label")
-    );
+    // Both detail paths must return the same projection: labels, the preserved
+    // calculated price, and the durable charge evidence.
+    let by_id = detail_by_id(&conn, 1).unwrap().expect("row 1 exists");
+    let by_trace = detail_by_trace_id(&conn, "tr_1")
+        .unwrap()
+        .expect("trace tr_1 exists");
+    for detail in [&by_id, &by_trace] {
+        assert_eq!(detail.account_id.map(|a| a.0), Some(205));
+        assert_eq!(
+            detail.account_label.as_deref(),
+            Some("My Custom Account Label")
+        );
+        assert_eq!(detail.combo_name.as_deref(), Some("My Combo Name"));
+        // The calculated price is preserved untouched next to the charge.
+        assert_eq!(detail.cost_usd, Some(0.0146004));
+        assert_eq!(detail.charged_units, Some(14_600));
+        assert!(detail.credits_debited);
+        assert_eq!(detail.charge_state(), ChargeState::Charged);
+    }
 
     let detail2 = detail_by_id(&conn, 2).unwrap().expect("row 2 exists");
     assert_eq!(detail2.account_id, None);
     assert_eq!(detail2.account_label, None);
+    assert_eq!(detail2.combo_name, None);
+    assert_eq!(detail2.charged_units, None);
+    assert!(!detail2.credits_debited);
+    assert_eq!(detail2.cost_usd, None);
+    assert_eq!(detail2.charge_state(), ChargeState::NotCharged);
 }
 
 mod exclusions {

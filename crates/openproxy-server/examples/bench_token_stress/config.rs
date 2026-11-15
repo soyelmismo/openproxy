@@ -8,7 +8,7 @@ use std::{
 pub const HELP: &str = "bench_token_stress [CONCURRENCY=10] [TOKENS=5000] [TOKENS_PER_EVENT=5]
   --repetitions N       Fresh processes and SQLite directory per repetition (default 3)
   --rounds N            Rounds of requests reusing the same HTTP client and server (default 1)
-  --keys N             Default ceil(concurrency/64). --keys 1 tests the admission cap
+  --keys N             Default ceil(concurrency/per-key cap). --keys 1 tests the admission cap
   --proxy-cpus LIST     taskset CPU list (default all allowed CPUs after the first two)
   --client-cpus LIST    taskset CPU list (default second allowed CPU)
   --mock-cpus LIST      taskset CPU list (default first allowed CPU)
@@ -206,7 +206,10 @@ impl Options {
             })
         };
         let repetitions = number("--repetitions", 3)?;
-        let keys_count = number("--keys", concurrency.div_ceil(64))?;
+        let keys_count = number(
+            "--keys",
+            concurrency.div_ceil(openproxy_core::rate_limit::DEFAULT_MAX_CONCURRENT_PER_KEY),
+        )?;
         let workers = number("--workers", sets[0].len())?;
         ensure!(
             (1..=100).contains(&repetitions)

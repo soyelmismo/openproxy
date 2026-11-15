@@ -159,8 +159,8 @@ pub(crate) async fn handle_sync_response(
             status = status.as_u16(),
             attempts = result.attempts,
             elapsed_ms,
-            error = %err,
-            "chat_completions: error from pipeline"
+            response_error = %err,
+            "chat_completions: masked error returned to the client"
         );
         return Err(ApiError(err));
     }
@@ -229,8 +229,8 @@ pub(crate) async fn handle_sync_response_responses(
             status = status.as_u16(),
             attempts = result.attempts,
             elapsed_ms,
-            error = %err,
-            "responses_completions: error from pipeline"
+            response_error = %err,
+            "responses_completions: masked error returned to the client"
         );
         return Err(ApiError(err));
     }

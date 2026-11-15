@@ -7,6 +7,22 @@ use openproxy_types::ids::ComboId;
 use std::sync::Arc;
 use tokio::sync::watch;
 
+/// Whether an error leaves the proxy as a generic class for a combo caller.
+///
+/// The rule is the HTTP status that was recorded for the attempt, not the
+/// internal variant: the same variant answered with `400` or `500` is a
+/// different thing for the caller, and two variants with the same status are the
+/// same thing. Anything below `400` is not an error response, and `499` means
+/// the caller closed the request, so neither is rewritten.
+///
+/// One family is exempt because this proxy produces it, never a target: the
+/// caller's own plan balance and quota windows
+/// ([`CoreError::is_caller_quota_rejection`]). Those are its limits and its only
+/// actionable information, so they keep their message and `Retry-After`.
+fn should_mask_target_error(err: &CoreError, status_code: u16) -> bool {
+    !err.is_caller_quota_rejection() && status_code >= 400 && status_code != 499
+}
+
 fn flatten_sub_combos(
     repo: &dyn crate::repository::PipelineRepository,
     root_combo_id: ComboId,
@@ -82,6 +98,7 @@ impl Pipeline {
     /// persisted, so concurrent requests cannot all spend the same balance
     /// (see [`crate::credits_gate`]). Keys without ledger rows are untouched.
     pub async fn run(&self, req: PipelineRequest) -> PipelineResult {
+        let combo_id = req.combo_id;
         let lane = match self.admit_credit_request(&req).await {
             crate::credits_gate::CreditAdmission::Open(lane) => lane,
             // Boxed to keep the admission enum small; the result is returned
@@ -89,12 +106,57 @@ impl Pipeline {
             crate::credits_gate::CreditAdmission::Denied(result) => return *result,
         };
 
-        let result = self.run_stages(req).await;
+        let mut result = self.run_stages(req).await;
 
         if let Some(lane) = lane {
             self.settle_credit_request(lane, &result).await;
         }
+        // Last step, after settlement read the real error and after the usage
+        // row recorded it: only the response is masked.
+        Self::mask_target_error(self.config.error_masking.enabled, combo_id, &mut result);
         result
+    }
+
+    /// Hide a failure from a caller routed through a combo.
+    ///
+    /// The `usage` row, the live log and the trace keep the real cause; only the
+    /// response is reduced to a class ([`CoreError::masked_for_client`]). The
+    /// one family that keeps its message is the caller's own quota/plan
+    /// rejection. A model routed directly (`combo_id` = the synthetic -1) is
+    /// left alone too: its caller is the operator debugging a provider.
+    pub(crate) fn mask_target_error(enabled: bool, combo_id: ComboId, result: &mut PipelineResult) {
+        if !enabled || combo_id.0 <= 0 {
+            return;
+        }
+        let Some(err) = result.error.as_ref() else {
+            return;
+        };
+        if !should_mask_target_error(err, result.status_code) {
+            return;
+        }
+        // The class comes from the recorded status, which is the target's real
+        // one; the error variant may have been rebuilt along the way.
+        let retry_after_ms = match err {
+            CoreError::RateLimited { retry_after_ms, .. } => Some(*retry_after_ms),
+            CoreError::MaskedUpstream { retry_after_ms, .. } => *retry_after_ms,
+            _ => None,
+        };
+        // Logged at INFO, not DEBUG: the debug-log ring and journald keep this
+        // line, so the operator sees the real cause here and in `usage` while
+        // the caller only ever gets the class.
+        tracing::info!(
+            combo_id = combo_id.0,
+            attempts = result.attempts,
+            status = result.status_code,
+            request_id = result
+                .usage_tuple
+                .map(|(id, _, _)| id.to_string())
+                .unwrap_or_default(),
+            original = %err,
+            "combo response masked; the real cause stays in this log and in usage"
+        );
+        let masked = CoreError::masked_upstream(result.status_code, retry_after_ms);
+        result.error = Some(masked);
     }
 
     async fn run_stages(&self, req: PipelineRequest) -> PipelineResult {

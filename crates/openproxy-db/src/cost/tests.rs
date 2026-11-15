@@ -374,3 +374,172 @@ fn attributed_insert_failure_cannot_fall_back_to_anonymous_usage() {
     assert_eq!(saved, key);
     assert!(crate::credits_ledger::balance_units(&conn, key).unwrap() < 1_000_000);
 }
+
+/// The projected row must carry the durable charge evidence, not a guess.
+fn projected_row(conn: &rusqlite::Connection, id: i64) -> RecentUsageRow {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {RECENT_USAGE_COLS} FROM usage WHERE id = ?1"
+        ))
+        .unwrap();
+    stmt.query_row(rusqlite::params![id], map_recent_usage_from_row)
+        .unwrap()
+}
+
+#[cfg(feature = "payments")]
+#[test]
+fn charged_units_records_what_the_debit_moved_and_leaves_the_price_alone() {
+    let pool = DbPool::test_pool_with_prefix("openproxy-cost-charged-units").unwrap();
+    let conn = pool.writer();
+    conn.execute("INSERT INTO api_keys(key_hash) VALUES('charged-units')", [])
+        .unwrap();
+    let key = conn.last_insert_rowid();
+    conn.execute("INSERT INTO credit_transactions(api_key_id,kind,amount_units,remaining_units) VALUES(?1,'grant',1000000,1000000)", [key])
+        .unwrap();
+    let mut input = test_input(1_000_000, 0, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
+    input.provider_id = ProviderId::new("openrouter");
+    input.upstream_model_id = "openai/gpt-4o-mini".into();
+    input.api_key_id = Some(openproxy_types::ids::ApiKeyId(key));
+
+    let (id, row) = record_row(&conn, &input).unwrap();
+    // 1M prompt tokens at 0.15 USD/1M = 0.15 USD = 150000 micro-USD.
+    let cost = row.cost_usd.expect("the row is priced");
+    assert!((cost - 0.15).abs() < 1e-9, "unexpected cost {cost}");
+    assert_eq!(row.charged_units, Some(150_000));
+    assert!(row.credits_debited);
+    assert_eq!(
+        row.charge_state(),
+        openproxy_types::usage::ChargeState::Charged
+    );
+
+    let stored = projected_row(&conn, id.0);
+    assert_eq!(stored.charged_units, Some(150_000));
+    assert!(stored.credits_debited);
+    assert_eq!(
+        crate::credits_ledger::balance_units(&conn, key).unwrap(),
+        850_000
+    );
+    // The calculated price is never rewritten by the charge bookkeeping.
+    assert_eq!(stored.cost_usd, row.cost_usd);
+}
+
+/// The exact shape of the row that motivated the column: a priced 200 for a key
+/// that holds no prepaid credits. The debit path runs, charges nothing, and the
+/// row must say "not charged" instead of echoing the price as if it had been
+/// billed.
+#[cfg(feature = "payments")]
+#[test]
+fn priced_row_on_a_key_without_prepaid_credits_is_not_charged() {
+    let pool = DbPool::test_pool_with_prefix("openproxy-cost-no-ledger").unwrap();
+    let conn = pool.writer();
+    conn.execute("INSERT INTO api_keys(key_hash) VALUES('no-ledger')", [])
+        .unwrap();
+    let key = conn.last_insert_rowid();
+    let mut input = test_input(1_000_000, 0, None, 100, USAGE_FLAG_CLIENT_RESPONSE);
+    input.provider_id = ProviderId::new("openrouter");
+    input.upstream_model_id = "openai/gpt-4o-mini".into();
+    input.api_key_id = Some(openproxy_types::ids::ApiKeyId(key));
+
+    let (id, row) = record_row(&conn, &input).unwrap();
+    assert!(row.cost_usd.is_some_and(|c| c > 0.0), "the row is priced");
+    assert_eq!(
+        row.charged_units,
+        Some(0),
+        "nothing left the balance, so nothing was charged"
+    );
+    assert!(row.credits_debited, "the debit path still ran");
+    assert_eq!(
+        row.charge_state(),
+        openproxy_types::usage::ChargeState::NotCharged
+    );
+
+    let stored = projected_row(&conn, id.0);
+    assert_eq!(stored.charged_units, Some(0));
+    assert_eq!(crate::credits_ledger::balance_units(&conn, key).unwrap(), 0);
+}
+
+/// Historical rows have no recorded amount: marker clear means no debit ever
+/// ran (not charged), marker set means the amount is unrecoverable (unknown).
+/// Neither may be answered with `cost_usd`.
+#[test]
+fn historical_rows_report_not_charged_or_unknown_never_the_price() {
+    let pool = DbPool::test_pool_with_prefix("openproxy-cost-historical").unwrap();
+    let conn = pool.writer();
+    let mut input = test_input(100, 200, Some(50), 500, 0);
+    input.provider_id = ProviderId::new("openrouter");
+    input.upstream_model_id = "openai/gpt-4o-mini".into();
+    let (id, row) = record_row(&conn, &input).unwrap();
+    assert_eq!(row.charged_units, None, "no debit was attempted");
+    assert!(!row.credits_debited);
+    assert_eq!(
+        row.charge_state(),
+        openproxy_types::usage::ChargeState::NotCharged
+    );
+
+    // Simulate a row billed before migration 132 existed.
+    conn.execute(
+        "UPDATE usage SET credits_debited = 1, charged_units = NULL WHERE id = ?1",
+        [id.0],
+    )
+    .unwrap();
+    let historical = projected_row(&conn, id.0);
+    assert_eq!(historical.charged_units, None);
+    assert!(historical.credits_debited);
+    assert_eq!(
+        historical.charge_state(),
+        openproxy_types::usage::ChargeState::Unknown,
+        "the marker alone cannot prove an amount"
+    );
+}
+
+/// Política antseed-cancel: una fila 499 (cancel del cliente) factura los
+/// prompt tokens a precio de input uncached (no llegó el bloque de usage con
+/// el reparto de caché) + los tokens entregados en vuelo. Los demás errores
+/// siguen en coste 0.
+#[test]
+fn status_499_bills_full_uncached_input_and_partial_output() {
+    let price = Some(crate::pricing::Price {
+        input_per_1m: 3.0,
+        output_per_1m: 15.0,
+        cached_per_1m: Some(0.3),
+        kind: crate::pricing::PriceKind::Chat,
+        ..Default::default()
+    });
+    let mut input = test_input(1000, 500, None, 1, 0);
+    input.status_code = 499;
+    input.cached_tokens = None;
+    let (cost, _) = super::compute(price, &input);
+    let expected = 1000.0 / 1_000_000.0 * 3.0 + 500.0 / 1_000_000.0 * 15.0;
+    assert!(
+        cost.expect("499 must bill").close_to(expected),
+        "cost {cost:?} != expected {expected}"
+    );
+
+    // Con cached declarado (llegó usage final: no es un cancel a medio
+    // stream) el 2xx sí descuenta caché; el 499 lo ignora siempre.
+    let mut delivered = test_input(1000, 500, None, 1, 0);
+    delivered.status_code = 200;
+    delivered.cached_tokens = Some(800);
+    let (cost_ok, _) = super::compute(price, &delivered);
+    let expected_cached =
+        200.0 / 1_000_000.0 * 3.0 + 800.0 / 1_000_000.0 * 0.3 + 500.0 / 1_000_000.0 * 15.0;
+    assert!(
+        cost_ok.expect("2xx must bill").close_to(expected_cached),
+        "cost {cost_ok:?} != expected {expected_cached}"
+    );
+
+    // Un upstream caído no se cobra al usuario.
+    let mut upstream_err = test_input(1000, 500, None, 1, 0);
+    upstream_err.status_code = 502;
+    let (cost_err, _) = super::compute(price, &upstream_err);
+    assert_eq!(cost_err, Some(0.0), "upstream errors must stay free");
+}
+
+trait CloseTo {
+    fn close_to(&self, other: f64) -> bool;
+}
+impl CloseTo for f64 {
+    fn close_to(&self, other: f64) -> bool {
+        (self - other).abs() < 1e-9
+    }
+}

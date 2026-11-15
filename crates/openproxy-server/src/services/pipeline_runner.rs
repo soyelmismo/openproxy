@@ -100,6 +100,7 @@ impl PipelineRunner {
             quota_protection: state.quota_protection(),
             pii_config: state.pii_config(),
             modality_routing: state.modality_routing(),
+            error_masking: state.error_masking(),
             background_tx: state.background_tx(),
         };
         let services = openproxy_pipeline::PipelineServices {

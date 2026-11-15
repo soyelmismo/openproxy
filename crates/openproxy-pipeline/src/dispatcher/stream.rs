@@ -642,10 +642,7 @@ impl UpstreamDispatcher {
                 choice.message.extra.remove("raw_response_body");
             }
             // Populate robust BPE token estimation if upstream omitted usage in streaming fold
-            crate::dispatcher::unary::ensure_usage_populated(
-                resp,
-                &params.req.openai_request.messages,
-            );
+            crate::dispatcher::unary::ensure_usage_populated(resp, &params.req.openai_request);
         }
 
         let is_client_response = !matches!(

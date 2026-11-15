@@ -95,6 +95,8 @@ pub(crate) struct NonStreamingSuccessArgs {
     pub response_headers: Option<std::collections::BTreeMap<String, String>>,
     pub response_body_raw: serde_json::Value,
     pub openai_response: crate::translation::OpenAIResponse,
+    /// Which fields were synthesized rather than reported by the upstream.
+    pub usage_estimated: (bool, bool),
 }
 
 /// `UpstreamRequest` ya construido por `setup_upstream_request_and_context`.

@@ -25,8 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 118 plan grant · 121 checkout resilience · 122 receipt binding ·
     // 123 checkout replay target · 124 credit reservations ·
     // 126 credit key-kind backfill · 130 tier stock · 131 minted-key TTL.
-    const PAYMENTS_ONLY_MIGRATIONS: &[i64] =
-        &[110, 111, 112, 113, 114, 115, 117, 118, 121, 122, 123, 124, 126, 127, 130, 131];
+    const PAYMENTS_ONLY_MIGRATIONS: &[i64] = &[
+        110, 111, 112, 113, 114, 115, 117, 118, 121, 122, 123, 124, 126, 127, 130, 131,
+    ];
     let mut entries = Vec::new();
 
     if migrations_dir.exists() {

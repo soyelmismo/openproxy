@@ -11,6 +11,7 @@ import { api } from "../../lib/api.js";
 import { ensureCombosLoaded } from "../../state/models-sync.js";
 import { ensureModalRoot } from "../../lib/ui-utils.js";
 import { formatAudioDuration } from "../../lib/format.js";
+import { chargeView } from "../../lib/charge.js";
 import { icons, endpointIcon } from "../../lib/icons.js";
 import { liveLogsStore } from "../../state/live-logs-store.js";
 import { clockStore } from "../../state/clock-store.js";
@@ -276,12 +277,19 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
   // Speed: "45.9 tok/s"
   const speedDisplay = log.tokens_per_sec != null ? `${log.tokens_per_sec.toFixed(1)} tok/s` : "—";
 
-  // Cost: "$0.0000". Audio costs are fractions of a cent, so they keep 6dp.
-  const costDisplay = costRaw != null
+  // Cost: what the ledger ACTUALLY charged (durable `charged_units`), never the
+  // calculated price presented as collected money. The price stays as a
+  // secondary line so both numbers are visible and distinguishable.
+  const charge = chargeView(log);
+  const costDisplay = charge.state === "unknown"
+    ? "— · Desconocido"
+    : `${charge.amountText} · ${charge.label}`;
+  const isAudioEndpoint = (log as Record<string, unknown>)["endpoint_kind"] === "audio";
+  const calculatedCostDisplay = costRaw != null
     ? (typeof costRaw === "number"
-        ? (isAudio ? `$${costRaw.toFixed(6)}` : `$${costRaw.toFixed(4)}`)
-        : (isAudio ? `$${Number(costRaw).toFixed(6)}` : `$${Number(costRaw).toFixed(4)}`))
-    : "$0.0000";
+        ? (isAudioEndpoint ? `$${costRaw.toFixed(6)}` : `$${costRaw.toFixed(4)}`)
+        : (isAudioEndpoint ? `$${Number(costRaw).toFixed(6)}` : `$${Number(costRaw).toFixed(4)}`))
+    : "—";
 
   const apiKeyDisplay = apiKeyId != null ? `#${String(apiKeyId)}` : "—";
 
@@ -315,7 +323,8 @@ export function renderLogDetailModal(log: LogDetailLog): TemplateResult {
             <div><strong>Latency:</strong> <span class="mono-val">${latencyDisplay}</span></div>
             <div><strong>Tokens:</strong> <span class="mono-val"${compressionTooltip ? html` title=${compressionTooltip}` : ""}>${tokensDisplay}</span></div>
             <div><strong>Speed:</strong> <span class="mono-val">${speedDisplay}</span></div>
-            <div><strong>Cost:</strong> <span class="mono-val">${costDisplay}</span></div>
+            <div><strong>Cost:</strong> <span class="mono-val log-cost--${charge.state}" title="${charge.title}">${costDisplay}</span></div>
+            <div><strong>Coste calculado:</strong> <span class="mono-val" title="Precio calculado de la peticion (no implica que se haya cobrado)">${calculatedCostDisplay}</span></div>
             <div><strong>Account:</strong> ${accountDisplay.title ? html`<span title=${accountDisplay.title}>${accountDisplay.text}</span>` : accountDisplay.text}</div>
             <div><strong>Combo:</strong> ${comboText}</div>
             <div><strong>API Key:</strong> ${apiKeyDisplay}</div>

@@ -6,7 +6,6 @@
 //! the first chunk charged only for delivered bytes, unpriced models failing
 //! closed, free keys untouched and `execute_test_target` not bypassing the gate.
 
-use openproxy_types::error::CoreError;
 use openproxy_types::ids::{ApiKeyId, ComboId, ComboTargetId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

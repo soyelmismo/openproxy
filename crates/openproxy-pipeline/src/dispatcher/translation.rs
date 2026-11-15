@@ -106,19 +106,20 @@ pub(crate) fn translate_non_streaming_body(
 /// Populates `usage` in `OpenAIResponse` using BPE tokenizer (tiktoken cl100k_base)
 /// if the upstream omitted it or returned zeros. This guarantees downstream clients
 /// (like Antseed sellers) always receive realistic, non-zero token accounting.
+/// Returns (prompt_estimated, completion_estimated) for persisted provenance.
 pub(crate) fn ensure_usage_populated(
     resp: &mut OpenAIResponse,
-    messages: &[openproxy_types::OpenAIMessage],
-) {
+    request: &openproxy_types::OpenAIRequest,
+) -> (bool, bool) {
     let needs_prompt = resp.usage.as_ref().is_none_or(|u| u.prompt_tokens == 0);
     let needs_completion = resp.usage.as_ref().is_none_or(|u| u.completion_tokens == 0);
 
     if !needs_prompt && !needs_completion {
-        return;
+        return (false, false);
     }
 
     let est_prompt = if needs_prompt {
-        openproxy_compression::token_estimate::estimate_prompt_tokens(messages).max(1)
+        openproxy_compression::token_estimate::estimate_request_prompt_tokens(request).max(1)
     } else {
         resp.usage.as_ref().map_or(0, |u| u.prompt_tokens)
     };
@@ -178,4 +179,5 @@ pub(crate) fn ensure_usage_populated(
             cached_tokens: Some(c),
         }),
     });
+    (needs_prompt, needs_completion)
 }
