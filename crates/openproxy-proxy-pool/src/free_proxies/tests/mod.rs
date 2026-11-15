@@ -93,6 +93,7 @@ fn setup_test_db() -> Connection {
           stream_mode TEXT NOT NULL DEFAULT 'auto' CHECK (stream_mode IN ('auto', 'streaming', 'unary')),
           prune_models INTEGER NOT NULL DEFAULT 1 CHECK (prune_models IN (0, 1)),
           prompt_cache_ttl TEXT NOT NULL DEFAULT 'auto',
+          allow_loopback INTEGER NOT NULL DEFAULT 0 CHECK (allow_loopback IN (0, 1)),
           CHECK (format IN ('openai', 'anthropic', 'mixed', 'gemini', 'responses'))
         );
         CREATE TABLE accounts (

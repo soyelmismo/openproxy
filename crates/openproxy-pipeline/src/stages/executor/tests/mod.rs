@@ -189,10 +189,6 @@ async fn test_race_target_deduplication_skips_failed_race_targets_in_sequential_
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
-
     let count_t1 = Arc::new(AtomicUsize::new(0));
     let count_t2 = Arc::new(AtomicUsize::new(0));
     let count_t3 = Arc::new(AtomicUsize::new(0));
@@ -460,10 +456,6 @@ async fn test_adversarial_race_winner_returns_empty_failure_sets() {
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
-
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

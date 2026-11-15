@@ -1,5 +1,38 @@
 pub use openproxy_adapters::MockAdapter;
 use openproxy_adapters::adapters::{AdapterAuthType, AdapterFormat, ProviderAdapterConfig};
+
+/// Runs an async test body on a dedicated thread with a large stack.
+///
+/// The decision pipeline builds a deep future (adapter + bridge +
+/// per-target evaluation + streaming translation, awaited into each other),
+/// and debug builds inflate every frame in that chain — a full e2e request
+/// peaks at ~2.05 MiB of stack, while libtest gives each test thread the
+/// `std::thread` default of 2 MiB, so a plain `#[tokio::test]` aborts the
+/// whole harness with a stack overflow. This is depth, not infinite
+/// recursion — the same body passes with `RUST_MIN_STACK=2150000` — so the
+/// fix is a bigger stack for the tests that need it, not a change to the
+/// pipeline (mirrors `run_with_big_stack` in the server's e2e suite).
+pub fn run_with_big_stack<F, Fut>(body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            // current_thread + enable_all mirrors `#[tokio::test]`'s default,
+            // so no test changes timing or spawning semantics.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(body());
+        })
+        .expect("spawn big-stack test thread")
+        .join()
+        .expect("test thread panicked");
+}
+
 pub mod combos {
     use super::{ComboId, Connection};
     pub use openproxy_types::combos::{AddTargetInput, Strategy};
@@ -74,9 +107,6 @@ pub fn fresh_pool() -> (DbPool, Arc<parking_lot::Mutex<Connection>>, PathBuf) {
     let pool = DbPool::test_pool_with_prefix("openproxy-pipeline-test").expect("open pool");
     let extra = pool.open_connection().expect("open extra");
     let conn = Arc::new(parking_lot::Mutex::new(extra));
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let path = pool.path().to_path_buf();
     (pool, conn, path)
 }
@@ -349,6 +379,7 @@ pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> Pipe
             extra_headers: Vec::new(),
             anonymous_fallback: false,
             rate_limit_scope: "account".into(),
+            allow_loopback: false,
         },
         call_count: None,
         fail_fetch: false,

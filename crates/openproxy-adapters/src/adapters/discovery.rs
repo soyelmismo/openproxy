@@ -267,3 +267,63 @@ mod tests {
         assert!(err.is_err());
     }
 }
+
+#[cfg(all(test, feature = "upstream-hyper"))]
+mod streaming_cap_tests {
+    use super::*;
+
+    /// Security (audit H-2): `upstream_get_bytes` feeds model discovery,
+    /// favicon fetching and models.dev sync — all of them `.collect()` the
+    /// body. The unary builders now default to the non-streaming transport
+    /// (32 MiB `Limited`), so an upstream that answers with an endless or
+    /// oversized body is rejected at the cap instead of buffering without
+    /// bound (previously the wire limit for these requests was `u64::MAX`,
+    /// bounded only by the 120 s discovery timeout).
+    #[tokio::test]
+    async fn upstream_get_bytes_rejects_bodies_past_the_transport_cap() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut tcp, _)) = listener.accept().await {
+                let mut buf = [0u8; 8192];
+                // Drain the request head.
+                let mut read = 0usize;
+                while read < 8192 {
+                    match tcp.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            read += n;
+                            if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                    }
+                }
+                // 33 MiB of body on a chunked stream: past the 32 MiB cap.
+                let head =
+                    b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n";
+                tcp.write_all(head).await.unwrap();
+                let chunk = vec![b'a'; 1024 * 1024];
+                for _ in 0..33 {
+                    tcp.write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                        .await
+                        .unwrap();
+                    tcp.write_all(&chunk).await.unwrap();
+                    tcp.write_all(b"\r\n").await.unwrap();
+                }
+                tcp.write_all(b"0\r\n\r\n").await.unwrap();
+            }
+        });
+
+        let client = std::sync::Arc::new(crate::upstream::UpstreamClient::new());
+        let err = upstream_get_bytes(&client, &format!("http://{addr}/models"), &[])
+            .await
+            .expect_err("body past the 32 MiB transport cap must be rejected");
+        assert!(
+            err.contains("length limit exceeded"),
+            "must fail at the transport limit, not elsewhere: {err}"
+        );
+    }
+}

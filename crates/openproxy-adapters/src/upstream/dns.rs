@@ -1,4 +1,3 @@
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 
@@ -54,21 +53,29 @@ pub fn is_private_or_reserved(ip: &IpAddr) -> bool {
     }
 }
 
-pub(crate) fn cache_key(host: &str, port: u16) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    host.hash(&mut hasher);
-    port.hash(&mut hasher);
-    hasher.finish()
+/// Cache key: the literal `host:port` string.
+///
+/// Security (audit H-5): the key used to be a 64-bit `DefaultHasher`
+/// (SipHash-1-3 with the FIXED default keys) digest of `(host, port)`. Any
+/// party able to trigger resolutions — e.g. the `/v1/images` fetch path via
+/// `resolve_public_host`, which SEEDS this cache — could precompute, offline
+/// and against the public binary, a colliding `(attacker_host, port)` pair
+/// for a victim host's digest and seed the victim's entry with
+/// attacker-controlled addresses: the next dial to the victim (a plaintext
+/// `http://` custom provider, carrying its Bearer credential) would connect
+/// to the attacker. A literal string key removes collision space entirely.
+pub(crate) fn cache_key(host: &str, port: u16) -> String {
+    format!("{host}:{port}")
 }
 
 static DNS_CACHE: std::sync::LazyLock<
-    dashmap::DashMap<u64, (Vec<SocketAddr>, std::time::Instant)>,
+    dashmap::DashMap<String, (Vec<SocketAddr>, std::time::Instant)>,
 > = std::sync::LazyLock::new(dashmap::DashMap::new);
 static SWEEP_STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 const DNS_TTL: std::time::Duration = std::time::Duration::from_mins(5);
 
-fn get_cached_dns(cache_key: u64) -> Option<Vec<SocketAddr>> {
-    let entry = DNS_CACHE.get(&cache_key)?;
+fn get_cached_dns(cache_key: &str) -> Option<Vec<SocketAddr>> {
+    let entry = DNS_CACHE.get(cache_key)?;
     if std::time::Instant::now() < entry.1 {
         Some(entry.0.clone())
     } else {
@@ -96,8 +103,9 @@ fn ensure_dns_sweep_started() {
 }
 
 /// Resolve `host:port` and require EVERY address to be public, regardless
-/// of `OPENPROXY_ALLOW_PRIVATE_UPSTREAMS` (which relaxes the check for LOOPBACK upstreams only
-/// for operator-configured provider upstreams, not for user-supplied URLs).
+/// of the per-request loopback opt-in (`CALL_ALLOW_LOOPBACK` relaxes the
+/// check for LOOPBACK upstreams only, for operator-configured provider
+/// upstreams, not for user-supplied URLs).
 ///
 /// The addresses are stored in the shared DNS cache, so a subsequent
 /// [`UpstreamClient`](super::UpstreamClient) call for the same
@@ -124,28 +132,27 @@ pub async fn resolve_public_host(host: &str, port: u16) -> io::Result<Vec<Socket
 /// async DNS, with a simple in-memory cache (5m TTL) to avoid
 /// hitting getaddrinfo on every fresh dial.
 pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
-    // ROOT FIX (audit A6-01): the env var used to disable the whole
-    // private/reserved filter in production builds. It now admits LOOPBACK
-    // upstreams only (the documented local-backend use case); RFC1918,
+    // ROOT FIX (audit A6-01 + H-3): the process-global env var is gone. The
+    // per-request `CALL_ALLOW_LOOPBACK` task-local (set from the provider
+    // row's `allow_loopback`) admits LOOPBACK upstreams only; RFC1918,
     // link-local metadata and every other reserved range stay blocked.
     let allow_all = cfg!(test) || cfg!(feature = "ssrf-bypass");
-    let allow_loopback = !allow_all
-        && std::env::var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS")
-            .is_ok_and(|v| v == "true" || v == "1");
+    let allow_loopback = !allow_all && super::connector::call_allows_loopback();
     let addr_allowed =
         |ip: std::net::IpAddr| !is_private_or_reserved(&ip) || (allow_loopback && ip.is_loopback());
 
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if !allow_all && !addr_allowed(ip) {
             return Err(io::Error::other(
-                "all resolved addresses are private/reserved (SSRF block). OPENPROXY_ALLOW_PRIVATE_UPSTREAMS admits loopback upstreams only.",
+                "all resolved addresses are private/reserved (SSRF block). A provider row with \
+                 allow_loopback = 1 admits loopback upstreams for that provider only.",
             ));
         }
         return Ok(vec![SocketAddr::new(ip, port)]);
     }
 
     let key = cache_key(host, port);
-    if let Some(cached) = get_cached_dns(key) {
+    if let Some(cached) = get_cached_dns(&key) {
         return Ok(cached);
     }
 
@@ -154,7 +161,8 @@ pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<Socket
         for addr in &addrs {
             if !addr_allowed(addr.ip()) {
                 return Err(io::Error::other(
-                    "all resolved addresses are private/reserved (SSRF block). OPENPROXY_ALLOW_PRIVATE_UPSTREAMS admits loopback upstreams only.",
+                    "all resolved addresses are private/reserved (SSRF block). A provider row with \
+                     allow_loopback = 1 admits loopback upstreams for that provider only.",
                 ));
             }
         }

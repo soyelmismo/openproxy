@@ -22,6 +22,11 @@ pub struct CreateProviderInput {
     pub stream_mode: Option<String>,
     #[serde(default)]
     pub prompt_cache_ttl: Option<String>,
+    /// Per-provider loopback opt-in (audit H-3). Off by default; only needed
+    /// for local development backends (e.g. contrib/laya-server on
+    /// 127.0.0.1). There is no process-wide environment knob anymore.
+    #[serde(default)]
+    pub allow_loopback: Option<bool>,
 }
 
 impl Validatable for CreateProviderInput {
@@ -50,6 +55,7 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
     let format = ProviderFormat::parse(&input.format).map_err(CoreError::Validation)?;
     let stream_mode = input.stream_mode.clone();
     let prompt_cache_ttl = input.prompt_cache_ttl.clone();
+    let allow_loopback = input.allow_loopback;
     providers::create(
         conn,
         providers::NewProvider {
@@ -65,13 +71,14 @@ pub fn create_provider(conn: &Connection, input: CreateProviderInput) -> Result<
                 .unwrap_or(crate::providers::RateLimitScope::Account),
         },
     )?;
-    if stream_mode.is_some() || prompt_cache_ttl.is_some() {
+    if stream_mode.is_some() || prompt_cache_ttl.is_some() || allow_loopback.is_some() {
         update_provider(
             conn,
             &id,
             &UpdateProviderInput {
                 stream_mode,
                 prompt_cache_ttl,
+                allow_loopback,
                 ..Default::default()
             },
         )?;
@@ -136,6 +143,10 @@ pub struct UpdateProviderInput {
     pub stream_mode: Option<String>,
     pub prune_models: Option<bool>,
     pub prompt_cache_ttl: Option<String>,
+    /// Per-provider loopback opt-in (audit H-3, migration 000135). Default
+    /// absent = leave the column alone. Only providers explicitly marked can
+    /// dial loopback upstreams; there is no process-wide knob anymore.
+    pub allow_loopback: Option<bool>,
 }
 
 impl Validatable for UpdateProviderInput {
@@ -180,6 +191,7 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             StreamMode,
             PruneModels,
             PromptCacheTtl,
+            AllowLoopback,
         }
 
         struct V;
@@ -269,6 +281,9 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::PromptCacheTtl => {
                             out.prompt_cache_ttl = Some(map.next_value()?);
                         }
+                        Field::AllowLoopback => {
+                            out.allow_loopback = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(out)
@@ -329,6 +344,7 @@ pub fn update_provider(
             stream_mode: input.stream_mode.as_deref(),
             prune_models: input.prune_models,
             prompt_cache_ttl: input.prompt_cache_ttl.as_deref(),
+            allow_loopback: input.allow_loopback,
         },
     )
 }

@@ -92,9 +92,6 @@ fn map_error_body_non_json_falls_back_to_status() {
 
 #[test]
 fn test_list_providers() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let server = httpmock::MockServer::start();
     let client = Client::new(server.base_url());
 
@@ -122,9 +119,6 @@ fn test_list_providers() {
 
 #[test]
 fn test_refresh_models() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let server = httpmock::MockServer::start();
     let client = Client::new(server.base_url());
 
@@ -141,9 +135,6 @@ fn test_refresh_models() {
 
 #[test]
 fn test_list_combo_targets() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let server = httpmock::MockServer::start();
     let client = Client::new(server.base_url());
 
@@ -172,9 +163,6 @@ fn test_list_combo_targets() {
 
 #[test]
 fn test_create_account() {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let server = httpmock::MockServer::start();
     let client = Client::new(server.base_url());
 

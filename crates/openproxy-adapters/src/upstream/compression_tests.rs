@@ -94,14 +94,14 @@ const SSE_PAYLOAD: &str = concat!(
 
 // Harness
 
-fn drive(codec: Option<Codec>, frames: &[Vec<u8>]) -> Result<Vec<u8>, String> {
+pub(super) fn drive(codec: Option<Codec>, frames: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     let mut headers = HeaderMap::new();
     if let Some(codec) = codec
         && let Ok(value) = HeaderValue::from_str(codec.as_str())
     {
         headers.insert(header::CONTENT_ENCODING, value);
     }
-    let mut decoding = BodyDecoding::from_response(&headers).map_err(|e| e.to_string())?;
+    let mut decoding = BodyDecoding::from_response(&headers, false).map_err(|e| e.to_string())?;
     let mut collected: Vec<u8> = Vec::new();
     for frame in frames {
         decoding.push(frame).map_err(|e| e.to_string())?;
@@ -131,7 +131,7 @@ fn drain(decoding: &mut BodyDecoding, collected: &mut Vec<u8>) -> Result<(), Str
     Err("decoder made no progress".to_string())
 }
 
-fn frames_of(bytes: &[u8], size: usize) -> Vec<Vec<u8>> {
+pub(super) fn frames_of(bytes: &[u8], size: usize) -> Vec<Vec<u8>> {
     bytes.chunks(size.max(1)).map(<[u8]>::to_vec).collect()
 }
 
@@ -268,7 +268,7 @@ fn identity_content_encoding_leaves_frames_byte_identical() {
         header::CONTENT_ENCODING,
         HeaderValue::from_static("identity"),
     );
-    let mut decoding = BodyDecoding::from_response(&headers).expect("decoder");
+    let mut decoding = BodyDecoding::from_response(&headers, false).expect("decoder");
     let mut collected: Vec<u8> = Vec::new();
     for frame in &frames {
         decoding.push(frame).expect("push");
@@ -560,7 +560,7 @@ fn one_shot_decoder_never_claims_it_can_drain_without_input() {
             header::CONTENT_ENCODING,
             HeaderValue::from_static(codec.as_str()),
         );
-        let mut decoding = BodyDecoding::from_response(&headers).expect("codec recognized");
+        let mut decoding = BodyDecoding::from_response(&headers, false).expect("codec recognized");
 
         // Before any input.
         assert!(
@@ -583,4 +583,85 @@ fn one_shot_decoder_never_claims_it_can_drain_without_input() {
             codec.as_str()
         );
     }
+}
+
+// Security-audit reproductions (branch fix/security-audit).
+
+/// VULN (audit): one-shot codecs (`zstd`, `br`) decompressed the whole
+/// accumulated buffer into memory and only checked the decoded size AFTER
+/// the expansion. A tiny zstd bomb expanding to 512 MiB must be rejected at
+/// the 32 MiB decoded cap, without ever materializing the full expansion:
+/// the process peak RSS may not grow by more than 64 MiB while the bomb is
+/// being decompressed.
+#[test]
+fn one_shot_zstd_bomb_does_not_materialize_the_full_expansion() {
+    fn peak_rss_kib() -> u64 {
+        let status = std::fs::read_to_string("/proc/self/status").expect("/proc/self/status");
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmHWM:") {
+                return rest
+                    .trim()
+                    .trim_end_matches("kB")
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+            }
+        }
+        0
+    }
+
+    // Stream-encode 512 MiB of zeros without ever holding the plaintext.
+    let mut encoder = zstd::stream::Encoder::new(Vec::new(), 3).expect("zstd encoder");
+    // Heap-allocated (clippy::large_stack_arrays): an 8 MiB stack array would
+    // blow the very test-thread stack this suite runs on.
+    let zeros: Box<[u8]> = vec![0u8; 8 * 1024 * 1024].into_boxed_slice();
+    for _ in 0..64 {
+        std::io::Write::write_all(&mut encoder, &zeros).expect("zstd write");
+    }
+    let compressed = encoder.finish().expect("zstd finish");
+    assert!(
+        compressed.len() < 8 * 1024 * 1024,
+        "bomb must stay small on the wire, got {}",
+        compressed.len()
+    );
+
+    let before = peak_rss_kib();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+    let mut decoding = BodyDecoding::from_response(&headers, false).expect("codec recognized");
+    for chunk in compressed.chunks(64 * 1024) {
+        decoding.push(chunk).expect("push ok");
+    }
+    let decoded = decoding.finish();
+    let grown = peak_rss_kib().saturating_sub(before);
+    assert!(decoded.is_err(), "the bomb must be rejected");
+    assert!(
+        grown < 64 * 1024,
+        "decompression must abort at the 32 MiB decoded cap instead of \
+         materializing the expansion: peak RSS grew by {grown} KiB"
+    );
+}
+
+/// VULN (audit): the compressed bytes buffered for a one-shot codec were
+/// unbounded; on a streaming transport (no byte limit) `pending` grew with
+/// whatever the upstream sent. Pushing past the compressed cap must fail.
+#[test]
+fn one_shot_pending_buffer_is_capped() {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("zstd"));
+    let mut decoding = BodyDecoding::from_response(&headers, false).expect("codec recognized");
+    let chunk = vec![0u8; 1024 * 1024];
+    let cap = 32 * 1024 * 1024usize;
+    let mut buffered = 0usize;
+    while buffered < cap {
+        decoding
+            .push(&chunk)
+            .expect("push within the cap must succeed");
+        buffered += chunk.len();
+    }
+    assert!(
+        decoding.push(&chunk).is_err(),
+        "pushing past the {} MiB compressed cap must fail",
+        cap / (1024 * 1024)
+    );
 }

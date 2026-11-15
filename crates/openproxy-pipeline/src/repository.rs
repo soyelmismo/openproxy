@@ -101,12 +101,21 @@ pub trait PipelineRepository: Send + Sync {
 
     fn get_models_by_row_ids(&self, model_row_ids: &[ModelRowId]) -> Result<HashMap<i64, Model>>;
     fn get_accounts_meta(&self, account_ids: &[AccountId]) -> Result<AccountsMetaMaps>;
-    fn get_antigravity_projects(&self, account_ids: &[i64]) -> Result<HashMap<i64, Box<str>>>;
+    fn get_antigravity_projects(
+        &self,
+        master_key: &MasterKey,
+        account_ids: &[i64],
+    ) -> Result<HashMap<i64, Box<str>>>;
     fn get_providers_auth_type(
         &self,
         provider_ids: &[ProviderId],
     ) -> Result<HashMap<String, String>>;
-    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()>;
+    fn update_antigravity_project_id(
+        &self,
+        master_key: &MasterKey,
+        account_id: i64,
+        new_project_id: &str,
+    ) -> Result<()>;
 
     fn resolve_combo_to_targets(
         &self,
@@ -411,19 +420,29 @@ impl PipelineRepository for SqlitePipelineRepository {
         openproxy_db::accounts::get_accounts_meta(&self.reader(), account_ids)
     }
 
-    fn get_antigravity_projects(&self, account_ids: &[i64]) -> Result<HashMap<i64, Box<str>>> {
+    fn get_antigravity_projects(
+        &self,
+        master_key: &MasterKey,
+        account_ids: &[i64],
+    ) -> Result<HashMap<i64, Box<str>>> {
         let conn = self.reader();
         let map: HashMap<i64, openproxy_db::accounts::AntigravityMeta> =
-            openproxy_db::accounts::read_provider_meta_batch(&conn, None, account_ids)?;
+            openproxy_db::accounts::read_provider_meta_batch(&conn, Some(master_key), account_ids)?;
         Ok(map
             .into_iter()
             .filter_map(|(id, meta)| meta.project_id.map(|s| (id, s.into_boxed_str())))
             .collect())
     }
 
-    fn update_antigravity_project_id(&self, account_id: i64, new_project_id: &str) -> Result<()> {
+    fn update_antigravity_project_id(
+        &self,
+        master_key: &MasterKey,
+        account_id: i64,
+        new_project_id: &str,
+    ) -> Result<()> {
         openproxy_db::accounts::update_antigravity_project_id(
             &self.writer(),
+            master_key,
             account_id,
             new_project_id,
         )

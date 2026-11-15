@@ -86,6 +86,7 @@ pub struct AppState {
         Arc<dashmap::DashMap<String, (Arc<openproxy_core::api_keys::ApiKey>, std::time::Instant)>>,
     ws_tickets: Arc<WsTicketStore>,
     admin_limiter: Arc<crate::handlers::admin::auth::AdminAuthLimiter>,
+    public_auth_limiter: Arc<crate::middleware::auth_throttle::AuthFailureLimiter>,
     oauth_states: Arc<crate::handlers::admin::oauth::OAuthStateStore>,
 }
 
@@ -283,6 +284,11 @@ impl AppState {
     /// Admin auth throttle + per-key WS stream cap (OP-27).
     pub fn admin_limiter(&self) -> &crate::handlers::admin::auth::AdminAuthLimiter {
         self.admin_limiter.as_ref()
+    }
+
+    /// Per-IP throttle for failed authentications on the public `/v1` API.
+    pub fn public_auth_limiter(&self) -> &crate::middleware::auth_throttle::AuthFailureLimiter {
+        self.public_auth_limiter.as_ref()
     }
 
     /// Shared handle to the admin limiter (for WS guards that must outlive the

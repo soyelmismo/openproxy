@@ -43,7 +43,13 @@ RUN case "${TARGETARCH}" in \
     echo "${ORT_SHA256}  /tmp/ort/ort.tgz" | sha256sum -c - && \
     tar -xzf /tmp/ort/ort.tgz --wildcards --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
 
-FROM gcr.io/distroless/cc:nonroot AS runtime
+# Security (OP-09, audit H-9): pin the runtime base by digest. The
+# `nonroot` tag is mutable — a rebuilt upstream tag silently changes the
+# runtime image every CI run. Digest verified against the registry
+# (multi-arch index: amd64, arm/v7, arm64/v8, ppc64le, riscv64, s390x) on
+# 2026-11-15. Bump deliberately after reviewing the new image, like the
+# fetcher stage above.
+FROM gcr.io/distroless/cc@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
 
 ARG TARGETARCH
 
@@ -70,9 +76,16 @@ VOLUME ["/var/lib/openproxy"]
 
 # Security (OP-23): real HEALTHCHECK. Distroless has no shell/wget/curl, so
 # the binary checks itself: `openproxy --healthcheck` TCP-connects to the
-# configured bind address and exits 0/1.
+# configured bind address and exits 0/1. The same --config flag as the CMD
+# so the check targets the address the server actually binds.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/usr/local/bin/openproxy", "--healthcheck"]
+    CMD ["/usr/local/bin/openproxy", "--healthcheck", "--config", "/etc/openproxy/config.toml"]
 
+# Security/ops (audit H-20 + this audit): the binary reads OPENPROXY_CONFIG
+# and, since the --config parsing fix, honors the CMD's --config flag as
+# well (previously the flag was silently discarded, so a plain `docker run`
+# fell back to ./config.toml defaults: loopback bind inside the container
+# and a master-key crash loop). The ENV makes the config explicit for every
+# invocation style; the CMD keeps the flag for operators who override it.
+ENV OPENPROXY_CONFIG=/etc/openproxy/config.toml
 ENTRYPOINT ["/usr/local/bin/openproxy"]
-CMD ["--config", "/etc/openproxy/config.toml"]

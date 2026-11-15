@@ -22,7 +22,34 @@ pub(crate) async fn resolve_or_create_oauth_account(
     account_id_input: Option<i64>,
 ) -> Result<AccountId, ApiError> {
     if let Some(id) = account_id_input {
-        return Ok(AccountId(id));
+        // ROOT FIX (security audit): `store_oauth_tokens` UPDATEs the target
+        // account unconditionally, so a caller-supplied `account_id` that is
+        // not validated would write this provider's credentials onto ANY
+        // existing account — including one belonging to a different provider
+        // (the zai exchange body makes this reachable). The id must exist
+        // and already belong to the provider being connected.
+        let pool = std::sync::Arc::clone(s.db_pool());
+        let master_key = std::sync::Arc::clone(s.master_key());
+        let provider = provider.to_string();
+        return tokio::task::spawn_blocking(move || {
+            let reader = pool.reader();
+            let account = core_accounts::get(&reader, AccountId(id), &master_key)
+                .map_err(ApiError)?
+                .ok_or_else(|| {
+                    ApiError(CoreError::Validation(format!(
+                        "account {id} does not exist; connect a new account instead"
+                    )))
+                })?;
+            if account.provider_id.as_str() != provider {
+                return Err(ApiError(CoreError::Validation(format!(
+                    "account {id} belongs to provider '{}', not '{provider}'",
+                    account.provider_id.as_str()
+                ))));
+            }
+            Ok(AccountId(id))
+        })
+        .await
+        .map_err(|e| ApiError(CoreError::Internal(format!("spawn failed: {e}"))))?;
     }
     let pool = std::sync::Arc::clone(s.db_pool());
     let provider = provider.to_string();

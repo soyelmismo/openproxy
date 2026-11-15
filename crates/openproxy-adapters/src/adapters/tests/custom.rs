@@ -28,6 +28,7 @@ fn make_custom_provider(
         stream_mode: "auto".into(),
         prompt_cache_ttl: "auto".into(),
         prune_models: true,
+        allow_loopback: false,
     }
 }
 

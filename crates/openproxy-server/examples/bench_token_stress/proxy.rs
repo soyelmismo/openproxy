@@ -26,6 +26,9 @@ fn seed(pool: &DbPool, master_key: &MasterKey, upstream: String) -> anyhow::Resu
             rate_limit_scope: None,
             stream_mode: None,
             prompt_cache_ttl: None,
+            // The bench upstream binds 127.0.0.1; the per-provider opt-in
+            // (audit H-3) replaces the old process-wide env var.
+            allow_loopback: Some(true),
         },
     )?;
     admin::create_account(

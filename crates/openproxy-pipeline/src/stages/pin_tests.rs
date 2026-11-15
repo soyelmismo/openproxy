@@ -45,6 +45,7 @@ fn adapter_generation(unary: bool) -> ProviderAdapterEnum {
             )],
             anonymous_fallback: false,
             rate_limit_scope: "none".into(),
+            allow_loopback: false,
         },
     )))
 }
@@ -207,6 +208,7 @@ async fn each_provider_of_a_request_gets_its_own_pin() {
             extra_headers: Vec::new(),
             anonymous_fallback: false,
             rate_limit_scope: "none".into(),
+            allow_loopback: false,
         }),
     )));
     config.adapters = Arc::new(adapters);

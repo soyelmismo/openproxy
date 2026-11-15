@@ -44,13 +44,25 @@ fn is_allowed_origin(origin: &str, host: &str) -> bool {
         return true;
     }
 
+    // Security (audit H-17): loopback origins are accepted only when the
+    // request Host is itself loopback — i.e. a local development deployment.
+    // Previously ANY localhost origin (any port) passed even when the
+    // dashboard was served from a public domain, so a malicious local
+    // process (dev-server, compromised npm tool) cleared the origin gate;
+    // only the Bearer/ticket authentication stopped it. Defense in depth:
+    // the gate must not depend on the layer behind it.
     let origin = origin
         .strip_prefix("http://")
         .or_else(|| origin.strip_prefix("https://"))
         .unwrap_or(origin);
-    let host_part = origin.split(':').next().unwrap_or(origin);
-
-    matches!(host_part, "localhost" | "127.0.0.1")
+    let origin_host = origin.split(':').next().unwrap_or(origin);
+    let request_host = host.split(':').next().unwrap_or(host);
+    let origin_is_loopback = matches!(origin_host, "localhost" | "127.0.0.1" | "[::1]" | "::1");
+    let request_is_local = matches!(
+        request_host,
+        "localhost" | "127.0.0.1" | "[::1]" | "::1" | ""
+    );
+    origin_is_loopback && request_is_local
 }
 
 fn check_cswsh_origin(headers: &HeaderMap) -> Result<(), (StatusCode, &'static str)> {
@@ -88,8 +100,42 @@ pub async fn usage_stream(
         return resp.into_response();
     }
 
+    // Security (audit H-16): the handshake authenticates OUTSIDE
+    // admin_auth_middleware, so the OP-27 failure throttle never saw it — an
+    // IP already blocked on /admin/api could keep brute-forcing Bearer keys
+    // and single-use tickets through the upgrade path. Route handshake
+    // failures through the same limiter, and apply the cached-valid-key
+    // escape hatch so a blocked shared IP does not lock out the dashboard's
+    // own streams.
+    let client_ip = crate::client_ip::resolve_client_ip(
+        &headers,
+        Some(&addr),
+        &s.config().server.trusted_proxies,
+    )
+    .unwrap_or_else(|| addr.ip());
+    if s.admin_limiter().is_blocked(client_ip) {
+        let known_good_key = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::trim)
+            .is_some_and(|token| {
+                let key_hash = openproxy_core::api_keys::hash_key(token);
+                s.get_cached_api_key(&key_hash).is_some()
+            });
+        if !known_good_key {
+            return crate::error::ApiError(openproxy_types::CoreError::RateLimited {
+                provider: "admin_auth_throttle".into(),
+                retry_after_ms: 60_000,
+                is_proxy_rotated: false,
+            })
+            .into_response();
+        }
+    }
+
     match authenticate_admin_ws(&s, &headers, q.ticket.as_deref(), Some(&addr)).await {
         Ok(identity) => {
+            s.admin_limiter().record_success(client_ip);
             // Security (OP-27): cap concurrent dashboard streams per key so a
             // single manage key cannot pin unlimited WS tasks. Dev-bypass
             // sessions carry no key and are not capped (feature-gated builds
@@ -107,14 +153,23 @@ pub async fn usage_stream(
                 },
                 None => None,
             };
-            ws.on_upgrade(move |socket| {
-                let s = s;
-                let _guard = ws_guard;
-                async move { stream_usage_rows(socket, s).await }
-            })
-            .into_response()
+            // Security (audit H-18): bound the inbound frames. The dashboard
+            // WS only ever receives tiny control pings; tungstenite's
+            // defaults (16 MiB frames / 64 MiB messages) let an authenticated
+            // key materialise large buffers per connection for nothing.
+            ws.max_frame_size(64 * 1024)
+                .max_message_size(64 * 1024)
+                .on_upgrade(move |socket| {
+                    let s = s;
+                    let _guard = ws_guard;
+                    async move { stream_usage_rows(socket, s).await }
+                })
+                .into_response()
         }
-        Err(e) => e.into_response(),
+        Err(e) => {
+            s.admin_limiter().record_failure(client_ip);
+            e.into_response()
+        }
     }
 }
 
@@ -506,8 +561,14 @@ mod tests {
             "example.com:8080"
         ));
         assert!(!is_allowed_origin("http://malicious.com", "example.com"));
-        assert!(is_allowed_origin("http://localhost:3000", "example.com"));
-        assert!(is_allowed_origin("http://127.0.0.1:8000", "example.com"));
+        // Audit H-17: loopback origins are only for loopback deployments —
+        // a public Host must not accept a localhost origin (any port), or a
+        // malicious local process would clear the CSWSH gate.
+        assert!(!is_allowed_origin("http://localhost:3000", "example.com"));
+        assert!(!is_allowed_origin("http://127.0.0.1:8000", "example.com"));
+        // Local development (dashboard on localhost) keeps working.
+        assert!(is_allowed_origin("http://localhost:3000", "localhost:8787"));
+        assert!(is_allowed_origin("http://127.0.0.1:8000", "127.0.0.1:8787"));
         assert!(!is_allowed_origin("http://example.com", ""));
     }
 }

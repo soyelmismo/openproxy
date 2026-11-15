@@ -628,6 +628,9 @@ macro_rules! declare_openai_adapter {
                         auth_type: $crate::adapters::AdapterAuthType::Bearer,
                         format: $crate::adapters::AdapterFormat::Openai,
                         extra_headers,
+                        // Built-in providers never opt into loopback dials
+                        // (audit H-3); only custom provider rows can.
+                        allow_loopback: false,
                     },
                 }
             }

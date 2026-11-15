@@ -82,9 +82,6 @@ fn paid_pool(status: QuotaPoolStatus) -> QuotaPool {
 /// the snapshot as within its 60s freshness window and performs no network
 /// call to the real Z.ai quota endpoints.
 fn pipeline_with_zai_account(tag: &str, pools: Vec<QuotaPool>) -> (Pipeline, AccountId) {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let (pool, _conn, _path) = crate::test_utils::fresh_pool();
     let master_key = Arc::new(MasterKey::generate().expect("generate master key"));
 

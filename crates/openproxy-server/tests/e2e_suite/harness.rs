@@ -360,9 +360,6 @@ pub struct TestHarness {
 
 impl TestHarness {
     pub async fn new() -> Self {
-        unsafe {
-            std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-        }
         let temp_dir = TempDir::new("openproxy-e2e").expect("temp dir");
         let db_pool =
             Arc::new(DbPool::open(&temp_dir.path().join("e2e.db")).expect("open db pool"));
@@ -394,6 +391,7 @@ impl TestHarness {
                     rate_limit_scope: None,
                     stream_mode: None,
                     prompt_cache_ttl: None,
+                    allow_loopback: None,
                 },
             )
             .expect("create mock provider");

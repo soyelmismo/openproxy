@@ -24,9 +24,6 @@ fn chunk_line(delta: serde_json::Value) -> String {
 }
 
 async fn run(frames: String) -> (Vec<String>, String) {
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

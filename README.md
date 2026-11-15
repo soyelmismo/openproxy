@@ -75,9 +75,12 @@ Run the official multi-arch image (`linux/amd64`, `linux/arm64`):
 docker pull ghcr.io/soyelmismo/openproxy:latest
 
 # Run with a mounted config file and volume for SQLite data
+# Bind the port to loopback only: this port serves the admin dashboard and
+# admin API over plain HTTP. To expose it externally, put a TLS-terminating
+# reverse proxy in front (see docker-compose.yml notes).
 docker run -d \
   --name openproxy \
-  -p 8787:8787 \
+  -p 127.0.0.1:8787:8787 \
   -v $(pwd)/config.toml:/etc/openproxy/config.toml:ro \
   -v openproxy-data:/var/lib/openproxy \
   --restart unless-stopped \

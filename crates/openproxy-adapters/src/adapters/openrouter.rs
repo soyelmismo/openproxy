@@ -87,6 +87,7 @@ impl OpenRouterAdapter {
                 name: "OpenRouter".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: "https://openrouter.ai/api/v1".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,

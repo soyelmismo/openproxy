@@ -40,6 +40,9 @@ pub mod responses;
 pub mod systemone;
 pub mod tokenize;
 
+#[cfg(test)]
+mod v1_throttle_tests;
+
 use crate::state::AppState;
 use axum::routing::post;
 
@@ -88,5 +91,22 @@ pub fn public_api_routes(state: &AppState) -> axum::Router<AppState> {
     #[cfg(feature = "payments")]
     let v1_routes = v1_routes.nest("/credits", credits_gateway::router(state));
 
-    axum::Router::new().nest("/v1", v1_routes)
+    // Security (audit H-3): failed `/v1` authentications previously ran
+    // through `authenticate` (SHA-256 + SQLite lookup per attempt) with no
+    // throttle: the auth layer is the outermost route layer, so the per-IP
+    // branch of `rate_limit_middleware` was unreachable pre-auth, and
+    // `GET /v1/models` (in-handler auth) had no middleware at all. This
+    // outermost layer counts 401s per client IP and blocks brute force.
+    // Security (audit H-3): failed `/v1` authentications previously ran
+    // through `authenticate` (SHA-256 + SQLite lookup per attempt) with no
+    // throttle: the auth layer is the outermost route layer, so the per-IP
+    // branch of `rate_limit_middleware` was unreachable pre-auth, and
+    // `GET /v1/models` (in-handler auth) had no middleware at all. This
+    // outermost layer counts 401s per client IP and blocks brute force.
+    axum::Router::new()
+        .nest("/v1", v1_routes)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::auth_throttle::public_auth_throttle_middleware,
+        ))
 }

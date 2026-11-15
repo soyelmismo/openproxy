@@ -23,6 +23,22 @@ pub const DEFAULT_KDF_ITERATIONS: u32 = 2_000;
 /// KDF identifier written to new encrypted bundles.
 pub const KDF_ALGO: &str = "pbkdf2-hmac-sha256";
 pub const KDF_ALGO_LEGACY: &str = "sha256_iter";
+
+/// Hard upper bound on the KDF iteration count accepted from a bundle
+/// header. Bundles written by this project use `DEFAULT_KDF_ITERATIONS`; a
+/// crafted bundle could otherwise name `u32::MAX` and pin a CPU core (and
+/// the caller's single SQLite writer) for hours. 10M iterations is already
+/// ~16x the default and several seconds of KDF work — beyond any legitimate
+/// bundle.
+pub const MAX_KDF_ITERATIONS: u32 = 10_000_000;
+
+/// Clamp an attacker-controllable `kdf_iterations` bundle field to the
+/// bounded range. `None` (field absent) keeps the project default.
+pub fn clamp_kdf_iterations(declared: Option<u32>) -> u32 {
+    declared
+        .unwrap_or(DEFAULT_KDF_ITERATIONS)
+        .min(MAX_KDF_ITERATIONS)
+}
 const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
 const KEY_LEN: usize = 32;
@@ -215,7 +231,7 @@ pub fn decrypt_bundle_payload(
         )));
     }
 
-    let iterations = bundle.kdf_iterations.unwrap_or(DEFAULT_KDF_ITERATIONS);
+    let iterations = clamp_kdf_iterations(bundle.kdf_iterations);
     let algo = bundle.kdf.as_deref().unwrap_or(KDF_ALGO_LEGACY);
 
     let mut key = derive_key(passphrase, &salt, iterations, algo);
@@ -348,5 +364,24 @@ mod tests {
         let decrypted = decrypt_bundle_payload(&legacy_bundle, Some("old-pass")).unwrap();
         assert_eq!(decrypted, payload);
         assert!(decrypt_bundle_payload(&legacy_bundle, Some("wrong")).is_err());
+    }
+
+    #[test]
+    fn test_clamp_kdf_iterations_bounds_attacker_controlled_count() {
+        assert_eq!(clamp_kdf_iterations(None), DEFAULT_KDF_ITERATIONS);
+        assert_eq!(
+            clamp_kdf_iterations(Some(u32::MAX)),
+            MAX_KDF_ITERATIONS,
+            "u32::MAX must never reach the KDF"
+        );
+        assert_eq!(
+            clamp_kdf_iterations(Some(MAX_KDF_ITERATIONS + 1)),
+            MAX_KDF_ITERATIONS
+        );
+        // Legit counts (including the debug default) pass through untouched.
+        assert_eq!(
+            clamp_kdf_iterations(Some(DEFAULT_KDF_ITERATIONS)),
+            DEFAULT_KDF_ITERATIONS
+        );
     }
 }

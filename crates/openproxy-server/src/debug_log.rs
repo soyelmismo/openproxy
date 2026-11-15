@@ -98,7 +98,11 @@ fn resolve_debug_log_path() -> std::path::PathBuf {
         .join("debug.log")
 }
 
-fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<DebugLogEntry>>) {
+fn spawn_file_logger_task(
+    path: std::path::PathBuf,
+    mut rx: mpsc::Receiver<Arc<DebugLogEntry>>,
+    max_bytes: u64,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Some(parent) = path.parent() {
             let _ = tokio::fs::create_dir_all(parent).await;
@@ -127,12 +131,14 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<D
             }
         }
 
+        let mut written_since_rotation: u64 = 0;
         let mut rotation_interval = tokio::time::interval(std::time::Duration::from_hours(12));
         rotation_interval.tick().await;
 
         loop {
             tokio::select! {
                 _ = rotation_interval.tick() => {
+                    written_since_rotation = 0;
                     if let Ok(new_file) = tokio::fs::OpenOptions::new()
                         .create(true)
                         .write(true)
@@ -162,11 +168,45 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<D
                                     Err(_) => break,
                                 }
                             }
+                            // Serialize first so the byte cap can account for
+                            // the whole batch before anything is written.
+                            let mut lines: Vec<String> = Vec::with_capacity(batch.len());
+                            let mut batch_bytes: u64 = 0;
                             for item in batch {
                                 if let Ok(mut json) = serde_json::to_string(item.as_ref()) {
                                     json.push('\n');
-                                    let _ = file.write_all(json.as_bytes()).await;
+                                    batch_bytes = batch_bytes.saturating_add(json.len() as u64);
+                                    lines.push(json);
                                 }
+                            }
+                            // Security (audit H-12): rotate on SIZE, not only
+                            // on the 12 h tick — the warn loop that fills the
+                            // shared disk is bounded by this cap.
+                            if written_since_rotation.saturating_add(batch_bytes) > max_bytes
+                                && let Ok(new_file) = tokio::fs::OpenOptions::new()
+                                    .create(true)
+                                    .write(true)
+                                    .truncate(true)
+                                    .open(&path)
+                                    .await
+                            {
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::fs::PermissionsExt;
+                                    if let Ok(meta) = new_file.metadata().await {
+                                        let mut perms = meta.permissions();
+                                        perms.set_mode(perms.mode() & 0o600);
+                                        let _ =
+                                            tokio::fs::set_permissions(&path, perms).await;
+                                    }
+                                }
+                                file = new_file;
+                                written_since_rotation = 0;
+                            }
+                            for line in lines {
+                                let _ = file.write_all(line.as_bytes()).await;
+                                written_since_rotation =
+                                    written_since_rotation.saturating_add(line.len() as u64);
                             }
                             let _ = file.flush().await;
                         }
@@ -175,17 +215,24 @@ fn spawn_file_logger_task(path: std::path::PathBuf, mut rx: mpsc::Receiver<Arc<D
                 }
             }
         }
-    });
+    })
 }
 
 /// Initialize the global ring buffer. Must be called once at startup from
 /// `telemetry::init`, before any [`DebugLogLayer`] is installed. Idempotent.
-pub fn init() {
+pub fn init(config: &openproxy_core::config::LoggingConfig) {
     let _ = &*DEBUG_LOG_BUFFER;
+    // Security (audit H-12): the file writer used to be unconditional and
+    // unbounded (rotation by 12 h wall clock only). It is now an explicit
+    // opt-out, and the writer enforces a byte cap between rotations so a
+    // warn loop cannot fill the disk SQLite shares.
+    if !config.debug_log_enabled || config.debug_log_max_bytes == 0 {
+        return;
+    }
     let _ = FILE_LOG_SENDER.get_or_init(|| {
         let (tx, rx) = mpsc::channel::<Arc<DebugLogEntry>>(FILE_LOG_CAPACITY);
         let path = resolve_debug_log_path();
-        spawn_file_logger_task(path, rx);
+        spawn_file_logger_task(path, rx, config.debug_log_max_bytes);
         tx
     });
 }
@@ -395,7 +442,7 @@ mod tests {
     #[tokio::test]
     async fn buffer_evicts_oldest_when_full() {
         let _test_lock = TEST_MUTEX.lock().unwrap();
-        init();
+        init(&openproxy_core::config::LoggingConfig::default());
         // Push BUFFER_CAPACITY + 10 entries and snapshot inside the same lock,
         // so only the last BUFFER_CAPACITY survive and sibling tests cannot race.
         let snap = {
@@ -433,7 +480,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_since_filters_by_seq() {
         let _test_lock = TEST_MUTEX.lock().unwrap();
-        init();
+        init(&openproxy_core::config::LoggingConfig::default());
         let snap = {
             let mut guard = DEBUG_LOG_BUFFER.lock();
             guard.entries.clear();
@@ -496,7 +543,7 @@ mod tests {
     #[tokio::test]
     async fn debug_log_layer_captures_warn_and_error_via_subscriber() {
         let _test_lock = TEST_MUTEX.lock().unwrap();
-        init();
+        init(&openproxy_core::config::LoggingConfig::default());
         // Reset the buffer inside the lock, so entries from earlier tests are absent.
         {
             let mut guard = DEBUG_LOG_BUFFER.lock();
@@ -550,7 +597,7 @@ mod tests {
     #[tokio::test]
     async fn debug_log_layer_redacts_secrets() {
         let _test_lock = TEST_MUTEX.lock().unwrap();
-        init();
+        init(&openproxy_core::config::LoggingConfig::default());
 
         {
             let mut guard = DEBUG_LOG_BUFFER.lock();
@@ -589,5 +636,86 @@ mod tests {
         // Ensure that the message was redacted
         assert!(snap[0].message.contains("sk-[REDACTED]"));
         assert!(snap[1].message.contains("Bearer [REDACTED]"));
+    }
+}
+
+#[cfg(test)]
+mod size_cap_tests {
+    use super::*;
+
+    fn entry_with_message(message: &str) -> Arc<DebugLogEntry> {
+        let entry = DebugLogEntry {
+            seq: 1,
+            timestamp: chrono::Utc::now(),
+            level: "WARN",
+            target: "test".to_string(),
+            message: message.to_string(),
+            request_id: None,
+            trace_id: None,
+            span_path: None,
+        };
+        Arc::new(entry)
+    }
+
+    /// Audit H-12: the file writer must rotate on SIZE, not only on the 12 h
+    /// tick — previously a warn loop could grow debug.log without bound (the
+    /// only bound was time), filling the disk SQLite shares.
+    #[tokio::test]
+    async fn debug_log_rotates_when_the_size_cap_is_reached() {
+        let dir = openproxy_db::testing::TempDir::new("debug-log-cap").expect("mkdir");
+        let path = dir.join("debug.log");
+        let (tx, rx) = mpsc::channel::<Arc<DebugLogEntry>>(100);
+
+        // Tiny cap: each JSON line is ~150 bytes, so a 600-byte cap forces a
+        // rotation every few entries.
+        let task = spawn_file_logger_task(path.clone(), rx, 600);
+
+        let big = "x".repeat(120);
+        // Send entries spaced out so the writer drains them in small
+        // batches: the rotation must then keep the file pinned near the cap
+        // instead of growing with every entry (the pre-fix behavior grew
+        // without bound until the 12 h tick).
+        for _ in 0..40 {
+            let _ = tx.send(entry_with_message(&big)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        }
+        drop(tx);
+        task.await.expect("logger task finishes");
+
+        let metadata = std::fs::metadata(&path).expect("log exists");
+        // One in-flight batch (~300 B) of slack past the 600 B cap.
+        assert!(
+            metadata.len() <= 600 + 350,
+            "file size {} must stay near the size cap",
+            metadata.len()
+        );
+        assert!(
+            metadata.len() > 0,
+            "entries are still written up to the cap"
+        );
+    }
+
+    /// Audit H-12: the writer honours the opt-out — but that path lives in
+    /// `init`, which is guarded by the config flag; pinned indirectly here by
+    /// asserting the config defaults the telemetry layer receives.
+    #[test]
+    fn logging_config_defaults_keep_the_file_enabled_with_a_cap() {
+        let cfg = openproxy_core::config::LoggingConfig::default();
+        assert!(cfg.debug_log_enabled);
+        assert_eq!(cfg.debug_log_max_bytes, 64 * 1024 * 1024);
+        // And the serde surface accepts the new keys (the TOML layer uses
+        // the same derive).
+        let parsed: openproxy_core::config::LoggingConfig = serde_json::from_value(
+            serde_json::json!({"format": "json", "level": "info", "debug_log_enabled": false, "debug_log_max_bytes": 1048576}),
+        )
+        .expect("serde parse");
+        assert!(!parsed.debug_log_enabled);
+        assert_eq!(parsed.debug_log_max_bytes, 1_048_576);
+        // Omitted keys fall back to the defaults (backward compatibility).
+        let legacy: openproxy_core::config::LoggingConfig =
+            serde_json::from_value(serde_json::json!({"format": "text", "level": "warn"}))
+                .expect("legacy parse");
+        assert!(legacy.debug_log_enabled);
+        assert_eq!(legacy.debug_log_max_bytes, 64 * 1024 * 1024);
     }
 }

@@ -188,6 +188,20 @@ function showCfNotice(on: boolean): void {
 }
 
 /**
+ * Wrap a server-generated SVG in an <img> data: URI (audit H-6).
+ *
+ * The QR used to be injected with `qr.innerHTML = o.qr_svg`. Today the SVG
+ * is minted locally by the server, but that sink turns ANY future regression
+ * in the generation path into stored XSS on the public money surface. In an
+ * image context an SVG is inert by construction: scripts never run, external
+ * references never load — so even a hostile payload renders as pixels (or
+ * nothing), never as markup.
+ */
+export function qrImageDataUri(svg: string): string {
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+/**
  * Paint the payment step (QR, amount, leverage line, address).
  * Returns whether the snapshot is DURABLE: the caller must not settle the
  * "creation in flight" marker before that is true, or a reload would orphan a
@@ -207,8 +221,16 @@ export function renderPayStep(o: CheckoutOrder): boolean {
   show("addr");
   paymentNote(false);
   const qr = $("qr");
-  qr.innerHTML = o.qr_svg;
-  if (!o.qr_svg) {
+  if (o.qr_svg) {
+    // Security (audit H-6): never innerHTML the SVG — render it as an image
+    // so any payload is inert (see qrImageDataUri).
+    const img = document.createElement("img");
+    img.alt = "Payment QR code";
+    img.style.width = "100%";
+    img.style.height = "100%";
+    img.src = qrImageDataUri(o.qr_svg);
+    qr.replaceChildren(img);
+  } else {
     // Never leave a blank box: show the EIP-681 payload + address instead.
     qr.textContent = o.qr_uri + " → " + o.collector_address;
   }

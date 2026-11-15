@@ -19,7 +19,9 @@ use super::profile::TimeoutProfile;
 use super::response::{UpstreamBodyStream, UpstreamResponse};
 
 #[cfg(feature = "upstream-hyper")]
-use super::connector::{CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts, phased_phase};
+use super::connector::{
+    CALL_ALLOW_LOOPBACK, CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts, phased_phase,
+};
 #[cfg(feature = "upstream-hyper")]
 use dashmap::DashMap;
 #[cfg(feature = "upstream-hyper")]
@@ -45,6 +47,12 @@ pub struct UpstreamRequest {
     pub is_streaming: bool,
     pub proxy: Option<String>,
     pub proxy_status: Option<String>,
+    /// Per-provider loopback opt-in (audit H-3). `true` allows THIS request
+    /// to dial a loopback upstream (local development backends); every other
+    /// private/reserved range stays blocked either way. Set by the pipeline
+    /// dispatcher from the provider row; there is no process-wide escape
+    /// hatch.
+    pub allow_loopback: bool,
 }
 
 use super::response::TransportBody;
@@ -57,6 +65,7 @@ pub(crate) trait UpstreamTransport: Send + Sync + std::fmt::Debug {
         req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
+        allow_loopback: bool,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<http::Response<TransportBody>, UpstreamError>>
@@ -139,6 +148,7 @@ impl UpstreamTransport for ProductionTransport {
         req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
+        allow_loopback: bool,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<http::Response<TransportBody>, UpstreamError>>
@@ -166,6 +176,7 @@ impl UpstreamTransport for ProductionTransport {
                     })
             };
             let fut = CALL_PROXY.scope(proxy_url, fut);
+            let fut = CALL_ALLOW_LOOPBACK.scope(allow_loopback, fut);
             let fut = CALL_TIMEOUTS.scope(connector_timeouts, fut);
             fut.await
         })
@@ -219,6 +230,7 @@ where
         req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
+        allow_loopback: bool,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<http::Response<TransportBody>, UpstreamError>>
@@ -244,6 +256,7 @@ where
                     })
             };
             let fut = CALL_PROXY.scope(proxy_url, fut);
+            let fut = CALL_ALLOW_LOOPBACK.scope(allow_loopback, fut);
             let fut = CALL_TIMEOUTS.scope(connector_timeouts, fut);
             fut.await
         })
@@ -363,6 +376,7 @@ impl UpstreamClient {
         let is_streaming = spec.is_streaming;
         let proxy_url = spec.proxy.clone();
         let (_uri, host_key, host) = build_host_key_and_uri(&spec.url, proxy_url.clone())?;
+        let allow_loopback = spec.allow_loopback;
         let request = build_hyper_request(spec)?;
         let upload_progress = request
             .extensions()
@@ -391,7 +405,7 @@ impl UpstreamClient {
         let connector_timeouts = PhasedTimeouts::from_resolved(&timeouts);
         let send_fut = async move {
             let res = transport
-                .send_request(request, connector_timeouts, proxy_url)
+                .send_request(request, connector_timeouts, proxy_url, allow_loopback)
                 .await;
             if res.is_ok() {
                 record_pool_completion(&pool, host_key, &host);
@@ -522,7 +536,7 @@ fn wrap_upstream_response(
     is_streaming: bool,
 ) -> UpstreamResult<UpstreamResponse> {
     let (mut parts, body) = response.into_parts();
-    let decoding = super::compression::BodyDecoding::from_response(&parts.headers)?;
+    let decoding = super::compression::BodyDecoding::from_response(&parts.headers, is_streaming)?;
     decoding.strip_decoded_headers(&mut parts.headers);
     let limit = if is_streaming {
         super::response::STREAMING_BODY_LIMIT_BYTES

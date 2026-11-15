@@ -171,7 +171,11 @@ async fn phase_timeout_body_chunk_gap() {
     let client = UpstreamClient::new();
     let mut resp = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             custom_profile(10_000, 1_000, 5_000, 30_000),
             CancellationToken::new(),
         )
@@ -202,7 +206,11 @@ async fn stub_event_does_not_start_chunk_gap_timer() {
     let client = UpstreamClient::new();
     let mut resp = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             custom_profile(5_000, 500, 5_000, 2_000),
             CancellationToken::new(),
         )
@@ -236,7 +244,11 @@ async fn ttft_timeout_fires_when_first_chunk_delayed_after_headers() {
     let client = UpstreamClient::new();
     let mut resp = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             custom_profile(200, 5_000, 5_000, 5_000),
             CancellationToken::new(),
         )
@@ -259,7 +271,11 @@ async fn sent_get_waits_for_headers_not_write_timeout() {
     let t0 = std::time::Instant::now();
     let res = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             custom_profile(500, 5_000, 100, 60_000),
             CancellationToken::new(),
         )
@@ -358,7 +374,11 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
     let client = UpstreamClient::new();
     let mut resp = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             custom_profile(10_000, 1_000, 5_000, 30_000),
             CancellationToken::new(),
         )
@@ -397,7 +417,11 @@ async fn adversarial_phase_timeout_body_chunk_not_attributed_to_write() {
     let client = UpstreamClient::new();
     let mut resp = client
         .call(
-            UpstreamRequest::get(format!("http://{addr}/")),
+            {
+                let mut req = UpstreamRequest::get(format!("http://{addr}/"));
+                req.is_streaming = true;
+                req
+            },
             custom_profile(5_000, 200, 5_000, 30_000),
             CancellationToken::new(),
         )
@@ -427,9 +451,13 @@ async fn headers_timeout_fires_on_silent_http_server() {
     let addr = spawn_mock_raw(vec![(&[], Duration::from_secs(30))]).await;
     let client = UpstreamClient::new();
     let t0 = std::time::Instant::now();
+    let mut req = UpstreamRequest::post_json(format!("http://{addr}/"), bytes::Bytes::from("{}"));
+    // The streaming deadlines (ttft 200 ms bounds the headers phase) are what
+    // this test pins; unary requests use the total deadline instead.
+    req.is_streaming = true;
     let res = client
         .call(
-            UpstreamRequest::post_json(format!("http://{addr}/"), bytes::Bytes::from("{}")),
+            req,
             custom_profile(200, 5_000, 5_000, 30_000),
             CancellationToken::new(),
         )

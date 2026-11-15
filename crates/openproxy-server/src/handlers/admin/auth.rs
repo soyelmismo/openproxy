@@ -324,6 +324,35 @@ fn client_allowed(path: &str, method: &axum::http::Method) -> bool {
     }
 }
 
+/// Whether the admin-auth throttle lets this request through.
+///
+/// Security (audit H-11): behind a reverse proxy WITHOUT `trusted_proxies`
+/// configured, every Internet client shares the proxy's loopback IP in the
+/// failure counter, so 20 anonymous failures locked the legitimate operator
+/// out of the whole admin surface for 60 s — renewable forever, a cheap
+/// remote DoS of the dashboard and the admin API. The escape hatch: a
+/// CACHED valid key still authenticates while its IP is blocked (verified
+/// against the in-memory key cache only — no DB — so brute force with
+/// unknown keys stays blocked without touching SQLite), and its success
+/// clears the budget via `record_success`. Unknown or absent credentials
+/// get the early 429 as before.
+fn admin_throttle_allows(
+    state: &AppState,
+    headers: &HeaderMap,
+    client_ip: std::net::IpAddr,
+) -> bool {
+    if !state.admin_limiter().is_blocked(client_ip) {
+        return true;
+    }
+    extract_bearer_token(headers)
+        .ok()
+        .flatten()
+        .is_some_and(|token| {
+            let key_hash = openproxy_core::api_keys::hash_key(token);
+            state.get_cached_api_key(&key_hash).is_some()
+        })
+}
+
 pub async fn admin_auth_middleware(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -339,7 +368,7 @@ pub async fn admin_auth_middleware(
         &state.config().server.trusted_proxies,
     )
     .unwrap_or_else(|| addr.ip());
-    if state.admin_limiter().is_blocked(client_ip_for_throttle) {
+    if !admin_throttle_allows(&state, req.headers(), client_ip_for_throttle) {
         return crate::error::ApiError(openproxy_types::CoreError::RateLimited {
             provider: "admin_auth_throttle".into(),
             retry_after_ms: 60_000,
@@ -456,8 +485,10 @@ pub async fn admin_auth_middleware(
 /// (~190 bits) makes brute force impractical, but the throttle removes the
 /// cheap resource-exhaustion and log-flooding paths.
 pub struct AdminAuthLimiter {
-    /// client IP -> (failures in window, window start)
-    failures: dashmap::DashMap<std::net::IpAddr, (u32, std::time::Instant)>,
+    /// Shared per-IP failure budget (extracted to
+    /// `middleware::auth_throttle::AuthFailureLimiter` so the public `/v1`
+    /// throttle reuses the same algorithm and eviction hardening).
+    failures: crate::middleware::auth_throttle::AuthFailureLimiter,
     /// key id -> live WebSocket streams
     ws_streams: dashmap::DashMap<openproxy_types::ids::ApiKeyId, usize>,
 }
@@ -478,7 +509,10 @@ impl Default for AdminAuthLimiter {
 impl AdminAuthLimiter {
     pub fn new() -> Self {
         Self {
-            failures: dashmap::DashMap::new(),
+            failures: crate::middleware::auth_throttle::AuthFailureLimiter::new(
+                ADMIN_AUTH_MAX_FAILURES,
+                ADMIN_AUTH_WINDOW,
+            ),
             ws_streams: dashmap::DashMap::new(),
         }
     }
@@ -492,80 +526,17 @@ impl AdminAuthLimiter {
     /// reset the counter (only a restart cured it; reproduced with the
     /// legitimate admin still locked out 61 s later).
     pub fn is_blocked(&self, ip: std::net::IpAddr) -> bool {
-        self.failures.get(&ip).is_some_and(|e| {
-            let (count, start) = e.value();
-            *count >= ADMIN_AUTH_MAX_FAILURES && start.elapsed() < ADMIN_AUTH_WINDOW
-        })
+        self.failures.is_blocked(ip)
     }
 
     /// Count one failed attempt; resets the window when it expired.
     pub fn record_failure(&self, ip: std::net::IpAddr) {
-        use dashmap::mapref::entry::Entry;
-        // Bound the map under a spoofed-IP flood. Security: previously this
-        // called `clear()`, which wiped the failure counters for active IPs
-        // too — a flood of 100,001 unique spoofed IPs would unblock an IP
-        // that was already throttled. We now drop only entries whose window
-        // has expired (the only ones that were going to be reaped anyway),
-        // preserving active failure counters and the throttle they back.
-        // If even after eviction we are still at the cap, drop the entries
-        // with the LOWEST failure count — those have not tripped the throttle
-        // and dropping them does not unblock anyone.
-        if self.failures.len() >= 100_000 {
-            self.evict_expired_failures();
-            if self.failures.len() >= 100_000 {
-                self.evict_oldest_failures(10_000);
-            }
-        }
-        let now = std::time::Instant::now();
-        match self.failures.entry(ip) {
-            Entry::Occupied(mut o) => {
-                let (count, start) = o.get_mut();
-                if start.elapsed() >= ADMIN_AUTH_WINDOW {
-                    *count = 1;
-                    *start = now;
-                } else {
-                    *count += 1;
-                }
-            }
-            Entry::Vacant(v) => {
-                v.insert((1, now));
-            }
-        }
+        self.failures.record_failure(ip);
     }
 
     /// A successful authentication clears the IP's failure budget.
     pub fn record_success(&self, ip: std::net::IpAddr) {
-        self.failures.remove(&ip);
-    }
-
-    /// Drop every failure-counter entry whose window has expired. Called when
-    /// the DashMap approaches its bound; preserves every active counter.
-    fn evict_expired_failures(&self) {
-        let now = std::time::Instant::now();
-        self.failures
-            .retain(|_, (_, start)| now.duration_since(*start) < ADMIN_AUTH_WINDOW);
-    }
-
-    /// Drop the `n` failure-counter entries with the LOWEST failure count.
-    /// Only invoked when [`evict_expired_failures`] could not free enough
-    /// slots — i.e. every surviving entry is still inside its 60-second
-    /// window, which only happens under a sustained spoofed-IP flood.
-    /// We evict the lowest-count entries because:
-    ///   * an entry with count < ADMIN_AUTH_MAX_FAILURES has not tripped the
-    ///     throttle, so dropping it does NOT unblock anyone;
-    ///   * a blocked IP (count >= ADMIN_AUTH_MAX_FAILURES) is preserved, so
-    ///     the throttle it backs survives the flood.
-    fn evict_oldest_failures(&self, n: usize) {
-        let mut lowest: Vec<(u32, std::net::IpAddr)> = self
-            .failures
-            .iter()
-            .map(|e| (e.value().0, *e.key()))
-            .collect();
-        // Sort ascending by failure count — lowest first.
-        lowest.sort_unstable_by_key(|a| a.0);
-        for (_, ip) in lowest.into_iter().take(n) {
-            self.failures.remove(&ip);
-        }
+        self.failures.record_success(ip);
     }
 
     /// Acquire one WebSocket stream slot for `key`, or `None` when the key
@@ -660,14 +631,7 @@ mod limiter_tests {
         }
         assert!(limiter.is_blocked(ip), "blocked at budget");
         // Age every failure entry past the window, as time would.
-        let now = std::time::Instant::now();
-        limiter.failures.iter_mut().for_each(|mut e| {
-            *e.value_mut() = (
-                ADMIN_AUTH_MAX_FAILURES,
-                now.checked_sub(ADMIN_AUTH_WINDOW + std::time::Duration::from_secs(1))
-                    .unwrap_or(now),
-            )
-        });
+        limiter.failures.age_entries_past_window_for_test();
         assert!(
             !limiter.is_blocked(ip),
             "the block must expire with the window instead of locking the IP forever"
@@ -714,6 +678,92 @@ mod limiter_tests {
         assert!(
             limiter.is_blocked(blocked_ip),
             "BLOCKED IP must remain blocked after spoofed-IP flood — clear() regression"
+        );
+    }
+}
+
+#[cfg(test)]
+mod throttle_escape_hatch_tests {
+    use super::*;
+    use crate::state::AppState;
+
+    async fn test_state() -> AppState {
+        let dir = openproxy_db::testing::TempDir::new("admin-throttle-test").expect("mkdir");
+        let pool = std::sync::Arc::new(
+            openproxy_db::DbPool::open(&dir.join("admin-throttle.db")).expect("open"),
+        );
+        {
+            let mut w = pool.writer();
+            openproxy_db::migrations::run(&mut w).expect("migrations");
+        }
+        let mk = openproxy_db::MasterKey::generate().unwrap();
+        let adapters = std::sync::Arc::new(parking_lot::RwLock::new(std::sync::Arc::new(
+            openproxy_adapters::adapters::builtin_adapters(),
+        )));
+        AppState::for_test(
+            openproxy_core::AppConfig::default(),
+            pool,
+            std::sync::Arc::new(mk),
+            adapters,
+        )
+    }
+
+    /// Audit H-11: a blocked IP with a CACHED valid key must pass the
+    /// throttle (shared-NAT lockout), while unknown keys and headerless
+    /// requests stay blocked without a database lookup.
+    #[tokio::test]
+    async fn blocked_ip_with_cached_valid_key_passes_throttle() {
+        let state = test_state().await;
+        let ip: std::net::IpAddr = "203.0.113.90".parse().unwrap();
+
+        // Seed + cache a valid manage key.
+        let plaintext = format!("op_live_admin_ok_{}", std::process::id());
+        {
+            let w = state.db_pool().writer();
+            let key_hash = openproxy_core::api_keys::hash_key(&plaintext);
+            w.execute(
+                "INSERT OR REPLACE INTO api_keys (key_hash, key_prefix, label, scopes_json, created_by) \
+                 VALUES (?1, ?2, 'throttle', '[\"manage\"]', 'throttle-test')",
+                rusqlite::params![key_hash, &plaintext[..plaintext.len().min(12)]],
+            )
+            .expect("insert key");
+        }
+        let key = openproxy_core::api_keys::get_by_hash(
+            &state.db_pool().writer(),
+            &openproxy_core::api_keys::hash_key(&plaintext),
+        )
+        .expect("fetch key")
+        .expect("key present");
+        state.cache_api_key(std::sync::Arc::new(key));
+
+        // Not blocked yet: everything passes.
+        assert!(admin_throttle_allows(&state, &HeaderMap::new(), ip));
+
+        // Trip the throttle for this IP.
+        for _ in 0..ADMIN_AUTH_MAX_FAILURES {
+            state.admin_limiter().record_failure(ip);
+        }
+        assert!(state.admin_limiter().is_blocked(ip));
+
+        // Headerless and unknown-key requests are blocked (fast 429).
+        assert!(!admin_throttle_allows(&state, &HeaderMap::new(), ip));
+        let mut bad = HeaderMap::new();
+        bad.insert(
+            "authorization",
+            "Bearer op_live_unknownkey".parse().unwrap(),
+        );
+        assert!(!admin_throttle_allows(&state, &bad, ip));
+
+        // The cached valid key passes the throttle and would clear the
+        // budget through record_success in the middleware.
+        let mut good = HeaderMap::new();
+        good.insert(
+            "authorization",
+            format!("Bearer {plaintext}").parse().unwrap(),
+        );
+        assert!(
+            admin_throttle_allows(&state, &good, ip),
+            "cached valid key must pass while blocked"
         );
     }
 }

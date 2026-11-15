@@ -198,6 +198,9 @@ impl WarmupStrategy for CodexWarmupStrategy {
                 .insert(http::HeaderName::from_static("chatgpt-account-id"), ws_val);
         }
 
+        // The warmup mirrors a real streaming client request so the upstream
+        // sees the same traffic shape; keep the streaming transport.
+        req.is_streaming = true;
         execute_warmup_ping(upstream, req, account, "codex", model).await
     }
 }

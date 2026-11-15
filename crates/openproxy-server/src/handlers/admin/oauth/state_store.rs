@@ -31,12 +31,20 @@ impl OAuthStateStore {
     }
 
     /// Record a freshly generated authorize response.
+    ///
+    /// Saturation policy (audit H-5): the store used to `clear()` EVERYTHING
+    /// when it hit the 4096-entry bound, so one client's authorize flood
+    /// invalidated the pending states of every other operator mid-flow (their
+    /// exchanges then failed as "unknown state"). Eviction is now the same
+    /// oldest-first policy the `AdminAuthLimiter` uses: drop expired entries
+    /// first, then the OLDEST records until there is room — a flood only ever
+    /// displaces states that were issued before it started.
     pub fn insert(&self, provider: &str, state: &str, code_verifier: &str, redirect_uri: &str) {
         if self.entries.len() >= OAUTH_STATE_MAX_ENTRIES {
             self.evict_expired();
         }
-        if self.entries.len() >= OAUTH_STATE_MAX_ENTRIES {
-            self.entries.clear();
+        while self.entries.len() >= OAUTH_STATE_MAX_ENTRIES {
+            self.evict_oldest();
         }
         self.entries.insert(
             (provider.to_string(), state.to_string()),
@@ -64,6 +72,34 @@ impl OAuthStateStore {
     fn evict_expired(&self) {
         self.entries
             .retain(|_, (_, _, created)| created.elapsed() <= OAUTH_STATE_TTL);
+    }
+
+    /// Drop the single oldest entry. Returns whether something was removed.
+    fn evict_oldest(&self) -> bool {
+        let mut oldest: Option<((String, String), std::time::Instant)> = None;
+        for entry in &self.entries {
+            let created = entry.value().2;
+            if oldest
+                .as_ref()
+                .is_none_or(|(_, oldest_created)| created < *oldest_created)
+            {
+                oldest = Some((entry.key().clone(), created));
+            }
+        }
+        match oldest {
+            Some((key, _)) => self.entries.remove(&key).is_some(),
+            None => false,
+        }
+    }
+
+    /// Number of pending entries (test/observability).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the store is empty (test/observability).
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 

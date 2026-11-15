@@ -75,6 +75,7 @@ impl CustomAdapter {
                 extra_headers,
                 anonymous_fallback: false, // Custom adapters don't have this yet, false by default
                 rate_limit_scope: provider.rate_limit_scope.as_str().to_string(),
+                allow_loopback: provider.allow_loopback,
             },
         }
     }
@@ -267,6 +268,7 @@ mod tests {
             extra_headers: vec![],
             anonymous_fallback: false,
             rate_limit_scope: "account".into(),
+            allow_loopback: false,
         });
 
         let model = ModelId::new("model-a");
@@ -299,6 +301,7 @@ mod tests {
             extra_headers: vec![],
             anonymous_fallback: false,
             rate_limit_scope: "account".into(),
+            allow_loopback: false,
         });
 
         let meta = adapter.metadata();

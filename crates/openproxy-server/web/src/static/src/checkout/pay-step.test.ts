@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CheckoutOrder } from "./api.js";
 import {
   enterOrder,
+  qrImageDataUri,
   renderPayStep,
   showKey,
   startCountdown,
@@ -182,6 +183,31 @@ afterEach(() => {
   sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+
+describe("QR rendering (audit H-6: no innerHTML sink on the money surface)", () => {
+  it("renders the server SVG through an inert <img> data URI, never as markup", () => {
+    const hostile = makeOrder({
+      qr_svg:
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script>' +
+        '<path d="M0 0h10v10z" fill="#000"/></svg>',
+    });
+    renderPayStep(hostile);
+    const qr = document.getElementById("qr")!;
+    // Exactly one child, an IMG whose src is the wrapped data URI: in an
+    // image context SVG scripts never execute, whatever the payload holds.
+    const img = qr.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe(qrImageDataUri(hostile.qr_svg));
+    expect(qr.querySelectorAll("svg,script,iframe,foreignObject").length).toBe(0);
+  });
+
+  it("falls back to the plain EIP-681 text when there is no SVG", () => {
+    renderPayStep(makeOrder({ qr_svg: "" }));
+    const qr = document.getElementById("qr")!;
+    expect(qr.querySelector("img")).toBeNull();
+    expect(qr.textContent).toContain("ethereum:0x0@8453/transfer");
+  });
 });
 
 describe("payment window polling", () => {

@@ -19,6 +19,13 @@ payments = ["openproxy-db/payments"]
 
 [dev-dependencies]
 criterion = { workspace = true }
+# Test-only: the SSRF address filter in openproxy-adapters blocks the
+# loopback addresses the mock upstreams in this crate's tests bind to.
+# `cfg!(test)` inside openproxy-adapters is false when it is compiled as a
+# dependency, so the bypass is propagated from here as a dev-dependency
+# feature (same pattern as openproxy-server). Test builds only — release
+# builds never pull dev-dependencies, so production keeps the SSRF filter on.
+openproxy-adapters = { path = "../openproxy-adapters", features = ["ssrf-bypass"] }
 
 [[bench]]
 name = "sse_streaming"

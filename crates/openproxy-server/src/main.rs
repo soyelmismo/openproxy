@@ -77,7 +77,30 @@ fn configure_allocator() {
     }
 }
 
+/// `--config <path>` (or `--config=<path>`) from the command line.
+///
+/// ROOT FIX (security audit): the container image's CMD passes
+/// `--config /etc/openproxy/config.toml`, but the binary never parsed the
+/// flag: the shipped config (bind, file-based master key, DB path inside
+/// the VOLUME) was silently ignored and the process fell back to defaults
+/// (loopback bind, `~/.openproxy/data.db` outside the volume, env key).
+fn config_path_from_args() -> Option<String> {
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if let Some(path) = arg.strip_prefix("--config=") {
+            return Some(path.to_string());
+        }
+        if arg == "--config" {
+            return args.next();
+        }
+    }
+    None
+}
+
 fn resolve_config_path() -> String {
+    if let Some(path) = config_path_from_args() {
+        return path;
+    }
     env::var("OPENPROXY_CONFIG").unwrap_or_else(|_| {
         let home_cfg = env::var("HOME")
             .ok()
@@ -418,6 +441,19 @@ fn run_main() -> anyhow::Result<()> {
         // 16-32 thread stacks and thread-local mimalloc pools.
         builder.worker_threads(4);
     }
+    // Security/robustness (audit H-11): a full pipeline request (adapter +
+    // bridge + decision + streaming translation, awaited into each other)
+    // peaks at ~2 MiB of stack in DEBUG builds, because unoptimized async
+    // frames never merge. `std::thread`'s default stack for tokio workers
+    // is exactly 2 MiB, so every worker thread sat precisely on the
+    // overflow edge: one more nesting level (or a debug deployment) and a
+    // request would SIGSEGV the worker with "has overflowed its stack".
+    // Measured peak: 2.05 MiB (the same body the e2e tests run); 16 MiB
+    // leaves an order of magnitude of headroom. The stack is reserved
+    // address space — pages are only committed as the pipeline actually
+    // descends, so the cost of the extra headroom is virtual memory, not
+    // RSS.
+    builder.thread_stack_size(16 * 1024 * 1024);
     let runtime = builder.build()?;
 
     runtime.block_on(async {

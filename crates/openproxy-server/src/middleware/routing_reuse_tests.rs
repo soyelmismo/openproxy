@@ -61,6 +61,7 @@ async fn fixture(input: CreateApiKeyInput) -> Fixture {
                         rate_limit_scope: None,
                         stream_mode: None,
                         prompt_cache_ttl: None,
+                        allow_loopback: None,
                     },
                 )?;
                 let model = admin::create_custom_model(

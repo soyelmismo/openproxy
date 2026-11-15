@@ -58,7 +58,8 @@ impl Worker {
             .arg(std::env::current_exe()?)
             .args(["--role", role])
             // Child-only environment, set before its Tokio threads exist.
-            .env("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true")
+            // (audit H-3: loopback admission now travels on the seeded
+            // provider row, not on a process-wide env var.)
             .env("MIMALLOC_DISALLOW_ARENA_ALLOC", "1")
             .env("MIMALLOC_PURGE_DELAY", "10")
             .env("MIMALLOC_ARENA_EAGER_COMMIT", "0")

@@ -533,3 +533,61 @@ async fn reorder_endpoint_accepts_valid_admin_token() {
     assert_eq!(priority_of(&state, b), 10);
     assert_eq!(priority_of(&state, a), 20);
 }
+
+/// VULN (audit, fix/security-audit): `GET /admin/accounts` serialized the
+/// decrypted `oauth_provider_specific` blob, which carries live credentials
+/// (zai access/refresh tokens, API keys, kiro client_secret). The list must
+/// redact credential-shaped fields while keeping the non-secret metadata the
+/// dashboard renders (user_id, name, region, reset counters).
+#[tokio::test]
+async fn account_list_does_not_leak_oauth_provider_credentials() {
+    let dir = tempdir();
+    let (state, plaintext) = make_state_with_key(&dir).await;
+    let account_id = insert_test_account(&state, "zai");
+    {
+        let w = state.db_pool().writer();
+        openproxy_core::accounts::store_oauth_tokens(
+            &w,
+            openproxy_types::ids::AccountId::new(account_id),
+            state.master_key().as_ref(),
+            openproxy_core::accounts::StoreOAuthTokensParams {
+                access_token: "live-access-token-value",
+                refresh_token: Some("live-refresh-token-value"),
+                token_type: "Bearer",
+                expires_at: None,
+                scope: None,
+                provider_specific: Some(
+                    r#"{"autoclaw_access_token":"SECRET-AUTOCLAW-TOKEN","zai_access_token":"SECRET-ZAI-TOKEN","api_key":"SECRET-API-KEY","client_secret":"SECRET-CLIENT-SECRET","user_id":"u-123","name":"Alice"}"#,
+                ),
+                email: Some("alice@example.com"),
+            },
+        )
+        .expect("store tokens");
+    }
+    let app = Router::new()
+        .route(
+            "/admin/accounts",
+            axum::routing::get(crate::handlers::admin::accounts::list_accounts),
+        )
+        .with_state(state);
+    let (status, v) = test_req(&app, "GET", "/admin/accounts", Some(&plaintext), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let serialized = v.to_string();
+    for secret in [
+        "SECRET-AUTOCLAW-TOKEN",
+        "SECRET-ZAI-TOKEN",
+        "SECRET-API-KEY",
+        "SECRET-CLIENT-SECRET",
+        "live-access-token-value",
+        "live-refresh-token-value",
+    ] {
+        assert!(
+            !serialized.contains(secret),
+            "the accounts list must not leak `{secret}`: {serialized}"
+        );
+    }
+    assert!(
+        serialized.contains("u-123") && serialized.contains("Alice"),
+        "non-secret metadata the dashboard renders must survive: {serialized}"
+    );
+}

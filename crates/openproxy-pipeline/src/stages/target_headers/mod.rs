@@ -24,6 +24,27 @@ fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
         .is_some_and(|sub| sub.eq_ignore_ascii_case(prefix))
 }
 
+/// `true` when a header NAME looks like a credential. Applied on top of
+/// every prefix allowlist: the prefixes enumerate the extension headers a
+/// provider accepts, and they keep growing, so a name that carries a
+/// credential (key/token/secret/auth/password/credential) is never forwarded
+/// from the client to the upstream, whatever the prefix allows.
+fn is_credential_header_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    // Exact names that merely LOOK credential-shaped: `tokentype` carries a
+    // type marker (e.g. `API_KEY`), never a secret value, and the kiro
+    // adapter deliberately forwards it.
+    if name == "tokentype" {
+        return false;
+    }
+    name.contains("key")
+        || name.contains("token")
+        || name.contains("secret")
+        || name.contains("auth")
+        || name.contains("password")
+        || name.contains("credential")
+}
+
 fn propagate_matching_headers<P>(
     headers: &mut Vec<(String, String)>,
     request_headers: &std::collections::BTreeMap<String, String>,
@@ -32,7 +53,12 @@ fn propagate_matching_headers<P>(
     P: Fn(&str) -> bool,
 {
     for (k, v) in request_headers {
-        if predicate(k) {
+        // ROOT FIX (security audit): the antigravity `x-goog-*` allowlist
+        // forwarded any x-goog-* header except two names, so a client could
+        // inject `x-goog-api-key` and override or plant upstream
+        // credentials. Every prefix allowlist now stops at credential-shaped
+        // names.
+        if predicate(k) && !is_credential_header_name(k) {
             upsert_header(headers, k, v.clone());
         }
     }

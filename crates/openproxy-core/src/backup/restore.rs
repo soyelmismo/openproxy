@@ -15,15 +15,50 @@ pub fn restore_backup(
     options: &RestoreOptions,
     db_path: Option<&Path>,
 ) -> Result<RestoreReport> {
-    if bundle.version == 0 || bundle.version > BACKUP_FORMAT_VERSION + 1 {
+    let payload = preflight_bundle(bundle, options.passphrase.as_deref())?;
+    restore_payload(conn, master_key, &payload, db_path)
+}
+
+/// Validate the bundle version and decrypt the payload WITHOUT touching the
+/// database.
+///
+/// ROOT FIX (security audit): split out of `restore_backup` so the caller
+/// (the admin handler) can run the whole version check + KDF + AES-GCM
+/// decrypt BEFORE acquiring the pool's single SQLite writer. Before, a
+/// bundle with a huge `kdf_iterations` pinned the writer — and with it every
+/// usage write, cooldown and billing update — for the whole KDF duration.
+pub fn preflight_bundle(
+    bundle: &BackupBundle,
+    passphrase: Option<&str>,
+) -> Result<openproxy_types::backup::BackupPayload> {
+    // ROOT FIX (security audit): fail closed on future formats. A bundle
+    // from a newer OpenProxy may carry fields this code does not know; the
+    // previous `+ 1` allowance silently dropped them and restored a
+    // semantically truncated state instead of refusing.
+    if bundle.version == 0 || bundle.version > BACKUP_FORMAT_VERSION {
         return Err(CoreError::Validation(format!(
             "Unsupported backup format version: {}. Expected <= {}",
             bundle.version, BACKUP_FORMAT_VERSION
         )));
     }
 
-    let payload = decrypt_bundle_payload(bundle, options.passphrase.as_deref())?;
+    decrypt_bundle_payload(bundle, passphrase)
+}
 
+/// Apply an already-decrypted payload to the database. The safety backup,
+/// migrations and the transactional table swap all happen here, under the
+/// caller's connection.
+///
+/// The bundle and the restore options were consumed by
+/// [`preflight_bundle`] (version gate, KDF, AES-GCM decrypt) before the
+/// caller took the DB writer; they are intentionally NOT parameters here so
+/// no future caller can reintroduce the writer-pinning window.
+pub fn restore_payload(
+    conn: &mut Connection,
+    master_key: &MasterKey,
+    payload: &openproxy_types::backup::BackupPayload,
+    db_path: Option<&Path>,
+) -> Result<RestoreReport> {
     // 1. Safety backup before making any changes
     let mut safety_backup_path = None;
     if let Some(path) = db_path

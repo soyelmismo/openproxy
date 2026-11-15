@@ -25,7 +25,9 @@ use parking_lot::Mutex;
 use tower_service::Service;
 
 use super::client::{ProductionTransport, UpstreamTransport, format_hyper_error};
-use super::connector::{CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts};
+use super::connector::{
+    CALL_ALLOW_LOOPBACK, CALL_PROXY, CALL_TIMEOUTS, PhasedConnector, PhasedTimeouts,
+};
 use super::error::{UpstreamError, UpstreamResult};
 use super::phases::UpstreamPhase;
 use super::request_body::RequestBody;
@@ -66,7 +68,10 @@ impl CooperativeH1Transport {
         let io = CALL_PROXY
             .scope(
                 None,
-                CALL_TIMEOUTS.scope(timeouts, connector.call(uri.clone())),
+                CALL_ALLOW_LOOPBACK.scope(
+                    super::connector::call_allows_loopback(),
+                    CALL_TIMEOUTS.scope(timeouts, connector.call(uri.clone())),
+                ),
             )
             .await
             .map_err(|error| {
@@ -113,11 +118,12 @@ impl UpstreamTransport for CooperativeH1Transport {
         mut req: Request<RequestBody>,
         connector_timeouts: PhasedTimeouts,
         proxy_url: Option<String>,
+        allow_loopback: bool,
     ) -> Pin<Box<dyn Future<Output = UpstreamResult<Response<TransportBody>>> + Send + '_>> {
         if !self.uses_cooperative_connection(&req, proxy_url.as_deref()) {
             return self
                 .fallback
-                .send_request(req, connector_timeouts, proxy_url);
+                .send_request(req, connector_timeouts, proxy_url, allow_loopback);
         }
         Box::pin(async move {
             let uri = req.uri().clone();

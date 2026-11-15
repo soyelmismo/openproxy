@@ -1,8 +1,22 @@
 //! AES-GCM 256 encryption for account API keys.
 //!
-//! Layout of a ciphertext blob: `nonce (12 bytes) || aes_gcm_seal(plaintext)`.
-//! Embedding the nonce in the blob keeps encrypt output atomic (no separate
-//! nonce column required at rest).
+//! Two ciphertext blob layouts are understood:
+//!
+//! * **v0 (legacy):** `nonce (12 bytes) || aes_gcm_seal(plaintext)`. No
+//!   version marker, no key slot, no AAD. Still produced by [`MasterKey::encrypt`]
+//!   for the call sites that have not migrated to context-bound blobs yet.
+//! * **v1:** `0x01 || key_slot (1 byte) || nonce (12 bytes) || aes_gcm_seal_aad(plaintext, aad)`.
+//!   The key slot records which key of the rotation pair sealed the blob
+//!   (0 = current, 1 = previous), and the AES-GCM AAD is the caller-supplied
+//!   context string (e.g. `"accounts.oauth_provider_specific"`). The AAD binds
+//!   the blob to the column it lives in: copying a sealed value into a
+//!   different table/column fails the tag check at rest instead of silently
+//!   decrypting in its new location.
+//!
+//! Disambiguation: a v0 blob whose first nonce byte happens to be `0x01`
+//! (1/256) is misread as v1 on decrypt; the v1 attempt fails its tag check
+//! and the decrypt path falls back to the v0 interpretation, so no legacy
+//! blob is ever rejected.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -16,6 +30,11 @@ const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 const ENV_VAR: &str = "OPENPROXY_MASTER_KEY";
 const PREVIOUS_ENV_VAR: &str = "OPENPROXY_MASTER_KEY_PREVIOUS";
+
+/// Version marker of the context-bound blob format.
+const BLOB_V1: u8 = 0x01;
+/// Smallest possible v1 blob: version + slot + nonce + 16-byte GCM tag.
+const V1_MIN_LEN: usize = 1 + 1 + NONCE_LEN + 16;
 
 /// AES-256 master key. Owns its 32 raw bytes; zeroized on drop via
 /// the [`Drop`] implementation below.
@@ -110,7 +129,8 @@ impl MasterKey {
 
     /// Encrypt a UTF-8 plaintext (API key) into a self-contained blob.
     ///
-    /// Output layout: `nonce (12 bytes) || ciphertext_with_tag`.
+    /// Output layout: `nonce (12 bytes) || ciphertext_with_tag` (legacy v0;
+    /// no AAD). Prefer [`MasterKey::encrypt_ctx`] for new call sites.
     pub fn encrypt(&self, plaintext: &str) -> Result<Vec<u8>> {
         let cipher = Aes256Gcm::new_from_slice(&self.current)
             .map_err(|e| CoreError::Internal(format!("key init failed: {e}")))?;
@@ -127,14 +147,103 @@ impl MasterKey {
         Ok(blob)
     }
 
+    /// Encrypt into the versioned, context-bound v1 blob layout:
+    /// `0x01 || key_slot || nonce (12) || ciphertext_with_tag`, sealed with
+    /// `ctx` as AES-GCM AAD.
+    ///
+    /// Security (audit H-8): the AAD binds the blob to the column it belongs
+    /// to (`ctx`, e.g. `"accounts.oauth_provider_specific"`), so a blob moved
+    /// between rows of a different table/column fails decryption instead of
+    /// being quietly adopted. The key slot makes rotation deterministic: the
+    /// blob records which key of the pair sealed it.
+    pub fn encrypt_ctx(&self, plaintext: &str, ctx: &str) -> Result<Vec<u8>> {
+        let cipher = Aes256Gcm::new_from_slice(&self.current)
+            .map_err(|e| CoreError::Internal(format!("key init failed: {e}")))?;
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::fill(&mut nonce_bytes)
+            .map_err(|e| CoreError::Internal(format!("nonce random failed: {e}")))?;
+        let nonce = Nonce::try_from(nonce_bytes.as_slice())
+            .map_err(|e| CoreError::Internal(format!("nonce len: {e}")))?;
+        let ct = cipher
+            .encrypt(
+                &nonce,
+                aes_gcm::aead::Payload {
+                    msg: plaintext.as_bytes(),
+                    aad: ctx.as_bytes(),
+                },
+            )
+            .map_err(|e| CoreError::Internal(format!("aes-gcm encrypt failed: {e}")))?;
+        let mut blob = Vec::with_capacity(2 + NONCE_LEN + ct.len());
+        blob.push(BLOB_V1);
+        blob.push(0u8); // sealed with the current key
+        blob.extend_from_slice(&nonce_bytes);
+        blob.extend_from_slice(&ct);
+        Ok(blob)
+    }
+
     /// Decrypt a blob produced by `encrypt`. The first 12 bytes are the nonce.
     /// Falls back to the previous key if the current key fails (rotation).
     pub fn decrypt(&self, blob: &[u8]) -> Result<String> {
+        self.decrypt_ctx(blob, "")
+    }
+
+    /// Decrypt either blob format under the caller's context:
+    ///
+    /// * v1 blobs are authenticated against `ctx` as AAD — a context mismatch
+    ///   (blob copied into another column, or tampering) is a hard error;
+    /// * v0 blobs (no AAD) decrypt under either key of the rotation pair.
+    pub fn decrypt_ctx(&self, blob: &[u8], ctx: &str) -> Result<String> {
         if blob.len() < NONCE_LEN + 16 {
             return Err(CoreError::Internal(
                 "ciphertext blob too short to contain nonce and tag".into(),
             ));
         }
+
+        // v1 path: version marker + key slot + nonce + AAD-bound ciphertext.
+        if blob[0] == BLOB_V1 && blob.len() >= V1_MIN_LEN {
+            let slot = blob[1];
+            let (nonce_bytes, ct) = blob[2..].split_at(NONCE_LEN);
+            let nonce = Nonce::try_from(nonce_bytes)
+                .map_err(|_| CoreError::Internal("failed to parse nonce".into()))?;
+
+            // Try the recorded slot first, then the other key of the pair:
+            // the operator may have rotated since the blob was sealed.
+            let keys: [Option<&[u8; KEY_LEN]>; 2] = if slot == 1 {
+                [self.previous.as_ref(), Some(&self.current)]
+            } else {
+                [Some(&self.current), self.previous.as_ref()]
+            };
+            for key in keys.into_iter().flatten() {
+                if let Some(res) = try_decrypt_aad(key, &nonce, ct, ctx.as_bytes()) {
+                    return res;
+                }
+            }
+
+            // A legacy v0 blob whose first nonce byte is 0x01 lands here.
+            // Re-interpret it as v0 before giving up; a genuine v1 blob with
+            // the wrong context fails BOTH interpretations (by design).
+            let (nonce_bytes, ct) = blob.split_at(NONCE_LEN);
+            let nonce = Nonce::try_from(nonce_bytes)
+                .map_err(|_| CoreError::Internal("failed to parse nonce".into()))?;
+            if let Some(res) = try_decrypt(&self.current, &nonce, ct) {
+                tracing::debug!("decrypted legacy v0 blob misread as v1");
+                return res;
+            }
+            if let Some(prev) = &self.previous
+                && let Some(res) = try_decrypt(prev, &nonce, ct)
+            {
+                tracing::debug!("decrypted legacy v0 blob (previous key) misread as v1");
+                return res;
+            }
+
+            return Err(CoreError::Internal(
+                "aes-gcm decrypt failed: wrong context (AAD) or neither key of the rotation pair \
+                 can open this blob"
+                    .into(),
+            ));
+        }
+
+        // v0 path: `nonce (12) || ct`, try current then previous.
         let (nonce_bytes, ct) = blob.split_at(NONCE_LEN);
         let nonce = Nonce::try_from(nonce_bytes)
             .map_err(|_| CoreError::Internal("failed to parse nonce".into()))?;
@@ -166,6 +275,25 @@ fn try_decrypt(
         Err(e) => return Some(Err(CoreError::Internal(format!("key init failed: {e}")))),
     };
     let pt = cipher.decrypt(nonce, ct).ok()?;
+    Some(
+        String::from_utf8(pt)
+            .map_err(|e| CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))),
+    )
+}
+
+fn try_decrypt_aad(
+    raw_key: &[u8; KEY_LEN],
+    nonce: &Nonce<aes_gcm::aead::consts::U12>,
+    ct: &[u8],
+    aad: &[u8],
+) -> Option<Result<String>> {
+    let cipher = match Aes256Gcm::new_from_slice(raw_key) {
+        Ok(c) => c,
+        Err(e) => return Some(Err(CoreError::Internal(format!("key init failed: {e}")))),
+    };
+    let pt = cipher
+        .decrypt(nonce, aes_gcm::aead::Payload { msg: ct, aad })
+        .ok()?;
     Some(
         String::from_utf8(pt)
             .map_err(|e| CoreError::Internal(format!("decrypted plaintext is not utf-8: {e}"))),
@@ -266,5 +394,114 @@ mod tests {
         let blob = old_key.encrypt("secret-value").unwrap();
         let pt = rotated_key.decrypt(&blob).unwrap();
         assert_eq!(pt, "secret-value");
+    }
+
+    // ---- audit H-8: versioned, context-bound blobs ----
+
+    const CTX_A: &str = "accounts.oauth_provider_specific";
+    const CTX_B: &str = "accounts.api_key";
+
+    #[test]
+    fn v1_blob_round_trips_with_its_context() {
+        let key = MasterKey::generate().unwrap();
+        let blob = key.encrypt_ctx("secret-json", CTX_A).unwrap();
+        assert_eq!(blob[0], BLOB_V1, "v1 marker byte");
+        assert_eq!(blob[1], 0u8, "sealed with the current key");
+        let pt = key.decrypt_ctx(&blob, CTX_A).unwrap();
+        assert_eq!(pt, "secret-json");
+    }
+
+    #[test]
+    fn v1_blob_rejected_under_a_different_context() {
+        // A blob copied from one column to another must NOT decrypt.
+        let key = MasterKey::generate().unwrap();
+        let blob = key.encrypt_ctx("secret-json", CTX_A).unwrap();
+        let err = key.decrypt_ctx(&blob, CTX_B).unwrap_err();
+        assert!(
+            err.to_string().contains("wrong context"),
+            "context mismatch must be reported as such: {err}"
+        );
+    }
+
+    #[test]
+    fn v1_blob_is_not_decryptable_through_the_legacy_api() {
+        // `decrypt` is `decrypt_ctx(blob, "")`: the empty context must not
+        // open a blob sealed with a real one.
+        let key = MasterKey::generate().unwrap();
+        let blob = key.encrypt_ctx("secret-json", CTX_A).unwrap();
+        assert!(key.decrypt(&blob).is_err());
+    }
+
+    #[test]
+    fn v1_blob_survives_rotation_with_slot_fallback() {
+        // Blob sealed by the OLD current key; after rotation the new pair
+        // (current=new, previous=old) must still open it via the slot
+        // fallback order.
+        let old_key = MasterKey::generate().unwrap();
+        let new_key = MasterKey::generate().unwrap();
+        let blob = old_key.encrypt_ctx("value", CTX_A).unwrap();
+        let rotated = MasterKey {
+            current: new_key.current,
+            previous: Some(old_key.current),
+        };
+        let pt = rotated.decrypt_ctx(&blob, CTX_A).unwrap();
+        assert_eq!(pt, "value");
+    }
+
+    #[test]
+    fn v1_blob_from_previous_key_slot_decrypts_first_try() {
+        let old_key = MasterKey::generate().unwrap();
+        let new_key = MasterKey::generate().unwrap();
+        // Simulate a blob that was sealed while `old_key` was the previous
+        // slot: slot byte 1 + AAD bound to CTX_A.
+        let cipher = Aes256Gcm::new_from_slice(&old_key.current).unwrap();
+        use aes_gcm::aead::Aead;
+        let nonce = Nonce::try_from([7u8; 12].as_slice()).unwrap();
+        let ct = cipher
+            .encrypt(
+                &nonce,
+                aes_gcm::aead::Payload {
+                    msg: b"prev-slot-value",
+                    aad: CTX_A.as_bytes(),
+                },
+            )
+            .unwrap();
+        let mut blob = vec![BLOB_V1, 1u8];
+        blob.extend_from_slice(&[7u8; 12]);
+        blob.extend_from_slice(&ct);
+
+        let rotated = MasterKey {
+            current: new_key.current,
+            previous: Some(old_key.current),
+        };
+        let pt = rotated.decrypt_ctx(&blob, CTX_A).unwrap();
+        assert_eq!(pt, "prev-slot-value");
+    }
+
+    #[test]
+    fn legacy_v0_blob_with_first_nonce_byte_01_still_decrypts() {
+        // Construct a v0 blob whose nonce starts with 0x01 so the decrypt
+        // path first misreads it as v1; the legacy fallback must recover it.
+        let key = MasterKey::generate().unwrap();
+        let cipher = Aes256Gcm::new_from_slice(&key.current).unwrap();
+        use aes_gcm::aead::Aead;
+        let nonce_bytes = [0x01, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let nonce = Nonce::try_from(nonce_bytes.as_slice()).unwrap();
+        let ct = cipher.encrypt(&nonce, "legacy-payload".as_bytes()).unwrap();
+        let mut blob = nonce_bytes.to_vec();
+        blob.extend_from_slice(&ct);
+
+        let pt = key.decrypt(&blob).unwrap();
+        assert_eq!(pt, "legacy-payload");
+        // And through a context call: v0 blobs carry no AAD, so any context
+        // still opens them (backward compatibility).
+        assert_eq!(key.decrypt_ctx(&blob, CTX_B).unwrap(), "legacy-payload");
+    }
+
+    #[test]
+    fn truncated_v1_blob_fails() {
+        let key = MasterKey::generate().unwrap();
+        let blob = key.encrypt_ctx("x", CTX_A).unwrap();
+        assert!(key.decrypt_ctx(&blob[..blob.len() - 1], CTX_A).is_err());
     }
 }

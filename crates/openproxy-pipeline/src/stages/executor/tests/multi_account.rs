@@ -15,10 +15,6 @@ async fn test_multi_account_rotation_on_400_tries_all_accounts_before_next_targe
     use crate::test_utils::{MockAdapter, fresh_pool, make_request};
     use openproxy_adapters::adapters::{AdapterFormat, ProviderAdapterEnum};
 
-    unsafe {
-        std::env::set_var("OPENPROXY_ALLOW_PRIVATE_UPSTREAMS", "true");
-    }
-
     let count_target1_acc1 = Arc::new(AtomicUsize::new(0));
     let count_target1_acc2 = Arc::new(AtomicUsize::new(0));
     let count_target2 = Arc::new(AtomicUsize::new(0));

@@ -430,6 +430,38 @@ fn test_propagate_opencode_dynamic_headers_and_extensions() {
     reset_dynamic_opencode_overrides();
 }
 
+/// VULN (audit, fix/security-audit): the `x-goog-*` prefix allowlist
+/// forwarded ANY x-goog-* header except two names, so a client could inject
+/// `x-goog-api-key` (and any other credential-shaped `x-goog-*` header),
+/// overriding or planting upstream credentials. Prefix allowlists must
+/// never forward credential-shaped names.
+#[test]
+fn test_propagate_antigravity_headers_never_forwards_credentials() {
+    let mut headers = vec![("User-Agent".into(), "Antigravity/4.3.0".into())];
+    let mut req_headers = std::collections::BTreeMap::new();
+    req_headers.insert("x-goog-api-key".into(), "attacker-plant".into());
+    req_headers.insert("x-goog-authorization".into(), "Bearer attacker".into());
+    req_headers.insert("x-goog-access-token".into(), "attacker-token".into());
+    req_headers.insert("x-goog-new-feature".into(), "enabled".into());
+
+    propagate_antigravity_headers(&mut headers, &req_headers);
+
+    let find = |k: &str| {
+        headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(k))
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(
+        find("x-goog-api-key"),
+        None,
+        "credential headers must never be forwarded"
+    );
+    assert_eq!(find("x-goog-authorization"), None);
+    assert_eq!(find("x-goog-access-token"), None);
+    assert_eq!(find("x-goog-new-feature"), Some("enabled"));
+}
+
 #[test]
 fn test_propagate_antigravity_headers() {
     let mut headers = vec![

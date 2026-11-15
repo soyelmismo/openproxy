@@ -176,6 +176,7 @@ async fn setup_test_env(cut_p1_midstream: bool) -> TestEnv {
                             rate_limit_scope: None,
                             stream_mode: None,
                             prompt_cache_ttl: None,
+                            allow_loopback: None,
                         },
                     )?;
 
@@ -415,27 +416,64 @@ async fn test_bridge_fifo_order_responses_format() {
     assert!(!wire.contains("[DONE]"));
 }
 
-#[tokio::test]
-async fn test_bridge_failure_before_output_retries_safely() {
+#[test]
+fn test_bridge_failure_before_output_retries_safely() {
     // When socket closes before any byte is committed to the client stream sink,
     // pipeline MUST allow a fresh attempt instead of committing an error.
-    let (wire, hits1, hits2) = run_runner_bridge_with_cut(false, TargetFormat::Openai).await;
+    //
+    // Runs on a big-stack thread: this test drives the FULL e2e pipeline
+    // future (router -> runner -> adapter -> bridge), which needs ~2 MiB of
+    // stack in debug builds, while libtest gives each test thread the
+    // `std::thread` default of 2 MiB — a plain `#[tokio::test]` aborted the
+    // whole harness with a stack overflow (measured peak 2.05 MiB; the same
+    // body passes with RUST_MIN_STACK=2150000). Mirrors
+    // `run_with_big_stack` in the e2e suite.
+    run_with_big_stack(|| async {
+        let (wire, hits1, hits2) = run_runner_bridge_with_cut(false, TargetFormat::Openai).await;
 
-    assert_eq!(hits1, 2, "first target must retry before any output");
-    assert_eq!(hits2, 0, "successful same-target retry needs no fallback");
+        assert_eq!(hits1, 2, "first target must retry before any output");
+        assert_eq!(hits2, 0, "successful same-target retry needs no fallback");
 
-    assert!(
-        wire.contains("replacement-chunk"),
-        "successful replacement output from second target must be streamed: {wire}"
-    );
-    assert!(
-        wire.contains("[DONE]"),
-        "successful stream must terminate with [DONE]: {wire}"
-    );
-    assert!(
-        !wire.contains("\"error\":"),
-        "no error frame should be emitted when retry succeeds: {wire}"
-    );
+        assert!(
+            wire.contains("replacement-chunk"),
+            "successful replacement output from second target must be streamed: {wire}"
+        );
+        assert!(
+            wire.contains("[DONE]"),
+            "successful stream must terminate with [DONE]: {wire}"
+        );
+        assert!(
+            !wire.contains("\"error\":"),
+            "no error frame should be emitted when retry succeeds: {wire}"
+        );
+    });
+}
+
+/// Runs an async test body on a dedicated thread with a large stack.
+///
+/// Debug builds never merge async frames, so a full e2e pipeline future
+/// peaks just above the 2 MiB stack libtest gives each test thread. This is
+/// depth, not infinite recursion — a bigger stack for the tests that need
+/// it, mirroring `run_with_big_stack` in `tests/e2e_suite/main.rs`.
+fn run_with_big_stack<F, Fut>(body: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()>,
+{
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            // current_thread + enable_all mirrors `#[tokio::test]`'s default,
+            // so the test keeps its timing and spawning semantics.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build tokio runtime")
+                .block_on(body());
+        })
+        .expect("spawn big-stack test thread")
+        .join()
+        .expect("test thread panicked");
 }
 
 #[tokio::test]
@@ -564,4 +602,225 @@ async fn test_app_router_e2e_wire_cut_responses() {
     assert!(partial_pos.unwrap() < error_pos.unwrap());
     assert!(!wire.contains("replacement-chunk"));
     assert!(!wire.contains("[DONE]"));
+}
+
+/// Audit H-9 end-to-end: with PII enabled, the OpenAI `user` field must be
+/// redacted in the body the gateway actually sends to the upstream provider.
+/// The sidecar identifiers used to bypass `PiiEngine::redact_messages` and
+/// reached the provider in clear text.
+#[tokio::test]
+async fn test_app_router_e2e_pii_user_field_redacted_upstream() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // A mock upstream that captures the full request body.
+    let captured: Arc<parking_lot::Mutex<Vec<u8>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let capture = Arc::clone(&captured);
+    let server = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            let header_len = loop {
+                let n = match socket.read(&mut chunk).await {
+                    Ok(n) if n > 0 => n,
+                    _ => return,
+                };
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&buf[..header_len]).to_string();
+            let content_len = head
+                .lines()
+                .filter_map(|l| l.split_once(':'))
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            while buf.len() < header_len + content_len {
+                match socket.read(&mut chunk).await {
+                    Ok(n) if n > 0 => buf.extend_from_slice(&chunk[..n]),
+                    _ => break,
+                }
+            }
+            *capture.lock() = buf[header_len..].to_vec();
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            let _ = socket.flush().await;
+            let _ = socket.shutdown().await;
+        }
+    });
+
+    let pool = Arc::new(DbPool::test_pool_with_prefix("pii-e2e").expect("pool"));
+    let master_key = Arc::new(MasterKey::generate().expect("mk"));
+    let config = AppConfig {
+        pii: serde_json::from_value(serde_json::json!({
+            "pii_enabled": true,
+            "pii_entities": ["email"]
+        }))
+        .expect("pii config"),
+        retries: openproxy_types::config::RetriesConfig {
+            max_attempts: 1,
+            ..Default::default()
+        },
+        racing: openproxy_types::config::RacingConfig {
+            max_race_size: 1,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(Vec::new())));
+    let state = AppState::for_test(config, Arc::clone(&pool), Arc::clone(&master_key), adapters);
+    state.discovery_scheduler().cancel();
+    state.supervisor().shutdown();
+    state.discovery_scheduler().shutdown_and_wait().await;
+    state.supervisor().shutdown_and_wait().await;
+
+    let client_key = pool
+        .spawn_write({
+            let master_key = Arc::clone(&master_key);
+            move |conn| {
+                let combo_id = create_combo(conn, "pii-combo", Strategy::Priority, 1)?;
+                let p_id = create_provider(
+                    conn,
+                    CreateProviderInput {
+                        id: "pii-p1".into(),
+                        name: "pii-p1".into(),
+                        base_url: format!("http://{addr}/v1"),
+                        auth_type: "bearer".into(),
+                        format: "openai".into(),
+                        extra_headers_json: None,
+                        rate_limit_scope: None,
+                        stream_mode: None,
+                        prompt_cache_ttl: None,
+                        allow_loopback: None,
+                    },
+                )?;
+                openproxy_core::admin::create_account(
+                    conn,
+                    &master_key,
+                    openproxy_core::admin::CreateAccountInput {
+                        provider_id: "pii-p1".into(),
+                        api_key: Some("sk-test-mock-key".into()),
+                        label: Some("pii-acc".into()),
+                        priority: Some(10),
+                        extra_config_json: None,
+                    },
+                )?;
+                let m_id = create_custom_model(
+                    conn,
+                    CreateCustomModelInput {
+                        provider_id: "pii-p1".into(),
+                        model_id: "test-model".into(),
+                        display_name: Some("pii model".into()),
+                        target_format: "openai".into(),
+                        ttl_seconds: 3600,
+                        model_type: Some("chat".into()),
+                    },
+                )?;
+                add_target(
+                    conn,
+                    AddTargetInput {
+                        combo_id,
+                        provider_id: p_id,
+                        account_id: None,
+                        model_row_id: Some(m_id),
+                        sub_combo_id: None,
+                        priority_order: 0,
+                        description: None,
+                        selected_accounts: None,
+                        client_profile: None,
+                    },
+                )?;
+
+                let (_rec, plaintext) = openproxy_core::api_keys::create(
+                    conn,
+                    CreateApiKeyInput {
+                        label: Some("pii-e2e-key".into()),
+                        scopes: vec!["chat".into()],
+                        allowed_models: None,
+                        allowed_combos: None,
+                        blacklisted_providers: None,
+                        allowed_providers: None,
+                        blacklisted_models: None,
+                        only_whitelisted: false,
+                        expires_at: None,
+                    },
+                    "pii-e2e",
+                )?;
+                Ok(plaintext)
+            }
+        })
+        .await
+        .expect("seed");
+
+    state
+        .rebuild_adapters()
+        .await
+        .expect("rebuild custom adapters");
+
+    let router = build_router(state);
+    let payload = serde_json::json!({
+        "model": "pii-combo",
+        "stream": true,
+        "user": "alice@corp.com",
+        "metadata": {"user_id": "bob@corp.com"},
+        "messages": [{"role": "user", "content": "contact alice@corp.com please"}]
+    });
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("authorization", format!("Bearer {client_key}"))
+        .header("content-type", "application/json")
+        .body(Body::from(payload.to_string()))
+        .unwrap();
+    let resp = router.oneshot(req).await.expect("oneshot");
+    assert_eq!(resp.status(), StatusCode::OK, "request must succeed");
+    let _ = resp.into_body().collect().await;
+
+    // Wait for the mock to finish capturing.
+    for _ in 0..50 {
+        if !captured.lock().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    server.abort();
+
+    let upstream_body = String::from_utf8_lossy(&captured.lock()).to_string();
+    assert!(
+        !upstream_body.is_empty(),
+        "the mock upstream must have captured a request body"
+    );
+    assert!(
+        !upstream_body.contains("alice@corp.com"),
+        "PII in `user` must NOT reach the upstream body: {upstream_body}"
+    );
+    assert!(
+        !upstream_body.contains("bob@corp.com"),
+        "PII in `metadata.user_id` must NOT reach the upstream body: {upstream_body}"
+    );
+    // The redactor replaces identifiers with synthetic placeholders (realistic
+    // pseudonymous emails), so the sidecar values must simply DIFFER from the
+    // originals the client sent.
+    let upstream_json: serde_json::Value =
+        serde_json::from_str(upstream_body.trim()).expect("upstream body is JSON");
+    let redacted_user = upstream_json["user"].as_str().expect("user present");
+    let redacted_uid = upstream_json["metadata"]["user_id"]
+        .as_str()
+        .expect("metadata.user_id present");
+    assert_ne!(
+        redacted_user, "alice@corp.com",
+        "user must be pseudonymised"
+    );
+    assert_ne!(
+        redacted_uid, "bob@corp.com",
+        "metadata.user_id must be pseudonymised"
+    );
 }

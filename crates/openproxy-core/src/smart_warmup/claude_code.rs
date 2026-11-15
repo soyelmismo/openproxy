@@ -208,6 +208,9 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
             http::HeaderValue::from_static(CLAUDE_CODE_USER_AGENT),
         );
 
+        // The warmup mirrors a real streaming client request so the upstream
+        // sees the same traffic shape; keep the streaming transport.
+        req.is_streaming = true;
         execute_warmup_ping(upstream, req, account, "claude-code", model).await
     }
 }

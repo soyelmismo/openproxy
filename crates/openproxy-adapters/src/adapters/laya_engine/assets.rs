@@ -182,9 +182,16 @@ async fn fetch(artifact: &Artifact) -> Result<crate::upstream::UpstreamResponse,
         if uri.scheme_str() != Some("https") {
             return Err(error("insecure artifact redirect"));
         }
+        // Artifacts are piped chunk-by-chunk to disk under a pinned-size
+        // ceiling (see `download`), so this is the one legitimate streaming
+        // consumer of `UpstreamRequest::get`: opt back into the streaming
+        // transport explicitly. Unary helpers now default to the bounded
+        // non-streaming limit (32 MiB), which would truncate large models.
+        let mut req = UpstreamRequest::get(&url);
+        req.is_streaming = true;
         let response = client
             .call(
-                UpstreamRequest::get(&url),
+                req,
                 TimeoutProfile::Custom(ResolvedTimeouts {
                     headers_ms: 30000,
                     body_chunk_ms: 60000,

@@ -369,6 +369,7 @@ async fn test_tier2_retry_on_500_switches_target_body() {
                 rate_limit_scope: None,
                 stream_mode: None,
                 prompt_cache_ttl: None,
+                allow_loopback: None,
             },
         )
         .expect("create fallback provider");

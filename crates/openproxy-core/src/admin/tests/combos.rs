@@ -56,6 +56,7 @@ fn seed_prov(conn: &Connection, pid: &str) {
             extra_headers_json: None,
             stream_mode: None,
             prompt_cache_ttl: None,
+            allow_loopback: None,
         },
     )
     .expect("seed provider");

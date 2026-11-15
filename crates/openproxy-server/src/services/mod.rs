@@ -69,7 +69,31 @@ impl AccountService {
         provider: Option<&ProviderId>,
         master_key: &db::MasterKey,
     ) -> Result<Vec<openproxy_core::accounts::Account>, CoreError> {
-        self.repo.list_accounts(provider, master_key)
+        let mut accounts = self.repo.list_accounts(provider, master_key)?;
+        // Security (audit H-14): `oauth_provider_specific` is decrypted for
+        // every reader, and for kiro it carries the dynamically registered
+        // OIDC client credentials (`client_secret`). The account LIST feeds
+        // the dashboard's routine refresh, where a plaintext secret would
+        // sit in browser caches / proxy logs — a disclosure the individual
+        // secret-read endpoints guard with `audit_secret_read` and an
+        // explicit opt-in. Mask the secret in the listing; internal kiro
+        // refresh flows read the decrypted record through the repository,
+        // not through this service.
+        for account in &mut accounts {
+            if let Some(specific) = account.oauth_provider_specific.as_deref()
+                && let Ok(mut value) = serde_json::from_str::<serde_json::Value>(specific)
+                && value
+                    .get("client_secret")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty())
+            {
+                if let Some(secret_value) = value.get_mut("client_secret") {
+                    *secret_value = serde_json::Value::String("[REDACTED]".to_string());
+                }
+                account.oauth_provider_specific = Some(value.to_string().into_boxed_str());
+            }
+        }
+        Ok(accounts)
     }
 
     pub fn create(
@@ -228,5 +252,139 @@ impl Services {
             combos,
             models,
         }
+    }
+}
+
+#[cfg(test)]
+mod account_list_masking_tests {
+    use super::*;
+    use crate::repositories::AccountRepository;
+    use openproxy_core::accounts::Account;
+
+    struct OneKiroAccount;
+
+    fn kiro_account() -> Account {
+        let mut account: Account = serde_json::from_value(serde_json::json!({
+            "id": 7,
+            "provider_id": "kiro",
+            "label": "kiro-main",
+            "priority": 1,
+            "health_status": "healthy",
+            "auth_type": "oauth",
+            "email": "ops@example.com",
+            "created_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("account");
+        account.oauth_provider_specific = Some(
+            r#"{"client_id":"cid-123","client_secret":"super-secret-value","region":"us-east-1"}"#
+                .to_string()
+                .into_boxed_str(),
+        );
+        account
+    }
+
+    impl AccountRepository for OneKiroAccount {
+        fn list_accounts(
+            &self,
+            _provider: Option<&ProviderId>,
+            _master_key: &db::MasterKey,
+        ) -> Result<Vec<Account>, CoreError> {
+            Ok(vec![kiro_account()])
+        }
+        fn create_account(
+            &self,
+            _master_key: &db::MasterKey,
+            _input: openproxy_core::admin::CreateAccountInput,
+        ) -> Result<AccountId, CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn bulk_create_accounts(
+            &self,
+            _master_key: &db::MasterKey,
+            _input: openproxy_core::admin::BulkCreateAccountsInput,
+        ) -> Result<Vec<AccountId>, CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn delete_account(&self, _id: AccountId) -> Result<(), CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn set_account_health(
+            &self,
+            _id: AccountId,
+            _health: openproxy_core::accounts::HealthStatus,
+        ) -> Result<(), CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn set_account_active(&self, _id: AccountId, _active: bool) -> Result<(), CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn update_account_api_key(
+            &self,
+            _master_key: &db::MasterKey,
+            _id: AccountId,
+            _input: openproxy_core::admin::UpdateAccountApiKeyInput,
+        ) -> Result<(), CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn get_account_api_key(
+            &self,
+            _master_key: &db::MasterKey,
+            _id: AccountId,
+        ) -> Result<String, CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn update_account_label(
+            &self,
+            _id: AccountId,
+            _input: openproxy_core::admin::UpdateAccountLabelInput,
+        ) -> Result<(), CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+        fn reorder_accounts(
+            &self,
+            _input: openproxy_core::admin::ReorderAccountsInput,
+        ) -> Result<(), CoreError> {
+            Err(CoreError::Internal(
+                "not needed for the listing test".into(),
+            ))
+        }
+    }
+
+    /// Audit H-14: the account listing (dashboard refresh) must not disclose
+    /// the kiro OIDC client_secret in plaintext — only the explicit
+    /// secret-read endpoints may, behind audit_secret_read.
+    #[test]
+    fn kiro_client_secret_is_masked_in_the_listing() {
+        let service = AccountService::new(std::sync::Arc::new(OneKiroAccount));
+        let mk = db::MasterKey::generate().expect("mk");
+        let listed = service.list(None, &mk).expect("list");
+        assert_eq!(listed.len(), 1);
+        let specific = listed[0]
+            .oauth_provider_specific
+            .as_deref()
+            .expect("specific");
+        assert!(
+            !specific.contains("super-secret-value"),
+            "client_secret must be masked: {specific}"
+        );
+        assert!(specific.contains("[REDACTED]"), "mask marker: {specific}");
+        // Other fields survive.
+        assert!(specific.contains("cid-123"), "client_id kept: {specific}");
     }
 }

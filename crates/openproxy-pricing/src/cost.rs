@@ -40,59 +40,12 @@ pub fn compute(price: Option<pricing::Price>, input: &UsageInput) -> (f64, Optio
     (cost, compute_tokens_per_sec(input))
 }
 
-fn apply_secret_redactions(text: String) -> String {
-    static RE_SK: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"sk-[A-Za-z0-9_\-]{10,}"));
-    // ROOT FIX (audit A6-04): the product's OWN key format was missing from
-    // the redaction set — an op_live_… credential landing in a WARN/ERROR
-    // message stayed in clear text in a world-readable debug.log and in the
-    // dashboard ring buffer, while sk-… keys were redacted.
-    static RE_OP_LIVE: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"op_live_[A-Za-z0-9]{16,}"));
-    static RE_XAPIKEY: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)x-api-key:\s*\S+"));
-    static RE_BEARER: LazyLock<regex::Regex> =
-        LazyLock::new(|| openproxy_types::static_regex!(r"(?i)Authorization:\s*Bearer\s+\S+"));
-
-    let patterns: &[(&LazyLock<regex::Regex>, &str)] = &[
-        (&RE_SK, "sk-[REDACTED]"),
-        (&RE_OP_LIVE, "op_live_[REDACTED]"),
-        (&RE_XAPIKEY, "x-api-key: [REDACTED]"),
-        (&RE_BEARER, "Authorization: Bearer [REDACTED]"),
-    ];
-
-    patterns.iter().fold(text, |acc, (re, rep)| {
-        if re.is_match(&acc) {
-            re.replace_all(&acc, *rep).into_owned()
-        } else {
-            acc
-        }
-    })
-}
-
-fn truncate_error_message(mut text: String) -> String {
-    if text.len() <= 2048 {
-        return text;
-    }
-    let mut idx = 2048;
-    while idx > 0 && !text.is_char_boundary(idx) {
-        idx -= 1;
-    }
-    text.truncate(idx);
-    text.push_str("...[truncated]");
-    text
-}
-
-/// Sanitize error_msg:
-/// - cap at 2KB
-/// - redact patterns: sk-..., x-api-key: ..., Authorization: Bearer ***
-///
-/// Returns `(sanitized, redacted)`.
 pub fn redact_error_msg(raw: &str) -> (String, String) {
-    let sanitized = truncate_error_message(apply_secret_redactions(raw.to_string()));
+    // Canonical redaction lives in openproxy_types::redaction (single source
+    // of truth shared with the usage-persistence copy in openproxy-db).
+    let sanitized = openproxy_types::redaction::sanitize_error_message(raw);
     (sanitized.clone(), sanitized)
 }
-
 static WARNED_MISSING_PRICING: LazyLock<parking_lot::Mutex<std::collections::HashSet<u64>>> =
     LazyLock::new(|| parking_lot::Mutex::new(std::collections::HashSet::new()));
 

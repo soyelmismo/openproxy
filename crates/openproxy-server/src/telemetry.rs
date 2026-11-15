@@ -23,7 +23,7 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 pub fn init(config: &LoggingConfig) -> anyhow::Result<()> {
     // Ring buffer first: DebugLogLayer must be able to push the moment the
     // subscriber is installed. Idempotent.
-    crate::debug_log::init();
+    crate::debug_log::init(config);
 
     // fmt layer: operator-controlled via RUST_LOG, else `LoggingConfig.level`.
     // The only filter governing stdout.
@@ -74,6 +74,7 @@ mod tests {
         let config = LoggingConfig {
             format: LogFormat::Text,
             level: "info".to_string(),
+            ..Default::default()
         };
         let _ = init(&config);
 
@@ -87,6 +88,7 @@ mod tests {
         let config = LoggingConfig {
             format: LogFormat::Json,
             level: "info".to_string(),
+            ..Default::default()
         };
         let _ = init(&config);
 

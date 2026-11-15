@@ -182,16 +182,28 @@ pub async fn restore_backup_handler(
 
     let state_clone = s.clone();
     let report = tokio::task::spawn_blocking(move || {
+        // ROOT FIX (security audit): validate the version and run the whole
+        // KDF + AES-GCM decrypt BEFORE acquiring the pool's single writer.
+        // A crafted bundle with a huge `kdf_iterations` used to pin the
+        // writer (and every usage write, cooldown and billing update) for
+        // the entire KDF duration.
+        let payload =
+            openproxy_core::backup::preflight_bundle(&bundle, opts.passphrase.as_deref())?;
         let mut w = pool.writer();
         let db_path = pool.path();
-        let rep = openproxy_core::backup::restore_backup(
+        let rep = openproxy_core::backup::restore_payload(
             &mut w,
             master_key.as_ref(),
-            &bundle,
-            &opts,
+            &payload,
             Some(db_path),
         )?;
         state_clone.reload_runtime_config(&w);
+        // ROOT FIX (security audit): the restore swaps the whole `api_keys`
+        // table, but the in-memory API-key cache (60 s TTL) kept serving the
+        // pre-restore keys: a key deleted by the restored bundle kept
+        // authenticating for up to a minute after the restore. Drop the
+        // cache with the same operation, like revoke/delete/update do.
+        state_clone.invalidate_api_key_cache(None);
         Ok::<_, CoreError>(rep)
     })
     .await

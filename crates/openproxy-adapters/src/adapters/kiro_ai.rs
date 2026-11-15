@@ -30,6 +30,7 @@ impl KiroAdapter {
                 name: "Kiro AI".into(),
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
+                allow_loopback: false,
                 base_url: "https://codewhisperer.us-east-1.amazonaws.com".into(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,

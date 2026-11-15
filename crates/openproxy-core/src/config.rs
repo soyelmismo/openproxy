@@ -37,6 +37,25 @@ use std::path::PathBuf;
 pub struct LoggingConfig {
     pub format: LogFormat,
     pub level: String,
+    /// Persist the WARN+ ring buffer to `~/.openproxy/debug.log` (audit H-12:
+    /// the file writer was unconditional; it is now an explicit opt-out).
+    #[serde(default = "default_debug_log_enabled")]
+    pub debug_log_enabled: bool,
+    /// Hard cap on the debug log between rotations. The writer used to rely
+    /// on the 12 h time rotation alone, so a warn loop could fill the disk
+    /// that SQLite shares (audit H-12).
+    #[serde(default = "default_debug_log_max_bytes")]
+    pub debug_log_max_bytes: u64,
+}
+
+fn default_debug_log_enabled() -> bool {
+    true
+}
+
+/// 64 MiB between rotations — generous for real diagnostics, far below any
+/// modern disk, and reached only by a pathological warn loop.
+fn default_debug_log_max_bytes() -> u64 {
+    64 * 1024 * 1024
 }
 
 impl Default for LoggingConfig {
@@ -44,6 +63,8 @@ impl Default for LoggingConfig {
         Self {
             format: LogFormat::Json,
             level: "info".into(),
+            debug_log_enabled: default_debug_log_enabled(),
+            debug_log_max_bytes: default_debug_log_max_bytes(),
         }
     }
 }
