@@ -542,3 +542,108 @@ pub(crate) async fn read_request_body_capped(
         }
     }
 }
+
+/// Redact the PII "sidecar" fields of a chat request at intake.
+///
+/// Security (audit H-9): the PII engine only redacts `messages`
+/// (`Preamble to every formatter`). The OpenAI `user` field and the
+/// Anthropic `metadata.user_id` (which the lenient parse flattens into
+/// `extra`) are the standard end-user identifiers the SDKs attach, and they
+/// were serialized verbatim to the upstream provider — defeating the
+/// documented "Zero-Leak PII" guarantee whenever a client put personal data
+/// outside `messages`.
+///
+/// Redaction happens here, BEFORE the request is wrapped in its shared `Arc`
+/// and BEFORE `ParsedChatRequest.bytes` is frozen, so every downstream
+/// consumer (formatters, Anthropic/Gemini translations, in-handler re-parses
+/// of `/v1/messages`, and the usage-recording raw-bytes fallback) observes
+/// the redacted value. A separate `PiiSession` is used: the `user` field is
+/// never echoed back in responses, so its placeholders need no restoration
+/// mapping.
+///
+/// Returns `true` when any value changed, so the caller can re-serialize the
+/// raw body bytes to keep them consistent with the redacted parse.
+pub(crate) fn redact_pii_sidecar_fields(
+    parsed: &mut openproxy_types::OpenAIRequest,
+    pii_config: &openproxy_types::config::PiiConfig,
+) -> bool {
+    if !pii_config.pii_enabled {
+        return false;
+    }
+    let engine = openproxy_pipeline::PiiEngine::from_config(pii_config);
+    let mut session = openproxy_pipeline::PiiSession::new(pii_config.pii_reversible);
+    let mut changed = false;
+
+    if let Some(user) = parsed.user.as_mut() {
+        let redacted = engine.redact_text(user, &mut session);
+        if redacted != *user {
+            *user = redacted;
+            changed = true;
+        }
+    }
+
+    // Anthropic-native `metadata.user_id` flattened into `extra` by the
+    // lenient parse; kept in sync with the `user` field semantics.
+    if let Some(serde_json::Value::Object(metadata)) = parsed.extra.get_mut("metadata")
+        && let Some(serde_json::Value::String(user_id)) = metadata.get_mut("user_id")
+    {
+        let redacted = engine.redact_text(user_id, &mut session);
+        if redacted != *user_id {
+            *user_id = redacted;
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+#[cfg(test)]
+mod pii_sidecar_tests {
+    use super::*;
+
+    fn pii_config() -> openproxy_types::config::PiiConfig {
+        serde_json::from_value(serde_json::json!({
+            "pii_enabled": true,
+            "pii_entities": ["email"]
+        }))
+        .expect("pii config")
+    }
+
+    fn parse_request(json: serde_json::Value) -> openproxy_types::OpenAIRequest {
+        serde_json::from_value(json).expect("parse request")
+    }
+
+    /// Audit H-9 reproduction: the `user` field and `metadata.user_id` carry
+    /// the same PII as `messages`, but only `messages` were redacted — the
+    /// identifiers reached the upstream provider in clear text.
+    #[test]
+    fn user_and_metadata_user_id_are_redacted_when_pii_enabled() {
+        let mut req = parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "contact alice@corp.com"}],
+            "user": "alice@corp.com",
+            "metadata": {"user_id": "bob@corp.com"}
+        }));
+        let changed = redact_pii_sidecar_fields(&mut req, &pii_config());
+        assert!(changed, "at least one sidecar field must change");
+        let user = req.user.as_deref().expect("user kept");
+        assert!(!user.contains("alice@corp.com"), "user redacted: {user}");
+        let metadata = req.extra.get("metadata").expect("metadata kept");
+        let uid = metadata
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .expect("user_id kept");
+        assert!(!uid.contains("bob@corp.com"), "user_id redacted: {uid}");
+    }
+
+    #[test]
+    fn sidecar_fields_untouched_when_pii_disabled_or_clean() {
+        let mut req = parse_request(serde_json::json!({
+            "model": "m",
+            "messages": [],
+            "user": "anonymous-session-42"
+        }));
+        assert!(!redact_pii_sidecar_fields(&mut req, &pii_config()));
+        assert_eq!(req.user.as_deref(), Some("anonymous-session-42"));
+    }
+}

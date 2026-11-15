@@ -501,6 +501,20 @@ pub async fn auth_middleware(
     }
     inject_deepseek_reasoning_if_needed(&mut parsed);
 
+    // Security (audit H-9): redact PII from the sidecar identity fields
+    // (`user`, Anthropic `metadata.user_id`) before the request is frozen
+    // into its shared Arc and raw bytes, so formatters, translations and
+    // recordings cannot leak what the messages redactor scrubbed.
+    let pii_sidecar_changed =
+        super::auth_sanitization::redact_pii_sidecar_fields(&mut parsed, &state.config().pii);
+    let bytes = if pii_sidecar_changed {
+        serde_json::to_vec(&parsed)
+            .map(bytes::Bytes::from)
+            .map_err(|e| ApiError(CoreError::Parse(e.to_string())))?
+    } else {
+        bytes
+    };
+
     if parsed.model.is_empty() && parts.uri.path().starts_with("/v1/images") {
         parsed.model = "dall-e-2".to_string();
     }
