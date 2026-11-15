@@ -459,18 +459,26 @@ export function renderModelsSection(
       </div>
 
       <div class="filter-bar">
-        <input type="text" placeholder="Search models..." .value=${ui.search || ''}
+        <input type="search" aria-label="Search models" placeholder="Search models..." .value=${ui.search || ''}
                @input=${(e: Event) => onUpdateProviderSearch(provider.id, e)}>
-        <div class="filter-tabs">
-          <button class=${'filter-tab ' + (ui.filter === 'all' ? 'active' : '')} @click=${() => onUpdateProviderFilter(provider.id, 'all')}>All (${providerModels.length})</button>
-          <button class=${'filter-tab ' + (ui.filter === 'active' ? 'active' : '')} @click=${() => onUpdateProviderFilter(provider.id, 'active')}>Active (${activeModels})</button>
-          <button class=${'filter-tab ' + (ui.filter === 'inactive' ? 'active' : '')} @click=${() => onUpdateProviderFilter(provider.id, 'inactive')}>Inactive (${providerModels.length - activeModels})</button>
+        <div class="filter-tabs" role="group" aria-label="Filter models by status">
+          <button type="button" aria-pressed=${ui.filter === 'all' ? 'true' : 'false'} class=${'filter-tab ' + (ui.filter === 'all' ? 'active' : '')} @click=${() => onUpdateProviderFilter(provider.id, 'all')}>All (${providerModels.length})</button>
+          <button type="button" aria-pressed=${ui.filter === 'active' ? 'true' : 'false'} class=${'filter-tab ' + (ui.filter === 'active' ? 'active' : '')} @click=${() => onUpdateProviderFilter(provider.id, 'active')}>Active (${activeModels})</button>
+          <button type="button" aria-pressed=${ui.filter === 'inactive' ? 'true' : 'false'} class=${'filter-tab ' + (ui.filter === 'inactive' ? 'active' : '')} @click=${() => onUpdateProviderFilter(provider.id, 'inactive')}>Inactive (${providerModels.length - activeModels})</button>
         </div>
       </div>
 
       <div class="models-list" id="models-tbody">
         ${filtered.length === 0
-          ? html`<p class="empty-row">No models match the filter.</p>`
+          ? html`<p class="empty-row">
+              No models match the filter.
+              ${(ui.search || ui.filter !== 'all')
+                ? html`<button type="button" class="secondary small" style="margin-left: 8px;" @click=${() => {
+                    setProviderUi(provider.id, { ...ui, search: '', filter: 'all', page: 1 });
+                    requestUpdate();
+                  }}>Reset filters</button>`
+                : html``}
+            </p>`
           : renderDataGrid<Model>({
               id: `provider-models-${provider.id}`,
               className: 'provider-models-table models-table',

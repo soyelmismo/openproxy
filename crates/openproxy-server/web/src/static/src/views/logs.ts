@@ -162,6 +162,17 @@ function matchesLogFilter(r: { upstreamModelId?: string; providerId?: string; re
   return true;
 }
 
+function hasActiveLogFilter(): boolean {
+  return Boolean(filterSearch) || filterStatus !== "all" || filterApiKeyId !== "all";
+}
+
+function getFilteredFinishedRows(): AttemptState[] {
+  const sourceFinished = (state.logs.page > 1 && frozenLogsSnapshot)
+    ? frozenLogsSnapshot
+    : liveLogsStore.selectFinishedRows();
+  return sourceFinished.filter(matchesLogFilter);
+}
+
 function renderHeaderRow(visibleColKeys: Set<string>): TemplateResult {
   return html`<div class="log-row desktop-table-header" style="cursor:default;border-bottom:1px solid var(--color-border);font-weight:600;font-size:max(10px,0.72rem);text-transform:uppercase;color:var(--color-log-header-fg);background:var(--color-log-header-bg);position:sticky;top:0;z-index:1;">${LOG_COLUMNS
     .filter((c) => visibleColKeys.has(c.key))
@@ -244,7 +255,7 @@ function renderSessionsSection(visibleColKeys: Set<string>, nowOffsetMs: number)
     </div>
     <div class="logs-scroll-area logs-scroll-area-finished logs-sessions-area">
       ${groups.length === 0
-        ? html`<div class="empty logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No sessions matching current filter." : "No recent requests yet."}</div>`
+        ? html`<div class="empty logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${hasActiveLogFilter() ? "No sessions matching current filter." : "No recent requests yet."}</div>`
         : groups.map((g) => renderSessionGroup(g, visibleColKeys, nowOffsetMs))}
     </div>
   </div>`;
@@ -348,14 +359,14 @@ function renderLogsView(): TemplateResult {
         <div class="logs-section-header"><span class="logs-section-title"><span class="logs-inflight-dot"></span> Requests in progress</span><span class="logs-section-count">${inflightRows.length}</span></div>
         <div class="logs-scroll-area logs-scroll-area-inflight" id="logs-scroll-area-inflight">
           ${renderHeaderRow(visibleColKeys)}
-          ${inflightRows.length === 0 ? html`<div class="empty empty-inflight logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No in-progress requests matching filter." : "No requests in progress."}</div>` : repeat(inflightRows, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
+          ${inflightRows.length === 0 ? html`<div class="empty empty-inflight logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${hasActiveLogFilter() ? "No in-progress requests matching filter." : "No requests in progress."}</div>` : repeat(inflightRows, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
         </div>
       </div>
       <div class="logs-section logs-section-finished" id="logs-section-finished">
         <div class="logs-section-header"><span class="logs-section-title">Finished or failed</span><span class="logs-section-count">${totalFinished}</span></div>
         <div class="logs-scroll-area logs-scroll-area-finished" id="logs-scroll-area-finished">
           ${renderHeaderRow(visibleColKeys)}
-          ${pageFinishedRows.length === 0 ? html`<div class="empty empty-finished logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${filterSearch || filterStatus !== "all" ? "No requests matching current filter." : "No recent requests yet."}</div>` : repeat(pageFinishedRows, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
+          ${pageFinishedRows.length === 0 ? html`<div class="empty empty-finished logs-empty-placeholder" style="padding:1.5rem;text-align:center;color:var(--color-text-muted);">${hasActiveLogFilter() ? "No requests matching current filter." : "No recent requests yet."}</div>` : repeat(pageFinishedRows, (r) => r.attemptKey, (r) => html`<div data-key=${r.attemptKey}>${renderLogRowHtml(r, visibleColKeys, nowOffsetMs)}</div>`)}
         </div>
         ${renderPagination(totalFinished, totalP)}
       </div>
@@ -367,11 +378,11 @@ export function logsPrevPage(): void {
   if (state.logs.page > 1) { state.logs.page--; if (state.logs.page === 1) { frozenLogsSnapshot = null; state.logs.followTail = true; } else state.logs.followTail = false; requestUpdate(); }
 }
 export function logsNextPage(): void {
-  const totalP = Math.max(1, Math.ceil(liveLogsStore.selectFinishedRows().length / state.logs.rowsPerPage));
+  const totalP = Math.max(1, Math.ceil(getFilteredFinishedRows().length / state.logs.rowsPerPage));
   if (state.logs.page < totalP) { if (state.logs.page === 1) frozenLogsSnapshot = [...liveLogsStore.selectFinishedRows()]; state.logs.page++; state.logs.followTail = false; requestUpdate(); }
 }
 export function logsGoPage(p: number): void {
-  const totalP = Math.max(1, Math.ceil(liveLogsStore.selectFinishedRows().length / state.logs.rowsPerPage));
+  const totalP = Math.max(1, Math.ceil(getFilteredFinishedRows().length / state.logs.rowsPerPage));
   const target = Math.max(1, Math.min(p, totalP));
   if (target === 1) { frozenLogsSnapshot = null; state.logs.followTail = true; } else { if (!frozenLogsSnapshot) frozenLogsSnapshot = [...liveLogsStore.selectFinishedRows()]; state.logs.followTail = false; }
   state.logs.page = target; requestUpdate();
@@ -457,7 +468,14 @@ export async function mountLogs(
     if (!columnsMenuOpen || !(ev.target instanceof Element) || ev.target.closest(".columns-menu-wrapper")) return;
     columnsMenuOpen = false; requestUpdate();
   };
+  const onDocKeydownForMenu = (ev: KeyboardEvent): void => {
+    if (!columnsMenuOpen || ev.key !== "Escape") return;
+    columnsMenuOpen = false;
+    requestUpdate();
+    document.getElementById("logs-columns-toggle")?.focus();
+  };
   document.addEventListener("click", onDocClickForMenu);
+  document.addEventListener("keydown", onDocKeydownForMenu);
   const onResizeForMenu = (): void => { if (columnsMenuOpen) clampColumnsMenu(); };
   window.addEventListener("resize", onResizeForMenu);
 
@@ -488,6 +506,7 @@ export async function mountLogs(
 
   return () => {
     document.removeEventListener("click", onDocClickForMenu);
+    document.removeEventListener("keydown", onDocKeydownForMenu);
     window.removeEventListener("resize", onResizeForMenu);
     disconnectLogsWebSocket();
     clockStore.unsubscribe(onClockTick);

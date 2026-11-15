@@ -373,3 +373,21 @@
     padding: 8px 12px;
   }
 }
+
+@media (max-width: 640px) {
+  .dg-bulk {
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 12px !important;
+    top: auto !important;
+    max-width: none;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    padding: 6px 10px;
+  }
+  .dg-bulk button {
+    min-height: 34px;
+    padding: 4px 10px;
+  }
+}
+

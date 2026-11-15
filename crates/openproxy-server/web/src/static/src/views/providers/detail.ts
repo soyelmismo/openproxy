@@ -41,6 +41,13 @@ if (typeof window !== 'undefined') {
       requestUpdate();
     }
   });
+  window.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && openTtlMenuProviderId !== null) {
+      openTtlMenuProviderId = null;
+      openTtlMenuPos = null;
+      requestUpdate();
+    }
+  });
 }
 
 
@@ -330,18 +337,42 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
             (fmt) => html`<option value=${fmt.id} title=${fmt.description} ?selected=${provider.format === fmt.id}>${fmt.id}</option>`
           )}
         </select>
-        <span class="editable meta-link" title="Click to edit endpoint (base URL)" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${provider.base_url}</span>
-        <small class="editable" title="Click to edit endpoint (base URL)" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
+        <span
+          class="editable meta-link"
+          role="button"
+          tabindex="0"
+          title="Click to edit endpoint (base URL)"
+          @click=${() => onEditBaseUrl(provider.id, provider.base_url)}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              void onEditBaseUrl(provider.id, provider.base_url);
+            }
+          }}
+        >${provider.base_url}</span>
+        <small class="editable" title="Click to edit endpoint (base URL)" aria-hidden="true" style="cursor: pointer;" @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()}</small>
         <span
           class=${'chip stream-chip' + (provider.stream_mode === 'unary' ? ' warn' : provider.stream_mode === 'streaming' ? ' combo-chip' : '')}
+          role="button"
+          tabindex="0"
           title="Stream mode: auto, unary (forced non-streaming), streaming (forced SSE). Click to cycle."
           style="cursor: pointer;"
           @click=${() => onCycleStreamMode(provider.id, provider.stream_mode)}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              void onCycleStreamMode(provider.id, provider.stream_mode);
+            }
+          }}
         >
           stream: ${provider.stream_mode || 'auto'}
         </span>
         <span
           class=${'chip ttl-chip' + (provider.prompt_cache_ttl && provider.prompt_cache_ttl !== 'auto' ? ' combo-chip' : '')}
+          role="button"
+          tabindex="0"
+          aria-haspopup="listbox"
+          aria-expanded=${openTtlMenuProviderId === provider.id ? 'true' : 'false'}
           title="Prompt cache TTL: click to change"
           style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; position: relative;"
           @click=${(e: MouseEvent) => {
@@ -372,6 +403,12 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
               openTtlMenuPos = { top, left };
             }
             requestUpdate();
+          }}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              (e.currentTarget as HTMLElement).click();
+            }
           }}
         >
           cache: ${provider.prompt_cache_ttl || 'auto'}
@@ -516,7 +553,19 @@ export function renderProviderDetail(): TemplateResult {
           <div class="provider-icon" data-format=${provider.format}>${renderProviderIcon(provider)}</div>
           <div class="cx-provider-summary-info">
             <h2>
-              <span class="editable" title="Click to rename" @click=${() => onRenameProvider(provider.id, provider.name)}>${provider.name}</span>
+              <span
+                class="editable"
+                role="button"
+                tabindex="0"
+                title="Click to rename"
+                @click=${() => onRenameProvider(provider.id, provider.name)}
+                @keydown=${(e: KeyboardEvent) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    void onRenameProvider(provider.id, provider.name);
+                  }
+                }}
+              >${provider.name}</span>
             </h2>
             <div class="cx-provider-summary-meta"><code>${provider.id}</code><span>${provider.format}</span><span>${provider.auth_type}</span>
               ${provider.active ? html`` : html`<span class="chip inactive-chip">${t('providers.list.card.inactive_suffix')}</span>`}

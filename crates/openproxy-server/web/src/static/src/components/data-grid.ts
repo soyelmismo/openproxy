@@ -132,7 +132,7 @@ const observed = new WeakMap<HTMLElement, ResizeObserver>();
 
 /** Re-run layout whenever the grid's box changes — tile resizes land here. */
 function observeGrid(root: HTMLElement): void {
-  if (observed.has(root)) return;
+  if (observed.has(root) || typeof ResizeObserver === "undefined") return;
   const ro = new ResizeObserver(() => scheduleMeasure(root, { reuseNaturals: true }));
   ro.observe(root);
   observed.set(root, ro);
@@ -309,19 +309,42 @@ function flushMeasures(): void {
 
 /* ------------------------------------------------------------------ editing */
 
+function findRowElByKey(gridId: string, key: string): HTMLElement | null {
+  const root = document.querySelector<HTMLElement>(`[data-grid-id="${gridId}"]`);
+  if (!root) return null;
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>(".dg-row"))) {
+    if (el.dataset["rowKey"] === key) return el;
+  }
+  return null;
+}
+
 function startEdit<T>(props: DataGridProps<T>, row: T): void {
   const s = stateFor(props.id);
   if (!props.renameable || props.renameable(row) == null) return;
-  s.editing = String(props.rowKey(row));
+  const key = String(props.rowKey(row));
+  s.editing = key;
   props.__refresh?.();
+  setTimeout(() => {
+    const input = findRowElByKey(props.id, key)?.querySelector<HTMLInputElement>(".dg-rename");
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }, 0);
 }
 
-function commitEdit<T>(props: DataGridProps<T>, input: HTMLInputElement, save: boolean): void {
+function commitEdit<T>(props: DataGridProps<T>, input: HTMLInputElement, save: boolean, restoreFocus = false): void {
   const s = stateFor(props.id);
   const key = s.editing;
+  if (!key) return;
   s.editing = null;
   props.__refresh?.();
-  if (!save || !key || !props.onRename) return;
+  if (restoreFocus) {
+    setTimeout(() => {
+      findRowElByKey(props.id, key)?.focus();
+    }, 0);
+  }
+  if (!save || !props.onRename) return;
   const row = props.rows.find((r) => String(props.rowKey(r)) === key);
   if (!row) return;
   const original = props.renameable?.(row) ?? "";
@@ -415,8 +438,8 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
                       .value=${renameText}
                       @keydown=${(e: KeyboardEvent) => {
                         e.stopPropagation();
-                        if (e.key === "Enter") commitEdit(props, e.target as HTMLInputElement, true);
-                        if (e.key === "Escape") commitEdit(props, e.target as HTMLInputElement, false);
+                        if (e.key === "Enter") commitEdit(props, e.target as HTMLInputElement, true, true);
+                        if (e.key === "Escape") commitEdit(props, e.target as HTMLInputElement, false, true);
                       }}
                       @blur=${(e: Event) => commitEdit(props, e.target as HTMLInputElement, true)}
                       @click=${(e: Event) => e.stopPropagation()}
@@ -453,10 +476,13 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
   });
 
   // Anchor the bulk bar where the selection happened; fixed positioning keeps
-  // it on screen while the page scrolls. Clamped so it never leaves the viewport.
+  // it on screen while the page scrolls. Clamped so it never leaves the viewport,
+  // including narrow mobile screens (< 416px) where innerWidth - 408 would be negative.
   const at = s.bulkAt;
+  const maxLeft = Math.max(8, window.innerWidth - Math.min(408, window.innerWidth - 16));
+  const maxTop = Math.max(8, window.innerHeight - 46);
   const bulkPos = at
-    ? `left:${Math.min(Math.max(at.x, 8), window.innerWidth - 408)}px;top:${Math.min(Math.max(at.y + 14, 8), window.innerHeight - 46)}px`
+    ? `left:${Math.min(Math.max(at.x, 8), maxLeft)}px;top:${Math.min(Math.max(at.y + 14, 8), maxTop)}px`
     : undefined;
   const bulk = s.selected.size > 0 && (props.bulkActions?.length ?? 0) > 0
     ? html`<div class="dg-bulk" role="toolbar" style=${bulkPos}>
@@ -482,8 +508,9 @@ export function renderDataGrid<T>(props: DataGridProps<T>): TemplateResult {
       tabindex="0"
       .__dgConf=${{ mins: props.columns.map((c) => c.min ?? 0), folds: props.columns.map((c) => c.fold ?? 0), elastic: props.columns.findIndex((c) => c.elastic) }}
       @click=${(e: MouseEvent) => {
-        const rowEl = (e.target as HTMLElement).closest(".dg-row") as HTMLElement | null;
-        if (!rowEl || (e.target as HTMLElement).closest(".dg-actions")) return;
+        const targetEl = e.target as HTMLElement;
+        const rowEl = targetEl.closest(".dg-row") as HTMLElement | null;
+        if (!rowEl || targetEl.closest(".dg-actions, a, button, input, select, textarea, label")) return;
         rowEl.focus();
         const key = rowEl.dataset["rowKey"]!;
         const idx = Number(rowEl.dataset["i"]);
@@ -597,6 +624,21 @@ function onRowKeydown<T>(e: KeyboardEvent, props: DataGridProps<T>, row: T, rowE
     s.selected.has(key) ? s.selected.delete(key) : s.selected.add(key);
     props.__refresh?.();
     return;
+  }
+  if (e.key === "Enter" && e.target === rowEl) {
+    if (props.expandedRow) {
+      e.preventDefault();
+      const key = String(props.rowKey(row));
+      s.expanded = s.expanded === key ? null : key;
+      props.__refresh?.();
+      return;
+    }
+    const link = rowEl.querySelector<HTMLAnchorElement>("a[href]");
+    if (link) {
+      e.preventDefault();
+      link.click();
+      return;
+    }
   }
   if (e.key === "F2") { e.preventDefault(); startEdit(props, row); return; }
   if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); props.onAction(row, "delete", rowEl); return; }

@@ -309,13 +309,13 @@ function rowHtml(row: Row): string {
 function tableHtml(rows: Row[]): string {
   const head = COLUMNS.map((c) => {
     if (!c.key) {
-      return `<th class="${c.num ? 'num' : ''}">${c.label}</th>`;
+      return `<th class="${c.num ? 'num' : ''}" scope="col">${c.label}</th>`;
     }
     const active = sortKey === c.key;
     const arrow = active ? (sortDir === 1 ? '▲' : '▼') : '';
     const aria = active ? (sortDir === 1 ? 'ascending' : 'descending') : 'none';
-    return `<th class="sortable${c.num ? ' num' : ''}${active ? ' active' : ''}" data-key="${c.key}" aria-sort="${aria}">
-      ${c.label}<span class="mc-arrow">${arrow}</span>
+    return `<th class="sortable${c.num ? ' num' : ''}${active ? ' active' : ''}" scope="col" tabindex="0" role="button" data-key="${c.key}" aria-sort="${aria}">
+      ${c.label}<span class="mc-arrow" aria-hidden="true">${arrow}</span>
     </th>`;
   }).join('');
   const body = rows.length > 0
@@ -439,7 +439,9 @@ function applyDensity(): void {
   card.classList.remove('density-normal', 'density-compact', 'density-ultra');
   card.classList.add(`density-${density}`);
   document.querySelectorAll<HTMLButtonElement>('.mc-density button').forEach((b) => {
-    b.classList.toggle('active', b.dataset['density'] === density);
+    const isActive = b.dataset['density'] === density;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-pressed', String(isActive));
   });
 }
 
@@ -485,11 +487,21 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
       <div class="mc-toolbar">
         <div class="mc-heading">
           <h1 class="mc-title">Models</h1>
-          <span class="mc-count" id="mc-count"></span>
+          <span class="mc-count" id="mc-count" aria-live="polite"></span>
         </div>
         <div class="mc-tools">
           <input id="mc-search" class="mc-search" type="search" autocomplete="off"
                  placeholder="Filter by model, provider or family…" aria-label="Filter models" />
+          <select id="mc-sort" class="mc-sort-select" aria-label="Sort models">
+            <option value="id:1">Sort: Model (A–Z)</option>
+            <option value="id:-1">Sort: Model (Z–A)</option>
+            <option value="provider:1">Sort: Provider (A–Z)</option>
+            <option value="type:1">Sort: Type</option>
+            <option value="context:-1">Sort: Context (High–Low)</option>
+            <option value="max_out:-1">Sort: Max Out (High–Low)</option>
+            <option value="price_in:1">Sort: $ in /M (Low–High)</option>
+            <option value="price_out:1">Sort: $ out /M (Low–High)</option>
+          </select>
           <div class="mc-density" role="group" aria-label="Density">
             <button type="button" data-density="normal" title="Normal density">Normal</button>
             <button type="button" data-density="compact" title="Compact density">Compact</button>
@@ -506,6 +518,23 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
     renderBody();
   });
 
+  const sortSelect = document.getElementById('mc-sort') as HTMLSelectElement | null;
+  const syncSortSelect = (): void => {
+    if (!sortSelect) return;
+    const candidate = `${sortKey}:${sortDir}`;
+    if (Array.from(sortSelect.options).some((o) => o.value === candidate)) {
+      sortSelect.value = candidate;
+    }
+  };
+  sortSelect?.addEventListener('change', () => {
+    const [k, d] = sortSelect.value.split(':');
+    if (k) {
+      sortKey = k as SortKey;
+      sortDir = d === '-1' ? -1 : 1;
+      renderBody();
+    }
+  });
+
   document.querySelectorAll<HTMLButtonElement>('.mc-density button').forEach((b) => {
     b.addEventListener('click', () => {
       const d = b.dataset['density'] as Density;
@@ -516,17 +545,32 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
     });
   });
 
-  const bodyHost = document.getElementById('mc-body');
-  bodyHost?.addEventListener('click', (ev: Event) => {
-    const th = (ev.target as HTMLElement).closest('th[data-key]') as HTMLElement | null;
-    if (!th) return;
+  const toggleSortByHeader = (th: HTMLElement, restoreFocus: boolean): void => {
     const key = th.dataset['key'] as SortKey;
     if (sortKey === key) sortDir = sortDir === 1 ? -1 : 1;
     else {
       sortKey = key;
       sortDir = 1;
     }
+    syncSortSelect();
     renderBody();
+    if (restoreFocus) {
+      document.querySelector<HTMLElement>(`#mc-body th[data-key="${key}"]`)?.focus();
+    }
+  };
+
+  const bodyHost = document.getElementById('mc-body');
+  bodyHost?.addEventListener('click', (ev: Event) => {
+    const th = (ev.target as HTMLElement).closest('th[data-key]') as HTMLElement | null;
+    if (!th) return;
+    toggleSortByHeader(th, false);
+  });
+  bodyHost?.addEventListener('keydown', (ev: KeyboardEvent) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const th = (ev.target as HTMLElement).closest('th[data-key]') as HTMLElement | null;
+    if (!th) return;
+    ev.preventDefault();
+    toggleSortByHeader(th, true);
   });
 
   applyDensity();

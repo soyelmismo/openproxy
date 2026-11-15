@@ -246,21 +246,30 @@ export function renderCombosList(): TemplateResult {
             <input
               type="search"
               class="cw-input combos-search-input"
+              aria-label="Filter combos"
               placeholder="Filter combos (e.g. nerd, gemma)..."
               .value=${comboSearchQuery}
               @input=${onComboSearch}>
           </div>
           ${uniqueStrategies.length > 1 ? html`
-            <select class="combos-filter-select" .value=${comboStrategyFilter} @change=${onStrategyFilterChange} title="Filter by Strategy">
+            <select class="combos-filter-select" aria-label="Filter by Strategy" .value=${comboStrategyFilter} @change=${onStrategyFilterChange} title="Filter by Strategy">
               <option value="all">All Strategies</option>
               ${uniqueStrategies.map((s) => html`<option value=${s} ?selected=${comboStrategyFilter === s}>${s}</option>`)}
             </select>
           ` : ""}
           ${uniquePriorityModes.length > 1 ? html`
-            <select class="combos-filter-select" .value=${comboPriorityModeFilter} @change=${onPriorityModeFilterChange} title="Filter by Priority Mode">
+            <select class="combos-filter-select" aria-label="Filter by Priority Mode" .value=${comboPriorityModeFilter} @change=${onPriorityModeFilterChange} title="Filter by Priority Mode">
               <option value="all">All Modes</option>
               ${uniquePriorityModes.map((pm) => html`<option value=${pm} ?selected=${comboPriorityModeFilter === pm}>${PRIORITY_MODE_LABELS[pm] || pm}</option>`)}
             </select>
+          ` : ""}
+          ${isFiltered ? html`
+            <button type="button" class="secondary small" @click=${() => {
+              comboSearchQuery = "";
+              comboStrategyFilter = "all";
+              comboPriorityModeFilter = "all";
+              requestUpdate();
+            }}>Reset</button>
           ` : ""}
           <span class="muted combos-count-badge">
             ${isFiltered ? `${filteredCustom.length} / ${list.length}` : `${list.length}`} total
