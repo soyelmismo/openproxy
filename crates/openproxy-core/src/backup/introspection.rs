@@ -5,7 +5,7 @@ use openproxy_types::Result;
 use rusqlite::Connection;
 use std::collections::{BTreeMap, HashSet};
 
-/// Tables that should NEVER be exported in a backup (ephemeral data, telemetry, caches, migrations).
+/// Tables that should NEVER be exported or restored in a backup (ephemeral data, telemetry, caches, migrations, and financial ledger/payment tables).
 pub const TABLE_BLACKLIST: &[&str] = &[
     "schema_migrations",
     "sqlite_sequence",
@@ -20,6 +20,12 @@ pub const TABLE_BLACKLIST: &[&str] = &[
     "free_proxies",
     "live_limited_models",
     "model_capabilities_sync",
+    "credit_transactions",
+    "credit_orders",
+    "matched_payments",
+    "credit_reservations",
+    "credits_watcher_state",
+    "api_key_quotas",
 ];
 
 /// Known core tables that have structured Backup structs.
