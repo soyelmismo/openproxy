@@ -40,26 +40,44 @@ pub(crate) fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     })
 }
 
-fn socks5_build_connect_req(dest_host: &str, dest_port: u16) -> Vec<u8> {
+fn validate_tunnel_dest_host(dest_host: &str) -> io::Result<()> {
+    let dest_host_bytes = dest_host.as_bytes();
+    if dest_host_bytes.is_empty() || dest_host_bytes.len() > 255 {
+        return Err(io::Error::other(
+            "proxy destination host length must be 1..=255 bytes",
+        ));
+    }
+    if dest_host.contains(['\r', '\n', '\0']) {
+        return Err(io::Error::other(
+            "proxy destination host contains forbidden control characters",
+        ));
+    }
+    Ok(())
+}
+
+fn socks5_build_connect_req(dest_host: &str, dest_port: u16) -> io::Result<Vec<u8>> {
+    validate_tunnel_dest_host(dest_host)?;
     let dest_host_bytes = dest_host.as_bytes();
     if let Ok(ip) = dest_host.parse::<std::net::Ipv4Addr>() {
         let mut req = Vec::with_capacity(10);
         req.extend_from_slice(&[0x05, 0x01, 0x00, 0x01]);
         req.extend_from_slice(&ip.octets());
         req.extend_from_slice(&dest_port.to_be_bytes());
-        req
+        Ok(req)
     } else if let Ok(ip) = dest_host.parse::<std::net::Ipv6Addr>() {
         let mut req = Vec::with_capacity(22);
         req.extend_from_slice(&[0x05, 0x01, 0x00, 0x04]);
         req.extend_from_slice(&ip.octets());
         req.extend_from_slice(&dest_port.to_be_bytes());
-        req
+        Ok(req)
     } else {
+        let host_len = u8::try_from(dest_host_bytes.len())
+            .map_err(|_| io::Error::other("SOCKS5 domain exceeds 255 bytes"))?;
         let mut req = Vec::with_capacity(7 + dest_host_bytes.len());
-        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, dest_host_bytes.len() as u8]);
+        req.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, host_len]);
         req.extend(dest_host_bytes);
         req.extend_from_slice(&dest_port.to_be_bytes());
-        req
+        Ok(req)
     }
 }
 
@@ -70,6 +88,7 @@ async fn socks5_tunnel(
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let req = socks5_build_connect_req(dest_host, dest_port)?;
     stream.write_all(&[0x05, 0x01, 0x00]).await?;
     let mut resp = [0u8; 2];
     stream.read_exact(&mut resp).await?;
@@ -77,7 +96,6 @@ async fn socks5_tunnel(
         return Err(io::Error::other("SOCKS5 auth negotiation failed").into());
     }
 
-    let req = socks5_build_connect_req(dest_host, dest_port);
     stream.write_all(&req).await?;
 
     let mut reply = [0u8; 4];
@@ -114,6 +132,7 @@ async fn socks4_tunnel(
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    validate_tunnel_dest_host(dest_host)?;
     let mut req = Vec::new();
     req.push(0x04);
     req.push(0x01);
@@ -167,6 +186,17 @@ where
     }
 }
 
+fn is_http_connect_status_200(first_line: &str) -> bool {
+    let mut parts = first_line.split_ascii_whitespace();
+    let Some(proto) = parts.next() else {
+        return false;
+    };
+    let Some(code) = parts.next() else {
+        return false;
+    };
+    (proto.starts_with("HTTP/1.1") || proto.starts_with("HTTP/1.0")) && code == "200"
+}
+
 async fn http_connect_tunnel<S>(
     mut stream: S,
     proxy: &ProxyConfig,
@@ -178,7 +208,11 @@ where
 {
     use tokio::io::AsyncWriteExt;
 
+    validate_tunnel_dest_host(dest_host)?;
     let auth_header = if let Some(ref auth) = proxy.auth {
+        if auth.contains(['\r', '\n', '\0']) {
+            return Err(io::Error::other("proxy credentials contain control characters").into());
+        }
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
         format!("Proxy-Authorization: Basic {encoded}\r\n")
@@ -193,7 +227,7 @@ where
     let headers_buf = read_http_connect_headers(&mut stream).await?;
     let resp_str = String::from_utf8_lossy(&headers_buf);
     let first_line = resp_str.lines().next().unwrap_or("");
-    if !first_line.contains(" 200 ") {
+    if !is_http_connect_status_200(first_line) {
         return Err(
             io::Error::other(format!("HTTP CONNECT proxy returned error: {first_line}")).into(),
         );
@@ -274,13 +308,13 @@ mod tests {
 
     #[test]
     fn test_socks5_build_connect_req_ipv4() {
-        let req = socks5_build_connect_req("127.0.0.1", 8080);
+        let req = socks5_build_connect_req("127.0.0.1", 8080).unwrap();
         assert_eq!(req, vec![0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x1f, 0x90]);
     }
 
     #[test]
     fn test_socks5_build_connect_req_ipv6() {
-        let req = socks5_build_connect_req("::1", 8080);
+        let req = socks5_build_connect_req("::1", 8080).unwrap();
         let mut expected = vec![0x05, 0x01, 0x00, 0x04];
         expected.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
         expected.extend_from_slice(&[0x1f, 0x90]);
@@ -289,10 +323,18 @@ mod tests {
 
     #[test]
     fn test_socks5_build_connect_req_domain() {
-        let req = socks5_build_connect_req("example.com", 80);
+        let req = socks5_build_connect_req("example.com", 80).unwrap();
         let mut expected = vec![0x05, 0x01, 0x00, 0x03, 11];
         expected.extend_from_slice(b"example.com");
         expected.extend_from_slice(&[0x00, 0x50]);
         assert_eq!(req, expected);
+    }
+
+    #[test]
+    fn test_tunnel_dest_host_and_status_validation() {
+        assert!(socks5_build_connect_req(&"a".repeat(256), 80).is_err());
+        assert!(socks5_build_connect_req("bad\r\nhost", 80).is_err());
+        assert!(is_http_connect_status_200("HTTP/1.1 200 Connection established"));
+        assert!(!is_http_connect_status_200("HTTP/1.1 502 Bad Gateway (200 ms)"));
     }
 }
