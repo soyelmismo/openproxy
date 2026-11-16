@@ -108,20 +108,15 @@ pub async fn edit_images(
     headers: HeaderMap,
     req: Request,
 ) -> Result<Response, ApiError> {
-    let parsed_body = parse_image_request(
+    let (parsed_body, api_key_id) = parse_and_authorize_image_request(
+        &state,
+        &headers,
         req,
         state.upstream_client(),
         state.config().server.request_max_body_bytes,
     )
     .await?;
     validate_image_edit_body(&parsed_body)?;
-
-    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
-        &state,
-        &headers,
-        &parsed_body.model_name,
-    )
-    .await?;
 
     let response = call_unary_executor!(execute_image_edit, state, parsed_body, api_key_id);
 
@@ -134,7 +129,9 @@ pub async fn create_image_variation(
     headers: HeaderMap,
     req: Request,
 ) -> Result<Response, ApiError> {
-    let parsed_body = parse_image_request(
+    let (parsed_body, api_key_id) = parse_and_authorize_image_request(
+        &state,
+        &headers,
         req,
         state.upstream_client(),
         state.config().server.request_max_body_bytes,
@@ -150,13 +147,6 @@ pub async fn create_image_variation(
             "missing or empty 'image' in request body".into(),
         )));
     }
-
-    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
-        &state,
-        &headers,
-        &parsed_body.model_name,
-    )
-    .await?;
 
     let response = call_unary_executor!(execute_image_variation, state, parsed_body, api_key_id);
 
@@ -176,15 +166,27 @@ fn json_value_to_form_string(v: &serde_json::Value) -> Option<String> {
 }
 
 async fn parse_image_json(
+    state: &AppState,
+    headers: &HeaderMap,
     json: serde_json::Value,
     upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
-) -> Result<ParsedImageMultipartBody, ApiError> {
+) -> Result<(ParsedImageMultipartBody, Option<openproxy_types::ids::ApiKeyId>), ApiError> {
     let model_name = json
         .get("model")
         .and_then(|v| v.as_str())
         .filter(|m| !m.is_empty())
         .unwrap_or("dall-e-2")
         .to_string();
+
+    // Authenticate and authorize the API key for `model_name` BEFORE fetching any
+    // remote `http://`/`https://` image URLs so unauthorized keys cannot trigger
+    // outbound downloads.
+    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
+        state,
+        headers,
+        &model_name,
+    )
+    .await?;
 
     let mut files = Vec::new();
     let mut form_fields = Vec::new();
@@ -201,18 +203,23 @@ async fn parse_image_json(
         }
     }
 
-    Ok(ParsedImageMultipartBody {
-        model_name,
-        files,
-        form_fields,
-    })
+    Ok((
+        ParsedImageMultipartBody {
+            model_name,
+            files,
+            form_fields,
+        },
+        api_key_id,
+    ))
 }
 
-async fn parse_image_request(
+async fn parse_and_authorize_image_request(
+    state: &AppState,
+    headers: &HeaderMap,
     req: Request,
     upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
     body_limit: usize,
-) -> Result<ParsedImageMultipartBody, ApiError> {
+) -> Result<(ParsedImageMultipartBody, Option<openproxy_types::ids::ApiKeyId>), ApiError> {
     let is_multipart = req
         .headers()
         .get(CONTENT_TYPE)
@@ -223,7 +230,14 @@ async fn parse_image_request(
         let multipart = Multipart::from_request(req, &())
             .await
             .map_err(|e| ApiError(CoreError::Validation(format!("multipart extract: {e}"))))?;
-        return parse_image_multipart(multipart).await;
+        let parsed = parse_image_multipart(multipart).await?;
+        let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
+            state,
+            headers,
+            &parsed.model_name,
+        )
+        .await?;
+        return Ok((parsed, api_key_id));
     }
 
     // Security (OP-14): the JSON body limit is the configured
@@ -237,7 +251,7 @@ async fn parse_image_request(
     let json: serde_json::Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ApiError(CoreError::Validation(format!("invalid json body: {e}"))))?;
 
-    parse_image_json(json, upstream_client).await
+    parse_image_json(state, headers, json, upstream_client).await
 }
 
 fn png_multipart_file(field_name: &str, bytes: bytes::Bytes) -> MultipartFile {

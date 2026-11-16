@@ -367,6 +367,13 @@ pub fn record_with_retry(
     with_busy_retry("cost::record", || record(conn, input))
 }
 
+const BILLABLE_STATUS_SQL: &str =
+    "AND ((status_code >= 200 AND status_code < 400) OR status_code = 499)";
+
+const TOKEN_BACKFILL_COST_EXPR: &str = "((COALESCE(?1, 0.0) * MAX(0, prompt_tokens - CASE WHEN status_code = 499 THEN 0 ELSE MIN(prompt_tokens, COALESCE(cached_tokens, 0)) END) \
+     + COALESCE(?3, ?1, 0.0) * CASE WHEN status_code = 499 THEN 0 ELSE MIN(prompt_tokens, COALESCE(cached_tokens, 0)) END) / 1000000.0) \
+     + (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0)";
+
 fn update_backfill_price(
     conn: &Connection,
     provider_id: &str,
@@ -376,14 +383,10 @@ fn update_backfill_price(
     use pricing::PriceKind;
     // Rows that ran through a priced combo are billed by the combo pass; the
     // model fallback must never overwrite them with the target model's rate.
-    // A combo with a schedule is priced by time of day and is excluded here for
-    // the same reason: the target model's flat rate is not its bill.
     const NOT_A_PRICED_COMBO: &str = "AND (combo_id IS NULL OR combo_id NOT IN \
          (SELECT id FROM combos WHERE (pricing_input_per_1m IS NOT NULL \
             AND pricing_output_per_1m IS NOT NULL) OR pricing_schedule IS NOT NULL))";
     match price {
-        // Audio rows bill on `audio_ms` at an hourly rate; the token formula
-        // below would price them at zero forever.
         Some(p) if p.kind == PriceKind::Audio => {
             let per_hour = p.audio_per_hour.unwrap_or(p.input_per_1m);
             conn.execute(
@@ -392,7 +395,7 @@ fn update_backfill_price(
                      SET cost_usd = (?1 * audio_ms / 3600000.0) \
                      WHERE provider_id = ?2 AND upstream_model_id = ?3 \
                        AND audio_ms > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL) \
-                       {NOT_A_PRICED_COMBO}"
+                       {BILLABLE_STATUS_SQL} {NOT_A_PRICED_COMBO}"
                 ),
                 params![per_hour, provider_id, upstream_model_id],
             )
@@ -402,15 +405,15 @@ fn update_backfill_price(
             .execute(
                 &format!(
                     "UPDATE usage \
-                     SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
-                                    (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
-                     WHERE provider_id = ?3 AND upstream_model_id = ?4 \
+                     SET cost_usd = {TOKEN_BACKFILL_COST_EXPR} \
+                     WHERE provider_id = ?4 AND upstream_model_id = ?5 \
                        AND prompt_tokens > 0 AND (cost_usd = 0.0 OR cost_usd IS NULL) \
-                       {NOT_A_PRICED_COMBO}"
+                       {BILLABLE_STATUS_SQL} {NOT_A_PRICED_COMBO}"
                 ),
                 params![
                     p.input_per_1m,
                     p.output_per_1m,
+                    p.cached_per_1m,
                     provider_id,
                     upstream_model_id
                 ],
@@ -423,7 +426,7 @@ fn update_backfill_price(
                      SET cost_usd = NULL \
                      WHERE provider_id = ?1 AND upstream_model_id = ?2 \
                        AND prompt_tokens > 0 AND cost_usd = 0.0 \
-                       {NOT_A_PRICED_COMBO}"
+                       {BILLABLE_STATUS_SQL} {NOT_A_PRICED_COMBO}"
                 ),
                 params![provider_id, upstream_model_id],
             )
@@ -441,52 +444,53 @@ fn update_backfill_combo_price(
         let per_hour = price.audio_per_hour.unwrap_or(price.input_per_1m);
         return conn
             .execute(
-                "UPDATE usage SET cost_usd = (?1 * audio_ms / 3600000.0) \
-                 WHERE combo_id = ?2 AND audio_ms > 0 \
-                   AND (cost_usd = 0.0 OR cost_usd IS NULL)",
+                &format!(
+                    "UPDATE usage SET cost_usd = (?1 * audio_ms / 3600000.0) \
+                     WHERE combo_id = ?2 AND audio_ms > 0 \
+                       AND (cost_usd = 0.0 OR cost_usd IS NULL) {BILLABLE_STATUS_SQL}"
+                ),
                 params![per_hour, combo_id],
             )
             .map_err(crate::error::map_db_error);
     }
     conn.execute(
-        "UPDATE usage \
-         SET cost_usd = (COALESCE(?1, 0.0) * prompt_tokens / 1000000.0) + \
-                        (COALESCE(?2, 0.0) * COALESCE(completion_tokens, 0) / 1000000.0) \
-         WHERE combo_id = ?3 AND prompt_tokens > 0 \
-           AND (cost_usd = 0.0 OR cost_usd IS NULL)",
-        params![price.input_per_1m, price.output_per_1m, combo_id],
+        &format!(
+            "UPDATE usage \
+             SET cost_usd = {TOKEN_BACKFILL_COST_EXPR} \
+             WHERE combo_id = ?4 AND prompt_tokens > 0 \
+               AND (cost_usd = 0.0 OR cost_usd IS NULL) {BILLABLE_STATUS_SQL}"
+        ),
+        params![
+            price.input_per_1m,
+            price.output_per_1m,
+            price.cached_per_1m,
+            combo_id
+        ],
     )
     .map_err(crate::error::map_db_error)
 }
 
-/// Re-price one scheduled combo's zero-cost rows at the band each was billed in.
-///
-/// A time-of-day price has no single rate: the band is a function of the instant
-/// the row was billed at, and `usage.created_at` is that instant. Rows whose
-/// timestamp cannot be read — and every row of a combo whose persisted schedule
-/// no longer parses — are skipped, never re-priced at today's band. Rewriting
-/// history with a tariff that never applied is worse than leaving it at zero.
-type ScheduledUsageRow = (i64, Option<String>, Option<u32>, Option<u32>, Option<u32>);
+type ScheduledUsageRow = (i64, Option<String>, Option<u32>, Option<u32>, Option<u32>, u16);
 
 fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types::Result<usize> {
     let rows: Vec<ScheduledUsageRow> = {
         let mut stmt = conn
-            .prepare(
-                "SELECT id, created_at, prompt_tokens, completion_tokens, cached_tokens \
+            .prepare(&format!(
+                "SELECT id, created_at, prompt_tokens, completion_tokens, cached_tokens, status_code \
                  FROM usage \
                  WHERE combo_id = ?1 AND prompt_tokens > 0 \
-                   AND (cost_usd = 0.0 OR cost_usd IS NULL)",
-            )
+                   AND (cost_usd = 0.0 OR cost_usd IS NULL) {BILLABLE_STATUS_SQL}"
+            ))
             .map_err(crate::error::map_db_error)?;
         let mapped = stmt
             .query_map(params![combo_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
             })
             .map_err(crate::error::map_db_error)?;
         mapped.filter_map(std::result::Result::ok).collect()
     };
     let mut updated = 0;
-    for (usage_id, created_at, prompt_tokens, completion_tokens, cached_tokens) in rows {
+    for (usage_id, created_at, prompt_tokens, completion_tokens, cached_tokens, status_code) in rows {
         let billed_at = created_at
             .as_deref()
             .and_then(pricing::parse_usage_timestamp);
@@ -494,11 +498,12 @@ fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types
         else {
             continue;
         };
+        let eff_cached = if status_code == 499 { None } else { cached_tokens };
         let Some(cost) = pricing::compute_cost_opt_with_cache(
             Some(price),
             prompt_tokens.unwrap_or(0),
             completion_tokens.unwrap_or(0),
-            cached_tokens,
+            eff_cached,
         ) else {
             continue;
         };
@@ -513,13 +518,10 @@ fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types
 }
 
 pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usize> {
-    // 1. Combo prices first: a combo that carries its own rate bills every row
-    //    it routed, whatever the target models cost. A scheduled combo has no
-    //    single rate, so its rows are re-priced one by one at their own instant.
     let combo_prices: Vec<(i64, Option<pricing::Price>, bool)> = {
         let mut stmt = conn
             .prepare(
-                "SELECT id, pricing_input_per_1m, pricing_output_per_1m, pricing_schedule \
+                "SELECT id, pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m, pricing_schedule \
                  FROM combos \
                  WHERE (pricing_input_per_1m IS NOT NULL \
                         AND pricing_output_per_1m IS NOT NULL) \
@@ -530,11 +532,13 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
             .query_map([], |r| {
                 let input: Option<f64> = r.get(1)?;
                 let output: Option<f64> = r.get(2)?;
-                let scheduled: Option<String> = r.get(3)?;
+                let cached: Option<f64> = r.get(3)?;
+                let scheduled: Option<String> = r.get(4)?;
                 let flat = match (input, output) {
                     (Some(input_per_1m), Some(output_per_1m)) => Some(pricing::Price {
                         input_per_1m,
                         output_per_1m,
+                        cached_per_1m: cached,
                         ..Default::default()
                     }),
                     _ => None,
@@ -553,17 +557,17 @@ pub fn backfill_usage_pricing(conn: &Connection) -> openproxy_types::Result<usiz
         }
     }
 
-    // 2. Everything else falls back to the target model's price.
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             "SELECT DISTINCT provider_id, upstream_model_id \
              FROM usage \
              WHERE (prompt_tokens > 0 OR audio_ms > 0) \
                AND (cost_usd = 0.0 OR cost_usd IS NULL) \
+               {BILLABLE_STATUS_SQL} \
                AND (combo_id IS NULL OR combo_id NOT IN \
                     (SELECT id FROM combos WHERE (pricing_input_per_1m IS NOT NULL \
-                       AND pricing_output_per_1m IS NOT NULL) OR pricing_schedule IS NOT NULL))",
-        )
+                       AND pricing_output_per_1m IS NOT NULL) OR pricing_schedule IS NOT NULL))"
+        ))
         .map_err(crate::error::map_db_error)?;
 
     let pairs: Vec<(String, String)> = stmt

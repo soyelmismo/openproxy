@@ -57,7 +57,7 @@ pub struct OpenReservation {
 pub struct UsageEvidence {
     pub row_id: i64,
     pub attempt: u8,
-    pub target_id: i64,
+    pub target_id: Option<i64>,
     pub cost_units: i64,
     pub debited: bool,
     /// The row was already confirmed as reaching the client.
@@ -269,8 +269,9 @@ pub fn delivered_usage(
                 CAST(ROUND(COALESCE(cost_usd, 0) * 1000000) AS INTEGER), credits_debited, \
                 client_response \
          FROM usage \
-         WHERE request_id = ?1 AND api_key_id = ?2 AND status_code BETWEEN 200 AND 299 \
-           AND race_lost = 0 AND combo_target_id IS NOT NULL \
+         WHERE request_id = ?1 AND api_key_id = ?2 \
+           AND (status_code BETWEEN 200 AND 299 OR status_code = 499) \
+           AND race_lost = 0 \
          ORDER BY client_response DESC, id DESC LIMIT 1",
         params![request_id, api_key_id],
         |row| {

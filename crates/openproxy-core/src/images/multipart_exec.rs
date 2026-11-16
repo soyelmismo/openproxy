@@ -71,7 +71,11 @@ pub(crate) async fn dispatch_horde_img2img(
             "negative_prompt" => negative_prompt = Some(v.clone()),
             "size" => size = Some(v.clone()),
             "quality" => quality = Some(v.clone()),
-            "n" => n = v.parse::<u32>().ok(),
+            "n" => {
+                if let Ok(parsed_n) = v.trim().parse::<u32>() {
+                    n = Some(n.unwrap_or(0).max(parsed_n.max(1)));
+                }
+            }
             "seed" => seed = v.parse::<u64>().ok(),
             "denoising_strength" | "strength" => denoising_strength = v.parse::<f32>().ok(),
             "source_processing" => source_processing = Some(v.as_str()),
@@ -143,14 +147,15 @@ pub(crate) async fn dispatch_horde_img2img(
 ///
 /// The API default — and what upstreams generate for `n = 0` — is one image.
 fn multipart_image_count(body: &ParsedImageMultipartBody) -> Option<u32> {
-    match body.form_fields.iter().find(|(key, _)| key == "n") {
-        None => Some(1),
-        Some((_, raw)) => match raw.trim().parse::<u32>() {
-            Ok(0) => Some(1),
-            Ok(count) => Some(count),
-            Err(_) => None,
-        },
+    let mut max_count: Option<u32> = None;
+    for (key, raw) in &body.form_fields {
+        if key == "n" {
+            let parsed = raw.trim().parse::<u32>().ok()?;
+            let normalized = parsed.max(1);
+            max_count = Some(max_count.map_or(normalized, |prev| prev.max(normalized)));
+        }
     }
+    Some(max_count.unwrap_or(1))
 }
 
 pub(crate) async fn execute_image_multipart(
@@ -469,6 +474,10 @@ pub(crate) async fn execute_image_multipart(
 
         let total_ms = started.elapsed().as_millis() as u64;
         let resp_json = serde_json::to_value(&parsed_response).ok();
+        let delivered_images = images.map(|req_n| {
+            let actual = u32::try_from(parsed_response.data.len()).unwrap_or(req_n);
+            req_n.max(actual)
+        });
         let args = UnaryUsageArgs {
             request_id,
             api_key_id,
@@ -478,7 +487,7 @@ pub(crate) async fn execute_image_multipart(
             combo_target_id: target.combo_target_id,
             model_row_id: target.model_row_id,
             upstream_model_id: &target.upstream_model,
-            prompt_tokens: images,
+            prompt_tokens: delivered_images,
             completion_tokens: None,
             status_code,
             error_msg: None,
