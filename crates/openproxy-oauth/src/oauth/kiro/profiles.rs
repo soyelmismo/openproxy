@@ -1,9 +1,13 @@
 use openproxy_adapters::upstream::{
     CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest,
 };
+use openproxy_db::accounts::oauth::{
+    decrypt_oauth_provider_specific, encrypt_oauth_provider_specific,
+};
+use openproxy_db::secrets::MasterKey;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::error::{CoreError, Result};
 use crate::ids::AccountId;
@@ -151,6 +155,72 @@ pub(crate) async fn list_available_profiles(
     Ok(arn)
 }
 
+/// Process-wide master key, resolved once. The service runs with
+/// `OPENPROXY_MASTER_KEY` set; without it, sealed blobs cannot be read and
+/// sealed writes are refused.
+pub(crate) fn master_key() -> Option<MasterKey> {
+    static KEY: OnceLock<Option<MasterKey>> = OnceLock::new();
+    KEY.get_or_init(|| MasterKey::from_env().ok()).clone()
+}
+
+/// Parse the stored `oauth_provider_specific` value into [`KiroProviderMeta`].
+///
+/// The column is MasterKey-sealed (audit H-8/H-10): decrypt first, fail
+/// closed. Kiro's own writers stored plaintext JSON until the seal landed, and
+/// a plaintext row written at runtime is only adopted into a sealed blob at
+/// boot, so plaintext JSON stays a tolerated legacy fallback. A value that
+/// neither decrypts nor parses as JSON reads as "no metadata" (default),
+/// mirroring [`decrypt_oauth_provider_specific`] semantics — never trust the
+/// raw bytes.
+pub(crate) fn parse_kiro_provider_specific(
+    raw: Option<&str>,
+    master_key: Option<&MasterKey>,
+) -> Result<KiroProviderMeta> {
+    if let Some(mk) = master_key
+        && let Some(decrypted) = decrypt_oauth_provider_specific(raw, mk)
+    {
+        return serde_json::from_str(&decrypted)
+            .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")));
+    }
+    match raw {
+        Some(s) if s.trim_start().starts_with('{') => serde_json::from_str(s)
+            .map_err(|e| CoreError::Parse(format!("kiro meta parse (legacy plaintext): {e}"))),
+        _ => Ok(KiroProviderMeta::default()),
+    }
+}
+
+/// Serialize and store the Kiro meta, sealing the blob.
+///
+/// Without a master key the write is REFUSED: a plaintext write would leak
+/// the fields and destroy the existing seal on the row (the same column
+/// carries no credential, but other readers are fail-closed and would lose
+/// the metadata until the next boot adoption).
+pub(crate) fn store_kiro_provider_specific(
+    conn: &Connection,
+    account_id: AccountId,
+    meta: &KiroProviderMeta,
+    master_key: Option<&MasterKey>,
+) -> Result<()> {
+    let Some(mk) = master_key else {
+        return Err(CoreError::Internal(
+            "kiro meta write refused: no master key available (writing would break the sealed blob)"
+                .into(),
+        ));
+    };
+    let json = serde_json::to_string(meta)
+        .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
+    let sealed = encrypt_oauth_provider_specific(&json, mk)?;
+    conn.execute(
+        "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
+        params![sealed, account_id.0],
+    )
+    .map_err(|e| CoreError::Database {
+        message: format!("kiro meta write for account {}: {e}", account_id.0),
+        source: Some(std::sync::Arc::new(e)),
+    })?;
+    Ok(())
+}
+
 pub fn read_profile_meta(
     conn: &Connection,
     account_id: AccountId,
@@ -172,8 +242,7 @@ pub fn read_profile_meta(
     if raw.is_empty() {
         return Ok(Some(KiroProviderMeta::default()));
     }
-    let mut meta: KiroProviderMeta = serde_json::from_str(&raw)
-        .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")))?;
+    let mut meta = parse_kiro_provider_specific(Some(&raw), master_key().as_ref())?;
     if meta.region.is_empty() {
         meta.region = DEFAULT_REGION.to_string();
     }

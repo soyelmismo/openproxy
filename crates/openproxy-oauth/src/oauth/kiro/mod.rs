@@ -272,20 +272,33 @@ impl OAuthProvider for KiroOAuthProvider {
                     if let Ok(retry_bytes) = retry_resp.collect().await
                         && retry_status.is_success()
                     {
-                        let mut updated_meta = meta;
+                        let mut updated_meta = meta.clone();
                         updated_meta.client_id = new_cid;
                         updated_meta.client_secret = new_csec;
-                        let meta_json = serde_json::to_string(&updated_meta).map_err(|e| {
-                            CoreError::Internal(format!("kiro meta serialize: {e}"))
-                        })?;
-                        db.with_conn_async(move |conn| {
-                            conn.execute(
-                                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                                rusqlite::params![meta_json, account_id.0],
-                            )
-                            .map_err(openproxy_db::error::map_db_error)
-                        })
-                        .await?;
+                        match profiles::master_key() {
+                            Some(mk) => {
+                                let write_account = account_id;
+                                let write_meta = updated_meta.clone();
+                                db.with_conn_async(move |conn| {
+                                    profiles::store_kiro_provider_specific(
+                                        conn,
+                                        write_account,
+                                        &write_meta,
+                                        Some(&mk),
+                                    )
+                                    .map_err(openproxy_db::error::map_db_error)
+                                })
+                                .await?;
+                            }
+                            None => {
+                                // Refuse to downgrade the sealed blob to
+                                // plaintext; the next refresh re-registers.
+                                tracing::warn!(
+                                    account = account_id.0,
+                                    "kiro client re-registration: meta write skipped, no master key"
+                                );
+                            }
+                        }
                         success_body = Some(retry_bytes);
                     }
                 }
@@ -363,11 +376,19 @@ impl OAuthProvider for KiroOAuthProvider {
                     })?;
                 let raw = raw.flatten();
 
-                let meta: KiroProviderMeta = match raw {
-                    Some(s) => serde_json::from_str(&s)
-                        .map_err(|e| CoreError::Parse(format!("kiro meta parse: {e}")))?,
-                    None => KiroProviderMeta::default(),
-                };
+                let meta: KiroProviderMeta =
+                    match profiles::parse_kiro_provider_specific(raw.as_deref(), Some(&master_key))
+                    {
+                        Ok(meta) => meta,
+                        Err(e) => {
+                            tracing::warn!(
+                                account = account_id.0,
+                                error = %e,
+                                "kiro post_exchange: unreadable provider_specific; using default meta"
+                            );
+                            KiroProviderMeta::default()
+                        }
+                    };
 
                 Ok::<_, CoreError>((access_token, meta))
             })
@@ -393,22 +414,11 @@ impl OAuthProvider for KiroOAuthProvider {
             }
         }
 
-        let meta_json = serde_json::to_string(&meta)
-            .map_err(|e| CoreError::Internal(format!("kiro meta serialize: {e}")))?;
+        let master_key = master_key.clone();
         let db_pool = Arc::clone(db_pool);
         tokio::task::spawn_blocking(move || -> std::result::Result<(), CoreError> {
             let conn = db_pool.writer();
-            conn.execute(
-                "UPDATE accounts SET oauth_provider_specific = ?1 WHERE id = ?2",
-                params![meta_json, account_id.0],
-            )
-            .map_err(|e| CoreError::Database {
-                message: format!(
-                    "kiro post_exchange update meta for account {}: {}",
-                    account_id.0, e
-                ),
-                source: Some(std::sync::Arc::new(e)),
-            })?;
+            profiles::store_kiro_provider_specific(&conn, account_id, &meta, Some(&master_key))?;
             Ok(())
         })
         .await??;
