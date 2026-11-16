@@ -1,83 +1,15 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use super::shared::test_support::{MapTransport, ok_json, ok_raw, temp_dir as shared_temp_dir};
 use super::*;
 use crate::client_contract::providers::codex_runtime::is_commit_sha;
 use crate::client_contract::validate_candidate_shape;
-use crate::client_contract::{FetchRequest, FetchResponse, RefreshReport};
-use std::collections::HashMap;
+use crate::client_contract::{FetchResponse, RefreshReport};
 use std::fs;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Transporte que responde desde un mapa de URL. Ninguna petición sale
-/// del proceso; una URL ausente se comporta como `404`.
-#[derive(Default)]
-struct MapTransport {
-    responses: Mutex<HashMap<String, FetchResponse>>,
-}
-
-impl MapTransport {
-    fn with(entries: Vec<(String, FetchResponse)>) -> Self {
-        let mut responses = HashMap::new();
-        for (url, response) in entries {
-            responses.insert(url, response);
-        }
-        Self {
-            responses: Mutex::new(responses),
-        }
-    }
-
-    fn set(&self, url: String, response: FetchResponse) {
-        self.responses.lock().unwrap().insert(url, response);
-    }
-}
-
-impl ContractTransport for MapTransport {
-    fn fetch(
-        &self,
-        request: &FetchRequest,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<FetchResponse, ContractError>> + Send + '_>,
-    > {
-        let response = self
-            .responses
-            .lock()
-            .unwrap()
-            .get(&request.url)
-            .cloned()
-            .unwrap_or(FetchResponse {
-                status: 404,
-                headers: Vec::new(),
-                body: Vec::new(),
-            });
-        Box::pin(async move { Ok(response) })
-    }
-}
+use std::path::PathBuf;
 
 fn temp_dir(name: &str) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("openproxy-codex-state-{name}-{stamp}"));
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn ok_json(body: &str) -> FetchResponse {
-    FetchResponse {
-        status: 200,
-        headers: Vec::new(),
-        body: body.as_bytes().to_vec(),
-    }
-}
-
-fn ok_raw(bytes: &[u8]) -> FetchResponse {
-    FetchResponse {
-        status: 200,
-        headers: Vec::new(),
-        body: bytes.to_vec(),
-    }
+    shared_temp_dir("openproxy-codex-state", name)
 }
 
 /// Mapa de red completo del pin, parametrizado por tag y commit: la misma

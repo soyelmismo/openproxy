@@ -467,21 +467,7 @@ where
         descriptor: &SourceDescriptor,
         cached: Option<&CacheEntry>,
     ) -> FetchRequest {
-        let mut headers = descriptor.headers.clone();
-        headers.push(("Accept".to_string(), descriptor.accept.clone()));
-        if let Some(entry) = cached.filter(|entry| entry.is_replayable()) {
-            headers.extend(entry.conditional_headers());
-        }
-        FetchRequest {
-            key: TransportCacheKey::new(
-                &descriptor.url,
-                &descriptor.accept,
-                &descriptor.auth_scope,
-            ),
-            method: "GET".to_string(),
-            url: descriptor.url.clone(),
-            headers,
-        }
+        build_conditional_request(descriptor, cached)
     }
 
     /// Handle a `304`.
@@ -524,7 +510,7 @@ where
         {
             return Ok(self.serve_unchanged(entry, response));
         }
-        self.record(key, response, digest.clone());
+        record_cache_entry(&self.cache, key, response, digest.clone());
         let candidate =
             self.driver
                 .parse(&response.body, descriptor.revision.as_deref(), &digest)?;
@@ -533,41 +519,67 @@ where
 
     /// Refresh the held entry's validators and answer `Unchanged`: the server
     /// confirmed the cached bytes still stand.
-    fn serve_unchanged(&self, mut entry: CacheEntry, response: &FetchResponse) -> FetchOutcome<T> {
-        refresh_validators(&mut entry, response);
-        entry.checked_at = Utc::now();
-        self.cache.insert(entry);
+    fn serve_unchanged(&self, entry: CacheEntry, response: &FetchResponse) -> FetchOutcome<T> {
+        touch_cache_entry(&self.cache, entry, response);
         FetchOutcome::Unchanged
-    }
-
-    /// Store the fresh bytes and validators for the next conditional request.
-    fn record(&self, key: &TransportCacheKey, response: &FetchResponse, digest: String) {
-        let entry = CacheEntry {
-            key: key.clone(),
-            etag: response.etag(),
-            last_modified: response.last_modified(),
-            checked_at: Utc::now(),
-            digest,
-            bytes: response.body.len(),
-            body: Some(response.body.clone()),
-        };
-        self.cache.insert(entry);
     }
 }
 
-/// Replace the validators of a cache entry with the ones the server just sent,
-/// keeping the held bytes and their digest.
-fn refresh_validators(entry: &mut CacheEntry, response: &FetchResponse) {
+/// Build a conditional GET request for `descriptor`, attaching `If-None-Match`
+/// / `If-Modified-Since` when `cached` holds replayable bytes.
+pub(crate) fn build_conditional_request(
+    descriptor: &SourceDescriptor,
+    cached: Option<&CacheEntry>,
+) -> FetchRequest {
+    let mut headers = descriptor.headers.clone();
+    headers.push(("Accept".to_string(), descriptor.accept.clone()));
+    if let Some(entry) = cached.filter(|entry| entry.is_replayable()) {
+        headers.extend(entry.conditional_headers());
+    }
+    FetchRequest {
+        key: TransportCacheKey::new(&descriptor.url, &descriptor.accept, &descriptor.auth_scope),
+        method: "GET".to_string(),
+        url: descriptor.url.clone(),
+        headers,
+    }
+}
+
+/// Store fresh bytes and validators in `cache` for the next conditional request.
+pub(crate) fn record_cache_entry(
+    cache: &TransportCache,
+    key: &TransportCacheKey,
+    response: &FetchResponse,
+    digest: String,
+) {
+    cache.insert(CacheEntry {
+        key: key.clone(),
+        etag: response.etag(),
+        last_modified: response.last_modified(),
+        checked_at: Utc::now(),
+        digest,
+        bytes: response.body.len(),
+        body: Some(response.body.clone()),
+    });
+}
+
+/// Refresh the validators and timestamp of `entry` in `cache`, preserving its bytes.
+pub(crate) fn touch_cache_entry(
+    cache: &TransportCache,
+    mut entry: CacheEntry,
+    response: &FetchResponse,
+) {
     if let Some(etag) = response.etag() {
         entry.etag = Some(etag);
     }
     if let Some(last_modified) = response.last_modified() {
         entry.last_modified = Some(last_modified);
     }
+    entry.checked_at = Utc::now();
+    cache.insert(entry);
 }
 
 /// Map a non-2xx, non-304 status to an error.
-fn status_error(url: &str, status: u16, response: &FetchResponse) -> ContractError {
+pub(crate) fn status_error(url: &str, status: u16, response: &FetchResponse) -> ContractError {
     match status {
         404 | 410 => ContractError::SourceMissing {
             url: url.to_string(),

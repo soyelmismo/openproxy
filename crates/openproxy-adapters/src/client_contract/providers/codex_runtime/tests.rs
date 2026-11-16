@@ -1,57 +1,9 @@
 #![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)]
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-
 use super::*;
-
-/// Transporte que responde desde un mapa de URL. Ninguna petición sale del
-/// proceso; una URL ausente se comporta como `404`.
-#[derive(Default)]
-struct MapTransport {
-    responses: Mutex<HashMap<String, FetchResponse>>,
-    seen: Mutex<Vec<FetchRequest>>,
-}
-
-impl MapTransport {
-    fn with(entries: Vec<(String, FetchResponse)>) -> Self {
-        let mut responses = HashMap::new();
-        for (url, response) in entries {
-            responses.insert(url, response);
-        }
-        Self {
-            responses: Mutex::new(responses),
-            seen: Mutex::new(Vec::new()),
-        }
-    }
-
-    fn requests(&self) -> Vec<FetchRequest> {
-        self.seen.lock().unwrap().clone()
-    }
-}
-
-impl ContractTransport for MapTransport {
-    fn fetch(
-        &self,
-        request: &FetchRequest,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<FetchResponse, ContractError>> + Send + '_>,
-    > {
-        self.seen.lock().unwrap().push(request.clone());
-        let response = self
-            .responses
-            .lock()
-            .unwrap()
-            .get(&request.url)
-            .cloned()
-            .unwrap_or(FetchResponse {
-                status: 404,
-                headers: Vec::new(),
-                body: Vec::new(),
-            });
-        Box::pin(async move { Ok(response) })
-    }
-}
+use crate::client_contract::providers::codex_state::shared::test_support::{
+    MapTransport, fixture_bytes, limits, ok_etag_json as ok_json, ok_etag_raw as ok_raw,
+};
 
 /// Commit del pin: `092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`, el que el
 /// annotated tag `rust-v0.162.1` desreferencia (visible en
@@ -65,35 +17,6 @@ const PINNED_TAG: &str = "rust-v0.162.1";
 /// Sha del annotated tag object del pin (visible en
 /// `fixtures/codex-tag-object.json`): a donde apunta `refs/tags`.
 const TAG_OBJECT_SHA: &str = "7a078f6bb4ce0dc2a81408b334ce52979d92c603";
-
-fn ok_json(body: &str) -> FetchResponse {
-    FetchResponse {
-        status: 200,
-        headers: vec![("etag".to_string(), "\"v1\"".to_string())],
-        body: body.as_bytes().to_vec(),
-    }
-}
-
-fn ok_raw(body: &[u8]) -> FetchResponse {
-    FetchResponse {
-        status: 200,
-        headers: vec![("etag".to_string(), "\"v1\"".to_string())],
-        body: body.to_vec(),
-    }
-}
-
-fn fixture_bytes(relative: &str) -> Vec<u8> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
-    std::fs::read(root.join(relative)).unwrap_or_else(|error| panic!("fixture {relative}: {error}"))
-}
-
-fn limits() -> ContractLimits {
-    ContractLimits {
-        catalog_bytes: 8 * 1024 * 1024,
-        source_bytes: 8 * 1024 * 1024,
-        ..ContractLimits::default()
-    }
-}
 
 fn driver(transport: MapTransport) -> CodexReleaseDriver {
     CodexReleaseDriver::new(

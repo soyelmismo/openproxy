@@ -5,75 +5,15 @@ use crate::client_contract::providers::codebuddy_runtime::{
     CODEBUDDY_REGISTRY_LATEST_URL, CODEBUDDY_UNPKG_PREFIX, CodeBuddyReleaseDriver,
     pinned_package_url, pinned_product_url,
 };
-use crate::client_contract::{
-    FetchRequest, FetchResponse, RefreshReport, validate_candidate_shape,
+use crate::client_contract::providers::codex_state::shared::test_support::{
+    MapTransport, ok_raw as ok_json, temp_dir as shared_temp_dir,
 };
-use std::collections::HashMap;
+use crate::client_contract::{FetchResponse, RefreshReport, validate_candidate_shape};
 use std::fs;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// Transporte que responde desde un mapa de URL. Ninguna petición sale del
-/// proceso; una URL ausente se comporta como `404`.
-#[derive(Default)]
-struct MapTransport {
-    responses: Mutex<HashMap<String, FetchResponse>>,
-}
-
-impl MapTransport {
-    fn with(entries: Vec<(String, FetchResponse)>) -> Self {
-        let mut responses = HashMap::new();
-        for (url, response) in entries {
-            responses.insert(url, response);
-        }
-        Self {
-            responses: Mutex::new(responses),
-        }
-    }
-
-    fn set(&self, url: String, response: FetchResponse) {
-        self.responses.lock().unwrap().insert(url, response);
-    }
-}
-
-impl ContractTransport for MapTransport {
-    fn fetch(
-        &self,
-        request: &FetchRequest,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<FetchResponse, ContractError>> + Send + '_>,
-    > {
-        let response = self
-            .responses
-            .lock()
-            .unwrap()
-            .get(&request.url)
-            .cloned()
-            .unwrap_or(FetchResponse {
-                status: 404,
-                headers: Vec::new(),
-                body: Vec::new(),
-            });
-        Box::pin(async move { Ok(response) })
-    }
-}
+use std::path::PathBuf;
 
 fn temp_dir(name: &str) -> PathBuf {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!("openproxy-codebuddy-state-{name}-{stamp}"));
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn ok_json(body: &[u8]) -> FetchResponse {
-    FetchResponse {
-        status: 200,
-        headers: Vec::new(),
-        body: body.to_vec(),
-    }
+    shared_temp_dir("openproxy-codebuddy-state", name)
 }
 
 /// Mapa de red del pin completo, parametrizado por revisión: la misma forma

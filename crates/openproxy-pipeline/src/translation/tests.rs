@@ -3,7 +3,7 @@ use openproxy_adapters::adapters::gemini::*;
 use openproxy_types::{OpenAIMessage, OpenAIRequest};
 use serde_json::{Value, json};
 
-fn openai_req_with(messages: Vec<(&str, &str)>) -> OpenAIRequest {
+pub(super) fn openai_req_with(messages: Vec<(&str, &str)>) -> OpenAIRequest {
     OpenAIRequest {
         model: "claude-test".into(),
         messages: messages

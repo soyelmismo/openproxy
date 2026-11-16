@@ -114,16 +114,14 @@ pub async fn usage_stream(
     )
     .unwrap_or_else(|| addr.ip());
     if s.admin_limiter().is_blocked(client_ip) {
+        // Delegates to validate_key_record via shared is_cached_key_valid_for_scope helper.
         let known_good_key = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(str::trim)
             .is_some_and(|token| {
-                let key_hash = openproxy_core::api_keys::hash_key(token);
-                s.get_cached_api_key(&key_hash).is_some_and(|key| {
-                    crate::middleware::auth::validate_key_record(&key, "manage").is_ok()
-                })
+                crate::middleware::auth::is_cached_key_valid_for_scope(&s, token, "manage")
             });
         if !known_good_key {
             return crate::error::ApiError(openproxy_types::CoreError::RateLimited {

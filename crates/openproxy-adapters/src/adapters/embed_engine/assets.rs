@@ -3,34 +3,24 @@
 //! Mirrors laya_engine::assets: a fixed revision, SHA-256 per artifact, and
 //! download-then-hard-link publication so concurrent installs never see a
 //! partially written model.
-//!
-//! The engine is multimodal: a text backbone plus vision and audio encoders
-//! that project into the same 768-dim space. All three ship as `q4f16`
-//! (4-bit weights, fp16 activations) because quantizing activations to int4
-//! damages the vector geometry far more in vision and audio than in text.
 
 use super::{CoreError, Settings};
-use sha2::{Digest, Sha256};
-use std::path::Path;
 #[cfg(any(feature = "upstream-hyper", test))]
-use std::path::PathBuf;
-use tokio::io::AsyncReadExt;
-#[cfg(feature = "upstream-hyper")]
-use tokio::io::AsyncWriteExt;
+use crate::adapters::native_engine_common::TemporaryFile as Temporary;
+use crate::adapters::native_engine_common::{
+    Artifact, artifact_error, download_artifact, verify_artifact,
+};
+use std::path::Path;
 
 #[cfg(feature = "upstream-hyper")]
 const REVISION: &str = "daa72c51243991dfcaf9f9137d2c573d8f7790c0";
 #[cfg(feature = "upstream-hyper")]
 const REPOSITORY: &str = "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve";
+#[cfg(not(feature = "upstream-hyper"))]
+const REVISION: &str = "";
 
-struct Artifact {
-    name: &'static str,
-    size: u64,
-    hash: &'static str,
-}
+const ERR_PREFIX: &str = "Embed artifacts";
 
-/// Files land in the cache root; every graph sits next to its `.onnx_data`
-/// external weights, which is what ONNX Runtime requires.
 const ARTIFACTS: [Artifact; 7] = [
     Artifact {
         name: "model_q4f16.onnx",
@@ -70,10 +60,9 @@ const ARTIFACTS: [Artifact; 7] = [
 ];
 
 fn error(e: impl std::fmt::Display) -> CoreError {
-    CoreError::Internal(format!("Embed artifacts: {e}"))
+    artifact_error(ERR_PREFIX, e)
 }
 
-/// Cache directory for the engine artifacts.
 fn cache_dir() -> std::path::PathBuf {
     if let Some(model) = std::env::var_os("OPENPROXY_EMBED_MODEL") {
         let path = std::path::PathBuf::from(model);
@@ -87,12 +76,10 @@ fn cache_dir() -> std::path::PathBuf {
     ))
 }
 
-/// Download and verify every artifact into the cache root.
 pub(super) async fn ensure(settings: &Settings) -> Result<(), CoreError> {
     let dir = cache_dir();
     tokio::fs::create_dir_all(&dir).await.map_err(error)?;
 
-    // Custom paths are honored but never overwritten.
     let custom_model =
         settings.model.is_some() || std::env::var_os("OPENPROXY_EMBED_MODEL").is_some();
     let custom_tokenizer =
@@ -102,13 +89,8 @@ pub(super) async fn ensure(settings: &Settings) -> Result<(), CoreError> {
         let path = dir.join(artifact.name);
         let is_custom = (artifact.name.starts_with("model") && custom_model)
             || (artifact.name == "tokenizer.json" && custom_tokenizer);
-        if is_custom {
-            // A user-supplied model already resolves through its own path;
-            // the sibling data file lands next to it, so only verify if the
-            // canonical name matches.
-            if path.file_name().is_some_and(|n| n != artifact.name) {
-                continue;
-            }
+        if is_custom && path.file_name().is_some_and(|n| n != artifact.name) {
+            continue;
         }
         if tokio::fs::try_exists(&path).await.map_err(error)? {
             verify(&path, artifact).await?;
@@ -121,159 +103,32 @@ pub(super) async fn ensure(settings: &Settings) -> Result<(), CoreError> {
 }
 
 async fn verify(path: &Path, artifact: &Artifact) -> Result<(), CoreError> {
-    let mut file = tokio::fs::File::open(path).await.map_err(error)?;
-    if file.metadata().await.map_err(error)?.len() != artifact.size {
-        return Err(error(format!("{} has an unexpected size", path.display())));
-    }
-    let mut hash = Sha256::new();
-    let mut buffer = vec![0; 64 * 1024];
-    loop {
-        let len = file.read(&mut buffer).await.map_err(error)?;
-        if len == 0 {
-            break;
-        }
-        hash.update(&buffer[..len]);
-    }
-    verify_digest(hash, artifact)
+    verify_artifact(path, artifact, ERR_PREFIX).await
 }
 
-fn verify_digest(hash: Sha256, artifact: &Artifact) -> Result<(), CoreError> {
-    let actual: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if actual != artifact.hash {
-        return Err(error(format!(
-            "SHA-256 mismatch for {}; refusing to load",
-            artifact.name
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(any(feature = "upstream-hyper", test))]
-struct Temporary(PathBuf);
-#[cfg(any(feature = "upstream-hyper", test))]
-impl Drop for Temporary {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-#[cfg(feature = "upstream-hyper")]
 async fn download(path: &Path, artifact: &Artifact) -> Result<(), CoreError> {
-    if std::env::var("OPENPROXY_EMBED_AUTO_DOWNLOAD").is_ok_and(|v| v == "0" || v == "false") {
-        return Err(error(
-            "automatic downloads disabled; install embed files manually",
-        ));
-    }
-    let parent = path
-        .parent()
-        .ok_or_else(|| error("missing cache directory"))?;
-    tokio::fs::create_dir_all(parent).await.map_err(error)?;
-    let temporary =
-        Temporary(parent.join(format!(".{}.{}.part", artifact.name, uuid::Uuid::new_v4())));
-    let mut options = tokio::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(&temporary.0).await.map_err(error)?;
-    tracing::info!(
-        artifact = artifact.name,
-        revision = REVISION,
-        "Downloading EmbeddingGemma on demand"
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(600), async {
-        let mut response = fetch(artifact).await?;
-        let mut hash = Sha256::new();
-        let mut size = 0u64;
-        while let Some(chunk) = response.body.next_chunk().await.map_err(error)? {
-            size = size
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| error("size overflow"))?;
-            if size > artifact.size {
-                return Err(error("download exceeds pinned size"));
-            }
-            hash.update(&chunk);
-            file.write_all(&chunk).await.map_err(error)?;
-        }
-        if size != artifact.size {
-            return Err(error("incomplete artifact download"));
-        }
-        verify_digest(hash, artifact)?;
-        file.sync_all().await.map_err(error)?;
-        drop(file);
-        tokio::fs::hard_link(&temporary.0, path)
-            .await
-            .map_err(error)?;
-        Ok(())
-    })
-    .await
-    .map_err(|_| error("download timed out"))?
-}
-
-#[cfg(not(feature = "upstream-hyper"))]
-async fn download(_path: &Path, _artifact: &Artifact) -> Result<(), CoreError> {
-    Err(error("automatic downloads require upstream-hyper"))
-}
-
-#[cfg(feature = "upstream-hyper")]
-async fn fetch(artifact: &Artifact) -> Result<crate::upstream::UpstreamResponse, CoreError> {
-    use crate::upstream::{
-        CancellationToken, ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest,
-    };
-    let client = UpstreamClient::new();
-    // HF stores LFS payloads under `onnx/`; each graph and its weights must be
-    // fetched from the same directory the session will read.
-    let remote = match artifact.name {
-        "tokenizer.json" => artifact.name.to_string(),
-        _ => format!("onnx/{}", artifact.name),
-    };
-    let mut url = format!("{REPOSITORY}/{REVISION}/{remote}");
-    for _ in 0..6 {
-        let uri: http::Uri = url.parse().map_err(error)?;
-        if uri.scheme_str() != Some("https") {
-            return Err(error("insecure artifact redirect"));
-        }
-        // Artifacts are piped chunk-by-chunk to disk under a pinned-size
-        // ceiling (see `download`), so this is the one legitimate streaming
-        // consumer of `UpstreamRequest::get`: opt back into the streaming
-        // transport explicitly. Unary helpers now default to the bounded
-        // non-streaming limit (32 MiB), which would truncate large models.
-        let mut req = UpstreamRequest::get(&url);
-        req.is_streaming = true;
-        let response = client
-            .call(
-                req,
-                TimeoutProfile::Custom(ResolvedTimeouts {
-                    headers_ms: 30000,
-                    body_chunk_ms: 60000,
-                    total_ms: 600000,
-                    ..ResolvedTimeouts::SYSTEM_DEFAULTS
-                }),
-                CancellationToken::new(),
-            )
-            .await
-            .map_err(error)?;
-        if response.status.is_success() {
-            return Ok(response);
-        }
-        if !response.status.is_redirection() {
-            return Err(error(format!("download HTTP {}", response.status)));
-        }
-        let location = response
-            .headers
-            .get(http::header::LOCATION)
-            .ok_or_else(|| error("redirect without location"))?
-            .to_str()
-            .map_err(error)?;
-        url = if location.starts_with('/') {
-            format!(
-                "https://{}{location}",
-                uri.authority().ok_or_else(|| error("missing host"))?
-            )
-        } else {
-            location.to_owned()
+    #[cfg(feature = "upstream-hyper")]
+    let remote_url = {
+        let remote = match artifact.name {
+            "tokenizer.json" => artifact.name.to_string(),
+            _ => format!("onnx/{}", artifact.name),
         };
-    }
-    Err(error("too many artifact redirects"))
+        format!("{REPOSITORY}/{REVISION}/{remote}")
+    };
+    #[cfg(not(feature = "upstream-hyper"))]
+    let remote_url = String::new();
+
+    download_artifact(
+        path,
+        artifact,
+        remote_url,
+        "OPENPROXY_EMBED_AUTO_DOWNLOAD",
+        "automatic downloads disabled; install embed files manually",
+        "EmbeddingGemma",
+        REVISION,
+        ERR_PREFIX,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -311,7 +166,6 @@ mod tests {
 
     #[test]
     fn total_matches_the_q4f16_set() {
-        // 150 MiB text + 93 MiB vision + 162 MiB audio + tokenizer.
         let sum: u64 = ARTIFACTS.iter().map(|a| a.size).sum();
         assert_eq!(sum, 457_894_639);
     }

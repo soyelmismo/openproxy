@@ -1,6 +1,6 @@
 use super::common::{
-    execute_warmup_ping, format_account_desc, is_any_weekly_model_detail_exhausted,
-    is_session_window_ticking, is_weekly_quota_exhausted, query_provider_models_fallback,
+    execute_warmup_ping, format_account_desc, is_5h_session_window_ready,
+    query_provider_models_fallback, resolve_strategy_models,
 };
 use super::traits::{WarmupAccountContext, WarmupStrategy};
 use crate::accounts::{self, Account};
@@ -16,18 +16,12 @@ use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ClaudeCodeWarmupStrategy;
 
 impl ClaudeCodeWarmupStrategy {
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for ClaudeCodeWarmupStrategy {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -80,61 +74,24 @@ impl WarmupStrategy for ClaudeCodeWarmupStrategy {
     }
 
     fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
-        let mut resolved = Vec::new();
-
-        // 1. Check if configured model explicitly matches claude-code / claude
-        for alias in config_models {
-            if let Some(target) = resolve_claude_model(conn, alias)
-                && !resolved.contains(&target)
-            {
-                resolved.push(target);
-            }
-        }
-
-        // 2. Fallback: discover the newest active claude-code model
-        if resolved.is_empty()
-            && let Some(target) = resolve_default_claude_model(conn)
-        {
-            resolved.push(target);
-        }
-
-        resolved
+        resolve_strategy_models(
+            conn,
+            config_models,
+            resolve_claude_model,
+            resolve_default_claude_model,
+        )
     }
 
     fn is_quota_ready(&self, quota: &AccountQuota, _model_id: &str, now: i64) -> bool {
-        // 1. If weekly quota is 100% exhausted, under NO circumstance attempt to warm up the 5h window
-        if is_weekly_quota_exhausted(quota, now) {
-            tracing::debug!(
-                weekly_used = ?quota.weekly_used,
-                weekly_limit = ?quota.weekly_limit,
-                reset_at = ?quota.weekly_reset_at,
-                "[SmartWarmup] Claude Code weekly quota is 100% utilized; skipping 5h window warmup"
-            );
-            return false;
-        }
-
-        // Also check weekly model details if present (e.g. Claude Sonnet (Weekly), Claude Opus (Weekly))
-        if is_any_weekly_model_detail_exhausted(
+        is_5h_session_window_ready(
             quota,
             |model_id| {
                 let lower = model_id.to_lowercase();
                 lower.contains("weekly") || lower.contains("seven_day")
             },
+            "Claude Code",
             now,
-        ) {
-            tracing::debug!(
-                "[SmartWarmup] Claude Code weekly model detail is 100% utilized; skipping 5h window warmup"
-            );
-            return false;
-        }
-
-        // 2. If the 5-hour session window is already ticking with usage, do not ping
-        if is_session_window_ticking(quota, now) {
-            return false;
-        }
-
-        // 3. 5h window is completely fresh (0% used) and ready to kickstart
-        quota.session_used.unwrap_or(0) == 0
+        )
     }
 
     async fn ping_model(

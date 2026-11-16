@@ -132,28 +132,9 @@ async fn dispatch_single_system_one(
         e
     })?;
 
-    let body_bytes = response
-        .body
-        .collect_all()
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))?;
-
-    if response.status.as_u16() != 200 {
-        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-        let err_body_str = std::str::from_utf8(&body_bytes).unwrap_or("");
-        tracing::warn!(
-            "SystemOne target failed with status {}: provider={}, body={}",
-            response.status.as_u16(),
-            target.provider,
-            err_body_str
-        );
-        return Err(map_upstream_status_error(
-            response.status.as_u16(),
-            target.provider.as_str(),
-            &target.upstream_model,
-            err_body_str,
-        ));
-    }
+    let (body_bytes, status_code) =
+        crate::unary::collect_unary_response(response, circuit_breaker, target, "SystemOne")
+            .await?;
 
     crate::guarded_unary_target!(record_success: circuit_breaker, target);
 
@@ -163,7 +144,7 @@ async fn dispatch_single_system_one(
         ))
     })?;
 
-    Ok((parsed_response, response.status.as_u16()))
+    Ok((parsed_response, status_code))
 }
 
 pub async fn execute_system_one(
@@ -181,8 +162,6 @@ pub async fn execute_system_one(
     } = deps;
     let started = Instant::now();
 
-    // Take the key's turn before any dispatch; released only once this
-    // request's usage row (and its debit) is persisted.
     let mut credit = UnaryCreditLease::admit(db_pool, api_key_id).await?;
 
     let req_model = req.model.as_deref().unwrap_or("jev-latest");
@@ -201,26 +180,13 @@ pub async fn execute_system_one(
     let mut attempt = 0;
 
     for target in targets {
-        if !crate::unary::is_target_available_async(
-            db_pool,
-            circuit_breaker,
-            target.account_id,
-            target.combo_target_id,
-        )
-        .await
-        {
-            continue;
-        }
+        crate::guarded_unary_target!(check_async: db_pool, circuit_breaker, target);
 
         let Some(adapter) = adapters.iter().find(|a| a.id() == &target.provider) else {
             tracing::warn!("No adapter found for provider {}", target.provider);
             continue;
         };
 
-        // Price the request from its state/questions and the model's own output
-        // ceiling before dispatching: a prepaid key never sends a request whose
-        // maximum cost does not fit its balance, and an unpriced request is
-        // refused rather than recorded at zero.
         let bound = match credit
             .authorize_dispatch(
                 db_pool,
@@ -256,14 +222,8 @@ pub async fn execute_system_one(
                         (Some(u.input_tokens as u32), Some(u.output_tokens as u32))
                     });
 
-                let (request_body, response_body) = if recording {
-                    (
-                        serde_json::to_vec(&req).ok().map(bytes::Bytes::from),
-                        serde_json::to_value(&parsed_response).ok(),
-                    )
-                } else {
-                    (None, None)
-                };
+                let (request_body, response_body) =
+                    crate::unary::serialize_recorded_bodies(recording, &req, &parsed_response);
 
                 let mut args = crate::unary::UnaryUsageArgs::from_target(
                     &target,
@@ -276,9 +236,6 @@ pub async fn execute_system_one(
                 if input_tokens.is_some() || output_tokens.is_some() {
                     args = args.with_tokens(input_tokens, output_tokens);
                 }
-                // A prepaid row is bounded by what admission priced: an
-                // upstream that omits `usage` (or reports zero) bills at the
-                // bound instead of for free.
                 credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;
 
                 tracing::info!("SystemOne request succeeded after {attempt} attempts");

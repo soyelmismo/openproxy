@@ -67,6 +67,17 @@ pub fn parse_nullable_f64(body: &Value, field: &str) -> Result<UpdateField<f64>,
     })
 }
 
+/// Parse a nullable boolean into `UpdateField<bool>`.
+pub fn parse_nullable_bool(body: &Value, field: &str) -> Result<UpdateField<bool>, ApiError> {
+    parse_tristate_with(body, field, |v| {
+        v.as_bool().ok_or_else(|| {
+            ApiError(CoreError::Validation(format!(
+                "{field} must be a boolean or null, got {v}"
+            )))
+        })
+    })
+}
+
 /// Parse an optional integer property bounded to `i32` range.
 ///
 /// - Field absent: `Ok(None)`

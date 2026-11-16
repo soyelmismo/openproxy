@@ -1,20 +1,20 @@
 //! Length-prefixed, bounded JSON IPC over private anonymous pipes.
 use super::{CoreError, SystemOneRequest, SystemOneResponse, lifecycle::Settings, load_engine};
+use crate::adapters::native_engine_common::{
+    IpcWorkerClient, encode_ipc_frame, ipc_internal, run_ipc_worker_loop,
+};
+#[cfg(test)]
+use crate::adapters::native_engine_common::{read_ipc_frame, write_ipc_frame};
+#[cfg(test)]
 use std::io::{Read, Write};
 use std::time::Duration;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, ChildStdin, ChildStdout},
-};
 
 const FRAME_LIMIT: usize = 4 * 1024 * 1024;
+const IPC_LABEL: &str = "Laya";
+const INVALID_FRAME_MSG: &str = "Invalid Laya IPC frame size";
 pub const WORKER_ARGUMENT: &str = "--laya-worker";
 
 unsafe extern "C" {
-    /// Shared worker confinement (landlock + seccomp). `allow_model_dir` grants
-    /// read access to the model's parent directory for engines with external
-    /// weights (HF `model.onnx` + `.onnx_data`); laya ships a single file and
-    /// passes 0.
     fn worker_sandbox(
         model: *const std::ffi::c_char,
         tokenizer: *const std::ffi::c_char,
@@ -23,8 +23,12 @@ unsafe extern "C" {
     ) -> std::ffi::c_int;
 }
 
+fn internal(e: impl std::fmt::Display) -> CoreError {
+    ipc_internal(IPC_LABEL, e)
+}
+
 pub(super) fn validate_request(req: &SystemOneRequest) -> Result<(), CoreError> {
-    encode(req)?;
+    encode_ipc_frame(req, FRAME_LIMIT, IPC_LABEL, INVALID_FRAME_MSG)?;
     if req.questions.len() > 64 {
         return Err(CoreError::Validation(
             "Laya supports at most 64 questions per batch".into(),
@@ -42,65 +46,27 @@ pub(super) fn validate_request(req: &SystemOneRequest) -> Result<(), CoreError> 
     Ok(())
 }
 
-fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, CoreError> {
-    let bytes = serde_json::to_vec(value).map_err(internal)?;
-    validate_length(bytes.len())?;
-    Ok(bytes)
-}
-
-fn validate_length(len: usize) -> Result<(), CoreError> {
-    if len == 0 || len > FRAME_LIMIT {
-        return Err(CoreError::Validation("Invalid Laya IPC frame size".into()));
-    }
-    Ok(())
-}
-
-fn internal(e: impl std::fmt::Display) -> CoreError {
-    CoreError::Internal(format!("Laya worker IPC: {e}"))
-}
-
+#[cfg(test)]
 fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, CoreError> {
-    let mut size = [0; 4];
-    reader.read_exact(&mut size).map_err(internal)?;
-    let len = u32::from_be_bytes(size) as usize;
-    validate_length(len)?;
-    let mut bytes = vec![0; len];
-    reader.read_exact(&mut bytes).map_err(internal)?;
-    Ok(bytes)
+    read_ipc_frame(reader, FRAME_LIMIT, IPC_LABEL, INVALID_FRAME_MSG)
 }
 
+#[cfg(test)]
 fn write_frame(writer: &mut impl Write, value: &impl serde::Serialize) -> Result<(), CoreError> {
-    let bytes = encode(value)?;
-    writer
-        .write_all(&(bytes.len() as u32).to_be_bytes())
-        .map_err(internal)?;
-    writer.write_all(&bytes).map_err(internal)?;
-    writer.flush().map_err(internal)
+    write_ipc_frame(writer, value, FRAME_LIMIT, IPC_LABEL, INVALID_FRAME_MSG)
 }
 
 /// Must run before config, database, credentials, telemetry or Tokio are initialized.
 pub fn run_worker() -> Result<(), CoreError> {
-    let mut input = std::io::stdin().lock();
-    let mut output = std::io::stdout().lock();
-    let settings: Settings = serde_json::from_slice(&read_frame(&mut input)?).map_err(internal)?;
-    let engine = match initialize(&settings) {
-        Ok(engine) => engine,
-        Err(error) => {
-            write_frame(&mut output, &Result::<(), String>::Err(error.to_string()))?;
-            return Err(error);
-        }
-    };
-    write_frame(&mut output, &Result::<(), String>::Ok(()))?;
-    loop {
-        let Ok(frame) = read_frame(&mut input) else {
-            return Ok(()); // Parent closed the pipe or sent an invalid frame.
-        };
-        let request: SystemOneRequest = serde_json::from_slice(&frame).map_err(internal)?;
-        let result = validate_request(&request)
-            .and_then(|()| engine.classify(&request))
-            .map_err(|e| e.to_string());
-        write_frame(&mut output, &result)?;
-    }
+    run_ipc_worker_loop(
+        FRAME_LIMIT,
+        IPC_LABEL,
+        INVALID_FRAME_MSG,
+        initialize,
+        |engine, request: &SystemOneRequest| {
+            validate_request(request).and_then(|()| engine.classify(request))
+        },
+    )
 }
 
 fn initialize(settings: &Settings) -> Result<super::LayaEngine, CoreError> {
@@ -129,107 +95,35 @@ fn initialize(settings: &Settings) -> Result<super::LayaEngine, CoreError> {
     )
 }
 
-pub(super) struct Client {
-    child: Child,
-    input: ChildStdin,
-    output: ChildStdout,
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        let _ = self.child.start_kill();
-    }
-}
+pub(super) struct Client(pub(super) IpcWorkerClient);
 
 impl Client {
-    pub async fn stop(&mut self) {
-        let _ = self.child.kill().await;
-        let _ = self.child.wait().await;
-    }
-
     pub async fn start(settings: &Settings) -> Result<Self, CoreError> {
-        let executable = std::env::current_exe().map_err(internal)?;
-        // Unit-test harnesses cannot handle --laya-worker. Use the workspace's
-        // server binary built by cargo test --workspace instead.
-        #[cfg(test)]
-        let executable = executable
-            .parent()
-            .and_then(std::path::Path::parent)
-            .ok_or_else(|| internal("missing test binary directory"))?
-            .join("openproxy");
-        let mut command = tokio::process::Command::new(executable);
-        command
-            .arg(WORKER_ARGUMENT)
-            .env_clear()
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true);
-        // Never forward master keys, OAuth tokens, proxy settings or loader variables.
-        for name in [
-            "HOME",
-            "OPENPROXY_ONNX_LIB",
-            "OPENPROXY_LAYA_MODEL",
-            "OPENPROXY_LAYA_TOKENIZER",
-            "OPENPROXY_LAYA_CONFIG",
-            "OPENPROXY_LAYA_THREADS",
-        ] {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        let mut child = command.spawn().map_err(internal)?;
-        let input = child
-            .stdin
-            .take()
-            .ok_or_else(|| internal("missing stdin"))?;
-        let output = child
-            .stdout
-            .take()
-            .ok_or_else(|| internal("missing stdout"))?;
-        let mut client = Self {
-            child,
-            input,
-            output,
-        };
-        let ready: Result<(), String> = client.exchange(settings, Duration::from_secs(120)).await?;
-        ready.map_err(internal)?;
-        Ok(client)
+        let inner = IpcWorkerClient::start(
+            settings,
+            WORKER_ARGUMENT,
+            &[
+                "HOME",
+                "OPENPROXY_ONNX_LIB",
+                "OPENPROXY_LAYA_MODEL",
+                "OPENPROXY_LAYA_TOKENIZER",
+                "OPENPROXY_LAYA_CONFIG",
+                "OPENPROXY_LAYA_THREADS",
+            ],
+            Duration::from_secs(120),
+            FRAME_LIMIT,
+            IPC_LABEL,
+            INVALID_FRAME_MSG,
+        )
+        .await?;
+        Ok(Self(inner))
     }
 
     pub async fn classify(
         &mut self,
         request: &SystemOneRequest,
     ) -> Result<SystemOneResponse, CoreError> {
-        let response: Result<SystemOneResponse, String> =
-            self.exchange(request, Duration::from_secs(30)).await?;
-        response.map_err(internal)
-    }
-
-    async fn exchange<T: serde::de::DeserializeOwned>(
-        &mut self,
-        value: &impl serde::Serialize,
-        deadline: Duration,
-    ) -> Result<T, CoreError> {
-        let bytes = encode(value)?;
-        tokio::time::timeout(deadline, async {
-            self.input
-                .write_u32(bytes.len() as u32)
-                .await
-                .map_err(internal)?;
-            self.input.write_all(&bytes).await.map_err(internal)?;
-            self.input.flush().await.map_err(internal)?;
-            let len = self.output.read_u32().await.map_err(internal)? as usize;
-            validate_length(len)?;
-            let mut response = vec![0; len];
-            self.output
-                .read_exact(&mut response)
-                .await
-                .map_err(internal)?;
-            serde_json::from_slice(&response).map_err(internal)
-        })
-        .await
-        .map_err(|_| internal("deadline exceeded"))?
+        self.0.call(request, Duration::from_secs(30)).await
     }
 }
 
@@ -237,24 +131,7 @@ impl Client {
 mod tests {
     use super::*;
 
-    #[test]
-    fn frames_reject_oversize_truncation_and_zero() {
-        for len in [0, FRAME_LIMIT + 1] {
-            assert!(read_frame(&mut &(len as u32).to_be_bytes()[..]).is_err());
-        }
-        assert!(read_frame(&mut &[0, 0, 0, 2, b'{'][..]).is_err());
-    }
-
-    #[test]
-    fn frames_roundtrip_unicode() {
-        let mut bytes = Vec::new();
-        write_frame(&mut bytes, &"¿日本語 🦀?").unwrap();
-        let frame = read_frame(&mut bytes.as_slice()).unwrap();
-        assert_eq!(
-            serde_json::from_slice::<String>(&frame).unwrap(),
-            "¿日本語 🦀?"
-        );
-    }
+    crate::adapters::native_engine_common::define_ipc_frame_tests!();
 
     #[test]
     fn request_rejects_empty_and_excessive_options() {

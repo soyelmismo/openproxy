@@ -252,37 +252,24 @@ impl ContractValidator<CodeBuddyProfile> for CodeBuddyContractValidator {
             }
         }
 
-        match candidate.catalog_ref.as_ref() {
-            Some(_reference) => match candidate.catalog_body() {
-                Some(bytes) => {
-                    let text = std::str::from_utf8(bytes).map_err(|error| {
-                        ContractError::Rejected(format!("el catálogo no es utf-8: {error}"))
-                    })?;
-                    let catalog = CodeBuddyCatalog::parse(text).map_err(|error| {
-                        ContractError::Rejected(format!("el catálogo es inválido: {error}"))
-                    })?;
-                    if catalog.models.is_empty() {
-                        return Err(ContractError::Rejected(
-                            "el catálogo del pin está vacío".to_string(),
-                        ));
-                    }
-                    if catalog.models.len() != candidate.payload.catalog_models {
-                        return Err(ContractError::Rejected(format!(
-                            "el catálogo declara {} modelos y el perfil {}",
-                            catalog.models.len(),
-                            candidate.payload.catalog_models
-                        )));
-                    }
-                }
-                None => {
-                    // Referencia sin bytes: legal si ya están persistidos, los
-                    // verifica el store por digest.
-                }
-            },
-            None => {
+        if let Some(text) = super::codex_state::shared::validate_catalog_utf8(
+            candidate,
+            "el perfil CodeBuddy requiere catálogo para activarse",
+        )? {
+            let catalog = CodeBuddyCatalog::parse(text).map_err(|error| {
+                ContractError::Rejected(format!("el catálogo es inválido: {error}"))
+            })?;
+            if catalog.models.is_empty() {
                 return Err(ContractError::Rejected(
-                    "el perfil CodeBuddy requiere catálogo para activarse".to_string(),
+                    "el catálogo del pin está vacío".to_string(),
                 ));
+            }
+            if catalog.models.len() != candidate.payload.catalog_models {
+                return Err(ContractError::Rejected(format!(
+                    "el catálogo declara {} modelos y el perfil {}",
+                    catalog.models.len(),
+                    candidate.payload.catalog_models
+                )));
             }
         }
         Ok(())
@@ -331,87 +318,12 @@ impl ActivatableVersion for CodeBuddyProfile {
     }
 }
 
-/// Runtime del contrato CodeBuddy: delega en
-/// [`GenericContractRuntime`](crate::client_contract::GenericContractRuntime) a
-/// través del facade compartido [`ProviderRuntime`].
-pub type CodeBuddyContractRuntime = ProviderRuntime<CodeBuddyProvider>;
-
-/// Raíz por defecto del LKG en disco.
-fn default_store_root() -> PathBuf {
-    default_store_root_for("OPENPROXY_CODEBUDDY_STORE_DIR")
-}
-
-/// Runtime global del contrato CodeBuddy.
-static RUNTIME: LazyLock<CodeBuddyContractRuntime> =
-    LazyLock::new(|| CodeBuddyContractRuntime::new(default_store_root()));
-
-/// El runtime global, accesible desde el server sin reconstruir nada.
-#[must_use]
-pub fn runtime() -> &'static CodeBuddyContractRuntime {
-    &RUNTIME
-}
-
-/// Carga (o sirve) el snapshot activo del runtime global: LKG en disco o
-/// semilla embebida del pin.
-///
-/// # Errors
-/// Errores del store (LKG corrupto o semilla inválida).
-pub fn ensure_loaded() -> Result<Arc<Snapshot<CodeBuddyProfile>>, ContractError> {
-    if let Some(snapshot) = RUNTIME.snapshot() {
-        return Ok(snapshot);
-    }
-    RUNTIME.load()
-}
-
-/// El snapshot activo del runtime global, si ya está cargado.
-#[must_use]
-pub fn current_snapshot() -> Option<Arc<Snapshot<CodeBuddyProfile>>> {
-    RUNTIME.snapshot()
-}
-
-/// La versión del paquete del snapshot activo, si ya está cargado.
-#[must_use]
-pub fn activated_version() -> Option<String> {
-    RUNTIME
-        .snapshot()
-        .map(|snapshot| snapshot.payload.version.clone())
-}
-
-/// Refresca el contrato contra el registro/unpkg con un transporte inyectado y
-/// devuelve la versión recién activada (`None` si no hubo activación nueva, o
-/// el candidato no verificó las reglas: la generación activa permanece).
-///
-/// Es la misma ruta que usa el server: el transporte solo cambia quién entrega
-/// los bytes, nunca las reglas de validación.
-pub async fn refresh_validated_with_transport(
-    transport: std::sync::Arc<dyn ContractTransport>,
-) -> Option<String> {
-    let _ = ensure_loaded();
-    RUNTIME.refresh_validated(transport).await
-}
-
-/// Refresca el contrato contra el registro/unpkg con el transporte del upstream
-/// y devuelve la versión recién activada (`None` si no hubo activación nueva, o
-/// el candidato no verificó las reglas: la generación activa permanece).
-///
-/// La versión solo se devuelve cuando el perfil activado es
-/// `identity_activatable`: sin correspondencia paquete→commit verificada el
-/// catálogo se publica como overlay, pero la identidad anunciada no se eleva.
-#[cfg(feature = "upstream-hyper")]
-pub async fn refresh_validated(
-    upstream_client: &Arc<crate::upstream::UpstreamClient>,
-) -> Option<String> {
-    use crate::client_contract::UpstreamHttpTransport;
-
-    let _ = ensure_loaded();
-    let transport = Arc::new(UpstreamHttpTransport::new(Arc::clone(upstream_client)));
-    refresh_validated_with_transport(transport).await
-}
-
-/// Sin transporte upstream embebido no hay refresh de red: el runtime global
-/// sigue sirviendo la generación activa.
-#[cfg(not(feature = "upstream-hyper"))]
-pub use super::codex_state::shared::refresh_validated_no_upstream as refresh_validated;
+super::codex_state::shared::define_global_provider_runtime!(
+    CodeBuddyContractRuntime,
+    CodeBuddyProvider,
+    CodeBuddyProfile,
+    "OPENPROXY_CODEBUDDY_STORE_DIR"
+);
 
 #[cfg(test)]
 mod tests;

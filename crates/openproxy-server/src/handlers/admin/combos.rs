@@ -125,7 +125,8 @@ pub async fn clone_combo(
 }
 
 pub(crate) use super::helpers::{
-    parse_nullable_f64, parse_nullable_i64, parse_nullable_str, parse_nullable_u64,
+    parse_nullable_bool, parse_nullable_f64, parse_nullable_i64, parse_nullable_str,
+    parse_nullable_u64,
 };
 
 fn apply_combo_cooldown_updates(
@@ -221,60 +222,29 @@ fn apply_combo_general_updates(
     {
         core_combos::update_preventive_rate_limit(w, id, enabled)?;
     }
-    match body.get("modality_gate") {
-        None => {}
-        // An explicit JSON null clears the override so the combo inherits the
-        // global `[modality_routing] enabled` setting again.
-        Some(serde_json::Value::Null) => core_combos::update_modality_gate(w, id, None)?,
-        Some(serde_json::Value::Bool(enabled)) => {
-            core_combos::update_modality_gate(w, id, Some(*enabled))?;
-        }
-        Some(other) => {
-            return Err(ApiError(CoreError::Validation(format!(
-                "modality_gate must be a boolean or null, got {other}"
-            ))));
-        }
+    match parse_nullable_bool(body, "modality_gate")? {
+        UpdateField::Ignore => {}
+        UpdateField::Reset => core_combos::update_modality_gate(w, id, None)?,
+        UpdateField::Set(enabled) => core_combos::update_modality_gate(w, id, Some(enabled))?,
     }
-    match body.get("sanitize_response") {
-        None => {}
-        Some(serde_json::Value::Null) => core_combos::update_sanitize_response(w, id, None)?,
-        Some(serde_json::Value::Bool(enabled)) => {
-            core_combos::update_sanitize_response(w, id, Some(*enabled))?;
-        }
-        Some(other) => {
-            return Err(ApiError(CoreError::Validation(format!(
-                "sanitize_response must be a boolean or null, got {other}"
-            ))));
-        }
+    match parse_nullable_bool(body, "sanitize_response")? {
+        UpdateField::Ignore => {}
+        UpdateField::Reset => core_combos::update_sanitize_response(w, id, None)?,
+        UpdateField::Set(enabled) => core_combos::update_sanitize_response(w, id, Some(enabled))?,
     }
-    match body.get("real_model_id") {
-        None => {}
-        Some(serde_json::Value::Null) => core_combos::update_real_model_id(w, id, None)?,
-        Some(serde_json::Value::String(s)) => {
+    match parse_nullable_str(body, "real_model_id")? {
+        UpdateField::Ignore => {}
+        UpdateField::Reset => core_combos::update_real_model_id(w, id, None)?,
+        UpdateField::Set(s) => {
             let trimmed = s.trim();
-            if trimmed.is_empty() {
-                core_combos::update_real_model_id(w, id, None)?;
-            } else {
-                core_combos::update_real_model_id(w, id, Some(trimmed))?;
-            }
-        }
-        Some(other) => {
-            return Err(ApiError(CoreError::Validation(format!(
-                "real_model_id must be a string or null, got {other}"
-            ))));
+            let model_opt = (!trimmed.is_empty()).then_some(trimmed);
+            core_combos::update_real_model_id(w, id, model_opt)?;
         }
     }
-    match body.get("purge_reasoning") {
-        None => {}
-        Some(serde_json::Value::Null) => core_combos::update_purge_reasoning(w, id, None)?,
-        Some(serde_json::Value::Bool(enabled)) => {
-            core_combos::update_purge_reasoning(w, id, Some(*enabled))?;
-        }
-        Some(other) => {
-            return Err(ApiError(CoreError::Validation(format!(
-                "purge_reasoning must be a boolean or null, got {other}"
-            ))));
-        }
+    match parse_nullable_bool(body, "purge_reasoning")? {
+        UpdateField::Ignore => {}
+        UpdateField::Reset => core_combos::update_purge_reasoning(w, id, None)?,
+        UpdateField::Set(enabled) => core_combos::update_purge_reasoning(w, id, Some(enabled))?,
     }
     // Per-combo pricing: input/output is a pair (both rates or neither) and the
     // optional cached-input rate only exists alongside it. The combo's price
@@ -394,79 +364,6 @@ pub async fn update_combo(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn test_parse_nullable_str() {
-        let obj = json!({ "valid": "text", "empty": null, "invalid": 123 });
-        assert_eq!(
-            parse_nullable_str(&obj, "valid").unwrap(),
-            UpdateField::Set("text")
-        );
-        assert_eq!(
-            parse_nullable_str(&obj, "empty").unwrap(),
-            UpdateField::Reset
-        );
-        assert_eq!(
-            parse_nullable_str(&obj, "missing").unwrap(),
-            UpdateField::Ignore
-        );
-        assert!(parse_nullable_str(&obj, "invalid").is_err());
-    }
-
-    #[test]
-    fn test_parse_nullable_u64() {
-        let obj = json!({ "valid": 42, "empty": null, "invalid": "text", "negative": -1 });
-        assert_eq!(
-            parse_nullable_u64(&obj, "valid").unwrap(),
-            UpdateField::Set(42)
-        );
-        assert_eq!(
-            parse_nullable_u64(&obj, "empty").unwrap(),
-            UpdateField::Reset
-        );
-        assert_eq!(
-            parse_nullable_u64(&obj, "missing").unwrap(),
-            UpdateField::Ignore
-        );
-        assert!(parse_nullable_u64(&obj, "invalid").is_err());
-        assert!(parse_nullable_u64(&obj, "negative").is_err());
-    }
-
-    #[test]
-    fn test_parse_nullable_i64() {
-        let obj = json!({ "valid": -42, "empty": null, "invalid": "text" });
-        assert_eq!(
-            parse_nullable_i64(&obj, "valid").unwrap(),
-            UpdateField::Set(-42)
-        );
-        assert_eq!(
-            parse_nullable_i64(&obj, "empty").unwrap(),
-            UpdateField::Reset
-        );
-        assert_eq!(
-            parse_nullable_i64(&obj, "missing").unwrap(),
-            UpdateField::Ignore
-        );
-        assert!(parse_nullable_i64(&obj, "invalid").is_err());
-    }
-
-    #[test]
-    fn test_parse_nullable_f64() {
-        let obj = json!({ "valid": 0.5, "empty": null, "invalid": "text" });
-        assert_eq!(
-            parse_nullable_f64(&obj, "valid").unwrap(),
-            UpdateField::Set(0.5)
-        );
-        assert_eq!(
-            parse_nullable_f64(&obj, "empty").unwrap(),
-            UpdateField::Reset
-        );
-        assert_eq!(
-            parse_nullable_f64(&obj, "missing").unwrap(),
-            UpdateField::Ignore
-        );
-        assert!(parse_nullable_f64(&obj, "invalid").is_err());
-    }
 
     fn schedule_body() -> serde_json::Value {
         use openproxy_types::pricing_schedule::{

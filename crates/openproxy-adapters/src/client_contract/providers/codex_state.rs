@@ -294,29 +294,16 @@ impl ContractValidator<CodexProfile> for CodexContractValidator {
             }
         }
 
-        match candidate.catalog_ref.as_ref() {
-            Some(_reference) => match candidate.catalog_body() {
-                Some(bytes) => {
-                    let text = std::str::from_utf8(bytes).map_err(|error| {
-                        ContractError::Rejected(format!("el catálogo no es utf-8: {error}"))
-                    })?;
-                    let catalog = CodexCatalog::parse(text).map_err(|error| {
-                        ContractError::Rejected(format!("el catálogo es inválido: {error}"))
-                    })?;
-                    if catalog.models.is_empty() {
-                        return Err(ContractError::Rejected(
-                            "el catálogo del pin está vacío".to_string(),
-                        ));
-                    }
-                }
-                None => {
-                    // Referencia sin bytes: legal si ya están persistidos, los
-                    // verifica el store por digest.
-                }
-            },
-            None => {
+        if let Some(text) = shared::validate_catalog_utf8(
+            candidate,
+            "el perfil Codex requiere catálogo para activarse",
+        )? {
+            let catalog = CodexCatalog::parse(text).map_err(|error| {
+                ContractError::Rejected(format!("el catálogo es inválido: {error}"))
+            })?;
+            if catalog.models.is_empty() {
                 return Err(ContractError::Rejected(
-                    "el perfil Codex requiere catálogo para activarse".to_string(),
+                    "el catálogo del pin está vacío".to_string(),
                 ));
             }
         }
@@ -365,70 +352,12 @@ impl ActivatableVersion for CodexProfile {
     }
 }
 
-/// Runtime del contrato Codex: delega en
-/// [`GenericContractRuntime`](crate::client_contract::GenericContractRuntime) a
-/// través del facade compartido [`ProviderRuntime`].
-pub type CodexContractRuntime = ProviderRuntime<CodexProvider>;
-
-/// Raíz por defecto del LKG en disco.
-fn default_store_root() -> PathBuf {
-    default_store_root_for("OPENPROXY_CODEX_STORE_DIR")
-}
-
-/// Runtime global del contrato Codex.
-static RUNTIME: LazyLock<CodexContractRuntime> =
-    LazyLock::new(|| CodexContractRuntime::new(default_store_root()));
-
-/// El runtime global, accesible desde el server sin reconstruir nada.
-#[must_use]
-pub fn runtime() -> &'static CodexContractRuntime {
-    &RUNTIME
-}
-
-/// Carga (o sirve) el snapshot activo del runtime global: LKG en disco o
-/// semilla embebida del pin.
-///
-/// # Errors
-/// Errores del store (LKG corrupto o semilla inválida).
-pub fn ensure_loaded() -> Result<Arc<Snapshot<CodexProfile>>, ContractError> {
-    if let Some(snapshot) = RUNTIME.snapshot() {
-        return Ok(snapshot);
-    }
-    RUNTIME.load()
-}
-
-/// El snapshot activo del runtime global, si ya está cargado.
-#[must_use]
-pub fn current_snapshot() -> Option<Arc<Snapshot<CodexProfile>>> {
-    RUNTIME.snapshot()
-}
-
-/// La versión de cliente del snapshot activo, si ya está cargado.
-#[must_use]
-pub fn activated_version() -> Option<String> {
-    RUNTIME
-        .snapshot()
-        .map(|snapshot| snapshot.payload.version.clone())
-}
-
-/// Refresca el contrato contra GitHub con el transporte del upstream y
-/// devuelve la versión recién activada (`None` si no hubo activación nueva o
-/// el candidato no verificó los guards: la generación activa permanece).
-#[cfg(feature = "upstream-hyper")]
-pub async fn refresh_validated(
-    upstream_client: &Arc<crate::upstream::UpstreamClient>,
-) -> Option<String> {
-    use crate::client_contract::UpstreamHttpTransport;
-
-    let _ = ensure_loaded();
-    let transport = Arc::new(UpstreamHttpTransport::new(Arc::clone(upstream_client)));
-    RUNTIME.refresh_validated(transport).await
-}
-
-/// Sin transporte upstream embebido no hay refresh de red: el runtime global
-/// sigue sirviendo la generación activa.
-#[cfg(not(feature = "upstream-hyper"))]
-pub use shared::refresh_validated_no_upstream as refresh_validated;
+shared::define_global_provider_runtime!(
+    CodexContractRuntime,
+    CodexProvider,
+    CodexProfile,
+    "OPENPROXY_CODEX_STORE_DIR"
+);
 
 #[cfg(test)]
 mod tests;

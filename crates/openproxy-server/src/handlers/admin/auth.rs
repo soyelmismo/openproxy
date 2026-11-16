@@ -348,10 +348,7 @@ fn admin_throttle_allows(
         .ok()
         .flatten()
         .is_some_and(|token| {
-            let key_hash = openproxy_core::api_keys::hash_key(token);
-            state
-                .get_cached_api_key(&key_hash)
-                .is_some_and(|key| crate::middleware::auth::validate_key_record(&key, "manage").is_ok())
+            crate::middleware::auth::is_cached_key_valid_for_scope(state, token, "manage")
         })
 }
 

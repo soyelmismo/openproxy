@@ -59,13 +59,19 @@ pub enum WarmupStrategyEnum {
     ClaudeCode(crate::smart_warmup::claude_code::ClaudeCodeWarmupStrategy),
 }
 
+macro_rules! dispatch_warmup_strategy {
+    ($self:expr, $s:ident => $body:expr) => {
+        match $self {
+            Self::Antigravity($s) => $body,
+            Self::Codex($s) => $body,
+            Self::ClaudeCode($s) => $body,
+        }
+    };
+}
+
 impl WarmupStrategy for WarmupStrategyEnum {
     fn provider_id(&self) -> &'static str {
-        match self {
-            Self::Antigravity(s) => s.provider_id(),
-            Self::Codex(s) => s.provider_id(),
-            Self::ClaudeCode(s) => s.provider_id(),
-        }
+        dispatch_warmup_strategy!(self, s => s.provider_id())
     }
 
     fn extract_account(
@@ -74,11 +80,7 @@ impl WarmupStrategy for WarmupStrategyEnum {
         conn: &rusqlite::Connection,
         master_key: &MasterKey,
     ) -> Option<WarmupAccountContext> {
-        match self {
-            Self::Antigravity(s) => s.extract_account(account, conn, master_key),
-            Self::Codex(s) => s.extract_account(account, conn, master_key),
-            Self::ClaudeCode(s) => s.extract_account(account, conn, master_key),
-        }
+        dispatch_warmup_strategy!(self, s => s.extract_account(account, conn, master_key))
     }
 
     async fn fetch_quota(
@@ -86,27 +88,15 @@ impl WarmupStrategy for WarmupStrategyEnum {
         upstream: &Arc<UpstreamClient>,
         account: &WarmupAccountContext,
     ) -> Option<Result<AccountQuota>> {
-        match self {
-            Self::Antigravity(s) => s.fetch_quota(upstream, account).await,
-            Self::Codex(s) => s.fetch_quota(upstream, account).await,
-            Self::ClaudeCode(s) => s.fetch_quota(upstream, account).await,
-        }
+        dispatch_warmup_strategy!(self, s => s.fetch_quota(upstream, account).await)
     }
 
     fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
-        match self {
-            Self::Antigravity(s) => s.resolve_models(conn, config_models),
-            Self::Codex(s) => s.resolve_models(conn, config_models),
-            Self::ClaudeCode(s) => s.resolve_models(conn, config_models),
-        }
+        dispatch_warmup_strategy!(self, s => s.resolve_models(conn, config_models))
     }
 
     fn is_quota_ready(&self, quota: &AccountQuota, model_id: &str, now: i64) -> bool {
-        match self {
-            Self::Antigravity(s) => s.is_quota_ready(quota, model_id, now),
-            Self::Codex(s) => s.is_quota_ready(quota, model_id, now),
-            Self::ClaudeCode(s) => s.is_quota_ready(quota, model_id, now),
-        }
+        dispatch_warmup_strategy!(self, s => s.is_quota_ready(quota, model_id, now))
     }
 
     async fn ping_model(
@@ -115,11 +105,7 @@ impl WarmupStrategy for WarmupStrategyEnum {
         account: &WarmupAccountContext,
         model_id: &str,
     ) -> bool {
-        match self {
-            Self::Antigravity(s) => s.ping_model(upstream, account, model_id).await,
-            Self::Codex(s) => s.ping_model(upstream, account, model_id).await,
-            Self::ClaudeCode(s) => s.ping_model(upstream, account, model_id).await,
-        }
+        dispatch_warmup_strategy!(self, s => s.ping_model(upstream, account, model_id).await)
     }
 }
 

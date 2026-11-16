@@ -275,89 +275,9 @@ pub fn extract_inline_tools_from_response_value(mut val: Value) -> Value {
     val
 }
 
+use crate::think_extractor::{find_ignore_ascii_case, safe_slice};
+use minimax_xml::find_next_invoke_tag as find_bare_invoke_span;
+
 fn find_earliest_enclosing_block(s: &str) -> Option<(usize, usize, &'static str)> {
-    let mut earliest: Option<(usize, usize, &'static str)> = None;
-    for &(open, close) in ENCLOSING_TAG_PAIRS {
-        let mut cursor = 0;
-        while let Some(pos) = find_ignore_ascii_case(&s[cursor..], open) {
-            let abs_pos = cursor + pos;
-            let after_tag = abs_pos + open.len();
-            let next_byte = s.as_bytes().get(after_tag);
-            let is_boundary = next_byte
-                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=');
-            if is_boundary {
-                // Find closing '>' of opening tag
-                if let Some(tag_end) = s[abs_pos..].find('>') {
-                    let full_open_end = abs_pos + tag_end + 1;
-                    if earliest.is_none_or(|(p, _, _)| abs_pos < p) {
-                        earliest = Some((abs_pos, full_open_end, close));
-                    }
-                }
-                break;
-            }
-            cursor = abs_pos + 1;
-        }
-    }
-    earliest
-}
-
-fn find_bare_invoke_span(s: &str) -> Option<(usize, &'static str)> {
-    let candidates = [
-        ("<invoke", "</invoke>"),
-        ("<｜｜DSML｜｜ invoke", "</｜｜DSML｜｜ invoke>"),
-        ("<｜DSML｜ invoke", "</｜DSML｜ invoke>"),
-        ("<function_call", "</function_call>"),
-        ("<function", "</function>"),
-        ("<call", "</call>"),
-        ("<action", "</action>"),
-    ];
-    let mut best: Option<(usize, &'static str)> = None;
-    for (open, close) in candidates {
-        let mut cursor = 0;
-        while let Some(pos) = find_ignore_ascii_case(&s[cursor..], open) {
-            let abs_pos = cursor + pos;
-            let after_tag = abs_pos + open.len();
-            let next_byte = s.as_bytes().get(after_tag);
-            let is_boundary = next_byte
-                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=');
-            if is_boundary {
-                if best.is_none_or(|(p, _)| abs_pos < p) {
-                    best = Some((abs_pos, close));
-                }
-                break;
-            }
-            cursor = abs_pos + 1;
-        }
-    }
-    best
-}
-
-#[inline]
-fn safe_slice(s: &str, start: usize, end: usize) -> &str {
-    let mut start_idx = std::cmp::min(start, s.len());
-    while start_idx < s.len() && !s.is_char_boundary(start_idx) {
-        start_idx += 1;
-    }
-    let mut end_idx = std::cmp::min(end, s.len());
-    while end_idx > 0 && !s.is_char_boundary(end_idx) {
-        end_idx -= 1;
-    }
-    if start_idx <= end_idx {
-        &s[start_idx..end_idx]
-    } else {
-        ""
-    }
-}
-
-fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    if haystack.len() < needle.len() {
-        return None;
-    }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+    minimax_xml::find_earliest_open_close_tag(s, ENCLOSING_TAG_PAIRS)
 }

@@ -181,34 +181,9 @@ async fn dispatch_single_embedding(
         e
     })?;
 
-    let status_code = response.status.as_u16();
-    let body_bytes = response.collect().await.map_err(|e| {
-        let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-        tracing::warn!(
-            "Embedding target body read failed: provider={}, error={:?}",
-            target.provider,
-            err
-        );
-        err
-    })?;
-
-    if status_code >= 400 {
-        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-        let err_text = String::from_utf8_lossy(&body_bytes);
-        tracing::warn!(
-            "Embedding target returned error status: provider={}, status={}, body={}",
-            target.provider,
-            status_code,
-            err_text
-        );
-        return Err(map_upstream_status_error(
-            status_code,
-            target.provider.as_str(),
-            &target.upstream_model,
-            &err_text,
-        ));
-    }
+    let (body_bytes, status_code) =
+        crate::unary::collect_unary_response(response, circuit_breaker, target, "Embedding")
+            .await?;
 
     // Embeddings have no streaming variant, so this is the single response
     // hook. The default is the identity, which is correct for every
@@ -220,9 +195,7 @@ async fn dispatch_single_embedding(
         )
         .ctx_parse("failed to translate embedding response")?;
 
-    if let Some(account_id) = target.account_id {
-        circuit_breaker.record_success(CircuitBreakerKey::Account(account_id));
-    }
+    crate::guarded_unary_target!(record_success: circuit_breaker, target);
 
     Ok((parsed_response, status_code))
 }
@@ -274,10 +247,6 @@ pub async fn execute_embeddings(
             continue;
         };
 
-        // Price the request from the client's own input before anything reaches
-        // the upstream: a prepaid key never dispatches a request whose maximum
-        // cost does not fit its balance, and an unpriced request is refused
-        // instead of being recorded at zero.
         let bound = match credit
             .authorize_dispatch(
                 db_pool,
@@ -307,18 +276,8 @@ pub async fn execute_embeddings(
         {
             Ok((parsed_response, status_code)) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                // Bodies go to the log only while the operator's recording
-                // toggle is on, matching the chat path. The client wire shape
-                // (`req`) is recorded, not the translated upstream body, so the
-                // log shows what the caller actually sent.
-                let (request_body, response_body) = if recording {
-                    (
-                        serde_json::to_vec(&req).ok().map(bytes::Bytes::from),
-                        serde_json::to_value(&parsed_response).ok(),
-                    )
-                } else {
-                    (None, None)
-                };
+                let (request_body, response_body) =
+                    crate::unary::serialize_recorded_bodies(recording, &req, &parsed_response);
                 let mut args = UnaryUsageArgs::from_target(
                     &target,
                     EndpointKind::Embedding,

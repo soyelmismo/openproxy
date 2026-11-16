@@ -1,5 +1,6 @@
 //! Resolution of model, tokenizer, config and modality tower artifact paths.
 
+use crate::adapters::native_engine_common::resolve_engine_candidate_path;
 use std::sync::OnceLock;
 
 fn resolve_candidate_path(
@@ -8,37 +9,7 @@ fn resolve_candidate_path(
     filename: &str,
     subpaths: &[&str],
 ) -> String {
-    if let Some(p) = explicit.filter(|s| !s.is_empty()) {
-        return p.to_string();
-    }
-    if let Some(p) = std::env::var(env_var).ok().filter(|s| !s.is_empty()) {
-        return p;
-    }
-    let mut candidates = Vec::new();
-    for base in [
-        std::env::var("HOME")
-            .map(|h| format!("{h}/.openproxy/models/embeddinggemma2"))
-            .unwrap_or_default(),
-        "./models/embeddinggemma2".to_string(),
-        "/var/lib/openproxy/models/embeddinggemma2".to_string(),
-    ] {
-        if base.is_empty() {
-            continue;
-        }
-        candidates.push(format!("{base}/{filename}"));
-        for sub in subpaths {
-            candidates.push(format!("{base}/{sub}"));
-        }
-    }
-    for cand in &candidates {
-        if std::path::Path::new(cand).exists() {
-            return cand.clone();
-        }
-    }
-    format!(
-        "{}/models/embeddinggemma2/{filename}",
-        std::env::var("HOME").unwrap_or_else(|_| ".".into())
-    )
+    resolve_engine_candidate_path("embeddinggemma2", explicit, env_var, filename, subpaths, false)
 }
 
 pub fn resolve_model_path(opt: Option<&str>) -> String {
@@ -60,7 +31,6 @@ pub fn resolve_tokenizer_path(opt: Option<&str>) -> String {
 }
 
 pub fn resolve_config_path(opt: Option<&str>) -> String {
-    // Optional: engine tuning (max_len). Absence is fine.
     resolve_candidate_path(opt, "OPENPROXY_EMBED_CONFIG", "engine_config.json", &[])
 }
 
@@ -81,14 +51,6 @@ pub fn resolve_audio_path(opt: Option<&str>) -> String {
     )
 }
 
-/// Resolve a modality tower that ships beside the text graph.
-///
-/// `opt` names the *text* model file. The vision and audio towers are separate
-/// files in the same directory, so handing `opt` straight to
-/// `resolve_candidate_path` would load the text graph three times: the tower
-/// session then has no modality-specific input and ORT fails the first Run
-/// with "Invalid input name". Derive the tower path from the text model's
-/// directory instead, and fall back to the normal search when it is absent.
 fn resolve_sibling_path(explicit: Option<&str>, env_var: &str, filename: &str) -> String {
     if let Some(p) = std::env::var(env_var).ok().filter(|s| !s.is_empty()) {
         return p;

@@ -8,7 +8,7 @@
 //!
 //! Full spec in `docs/specs/antigravity-gaps-p2.md` §3 (GAP-2).
 
-use axum::{Router, extract::State, http::HeaderMap, response::IntoResponse, routing::post};
+use axum::{Router, extract::State, http::HeaderMap};
 
 use crate::{
     disconnect::CancelWatch, error::ApiError, extractors::ValidatedToken,
@@ -20,25 +20,9 @@ use crate::{
 /// auth + routing. `auth_middleware` detects `/v1/responses` and translates the
 /// Responses body into a `ParsedChatRequest` so routing resolves correctly.
 pub fn router(state: &AppState) -> Router<AppState> {
-    use axum::middleware;
     Router::new().route(
         "/responses",
-        post(responses_completions)
-            .route_layer(middleware::from_fn(
-                crate::disconnect::client_disconnect_middleware,
-            ))
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                crate::middleware::rate_limit::rate_limit_middleware,
-            ))
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                crate::middleware::routing::routing_middleware,
-            ))
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                crate::middleware::auth::auth_middleware,
-            )),
+        super::chat_endpoint(state, responses_completions),
     )
 }
 
@@ -62,11 +46,7 @@ pub async fn responses_completions(
         },
     );
 
-    let is_stream = prepared.req.openai_request.stream;
-
-    // Non-streaming MUST go through `handle_sync_response_responses` to emit the
-    // Responses-shaped envelope.
-    if is_stream {
+    if prepared.req.openai_request.stream {
         let model = prepared.req.openai_request.model.clone();
         let request_id = prepared.req.request_id;
         let merged = PipelineRunner::spawn_streaming_bridge(
@@ -83,18 +63,7 @@ pub async fn responses_completions(
             model,
         );
 
-        let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
-            sse_stream,
-            crate::services::sse_coalesce::configured_window(),
-        ));
-        return Ok((
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/event-stream; charset=utf-8",
-            )],
-            body,
-        )
-            .into_response());
+        return Ok(super::chat::into_coalesced_sse_response(sse_stream));
     }
     crate::handlers::chat::handle_sync_response_responses(pipeline, prepared.req, prepared.done_tx)
         .await

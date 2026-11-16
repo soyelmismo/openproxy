@@ -675,6 +675,19 @@ const RECENT_USAGE_COLS: &str = "id, request_id, trace_id, provider_id, upstream
     proxy_status, is_proxy_rotated, cached_tokens, pii_redacted, api_key_id, audio_ms, session_hash, \
     charged_units, credits_debited";
 
+fn broadcast_queried_usage_row<P: rusqlite::Params>(
+    conn: &Connection,
+    where_clause: &str,
+    params: P,
+) {
+    if let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT {RECENT_USAGE_COLS} FROM usage WHERE {where_clause}"
+    )) && let Ok(row) = stmt.query_row(params, map_recent_usage_from_row)
+    {
+        broadcast_usage_row(row);
+    }
+}
+
 pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_types::Result<()> {
     crate::credits_billing::transaction(conn, |conn| {
         conn.execute(
@@ -682,21 +695,13 @@ pub fn mark_client_response(conn: &Connection, row_id: UsageId) -> openproxy_typ
             params![row_id.0],
         )
         .map_err(crate::error::map_db_error_ctx("mark_client_response"))?;
-        // The updated row (with its charged amount) is re-read and broadcast
-        // below, so the debit result itself is not needed here.
         #[cfg(feature = "payments")]
         let _charged = crate::credits_billing::debit_usage(conn, row_id.0)?;
         #[cfg(not(feature = "payments"))]
         let _charged = crate::credits_billing::debit_usage(conn, row_id.0);
         Ok(())
     })?;
-
-    if let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT {RECENT_USAGE_COLS} FROM usage WHERE id = ?1"
-    )) && let Ok(row) = stmt.query_row(params![row_id.0], map_recent_usage_from_row)
-    {
-        broadcast_usage_row(row);
-    }
+    broadcast_queried_usage_row(conn, "id = ?1", params![row_id.0]);
     Ok(())
 }
 
@@ -714,9 +719,7 @@ pub fn mark_winner_usage_row(
             )
             .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
         let ids = stmt
-            .query_map(params![request_id, attempt, target_id.0], |r| {
-                r.get::<_, i64>(0)
-            })
+            .query_map(params![request_id, attempt, target_id.0], |r| r.get::<_, i64>(0))
             .map_err(crate::error::map_db_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(crate::error::map_db_error)?;
@@ -729,14 +732,11 @@ pub fn mark_winner_usage_row(
         }
         Ok(())
     })?;
-
-    if let Ok(mut stmt) = conn.prepare(&format!(
-            "SELECT {RECENT_USAGE_COLS} FROM usage WHERE request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 ORDER BY id DESC LIMIT 1"
-        ))
-        && let Ok(row) = stmt.query_row(params![request_id, attempt, target_id.0], map_recent_usage_from_row)
-    {
-        broadcast_usage_row(row);
-    }
+    broadcast_queried_usage_row(
+        conn,
+        "request_id = ?1 AND attempt = ?2 AND combo_target_id = ?3 ORDER BY id DESC LIMIT 1",
+        params![request_id, attempt, target_id.0],
+    );
     Ok(())
 }
 

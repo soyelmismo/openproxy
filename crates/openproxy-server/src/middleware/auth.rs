@@ -255,6 +255,17 @@ pub(crate) fn validate_key_record(key: &ApiKey, required_scope: &str) -> Result<
     validate_key_record_any_scope(key, &[required_scope])
 }
 
+pub(crate) fn is_cached_key_valid_for_scope(
+    state: &AppState,
+    token: &str,
+    required_scope: &str,
+) -> bool {
+    let key_hash = core_api_keys::hash_key(token);
+    state
+        .get_cached_api_key(&key_hash)
+        .is_some_and(|key| validate_key_record(&key, required_scope).is_ok())
+}
+
 /// Validate an API key credential against active keys for any of the given scopes
 pub(crate) async fn verify_key_credentials_any_scope(
     state: &AppState,

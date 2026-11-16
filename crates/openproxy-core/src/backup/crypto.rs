@@ -43,31 +43,7 @@ const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 
-/// HMAC-SHA256 (RFC 2104) over `data` with `key`.
-fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
-    const BLOCK: usize = 64; // SHA-256 block size
-    let mut key_block = [0u8; BLOCK];
-    if key.len() > BLOCK {
-        key_block[..32].copy_from_slice(&Sha256::digest(key));
-    } else {
-        key_block[..key.len()].copy_from_slice(key);
-    }
-    let mut ipad = [0x36u8; BLOCK];
-    let mut opad = [0x5cu8; BLOCK];
-    for i in 0..BLOCK {
-        ipad[i] ^= key_block[i];
-        opad[i] ^= key_block[i];
-    }
-    let inner = Sha256::new()
-        .chain_update(ipad)
-        .chain_update(data)
-        .finalize();
-    Sha256::new()
-        .chain_update(opad)
-        .chain_update(inner)
-        .finalize()
-        .into()
-}
+use openproxy_adapters::adapters::eac::signing::hmac_sha256;
 
 /// PBKDF2-HMAC-SHA256 (RFC 8018 / RFC 2898).
 fn pbkdf2_hmac_sha256(passphrase: &[u8], salt: &[u8], iterations: u32, dk_len: usize) -> Vec<u8> {
