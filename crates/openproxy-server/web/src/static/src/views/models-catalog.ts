@@ -14,6 +14,9 @@
  * but malformed schedule renders as "unavailable" — never as the flat price.
  */
 import { api } from '../state/api.js';
+import { getToken } from '../state/auth.js';
+import { PROXY_PREFIX } from '../state/proxy-prefix.js';
+import { showToast } from '../components/toast.js';
 import { escapeHtml } from '../lib/escape.js';
 import { createVisibilityAwareInterval, type VisibilityAwareHandle } from '../lib/visibility-aware-interval.js';
 import {
@@ -71,6 +74,8 @@ interface RowPricing {
   unavailable: boolean;
   /** Clock used to compute nextTransitionMs (server-corrected). */
   nowMs: number;
+  /** Raw parsed schedule for the Band cell tooltip / windows line. */
+  schedule: PricingSchedule | null;
 }
 
 interface Row {
@@ -118,6 +123,18 @@ let sortKey: SortKey = 'id';
 let sortDir: 1 | -1 = 1;
 let density: Density = 'normal';
 let mounted = false;
+let keyRevealed = false;
+
+const ICON_EYE =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/></svg>';
+const ICON_EYE_OFF =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2"/><path d="M2.5 13.5l11-11"/></svg>';
+const ICON_COPY =
+  '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/></svg>';
+
+function maskedKey(token: string): string {
+  return token.length > 12 ? `${token.slice(0, 8)}${'•'.repeat(10)}${token.slice(-4)}` : '••••••••';
+}
 
 function loadDensity(): Density {
   try {
@@ -172,6 +189,58 @@ function providerOf(e: CatalogEntry): string {
   return slash > 0 ? e.id.slice(0, slash) : '';
 }
 
+const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function dayLabel(day: number): string {
+  return DAY_LABELS[day - 1] ?? '?';
+}
+
+/** ISO weekdays (1=Mon … 7=Sun) → compact label: "Mon–Fri", "daily", "Tue/Sat". */
+function fmtWindowDays(days: number[]): string {
+  const sorted = [...new Set(days)].filter((d) => d >= 1 && d <= 7).sort((a, b) => a - b);
+  if (sorted.length === 0) return '';
+  if (sorted.length === 7) return 'daily';
+  const first = sorted[0];
+  if (first == null) return '';
+  const parts: string[] = [];
+  let start = first;
+  let prev = first;
+  for (const d of sorted.slice(1)) {
+    if (d === prev + 1) {
+      prev = d;
+      continue;
+    }
+    parts.push(start === prev ? dayLabel(start) : `${dayLabel(start)}–${dayLabel(prev)}`);
+    start = d;
+    prev = d;
+  }
+  parts.push(start === prev ? dayLabel(start) : `${dayLabel(start)}–${dayLabel(prev)}`);
+  return parts.join(', ');
+}
+
+/** "Mon–Fri 01:00–07:00; Sat–Sun 02:00–08:00" — empty when no windows. */
+function windowsSummary(schedule: PricingSchedule): string {
+  const wins = schedule.peak_windows || [];
+  if (wins.length === 0) return '';
+  return wins
+    .map((w) => `${fmtWindowDays(w.days)} ${w.start}–${w.end}`.trim())
+    .filter((s) => s !== '' && !s.startsWith(' '))
+    .join('; ');
+}
+
+/** Full peak/off-peak breakdown for the Band cell tooltip. */
+function scheduleTooltip(schedule: PricingSchedule): string {
+  const rates = (r: { input_per_1m: number; output_per_1m: number; cached_per_1m: number | null }): string =>
+    `${fmtPrice(r.input_per_1m)} in / ${fmtPrice(r.output_per_1m)} out / ${
+      r.cached_per_1m == null ? 'input rate' : fmtPrice(r.cached_per_1m)
+    } cached`;
+  const lines = [`Peak: ${rates(schedule.peak)}`, `Off-peak: ${rates(schedule.off_peak)}`];
+  const w = windowsSummary(schedule);
+  if (w) lines.push(`Peak windows (UTC): ${w}`);
+  if (schedule.off_peak_dates?.length) lines.push(`Forced off-peak: ${schedule.off_peak_dates.join(', ')}`);
+  return lines.join('\n');
+}
+
 function isPriceSort(key: SortKey): boolean {
   return key === 'price_in' || key === 'price_cached' || key === 'price_out';
 }
@@ -191,6 +260,7 @@ function pricingFor(entry: CatalogEntry, idx: number, nowMs: number): RowPricing
       nextBand: resolved.nextBand,
       unavailable: false,
       nowMs: clock,
+      schedule,
     };
   }
   return {
@@ -202,6 +272,7 @@ function pricingFor(entry: CatalogEntry, idx: number, nowMs: number): RowPricing
     nextBand: null,
     unavailable: unavailable[idx] === true,
     nowMs,
+    schedule: null,
   };
 }
 
@@ -278,7 +349,14 @@ function bandCell(p: RowPricing): string {
     ? `<span class="mc-countdown" data-countdown title=${escapeHtml(next ? `Next: ${next} at ${remaining}` : remaining)}>${remaining}</span>`
     : '';
   const nextTag = next != null ? `<span class="mc-band-next" data-next>→ ${next}</span>` : '';
-  return `<span class="mc-band ${isPeak ? 'is-peak' : 'is-offpeak'}" data-band>${label}</span>${countdown}${nextTag}`;
+  // Visible schedule line + hover tooltip: the user must see WHEN peak and
+  // off-peak apply, not just which band is active right now.
+  const wins = p.schedule ? windowsSummary(p.schedule) : '';
+  const tip = p.schedule ? ` title="${escapeHtml(scheduleTooltip(p.schedule as PricingSchedule))}"` : '';
+  const scheduleLine = wins
+    ? `<span class="mc-schedule-line" title="${escapeHtml(scheduleTooltip(p.schedule as PricingSchedule))}">${escapeHtml(wins)}</span>`
+    : '';
+  return `<span class="mc-band ${isPeak ? 'is-peak' : 'is-offpeak'}" data-band${tip}>${label}</span>${countdown}${nextTag}${scheduleLine}`;
 }
 
 function rowHtml(row: Row): string {
@@ -509,8 +587,55 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
           </div>
         </div>
       </div>
+      <div class="mc-endpoint" id="mc-endpoint">
+        <div class="mc-endpoint-row">
+          <span class="mc-endpoint-label">API base</span>
+          <code class="mc-endpoint-value" id="mc-apibase"></code>
+          <button type="button" class="mc-ep-btn" data-ep="copy-base" title="Copy API base" aria-label="Copy API base">${ICON_COPY}</button>
+        </div>
+        <div class="mc-endpoint-row">
+          <span class="mc-endpoint-label">API key</span>
+          <code class="mc-endpoint-value" id="mc-keyval"></code>
+          <button type="button" class="mc-ep-btn" data-ep="toggle-key" id="mc-key-eye" title="Show API key" aria-label="Show API key">${ICON_EYE}</button>
+          <button type="button" class="mc-ep-btn" data-ep="copy-key" title="Copy API key" aria-label="Copy API key">${ICON_COPY}</button>
+        </div>
+      </div>
       <div id="mc-body" class="mc-body"></div>
     </div>`;
+
+  // Endpoint block: API base + the session's API key (reveal + copy).
+  keyRevealed = false;
+  const apiBase = `${location.origin}${PROXY_PREFIX}/v1`;
+  const token = getToken() ?? '';
+  const apiBaseEl = document.getElementById('mc-apibase');
+  if (apiBaseEl) apiBaseEl.textContent = apiBase;
+  const syncKeyDisplay = (): void => {
+    const keyEl = document.getElementById('mc-keyval');
+    const eye = document.getElementById('mc-key-eye');
+    if (keyEl) {
+      keyEl.textContent = token ? (keyRevealed ? token : maskedKey(token)) : '';
+      keyEl.classList.toggle('is-revealed', keyRevealed);
+    }
+    if (eye) {
+      eye.innerHTML = keyRevealed ? ICON_EYE_OFF : ICON_EYE;
+      eye.title = keyRevealed ? 'Hide API key' : 'Show API key';
+      eye.setAttribute('aria-label', eye.title);
+    }
+  };
+  syncKeyDisplay();
+  document.getElementById('mc-endpoint')?.addEventListener('click', (ev: Event) => {
+    const btn = (ev.target as HTMLElement).closest<HTMLButtonElement>('button[data-ep]');
+    if (!btn) return;
+    const action = btn.dataset['ep'];
+    if (action === 'copy-base') {
+      void navigator.clipboard?.writeText(apiBase).then(() => showToast('Copied'));
+    } else if (action === 'copy-key') {
+      if (token) void navigator.clipboard?.writeText(token).then(() => showToast('Copied'));
+    } else if (action === 'toggle-key') {
+      keyRevealed = !keyRevealed;
+      syncKeyDisplay();
+    }
+  });
 
   const search = document.getElementById('mc-search') as HTMLInputElement | null;
   search?.addEventListener('input', () => {

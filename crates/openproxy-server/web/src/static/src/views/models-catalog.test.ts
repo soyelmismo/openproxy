@@ -176,4 +176,60 @@ describe("models catalog pricing schedule", () => {
     expect(ids).toEqual(["cheap", "combo:deepseek-chat"]);
     cleanup?.();
   });
+
+  it("renders the peak/off-peak windows line and the full schedule tooltip", async () => {
+    const weekSchedule = {
+      ...SCHEDULE,
+      peak_windows: [
+        { days: [1, 2, 3, 4, 5], start: "01:00", end: "07:00" },
+        { days: [6, 7], start: "02:00", end: "08:00" },
+      ],
+      off_peak_dates: ["2026-01-06"],
+    };
+    vi.spyOn(apiModule, "api").mockResolvedValue({
+      count: 1,
+      data: [entry({ pricing_schedule: weekSchedule })],
+    });
+    const cleanup = await mountModelsCatalog(host);
+
+    const row = host.querySelector('tr[data-mc-idx="0"]')!;
+    expect(row.querySelector(".mc-schedule-line")?.textContent).toBe(
+      "Mon–Fri 01:00–07:00; Sat–Sun 02:00–08:00",
+    );
+    const tip = row.querySelector("[data-band]")?.getAttribute("title") ?? "";
+    expect(tip).toContain("Peak: $0.300 in / $1.20 out / $0.0060 cached");
+    expect(tip).toContain("Off-peak: $0.150 in / $0.600 out / $0.0030 cached");
+    expect(tip).toContain("Peak windows (UTC): Mon–Fri 01:00–07:00; Sat–Sun 02:00–08:00");
+    expect(tip).toContain("Forced off-peak: 2026-01-06");
+    cleanup?.();
+  });
+
+  it("header shows API base and the session key, masked until the eye toggles", async () => {
+    const token = "opk_testkey_abcdef0123456789";
+    localStorage.setItem("openproxy_admin_token", token);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.spyOn(apiModule, "api").mockResolvedValue({ count: 1, data: [entry({ pricing_schedule: null })] });
+    const cleanup = await mountModelsCatalog(host);
+
+    expect(document.getElementById("mc-apibase")?.textContent).toBe(
+      `${window.location.origin}/v1`,
+    );
+    const keyVal = document.getElementById("mc-keyval")!;
+    expect(keyVal.textContent).toBe("opk_test••••••••••6789");
+    expect(keyVal.classList.contains("is-revealed")).toBe(false);
+
+    document.getElementById("mc-key-eye")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(keyVal.textContent).toBe(token);
+    expect(keyVal.classList.contains("is-revealed")).toBe(true);
+
+    document.getElementById("mc-key-eye")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(keyVal.textContent).toBe("opk_test••••••••••6789");
+
+    const copyKey = document.querySelector<HTMLButtonElement>('button[data-ep="copy-key"]')!;
+    copyKey.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(writeText).toHaveBeenCalledWith(token);
+    cleanup?.();
+    localStorage.removeItem("openproxy_admin_token");
+  });
 });
