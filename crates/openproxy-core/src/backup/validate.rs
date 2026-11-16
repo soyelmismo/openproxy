@@ -9,7 +9,7 @@ pub fn validate_backup(
     bundle: &BackupBundle,
     passphrase: Option<&str>,
 ) -> Result<BackupValidationSummary> {
-    if bundle.version == 0 || bundle.version > BACKUP_FORMAT_VERSION + 1 {
+    if bundle.version == 0 || bundle.version > BACKUP_FORMAT_VERSION {
         return Err(CoreError::Validation(format!(
             "Unsupported backup format version: {}. Expected version <= {}",
             bundle.version, BACKUP_FORMAT_VERSION

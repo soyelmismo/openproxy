@@ -104,6 +104,7 @@ pub fn restore_payload(
          DELETE FROM provider_favicons; \
          DELETE FROM live_limited_models; \
          DELETE FROM oauth_device_tickets; \
+         DELETE FROM api_key_quotas; \
          UPDATE usage SET api_key_id = NULL; \
          DELETE FROM combo_targets; \
          DELETE FROM combos; \
@@ -554,7 +555,12 @@ pub fn restore_payload(
     drop(stmt);
 
     // Restore extra unmapped tables (if any)
-    let _ = crate::backup::introspection::restore_extra_tables(&tx, &payload.extra_tables);
+    crate::backup::introspection::restore_extra_tables(&tx, &payload.extra_tables)?;
+    tx.execute_batch(
+        "UPDATE api_keys SET tier_id = NULL WHERE tier_id IS NOT NULL AND tier_id NOT IN (SELECT id FROM credit_tiers); \
+         DELETE FROM api_key_quotas WHERE api_key_id NOT IN (SELECT id FROM api_keys);",
+    )
+    .map_err(|e| map_db_error_ctx("clean dangling tier/quota references after restore")(e))?;
 
     // Verify foreign keys
     let mut fk_stmt = tx

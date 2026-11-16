@@ -5,7 +5,7 @@ use openproxy_types::Result;
 use rusqlite::Connection;
 use std::collections::{BTreeMap, HashSet};
 
-/// Tables that should NEVER be exported in a backup (ephemeral data, telemetry, caches, migrations).
+/// Tables that should NEVER be exported or restored in a backup (ephemeral data, telemetry, caches, migrations, and financial ledger/payment tables).
 pub const TABLE_BLACKLIST: &[&str] = &[
     "schema_migrations",
     "sqlite_sequence",
@@ -20,6 +20,12 @@ pub const TABLE_BLACKLIST: &[&str] = &[
     "free_proxies",
     "live_limited_models",
     "model_capabilities_sync",
+    "credit_transactions",
+    "credit_orders",
+    "matched_payments",
+    "credit_reservations",
+    "credits_watcher_state",
+    "api_key_quotas",
 ];
 
 /// Known core tables that have structured Backup structs.
@@ -126,6 +132,19 @@ pub fn export_extra_columns_by_pk(
     Ok(result)
 }
 
+/// Security-critical and primary-key columns that `restore_extra_columns` must
+/// never overwrite after structured `restore_payload` sanitization/encryption.
+pub const PROTECTED_EXTRA_COLUMNS: &[&str] = &[
+    "id",
+    "key",
+    "api_key_encrypted",
+    "access_token_encrypted",
+    "refresh_token_encrypted",
+    "oauth_provider_specific",
+    "key_hash",
+    "allow_loopback",
+];
+
 /// Dynamic restore of extra columns on an existing row via UPDATE if column exists in target table.
 pub fn restore_extra_columns(
     tx: &rusqlite::Transaction<'_>,
@@ -135,38 +154,51 @@ pub fn restore_extra_columns(
     extra_fields: &BTreeMap<String, serde_json::Value>,
     existing_table_cols: &HashSet<String>,
 ) -> Result<()> {
+    let safe_table = table_name.replace('"', "\"\"");
+    let safe_pk = pk_col.replace('"', "\"\"");
     for (col_name, json_val) in extra_fields {
+        // Never allow extra_fields to overwrite primary keys, encrypted credentials, or SSRF flags
+        if col_name == pk_col || PROTECTED_EXTRA_COLUMNS.contains(&col_name.as_str()) {
+            continue;
+        }
         // Only attempt to set if the column actually exists in the local database schema
         if !existing_table_cols.contains(col_name) {
             continue;
         }
 
+        let safe_col = col_name.replace('"', "\"\"");
         let update_sql =
-            format!("UPDATE \"{table_name}\" SET \"{col_name}\" = ?1 WHERE \"{pk_col}\" = ?2");
+            format!("UPDATE \"{safe_table}\" SET \"{safe_col}\" = ?1 WHERE \"{safe_pk}\" = ?2");
 
         match json_val {
             serde_json::Value::Null => {
-                let _ = tx.execute(
+                tx.execute(
                     &update_sql,
                     rusqlite::params![rusqlite::types::Null, pk_val],
-                );
+                )
+                .map_err(map_db_error)?;
             }
             serde_json::Value::Bool(b) => {
-                let _ = tx.execute(&update_sql, rusqlite::params![*b as i64, pk_val]);
+                tx.execute(&update_sql, rusqlite::params![*b as i64, pk_val])
+                    .map_err(map_db_error)?;
             }
             serde_json::Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
-                    let _ = tx.execute(&update_sql, rusqlite::params![i, pk_val]);
+                    tx.execute(&update_sql, rusqlite::params![i, pk_val])
+                        .map_err(map_db_error)?;
                 } else if let Some(f) = n.as_f64() {
-                    let _ = tx.execute(&update_sql, rusqlite::params![f, pk_val]);
+                    tx.execute(&update_sql, rusqlite::params![f, pk_val])
+                        .map_err(map_db_error)?;
                 }
             }
             serde_json::Value::String(s) => {
-                let _ = tx.execute(&update_sql, rusqlite::params![s, pk_val]);
+                tx.execute(&update_sql, rusqlite::params![s, pk_val])
+                    .map_err(map_db_error)?;
             }
             serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
                 let serialized = json_val.to_string();
-                let _ = tx.execute(&update_sql, rusqlite::params![serialized, pk_val]);
+                tx.execute(&update_sql, rusqlite::params![serialized, pk_val])
+                    .map_err(map_db_error)?;
             }
         }
     }

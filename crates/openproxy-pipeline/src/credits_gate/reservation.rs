@@ -88,12 +88,19 @@ fn reconcile_blocking(
                     "delivered response was already debited",
                 ),
                 Some(evidence) if evidence.cost_units > 0 => {
-                    openproxy_db::cost::mark_winner_usage_row(
-                        conn,
-                        &open.request_id,
-                        evidence.attempt,
-                        ComboTargetId(evidence.target_id),
-                    )?;
+                    if let Some(target_id) = evidence.target_id {
+                        openproxy_db::cost::mark_winner_usage_row(
+                            conn,
+                            &open.request_id,
+                            evidence.attempt,
+                            ComboTargetId(target_id),
+                        )?;
+                    } else {
+                        openproxy_db::cost::mark_client_response(
+                            conn,
+                            openproxy_types::ids::UsageId(evidence.row_id),
+                        )?;
+                    }
                     (
                         db::STATE_SETTLED,
                         db::OUTCOME_RECOVERED_BILLED,

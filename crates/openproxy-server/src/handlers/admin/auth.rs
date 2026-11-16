@@ -349,7 +349,9 @@ fn admin_throttle_allows(
         .flatten()
         .is_some_and(|token| {
             let key_hash = openproxy_core::api_keys::hash_key(token);
-            state.get_cached_api_key(&key_hash).is_some()
+            state
+                .get_cached_api_key(&key_hash)
+                .is_some_and(|key| crate::middleware::auth::validate_key_record(&key, "manage").is_ok())
         })
 }
 
@@ -379,8 +381,6 @@ pub async fn admin_auth_middleware(
 
     match authenticate_admin(&state, req.headers(), Some(&addr)).await {
         Ok(identity) => {
-            state.admin_limiter().record_success(client_ip_for_throttle);
-
             // Scope-based endpoint authorization guard (deny by default).
             // "manage" is the operator scope and sees everything. Client keys
             // (analytics/read) get ONLY the explicit allowlist below: their
@@ -414,6 +414,7 @@ pub async fn admin_auth_middleware(
                 }
             }
 
+            state.admin_limiter().record_success(client_ip_for_throttle);
             req.extensions_mut().insert(identity);
         }
         Err(e) => {

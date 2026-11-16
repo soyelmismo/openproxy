@@ -246,7 +246,7 @@ fn filter_ssrf_addresses(addrs: Vec<SocketAddr>) -> Result<Vec<SocketAddr>, Phas
 /// Cloud metadata lives on link-local (169.254/16) and documentation/multicast
 /// ranges are never legitimate backends — those stay blocked regardless of
 /// the opt-in.
-fn provider_opt_in_admits(ip: &IpAddr) -> bool {
+pub(super) fn provider_opt_in_admits(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
         IpAddr::V6(v6) => {
@@ -524,6 +524,9 @@ async fn run_phased_connect(
     })?;
 
     let proxy_config_opt = resolve_call_proxy_config()?;
+    if proxy_config_opt.is_some() {
+        validate_proxy_target_host(host, port, connect_deadline, timeouts.dns).await?;
+    }
     let (dial_host, dial_port) = resolve_dial_target(proxy_config_opt.as_ref(), host, port);
 
     let stream = establish_raw_tcp_stream(dial_host, dial_port, connect_deadline, timeouts).await?;
@@ -560,6 +563,32 @@ fn parse_authority(uri: &Uri) -> Result<(&str, u16), String> {
         _ => 80,
     });
     Ok((host, port))
+}
+
+/// Validate the ultimate destination host against the SSRF policy even when
+/// traffic is tunneled through an upstream HTTP/SOCKS proxy.
+async fn validate_proxy_target_host(
+    host: &str,
+    port: u16,
+    connect_deadline: std::time::Instant,
+    dns_timeout_config: Duration,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(literal) = parse_literal_ip(host, port) {
+        filter_ssrf_addresses(vec![literal])
+            .map(|_| ())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        return Ok(());
+    }
+    let allow_all = cfg!(test) || cfg!(feature = "ssrf-bypass");
+    if !allow_all {
+        let addrs = dns_phase(host, port, connect_deadline, dns_timeout_config)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        filter_ssrf_addresses(addrs)
+            .map(|_| ())
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+    }
+    Ok(())
 }
 
 /// If `host` is an IP literal (v4 or v6), build the corresponding

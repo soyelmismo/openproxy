@@ -134,12 +134,14 @@ pub async fn resolve_public_host(host: &str, port: u16) -> io::Result<Vec<Socket
 pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     // ROOT FIX (audit A6-01 + H-3): the process-global env var is gone. The
     // per-request `CALL_ALLOW_LOOPBACK` task-local (set from the provider
-    // row's `allow_loopback`) admits LOOPBACK upstreams only; RFC1918,
-    // link-local metadata and every other reserved range stay blocked.
+    // row's `allow_loopback`) admits local upstreams only; link-local metadata
+    // and every other reserved range stay blocked.
     let allow_all = cfg!(test) || cfg!(feature = "ssrf-bypass");
     let allow_loopback = !allow_all && super::connector::call_allows_loopback();
-    let addr_allowed =
-        |ip: std::net::IpAddr| !is_private_or_reserved(&ip) || (allow_loopback && ip.is_loopback());
+    let addr_allowed = |ip: std::net::IpAddr| {
+        !is_private_or_reserved(&ip)
+            || (allow_loopback && super::connector::provider_opt_in_admits(&ip))
+    };
 
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         if !allow_all && !addr_allowed(ip) {
@@ -152,7 +154,16 @@ pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<Socket
     }
 
     let key = cache_key(host, port);
-    if let Some(cached) = get_cached_dns(&key) {
+    if let Some(mut cached) = get_cached_dns(&key) {
+        if !allow_all {
+            cached.retain(|a| addr_allowed(a.ip()));
+            if cached.is_empty() {
+                return Err(io::Error::other(
+                    "all resolved addresses are private/reserved (SSRF block). A provider row with \
+                     allow_loopback = 1 admits loopback upstreams for that provider only.",
+                ));
+            }
+        }
         return Ok(cached);
     }
 
@@ -167,9 +178,11 @@ pub(crate) async fn resolve_host(host: &str, port: u16) -> io::Result<Vec<Socket
             }
         }
     }
-    let now = std::time::Instant::now();
-    DNS_CACHE.insert(key, (addrs.clone(), now + DNS_TTL));
-    ensure_dns_sweep_started();
+    if addrs.iter().all(|a| !is_private_or_reserved(&a.ip())) {
+        let now = std::time::Instant::now();
+        DNS_CACHE.insert(key, (addrs.clone(), now + DNS_TTL));
+        ensure_dns_sweep_started();
+    }
 
     Ok(addrs)
 }
