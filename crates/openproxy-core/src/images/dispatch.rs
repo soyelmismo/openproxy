@@ -310,14 +310,12 @@ pub async fn execute_image_generation(
         let req_json = serde_json::to_vec(&req).ok().map(bytes::Bytes::from);
         let resp_json = serde_json::to_value(&parsed_response).ok();
 
-        let delivered_images = images.map(|req_n| {
-            let actual = u32::try_from(parsed_response.data.len()).unwrap_or(req_n);
-            req_n.max(actual)
-        });
+        let actual = u32::try_from(parsed_response.data.len()).unwrap_or(images);
+        let delivered_images = images.max(actual);
         let args = UnaryUsageArgs::from_target(target, EndpointKind::Image, status_code, total_ms)
             .with_request_id(request_id)
             .with_api_key_id(api_key_id)
-            .with_tokens(delivered_images, None)
+            .with_tokens(Some(delivered_images), None)
             .with_json(req_json, resp_json);
         // The debit rides on this row; persist it before releasing the key.
         credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;

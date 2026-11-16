@@ -86,7 +86,7 @@ pub mod reservations {
     pub struct UsageEvidence {
         pub row_id: i64,
         pub attempt: u8,
-        pub target_id: i64,
+        pub target_id: Option<i64>,
         pub cost_units: i64,
         pub debited: bool,
         pub client_response: bool,

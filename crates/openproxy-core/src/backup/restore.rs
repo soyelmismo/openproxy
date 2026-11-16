@@ -97,14 +97,23 @@ pub fn restore_payload(
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|e| map_db_error_ctx("begin restore transaction")(e))?;
 
-    // Clear dependent and existing tables
-    tx.execute_batch(
+    // Clear dependent and existing tables. `api_key_quotas` is only present
+    // when its migration ran (payments-era schema); a restore into a
+    // minimal-schema target must skip it instead of failing the batch.
+    let has_api_key_quotas: bool = tx
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'api_key_quotas'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| map_db_error_ctx("probe api_key_quotas table")(e))?;
+    let mut clean_sql = String::from(
         "DELETE FROM target_cooldowns; \
          DELETE FROM provider_proxy_cooldowns; \
          DELETE FROM provider_favicons; \
          DELETE FROM live_limited_models; \
          DELETE FROM oauth_device_tickets; \
-         DELETE FROM api_key_quotas; \
          UPDATE usage SET api_key_id = NULL; \
          DELETE FROM combo_targets; \
          DELETE FROM combos; \
@@ -115,8 +124,12 @@ pub fn restore_payload(
          DELETE FROM api_keys; \
          DELETE FROM app_config; \
          DELETE FROM sqlite_sequence WHERE name IN ('combo_targets', 'combos', 'accounts', 'models', 'api_keys');",
-    )
-    .map_err(|e| map_db_error_ctx("clean tables for restore")(e))?;
+    );
+    if has_api_key_quotas {
+        clean_sql.insert_str(0, "DELETE FROM api_key_quotas; ");
+    }
+    tx.execute_batch(&clean_sql)
+        .map_err(|e| map_db_error_ctx("clean tables for restore")(e))?;
 
     // Restore providers
     let provider_cols: std::collections::HashSet<String> =
@@ -556,11 +569,42 @@ pub fn restore_payload(
 
     // Restore extra unmapped tables (if any)
     crate::backup::introspection::restore_extra_tables(&tx, &payload.extra_tables)?;
-    tx.execute_batch(
-        "UPDATE api_keys SET tier_id = NULL WHERE tier_id IS NOT NULL AND tier_id NOT IN (SELECT id FROM credit_tiers); \
-         DELETE FROM api_key_quotas WHERE api_key_id NOT IN (SELECT id FROM api_keys);",
-    )
-    .map_err(|e| map_db_error_ctx("clean dangling tier/quota references after restore")(e))?;
+    // Dangling-reference cleanup assumes the payments-era schema (tier_id
+    // column, credit_tiers and api_key_quotas). Restoring into a
+    // minimal-schema target skips them instead of failing the batch.
+    let api_key_cols: std::collections::HashSet<String> =
+        crate::backup::introspection::get_table_columns(&tx, "api_keys")
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    let table_exists = |name: &str| -> openproxy_types::Result<bool> {
+        tx.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![name],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .map_err(|e| map_db_error_ctx(format!("probe {name} table"))(e))
+    };
+    let has_tier_id = api_key_cols.contains("tier_id") && table_exists("credit_tiers")?;
+    let has_quotas = table_exists("api_key_quotas")?;
+    let mut dangling_sql = String::new();
+    if has_tier_id {
+        dangling_sql.push_str(
+            "UPDATE api_keys SET tier_id = NULL WHERE tier_id IS NOT NULL \
+             AND tier_id NOT IN (SELECT id FROM credit_tiers); ",
+        );
+    }
+    if has_quotas {
+        dangling_sql.push_str(
+            "DELETE FROM api_key_quotas WHERE api_key_id NOT IN (SELECT id FROM api_keys); ",
+        );
+    }
+    if !dangling_sql.is_empty() {
+        tx.execute_batch(&dangling_sql).map_err(|e| {
+            map_db_error_ctx("clean dangling tier/quota references after restore")(e)
+        })?;
+    }
 
     // Verify foreign keys
     let mut fk_stmt = tx

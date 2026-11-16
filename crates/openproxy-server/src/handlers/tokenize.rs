@@ -104,7 +104,7 @@ pub async fn tokenize(
                 .find(|t| {
                     auth_token.as_ref().is_none_or(|auth| {
                         auth.is_provider_allowed(t.provider_id.as_str())
-                            && auth.is_model_allowed_for_provider(t.provider_id.as_str(), &model)
+                            && auth.is_model_allowed(&model, Some(t.provider_id.as_str()))
                     })
                 })
                 .ok_or_else(|| {
