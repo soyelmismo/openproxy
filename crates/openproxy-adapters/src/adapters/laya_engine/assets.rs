@@ -1,23 +1,20 @@
 //! Pinned, hash-verified artifacts. Downloads stream to an atomic disk cache.
 use super::{CoreError, lifecycle::Settings};
-use sha2::{Digest, Sha256};
-use std::path::Path;
 #[cfg(any(feature = "upstream-hyper", test))]
-use std::path::PathBuf;
-use tokio::io::AsyncReadExt;
-#[cfg(feature = "upstream-hyper")]
-use tokio::io::AsyncWriteExt;
+use crate::adapters::native_engine_common::TemporaryFile as Temporary;
+use crate::adapters::native_engine_common::{
+    Artifact, artifact_error, download_artifact, verify_artifact,
+};
+use std::path::Path;
 
 #[cfg(feature = "upstream-hyper")]
 const REVISION: &str = "0966c4fa58da6878b39e7e14cb5e93313b82d828";
 #[cfg(feature = "upstream-hyper")]
 const REPOSITORY: &str = "https://huggingface.co/soyelmismo/laya-multilingual-onnx/resolve";
+#[cfg(not(feature = "upstream-hyper"))]
+const REVISION: &str = "";
 
-struct Artifact {
-    name: &'static str,
-    size: u64,
-    hash: &'static str,
-}
+const ERR_PREFIX: &str = "Laya artifacts";
 
 const ARTIFACTS: [Artifact; 3] = [
     Artifact {
@@ -38,7 +35,7 @@ const ARTIFACTS: [Artifact; 3] = [
 ];
 
 fn error(e: impl std::fmt::Display) -> CoreError {
-    CoreError::Internal(format!("Laya artifacts: {e}"))
+    artifact_error(ERR_PREFIX, e)
 }
 
 pub(super) async fn ensure(settings: &Settings) -> Result<(), CoreError> {
@@ -55,7 +52,6 @@ pub(super) async fn ensure(settings: &Settings) -> Result<(), CoreError> {
     for ((artifact, path), custom) in ARTIFACTS.iter().zip(paths).zip(custom) {
         let path = Path::new(&path);
         if custom || path.file_name().is_some_and(|name| name != artifact.name) {
-            // Explicit custom models/configs remain supported, but are never overwritten.
             if !tokio::fs::try_exists(path).await.map_err(error)?
                 && artifact.name != "rl_agent_config.json"
             {
@@ -76,154 +72,26 @@ pub(super) async fn ensure(settings: &Settings) -> Result<(), CoreError> {
 }
 
 async fn verify(path: &Path, artifact: &Artifact) -> Result<(), CoreError> {
-    let mut file = tokio::fs::File::open(path).await.map_err(error)?;
-    if file.metadata().await.map_err(error)?.len() != artifact.size {
-        return Err(error(format!("{} has an unexpected size", path.display())));
-    }
-    let mut hash = Sha256::new();
-    let mut buffer = vec![0; 64 * 1024];
-    loop {
-        let len = file.read(&mut buffer).await.map_err(error)?;
-        if len == 0 {
-            break;
-        }
-        hash.update(&buffer[..len]);
-    }
-    verify_digest(hash, artifact)
+    verify_artifact(path, artifact, ERR_PREFIX).await
 }
 
-fn verify_digest(hash: Sha256, artifact: &Artifact) -> Result<(), CoreError> {
-    let actual: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
-    if actual != artifact.hash {
-        return Err(error(format!(
-            "SHA-256 mismatch for {}; refusing to load",
-            artifact.name
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(any(feature = "upstream-hyper", test))]
-struct Temporary(PathBuf);
-#[cfg(any(feature = "upstream-hyper", test))]
-impl Drop for Temporary {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-#[cfg(feature = "upstream-hyper")]
 async fn download(path: &Path, artifact: &Artifact) -> Result<(), CoreError> {
-    if std::env::var("OPENPROXY_LAYA_AUTO_DOWNLOAD").is_ok_and(|v| v == "0" || v == "false") {
-        return Err(error(
-            "automatic downloads disabled; install Laya files manually",
-        ));
-    }
-    let parent = path
-        .parent()
-        .ok_or_else(|| error("missing cache directory"))?;
-    tokio::fs::create_dir_all(parent).await.map_err(error)?;
-    let temporary =
-        Temporary(parent.join(format!(".{}.{}.part", artifact.name, uuid::Uuid::new_v4())));
-    let mut options = tokio::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(&temporary.0).await.map_err(error)?;
-    tracing::info!(
-        artifact = artifact.name,
-        revision = REVISION,
-        "Downloading Laya on demand"
-    );
-    tokio::time::timeout(std::time::Duration::from_secs(600), async {
-        let mut response = fetch(artifact).await?;
-        let mut hash = Sha256::new();
-        let mut size = 0u64;
-        while let Some(chunk) = response.body.next_chunk().await.map_err(error)? {
-            size = size
-                .checked_add(chunk.len() as u64)
-                .ok_or_else(|| error("size overflow"))?;
-            if size > artifact.size {
-                return Err(error("download exceeds pinned size"));
-            }
-            hash.update(&chunk);
-            file.write_all(&chunk).await.map_err(error)?;
-        }
-        if size != artifact.size {
-            return Err(error("incomplete artifact download"));
-        }
-        verify_digest(hash, artifact)?;
-        file.sync_all().await.map_err(error)?;
-        drop(file);
-        // Publish without replacing a concurrently-installed file.
-        tokio::fs::hard_link(&temporary.0, path)
-            .await
-            .map_err(error)?;
-        Ok(())
-    })
+    #[cfg(feature = "upstream-hyper")]
+    let remote_url = format!("{REPOSITORY}/{REVISION}/{}", artifact.name);
+    #[cfg(not(feature = "upstream-hyper"))]
+    let remote_url = String::new();
+
+    download_artifact(
+        path,
+        artifact,
+        remote_url,
+        "OPENPROXY_LAYA_AUTO_DOWNLOAD",
+        "automatic downloads disabled; install Laya files manually",
+        "Laya",
+        REVISION,
+        ERR_PREFIX,
+    )
     .await
-    .map_err(|_| error("download timed out"))?
-}
-
-#[cfg(not(feature = "upstream-hyper"))]
-async fn download(_path: &Path, _artifact: &Artifact) -> Result<(), CoreError> {
-    Err(error("automatic downloads require upstream-hyper"))
-}
-
-#[cfg(feature = "upstream-hyper")]
-async fn fetch(artifact: &Artifact) -> Result<crate::upstream::UpstreamResponse, CoreError> {
-    use crate::upstream::{
-        CancellationToken, ResolvedTimeouts, TimeoutProfile, UpstreamClient, UpstreamRequest,
-    };
-    let client = UpstreamClient::new();
-    let mut url = format!("{REPOSITORY}/{REVISION}/{}", artifact.name);
-    for _ in 0..6 {
-        let uri: http::Uri = url.parse().map_err(error)?;
-        if uri.scheme_str() != Some("https") {
-            return Err(error("insecure artifact redirect"));
-        }
-        // Artifacts are piped chunk-by-chunk to disk under a pinned-size
-        // ceiling (see `download`), so this is the one legitimate streaming
-        // consumer of `UpstreamRequest::get`: opt back into the streaming
-        // transport explicitly. Unary helpers now default to the bounded
-        // non-streaming limit (32 MiB), which would truncate large models.
-        let mut req = UpstreamRequest::get(&url);
-        req.is_streaming = true;
-        let response = client
-            .call(
-                req,
-                TimeoutProfile::Custom(ResolvedTimeouts {
-                    headers_ms: 30000,
-                    body_chunk_ms: 60000,
-                    total_ms: 600000,
-                    ..ResolvedTimeouts::SYSTEM_DEFAULTS
-                }),
-                CancellationToken::new(),
-            )
-            .await
-            .map_err(error)?;
-        if response.status.is_success() {
-            return Ok(response);
-        }
-        if !response.status.is_redirection() {
-            return Err(error(format!("download HTTP {}", response.status)));
-        }
-        let location = response
-            .headers
-            .get(http::header::LOCATION)
-            .ok_or_else(|| error("redirect without location"))?
-            .to_str()
-            .map_err(error)?;
-        url = if location.starts_with('/') {
-            format!(
-                "https://{}{location}",
-                uri.authority().ok_or_else(|| error("missing host"))?
-            )
-        } else {
-            location.to_owned()
-        };
-    }
-    Err(error("too many artifact redirects"))
 }
 
 #[cfg(test)]

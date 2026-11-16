@@ -57,6 +57,100 @@ struct PendingCheckout {
     reply: oneshot::Sender<Result<CreditOrder>>,
 }
 
+/// Generic group-commit queue shared by [`CheckoutBatcher`] and
+/// [`super::delivery_batch::DeliveryBatcher`].
+///
+///Lazily spawns a detached committer task on the current Tokio runtime and
+///collects up to `max_batch` items within `collect_window` before invoking
+///`commit_fn` in a single batch.
+pub(crate) struct GroupCommitQueue<T> {
+    sender: OnceLock<mpsc::Sender<T>>,
+    queue_depth: usize,
+    max_batch: usize,
+    collect_window: std::time::Duration,
+    not_running_msg: &'static str,
+    no_runtime_msg: &'static str,
+}
+
+impl<T: Send + 'static> GroupCommitQueue<T> {
+    pub(crate) const fn new(
+        queue_depth: usize,
+        max_batch: usize,
+        collect_window: std::time::Duration,
+        not_running_msg: &'static str,
+        no_runtime_msg: &'static str,
+    ) -> Self {
+        Self {
+            sender: OnceLock::new(),
+            queue_depth,
+            max_batch,
+            collect_window,
+            not_running_msg,
+            no_runtime_msg,
+        }
+    }
+
+    pub(crate) fn is_started(&self) -> bool {
+        self.sender.get().is_some()
+    }
+
+    pub(crate) fn sender_or_spawn<F, Fut>(&self, commit_fn: F) -> Result<mpsc::Sender<T>>
+    where
+        F: Fn(Vec<T>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if let Some(sender) = self.sender.get() {
+            return Ok(sender.clone());
+        }
+        let handle = tokio::runtime::Handle::try_current()
+            .map_err(|_| CoreError::Internal(self.no_runtime_msg.into()))?;
+        let queue_depth = self.queue_depth;
+        let max_batch = self.max_batch;
+        let collect_window = self.collect_window;
+        let sender = self.sender.get_or_init(|| {
+            let (sender, mut receiver) = mpsc::channel::<T>(queue_depth);
+            let _ = handle.spawn(async move {
+                loop {
+                    let Some(first) = receiver.recv().await else {
+                        return;
+                    };
+                    let mut batch = Vec::with_capacity(max_batch);
+                    batch.push(first);
+                    let mut drained = false;
+                    let deadline = tokio::time::Instant::now() + collect_window;
+                    while batch.len() < max_batch {
+                        match tokio::time::timeout_at(deadline, receiver.recv()).await {
+                            Ok(Some(next)) => batch.push(next),
+                            Ok(None) => {
+                                drained = true;
+                                break;
+                            }
+                            Err(_elapsed) => break,
+                        }
+                    }
+                    commit_fn(batch).await;
+                    if drained {
+                        return;
+                    }
+                }
+            });
+            sender
+        });
+        Ok(sender.clone())
+    }
+
+    pub(crate) async fn send<F, Fut>(&self, item: T, commit_fn: F) -> Result<()>
+    where
+        F: Fn(Vec<T>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.sender_or_spawn(commit_fn)?
+            .send(item)
+            .await
+            .map_err(|_| CoreError::Internal(self.not_running_msg.into()))
+    }
+}
+
 /// Per-`AppState` checkout batcher. Cloning is cheap and shares one queue.
 #[derive(Clone)]
 pub struct CheckoutBatcher {
@@ -65,15 +159,13 @@ pub struct CheckoutBatcher {
 
 struct Inner {
     pool: Arc<DbPool>,
-    /// Created on the first `submit` (or in `new` when a runtime is already
-    /// running). `OnceLock` keeps `new` synchronous and race-free.
-    sender: OnceLock<mpsc::Sender<PendingCheckout>>,
+    queue: GroupCommitQueue<PendingCheckout>,
 }
 
 impl std::fmt::Debug for CheckoutBatcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CheckoutBatcher")
-            .field("started", &self.inner.sender.get().is_some())
+            .field("started", &self.inner.queue.is_started())
             .finish_non_exhaustive()
     }
 }
@@ -87,33 +179,26 @@ impl CheckoutBatcher {
         let batcher = Self {
             inner: Arc::new(Inner {
                 pool,
-                sender: OnceLock::new(),
+                queue: GroupCommitQueue::new(
+                    CHECKOUT_QUEUE_DEPTH,
+                    CHECKOUT_MAX_BATCH,
+                    CHECKOUT_COLLECT_WINDOW,
+                    "checkout batcher is not running",
+                    "checkout batcher needs a tokio runtime to start its committer",
+                ),
             }),
         };
-        // Ignore the error: without a runtime the first submit starts the task.
         let _ = batcher.sender();
         batcher
     }
 
     /// Create one receipt-bound checkout through the group committer.
-    ///
-    /// Returns only after the batch that contains this item has COMMITTED, so a
-    /// returned order is durable (as durable as `synchronous` allows) and
-    /// quotable. Dropping this future does NOT cancel the order: the row is
-    /// still committed with its batch, and retrying with the same receipt
-    /// replays it (that is the whole point of the receipt).
-    ///
-    /// # Errors
-    /// - the item's own validation/DB failure (bad plan, window, receipt, jitter);
-    /// - `Internal` when the batcher is not running or the batch COMMIT failed —
-    ///   in which case NO order exists for this call.
     pub async fn submit(
         &self,
         request: CreateOrderRequest,
         payment_window_secs: i64,
         receipt: String,
     ) -> Result<CreditOrder> {
-        let sender = self.sender()?;
         let (reply, answer) = oneshot::channel();
         let pending = PendingCheckout {
             item: BatchOrderRequest {
@@ -123,10 +208,14 @@ impl CheckoutBatcher {
             },
             reply,
         };
-        sender
-            .send(pending)
-            .await
-            .map_err(|_| CoreError::Internal("checkout batcher is not running".into()))?;
+        let pool = Arc::clone(&self.inner.pool);
+        self.inner
+            .queue
+            .send(pending, move |batch| {
+                let pool = Arc::clone(&pool);
+                async move { commit_batch(&pool, batch).await }
+            })
+            .await?;
         answer.await.map_err(|_| {
             CoreError::Internal(
                 "checkout batch ended without a result (the transaction was not committed)".into(),
@@ -134,55 +223,12 @@ impl CheckoutBatcher {
         })?
     }
 
-    /// Start (once) and return the queue handle.
     fn sender(&self) -> Result<mpsc::Sender<PendingCheckout>> {
-        if let Some(sender) = self.inner.sender.get() {
-            return Ok(sender.clone());
-        }
-        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
-            CoreError::Internal(
-                "checkout batcher needs a tokio runtime to start its committer".into(),
-            )
-        })?;
-        // The task holds only the pool and the receiver: when every batcher
-        // handle is dropped the channel closes and the committer exits.
         let pool = Arc::clone(&self.inner.pool);
-        let sender = self.inner.sender.get_or_init(|| {
-            let (sender, receiver) = mpsc::channel(CHECKOUT_QUEUE_DEPTH);
-            // Detached on purpose: the batcher owns the queue, not the handle.
-            let _ = handle.spawn(run_committer(pool, receiver));
-            sender
-        });
-        Ok(sender.clone())
-    }
-}
-
-/// Drain the queue and commit in batches until every sender is gone.
-async fn run_committer(pool: Arc<DbPool>, mut queue: mpsc::Receiver<PendingCheckout>) {
-    loop {
-        // Park until there is work: no polling, no timer while idle.
-        let Some(first) = queue.recv().await else {
-            return;
-        };
-        let mut batch = Vec::with_capacity(CHECKOUT_MAX_BATCH);
-        batch.push(first);
-        let mut drained = false;
-        let deadline = tokio::time::Instant::now() + CHECKOUT_COLLECT_WINDOW;
-        while batch.len() < CHECKOUT_MAX_BATCH {
-            match tokio::time::timeout_at(deadline, queue.recv()).await {
-                Ok(Some(next)) => batch.push(next),
-                Ok(None) => {
-                    // Batcher dropped mid-collect: flush this batch, then stop.
-                    drained = true;
-                    break;
-                }
-                Err(_elapsed) => break,
-            }
-        }
-        commit_batch(&pool, batch).await;
-        if drained {
-            return;
-        }
+        self.inner.queue.sender_or_spawn(move |batch| {
+            let pool = Arc::clone(&pool);
+            async move { commit_batch(&pool, batch).await }
+        })
     }
 }
 
@@ -201,14 +247,10 @@ async fn commit_batch(pool: &Arc<DbPool>, batch: Vec<PendingCheckout>) {
     match written {
         Ok(results) => {
             for (reply, result) in replies.into_iter().zip(results) {
-                // A closed receiver means the caller went away; the order is
-                // already committed and a receipt retry replays it.
                 let _ = reply.send(result);
             }
         }
         Err(e) => {
-            // The transaction did not land: no item of this batch exists, so
-            // every waiter gets an error and nobody may quote an order.
             let message = format!("checkout batch commit failed: {e}");
             for reply in replies {
                 let _ = reply.send(Err(CoreError::Internal(message.clone())));

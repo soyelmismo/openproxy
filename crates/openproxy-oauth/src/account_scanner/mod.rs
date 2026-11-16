@@ -25,7 +25,7 @@ pub use claude_code::{
 };
 pub use local_sync::{
     antigravity_account_matches, check_local_cli_updated_tokens, claude_code_account_matches,
-    sync_to_local_cli_if_active,
+    sync_to_local_cli_if_active, write_account_to_claude_code_cli,
 };
 
 /// Home directory via `std::env::var_os("HOME")`, fallback to `USERPROFILE`.
@@ -75,54 +75,34 @@ impl DiscoveredAccount {
     }
 }
 
+fn push_if_unique(accounts: &mut Vec<DiscoveredAccount>, candidate: DiscoveredAccount) {
+    let duplicate = accounts.iter().any(|a| {
+        a.provider_id == candidate.provider_id
+            && ((a.email.is_some() && a.email == candidate.email)
+                || a.access_token == candidate.access_token
+                || (a.refresh_token.is_some() && a.refresh_token == candidate.refresh_token))
+    });
+    if !duplicate {
+        accounts.push(candidate);
+    }
+}
+
 /// Discovers accounts from local CLIs (Antigravity CLI, Antigravity OAuth creds,
 /// Claude Code CLI, Claude-Swap backups).
 pub fn scan_external_accounts() -> Vec<DiscoveredAccount> {
     let mut accounts = Vec::new();
-
-    // Antigravity CLI
-    if let Some(cli_acc) = scan_antigravity_cli() {
-        accounts.push(cli_acc);
+    for candidate in [
+        scan_antigravity_cli(),
+        scan_antigravity_oauth_creds(),
+        scan_claude_code_cli(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        push_if_unique(&mut accounts, candidate);
     }
-
-    // Antigravity OAuth creds
-    if let Some(creds_acc) = scan_antigravity_oauth_creds() {
-        let duplicate = accounts.iter().any(|a| {
-            a.provider_id == creds_acc.provider_id
-                && ((a.email.is_some() && a.email == creds_acc.email)
-                    || a.access_token == creds_acc.access_token
-                    || (a.refresh_token.is_some() && a.refresh_token == creds_acc.refresh_token))
-        });
-        if !duplicate {
-            accounts.push(creds_acc);
-        }
-    }
-
-    // Claude Code CLI
-    if let Some(claude_acc) = scan_claude_code_cli() {
-        let duplicate = accounts.iter().any(|a| {
-            a.provider_id == claude_acc.provider_id
-                && ((a.email.is_some() && a.email == claude_acc.email)
-                    || a.access_token == claude_acc.access_token
-                    || (a.refresh_token.is_some() && a.refresh_token == claude_acc.refresh_token))
-        });
-        if !duplicate {
-            accounts.push(claude_acc);
-        }
-    }
-
-    // Claude-Swap backups
     for cswap_acc in scan_claude_swap_backups() {
-        let duplicate = accounts.iter().any(|a| {
-            a.provider_id == cswap_acc.provider_id
-                && ((a.email.is_some() && a.email == cswap_acc.email)
-                    || a.access_token == cswap_acc.access_token
-                    || (a.refresh_token.is_some() && a.refresh_token == cswap_acc.refresh_token))
-        });
-        if !duplicate {
-            accounts.push(cswap_acc);
-        }
+        push_if_unique(&mut accounts, cswap_acc);
     }
-
     accounts
 }

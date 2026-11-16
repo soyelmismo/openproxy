@@ -741,4 +741,4 @@ pub use unary::{admit_unary_credit, admit_unary_credit_with_request, settle_unar
 // These tests seed credit tables directly: they only exist with payments.
 #[cfg(all(test, feature = "payments"))]
 #[path = "credits_gate_tests.rs"]
-mod tests;
+pub(crate) mod tests;

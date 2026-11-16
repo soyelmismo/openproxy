@@ -128,6 +128,9 @@ fn update_inflight_attempt(
     if event.api_key_id.is_some() {
         item.api_key_id = event.api_key_id;
     }
+    if event.session_hash.is_some() {
+        item.session_hash = event.session_hash;
+    }
 }
 
 fn publish_stage_global(event: openproxy_types::usage::StageEvent) {

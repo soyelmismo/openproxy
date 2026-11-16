@@ -66,26 +66,31 @@ async fn different_keys_run_in_parallel() {
 // ── upstream fixture ────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
-enum UpstreamMode {
+pub(crate) enum UpstreamMode {
     /// SSE completion: one content frame, a terminal `usage` frame, `[DONE]`.
     /// The harness advertises `streaming: true` for the fixture model, and the
     /// pipeline always streams upstream for such a model, so even a unary
     /// client request arrives here as a stream and is accumulated downstream.
     Ok,
+    /// SSE completion with 100 prompt tokens for `openai/gpt-4o` budget tests.
+    BudgetOk,
     /// 500 with a JSON error body.
     ServerError,
+    /// One content frame, then silence: the client receives part of the
+    /// response and the process is aborted, like a crash mid-stream.
+    HangAfterFirstChunk,
     /// SSE headers, then silence: the client stays in flight until aborted.
     Hang,
 }
 
-struct Upstream {
-    url: String,
-    hits: std::sync::Arc<AtomicUsize>,
+pub(crate) struct Upstream {
+    pub(crate) url: String,
+    pub(crate) hits: std::sync::Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Upstream {
-    async fn start(mode: UpstreamMode) -> Self {
+    pub(crate) async fn start(mode: UpstreamMode) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
@@ -133,12 +138,34 @@ async fn serve_connection(
                 body.len()
             )
         }
+        UpstreamMode::BudgetOk => {
+            let body = concat!(
+                "data: {\"id\":\"budget\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"openai/gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"budget\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"openai/gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":0,\"total_tokens\":100}}\n\n",
+                "data: [DONE]\n\n"
+            );
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
         UpstreamMode::ServerError => {
             let body = "{\"error\":{\"message\":\"fixture upstream failure\"}}";
             format!(
                 "HTTP/1.1 500 Internal Server Error\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
             )
+        }
+        UpstreamMode::HangAfterFirstChunk => {
+            let head =
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+            let chunk = "data: {\"id\":\"budget\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"openai/gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n";
+            let _ = socket.write_all(head.as_bytes()).await;
+            let _ = socket.write_all(chunk.as_bytes()).await;
+            let _ = socket.flush().await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = socket.shutdown().await;
+            return;
         }
         UpstreamMode::Hang => {
             let _ = socket
@@ -193,21 +220,43 @@ async fn read_http_request(socket: &mut tokio::net::TcpStream) -> Option<Vec<u8>
 
 // ── harness ─────────────────────────────────────────────────────────
 
-struct Harness {
-    pipeline: crate::Pipeline,
-    pool: openproxy_db::conn::DbPool,
-    combo_id: ComboId,
-    target_id: ComboTargetId,
-    key_id: i64,
-    hits: std::sync::Arc<AtomicUsize>,
-    worker: Option<crate::worker::WorkerHandle>,
+pub(crate) struct Harness {
+    pub(crate) pipeline: crate::Pipeline,
+    pub(crate) pool: openproxy_db::conn::DbPool,
+    pub(crate) combo_id: ComboId,
+    pub(crate) target_id: ComboTargetId,
+    pub(crate) key_id: i64,
+    pub(crate) hits: std::sync::Arc<AtomicUsize>,
+    pub(crate) worker: Option<crate::worker::WorkerHandle>,
 }
 
 impl Harness {
     /// `grant_units = None` seeds a key with no ledger rows at all (not
     /// credit-governed). `with_worker = false` leaves the usage journal with
     /// nobody draining it, which lets a test observe admission's own drain.
-    fn start(upstream: &Upstream, grant_units: Option<i64>, with_worker: bool) -> Self {
+    pub(crate) fn start(
+        upstream: &Upstream,
+        grant_units: Option<i64>,
+        with_worker: bool,
+    ) -> Self {
+        Self::start_with_options(
+            upstream,
+            None,
+            Some((1000.0, 0.0)),
+            false,
+            grant_units,
+            with_worker,
+        )
+    }
+
+    pub(crate) fn start_with_options(
+        upstream: &Upstream,
+        model_id: Option<&str>,
+        combo_price: Option<(f64, f64)>,
+        price_model_row: bool,
+        grant_units: Option<i64>,
+        with_worker: bool,
+    ) -> Self {
         let (pool, seed_conn, _path) = crate::test_utils::fresh_pool();
         let master_key =
             std::sync::Arc::new(openproxy_db::secrets::MasterKey::generate().expect("master key"));
@@ -220,19 +269,48 @@ impl Harness {
                 &upstream.url,
                 master_key.as_ref(),
             );
-            // A request that reports 1000 prompt tokens costs 1000 * 1000 / 1e6
-            // = 1.0 USD, i.e. far more than the seeded grant, so one admitted
-            // request always drains it.
-            conn.execute(
-                "UPDATE combos SET pricing_input_per_1m = 1000.0, pricing_output_per_1m = 0.0 WHERE id = ?1",
-                [combo_id.0],
-            )
-            .expect("price combo");
-            conn.execute(
-                "UPDATE models SET capabilities_json = '{\"streaming\":true}' WHERE provider_id = 'mock-openai'",
-                [],
-            )
-            .expect("enable streaming capability");
+            if let Some(model_id) = model_id {
+                conn.execute(
+                    "UPDATE models SET model_id = ?1, capabilities_json = '{\"streaming\":true}' \
+                     WHERE provider_id = 'mock-openai'",
+                    [model_id],
+                )
+                .expect("set fixture model");
+            } else {
+                conn.execute(
+                    "UPDATE models SET capabilities_json = '{\"streaming\":true}' WHERE provider_id = 'mock-openai'",
+                    [],
+                )
+                .expect("enable streaming capability");
+            }
+            match combo_price {
+                Some((input, output)) => {
+                    conn.execute(
+                        "UPDATE combos SET pricing_input_per_1m = ?1, pricing_output_per_1m = ?2 WHERE id = ?3",
+                        rusqlite::params![input, output, combo_id.0],
+                    )
+                    .expect("price combo");
+                    if price_model_row && let Some(model_id) = model_id {
+                        conn.execute(
+                            "INSERT INTO model_capabilities_sync \
+                             (provider_id, model_id, pricing_input_per_1m, pricing_output_per_1m) \
+                             VALUES ('mock-openai', ?1, ?2, ?3) \
+                             ON CONFLICT(provider_id, model_id) DO UPDATE SET \
+                                 pricing_input_per_1m = excluded.pricing_input_per_1m, \
+                                 pricing_output_per_1m = excluded.pricing_output_per_1m",
+                            rusqlite::params![model_id, input, output],
+                        )
+                        .expect("price model row");
+                    }
+                }
+                None => {
+                    conn.execute(
+                        "UPDATE combos SET pricing_input_per_1m = NULL, pricing_output_per_1m = NULL WHERE id = ?1",
+                        [combo_id.0],
+                    )
+                    .expect("clear combo price");
+                }
+            }
             conn.execute(
                 "INSERT INTO api_keys (key_hash, label) VALUES ('credit-gate-fixture', 'credit-gate')",
                 [],
@@ -278,7 +356,7 @@ impl Harness {
         }
     }
 
-    fn request(
+    pub(crate) fn request(
         &self,
     ) -> (
         crate::PipelineRequest,
@@ -289,7 +367,13 @@ impl Harness {
         (req, cancel)
     }
 
-    fn streaming_request(
+    pub(crate) fn request_with_max_tokens(&self, max_tokens: Option<u32>) -> crate::PipelineRequest {
+        let (mut req, _cancel) = self.request();
+        std::sync::Arc::make_mut(&mut req.openai_request).max_tokens = max_tokens;
+        req
+    }
+
+    pub(crate) fn streaming_request(
         &self,
     ) -> (
         crate::PipelineRequest,
@@ -303,17 +387,31 @@ impl Harness {
         (req, rx, cancel)
     }
 
+    pub(crate) fn streaming_request_with_max_tokens(
+        &self,
+        max_tokens: Option<u32>,
+    ) -> (
+        crate::PipelineRequest,
+        tokio::sync::mpsc::Receiver<bytes::Bytes>,
+    ) {
+        let mut req = self.request_with_max_tokens(max_tokens);
+        std::sync::Arc::make_mut(&mut req.openai_request).stream = true;
+        let (sink, rx) = tokio::sync::mpsc::channel(64);
+        req.stream_sink = Some(crate::StreamSink::direct(sink));
+        (req, rx)
+    }
+
     /// Identity the gate keys lanes by: the shared writer connection.
-    fn db_id(&self) -> usize {
+    pub(crate) fn db_id(&self) -> usize {
         std::sync::Arc::as_ptr(&self.pipeline.conn) as usize
     }
 
-    fn balance(&self) -> i64 {
+    pub(crate) fn balance(&self) -> i64 {
         let conn = self.pool.writer();
         openproxy_db::credits_ledger::balance_units(&conn, self.key_id).expect("balance")
     }
 
-    fn usage_row(&self, request_id: &str) -> Option<(i64, i64, f64)> {
+    pub(crate) fn usage_row(&self, request_id: &str) -> Option<(i64, i64, f64)> {
         use rusqlite::OptionalExtension;
         let conn = self.pool.writer();
         conn.query_row(
@@ -326,7 +424,32 @@ impl Harness {
         .expect("usage lookup")
     }
 
-    fn debited_rows(&self) -> i64 {
+    pub(crate) fn reservation(
+        &self,
+        request_id: &str,
+    ) -> Option<(i64, i64, i64, String, Option<String>, i64)> {
+        use rusqlite::OptionalExtension;
+        let conn = self.pool.writer();
+        conn.query_row(
+            "SELECT generated_units, delivery_started, reserved_units, state, outcome, charged_units \
+             FROM credit_reservations WHERE request_id = ?1 AND attempt = 1",
+            [request_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()
+        .expect("reservation lookup")
+    }
+
+    pub(crate) fn debited_rows(&self) -> i64 {
         let conn = self.pool.writer();
         conn.query_row(
             "SELECT COUNT(*) FROM usage WHERE api_key_id = ?1 AND credits_debited = 1",
@@ -336,14 +459,14 @@ impl Harness {
         .expect("count debits")
     }
 
-    async fn run_with_timeout(&self, req: crate::PipelineRequest) -> crate::PipelineResult {
+    pub(crate) async fn run_with_timeout(&self, req: crate::PipelineRequest) -> crate::PipelineResult {
         tokio::time::timeout(Duration::from_secs(10), self.pipeline.run(req))
             .await
             .expect("pipeline run timed out: the credit gate leaked a lane")
     }
 
     /// Proof that the key's lane is free right now, independent of balances.
-    async fn assert_lane_free(&self) {
+    pub(crate) async fn assert_lane_free(&self) {
         let guard = tokio::time::timeout(
             Duration::from_secs(2),
             self.pipeline

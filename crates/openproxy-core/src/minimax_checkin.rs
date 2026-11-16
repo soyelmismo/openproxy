@@ -1,13 +1,14 @@
 //! Background daemon and runner for MiniMax daily check-in (signin rewards).
 
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::accounts;
+use crate::codebuddy_checkin::{
+    collect_oauth_accounts_for_checkin, run_periodic_checkin_scheduler,
+};
 use crate::error::{CoreError, Result};
-use crate::ids::{AccountId, ProviderId};
+use crate::ids::AccountId;
 use crate::oauth::minimax::MiniMaxAccountMeta;
 use crate::oauth::minimax::checkin::{self, DailyCheckinSummary};
 use crate::oauth::minimax::matrix::MiniMaxRegion;
@@ -42,27 +43,22 @@ pub async fn run_checkin_scheduler(
     master_key: Arc<MasterKey>,
     cancel: CancellationToken,
 ) {
-    tokio::select! {
-        () = cancel.cancelled() => return,
-        () = sleep(Duration::from_secs(45)) => {}
-    }
-
-    loop {
-        if cancel.is_cancelled() {
-            tracing::info!("[MiniMaxCheckin] Scheduler shutting down");
-            break;
-        }
-
-        run_checkin_cycle_with_cancel(&db_pool, &upstream_client, &master_key, Some(&cancel)).await;
-
-        tokio::select! {
-            () = cancel.cancelled() => {
-                tracing::info!("[MiniMaxCheckin] Scheduler shutting down");
-                break;
+    run_periodic_checkin_scheduler(
+        "MiniMaxCheckin",
+        45,
+        DEFAULT_CHECKIN_INTERVAL_SECS,
+        cancel,
+        move |c| {
+            let db_pool = Arc::clone(&db_pool);
+            let upstream_client = Arc::clone(&upstream_client);
+            let master_key = Arc::clone(&master_key);
+            async move {
+                run_checkin_cycle_with_cancel(&db_pool, &upstream_client, &master_key, Some(&c))
+                    .await;
             }
-            () = sleep(Duration::from_secs(DEFAULT_CHECKIN_INTERVAL_SECS)) => {}
-        }
-    }
+        },
+    )
+    .await;
 }
 
 /// Runs a single sweep over all MiniMax accounts and claims checkin for those not yet claimed today.
@@ -84,46 +80,24 @@ pub async fn run_checkin_cycle_with_cancel(
 ) {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    let accounts_to_check = {
-        let pool = Arc::clone(db_pool);
-        let key = Arc::clone(master_key);
-        let today_clone = today.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = pool.reader();
-            let mut list = Vec::new();
-            for pid_str in &MINIMAX_PROVIDERS {
-                let pid = ProviderId::new(*pid_str);
-                if let Ok(accs) = accounts::list(&conn, Some(&pid), &key) {
-                    for acc in accs {
-                        if acc.health_status == accounts::HealthStatus::Unhealthy
-                            || acc.auth_type.as_ref() != "oauth"
-                        {
-                            continue;
-                        }
-
-                        let meta = acc
-                            .oauth_provider_specific
-                            .as_deref()
-                            .and_then(|r| serde_json::from_str::<MiniMaxAccountMeta>(r).ok())
-                            .unwrap_or_default();
-
-                        let not_checked_in_today =
-                            meta.last_checkin_date.as_deref() != Some(today_clone.as_str());
-                        let needs_enrichment = meta.credit_balance.is_none()
-                            || meta.real_user_id.is_none()
-                            || acc.label.as_deref().unwrap_or("").trim().is_empty();
-
-                        if not_checked_in_today || needs_enrichment {
-                            list.push(acc.id);
-                        }
-                    }
-                }
-            }
-            list
-        })
-        .await
-        .unwrap_or_default()
-    };
+    let accounts_to_check = collect_oauth_accounts_for_checkin(
+        db_pool,
+        master_key,
+        &MINIMAX_PROVIDERS,
+        move |acc| {
+            let meta = acc
+                .oauth_provider_specific
+                .as_deref()
+                .and_then(|r| serde_json::from_str::<MiniMaxAccountMeta>(r).ok())
+                .unwrap_or_default();
+            let not_checked_in_today = meta.last_checkin_date.as_deref() != Some(today.as_str());
+            let needs_enrichment = meta.credit_balance.is_none()
+                || meta.real_user_id.is_none()
+                || acc.label.as_deref().unwrap_or("").trim().is_empty();
+            not_checked_in_today || needs_enrichment
+        },
+    )
+    .await;
 
     for account_id in accounts_to_check {
         if cancel.is_some_and(|c| c.is_cancelled()) {

@@ -36,6 +36,8 @@ pub mod devin;
 pub mod eac;
 #[cfg(feature = "laya-engine")]
 pub mod embed_engine;
+#[cfg(feature = "laya-engine")]
+pub(crate) mod native_engine_common;
 #[cfg(feature = "embed-engine")]
 pub mod embed_engine_adapter;
 pub mod factory;

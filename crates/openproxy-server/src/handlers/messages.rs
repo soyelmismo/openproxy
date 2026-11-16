@@ -61,25 +61,16 @@ pub async fn anthropic_messages(
         let sse_stream =
             OpenAIToAnthropicSseStream::new(merged, format!("msg_{request_id}"), model);
 
-        let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
-            sse_stream,
-            crate::services::sse_coalesce::configured_window(),
-        ));
-        Ok((
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/event-stream; charset=utf-8",
-            )],
-            body,
-        )
-            .into_response())
+        Ok(super::chat::into_coalesced_sse_response(sse_stream))
     } else {
-        let result = pipeline.run(prepared.req).await;
-        let _ = prepared.done_tx.send(());
-        if let Some(err) = result.error {
-            return Err(ApiError(err));
-        }
-        let body_value = match result.final_response {
+        let (final_response, _, _) = super::chat::run_sync_pipeline(
+            pipeline,
+            prepared.req,
+            prepared.done_tx,
+            "anthropic_messages",
+        )
+        .await?;
+        let body_value = match final_response {
             Some(resp) => {
                 let anthropic_resp = openai_response_to_anthropic(resp);
                 serde_json::to_value(&anthropic_resp).unwrap_or_else(|e| {

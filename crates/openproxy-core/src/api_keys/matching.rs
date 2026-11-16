@@ -173,42 +173,20 @@ impl ApiKey {
 
     /// Returns whether the specified provider is permitted by this key.
     pub fn is_provider_allowed(&self, provider_id: &str) -> bool {
-        if let Some(blacklisted) = &self.blacklisted_providers
-            && blacklisted.iter().any(|p| p == provider_id || p == "*")
-        {
+        if is_provider_blacklisted(self.blacklisted_providers.as_deref(), Some(provider_id)) {
             return false;
         }
         if self.only_whitelisted {
-            return self
-                .allowed_providers
-                .as_ref()
-                .is_some_and(|allowed| {
-                    !allowed.is_empty() && allowed.iter().any(|p| p == provider_id || p == "*")
-                });
+            return is_provider_strictly_allowed(self.allowed_providers.as_deref(), Some(provider_id));
         }
-        if let Some(allowed) = &self.allowed_providers
-            && !allowed.is_empty()
-            && !allowed.iter().any(|p| p == provider_id || p == "*")
-        {
-            return false;
-        }
-        true
+        is_provider_in_allowlist(self.allowed_providers.as_deref(), Some(provider_id))
     }
 
     /// Returns whether the specified combo ID is permitted by this key.
     pub fn is_combo_allowed(&self, combo_id: i64) -> bool {
-        if self.only_whitelisted {
-            return self
-                .allowed_combos
-                .as_ref()
-                .is_some_and(|allowed| !allowed.is_empty() && allowed.contains(&combo_id));
+        match self.allowed_combos.as_deref() {
+            Some(allowed) if !allowed.is_empty() => allowed.contains(&combo_id),
+            _ => !self.only_whitelisted,
         }
-        if let Some(allowed) = &self.allowed_combos
-            && !allowed.is_empty()
-            && !allowed.contains(&combo_id)
-        {
-            return false;
-        }
-        true
     }
 }

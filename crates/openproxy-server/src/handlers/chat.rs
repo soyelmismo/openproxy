@@ -111,6 +111,55 @@ pub async fn chat_completions(
     handle_sync_response(pipeline, prepared.req, prepared.done_tx).await
 }
 
+/// Wrap an SSE byte stream in [`crate::services::sse_coalesce::CoalescedSse`] and
+/// attach the standard `text/event-stream; charset=utf-8` content-type header.
+pub(crate) fn into_coalesced_sse_response<S>(sse_stream: S) -> axum::response::Response
+where
+    S: Stream<Item = Result<Bytes, Infallible>> + Send + 'static,
+{
+    let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
+        sse_stream,
+        crate::services::sse_coalesce::configured_window(),
+    ));
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/event-stream; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
+}
+
+/// Run a non-streaming pipeline request, signal `done_tx`, and map any pipeline
+/// error into [`ApiError`].
+pub(crate) async fn run_sync_pipeline(
+    pipeline: Pipeline,
+    req: PipelineRequest,
+    done_tx: tokio::sync::oneshot::Sender<()>,
+    caller: &'static str,
+) -> Result<(Option<openproxy_types::OpenAIResponse>, u32, u128), ApiError> {
+    let started = Instant::now();
+    let result = pipeline.run(req).await;
+    let _ = done_tx.send(());
+    let elapsed_ms = started.elapsed().as_millis();
+
+    if let Some(err) = result.error {
+        let status =
+            StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        tracing::debug!(
+            status = status.as_u16(),
+            attempts = result.attempts,
+            elapsed_ms,
+            response_error = %err,
+            "{caller}: masked error returned to the client"
+        );
+        return Err(ApiError(err));
+    }
+
+    Ok((result.final_response, result.attempts, elapsed_ms))
+}
+
 pub(crate) fn handle_streaming_response(
     pipeline: Pipeline,
     req: PipelineRequest,
@@ -128,18 +177,7 @@ pub(crate) fn handle_streaming_response(
         ),
     };
 
-    let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
-        sse_stream,
-        crate::services::sse_coalesce::configured_window(),
-    ));
-    (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/event-stream; charset=utf-8",
-        )],
-        body,
-    )
-        .into_response()
+    into_coalesced_sse_response(sse_stream)
 }
 
 pub(crate) async fn handle_sync_response(
@@ -147,28 +185,10 @@ pub(crate) async fn handle_sync_response(
     req: PipelineRequest,
     done_tx: tokio::sync::oneshot::Sender<()>,
 ) -> Result<axum::response::Response, ApiError> {
-    let started = Instant::now();
-    let result = pipeline.run(req).await;
-    let _ = done_tx.send(());
-    let elapsed_ms = started.elapsed().as_millis();
+    let (final_response, attempts, elapsed_ms) =
+        run_sync_pipeline(pipeline, req, done_tx, "chat_completions").await?;
 
-    if let Some(err) = result.error {
-        let status =
-            StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        tracing::debug!(
-            status = status.as_u16(),
-            attempts = result.attempts,
-            elapsed_ms,
-            response_error = %err,
-            "chat_completions: masked error returned to the client"
-        );
-        return Err(ApiError(err));
-    }
-
-    // Serialize straight into the response body instead of building a
-    // `serde_json::Value` first (which allocates a DOM and reserializes it
-    // inside `Json`). `to_writer` into a `BytesMut` is one pass.
-    match result.final_response {
+    match final_response {
         Some(resp) => {
             let mut buf = bytes::BytesMut::with_capacity(1024).writer();
             match serde_json::to_writer(&mut buf, &resp) {
@@ -193,7 +213,7 @@ pub(crate) async fn handle_sync_response(
         }
         None => {
             tracing::warn!(
-                attempts = result.attempts,
+                attempts,
                 elapsed_ms,
                 "chat_completions: pipeline returned neither error nor response"
             );
@@ -205,41 +225,19 @@ pub(crate) async fn handle_sync_response(
     }
 }
 
-/// Non-streaming Responses path (GAP-2). Mirrors [`handle_sync_response`] but
-/// wraps the final `OpenAIResponse` in the Responses envelope
-/// (`{object: "response", output: [...]}`).
-///
-/// MUST be called from `responses_completions`, never from the chat path:
-/// `handle_sync_response` would silently ship a chat-completion shape and break
-/// the wire contract.
 pub(crate) async fn handle_sync_response_responses(
     pipeline: Pipeline,
     req: PipelineRequest,
     done_tx: tokio::sync::oneshot::Sender<()>,
 ) -> Result<axum::response::Response, ApiError> {
-    let started = Instant::now();
-    let result = pipeline.run(req).await;
-    let _ = done_tx.send(());
-    let elapsed_ms = started.elapsed().as_millis();
+    let (final_response, attempts, elapsed_ms) =
+        run_sync_pipeline(pipeline, req, done_tx, "responses_completions").await?;
 
-    if let Some(err) = result.error {
-        let status =
-            StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-        tracing::debug!(
-            status = status.as_u16(),
-            attempts = result.attempts,
-            elapsed_ms,
-            response_error = %err,
-            "responses_completions: masked error returned to the client"
-        );
-        return Err(ApiError(err));
-    }
-
-    let body_value = match result.final_response {
+    let body_value = match final_response {
         Some(resp) => resp.to_responses_envelope(),
         None => {
             tracing::warn!(
-                attempts = result.attempts,
+                attempts,
                 elapsed_ms,
                 "responses_completions: pipeline returned neither error nor response"
             );

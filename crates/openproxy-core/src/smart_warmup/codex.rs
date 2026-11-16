@@ -1,6 +1,7 @@
 use super::common::{
-    execute_warmup_ping, format_account_desc, is_any_weekly_model_detail_exhausted,
-    is_session_window_ticking, is_weekly_quota_exhausted, query_provider_models_fallback,
+    execute_warmup_ping, format_account_desc, is_5h_session_window_ready,
+    is_any_weekly_model_detail_exhausted, is_weekly_quota_exhausted,
+    query_provider_models_fallback, resolve_strategy_models,
 };
 use super::traits::{WarmupAccountContext, WarmupStrategy, is_future_reset};
 use crate::accounts::{self, Account};
@@ -14,18 +15,12 @@ use openproxy_db::secrets::MasterKey;
 use openproxy_types::AccountQuota;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CodexWarmupStrategy;
 
 impl CodexWarmupStrategy {
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for CodexWarmupStrategy {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -71,72 +66,40 @@ impl WarmupStrategy for CodexWarmupStrategy {
     }
 
     fn resolve_models(&self, conn: &rusqlite::Connection, config_models: &[String]) -> Vec<String> {
-        let mut resolved = Vec::new();
-
-        // 1. Check if any configured model explicitly targets codex / gpt
-        for alias in config_models {
-            if let Some(target) = resolve_codex_model(conn, alias)
-                && !resolved.contains(&target)
-            {
-                resolved.push(target);
-            }
-        }
-
-        // 2. Fallback: if no config models matched codex, discover the newest active codex model
-        if resolved.is_empty()
-            && let Some(target) = resolve_default_codex_model(conn)
-        {
-            resolved.push(target);
-        }
-
-        resolved
+        resolve_strategy_models(
+            conn,
+            config_models,
+            resolve_codex_model,
+            resolve_default_codex_model,
+        )
     }
 
     fn is_quota_ready(&self, quota: &AccountQuota, model_id: &str, now: i64) -> bool {
-        // 1. Weekly window exhausted: under NO circumstance attempt to warm up session window
-        if is_weekly_quota_exhausted(quota, now) {
-            tracing::debug!(
-                weekly_used = ?quota.weekly_used,
-                weekly_limit = ?quota.weekly_limit,
-                reset_at = ?quota.weekly_reset_at,
-                "[SmartWarmup] Codex weekly quota is 100% utilized; skipping session window warmup"
-            );
+        if is_weekly_quota_exhausted(quota, now)
+            || is_any_weekly_model_detail_exhausted(
+                quota,
+                |id| {
+                    let lower = id.to_lowercase();
+                    lower.contains("weekly") || lower.contains("secondary")
+                },
+                now,
+            )
+        {
             return false;
         }
 
-        // Also check additional rate limits for weekly limits
-        if is_any_weekly_model_detail_exhausted(
-            quota,
-            |model_id| {
-                let lower = model_id.to_lowercase();
-                lower.contains("weekly") || lower.contains("secondary")
-            },
-            now,
-        ) {
-            return false;
-        }
-
-        if let Some(details) = &quota.model_details {
-            // Specific model rate limit already ticking?
-            let matched = details.iter().find(|d| d.model_id == model_id);
-            if let Some(d) = matched
-                && d.session_used > 0
-                && is_future_reset(d.session_reset_at.as_deref(), now)
-            {
+        if let Some(d) = quota
+            .model_details
+            .as_ref()
+            .and_then(|details| details.iter().find(|d| d.model_id == model_id))
+        {
+            if d.session_used > 0 && is_future_reset(d.session_reset_at.as_deref(), now) {
                 return false;
             }
-            if let Some(d) = matched {
-                return d.session_used == 0 && d.remaining_fraction >= 0.999;
-            }
+            return d.session_used == 0 && d.remaining_fraction >= 0.999;
         }
 
-        // 2. Primary session window already ticking?
-        if is_session_window_ticking(quota, now) {
-            return false;
-        }
-
-        // 3. Ready if session_used is 0
-        quota.session_used.unwrap_or(0) == 0
+        is_5h_session_window_ready(quota, |_| false, "Codex", now)
     }
 
     async fn ping_model(

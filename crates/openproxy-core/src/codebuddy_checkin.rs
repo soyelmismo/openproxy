@@ -24,6 +24,76 @@ pub const CODEBUDDY_PROVIDERS: [&str; 3] =
     ["codebuddy", "codebuddy-code", "@tencent-ai/codebuddy-code"];
 const DEFAULT_CHECKIN_INTERVAL_SECS: u64 = 14_400; // 4 hours
 
+/// Shared periodic check-in loop used by both CodeBuddy and MiniMax check-in daemons.
+pub(crate) async fn run_periodic_checkin_scheduler<F, Fut>(
+    tag: &'static str,
+    initial_delay_secs: u64,
+    interval_secs: u64,
+    cancel: CancellationToken,
+    mut cycle_fn: F,
+) where
+    F: FnMut(CancellationToken) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        () = cancel.cancelled() => return,
+        () = sleep(Duration::from_secs(initial_delay_secs)) => {}
+    }
+
+    loop {
+        if cancel.is_cancelled() {
+            tracing::info!("[{tag}] Scheduler shutting down");
+            break;
+        }
+
+        cycle_fn(cancel.clone()).await;
+
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::info!("[{tag}] Scheduler shutting down");
+                break;
+            }
+            () = sleep(Duration::from_secs(interval_secs)) => {}
+        }
+    }
+}
+
+/// Shared OAuth account filter for daily check-in sweeps across multiple provider IDs.
+pub(crate) async fn collect_oauth_accounts_for_checkin<F>(
+    db_pool: &Arc<DbPool>,
+    master_key: &Arc<MasterKey>,
+    providers: &'static [&'static str],
+    should_check: F,
+) -> Vec<AccountId>
+where
+    F: Fn(&accounts::Account) -> bool + Send + 'static,
+{
+    let pool = Arc::clone(db_pool);
+    let key = Arc::clone(master_key);
+    tokio::task::spawn_blocking(move || {
+        let conn = pool.reader();
+        let mut list = Vec::new();
+        for pid_str in providers {
+            let pid = ProviderId::new(*pid_str);
+            if let Ok(accs) = accounts::list(&conn, Some(&pid), &key) {
+                for acc in accs {
+                    if acc.health_status == accounts::HealthStatus::Unhealthy
+                        || acc.auth_type.as_ref() != "oauth"
+                    {
+                        continue;
+                    }
+                    if should_check(&acc) {
+                        list.push(acc.id);
+                    }
+                }
+            }
+        }
+        list
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Starts the background scheduler for CodeBuddy daily checkins.
 pub fn start_checkin_scheduler(
     db_pool: Arc<DbPool>,
@@ -47,27 +117,22 @@ pub async fn run_checkin_scheduler(
     master_key: Arc<MasterKey>,
     cancel: CancellationToken,
 ) {
-    tokio::select! {
-        () = cancel.cancelled() => return,
-        () = sleep(Duration::from_secs(3)) => {}
-    }
-
-    loop {
-        if cancel.is_cancelled() {
-            tracing::info!("[CodeBuddyCheckin] Scheduler shutting down");
-            break;
-        }
-
-        run_checkin_cycle_with_cancel(&db_pool, &upstream_client, &master_key, Some(&cancel)).await;
-
-        tokio::select! {
-            () = cancel.cancelled() => {
-                tracing::info!("[CodeBuddyCheckin] Scheduler shutting down");
-                break;
+    run_periodic_checkin_scheduler(
+        "CodeBuddyCheckin",
+        3,
+        DEFAULT_CHECKIN_INTERVAL_SECS,
+        cancel,
+        move |c| {
+            let db_pool = Arc::clone(&db_pool);
+            let upstream_client = Arc::clone(&upstream_client);
+            let master_key = Arc::clone(&master_key);
+            async move {
+                run_checkin_cycle_with_cancel(&db_pool, &upstream_client, &master_key, Some(&c))
+                    .await;
             }
-            () = sleep(Duration::from_secs(DEFAULT_CHECKIN_INTERVAL_SECS)) => {}
-        }
-    }
+        },
+    )
+    .await;
 }
 
 /// Runs a single sweep over all CodeBuddy accounts and claims checkin for those not yet claimed today.
@@ -89,40 +154,18 @@ pub async fn run_checkin_cycle_with_cancel(
 ) {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
-    let accounts_to_check = {
-        let pool = Arc::clone(db_pool);
-        let key = Arc::clone(master_key);
-        let today_clone = today.clone();
-        tokio::task::spawn_blocking(move || {
-            let conn = pool.reader();
-            let mut list = Vec::new();
-            for pid_str in &CODEBUDDY_PROVIDERS {
-                let pid = ProviderId::new(*pid_str);
-                if let Ok(accs) = accounts::list(&conn, Some(&pid), &key) {
-                    for acc in accs {
-                        if acc.health_status == accounts::HealthStatus::Unhealthy
-                            || acc.auth_type.as_ref() != "oauth"
-                        {
-                            continue;
-                        }
-
-                        let meta = parse_codebuddy_provider_meta(acc.oauth_provider_specific.as_deref());
-
-                        let not_checked_in_today =
-                            meta.last_checkin_date.as_deref() != Some(today_clone.as_str());
-                        let needs_enrichment = meta.credit_balance.is_none();
-
-                        if not_checked_in_today || needs_enrichment {
-                            list.push(acc.id);
-                        }
-                    }
-                }
-            }
-            list
-        })
-        .await
-        .unwrap_or_default()
-    };
+    let accounts_to_check = collect_oauth_accounts_for_checkin(
+        db_pool,
+        master_key,
+        &CODEBUDDY_PROVIDERS,
+        move |acc| {
+            let meta = parse_codebuddy_provider_meta(acc.oauth_provider_specific.as_deref());
+            let not_checked_in_today = meta.last_checkin_date.as_deref() != Some(today.as_str());
+            let needs_enrichment = meta.credit_balance.is_none();
+            not_checked_in_today || needs_enrichment
+        },
+    )
+    .await;
 
     for account_id in accounts_to_check {
         if cancel.is_some_and(|c| c.is_cancelled()) {

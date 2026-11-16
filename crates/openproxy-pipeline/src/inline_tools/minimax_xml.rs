@@ -89,19 +89,19 @@ pub fn parse_xml_invokes(text: &str) -> Vec<ParsedToolCall> {
     calls
 }
 
-fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
-    let candidates = [
-        ("<invoke", "</invoke>"),
-        ("<｜｜DSML｜｜ invoke", "</｜｜DSML｜｜ invoke>"),
-        ("<｜DSML｜ invoke", "</｜DSML｜ invoke>"),
-        ("<function_call", "</function_call>"),
-        ("<function", "</function>"),
-        ("<call", "</call>"),
-        ("<action", "</action>"),
-    ];
+pub(super) const INVOKE_TAG_CANDIDATES: &[(&str, &str)] = &[
+    ("<invoke", "</invoke>"),
+    ("<｜｜DSML｜｜ invoke", "</｜｜DSML｜｜ invoke>"),
+    ("<｜DSML｜ invoke", "</｜DSML｜ invoke>"),
+    ("<function_call", "</function_call>"),
+    ("<function", "</function>"),
+    ("<call", "</call>"),
+    ("<action", "</action>"),
+];
 
+pub(super) fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
     let mut best: Option<(usize, &'static str)> = None;
-    for (open, close) in candidates {
+    for &(open, close) in INVOKE_TAG_CANDIDATES {
         let mut cursor = 0;
         while let Some(pos) = find_ignore_ascii_case(&s[cursor..], open) {
             let abs_pos = cursor + pos;
@@ -120,6 +120,34 @@ fn find_next_invoke_tag(s: &str) -> Option<(usize, &'static str)> {
         }
     }
     best
+}
+
+pub(super) fn find_earliest_open_close_tag(
+    s: &str,
+    candidates: &[(&str, &'static str)],
+) -> Option<(usize, usize, &'static str)> {
+    let mut earliest: Option<(usize, usize, &'static str)> = None;
+    for &(open, close) in candidates {
+        let mut cursor = 0;
+        while let Some(pos) = find_ignore_ascii_case(&s[cursor..], open) {
+            let abs_pos = cursor + pos;
+            let after_tag = abs_pos + open.len();
+            let next_byte = s.as_bytes().get(after_tag);
+            let is_boundary = next_byte
+                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=');
+            if is_boundary {
+                if let Some(tag_end) = s[abs_pos..].find('>') {
+                    let full_open_end = abs_pos + tag_end + 1;
+                    if earliest.is_none_or(|(p, _, _)| abs_pos < p) {
+                        earliest = Some((abs_pos, full_open_end, close));
+                    }
+                }
+                break;
+            }
+            cursor = abs_pos + 1;
+        }
+    }
+    earliest
 }
 
 pub fn extract_all_attributes(tag_str: &str) -> Vec<(String, String)> {
@@ -576,15 +604,4 @@ fn strip_outer_wrapper_tag<'a>(s: &'a str, tag_name: &str) -> Option<&'a str> {
     }
 }
 
-fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    if haystack.len() < needle.len() {
-        return None;
-    }
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .position(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
-}
+pub(super) use crate::think_extractor::find_ignore_ascii_case;

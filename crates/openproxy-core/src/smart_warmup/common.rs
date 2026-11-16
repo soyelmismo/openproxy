@@ -118,6 +118,70 @@ pub fn is_session_window_ticking(quota: &AccountQuota, now: i64) -> bool {
     false
 }
 
+/// Shared model resolution loop for warmup strategies (`codex` and `claude-code`):
+/// resolves configured model aliases first, falling back to `resolve_default(conn)` if none matched.
+pub fn resolve_strategy_models<F, D>(
+    conn: &rusqlite::Connection,
+    config_models: &[String],
+    resolve_alias: F,
+    resolve_default: D,
+) -> Vec<String>
+where
+    F: Fn(&rusqlite::Connection, &str) -> Option<String>,
+    D: FnOnce(&rusqlite::Connection) -> Option<String>,
+{
+    let mut resolved = Vec::new();
+    for alias in config_models {
+        if let Some(target) = resolve_alias(conn, alias)
+            && !resolved.contains(&target)
+        {
+            resolved.push(target);
+        }
+    }
+    if resolved.is_empty()
+        && let Some(target) = resolve_default(conn)
+    {
+        resolved.push(target);
+    }
+    resolved
+}
+
+/// Shared 5-hour session window readiness check used by both Codex and Claude Code warmup strategies:
+/// verifies weekly quota is not exhausted, weekly model details are not exhausted, and the 5h session
+/// window has 0 usage and is not already ticking.
+pub fn is_5h_session_window_ready<F>(
+    quota: &AccountQuota,
+    weekly_detail_match: F,
+    provider_label: &str,
+    now: i64,
+) -> bool
+where
+    F: Fn(&str) -> bool,
+{
+    if is_weekly_quota_exhausted(quota, now) {
+        tracing::debug!(
+            weekly_used = ?quota.weekly_used,
+            weekly_limit = ?quota.weekly_limit,
+            reset_at = ?quota.weekly_reset_at,
+            "[SmartWarmup] {provider_label} weekly quota is 100% utilized; skipping 5h window warmup"
+        );
+        return false;
+    }
+
+    if is_any_weekly_model_detail_exhausted(quota, weekly_detail_match, now) {
+        tracing::debug!(
+            "[SmartWarmup] {provider_label} weekly model detail is 100% utilized; skipping 5h window warmup"
+        );
+        return false;
+    }
+
+    if is_session_window_ticking(quota, now) {
+        return false;
+    }
+
+    quota.session_used.unwrap_or(0) == 0
+}
+
 /// Executes an upstream warmup ping request, logging success/failure and snippet on error.
 pub async fn execute_warmup_ping(
     upstream: &Arc<UpstreamClient>,

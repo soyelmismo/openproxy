@@ -256,19 +256,28 @@ pub async fn resolve_api_key_async(
         .await
 }
 
+fn is_account_unhealthy(
+    circuit_breaker: &CircuitBreakerRegistry,
+    account_id: Option<AccountId>,
+) -> bool {
+    if let Some(id) = account_id
+        && circuit_breaker.is_healthy(CircuitBreakerKey::Account(id)) == Health::Unhealthy
+    {
+        tracing::debug!(?id, "Account is unhealthy via circuit breaker, skipping");
+        return true;
+    }
+    false
+}
+
 pub fn is_target_available(
     db_pool: &DbPool,
     circuit_breaker: &CircuitBreakerRegistry,
     account_id: Option<AccountId>,
     combo_target_id: Option<ComboTargetId>,
 ) -> bool {
-    if let Some(account_id) = account_id
-        && circuit_breaker.is_healthy(CircuitBreakerKey::Account(account_id)) == Health::Unhealthy
-    {
-        tracing::debug!("Account {account_id:?} is unhealthy via circuit breaker, skipping");
+    if is_account_unhealthy(circuit_breaker, account_id) {
         return false;
     }
-
     if let Some(target_id) = combo_target_id {
         let is_cooling_down = {
             let r = db_pool.reader();
@@ -279,7 +288,6 @@ pub fn is_target_available(
             return false;
         }
     }
-
     true
 }
 
@@ -299,13 +307,7 @@ pub async fn is_target_available_async(
     account_id: Option<AccountId>,
     combo_target_id: Option<ComboTargetId>,
 ) -> bool {
-    if account_id.is_some_and(|id| {
-        circuit_breaker.is_healthy(CircuitBreakerKey::Account(id)) == Health::Unhealthy
-    }) {
-        tracing::debug!(
-            ?account_id,
-            "Account is unhealthy via circuit breaker, skipping"
-        );
+    if is_account_unhealthy(circuit_breaker, account_id) {
         return false;
     }
     let Some(target_id) = combo_target_id else {
@@ -417,6 +419,150 @@ pub async fn call_unary_upstream(
         .call(upstream_req, TimeoutProfile::Quota, cancel)
         .await
         .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
+}
+
+/// Strip characters that could inject headers or break quoted-string syntax in
+/// `Content-Disposition` / `Content-Type` multipart part headers.
+pub fn sanitize_header_token(raw: &str, fallback: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .filter(|&c| c != '\r' && c != '\n' && c != '"' && c != '\\' && !c.is_control())
+        .collect();
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned
+    }
+}
+
+/// File part descriptor for [`call_unary_multipart_upstream`].
+pub struct MultipartFilePart<'a> {
+    pub field_name: &'a str,
+    pub file_name: &'a str,
+    pub content_type: &'a str,
+    pub bytes: &'a [u8],
+}
+
+/// Build and send a `multipart/form-data` upstream request shared by audio and
+/// image edit/variation endpoints.
+pub async fn call_unary_multipart_upstream(
+    upstream_client: &Arc<UpstreamClient>,
+    adapter: &ProviderAdapterEnum,
+    upstream_url: &str,
+    api_key: &str,
+    upstream_model_id: &str,
+    form_fields: &[(String, String)],
+    files: &[MultipartFilePart<'_>],
+    inject_model_field: bool,
+) -> Result<UpstreamResponse> {
+    let boundary = format!("----OpenProxyFormBoundary{}", uuid::Uuid::new_v4().simple());
+    let mut body = Vec::new();
+
+    if inject_model_field || !form_fields.iter().any(|(k, _)| k == "model") {
+        let safe_model = sanitize_header_token(upstream_model_id, "model");
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{safe_model}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+
+    for (name, val) in form_fields {
+        if inject_model_field && name == "model" {
+            continue;
+        }
+        let safe_name = sanitize_header_token(name, "field");
+        body.extend_from_slice(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{safe_name}\"\r\n\r\n{val}\r\n")
+                .as_bytes(),
+        );
+    }
+
+    for file in files {
+        let safe_field = sanitize_header_token(file.field_name, "file");
+        let safe_filename = sanitize_header_token(file.file_name, "upload.bin");
+        let safe_ct = sanitize_header_token(file.content_type, "application/octet-stream");
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{safe_field}\"; filename=\"{safe_filename}\"\r\nContent-Type: {safe_ct}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(file.bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let mut upstream_req = UpstreamRequest::post_json(upstream_url, Bytes::from(body));
+    apply_adapter_headers(&mut upstream_req, adapter, api_key, upstream_model_id, true);
+    let content_type = format!("multipart/form-data; boundary={boundary}");
+    if let Ok(hv) = axum::http::HeaderValue::from_str(&content_type) {
+        upstream_req
+            .headers
+            .insert(axum::http::header::CONTENT_TYPE, hv);
+    }
+    let cancel = CancellationToken::new();
+    upstream_client
+        .call(upstream_req, TimeoutProfile::Quota, cancel)
+        .await
+        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
+}
+
+/// Collect a unary upstream response body, recording circuit-breaker failure and
+/// mapping HTTP status errors (>= 400) uniformly across unary endpoints.
+pub async fn collect_unary_response(
+    response: UpstreamResponse,
+    circuit_breaker: &CircuitBreakerRegistry,
+    target: &UnaryTarget,
+    endpoint_label: &str,
+) -> Result<(Bytes, u16)> {
+    let status_code = response.status.as_u16();
+    let body_bytes = response.collect().await.map_err(|e| {
+        let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        tracing::warn!(
+            "{endpoint_label} target body read failed: provider={}, error={:?}",
+            target.provider,
+            err
+        );
+        err
+    })?;
+
+    if status_code >= 400 {
+        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
+        let err_text = String::from_utf8_lossy(&body_bytes);
+        tracing::warn!(
+            "{endpoint_label} target returned error status: provider={}, status={}, body={}",
+            target.provider,
+            status_code,
+            err_text
+        );
+        return Err(map_upstream_status_error(
+            status_code,
+            target.provider.as_str(),
+            &target.upstream_model,
+            &err_text,
+        ));
+    }
+
+    Ok((body_bytes, status_code))
+}
+
+/// Serialize request and response payloads when body recording is enabled.
+pub fn serialize_recorded_bodies<Req: serde::Serialize, Resp: serde::Serialize>(
+    recording: bool,
+    req: &Req,
+    resp: &Resp,
+) -> (Option<Bytes>, Option<serde_json::Value>) {
+    if recording {
+        (
+            serde_json::to_vec(req).ok().map(Bytes::from),
+            serde_json::to_value(resp).ok(),
+        )
+    } else {
+        (None, None)
+    }
 }
 
 pub fn map_upstream_status_error(

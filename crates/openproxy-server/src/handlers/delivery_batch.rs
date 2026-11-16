@@ -23,12 +23,14 @@
 //!   reveal mark (or the wipe) is committed with the batch and the reply is
 //!   dropped, which the receipt contract already treats as replayable.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use openproxy_core::credits::{DeliveryOp, DeliveryOutcome, apply_delivery_batch};
 use openproxy_db::{DbPool, MasterKey};
 use openproxy_types::{CoreError, Result};
 use tokio::sync::{mpsc, oneshot};
+
+use super::checkout_batch::GroupCommitQueue;
 
 /// Queue depth. A bounded channel is the backpressure: a burst deeper than
 /// this waits in `submit_*` instead of growing memory.
@@ -67,15 +69,13 @@ struct Inner {
     pool: Arc<DbPool>,
     /// The master key decrypts minted keys; fixed for the process lifetime.
     master: Arc<MasterKey>,
-    /// Created on the first `submit` (or in `new` when a runtime is already
-    /// running). `OnceLock` keeps `new` synchronous and race-free.
-    sender: OnceLock<mpsc::Sender<PendingDelivery>>,
+    queue: GroupCommitQueue<PendingDelivery>,
 }
 
 impl std::fmt::Debug for DeliveryBatcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeliveryBatcher")
-            .field("started", &self.inner.sender.get().is_some())
+            .field("started", &self.inner.queue.is_started())
             .finish_non_exhaustive()
     }
 }
@@ -90,22 +90,20 @@ impl DeliveryBatcher {
             inner: Arc::new(Inner {
                 pool,
                 master,
-                sender: OnceLock::new(),
+                queue: GroupCommitQueue::new(
+                    DELIVERY_QUEUE_DEPTH,
+                    DELIVERY_MAX_BATCH,
+                    DELIVERY_COLLECT_WINDOW,
+                    "delivery batcher is not running",
+                    "delivery batcher needs a tokio runtime to start its committer",
+                ),
             }),
         };
-        // Ignore the error: without a runtime the first submit starts the task.
         let _ = batcher.sender();
         batcher
     }
 
     /// Retry the delivery of a minted key through the group committer.
-    ///
-    /// Returns only after the batch that contains this item has COMMITTED, so
-    /// the `key_revealed` mark is durable when the plaintext is returned.
-    ///
-    /// # Errors
-    /// - the item's own validation/DB failure (unknown receipt, decrypt);
-    /// - `Internal` when the batcher is not running or the batch COMMIT failed.
     pub async fn submit_reveal(&self, code: String, receipt: String) -> Result<Option<String>> {
         match self.submit(code, DeliveryOp::Reveal { receipt }).await? {
             DeliveryReply::Revealed(r) => r,
@@ -116,12 +114,7 @@ impl DeliveryBatcher {
     }
 
     /// Acknowledge a delivery and wipe the ciphertext through the group
-    /// committer. Reply only after the batch COMMITTED (a wiped ciphertext
-    /// that was not committed is impossible).
-    ///
-    /// # Errors
-    /// - the item's own validation/DB failure (unknown receipt);
-    /// - `Internal` when the batcher is not running or the batch COMMIT failed.
+    /// committer. Reply only after the batch COMMITTED.
     pub async fn submit_ack(&self, code: String, receipt: String) -> Result<bool> {
         match self.submit(code, DeliveryOp::Ack { receipt }).await? {
             DeliveryReply::Acked(r) => r,
@@ -133,13 +126,18 @@ impl DeliveryBatcher {
 
     /// Queue one item and wait for its batch to commit.
     async fn submit(&self, code: String, op: DeliveryOp) -> Result<DeliveryReply> {
-        let sender = self.sender()?;
         let (reply, answer) = oneshot::channel::<DeliveryReply>();
         let pending = PendingDelivery { code, op, reply };
-        sender
-            .send(pending)
-            .await
-            .map_err(|_| CoreError::Internal("delivery batcher is not running".into()))?;
+        let pool = Arc::clone(&self.inner.pool);
+        let master = Arc::clone(&self.inner.master);
+        self.inner
+            .queue
+            .send(pending, move |batch| {
+                let pool = Arc::clone(&pool);
+                let master = Arc::clone(&master);
+                async move { commit_batch(&pool, &master, batch).await }
+            })
+            .await?;
         answer.await.map_err(|_| {
             CoreError::Internal(
                 "delivery batch ended without a result (the transaction was not committed)".into(),
@@ -147,60 +145,14 @@ impl DeliveryBatcher {
         })
     }
 
-    /// Start (once) and return the queue handle.
     fn sender(&self) -> Result<mpsc::Sender<PendingDelivery>> {
-        if let Some(sender) = self.inner.sender.get() {
-            return Ok(sender.clone());
-        }
-        let handle = tokio::runtime::Handle::try_current().map_err(|_| {
-            CoreError::Internal(
-                "delivery batcher needs a tokio runtime to start its committer".into(),
-            )
-        })?;
-        // The task holds only the pool, the key and the receiver: when every
-        // batcher handle is dropped the channel closes and the committer exits.
         let pool = Arc::clone(&self.inner.pool);
         let master = Arc::clone(&self.inner.master);
-        let sender = self.inner.sender.get_or_init(|| {
-            let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE_DEPTH);
-            // Detached on purpose: the batcher owns the queue, not the handle.
-            let _ = handle.spawn(run_committer(pool, master, receiver));
-            sender
-        });
-        Ok(sender.clone())
-    }
-}
-
-/// Drain the queue and commit in batches until every sender is gone.
-async fn run_committer(
-    pool: Arc<DbPool>,
-    master: Arc<MasterKey>,
-    mut queue: mpsc::Receiver<PendingDelivery>,
-) {
-    loop {
-        // Park until there is work: no polling, no timer while idle.
-        let Some(first) = queue.recv().await else {
-            return;
-        };
-        let mut batch = Vec::with_capacity(DELIVERY_MAX_BATCH);
-        batch.push(first);
-        let mut drained = false;
-        let deadline = tokio::time::Instant::now() + DELIVERY_COLLECT_WINDOW;
-        while batch.len() < DELIVERY_MAX_BATCH {
-            match tokio::time::timeout_at(deadline, queue.recv()).await {
-                Ok(Some(next)) => batch.push(next),
-                Ok(None) => {
-                    // Batcher dropped mid-collect: flush this batch, then stop.
-                    drained = true;
-                    break;
-                }
-                Err(_elapsed) => break,
-            }
-        }
-        commit_batch(&pool, &master, batch).await;
-        if drained {
-            return;
-        }
+        self.inner.queue.sender_or_spawn(move |batch| {
+            let pool = Arc::clone(&pool);
+            let master = Arc::clone(&master);
+            async move { commit_batch(&pool, &master, batch).await }
+        })
     }
 }
 
@@ -228,14 +180,10 @@ async fn commit_batch(pool: &Arc<DbPool>, master: &Arc<MasterKey>, batch: Vec<Pe
                         DeliveryOp::Ack { .. } => DeliveryReply::Acked(Err(e)),
                     },
                 };
-                // A closed receiver means the caller went away; the item is
-                // already committed and its receipt contract replays it.
                 let _ = pending.reply.send(reply);
             }
         }
         Err(e) => {
-            // The transaction did not land: no item of this batch exists, so
-            // every waiter gets an error and nobody may act on a result.
             let message = format!("delivery batch commit failed: {e}");
             for pending in batch {
                 let reply = match pending.op {

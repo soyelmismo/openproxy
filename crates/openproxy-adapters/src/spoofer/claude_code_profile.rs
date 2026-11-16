@@ -285,18 +285,11 @@ impl ContractValidator<ClaudeCodeProfile> for ClaudeContractValidator {
         _previous: Option<&Snapshot<ClaudeCodeProfile>>,
         limits: &ContractLimits,
     ) -> Result<(), ContractError> {
-        if candidate.rule_set_id != CLAUDE_CODE_RUNTIME_RULE_SET_ID {
-            return Err(ContractError::Rejected(format!(
-                "el candidato declara el rule set {:?} y el runtime compilado es {:?}",
-                candidate.rule_set_id, CLAUDE_CODE_RUNTIME_RULE_SET_ID
-            )));
-        }
-        if candidate.extractor_version != CLAUDE_CODE_RUNTIME_EXTRACTOR_VERSION {
-            return Err(ContractError::Rejected(format!(
-                "el candidato usa el extractor v{} y el runtime compilado es v{}",
-                candidate.extractor_version, CLAUDE_CODE_RUNTIME_EXTRACTOR_VERSION
-            )));
-        }
+        crate::client_contract::providers::codex_state::check_compiled_rules(
+            candidate,
+            CLAUDE_CODE_RUNTIME_RULE_SET_ID,
+            CLAUDE_CODE_RUNTIME_EXTRACTOR_VERSION,
+        )?;
         validate_candidate_shape(candidate, limits)?;
 
         let cli_version = &candidate.payload.cli_version;
@@ -405,15 +398,9 @@ impl ClaudeContractRuntime {
 
 /// Raíz por defecto del LKG en disco.
 fn default_store_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("OPENPROXY_CLAUDE_CODE_STORE_DIR")
-        && !dir.trim().is_empty()
-    {
-        return PathBuf::from(dir);
-    }
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".openproxy").join("contracts")
+    crate::client_contract::providers::codex_state::default_store_root_for(
+        "OPENPROXY_CLAUDE_CODE_STORE_DIR",
+    )
 }
 
 /// Runtime global del contrato Claude Code.

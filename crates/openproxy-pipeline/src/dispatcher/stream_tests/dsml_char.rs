@@ -1,16 +1,16 @@
 //! Character-by-character stress of the DSML path, plus a check that the
 //! recorded body keeps its non-tool fields intact.
 
-use super::{build_dispatcher_for_stream_test, fresh_pool};
+use super::{
+    build_dispatcher_for_stream_test, fresh_pool, make_stream_pipeline_request,
+    make_stream_test_entities, seed_stream_provider, spawn_single_sse_server,
+};
 use crate::dispatcher::types::StreamDispatchParams;
-use openproxy_types::CancelReason;
-use openproxy_types::combos::{Combo, ComboTarget, PriorityMode, Strategy};
-use openproxy_types::providers::{AuthType, ProviderFormat, RateLimitScope};
 use std::fmt::Write as _;
 
-const DSML_BODY: &str = "\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"terminal\">\n<｜｜DSML｜｜ parameter name=\"command\" string=\"true\">ls -la</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>";
+pub(super) const DSML_BODY: &str = "\n\n<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"terminal\">\n<｜｜DSML｜｜ parameter name=\"command\" string=\"true\">ls -la</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>";
 
-fn chunk_line(delta: serde_json::Value) -> String {
+pub(super) fn dsml_chunk_line(delta: serde_json::Value, finish: serde_json::Value) -> String {
     format!(
         "data: {}\n\n",
         serde_json::json!({
@@ -18,117 +18,48 @@ fn chunk_line(delta: serde_json::Value) -> String {
             "object": "chat.completion.chunk",
             "created": 1793251173u64,
             "model": "deepseek-v4.1-flash:free",
-            "choices": [{ "index": 0, "delta": delta, "finish_reason": serde_json::Value::Null }]
+            "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }]
         })
     )
 }
 
-async fn run(frames: String) -> (Vec<String>, String) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        if let Ok((mut socket, _)) = listener.accept().await {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let mut buf = [0u8; 4096];
-            let _ = socket.read(&mut buf).await;
-            let body = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{frames}"
-            );
-            let _ = socket.write_all(body.as_bytes()).await;
-            let _ = socket.flush().await;
-            let _ = socket.shutdown().await;
-        }
-    });
+fn chunk_line(delta: serde_json::Value) -> String {
+    dsml_chunk_line(delta, serde_json::Value::Null)
+}
 
+pub(super) async fn run_dsml_stream_case(
+    provider_id: &str,
+    trace_id: &str,
+    recording: bool,
+    sink_cap: usize,
+    frames: String,
+) -> (
+    Vec<String>,
+    std::sync::Arc<parking_lot::Mutex<rusqlite::Connection>>,
+) {
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{frames}"
+    );
+    let base_url = spawn_single_sse_server(response).await;
     let (_pool, conn_arc, _path) = fresh_pool();
-    let pid = openproxy_types::ids::ProviderId::new("dsml-char");
-    let base_url = format!("http://127.0.0.1:{}", addr.port());
-    {
-        let c = conn_arc.lock();
-        openproxy_db::providers::create(
-            &c,
-            openproxy_db::providers::NewProvider {
-                id: &pid,
-                name: "dsml-char",
-                base_url: &base_url,
-                auth_type: AuthType::Bearer,
-                format: ProviderFormat::Openai,
-                extra_headers_json: None,
-                auto_activate_keyword: None,
-                rate_limit_scope: RateLimitScope::Account,
-            },
+    seed_stream_provider(&conn_arc, provider_id, &base_url);
+    let dispatcher = if recording {
+        super::build_dispatcher_for_stream_test_with_recording(
+            std::sync::Arc::clone(&conn_arc),
+            true,
         )
-        .expect("seed provider");
-    }
-    let dispatcher = build_dispatcher_for_stream_test(std::sync::Arc::clone(&conn_arc));
-
-    let model = openproxy_types::models::Model {
-        row_id: openproxy_types::ids::ModelRowId(1),
-        provider_id: pid.clone(),
-        model_id: openproxy_types::ids::ModelId::new("deepseek-v4.1-flash:free"),
-        target_format: openproxy_types::TargetFormat::Openai,
-        active: true,
-        ..Default::default()
-    };
-    let target = ComboTarget {
-        id: openproxy_types::ids::ComboTargetId(1),
-        combo_id: openproxy_types::ids::ComboId(1),
-        provider_id: pid.clone(),
-        active: true,
-        priority_order: 1,
-        weight: 1,
-        rate_limit_scope: RateLimitScope::Account,
-        ..Default::default()
-    };
-    let combo = Combo {
-        id: openproxy_types::ids::ComboId(1),
-        name: "dsml-char".into(),
-        strategy: Strategy::Priority,
-        priority_mode: PriorityMode::Strict,
-        race_size: 1,
-        created_at: "2024-01-01".into(),
-        cooldown_mode: openproxy_types::config::CooldownMode::None,
-        selection_window_secs: Some(3600),
-        ..Default::default()
+    } else {
+        build_dispatcher_for_stream_test(std::sync::Arc::clone(&conn_arc))
     };
 
-    let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(4096);
-    let (_tx, rx) = tokio::sync::watch::channel::<Option<CancelReason>>(None);
-    let req = crate::PipelineRequest {
-        request_id: openproxy_types::ids::RequestId::new(),
-        trace_id: openproxy_types::ids::TraceId::new(),
-        combo_id: openproxy_types::ids::ComboId(1),
-        openai_request: std::sync::Arc::new(openproxy_types::OpenAIRequest {
-            model: "deepseek-v4.1-flash:free".into(),
-            messages: vec![],
-            stream: true,
-            temperature: None,
-            max_tokens: None,
-            top_p: None,
-            stop: None,
-            tools: None,
-            tool_choice: None,
-            top_k: None,
-            user: None,
-            extra: serde_json::Map::new(),
-        }),
-        client_disconnected: rx,
-        stream_sink: Some(crate::race_sink::StreamSink::direct(sink_tx)),
-        api_key_id: None,
-        combo_override: None,
-        targets_override: None,
-        request_headers: std::collections::BTreeMap::new(),
-        request_body_json: None,
-        race_cancelled: false,
-        race_cancel: None,
-        endpoint_kind: openproxy_types::endpoint::EndpointKind::Chat,
-        compressed_messages: std::sync::Arc::new(std::sync::OnceLock::new()),
-        active_system_prefix: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-        pii_session: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-        compression_stats: std::sync::Arc::new(parking_lot::Mutex::new(None)),
-        proxy_override: None,
-        pinned_adapters: Default::default(),
-    };
+    let (_pid, model, target, combo) =
+        make_stream_test_entities(provider_id, "deepseek-v4.1-flash:free");
+    let (sink_tx, mut sink_rx) = tokio::sync::mpsc::channel(sink_cap);
+    let req = make_stream_pipeline_request(
+        "deepseek-v4.1-flash:free",
+        true,
+        Some(crate::race_sink::StreamSink::direct(sink_tx)),
+    );
 
     let started = std::time::Instant::now();
     let params = StreamDispatchParams {
@@ -143,7 +74,7 @@ async fn run(frames: String) -> (Vec<String>, String) {
         started,
         attempt: 1,
         race_size: 1,
-        trace_id: "t-dsml-char".to_string(),
+        trace_id: trace_id.to_string(),
         upstream_request: openproxy_adapters::upstream::UpstreamRequest::post_json(
             format!("{base_url}/v1/chat/completions"),
             bytes::Bytes::from(
@@ -163,6 +94,12 @@ async fn run(frames: String) -> (Vec<String>, String) {
     while let Ok(chunk) = sink_rx.try_recv() {
         received.push(String::from_utf8_lossy(&chunk).to_string());
     }
+    (received, conn_arc)
+}
+
+async fn run(frames: String) -> (Vec<String>, String) {
+    let (received, conn_arc) =
+        run_dsml_stream_case("dsml-char", "t-dsml-char", false, 4096, frames).await;
     let conn = conn_arc.lock();
     let recorded: String = conn
         .query_row(

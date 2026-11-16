@@ -25,7 +25,7 @@ const THINK_OPEN_TAGS_BYTES: &[&[u8]] = &[b"<think>", b"<thinking>", b"<reasonin
 
 /// Find the first case-insensitive match of a needle in a haystack without allocating.
 #[inline]
-fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
+pub(crate) fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
@@ -55,7 +55,7 @@ fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
 }
 
 #[inline]
-fn safe_slice_to(s: &str, end: usize) -> &str {
+pub(crate) fn safe_slice_to(s: &str, end: usize) -> &str {
     let mut e = std::cmp::min(end, s.len());
     while e > 0 && !s.is_char_boundary(e) {
         e -= 1;
@@ -64,12 +64,29 @@ fn safe_slice_to(s: &str, end: usize) -> &str {
 }
 
 #[inline]
-fn safe_slice_from(s: &str, start: usize) -> &str {
+pub(crate) fn safe_slice_from(s: &str, start: usize) -> &str {
     let mut s_idx = std::cmp::min(start, s.len());
     while s_idx < s.len() && !s.is_char_boundary(s_idx) {
         s_idx += 1;
     }
     &s[s_idx..]
+}
+
+#[inline]
+pub(crate) fn safe_slice(s: &str, start: usize, end: usize) -> &str {
+    let mut start_idx = std::cmp::min(start, s.len());
+    while start_idx < s.len() && !s.is_char_boundary(start_idx) {
+        start_idx += 1;
+    }
+    let mut end_idx = std::cmp::min(end, s.len());
+    while end_idx > 0 && !s.is_char_boundary(end_idx) {
+        end_idx -= 1;
+    }
+    if start_idx <= end_idx {
+        &s[start_idx..end_idx]
+    } else {
+        ""
+    }
 }
 
 /// Extract `<think>` blocks from a non-streaming `OpenAIResponse`'s

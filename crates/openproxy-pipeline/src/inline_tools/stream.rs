@@ -348,31 +348,12 @@ fn parse_tool_block(block: &str) -> Option<Vec<ParsedToolCall>> {
 }
 
 fn find_earliest_tool_tag(input: &str) -> Option<(usize, usize, &'static str)> {
-    let mut earliest: Option<(usize, usize, &'static str)> = None;
-
-    if let Some(pos) = find_ignore_ascii_case(input, "[TOOL_CALLS]") {
-        earliest = Some((pos, pos + "[TOOL_CALLS]".len(), "]"));
-    }
-
-    for &(open, close) in TOOL_TAG_CANDIDATES {
-        let mut cursor = 0;
-        while let Some(pos) = find_ignore_ascii_case(&input[cursor..], open) {
-            let abs_pos = cursor + pos;
-            let after_tag = abs_pos + open.len();
-            let next_byte = input.as_bytes().get(after_tag);
-            let is_boundary = next_byte
-                .is_none_or(|&b| b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=');
-            if is_boundary {
-                if let Some(tag_end) = input[abs_pos..].find('>') {
-                    let full_open_end = abs_pos + tag_end + 1;
-                    if earliest.is_none_or(|(p, _, _)| abs_pos < p) {
-                        earliest = Some((abs_pos, full_open_end, close));
-                    }
-                }
-                break;
-            }
-            cursor = abs_pos + 1;
-        }
+    let mut earliest = find_ignore_ascii_case(input, "[TOOL_CALLS]")
+        .map(|pos| (pos, pos + "[TOOL_CALLS]".len(), "]"));
+    if let Some(tag) = super::minimax_xml::find_earliest_open_close_tag(input, TOOL_TAG_CANDIDATES)
+        && earliest.is_none_or(|(p, _, _)| tag.0 < p)
+    {
+        earliest = Some(tag);
     }
     earliest
 }
@@ -520,31 +501,4 @@ fn strip_tool_call_tags(s: &str) -> &str {
     trimmed
 }
 
-fn find_ignore_ascii_case(haystack: &str, needle: &str) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    if haystack.len() < needle.len() {
-        return None;
-    }
-    let haystack_bytes = haystack.as_bytes();
-    let needle_bytes = needle.as_bytes();
-    let first_lo = needle_bytes[0].to_ascii_lowercase();
-    let first_hi = needle_bytes[0].to_ascii_uppercase();
-    let limit = haystack_bytes.len() - needle_bytes.len();
-    let mut pos = 0;
-
-    while pos <= limit {
-        let offset = if first_lo == first_hi {
-            memchr::memchr(first_lo, &haystack_bytes[pos..=limit])?
-        } else {
-            memchr::memchr2(first_lo, first_hi, &haystack_bytes[pos..=limit])?
-        };
-        let idx = pos + offset;
-        if haystack_bytes[idx..idx + needle_bytes.len()].eq_ignore_ascii_case(needle_bytes) {
-            return Some(idx);
-        }
-        pos = idx + 1;
-    }
-    None
-}
+use crate::think_extractor::find_ignore_ascii_case;

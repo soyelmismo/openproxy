@@ -86,30 +86,43 @@ pub fn claude_code_builtin_models() -> Vec<DiscoveredModel> {
     models
         .into_iter()
         .map(|(id, name, ctx, max_out, thinking)| {
-            let caps = openproxy_types::ModelCapabilities {
-                vision: Some(true),
-                tool_calling: Some(true),
-                reasoning: Some(thinking),
-                thinking: Some(thinking),
-                streaming: Some(true),
-                ..Default::default()
-            };
-            DiscoveredModel {
-                model_id: ModelId::new(id),
-                display_name: Some(name.to_string()),
-                target_format: TargetFormat::Anthropic,
-                context_length: Some(ctx),
-                max_output_tokens: Some(max_out),
-                input_modalities: Some(
-                    vec!["text".to_string(), "image".to_string()].into_boxed_slice(),
-                ),
-                output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
-                model_type: Some("chat".to_string()),
-                family: Some("claude".to_string()),
-                capabilities: Some(caps),
-            }
+            claude_discovered_model(id, name, ctx, max_out, thinking)
         })
         .collect()
+}
+
+/// Builds a [`DiscoveredModel`] in the canonical Claude shape: Anthropic
+/// target format, chat type, text+image+pdf input modalities and the shared
+/// capability set with `reasoning`/`thinking` gated by the model generation.
+fn claude_discovered_model(
+    id: &str,
+    name: &str,
+    ctx: i64,
+    max_out: i64,
+    reasoning: bool,
+) -> DiscoveredModel {
+    let caps = openproxy_types::ModelCapabilities {
+        vision: Some(true),
+        tool_calling: Some(true),
+        reasoning: Some(reasoning),
+        thinking: Some(reasoning),
+        streaming: Some(true),
+        ..Default::default()
+    };
+    DiscoveredModel {
+        model_id: ModelId::new(id),
+        display_name: Some(name.to_string()),
+        target_format: TargetFormat::Anthropic,
+        context_length: Some(ctx),
+        max_output_tokens: Some(max_out),
+        input_modalities: Some(
+            vec!["text".to_string(), "image".to_string(), "pdf".to_string()].into_boxed_slice(),
+        ),
+        output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
+        model_type: Some("chat".to_string()),
+        family: Some("claude".to_string()),
+        capabilities: Some(caps),
+    }
 }
 
 pub fn parse_claude_models_response(body: &serde_json::Value) -> Option<Vec<DiscoveredModel>> {
@@ -143,29 +156,7 @@ pub fn parse_claude_models_response(body: &serde_json::Value) -> Option<Vec<Disc
                     || id.contains("fable")
             });
 
-        let caps = openproxy_types::ModelCapabilities {
-            vision: Some(true),
-            tool_calling: Some(true),
-            reasoning: Some(reasoning),
-            thinking: Some(reasoning),
-            streaming: Some(true),
-            ..Default::default()
-        };
-
-        discovered.push(DiscoveredModel {
-            model_id: ModelId::new(id),
-            display_name: Some(name.to_string()),
-            target_format: TargetFormat::Anthropic,
-            context_length: Some(ctx),
-            max_output_tokens: Some(max_out),
-            input_modalities: Some(
-                vec!["text".to_string(), "image".to_string()].into_boxed_slice(),
-            ),
-            output_modalities: Some(vec!["text".to_string()].into_boxed_slice()),
-            model_type: Some("chat".to_string()),
-            family: Some("claude".to_string()),
-            capabilities: Some(caps),
-        });
+        discovered.push(claude_discovered_model(id, name, ctx, max_out, reasoning));
     }
 
     if discovered.is_empty() {

@@ -55,12 +55,8 @@ pub fn resolve_audio_targets(
     )
 }
 
-fn sanitize_header_token(value: &str) -> String {
-    value
-        .chars()
-        .filter(|&c| c != '\r' && c != '\n' && c != '\0' && c != '"')
-        .collect()
-}
+pub use crate::unary::sanitize_header_token;
+use crate::unary::{MultipartFilePart, call_unary_multipart_upstream};
 
 pub async fn dispatch_audio_request(
     upstream_client: &Arc<UpstreamClient>,
@@ -73,55 +69,23 @@ pub async fn dispatch_audio_request(
     if adapter.build_auth_header(api_key).is_none() {
         return Err(CoreError::Validation("Invalid API Key".into()));
     }
-
-    let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
-    let mut payload = Vec::new();
-
-    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
-    payload.extend_from_slice(upstream_model_id.as_bytes());
-    payload.extend_from_slice(b"\r\n");
-
-    for (k, v) in &body.form_fields {
-        if v.trim().is_empty() {
-            continue;
-        }
-        let safe_k = sanitize_header_token(k);
-        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{safe_k}\"\r\n\r\n").as_bytes(),
-        );
-        payload.extend_from_slice(v.as_bytes());
-        payload.extend_from_slice(b"\r\n");
-    }
-
-    let safe_file_name = sanitize_header_token(&body.file_name);
-    let safe_ct = sanitize_header_token(&body.file_content_type);
-    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    payload.extend_from_slice(
-        format!(
-            "Content-Disposition: form-data; name=\"file\"; filename=\"{safe_file_name}\"\r\n"
-        )
-        .as_bytes(),
-    );
-    payload
-        .extend_from_slice(format!("Content-Type: {safe_ct}\r\n\r\n").as_bytes());
-    payload.extend_from_slice(&body.file_bytes);
-    payload.extend_from_slice(b"\r\n");
-
-    payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-
-    let content_type = format!("multipart/form-data; boundary={boundary}");
-    let mut req =
-        UpstreamRequest::post_multipart(upstream_url, &content_type, Bytes::from(payload));
-
-    apply_adapter_headers(&mut req, &adapter, api_key, upstream_model_id, true);
-
-    let cancel = CancellationToken::new();
-    upstream_client
-        .call(req, TimeoutProfile::Quota, cancel)
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
+    let file_part = MultipartFilePart {
+        field_name: "file",
+        file_name: &body.file_name,
+        content_type: &body.file_content_type,
+        bytes: &body.file_bytes,
+    };
+    call_unary_multipart_upstream(
+        upstream_client,
+        &adapter,
+        upstream_url,
+        api_key,
+        upstream_model_id,
+        &body.form_fields,
+        &[file_part],
+        true,
+    )
+    .await
 }
 
 async fn dispatch_single_transcribe(
@@ -162,7 +126,6 @@ async fn dispatch_single_transcribe(
         e
     })?;
 
-    let status_code = response.status;
     let content_type = response
         .headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -170,38 +133,11 @@ async fn dispatch_single_transcribe(
         .unwrap_or("application/json")
         .to_string();
 
-    let body_bytes = response.collect().await.map_err(|e| {
-        let err = CoreError::UpstreamConnection(format!("read body: {e:?}"));
-        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-        tracing::warn!(
-            "Audio target body read failed: provider={}, error={:?}",
-            target.provider,
-            err
-        );
-        err
-    })?;
-
-    let code_u16 = status_code.as_u16();
-    if code_u16 >= 400 {
-        crate::guarded_unary_target!(record_failure: circuit_breaker, target);
-        let err_text = String::from_utf8_lossy(&body_bytes);
-        tracing::warn!(
-            "Audio target returned error status: provider={}, model={}, status={}, body={}",
-            target.provider,
-            target.upstream_model,
-            status_code,
-            err_text
-        );
-        return Err(map_upstream_status_error(
-            code_u16,
-            target.provider.as_str(),
-            &target.upstream_model,
-            &err_text,
-        ));
-    }
+    let (body_bytes, status_code) =
+        crate::unary::collect_unary_response(response, circuit_breaker, target, "Audio").await?;
 
     Ok(AudioTranscriptionResponse {
-        status_code: code_u16,
+        status_code,
         content_type,
         body_bytes,
     })

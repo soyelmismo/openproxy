@@ -6,26 +6,35 @@
 //! Prevents `invalid_grant` / "Refresh token not found or invalid" failures caused by
 //! external refresh token rotation (RTR) when running host CLIs.
 
+use std::path::PathBuf;
+
 use super::{
     DiscoveredAccount, scan_antigravity_cli, scan_antigravity_oauth_creds, scan_claude_code_cli,
     scan_claude_swap_backups,
 };
+use openproxy_types::Result;
+
+fn match_non_empty_emails(acc_email: Option<&str>, disc_email: Option<&str>) -> Option<bool> {
+    if let (Some(a), Some(d)) = (acc_email, disc_email)
+        && !a.trim().is_empty()
+        && !d.trim().is_empty()
+    {
+        return Some(a.trim().eq_ignore_ascii_case(d.trim()));
+    }
+    None
+}
 
 /// Matches an OpenProxy account against a discovered local CLI credential for Claude Code.
 pub fn claude_code_account_matches(
     account: &crate::accounts::Account,
     discovered: &DiscoveredAccount,
 ) -> bool {
-    // 1. By email
-    if let (Some(acc_email), Some(disc_email)) =
-        (account.email.as_deref(), discovered.email.as_deref())
-        && !acc_email.trim().is_empty()
-        && !disc_email.trim().is_empty()
+    if let Some(matched) =
+        match_non_empty_emails(account.email.as_deref(), discovered.email.as_deref())
     {
-        return acc_email.trim().eq_ignore_ascii_case(disc_email.trim());
+        return matched;
     }
 
-    // 2. By account_uuid in oauth_provider_specific
     if let (Some(acc_spec), Some(disc_spec)) = (
         account.oauth_provider_specific.as_deref(),
         discovered.oauth_provider_specific.as_deref(),
@@ -43,12 +52,7 @@ pub fn claude_code_account_matches(
         }
     }
 
-    // 3. Fallback: single local account without email
-    if account.email.is_none() && discovered.email.is_none() {
-        return true;
-    }
-
-    false
+    account.email.is_none() && discovered.email.is_none()
 }
 
 /// Matches an OpenProxy account against a discovered local CLI credential for Antigravity.
@@ -56,17 +60,27 @@ pub fn antigravity_account_matches(
     account: &crate::accounts::Account,
     discovered: &DiscoveredAccount,
 ) -> bool {
-    if let (Some(acc_email), Some(disc_email)) =
-        (account.email.as_deref(), discovered.email.as_deref())
-        && !acc_email.trim().is_empty()
-        && !disc_email.trim().is_empty()
-    {
-        return acc_email.trim().eq_ignore_ascii_case(disc_email.trim());
-    }
-    if account.email.is_none() && discovered.email.is_none() {
-        return true;
-    }
-    false
+    match_non_empty_emails(account.email.as_deref(), discovered.email.as_deref())
+        .unwrap_or_else(|| account.email.is_none() && discovered.email.is_none())
+}
+
+fn tokens_differ(
+    disc: &DiscoveredAccount,
+    db_access_token: Option<&str>,
+    db_refresh_token: Option<&str>,
+    check_access: bool,
+) -> bool {
+    let rt_differs = match (&disc.refresh_token, db_refresh_token) {
+        (Some(disc_rt), Some(db_rt)) => disc_rt != db_rt,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    let at_differs = check_access
+        && match (db_access_token, &disc.access_token) {
+            (Some(db_at), disc_at) => db_at != disc_at,
+            (None, _) => true,
+        };
+    rt_differs || at_differs
 }
 
 /// Checks whether the host CLI on disk holds updated credentials for the given account
@@ -79,71 +93,81 @@ pub fn check_local_cli_updated_tokens(
 ) -> Option<DiscoveredAccount> {
     match provider_id {
         "claude-code" | "claude" => {
-            // Check active CLI credentials (~/.claude/.credentials.json)
             if let Some(disc) = scan_claude_code_cli()
                 && claude_code_account_matches(account, &disc)
+                && tokens_differ(&disc, db_access_token, db_refresh_token, true)
             {
-                let rt_differs = match (&disc.refresh_token, db_refresh_token) {
-                    (Some(disc_rt), Some(db_rt)) => disc_rt != db_rt,
-                    (Some(_), None) => true,
-                    _ => false,
-                };
-                let at_differs = match (db_access_token, &disc.access_token) {
-                    (Some(db_at), disc_at) => db_at != disc_at,
-                    (None, _) => true,
-                };
-                if rt_differs || at_differs {
-                    return Some(disc);
-                }
+                return Some(disc);
             }
-            // Fallback: check backups in ~/.claude-swap-backup
-            for disc in scan_claude_swap_backups() {
-                if claude_code_account_matches(account, &disc) {
-                    let rt_differs = match (&disc.refresh_token, db_refresh_token) {
-                        (Some(disc_rt), Some(db_rt)) => disc_rt != db_rt,
-                        (Some(_), None) => true,
-                        _ => false,
-                    };
-                    if rt_differs {
-                        return Some(disc);
-                    }
-                }
-            }
-            None
+            scan_claude_swap_backups().into_iter().find(|disc| {
+                claude_code_account_matches(account, disc)
+                    && tokens_differ(disc, db_access_token, db_refresh_token, false)
+            })
         }
         "antigravity" => {
             if let Some(disc) = scan_antigravity_cli()
                 && antigravity_account_matches(account, &disc)
+                && tokens_differ(&disc, db_access_token, db_refresh_token, true)
             {
-                let rt_differs = match (&disc.refresh_token, db_refresh_token) {
-                    (Some(disc_rt), Some(db_rt)) => disc_rt != db_rt,
-                    (Some(_), None) => true,
-                    _ => false,
-                };
-                let at_differs = match (db_access_token, &disc.access_token) {
-                    (Some(db_at), disc_at) => db_at != disc_at,
-                    (None, _) => true,
-                };
-                if rt_differs || at_differs {
-                    return Some(disc);
-                }
+                return Some(disc);
             }
-            if let Some(disc) = scan_antigravity_oauth_creds()
-                && antigravity_account_matches(account, &disc)
-            {
-                let rt_differs = match (&disc.refresh_token, db_refresh_token) {
-                    (Some(disc_rt), Some(db_rt)) => disc_rt != db_rt,
-                    (Some(_), None) => true,
-                    _ => false,
-                };
-                if rt_differs {
-                    return Some(disc);
-                }
-            }
-            None
+            scan_antigravity_oauth_creds().filter(|disc| {
+                antigravity_account_matches(account, disc)
+                    && tokens_differ(disc, db_access_token, db_refresh_token, false)
+            })
         }
         _ => None,
     }
+}
+
+/// Extracts `oauth_provider_specific` metadata and writes Claude Code CLI credentials
+/// for `account` to disk. Shared by background OAuth refresh sync and admin CLI injection.
+pub fn write_account_to_claude_code_cli(
+    account: &crate::accounts::Account,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_at: Option<&str>,
+    email: Option<&str>,
+) -> Result<PathBuf> {
+    let (account_uuid, org_uuid, sub_type, rate_tier) = account
+        .oauth_provider_specific
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .map_or((None, None, None, None), |val| {
+            let get_str = |key: &str| val.get(key).and_then(|v| v.as_str()).map(str::to_string);
+            (
+                get_str("account_uuid"),
+                get_str("organization_uuid"),
+                get_str("subscription_type"),
+                get_str("rate_limit_tier"),
+            )
+        });
+
+    let inferred_sub_type = sub_type.as_deref().or_else(|| {
+        account.quota_plan_name.as_deref().and_then(|p| {
+            let p_low = p.to_lowercase();
+            if p_low.contains("pro") {
+                Some("pro")
+            } else if p_low.contains("max") {
+                Some("max")
+            } else if p_low.contains("team") {
+                Some("team")
+            } else {
+                None
+            }
+        })
+    });
+
+    super::claude_code::write_claude_code_credentials(super::claude_code::ClaudeCodeWriteOptions {
+        access_token,
+        refresh_token,
+        expires_at,
+        email: email.or(account.email.as_deref()),
+        account_uuid: account_uuid.as_deref(),
+        org_uuid: org_uuid.as_deref(),
+        subscription_type: inferred_sub_type,
+        rate_limit_tier: rate_tier.as_deref(),
+    })
 }
 
 /// Propagates freshly refreshed tokens back to the host CLI on disk if the refreshed account
@@ -156,106 +180,52 @@ pub fn sync_to_local_cli_if_active(
     expires_at: Option<&str>,
     email: Option<&str>,
 ) -> bool {
-    match provider_id {
+    let write_res = match provider_id {
         "claude-code" | "claude" => {
-            if let Some(disc) = scan_claude_code_cli()
-                && claude_code_account_matches(account, &disc)
-            {
-                let (account_uuid, org_uuid, sub_type, rate_tier) = account
-                    .oauth_provider_specific
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
-                    .map_or((None, None, None, None), |val| {
-                        let acc_uuid = val
-                            .get("account_uuid")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string);
-                        let org_uuid = val
-                            .get("organization_uuid")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string);
-                        let sub = val
-                            .get("subscription_type")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string);
-                        let tier = val
-                            .get("rate_limit_tier")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string);
-                        (acc_uuid, org_uuid, sub, tier)
-                    });
-
-                let inferred_sub_type = sub_type.as_deref().or_else(|| {
-                    account.quota_plan_name.as_deref().and_then(|p| {
-                        let p_low = p.to_lowercase();
-                        if p_low.contains("pro") {
-                            Some("pro")
-                        } else if p_low.contains("max") {
-                            Some("max")
-                        } else if p_low.contains("team") {
-                            Some("team")
-                        } else {
-                            None
-                        }
-                    })
-                });
-
-                let write_res = super::claude_code::write_claude_code_credentials(
-                    super::claude_code::ClaudeCodeWriteOptions {
-                        access_token,
-                        refresh_token,
-                        expires_at,
-                        email: email.or(account.email.as_deref()),
-                        account_uuid: account_uuid.as_deref(),
-                        org_uuid: org_uuid.as_deref(),
-                        subscription_type: inferred_sub_type,
-                        rate_limit_tier: rate_tier.as_deref(),
-                    },
-                );
-                if let Err(e) = write_res {
-                    tracing::warn!(
-                        account = account.id.0,
-                        error = %e,
-                        "sync_to_local_cli: failed to write refreshed claude-code credentials to disk"
-                    );
-                    return false;
-                }
-                tracing::info!(
-                    account = account.id.0,
-                    "sync_to_local_cli: refreshed claude-code tokens written to local CLI credentials"
-                );
-                return true;
+            let Some(disc) = scan_claude_code_cli() else {
+                return false;
+            };
+            if !claude_code_account_matches(account, &disc) {
+                return false;
             }
-            false
+            write_account_to_claude_code_cli(account, access_token, refresh_token, expires_at, email)
         }
         "antigravity" => {
-            if let Some(disc) = scan_antigravity_cli()
-                && antigravity_account_matches(account, &disc)
-            {
-                let write_res = super::antigravity::write_antigravity_credentials(
-                    super::antigravity::AntigravityWriteOptions {
-                        access_token,
-                        refresh_token,
-                        expires_at,
-                        email: email.or(account.email.as_deref()),
-                    },
-                );
-                if let Err(e) = write_res {
-                    tracing::warn!(
-                        account = account.id.0,
-                        error = %e,
-                        "sync_to_local_cli: failed to write refreshed antigravity credentials to disk"
-                    );
-                    return false;
-                }
-                tracing::info!(
-                    account = account.id.0,
-                    "sync_to_local_cli: refreshed antigravity tokens written to local CLI credentials"
-                );
-                return true;
+            let Some(disc) = scan_antigravity_cli() else {
+                return false;
+            };
+            if !antigravity_account_matches(account, &disc) {
+                return false;
             }
+            super::antigravity::write_antigravity_credentials(
+                super::antigravity::AntigravityWriteOptions {
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    email: email.or(account.email.as_deref()),
+                },
+            )
+        }
+        _ => return false,
+    };
+
+    match write_res {
+        Ok(_) => {
+            tracing::info!(
+                account = account.id.0,
+                provider = provider_id,
+                "sync_to_local_cli: refreshed tokens written to local CLI credentials"
+            );
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                account = account.id.0,
+                provider = provider_id,
+                error = %e,
+                "sync_to_local_cli: failed to write refreshed credentials to disk"
+            );
             false
         }
-        _ => false,
     }
 }

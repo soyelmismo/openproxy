@@ -43,11 +43,15 @@ pub enum ImageMultipartKind {
     Variation,
 }
 
-fn sanitize_header_token(value: &str) -> String {
-    value
-        .chars()
-        .filter(|&c| c != '\r' && c != '\n' && c != '\0' && c != '"')
-        .collect()
+pub use crate::unary::sanitize_header_token;
+use crate::unary::{MultipartFilePart, call_unary_multipart_upstream};
+
+#[must_use]
+pub(crate) fn effective_delivered_images(requested: Option<u32>, actual_len: usize) -> Option<u32> {
+    requested.map(|req_n| {
+        let actual = u32::try_from(actual_len).unwrap_or(req_n);
+        req_n.max(actual)
+    })
 }
 
 pub async fn dispatch_image_multipart_request(
@@ -58,57 +62,27 @@ pub async fn dispatch_image_multipart_request(
     upstream_model_id: &str,
     body: &ParsedImageMultipartBody,
 ) -> Result<UpstreamResponse> {
-    let boundary = format!("----WebKitFormBoundary{}", uuid::Uuid::new_v4().simple());
-    let mut payload = Vec::new();
-
-    payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    payload.extend_from_slice(b"Content-Disposition: form-data; name=\"model\"\r\n\r\n");
-    payload.extend_from_slice(upstream_model_id.as_bytes());
-    payload.extend_from_slice(b"\r\n");
-
-    for (k, v) in &body.form_fields {
-        if k == "model" {
-            continue;
-        }
-        let safe_k = sanitize_header_token(k);
-        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{safe_k}\"\r\n\r\n").as_bytes(),
-        );
-        payload.extend_from_slice(v.as_bytes());
-        payload.extend_from_slice(b"\r\n");
-    }
-
-    for file in &body.files {
-        let safe_name = sanitize_header_token(&file.name);
-        let safe_file_name = sanitize_header_token(&file.file_name);
-        let safe_ct = sanitize_header_token(&file.content_type);
-        payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        payload.extend_from_slice(
-            format!(
-                "Content-Disposition: form-data; name=\"{safe_name}\"; filename=\"{safe_file_name}\"\r\n"
-            )
-            .as_bytes(),
-        );
-        payload
-            .extend_from_slice(format!("Content-Type: {safe_ct}\r\n\r\n").as_bytes());
-        payload.extend_from_slice(&file.bytes);
-        payload.extend_from_slice(b"\r\n");
-    }
-
-    payload.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-
-    let content_type = format!("multipart/form-data; boundary={boundary}");
-    let mut upstream_req =
-        UpstreamRequest::post_multipart(upstream_url, &content_type, bytes::Bytes::from(payload));
-
-    apply_adapter_headers(&mut upstream_req, adapter, api_key, upstream_model_id, true);
-
-    let cancel = CancellationToken::new();
-    upstream_client
-        .call(upstream_req, TimeoutProfile::Quota, cancel)
-        .await
-        .map_err(|e| CoreError::UpstreamConnection(format!("{upstream_url}: {e:?}")))
+    let parts: Vec<MultipartFilePart<'_>> = body
+        .files
+        .iter()
+        .map(|f| MultipartFilePart {
+            field_name: &f.name,
+            file_name: &f.file_name,
+            content_type: &f.content_type,
+            bytes: &f.bytes,
+        })
+        .collect();
+    call_unary_multipart_upstream(
+        upstream_client,
+        adapter,
+        upstream_url,
+        api_key,
+        upstream_model_id,
+        &body.form_fields,
+        &parts,
+        false,
+    )
+    .await
 }
 
 pub async fn execute_image_edit(
