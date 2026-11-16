@@ -55,6 +55,13 @@ pub fn resolve_audio_targets(
     )
 }
 
+fn sanitize_header_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|&c| c != '\r' && c != '\n' && c != '\0' && c != '"')
+        .collect()
+}
+
 pub async fn dispatch_audio_request(
     upstream_client: &Arc<UpstreamClient>,
     adapter: ProviderAdapterEnum,
@@ -79,24 +86,26 @@ pub async fn dispatch_audio_request(
         if v.trim().is_empty() {
             continue;
         }
+        let safe_k = sanitize_header_token(k);
         payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         payload.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{k}\"\r\n\r\n").as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{safe_k}\"\r\n\r\n").as_bytes(),
         );
         payload.extend_from_slice(v.as_bytes());
         payload.extend_from_slice(b"\r\n");
     }
 
+    let safe_file_name = sanitize_header_token(&body.file_name);
+    let safe_ct = sanitize_header_token(&body.file_content_type);
     payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     payload.extend_from_slice(
         format!(
-            "Content-Disposition: form-data; name=\"file\"; filename=\"{}\"\r\n",
-            body.file_name
+            "Content-Disposition: form-data; name=\"file\"; filename=\"{safe_file_name}\"\r\n"
         )
         .as_bytes(),
     );
     payload
-        .extend_from_slice(format!("Content-Type: {}\r\n\r\n", body.file_content_type).as_bytes());
+        .extend_from_slice(format!("Content-Type: {safe_ct}\r\n\r\n").as_bytes());
     payload.extend_from_slice(&body.file_bytes);
     payload.extend_from_slice(b"\r\n");
 

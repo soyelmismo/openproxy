@@ -43,6 +43,13 @@ pub enum ImageMultipartKind {
     Variation,
 }
 
+fn sanitize_header_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|&c| c != '\r' && c != '\n' && c != '\0' && c != '"')
+        .collect()
+}
+
 pub async fn dispatch_image_multipart_request(
     upstream_client: &Arc<UpstreamClient>,
     adapter: &ProviderAdapterEnum,
@@ -63,25 +70,28 @@ pub async fn dispatch_image_multipart_request(
         if k == "model" {
             continue;
         }
+        let safe_k = sanitize_header_token(k);
         payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         payload.extend_from_slice(
-            format!("Content-Disposition: form-data; name=\"{k}\"\r\n\r\n").as_bytes(),
+            format!("Content-Disposition: form-data; name=\"{safe_k}\"\r\n\r\n").as_bytes(),
         );
         payload.extend_from_slice(v.as_bytes());
         payload.extend_from_slice(b"\r\n");
     }
 
     for file in &body.files {
+        let safe_name = sanitize_header_token(&file.name);
+        let safe_file_name = sanitize_header_token(&file.file_name);
+        let safe_ct = sanitize_header_token(&file.content_type);
         payload.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
         payload.extend_from_slice(
             format!(
-                "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
-                file.name, file.file_name
+                "Content-Disposition: form-data; name=\"{safe_name}\"; filename=\"{safe_file_name}\"\r\n"
             )
             .as_bytes(),
         );
         payload
-            .extend_from_slice(format!("Content-Type: {}\r\n\r\n", file.content_type).as_bytes());
+            .extend_from_slice(format!("Content-Type: {safe_ct}\r\n\r\n").as_bytes());
         payload.extend_from_slice(&file.bytes);
         payload.extend_from_slice(b"\r\n");
     }
