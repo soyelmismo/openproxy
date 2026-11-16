@@ -66,12 +66,14 @@ struct ErrorBody<'a> {
 /// and AES-GCM are synchronous (AGENTS §4.3 forbids holding locks across `.await`).
 pub async fn tokenize(
     State(s): State<AppState>,
+    auth_ext: Option<axum::Extension<crate::middleware::auth::ValidatedApiToken>>,
     axum::Extension(parsed_req): axum::Extension<ParsedChatRequest>,
 ) -> Result<Response, ApiError> {
     let req = parsed_req.parsed.as_ref().clone();
     if req.model.is_empty() {
         return Err(ApiError(CoreError::Validation("model is required".into())));
     }
+    let auth_token = auth_ext.map(|axum::Extension(t)| t);
 
     // Resolve routing + rotation + access_token decrypt in one spawn_blocking; the
     // reader guard is dropped before the future resolves (no `.await` under guard).
@@ -82,17 +84,38 @@ pub async fn tokenize(
         tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
             let r = db_pool.reader();
             let plan = routing::resolve(&r, &model)?;
-            let RoutingPlan::Combo { targets, .. } = plan else {
+            let RoutingPlan::Combo { combo_id, targets, .. } = plan else {
                 return Err(ApiError(CoreError::model_not_found(
                     "<unknown>",
                     model.clone(),
                 )));
             };
+            if let Some(ref auth) = auth_token
+                && combo_id.0 != openproxy_core::routing::SYNTHETIC_COMBO_ID
+                && !auth.is_combo_allowed(combo_id.0)
+            {
+                return Err(ApiError(CoreError::Auth(
+                    "combo not allowed for this key".into(),
+                )));
+            }
             let expanded = routing::expand_account_rotation(&r, targets)?;
             let target = expanded
                 .into_iter()
-                .next()
-                .ok_or_else(|| ApiError(CoreError::NoHealthyTargets(0)))?;
+                .find(|t| {
+                    auth_token.as_ref().is_none_or(|auth| {
+                        auth.is_provider_allowed(t.provider_id.as_str())
+                            && auth.is_model_allowed_for_provider(t.provider_id.as_str(), &model)
+                    })
+                })
+                .ok_or_else(|| {
+                    if auth_token.is_some() {
+                        ApiError(CoreError::Auth(
+                            "provider or model not allowed for this key".into(),
+                        ))
+                    } else {
+                        ApiError(CoreError::NoHealthyTargets(0))
+                    }
+                })?;
             let account_id: AccountId = target
                 .account_id
                 .ok_or_else(|| ApiError(CoreError::NoHealthyTargets(0)))?;

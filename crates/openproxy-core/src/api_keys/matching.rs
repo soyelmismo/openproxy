@@ -178,6 +178,14 @@ impl ApiKey {
         {
             return false;
         }
+        if self.only_whitelisted {
+            return self
+                .allowed_providers
+                .as_ref()
+                .is_some_and(|allowed| {
+                    !allowed.is_empty() && allowed.iter().any(|p| p == provider_id || p == "*")
+                });
+        }
         if let Some(allowed) = &self.allowed_providers
             && !allowed.is_empty()
             && !allowed.iter().any(|p| p == provider_id || p == "*")
@@ -189,6 +197,12 @@ impl ApiKey {
 
     /// Returns whether the specified combo ID is permitted by this key.
     pub fn is_combo_allowed(&self, combo_id: i64) -> bool {
+        if self.only_whitelisted {
+            return self
+                .allowed_combos
+                .as_ref()
+                .is_some_and(|allowed| !allowed.is_empty() && allowed.contains(&combo_id));
+        }
         if let Some(allowed) = &self.allowed_combos
             && !allowed.is_empty()
             && !allowed.contains(&combo_id)

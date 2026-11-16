@@ -121,7 +121,9 @@ pub async fn usage_stream(
             .map(str::trim)
             .is_some_and(|token| {
                 let key_hash = openproxy_core::api_keys::hash_key(token);
-                s.get_cached_api_key(&key_hash).is_some()
+                s.get_cached_api_key(&key_hash).is_some_and(|key| {
+                    crate::middleware::auth::validate_key_record(&key, "manage").is_ok()
+                })
             });
         if !known_good_key {
             return crate::error::ApiError(openproxy_types::CoreError::RateLimited {

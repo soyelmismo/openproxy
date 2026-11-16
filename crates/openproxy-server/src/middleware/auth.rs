@@ -262,8 +262,8 @@ pub(crate) async fn verify_key_credentials_any_scope(
     allowed_scopes: &[&str],
 ) -> Result<Arc<core_api_keys::ApiKey>, ApiError> {
     let key_hash = core_api_keys::hash_key(token);
-    let key = if let Some(cached) = state.get_cached_api_key(&key_hash) {
-        cached
+    let (key, was_cached) = if let Some(cached) = state.get_cached_api_key(&key_hash) {
+        (cached, true)
     } else {
         let lookup_hash = key_hash.clone();
         let fetched = state
@@ -275,12 +275,13 @@ pub(crate) async fn verify_key_credentials_any_scope(
                 ApiError(CoreError::Auth("invalid api key".into()))
             })?
             .ok_or_else(|| ApiError(CoreError::Auth("invalid api key".into())))?;
-        let arc_key = Arc::new(fetched);
-        state.cache_api_key(Arc::clone(&arc_key));
-        arc_key
+        (Arc::new(fetched), false)
     };
 
     validate_key_record_any_scope(&key, allowed_scopes)?;
+    if !was_cached {
+        state.cache_api_key(Arc::clone(&key));
+    }
 
     // Security (OP-15): `touch_last_used` is throttled in SQL to one write per
     // LAST_USED_THROTTLE_SECS, but the old code contended for the pool's

@@ -179,7 +179,9 @@ pub async fn public_auth_throttle_middleware(
         )
         .is_some_and(|token| {
             let key_hash = openproxy_core::api_keys::hash_key(token);
-            state.get_cached_api_key(&key_hash).is_some()
+            state
+                .get_cached_api_key(&key_hash)
+                .is_some_and(|key| key.is_active)
         });
         if !known_good_key {
             return Err(ApiError(CoreError::RateLimited {
