@@ -1,17 +1,22 @@
 /**
  * Models catalog view — the client-facing table of every model the caller's
  * API key can see (same filtering as `GET /v1/models`), enriched with
- * per-1M pricing from the billing lookup. Sortable columns, free-text filter
- * and three density presets (normal / compact / ultra). Full mobile support:
- * under 760px the table reflows into labelled cards.
+ * per-1M pricing from the billing lookup. Sortable columns and a free-text
+ * filter. Full mobile support: under 760px the table reflows into labelled
+ * cards.
+ *
+ * Endpoint chips: the view header carries the API base and the session key
+ * (masked, revealed on demand) with copy buttons — a caller can wire a CLI
+ * from this screen alone.
  *
  * Peak/off-peak schedules: when the catalog entry carries a
- * `pricing_schedule`, the price cells show the band active right now and the
- * Band column counts down to the next real transition. A single one-second
- * timer updates those cells in place (one timer for the whole table, no
- * per-row fetch, no full re-render every second); the table is only rebuilt
- * when a band actually flips while sorting by a price/band column. A present
- * but malformed schedule renders as "unavailable" — never as the flat price.
+ * `pricing_schedule`, the Band cell shows the active band as a badge, the
+ * countdown to the next real transition and the visible windows line; the
+ * price cells tick with the band. A single one-second timer updates those
+ * cells in place (one timer for the whole table, no per-row fetch, no full
+ * re-render every second); the table is only rebuilt when a band actually
+ * flips while sorting by a price/band column. A present but malformed
+ * schedule renders as "unavailable" — never as the flat price.
  */
 import { api } from '../state/api.js';
 import { getToken } from '../state/auth.js';
@@ -34,7 +39,6 @@ interface CatalogEntry {
   family?: string | null;
   context_length?: number | null;
   max_output_tokens?: number | null;
-  capabilities?: Record<string, boolean> | null;
   pricing_input_per_1m?: number | null;
   pricing_output_per_1m?: number | null;
   pricing_cached_per_1m?: number | null;
@@ -49,18 +53,7 @@ interface CatalogResponse {
   data: CatalogEntry[];
 }
 
-type SortKey =
-  | 'id'
-  | 'provider'
-  | 'type'
-  | 'context'
-  | 'max_out'
-  | 'price_in'
-  | 'price_cached'
-  | 'price_out'
-  | 'band';
-
-type Density = 'normal' | 'compact' | 'ultra';
+type SortKey = 'id' | 'context' | 'max_out' | 'price_in' | 'price_cached' | 'price_out' | 'band';
 
 interface RowPricing {
   band: PricingBand | null;
@@ -84,30 +77,14 @@ interface Row {
   pricing: RowPricing;
 }
 
-const LS_KEY = 'openproxy.modelsCatalogDensity';
-
-const COLUMNS: readonly { key: SortKey | null; label: string; dataL: string; num?: boolean }[] = [
+const COLUMNS: readonly { key: SortKey; label: string; dataL: string; num?: boolean }[] = [
   { key: 'id', label: 'Model', dataL: 'Model' },
-  { key: 'provider', label: 'Provider', dataL: 'Provider' },
-  { key: 'type', label: 'Type', dataL: 'Type' },
   { key: 'context', label: 'Context', dataL: 'Context', num: true },
   { key: 'max_out', label: 'Max out', dataL: 'Max out', num: true },
   { key: 'price_in', label: '$ in /M', dataL: '$ in /M', num: true },
   { key: 'price_cached', label: '$ cached /M', dataL: '$ cached /M', num: true },
   { key: 'price_out', label: '$ out /M', dataL: '$ out /M', num: true },
   { key: 'band', label: 'Band', dataL: 'Band' },
-  { key: null, label: 'Capabilities', dataL: 'Capabilities' },
-];
-
-const CAP_BADGES: readonly [string, string][] = [
-  ['tools', 'tools'],
-  ['vision', 'vision'],
-  ['reasoning', 'reason'],
-  ['thinking', 'think'],
-  ['attachment', 'files'],
-  ['structured_output', 'json'],
-  ['audio_input', 'audio-in'],
-  ['audio_output', 'audio-out'],
 ];
 
 let entries: CatalogEntry[] = [];
@@ -121,7 +98,6 @@ let errorMsg: string | null = null;
 let query = '';
 let sortKey: SortKey = 'id';
 let sortDir: 1 | -1 = 1;
-let density: Density = 'normal';
 let mounted = false;
 let keyRevealed = false;
 
@@ -134,24 +110,6 @@ const ICON_COPY =
 
 function maskedKey(token: string): string {
   return token.length > 12 ? `${token.slice(0, 8)}${'•'.repeat(10)}${token.slice(-4)}` : '••••••••';
-}
-
-function loadDensity(): Density {
-  try {
-    const v = localStorage.getItem(LS_KEY);
-    if (v === 'compact' || v === 'ultra' || v === 'normal') return v;
-  } catch {
-    /* private mode */
-  }
-  return 'normal';
-}
-
-function saveDensity(d: Density): void {
-  try {
-    localStorage.setItem(LS_KEY, d);
-  } catch {
-    /* private mode */
-  }
 }
 
 function fmtTokens(n?: number | null): string {
@@ -183,6 +141,7 @@ function fmtCountdown(ms: number): string {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
 }
 
+/** Provider/family text for the free-text filter only — never a column. */
 function providerOf(e: CatalogEntry): string {
   if (e.owned_by) return e.owned_by;
   const slash = e.id.indexOf('/');
@@ -281,10 +240,6 @@ function sortValue(row: Row, key: SortKey): string | number {
   switch (key) {
     case 'id':
       return e.id.toLowerCase();
-    case 'provider':
-      return providerOf(e).toLowerCase();
-    case 'type':
-      return (e.type || '').toLowerCase();
     case 'context':
       return e.context_length ?? -1;
     case 'max_out':
@@ -327,15 +282,6 @@ function visibleRows(): Row[] {
   return rows;
 }
 
-function badgesHtml(e: CatalogEntry): string {
-  const caps = e.capabilities || {};
-  const parts: string[] = [];
-  for (const [flag, label] of CAP_BADGES) {
-    if (caps[flag]) parts.push(`<span class="mc-badge">${label}</span>`);
-  }
-  return parts.length > 0 ? parts.join('') : '<span class="mc-muted">—</span>';
-}
-
 function bandCell(p: RowPricing): string {
   if (p.unavailable) {
     return '<span class="mc-band is-unavailable" data-band>unavailable</span>';
@@ -345,50 +291,42 @@ function bandCell(p: RowPricing): string {
   const label = isPeak ? 'peak' : 'off-peak';
   const remaining = p.nextTransitionMs != null ? fmtCountdown(p.nextTransitionMs - p.nowMs) : null;
   const next = p.nextBand != null ? (p.nextBand === 'peak' ? 'peak' : 'off-peak') : null;
+  const tip = p.schedule ? ` title="${escapeHtml(scheduleTooltip(p.schedule))}"` : '';
   const countdown = remaining != null
-    ? `<span class="mc-countdown" data-countdown title=${escapeHtml(next ? `Next: ${next} at ${remaining}` : remaining)}>${remaining}</span>`
+    ? `<span class="mc-countdown" data-countdown>${remaining}</span>`
     : '';
   const nextTag = next != null ? `<span class="mc-band-next" data-next>→ ${next}</span>` : '';
-  // Visible schedule line + hover tooltip: the user must see WHEN peak and
-  // off-peak apply, not just which band is active right now.
+  const meta = countdown || nextTag
+    ? `<span class="mc-band-meta">${nextTag}${countdown}</span>`
+    : '';
+  // Visible schedule line: the user must see WHEN peak and off-peak apply,
+  // not just which band is active right now.
   const wins = p.schedule ? windowsSummary(p.schedule) : '';
-  const tip = p.schedule ? ` title="${escapeHtml(scheduleTooltip(p.schedule as PricingSchedule))}"` : '';
   const scheduleLine = wins
     ? `<span class="mc-schedule-line" title="${escapeHtml(scheduleTooltip(p.schedule as PricingSchedule))}">${escapeHtml(wins)}</span>`
     : '';
-  return `<span class="mc-band ${isPeak ? 'is-peak' : 'is-offpeak'}" data-band${tip}>${label}</span>${countdown}${nextTag}${scheduleLine}`;
+  return `<span class="mc-band ${isPeak ? 'is-peak' : 'is-offpeak'}" data-band${tip}><span class="mc-band-dot" aria-hidden="true"></span><span data-band-label>${label}</span></span>${meta}${scheduleLine}`;
 }
 
 function rowHtml(row: Row): string {
   const e = row.entry;
   const p = row.pricing;
-  // Combos are listed under their bare routing name (no `combo:` prefix), so
-  // the marker is the owner/family the catalog stamps on every combo entry.
-  const isCombo = (e.type || '').toLowerCase() === 'combo' ||
-    e.owned_by === 'combo' || e.family === 'combo' || e.id.startsWith('combo:');
   const sub = e.display_name && e.display_name !== e.id
     ? `<span class="mc-sub">${escapeHtml(e.display_name)}</span>`
     : '';
-  const typeLabel = escapeHtml(e.type || 'chat');
-  return `<tr class="mc-row${isCombo ? ' is-combo' : ''}" data-mc-idx="${row.idx}">
+  return `<tr class="mc-row" data-mc-idx="${row.idx}">
     <td data-l="Model" class="mc-model"><span class="mc-id">${escapeHtml(e.id)}</span>${sub}</td>
-    <td data-l="Provider">${escapeHtml(providerOf(e))}</td>
-    <td data-l="Type"><span class="mc-type${isCombo ? ' is-combo' : ''}">${typeLabel}</span></td>
     <td data-l="Context" class="num">${fmtTokens(e.context_length)}</td>
     <td data-l="Max out" class="num">${fmtTokens(e.max_output_tokens)}</td>
     <td data-l="$ in /M" class="num" data-price="in">${p.unavailable ? '—' : fmtPrice(p.input)}</td>
     <td data-l="$ cached /M" class="num" data-price="cached">${p.unavailable ? '—' : fmtPrice(p.cached)}</td>
     <td data-l="$ out /M" class="num" data-price="out">${p.unavailable ? '—' : fmtPrice(p.output)}</td>
     <td data-l="Band" class="mc-band-cell">${bandCell(p)}</td>
-    <td data-l="Capabilities"><div class="mc-badges">${badgesHtml(e)}</div></td>
   </tr>`;
 }
 
 function tableHtml(rows: Row[]): string {
   const head = COLUMNS.map((c) => {
-    if (!c.key) {
-      return `<th class="${c.num ? 'num' : ''}" scope="col">${c.label}</th>`;
-    }
     const active = sortKey === c.key;
     const arrow = active ? (sortDir === 1 ? '▲' : '▼') : '';
     const aria = active ? (sortDir === 1 ? 'ascending' : 'descending') : 'none';
@@ -463,7 +401,8 @@ function tick(): void {
     const bandEl = rowEl.querySelector<HTMLElement>('[data-band]');
     if (bandEl) {
       const isPeak = resolved.band === 'peak';
-      bandEl.textContent = isPeak ? 'peak' : 'off-peak';
+      const labelEl = bandEl.querySelector<HTMLElement>('[data-band-label]');
+      if (labelEl) labelEl.textContent = isPeak ? 'peak' : 'off-peak';
       bandEl.classList.toggle('is-peak', isPeak);
       bandEl.classList.toggle('is-offpeak', !isPeak);
     }
@@ -511,18 +450,6 @@ function buildPricingIndex(): void {
   }
 }
 
-function applyDensity(): void {
-  const card = document.querySelector('.mc-card');
-  if (!card) return;
-  card.classList.remove('density-normal', 'density-compact', 'density-ultra');
-  card.classList.add(`density-${density}`);
-  document.querySelectorAll<HTMLButtonElement>('.mc-density button').forEach((b) => {
-    const isActive = b.dataset['density'] === density;
-    b.classList.toggle('active', isActive);
-    b.setAttribute('aria-pressed', String(isActive));
-  });
-}
-
 async function refresh(): Promise<void> {
   loading = true;
   errorMsg = null;
@@ -558,10 +485,9 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
   query = '';
   sortKey = 'id';
   sortDir = 1;
-  density = loadDensity();
 
   main.innerHTML = `
-    <div class="card mc-card density-${density}">
+    <div class="card mc-card">
       <div class="mc-toolbar">
         <div class="mc-heading">
           <h1 class="mc-title">Models</h1>
@@ -573,27 +499,20 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
           <select id="mc-sort" class="mc-sort-select" aria-label="Sort models">
             <option value="id:1">Sort: Model (A–Z)</option>
             <option value="id:-1">Sort: Model (Z–A)</option>
-            <option value="provider:1">Sort: Provider (A–Z)</option>
-            <option value="type:1">Sort: Type</option>
             <option value="context:-1">Sort: Context (High–Low)</option>
             <option value="max_out:-1">Sort: Max Out (High–Low)</option>
             <option value="price_in:1">Sort: $ in /M (Low–High)</option>
             <option value="price_out:1">Sort: $ out /M (Low–High)</option>
           </select>
-          <div class="mc-density" role="group" aria-label="Density">
-            <button type="button" data-density="normal" title="Normal density">Normal</button>
-            <button type="button" data-density="compact" title="Compact density">Compact</button>
-            <button type="button" data-density="ultra" title="Ultra-compact density">Ultra</button>
-          </div>
         </div>
       </div>
       <div class="mc-endpoint" id="mc-endpoint">
-        <div class="mc-endpoint-row">
+        <div class="mc-endpoint-chip">
           <span class="mc-endpoint-label">API base</span>
           <code class="mc-endpoint-value" id="mc-apibase"></code>
           <button type="button" class="mc-ep-btn" data-ep="copy-base" title="Copy API base" aria-label="Copy API base">${ICON_COPY}</button>
         </div>
-        <div class="mc-endpoint-row">
+        <div class="mc-endpoint-chip">
           <span class="mc-endpoint-label">API key</span>
           <code class="mc-endpoint-value" id="mc-keyval"></code>
           <button type="button" class="mc-ep-btn" data-ep="toggle-key" id="mc-key-eye" title="Show API key" aria-label="Show API key">${ICON_EYE}</button>
@@ -603,7 +522,7 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
       <div id="mc-body" class="mc-body"></div>
     </div>`;
 
-  // Endpoint block: API base + the session's API key (reveal + copy).
+  // Endpoint chips: API base + the session's API key (reveal + copy).
   keyRevealed = false;
   const apiBase = `${location.origin}${PROXY_PREFIX}/v1`;
   const token = getToken() ?? '';
@@ -660,16 +579,6 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
     }
   });
 
-  document.querySelectorAll<HTMLButtonElement>('.mc-density button').forEach((b) => {
-    b.addEventListener('click', () => {
-      const d = b.dataset['density'] as Density;
-      if (d !== 'normal' && d !== 'compact' && d !== 'ultra') return;
-      density = d;
-      saveDensity(d);
-      applyDensity();
-    });
-  });
-
   const toggleSortByHeader = (th: HTMLElement, restoreFocus: boolean): void => {
     const key = th.dataset['key'] as SortKey;
     if (sortKey === key) sortDir = sortDir === 1 ? -1 : 1;
@@ -698,7 +607,6 @@ export async function mountModelsCatalog(container?: HTMLElement | string): Prom
     toggleSortByHeader(th, true);
   });
 
-  applyDensity();
   await refresh();
 
   return () => {

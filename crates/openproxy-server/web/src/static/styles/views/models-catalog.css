@@ -1,4 +1,4 @@
-/* Models catalog — client-facing sortable table with density presets.
+/* Models catalog — client-facing sortable table with per-band pricing.
    Mobile (<760px): rows reflow into labelled cards. */
 
 .mc-card { padding: var(--space-3, 16px); }
@@ -41,23 +41,6 @@
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
 }
-
-.mc-density {
-  display: inline-flex;
-  border: var(--border-w, 1px) var(--border-style, solid) var(--color-border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.mc-density button {
-  padding: 6px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-.mc-density button + button { border-left: var(--border-w, 1px) var(--border-style, solid) var(--color-border); }
-.mc-density button.active { background: var(--color-primary); color: var(--color-primary-fg); }
 
 .mc-tablewrap {
   overflow: auto;
@@ -108,27 +91,6 @@
 .mc-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; display: block; word-break: break-all; }
 .mc-sub { display: block; color: var(--color-text-muted); font-size: 0.72rem; margin-top: 1px; }
 
-.mc-type {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--color-surface-2);
-  border: var(--border-w, 1px) var(--border-style, solid) var(--color-border-soft);
-  font-size: 0.72rem;
-}
-.mc-type.is-combo { background: var(--color-warn-soft, rgba(255, 180, 0, 0.15)); border-color: var(--color-warn, #f5a623); }
-
-.mc-badges { display: flex; flex-wrap: wrap; gap: 4px; }
-.mc-badge {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 5px;
-  background: var(--color-surface-2);
-  border: var(--border-w, 1px) var(--border-style, solid) var(--color-border-soft);
-  color: var(--color-text-muted);
-  font-size: 0.68rem;
-  white-space: nowrap;
-}
 .mc-muted { color: var(--color-text-muted); }
 
 .mc-state, .mc-empty { padding: 24px; text-align: center; color: var(--color-text-muted); }
@@ -141,27 +103,12 @@
   font-size: 0.85rem;
 }
 
-/* Density: compact */
-.mc-card.density-compact .mc-table tbody td { padding: 4px 8px; }
-.mc-card.density-compact .mc-table { font-size: 0.8rem; }
-.mc-card.density-compact .mc-sub { display: none; }
-
-/* Density: ultra */
-.mc-card.density-ultra .mc-table { font-size: 0.75rem; }
-.mc-card.density-ultra .mc-table thead th { padding: 4px 6px; font-size: 0.68rem; }
-.mc-card.density-ultra .mc-table tbody td { padding: 2px 6px; }
-.mc-card.density-ultra .mc-sub,
-.mc-card.density-ultra .mc-badges { display: none; }
-.mc-card.density-ultra .mc-type { padding: 0 5px; font-size: 0.66rem; }
-
 /* Mobile & narrow workspace tiles: reflow rows into labelled cards */
 @media (max-width: 760px) {
   .mc-card { padding: 10px; }
   .mc-search { min-width: 0; width: 100%; }
   .mc-sort-select { width: 100%; }
   .mc-tools { width: 100%; }
-  .mc-density { width: 100%; }
-  .mc-density button { flex: 1; }
   .mc-tablewrap { max-height: none; border: 0; overflow: visible; }
   .mc-table { display: block; }
   .mc-table thead { display: none; }
@@ -201,21 +148,31 @@
   }
   .mc-table tbody td.mc-model::before { display: none; }
   .mc-table .num { white-space: normal; }
-  .mc-badges { justify-content: flex-end; }
   .mc-empty { display: block !important; text-align: center; }
   .mc-empty::before { display: none; }
 }
 
-/* Peak / off-peak band + next-transition countdown (pricing schedules). */
-.mc-band-cell { white-space: nowrap; }
+/* Peak / off-peak band badge + next-transition countdown (pricing schedules).
+   The badge carries a colored dot; the countdown sits on its own meta line so
+   the cell reads as badge-on-top, details-below instead of one flat run. */
+.mc-band-cell { white-space: normal; min-width: 150px; }
 .mc-band {
-  display: inline-block;
-  padding: 1px 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 12px 3px 9px;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.02em;
   border: var(--border-w, 1px) var(--border-style, solid) transparent;
+}
+.mc-band-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
 }
 .mc-band.is-peak {
   color: var(--color-warning, #b45309);
@@ -233,29 +190,36 @@
   border-color: var(--color-border-soft);
   font-weight: 500;
 }
+.mc-band-meta {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+.mc-band-next { opacity: 0.85; }
 .mc-countdown {
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
-  font-size: 0.72rem;
-  color: var(--color-text-muted);
 }
-.mc-band-next {
-  margin-left: 4px;
-  font-size: 0.7rem;
+.mc-schedule-line {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.68rem;
   color: var(--color-text-muted);
-  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
 }
 @media (max-width: 760px) {
-  .mc-band-cell { white-space: normal; flex-wrap: wrap; justify-content: flex-end; }
-  .mc-countdown { margin-left: 0; }
+  .mc-band-cell { justify-content: flex-end; }
+  .mc-schedule-line { white-space: normal; max-width: none; }
 }
 
 @container tile-view (max-width: 720px) {
   .mc-search { min-width: 0; width: 100%; }
   .mc-sort-select { width: 100%; }
   .mc-tools { width: 100%; }
-  .mc-density { width: 100%; }
-  .mc-density button { flex: 1; }
   .mc-tablewrap { max-height: none; border: 0; overflow: visible; }
   .mc-table { display: block; }
   .mc-table thead { display: none; }
@@ -295,43 +259,48 @@
   }
   .mc-table tbody td.mc-model::before { display: none; }
   .mc-table .num { white-space: normal; }
-  .mc-badges { justify-content: flex-end; }
   .mc-empty { display: block !important; text-align: center; }
   .mc-empty::before { display: none; }
 }
 
 
-/* Endpoint block: API base + session API key with reveal/copy. */
+/* Endpoint chips: API base + session API key with reveal/copy — pill badges. */
 .mc-endpoint {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+.mc-endpoint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 5px 6px 5px 14px;
   border: var(--border-w, 1px) var(--border-style, solid) var(--color-border-soft);
-  border-radius: 10px;
+  border-radius: 999px;
   background: var(--color-surface-2);
 }
 
-.mc-endpoint-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-
 .mc-endpoint-label {
   flex-shrink: 0;
-  min-width: 64px;
-  font-size: 0.72rem;
+  font-size: 0.66rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.05em;
   color: var(--color-text-muted);
 }
 
 .mc-endpoint-value {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 340px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   color: var(--color-text);
 }
 .mc-endpoint-value.is-revealed { word-break: break-all; white-space: normal; }
@@ -341,30 +310,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: var(--border-w, 1px) var(--border-style, solid) var(--color-border);
-  border-radius: 7px;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
   color: var(--color-text-muted);
   cursor: pointer;
 }
-.mc-ep-btn:hover { color: var(--color-text); border-color: var(--color-primary); }
+.mc-ep-btn:hover { color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 12%, transparent); }
 .mc-ep-btn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
 
-/* Peak/off-peak windows rendered under the band label. */
-.mc-schedule-line {
-  display: block;
-  width: 100%;
-  font-size: 0.68rem;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 @media (max-width: 760px) {
-  .mc-endpoint-row { flex-wrap: wrap; }
-  .mc-endpoint-value { flex: 1 1 100%; order: 3; }
-  .mc-schedule-line { white-space: normal; }
+  .mc-endpoint-chip { width: 100%; }
+  .mc-endpoint-value { flex: 1 1 auto; }
 }

@@ -151,7 +151,8 @@ describe("models catalog pricing schedule", () => {
     expect(row.querySelector('td[data-l="$ cached /M"]')).not.toBeNull();
     expect(row.querySelector('td[data-l="$ out /M"]')).not.toBeNull();
     expect(row.querySelector('td[data-l="Band"]')?.textContent).toContain("peak");
-    expect(host.querySelector(".mc-card")?.className).toContain("density-normal");
+    expect(row.querySelector('td[data-l="Provider"]')).toBeNull();
+    expect(row.querySelector('td[data-l="Capabilities"]')).toBeNull();
     cleanup?.();
   });
 
