@@ -6,10 +6,15 @@
 //! translates them for the client.
 
 use openproxy_pipeline::sse::{
-    SSE_DONE, UpstreamSseChunk, format_sse_line,
+    UpstreamSseChunk, format_sse_line,
     parse_gemini_sse_line_test as parse_gemini_sse_line, parse_openai_sse_line,
 };
 use openproxy_pipeline::translation::OpenAIUsage;
+use openproxy_pipeline::SSE_DONE_BYTES;
+
+/// The `[DONE]` sentinel as `&str`; `sse_done_bytes_matches_str` guards the
+/// parity with the pipeline's `Bytes` constant.
+const SSE_DONE_STR: &str = "data: [DONE]\n\n";
 
 /// Helper: get the payload as a `Value`, whether it came via `raw_payload`
 /// (OpenAI pass-through) or `payload` (translated formats).
@@ -226,8 +231,16 @@ fn format_then_parse_roundtrip() {
 }
 
 #[test]
+fn sse_done_bytes_matches_str() {
+    assert_eq!(
+        std::str::from_utf8(SSE_DONE_BYTES.as_ref()).unwrap(),
+        SSE_DONE_STR
+    );
+}
+
+#[test]
 fn sse_done_constant_parses_as_done() {
-    let line = SSE_DONE.trim_end();
+    let line = SSE_DONE_STR.trim_end();
     let chunk = parse_openai_sse_line(line).unwrap().unwrap();
     assert!(chunk.done);
 }
@@ -237,7 +250,7 @@ fn format_done_sentinel() {
     let done_value = serde_json::Value::Null;
     let formatted = format_sse_line(&done_value);
     // formatting Null yields "data: null", which is not the [DONE] sentinel
-    assert_ne!(formatted, SSE_DONE);
+    assert_ne!(formatted, SSE_DONE_STR);
     assert_eq!(formatted, "data: null\n\n");
 }
 

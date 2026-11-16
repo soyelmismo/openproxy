@@ -32,7 +32,6 @@
 //! guards compilados para esa revisión. El catálogo sí se publica como overlay
 //! separado, verificado por digest.
 
-use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 #[cfg(test)]
@@ -46,8 +45,8 @@ use super::codebuddy_runtime::{
     correspondence_from_evidence, parse_package_manifest, parse_product_document,
     pinned_package_url, pinned_product_url,
 };
-use super::codex_state::shared::{ActivatableVersion, ContractProvider, ProviderRuntime};
-use super::codex_state::{check_compiled_rules, default_store_root_for};
+use super::codex_state::shared::{ActivatableVersion, ContractProvider};
+use super::codex_state::check_compiled_rules;
 use crate::client_contract::{
     Candidate, ClientIdentity, ContractError, ContractId, ContractLimits, ContractTransport,
     ContractValidator, EvidenceKind, IDENTITY_ORIGIN_OFFICIAL, Snapshot, SourceRef, TransportCache,

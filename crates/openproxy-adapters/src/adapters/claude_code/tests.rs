@@ -1,6 +1,7 @@
 use super::adapter_impl::*;
 use super::betas::*;
 use super::*;
+use openproxy_types::{ModelId, TargetFormat};
 use finalize_tests::resolved_target_for;
 
 mod beta_tests;

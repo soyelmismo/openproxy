@@ -82,7 +82,7 @@ impl ApiError {
             _ => {
                 let raw = self.0.to_string();
                 let redacted = openproxy_core::cost::redact_error_msg(&raw);
-                truncate_error_message(&redacted.0).into_owned()
+                truncate_error_message(&redacted).into_owned()
             }
         }
     }

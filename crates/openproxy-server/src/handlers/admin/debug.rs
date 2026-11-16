@@ -238,7 +238,7 @@ fn collect_table_recovery_stats(
                     "table": table,
                     "rows": 0,
                     "status": "corrupt",
-                    "error": openproxy_core::cost::redact_error_msg(&e.to_string()).0
+                    "error": openproxy_core::cost::redact_error_msg(&e.to_string())
                 }));
             }
             None => {

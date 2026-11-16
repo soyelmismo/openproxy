@@ -1,6 +1,5 @@
 use super::tests::openai_req_with;
 use crate::translation::*;
-use openproxy_adapters::adapters::gemini::*;
 use openproxy_types::OpenAIMessage;
 use serde_json::{Value, json};
 

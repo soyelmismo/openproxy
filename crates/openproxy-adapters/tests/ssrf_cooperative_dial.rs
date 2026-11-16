@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Integration tests for the cooperative transport's SSRF opt-in plumbing.
 //!
 //! These run WITHOUT `cfg(test)` for the crate itself, so the real

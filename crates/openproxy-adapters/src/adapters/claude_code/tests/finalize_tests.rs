@@ -1,4 +1,5 @@
 use super::*;
+use openproxy_types::{ModelId, TargetFormat};
 pub(super) fn resolved_for(model_id: &str) -> openproxy_types::context::ResolvedTarget {
     resolved_target_for(
         model_id,

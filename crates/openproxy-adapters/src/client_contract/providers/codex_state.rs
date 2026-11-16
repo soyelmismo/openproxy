@@ -21,7 +21,6 @@
 //! Codex: procedencia real del pin, validación de reglas compiladas y el
 //! punto de entrada global para el server.
 
-use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 use serde_json::Value;
@@ -39,7 +38,7 @@ use crate::client_contract::{
 
 #[doc(hidden)]
 pub mod shared;
-use shared::{ActivatableVersion, ContractProvider, ProviderRuntime};
+use shared::{ActivatableVersion, ContractProvider};
 pub(crate) use shared::{check_compiled_rules, default_store_root_for};
 
 const TAG_REF_JSON: &str = include_str!("../../../../../fixtures/codex-tag-ref.json");

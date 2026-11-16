@@ -4,15 +4,14 @@ use std::sync::Arc;
 
 use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest, UpstreamResponse,
+    UpstreamClient, UpstreamResponse,
 };
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;
-use openproxy_types::{CoreError, ImageGenerationResponse, Result, ids::ApiKeyId};
+use openproxy_types::{ImageGenerationResponse, Result, ids::ApiKeyId};
 
 use crate::images::multipart_exec::execute_image_multipart;
-use crate::unary::apply_adapter_headers;
 
 #[derive(Clone, Debug)]
 pub struct MultipartFile {

@@ -32,6 +32,14 @@ pub use chunk::*;
 pub use framing::SseParser;
 pub use inline_error::{ParsedInlineError, parse_inline_sse_error};
 
+/// Maximum bytes for one buffered SSE line (4 MiB) — guards the line buffer
+/// against unbounded allocation from malformed upstream streams.
+pub const MAX_SSE_LINE_BYTES: usize = 4_194_304;
+/// Maximum allowed bytes for an SSE event type string (e.g., "message_start",
+/// "content_block_delta"). Prevents unbounded memory allocation from malformed
+/// upstream event: lines.
+pub const MAX_SSE_EVENT_TYPE_BYTES: usize = 1024;
+
 pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
     let pos = bytes.iter().position(|&b| b != b' ').unwrap_or(bytes.len());
     &bytes[pos..]
@@ -322,7 +330,10 @@ mod tests {
 
     #[test]
     fn sse_done_constant_value() {
-        assert_eq!(SSE_DONE, "data: [DONE]\n\n");
+        assert_eq!(
+            std::str::from_utf8(crate::pipeline::SSE_DONE_BYTES.as_ref()).unwrap(),
+            "data: [DONE]\n\n"
+        );
     }
 
     #[test]

@@ -297,7 +297,7 @@ where
         let request_id = visitor.request_id.take();
         let trace_id = visitor.trace_id.take();
         let raw_message = visitor.into_message();
-        let (message, _) = openproxy_core::cost::redact_error_msg(&raw_message);
+        let message = openproxy_core::cost::redact_error_msg(&raw_message);
 
         // `event_scope` iterates from the current span up through all parents,
         // so the resulting path is slash-separated.

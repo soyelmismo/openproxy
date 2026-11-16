@@ -6,7 +6,6 @@
 
 use super::{CoreError, Settings};
 #[cfg(any(feature = "upstream-hyper", test))]
-use crate::adapters::native_engine_common::TemporaryFile as Temporary;
 use crate::adapters::native_engine_common::{
     Artifact, artifact_error, download_artifact, verify_artifact,
 };
@@ -133,6 +132,7 @@ async fn download(path: &Path, artifact: &Artifact) -> Result<(), CoreError> {
 
 #[cfg(test)]
 mod tests {
+    use crate::adapters::native_engine_common::TemporaryFile as Temporary;
     use super::*;
 
     #[tokio::test]

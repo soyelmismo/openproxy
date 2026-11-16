@@ -86,6 +86,7 @@ pub(crate) fn verify_digest(
 }
 
 #[cfg(feature = "upstream-hyper")]
+#[allow(clippy::too_many_arguments)] // 8 params: all semantically distinct, grouping would obscure the call sites
 pub(crate) async fn download_artifact(
     path: &Path,
     artifact: &Artifact,
@@ -803,9 +804,11 @@ macro_rules! define_engine_lifecycle {
             threads: Option<usize>,
         ) -> Result<(), CoreError> {
             spawn_init_background();
+            // A `ty` fragment can't be followed by a struct literal; alias it first.
+            type EngineSettings = $settings_ty;
             submit(
                 None,
-                <$settings_ty> {
+                EngineSettings {
                     model: model.map(str::to_owned),
                     tokenizer: tokenizer.map(str::to_owned),
                     config: config.map(str::to_owned),

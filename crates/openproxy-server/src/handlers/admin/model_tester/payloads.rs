@@ -5,7 +5,7 @@ use super::super::{
 use super::TestResult;
 
 pub fn test_error_result(row_id: i64, status: u16, err_msg: &str) -> TestResult {
-    let redacted = openproxy_core::cost::redact_error_msg(err_msg).0;
+    let redacted = openproxy_core::cost::redact_error_msg(err_msg);
     TestResult {
         row_id,
         status,

@@ -1,5 +1,5 @@
 //! Length-prefixed, bounded JSON IPC over private anonymous pipes.
-use super::{CoreError, SystemOneRequest, SystemOneResponse, lifecycle::Settings, load_engine};
+use super::{CoreError, SystemOneRequest, lifecycle::Settings, load_engine};
 use crate::adapters::native_engine_common::{
     IpcWorkerClient, encode_ipc_frame, ipc_internal, run_ipc_worker_loop,
 };
@@ -119,12 +119,6 @@ impl Client {
         Ok(Self(inner))
     }
 
-    pub async fn classify(
-        &mut self,
-        request: &SystemOneRequest,
-    ) -> Result<SystemOneResponse, CoreError> {
-        self.0.call(request, Duration::from_secs(30)).await
-    }
 }
 
 #[cfg(test)]

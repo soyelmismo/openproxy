@@ -6,7 +6,7 @@ use std::time::Instant;
 use bytes::Bytes;
 use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_adapters::upstream::{
-    CancellationToken, TimeoutProfile, UpstreamClient, UpstreamRequest, UpstreamResponse,
+    UpstreamClient, UpstreamResponse,
 };
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;

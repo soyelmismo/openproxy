@@ -1,5 +1,6 @@
 use super::finalize_tests::*;
 use super::*;
+use openproxy_types::{ModelId, TargetFormat};
 #[test]
 fn test_betas_from_body_display_updates_drops_redact_thinking() {
     let json = captured_cli_body();

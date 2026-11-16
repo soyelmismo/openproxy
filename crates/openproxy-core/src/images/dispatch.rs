@@ -7,7 +7,7 @@ use openproxy_adapters::adapters::ProviderAdapterEnum;
 use openproxy_adapters::upstream::{UpstreamClient, UpstreamResponse};
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
-use openproxy_pipeline::circuit_breaker::{CircuitBreakerKey, CircuitBreakerRegistry};
+use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;
 use openproxy_types::{
     CoreError, EndpointKind, ImageGenerationRequest, ImageGenerationResponse, Result,
     ids::{ApiKeyId, RequestId},
@@ -311,10 +311,11 @@ pub async fn execute_image_generation(
             Some(images),
             parsed_response.data.len(),
         );
+        // `effective_delivered_images` already returns Option<u32>.
         let args = UnaryUsageArgs::from_target(target, EndpointKind::Image, status_code, total_ms)
             .with_request_id(request_id)
             .with_api_key_id(api_key_id)
-            .with_tokens(Some(delivered_images), None)
+            .with_tokens(delivered_images, None)
             .with_json(req_json, resp_json);
         // The debit rides on this row; persist it before releasing the key.
         credit.settle_quoted(db_pool, &args, bound.as_ref()).await?;

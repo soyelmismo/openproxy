@@ -115,7 +115,7 @@ pub async fn chat_completions(
 /// attach the standard `text/event-stream; charset=utf-8` content-type header.
 pub(crate) fn into_coalesced_sse_response<S>(sse_stream: S) -> axum::response::Response
 where
-    S: Stream<Item = Result<Bytes, Infallible>> + Send + 'static,
+    S: Stream<Item = Result<Bytes, Infallible>> + Send + Unpin + 'static,
 {
     let body = axum::body::Body::from_stream(crate::services::sse_coalesce::CoalescedSse::new(
         sse_stream,
@@ -157,7 +157,7 @@ pub(crate) async fn run_sync_pipeline(
         return Err(ApiError(err));
     }
 
-    Ok((result.final_response, result.attempts, elapsed_ms))
+    Ok((result.final_response, u32::from(result.attempts), elapsed_ms))
 }
 
 pub(crate) fn handle_streaming_response(

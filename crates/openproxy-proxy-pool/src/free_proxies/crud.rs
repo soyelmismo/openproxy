@@ -203,6 +203,26 @@ pub fn delete_proxy(conn: &Connection, id: &str) -> crate::error::Result<()> {
     Ok(())
 }
 
+/// Update status, latency and timestamps of a proxy in one row.
+///
+/// Distinct from `openproxy_db::free_proxies::update_proxy_status`, which
+/// never records latency (clears it). This variant persists the measured
+/// latency from the probe so stats can average it.
+pub fn update_proxy_status(
+    conn: &Connection,
+    id: &str,
+    status: &str,
+    latency_ms: Option<i64>,
+) -> crate::error::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
+        rusqlite::params![status, latency_ms, now, now, id],
+    )
+    .map_err(map_db_error)?;
+    Ok(())
+}
+
 /// Unified async resolution of the active proxy for a provider / account.
 ///
 /// If `use_proxies` is enabled for the provider, returns `Ok(Some(proxy_url))`.

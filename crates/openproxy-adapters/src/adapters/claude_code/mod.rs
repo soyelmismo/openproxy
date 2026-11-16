@@ -1,6 +1,6 @@
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ModelId, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, TargetFormat, UpstreamClient, UpstreamRequest,
+    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ProviderAdapter,
+    ProviderAdapterConfig, ProviderId, Result, UpstreamClient, UpstreamRequest,
 };
 use crate::client_contract::Snapshot;
 use crate::spoofer::claude_code_profile::ClaudeCodeProfile;

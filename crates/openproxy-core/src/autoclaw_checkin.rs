@@ -65,29 +65,35 @@ pub async fn run_autoclaw_checkin_scheduler(
     oauth_registry: Arc<OAuthProviderRegistry>,
     cancel: CancellationToken,
 ) {
-    crate::codebuddy_checkin::run_periodic_checkin_scheduler(
-        "AutoClawCheckin",
-        45,
-        CYCLE_INTERVAL_SECS,
-        cancel,
-        |c| {
-            let db_pool = Arc::clone(&db_pool);
-            let upstream_client = Arc::clone(&upstream_client);
-            let master_key = Arc::clone(&master_key);
-            let oauth_registry = Arc::clone(&oauth_registry);
-            async move {
-                run_checkin_cycle_with_cancel(
-                    &db_pool,
-                    &upstream_client,
-                    &master_key,
-                    &oauth_registry,
-                    Some(&c),
-                )
-                .await;
+    // Initial delay: stay out of the boot stampede.
+    tokio::select! {
+        () = cancel.cancelled() => return,
+        () = sleep(Duration::from_secs(45)) => {}
+    }
+
+    loop {
+        if cancel.is_cancelled() {
+            tracing::info!("[AutoClawCheckin] Scheduler shutting down");
+            break;
+        }
+
+        run_checkin_cycle_with_cancel(
+            &db_pool,
+            &upstream_client,
+            &master_key,
+            &oauth_registry,
+            Some(&cancel),
+        )
+        .await;
+
+        tokio::select! {
+            () = cancel.cancelled() => {
+                tracing::info!("[AutoClawCheckin] Scheduler shutting down");
+                break;
             }
-        },
-    )
-    .await;
+            () = sleep(Duration::from_secs(CYCLE_INTERVAL_SECS)) => {}
+        }
+    }
 }
 
 /// One sweep over every `zai` OAuth account whose daily claim is still open.

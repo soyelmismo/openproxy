@@ -4,7 +4,7 @@
 //! a settings frame, loads the engine inside the sandbox, and answers one
 //! embedding request per frame.
 
-use super::{CoreError, EmbedRequest, EmbedResponse, Settings, load_engine};
+use super::{CoreError, EmbedRequest, Settings, load_engine};
 use crate::adapters::native_engine_common::{
     IpcWorkerClient, encode_ipc_frame, run_ipc_worker_loop,
 };
@@ -114,9 +114,6 @@ impl Client {
         Ok(Self(inner))
     }
 
-    pub async fn embed(&mut self, request: &EmbedRequest) -> Result<EmbedResponse, CoreError> {
-        self.0.call(request, Duration::from_secs(120)).await
-    }
 }
 
 #[cfg(test)]

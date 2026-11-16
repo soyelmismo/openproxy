@@ -1,7 +1,6 @@
 #![allow(clippy::pedantic, clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use crate::client_contract::FetchResponse;
 use crate::client_contract::providers::codex_state::shared::test_support::{
     MapTransport, fixture_bytes, limits, ok_etag_raw as ok_json,
 };

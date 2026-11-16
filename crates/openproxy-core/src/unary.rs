@@ -445,6 +445,7 @@ pub struct MultipartFilePart<'a> {
 
 /// Build and send a `multipart/form-data` upstream request shared by audio and
 /// image edit/variation endpoints.
+#[allow(clippy::too_many_arguments)] // 8 params: all semantically distinct, grouping would obscure the call sites
 pub async fn call_unary_multipart_upstream(
     upstream_client: &Arc<UpstreamClient>,
     adapter: &ProviderAdapterEnum,
