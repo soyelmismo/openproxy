@@ -603,3 +603,11 @@ fn error_body_message_strips_wrapper() {
 
 mod catalog;
 mod request;
+
+/// The Devin live-catalog snapshot is process-wide; every test that reads or
+/// writes it must hold this lock or thread scheduling (e.g. under coverage
+/// instrumentation) interleaves the writers with the readers.
+pub(crate) fn live_catalog_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LIVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}

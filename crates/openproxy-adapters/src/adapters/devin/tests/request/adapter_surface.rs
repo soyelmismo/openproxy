@@ -230,6 +230,10 @@ fn oauth_account_embeds_access_token_in_metadata() {
 
 #[test]
 fn devin_builtin_models_catalog() {
+    // Assert against the hardcoded catalog: drop any live snapshot another
+    // test may have published and hold the shared lock while reading.
+    let _g = super::super::live_catalog_lock();
+    super::super::super::catalog::clear_live_catalog();
     let models = devin_builtin_models();
     assert_eq!(models.len(), 46);
     // swe-2 lists as swe-2:free (free cost tier on the wire).
