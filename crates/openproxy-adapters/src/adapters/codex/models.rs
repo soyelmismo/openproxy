@@ -52,6 +52,9 @@ pub fn hardcoded_models() -> Vec<DiscoveredModel> {
         ("gpt-6-astra", "GPT-6-Astra", 272_000, 872_000, true),
         ("gpt-6.1-sol", "GPT-6.1-Sol", 272_000, 872_000, true),
         ("gpt-6.1-terra", "GPT-6.1 Terra", 500_000, 872_000, true),
+        // Upstream added 2026-11: codex-rs models-manager drift (visible models).
+        ("gpt-6.2-sol", "GPT-6.2-Sol", 500_000, 872_000, true),
+        ("gpt-6.2-astra", "GPT-6.2-Astra", 272_000, 872_000, true),
         ("gpt-6-sol", "GPT-6-Sol", 272_000, 872_000, true),
         ("gpt-6-luna", "GPT-6-Luna", 272_000, 872_000, true),
         ("gpt-5.6-sol", "GPT-5.6-Sol", 272_000, 872_000, true),
