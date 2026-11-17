@@ -384,6 +384,10 @@ fn uid_empty_and_passthrough() {
 
 #[test]
 fn uid_catalog_and_effort() {
+    // Resolve against the hardcoded stem table: drop any live snapshot
+    // another test may have published and hold the shared lock while reading.
+    let _g = super::super::live_catalog_lock();
+    super::super::super::catalog::clear_live_catalog();
     assert_eq!(resolve_devin_chat_model_uid("swe-2", "", 0), "swe-2-high");
     assert_eq!(
         resolve_devin_chat_model_uid("swe-2:max", "", 0),
@@ -434,6 +438,8 @@ fn uid_catalog_and_effort() {
 
 #[test]
 fn uid_special_bases() {
+    let _g = super::super::live_catalog_lock();
+    super::super::super::catalog::clear_live_catalog();
     assert_eq!(resolve_devin_chat_model_uid("glm-5-2", "", 0), "glm-5-2");
     assert_eq!(
         resolve_devin_chat_model_uid("glm-5-2:max", "", 0),

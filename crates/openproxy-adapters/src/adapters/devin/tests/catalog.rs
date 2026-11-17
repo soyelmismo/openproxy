@@ -7,13 +7,10 @@ use super::super::models::{
 };
 use super::super::protoc;
 use super::super::quota::parse_user_status;
-use std::sync::Mutex;
-
-/// Live-catalog tests share the process-wide snapshot; serialize them.
-static LIVE_LOCK: Mutex<()> = Mutex::new(());
-
+/// Live-catalog tests share the process-wide snapshot; serialize them via the
+/// lock shared with tests::request (cross-module readers must not interleave).
 fn lock() -> std::sync::MutexGuard<'static, ()> {
-    LIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    super::live_catalog_lock()
 }
 
 // ---------------------------------------------------------------------------

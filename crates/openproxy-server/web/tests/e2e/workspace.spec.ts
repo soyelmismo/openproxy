@@ -46,8 +46,9 @@ test('tiling keeps independent live views, routes active panel, resizes, maximiz
   const second = page.locator('.workspace-tile').nth(1);
   await expect(first.locator('.tile-view')).toBeVisible();
   await expect(second.locator('.tile-view')).toBeVisible();
-  await expect(page.locator('.tile-view').nth(0)).toContainText('Combos');
-  await expect(page.locator('.tile-view').nth(1)).toContainText('Logs');
+  await expect(page.locator('.tile-view').nth(0)).toHaveAttribute('data-route', '#/combos');
+  await expect(page.locator('.tile-view').nth(1)).toHaveAttribute('data-route', '#/logs');
+  await expect(page.locator('.tile-view').nth(1).locator('.logs-control-deck')).toBeVisible();
   const originalUrl = await first.locator('.tile-view').evaluate(el => (el as HTMLElement).dataset['route']);
   await second.locator('.tile-title').click();
   await page.getByRole('menuitem', { name: 'API Keys', exact: true }).click();
@@ -55,10 +56,13 @@ test('tiling keeps independent live views, routes active panel, resizes, maximiz
   expect(await first.locator('.tile-view').evaluate(el => (el as HTMLElement).dataset['route'])).toBe(originalUrl);
   await expect(page).toHaveURL(/#\/keys$/);
 
-  const separator = page.getByRole('separator', { name: 'Resize panel columns' });
+  // Two side-by-side tiles share one vertical seam; its accessible name is
+  // "Resize <left label> and <right label> panels" and follows the tiles'
+  // routes. Keyboard steps rewrite the tiles' inline grid spans (no aria-valuenow).
+  const separator = page.getByRole('separator', { name: 'Resize Combos and API Keys panels' });
   await separator.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(separator).toHaveAttribute('aria-valuenow', '56');
+  await expect(first).toHaveAttribute('style', /span 4/);
   await second.getByRole('button', { name: 'Maximize panel' }).click();
   await expect(first).toBeHidden();
   await second.getByRole('button', { name: 'Restore panel' }).click();
@@ -132,7 +136,7 @@ test('API keys appear in context and edit in an integrated properties view with 
     await expect(frame.getByLabel('Label', { exact: true })).toBeVisible();
     expect(await page.locator('html').evaluate(el => el.scrollWidth <= window.innerWidth)).toBe(true);
     await page.setViewportSize({ width: 1600, height: 1000 });
-    await page.screenshot({ path: '/root/.hermes/cache/scratch/openproxy-tiling/key-properties.png' });
+    await page.screenshot({ path: 'test-results/openproxy-tiling/key-properties.png' });
   } finally {
     await page.request.delete(`/admin/api/keys/${id}`, { headers });
   }
@@ -161,13 +165,13 @@ test('provider toolbar, SVG controls and tile first paint remain integrated', as
   expect(await svgPath.evaluate(el => ({ ns: el.namespaceURI, width: (el as SVGGraphicsElement).getBBox().width }))).toEqual({ ns: 'http://www.w3.org/2000/svg', width: 12 });
   await expect(second).toBeVisible();
   expect(await page.locator('html').getAttribute('data-theme')).toBe('dark');
-  await page.screenshot({ path: '/root/.hermes/cache/scratch/openproxy-tiling/comments-desktop.png' });
+  await page.screenshot({ path: 'test-results/openproxy-tiling/comments-desktop.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: '1. Providers', exact: true }).click();
   await expect(frame.locator('.providers-toolbar')).toBeVisible();
   expect(await page.locator('html').evaluate(el => el.scrollWidth <= window.innerWidth)).toBe(true);
   expect(await frame.locator('.providers-toolbar').evaluate(el => el.querySelector('.filter-tabs')!.getBoundingClientRect().right <= el.querySelector('.actions')!.getBoundingClientRect().left)).toBe(true);
-  await page.screenshot({ path: '/root/.hermes/cache/scratch/openproxy-tiling/comments-mobile.png' });
+  await page.screenshot({ path: 'test-results/openproxy-tiling/comments-mobile.png' });
 });
 
 test('logout tears down all native panels', async ({ page }) => {
@@ -243,7 +247,7 @@ test('native desktop panels expose individual elements and provider modal spans 
   await modal.getByRole('button', { name: 'Create', exact: true }).focus();
   await page.keyboard.press('Tab');
   await expect(modal.getByRole('button', { name: 'Close', exact: true })).toBeFocused();
-  await page.screenshot({ path: '/root/.hermes/cache/scratch/openproxy-tiling/native-modal.png' });
+  await page.screenshot({ path: 'test-results/openproxy-tiling/native-modal.png' });
   await page.keyboard.press('Escape');
   await expect(modal).toHaveCount(0);
   await expect(providers.getByRole('button', { name: 'Add provider', exact: true })).toBeFocused();

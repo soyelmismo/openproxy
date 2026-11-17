@@ -76,12 +76,18 @@ test.describe('API keys CRUD', () => {
       keyId = Number(await row.getAttribute('data-row-key'));
       expect(Number.isSafeInteger(keyId)).toBe(true);
 
+      // Editing moved from a modal to the integrated key-detail route.
       await row.getByRole('button', { name: 'Edit' }).click();
-      const editDialog = page.locator('.modal-bg').filter({ has: page.locator('form') });
-      await expect(editDialog).toBeVisible();
-      await editDialog.getByLabel('Label').fill(editedLabel);
-      await editDialog.getByRole('button', { name: 'Save' }).click();
-      await expect(editDialog).not.toBeVisible();
+      await expect(page).toHaveURL(new RegExp(`#/keys/${keyId}$`));
+      const detail = page.locator('.key-detail');
+      await expect(detail.locator('h1')).toHaveText(label);
+      await detail.getByLabel('Label', { exact: true }).fill(editedLabel);
+      const saved = page.waitForResponse(r => r.url().endsWith(`/keys/${keyId}`) && r.request().method() === 'PATCH');
+      await detail.getByRole('button', { name: 'Save', exact: true }).click();
+      expect((await saved).ok()).toBe(true);
+      await expect(detail.locator('h1')).toHaveText(editedLabel);
+      await detail.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(page).toHaveURL(/#\/keys$/);
 
       const persisted = await page.request.get(`/admin/api/keys/${keyId}`, {
         headers: adminAuthHeaders(),

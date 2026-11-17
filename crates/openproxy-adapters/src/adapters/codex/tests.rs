@@ -251,7 +251,7 @@ fn test_codex_default_headers_contract() {
 #[test]
 fn test_codex_hardcoded_models_parity() {
     let models = codex_static_models();
-    assert_eq!(models.len(), 12);
+    assert_eq!(models.len(), 14);
     let ids: Vec<&str> = models.iter().map(|m| m.model_id.as_str()).collect();
     assert_eq!(
         ids,
@@ -259,6 +259,8 @@ fn test_codex_hardcoded_models_parity() {
             "gpt-6-astra",
             "gpt-6.1-sol",
             "gpt-6.1-terra",
+            "gpt-6.2-sol",
+            "gpt-6.2-astra",
             "gpt-6-sol",
             "gpt-6-luna",
             "gpt-5.6-sol",
@@ -362,7 +364,7 @@ fn test_codex_spoofer_preserves_valid_and_upgrades_invalid_ua() {
 #[test]
 fn test_merge_codex_models_preserves_base_and_adds_backend() {
     let base = codex_static_models();
-    assert_eq!(base.len(), 12);
+    assert_eq!(base.len(), 14);
     assert!(base.iter().any(|m| m.model_id.as_str() == "gpt-6-astra"));
     assert!(!base.iter().any(|m| m.model_id.as_str() == "gpt-reserve"));
 
@@ -394,7 +396,7 @@ fn test_merge_codex_models_preserves_base_and_adds_backend() {
     ];
 
     let merged = models::merge_codex_models(base, backend);
-    assert_eq!(merged.len(), 13);
+    assert_eq!(merged.len(), 15);
     assert!(merged.iter().any(|m| m.model_id.as_str() == "gpt-6-astra"));
     assert!(merged.iter().any(|m| m.model_id.as_str() == "gpt-5.4"));
     assert!(merged.iter().any(|m| m.model_id.as_str() == "gpt-reserve"));

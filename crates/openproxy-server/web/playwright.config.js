@@ -18,7 +18,10 @@ export default defineConfig({
   // Single worker to avoid fighting the WebSocket / shared DB.
   workers: 1,
   webServer: {
-    command: 'cargo run -p openproxy-server',
+    // Payments feature on: production enables it (payments.local) and the
+    // dashboard bundle ships the quota/plan editor, so the e2e server must
+    // accept the same key bodies the UI sends.
+    command: 'cargo run -p openproxy-server --features payments',
     port: 8790,
     reuseExistingServer: !process.env.CI,
     cwd: '../../..',

@@ -88,7 +88,7 @@ test.describe('Combos CRUD', () => {
       await createDialog.getByRole('button', { name: 'Create' }).click();
       await expect(createDialog).not.toBeVisible();
 
-      const row = page.locator('tr').filter({ hasText: name });
+      const row = page.getByRole('row').filter({ hasText: name });
       await expect(row).toHaveCount(1);
       // The row renders the strategy chip and "race N" in its columns.
       await expect(row).toContainText(createdStrategy);
@@ -185,7 +185,7 @@ test.describe('Combos CRUD', () => {
       await confirmDialog.getByRole('button', { name: 'Delete' }).click();
 
       await expect(page).toHaveURL(/#\/combos$/);
-      await expect(page.locator('tr').filter({ hasText: name })).toHaveCount(0);
+      await expect(page.getByRole('row').filter({ hasText: name })).toHaveCount(0);
       // BUG-C1: a missing combo answers 404 with code "combo_not_found"
       // (CoreError::ComboNotFound), not the "not_found" the plan assumed.
       const gone = await page.request.get(`/admin/api/combos/${comboId}`, {

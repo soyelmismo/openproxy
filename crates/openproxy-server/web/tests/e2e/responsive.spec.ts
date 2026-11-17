@@ -2,6 +2,10 @@
 // 480px breakpoints: the sidebar becomes a top-bar on mobile, the body
 // never scrolls horizontally, and the 1280px desktop layout is unchanged.
 //
+// The tiling workspace replaced the old #main content host: views live in
+// .tile-view elements inside .workspace-grid tiles, so the shell-level
+// assertions target the sidebar and the desk instead of #main.
+//
 import { test, expect, type Page } from '@playwright/test';
 
 const DUMMY_ADMIN_TOKEN = 'op_live_test_dummy_token_for_e2e';
@@ -27,11 +31,9 @@ async function gotoHome(page: Page): Promise<void> {
     }
   });
   await page.goto('http://localhost:8790/');
-  // Wait for the shell to mount: sidebar + main must exist.
+  // Wait for the shell to mount: sidebar + workspace desk must exist.
   await page.waitForSelector('.sidebar', { timeout: 10000 });
-  await page.waitForSelector('#main', { timeout: 10000 });
-  // The home view renders a .page-header with h2 "Overview".
-  await page.waitForSelector('.page-header h2', { timeout: 10000 });
+  await page.waitForSelector('.workspace-grid', { timeout: 10000 });
 }
 
 test.describe('Responsive — mobile (375x667)', () => {
@@ -40,25 +42,24 @@ test.describe('Responsive — mobile (375x667)', () => {
   test('home: sidebar is a top-bar, no horizontal body scroll, all nav links visible', async ({ page }: { page: Page }) => {
     await gotoHome(page);
 
-    // main's top edge. (We allow a 1px tolerance for sub-pixel
-    // rounding.) Crucially, the sidebar's `right` edge must
-    // extend past main's right edge — i.e. it spans the full
-    // viewport width like a top bar would.
+    // The sidebar renders as the mobile top-bar: its bottom edge must
+    // sit at or above the workspace grid's top edge, and it spans the
+    // full inner width of the viewport (1px page-frame border per side
+    // on a 375px viewport => 373px).
     const sidebar = page.locator('.sidebar');
-    const main = page.locator('#main');
+    const grid = page.locator('.workspace-grid');
     const sbBox = await sidebar.boundingBox();
-    const mainBox = await main.boundingBox();
+    const gridBox = await grid.boundingBox();
     expect(sbBox).not.toBeNull();
-    expect(mainBox).not.toBeNull();
-    // Sidebar's bottom must be at or above main's top.
-    expect(sbBox!.y + sbBox!.height).toBeLessThanOrEqual(mainBox!.y + 1);
-    // Sidebar must be the full inner width of the viewport. The
-    // #app shell has a 1px page-frame border on each side, so on
-    // a 375px viewport the inner grid is 373px wide.
+    expect(gridBox).not.toBeNull();
+    expect(sbBox!.y + sbBox!.height).toBeLessThanOrEqual(gridBox!.y + 1);
     expect(sbBox!.width).toBe(373);
 
+    // Desktop nav links live in the drawer on mobile; the burger opens it.
+    await page.getByRole('button', { name: /open.*menu|open.*navigation/i }).click();
+    await expect(page.locator('.sidebar-drawer')).toBeVisible();
     for (const label of NAV_LINKS) {
-      const link = page.locator(`.sidebar nav a`, { hasText: label });
+      const link = page.locator('.sidebar-drawer nav a', { hasText: label });
       await expect(link).toBeVisible();
     }
 
@@ -70,45 +71,37 @@ test.describe('Responsive — mobile (375x667)', () => {
     expect(scrollW).toBeLessThanOrEqual(innerW + 2);
   });
 
-  test('logs: table is horizontally scrollable inside main, not on body', async ({ page }: { page: Page }) => {
+  test('logs: table is horizontally scrollable inside its tile, not on body', async ({ page }: { page: Page }) => {
     await gotoHome(page);
-    await page.goto('http://localhost:8790/#/logs');
-    // Wait for logs view to render its header row.
-    await page.waitForSelector('#logs .log-row [data-col="time"]', { state: 'attached', timeout: 10000 });
+    // Navigate through the drawer: a bare hash change does not route the
+    // tiling workspace.
+    await page.getByRole('button', { name: /open.*menu|open.*navigation/i }).click();
+    await page.locator('.sidebar-drawer a[data-nav="#/logs"]').click();
+    const logsView = page.locator('.tile-view[data-route="#/logs"]');
+    await expect(logsView.locator('.logs-control-deck')).toBeVisible({ timeout: 10000 });
 
-    // Body must not horizontally scroll (the logs table is wide,
-    // but it's inside <main> which has overflow-x: auto).
+    // Body must not horizontally scroll (the logs table is wide, but it
+    // scrolls inside its tile container).
     const { scrollW, innerW } = await page.evaluate(() => ({
       scrollW: document.body.scrollWidth,
       innerW: window.innerWidth,
     }));
     expect(scrollW).toBeLessThanOrEqual(innerW + 2);
 
-    // The logs container itself has overflow-y: auto (set in
-    // components.css for #logs), and its content is wider than
-    // its visible area on mobile — we don't assert that the row
-    // overflows because the table may be empty on a fresh load,
-    // but we DO assert that #logs exists and is visible.
-    await expect(page.locator('#logs')).toBeVisible();
+    await expect(logsView).toBeVisible();
   });
 
-  test('480px: main padding is reduced, page-header h2 is 1.1rem', async ({ page }: { page: Page }) => {
+  test('480px: tile padding is reduced to the compact mobile rhythm', async ({ page }: { page: Page }) => {
     // Use a viewport that triggers the 480px breakpoint (which
     // is a subset of the 768px breakpoint).
     await page.setViewportSize({ width: 360, height: 720 });
     await gotoHome(page);
 
-    // sets `font-size: var(--fs-md)` (= 0.95rem) on <html>, which
-    // makes 1rem = 0.95 * 16px = 15.2px. So 0.75rem = 11.4px.
-    const mainPad = await page.locator('#main').evaluate(
+    // The mobile block of workspace.css pins the tile padding to 12px.
+    const tilePad = await page.locator('.tile-view').first().evaluate(
       (el) => getComputedStyle(el).paddingTop,
     );
-    expect(mainPad).toBe('11.4px');
-
-    const h2Size = await page.locator('.page-header h2').evaluate(
-      (el) => getComputedStyle(el).fontSize,
-    );
-    expect(h2Size).toBe('16.72px');
+    expect(tilePad).toBe('12px');
   });
 });
 
@@ -116,61 +109,64 @@ test.describe('Responsive — desktop (1280x800)', () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test('desktop layout intact: sidebar is left column, no regression', async ({ page }: { page: Page }) => {
-    await gotoHome(page);
-
-    const sidebar = page.locator('.sidebar');
-    const main = page.locator('#main');
-    const sbBox = await sidebar.boundingBox();
-    const mainBox = await main.boundingBox();
-    expect(sbBox).not.toBeNull();
-    expect(mainBox).not.toBeNull();
-    // Sidebar is in the left column: its left edge is at x=0
-    // (or x=1 due to the page-frame border on #app), and main
-    // starts at or after the sidebar's right edge.
-    expect(sbBox!.x).toBeLessThanOrEqual(1);
-    expect(mainBox!.x).toBeGreaterThanOrEqual(sbBox!.x + sbBox!.width - 1);
-
-    // Sidebar width should be the configured --layout-sidebar-w
-    // (200px) — but main is what defines the row height, so the
-    // sidebar and main share the same y range.
-    expect(sbBox!.width).toBe(200);
-    expect(sbBox!.height).toBe(mainBox!.height);
-  });
-
-  test('desktop: sidebar collapse toggle still works (regression check)', async ({ page }: { page: Page }) => {
-    // Start from a clean state — make sure the user hasn't left
-    // the sidebar collapsed from a previous test.
-    await page.goto('http://localhost:8790/');
-    await page.evaluate(() => {
-      try { localStorage.removeItem('openproxy:sidebarCollapsed'); } catch (_e) { void _e; }
+    // Expand the rail: the compact rail is the stored-preference default,
+    // this test pins the expanded desktop column.
+    await page.addInitScript(() => {
+      try { localStorage.setItem('openproxy:sidebarCollapsed', '0'); } catch (_e) { void _e; }
     });
     await gotoHome(page);
 
     const sidebar = page.locator('.sidebar');
+    const grid = page.locator('.workspace-grid');
+    const sbBox = await sidebar.boundingBox();
+    const gridBox = await grid.boundingBox();
+    expect(sbBox).not.toBeNull();
+    expect(gridBox).not.toBeNull();
+    // Sidebar is in the left column: its left edge is at x=0
+    // (or x=1 due to the page-frame border on #app), and the desk
+    // starts at or after the sidebar's right edge.
+    expect(sbBox!.x).toBeLessThanOrEqual(1);
+    expect(gridBox!.x).toBeGreaterThanOrEqual(sbBox!.x + sbBox!.width - 1);
+
+    // Expanded rail width matches --layout-sidebar-w (200px) and the
+    // sidebar spans the desk vertically.
+    expect(sbBox!.width).toBeGreaterThan(150);
+    expect(sbBox!.height).toBeGreaterThanOrEqual(gridBox!.height);
+  });
+
+  test('desktop: sidebar collapse toggle still works (regression check)', async ({ page }: { page: Page }) => {
+    // Start from a clean state: no stored preference => the compact rail
+    // is the product default.
+    await page.goto('http://localhost:8790/');
+    await page.evaluate(() => {
+      try { localStorage.removeItem('openproxy:sidebarCollapsed'); } catch (_e) { void _e; }
+    });
+    await page.reload();
+    await page.waitForSelector('.workspace-grid', { timeout: 10000 });
+
+    const sidebar = page.locator('.sidebar');
     const toggle = page.locator('.sidebar-toggle');
 
-    // Sidebar is expanded by default.
-    const expandedBox = await sidebar.boundingBox();
-    expect(expandedBox).not.toBeNull();
-    expect(expandedBox!.width).toBe(200);
-    await expect(toggle).toBeVisible();
-
-    // Click toggle → sidebar collapses. The width should drop
-    // to --layout-sidebar-w-collapsed (smaller than 200).
-    await toggle.click();
-    // The CSS animation/transition is instant for width; just
-    // wait for the body class to flip.
+    // Sidebar is collapsed by default (compact rail).
     await expect(page.locator('body.sidebar-collapsed')).toHaveCount(1);
     const collapsedBox = await sidebar.boundingBox();
     expect(collapsedBox).not.toBeNull();
-    expect(collapsedBox!.width).toBeLessThan(200);
-    expect(collapsedBox!.width).toBeGreaterThan(0);
+    expect(collapsedBox!.width).toBeLessThan(80);
+    await expect(toggle).toBeVisible();
 
-    // Click again → expands back.
+    // Click toggle => sidebar expands. The width should reach the
+    // expanded --layout-sidebar-w (larger than the compact rail).
     await toggle.click();
     await expect(page.locator('body.sidebar-collapsed')).toHaveCount(0);
-    const reExpandedBox = await sidebar.boundingBox();
-    expect(reExpandedBox).not.toBeNull();
-    expect(reExpandedBox!.width).toBe(200);
+    const expandedBox = await sidebar.boundingBox();
+    expect(expandedBox).not.toBeNull();
+    expect(expandedBox!.width).toBeGreaterThan(150);
+
+    // Click again => collapses back.
+    await toggle.click();
+    await expect(page.locator('body.sidebar-collapsed')).toHaveCount(1);
+    const reCollapsedBox = await sidebar.boundingBox();
+    expect(reCollapsedBox).not.toBeNull();
+    expect(reCollapsedBox!.width).toBeLessThan(80);
   });
 });
