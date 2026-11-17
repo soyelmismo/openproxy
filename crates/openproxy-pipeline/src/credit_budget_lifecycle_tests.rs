@@ -17,7 +17,14 @@ fn start_budget_harness(
     grant: Option<i64>,
     with_worker: bool,
 ) -> Harness {
-    Harness::start_with_options(upstream, Some(model_id), combo_price, true, grant, with_worker)
+    Harness::start_with_options(
+        upstream,
+        Some(model_id),
+        combo_price,
+        true,
+        grant,
+        with_worker,
+    )
 }
 
 /// `openai/gpt-4o` is in the static catalog (2.5 input / 10 output USD per
@@ -236,8 +243,7 @@ async fn unpriced_model_fails_closed_before_dispatch() {
 #[tokio::test]
 async fn free_keys_keep_full_access_even_with_unpriced_models() {
     let upstream = Upstream::start(UpstreamMode::BudgetOk).await;
-    let harness =
-        start_budget_harness(&upstream, "no/such-model-budget-fixture", None, None, true);
+    let harness = start_budget_harness(&upstream, "no/such-model-budget-fixture", None, None, true);
 
     let result = harness
         .run_with_timeout(harness.request_with_max_tokens(None))

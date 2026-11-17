@@ -81,9 +81,9 @@ use super::codex::{CODEX_REGION_GUARDS, CODEX_RELEASE_TAG, CODEX_WORKSPACE_VERSI
 use crate::client_contract::refresh::is_json_body;
 use crate::client_contract::{
     CacheEntry, Candidate, ClientIdentity, ContractDriver, ContractError, ContractId,
-    ContractLimits, ContractTransport, EvidenceKind, FetchResponse,
-    IDENTITY_ORIGIN_OFFICIAL, SourceDescriptor, SourceRef, TransportCache, TransportCacheKey,
-    hex_digest, parse_version, validate_catalog_body_size, validate_source_body_size,
+    ContractLimits, ContractTransport, EvidenceKind, FetchResponse, IDENTITY_ORIGIN_OFFICIAL,
+    SourceDescriptor, SourceRef, TransportCache, TransportCacheKey, hex_digest, parse_version,
+    validate_catalog_body_size, validate_source_body_size,
 };
 
 pub(crate) mod acquirer;

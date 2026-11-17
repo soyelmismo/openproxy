@@ -1,6 +1,6 @@
 use super::models::{FreeProxy, ProxySummary, ScrapedProxy};
-pub use openproxy_db::free_proxies::*;
 use openproxy_db::error::map_db_error;
+pub use openproxy_db::free_proxies::*;
 use rusqlite::Connection;
 
 fn fetch_proxy_stats(

@@ -376,19 +376,20 @@ impl OAuthProvider for KiroOAuthProvider {
                     })?;
                 let raw = raw.flatten();
 
-                let meta: KiroProviderMeta =
-                    match profiles::parse_kiro_provider_specific(raw.as_deref(), Some(&master_key))
-                    {
-                        Ok(meta) => meta,
-                        Err(e) => {
-                            tracing::warn!(
-                                account = account_id.0,
-                                error = %e,
-                                "kiro post_exchange: unreadable provider_specific; using default meta"
-                            );
-                            KiroProviderMeta::default()
-                        }
-                    };
+                let meta: KiroProviderMeta = match profiles::parse_kiro_provider_specific(
+                    raw.as_deref(),
+                    Some(&master_key),
+                ) {
+                    Ok(meta) => meta,
+                    Err(e) => {
+                        tracing::warn!(
+                            account = account_id.0,
+                            error = %e,
+                            "kiro post_exchange: unreadable provider_specific; using default meta"
+                        );
+                        KiroProviderMeta::default()
+                    }
+                };
 
                 Ok::<_, CoreError>((access_token, meta))
             })

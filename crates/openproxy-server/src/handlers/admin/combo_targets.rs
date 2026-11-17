@@ -195,7 +195,13 @@ async fn run_fan_out_combo_tests(
                         "skipped": true,
                     });
                 }
-                Box::pin(run_and_format_single_combo_target(s, &t, cancel_rx, attribution)).await
+                Box::pin(run_and_format_single_combo_target(
+                    s,
+                    &t,
+                    cancel_rx,
+                    attribution,
+                ))
+                .await
             }
         });
         futures::future::join_all(tasks).await

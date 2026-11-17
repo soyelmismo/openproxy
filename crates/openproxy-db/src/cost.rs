@@ -470,7 +470,14 @@ fn update_backfill_combo_price(
     .map_err(crate::error::map_db_error)
 }
 
-type ScheduledUsageRow = (i64, Option<String>, Option<u32>, Option<u32>, Option<u32>, u16);
+type ScheduledUsageRow = (
+    i64,
+    Option<String>,
+    Option<u32>,
+    Option<u32>,
+    Option<u32>,
+    u16,
+);
 
 fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types::Result<usize> {
     let rows: Vec<ScheduledUsageRow> = {
@@ -484,13 +491,21 @@ fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types
             .map_err(crate::error::map_db_error)?;
         let mapped = stmt
             .query_map(params![combo_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })
             .map_err(crate::error::map_db_error)?;
         mapped.filter_map(std::result::Result::ok).collect()
     };
     let mut updated = 0;
-    for (usage_id, created_at, prompt_tokens, completion_tokens, cached_tokens, status_code) in rows {
+    for (usage_id, created_at, prompt_tokens, completion_tokens, cached_tokens, status_code) in rows
+    {
         let billed_at = created_at
             .as_deref()
             .and_then(pricing::parse_usage_timestamp);
@@ -498,7 +513,11 @@ fn backfill_scheduled_combo(conn: &Connection, combo_id: i64) -> openproxy_types
         else {
             continue;
         };
-        let eff_cached = if status_code == 499 { None } else { cached_tokens };
+        let eff_cached = if status_code == 499 {
+            None
+        } else {
+            cached_tokens
+        };
         let Some(cost) = pricing::compute_cost_opt_with_cache(
             Some(price),
             prompt_tokens.unwrap_or(0),
@@ -719,7 +738,9 @@ pub fn mark_winner_usage_row(
             )
             .map_err(crate::error::map_db_error_ctx("mark_winner_usage_row"))?;
         let ids = stmt
-            .query_map(params![request_id, attempt, target_id.0], |r| r.get::<_, i64>(0))
+            .query_map(params![request_id, attempt, target_id.0], |r| {
+                r.get::<_, i64>(0)
+            })
             .map_err(crate::error::map_db_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(crate::error::map_db_error)?;

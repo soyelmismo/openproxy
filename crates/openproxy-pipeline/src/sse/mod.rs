@@ -45,7 +45,6 @@ pub fn skip_leading_spaces(bytes: &[u8]) -> &[u8] {
     &bytes[pos..]
 }
 
-
 /// Deserialize an SSE payload as JSON, returning
 /// `CoreError::Parse("<provider> sse json: ...")`.
 ///
@@ -262,7 +261,6 @@ fn check_usage_present(payload: &str) -> bool {
 pub fn sse_payload_needs_parse(payload: &str) -> bool {
     check_usage_present(payload) || check_finish_reason_non_null(payload)
 }
-
 
 // `MAX_TOOL_*` / `MAX_RESPONSES_*` stay `pub(crate)` in their submodules: no
 // in-crate consumer reaches them through `crate::sse::*`, and a `pub(crate) use`

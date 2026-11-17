@@ -264,8 +264,16 @@ fn auth_has_routing_restrictions(auth: &ValidatedApiToken) -> bool {
         || auth.key.blacklisted_providers.is_some()
         || auth.key.allowed_providers.is_some()
         || auth.key.blacklisted_models.is_some()
-        || auth.key.allowed_models.as_ref().is_some_and(|a| !a.is_empty())
-        || auth.key.allowed_combos.as_ref().is_some_and(|c| !c.is_empty())
+        || auth
+            .key
+            .allowed_models
+            .as_ref()
+            .is_some_and(|a| !a.is_empty())
+        || auth
+            .key
+            .allowed_combos
+            .as_ref()
+            .is_some_and(|c| !c.is_empty())
 }
 
 fn apply_auth_restrictions_to_plan(

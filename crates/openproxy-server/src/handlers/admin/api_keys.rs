@@ -316,12 +316,20 @@ pub async fn update_api_key(
                 match request {
                     None => openproxy_core::credits::tiers::set_key_tier(w, ApiKeyId(id), None)?,
                     Some(tier_id) => {
-                        let tier = openproxy_core::credits::tiers::get(w, tier_id)?
-                            .ok_or_else(|| {
+                        let tier =
+                            openproxy_core::credits::tiers::get(w, tier_id)?.ok_or_else(|| {
                                 CoreError::not_found("credit_tier", tier_id.to_string())
                             })?;
-                        openproxy_core::credits::tiers::apply_to_key(w, ApiKeyId(id), &tier.config)?;
-                        openproxy_core::credits::tiers::set_key_tier(w, ApiKeyId(id), Some(tier.id))?;
+                        openproxy_core::credits::tiers::apply_to_key(
+                            w,
+                            ApiKeyId(id),
+                            &tier.config,
+                        )?;
+                        openproxy_core::credits::tiers::set_key_tier(
+                            w,
+                            ApiKeyId(id),
+                            Some(tier.id),
+                        )?;
                         openproxy_core::credits::tiers::grant_plan(w, ApiKeyId(id), &tier)?;
                     }
                 }
@@ -333,11 +341,9 @@ pub async fn update_api_key(
                 // key exists and is planless. `row.get(0)` typed as i64 breaks
                 // on planless keys — the tier_id column is NULL there.
                 let row_tier: Option<Option<i64>> = w
-                    .query_row(
-                        "SELECT tier_id FROM api_keys WHERE id = ?1",
-                        [id],
-                        |row| row.get::<_, Option<i64>>(0),
-                    )
+                    .query_row("SELECT tier_id FROM api_keys WHERE id = ?1", [id], |row| {
+                        row.get::<_, Option<i64>>(0)
+                    })
                     .optional()
                     .map_err(openproxy_db::error::map_db_error)?;
                 let current_tier =
@@ -426,11 +432,9 @@ fn fetch_key_quota(r: &rusqlite::Connection, id: i64) -> Result<serde_json::Valu
     // The ApiKey DTO does not carry the tier link; the editor needs it to
     // know whether the caps below are the plan's or the key's own.
     let tier_id: Option<i64> = r
-        .query_row(
-            "SELECT tier_id FROM api_keys WHERE id = ?1",
-            [id],
-            |row| row.get::<_, Option<i64>>(0),
-        )
+        .query_row("SELECT tier_id FROM api_keys WHERE id = ?1", [id], |row| {
+            row.get::<_, Option<i64>>(0)
+        })
         .optional()
         .map_err(openproxy_db::error::map_db_error)?
         .flatten();
@@ -547,9 +551,11 @@ mod quota_field_tests {
     #[test]
     fn absent_quota_is_a_noop() {
         assert!(parse_quota_field(&serde_json::json!({})).unwrap().is_none());
-        assert!(parse_quota_field(&serde_json::json!({"label": "x"}))
-            .unwrap()
-            .is_none());
+        assert!(
+            parse_quota_field(&serde_json::json!({"label": "x"}))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -584,7 +590,10 @@ mod quota_field_tests {
             serde_json::json!(true),
         ] {
             let body = serde_json::json!({ "quota": { "weekly_usd_cap": bad } });
-            assert!(parse_quota_field(&body).is_err(), "bad cap must be rejected");
+            assert!(
+                parse_quota_field(&body).is_err(),
+                "bad cap must be rejected"
+            );
         }
     }
 

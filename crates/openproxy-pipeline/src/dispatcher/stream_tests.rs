@@ -201,10 +201,7 @@ async fn run_sse_stream_fixture(
     provider_id: &str,
     trace_id: &str,
     response: &str,
-) -> (
-    crate::pipeline::PipelineResult,
-    Vec<bytes::Bytes>,
-) {
+) -> (crate::pipeline::PipelineResult, Vec<bytes::Bytes>) {
     let base_url = spawn_single_sse_server(response.to_string()).await;
     let (_pool, conn_arc, _path) = fresh_pool();
     seed_stream_provider(&conn_arc, provider_id, &base_url);

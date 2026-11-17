@@ -5,9 +5,7 @@ use std::time::Instant;
 
 use bytes::Bytes;
 use openproxy_adapters::adapters::ProviderAdapterEnum;
-use openproxy_adapters::upstream::{
-    UpstreamClient, UpstreamResponse,
-};
+use openproxy_adapters::upstream::{UpstreamClient, UpstreamResponse};
 use openproxy_db::DbPool;
 use openproxy_db::secrets::MasterKey;
 use openproxy_pipeline::circuit_breaker::CircuitBreakerRegistry;

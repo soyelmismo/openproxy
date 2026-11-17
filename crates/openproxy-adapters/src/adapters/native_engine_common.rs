@@ -50,7 +50,7 @@ pub(crate) async fn verify_artifact(
     artifact: &Artifact,
     err_prefix: &str,
 ) -> Result<(), CoreError> {
-    let err = |e: & dyn std::fmt::Display| artifact_error(err_prefix, e);
+    let err = |e: &dyn std::fmt::Display| artifact_error(err_prefix, e);
     let mut file = tokio::fs::File::open(path).await.map_err(|e| err(&e))?;
     if file.metadata().await.map_err(|e| err(&e))?.len() != artifact.size {
         return Err(artifact_error(
@@ -106,11 +106,8 @@ pub(crate) async fn download_artifact(
     tokio::fs::create_dir_all(parent)
         .await
         .map_err(|e| artifact_error(err_prefix, e))?;
-    let temporary = TemporaryFile(parent.join(format!(
-        ".{}.{}.part",
-        artifact.name,
-        uuid::Uuid::new_v4()
-    )));
+    let temporary =
+        TemporaryFile(parent.join(format!(".{}.{}.part", artifact.name, uuid::Uuid::new_v4())));
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -620,9 +617,9 @@ impl<Req: Send + 'static, Resp: Send + 'static> EngineSupervisor<Req, Resp> {
                 &'a mut Option<ResidentWorker>,
                 &'a S,
                 Option<&'a Req>,
-            ) -> Pin<
-                Box<dyn Future<Output = Result<Option<Resp>, CoreError>> + Send + 'a>,
-            > + Send
+            )
+                -> Pin<Box<dyn Future<Output = Result<Option<Resp>, CoreError>> + Send + 'a>>
+            + Send
             + Sync
             + Copy
             + 'static,
@@ -645,9 +642,9 @@ impl<Req: Send + 'static, Resp: Send + 'static> EngineSupervisor<Req, Resp> {
                 .try_send(SupervisorJob { request, reply })
                 .map_err(|e| CoreError::Internal(format!("{label} queue full or closed: {e}")))?;
         }
-        receiver.recv_timeout(self.recv_timeout).map_err(|e| {
-            CoreError::Internal(format!("{label} worker stopped or timed out: {e}"))
-        })?
+        receiver
+            .recv_timeout(self.recv_timeout)
+            .map_err(|e| CoreError::Internal(format!("{label} worker stopped or timed out: {e}")))?
     }
 
     fn start_manager<S, RunFn>(
@@ -661,9 +658,9 @@ impl<Req: Send + 'static, Resp: Send + 'static> EngineSupervisor<Req, Resp> {
                 &'a mut Option<ResidentWorker>,
                 &'a S,
                 Option<&'a Req>,
-            ) -> Pin<
-                Box<dyn Future<Output = Result<Option<Resp>, CoreError>> + Send + 'a>,
-            > + Send
+            )
+                -> Pin<Box<dyn Future<Output = Result<Option<Resp>, CoreError>> + Send + 'a>>
+            + Send
             + Sync
             + Copy
             + 'static,
@@ -680,13 +677,8 @@ impl<Req: Send + 'static, Resp: Send + 'static> EngineSupervisor<Req, Resp> {
                     .enable_all()
                     .build();
                 match runtime {
-                    Ok(runtime) => runtime.block_on(self.supervise(
-                        receiver,
-                        token,
-                        settings,
-                        idle,
-                        run_job_fn,
-                    )),
+                    Ok(runtime) => runtime
+                        .block_on(self.supervise(receiver, token, settings, idle, run_job_fn)),
                     Err(e) => {
                         tracing::error!(error = %e, "Cannot start {label} supervisor runtime")
                     }
@@ -843,12 +835,10 @@ macro_rules! define_engine_lifecycle {
             if resident.is_none() {
                 $ensure_fn(settings).await?;
                 let client = <$client_ty>::start(settings).await?;
-                *resident = Some(
-                    $crate::adapters::native_engine_common::ResidentWorker::new(
-                        client.0,
-                        &SUPERVISOR.resident,
-                    ),
-                );
+                *resident = Some($crate::adapters::native_engine_common::ResidentWorker::new(
+                    client.0,
+                    &SUPERVISOR.resident,
+                ));
             }
             let Some(request) = request else {
                 return Ok(None);
@@ -889,14 +879,27 @@ macro_rules! define_supervisor_tests {
         #[test]
         fn queue_is_bounded_and_disconnected_replies_do_not_panic() {
             use $crate::adapters::native_engine_common::SupervisorJob as Job;
-            let (sender, _receiver) =
-                tokio::sync::mpsc::channel::<Job<$req_ty, $resp_ty>>(8);
+            let (sender, _receiver) = tokio::sync::mpsc::channel::<Job<$req_ty, $resp_ty>>(8);
             for _ in 0..8 {
                 let (reply, _) = std::sync::mpsc::sync_channel(1);
-                assert!(sender.try_send(Job { request: None, reply }).is_ok());
+                assert!(
+                    sender
+                        .try_send(Job {
+                            request: None,
+                            reply
+                        })
+                        .is_ok()
+                );
             }
             let (reply, _) = std::sync::mpsc::sync_channel(1);
-            assert!(sender.try_send(Job { request: None, reply }).is_err());
+            assert!(
+                sender
+                    .try_send(Job {
+                        request: None,
+                        reply
+                    })
+                    .is_err()
+            );
         }
 
         #[tokio::test]
@@ -915,7 +918,13 @@ macro_rules! define_supervisor_tests {
             ));
             for _ in 0..2 {
                 let (reply, response) = std::sync::mpsc::sync_channel(1);
-                sender.send(Job { request: None, reply }).await.unwrap();
+                sender
+                    .send(Job {
+                        request: None,
+                        reply,
+                    })
+                    .await
+                    .unwrap();
                 let result = tokio::task::spawn_blocking(move || response.recv())
                     .await
                     .unwrap()

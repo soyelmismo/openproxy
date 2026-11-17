@@ -59,7 +59,7 @@ fn test_projection_column_contract() {
     for sql in queries {
         let stmt = conn.prepare(sql).unwrap();
         assert_eq!(stmt.column_count(), 41);
-        assert_eq!(stmt.column_names(), EXPECTED_COLUMNS);
+        assert_eq!(stmt.column_names().collect::<Vec<_>>(), EXPECTED_COLUMNS);
     }
 }
 

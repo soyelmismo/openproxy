@@ -157,7 +157,11 @@ pub(crate) async fn run_sync_pipeline(
         return Err(ApiError(err));
     }
 
-    Ok((result.final_response, u32::from(result.attempts), elapsed_ms))
+    Ok((
+        result.final_response,
+        u32::from(result.attempts),
+        elapsed_ms,
+    ))
 }
 
 pub(crate) fn handle_streaming_response(

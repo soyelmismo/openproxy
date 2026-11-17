@@ -3,7 +3,6 @@ use crate::translation::*;
 use openproxy_types::OpenAIMessage;
 use serde_json::{Value, json};
 
-
 fn make_msg(
     role: &str,
     content: Option<Value>,
@@ -195,7 +194,6 @@ fn minimax_full_tool_round_trip_request_shape() {
     );
 }
 
-
 #[test]
 fn minimax_tool_result_then_user_merges_into_single_user_message() {
     let mut req = openai_req_with(vec![]);
@@ -283,7 +281,6 @@ fn minimax_tool_result_then_user_merges_into_single_user_message() {
     );
 }
 
-
 #[tokio::test]
 async fn openai_to_anthropic_sse_stream_translates_chunks() {
     use futures_util::StreamExt;
@@ -309,7 +306,6 @@ async fn openai_to_anthropic_sse_stream_translates_chunks() {
             .contains("event: message_stop")
     );
 }
-
 
 #[test]
 fn anthropic_sse_forwards_cached_usage() {

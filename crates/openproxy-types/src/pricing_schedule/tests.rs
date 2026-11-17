@@ -335,7 +335,13 @@ fn window_and_date_counts_are_bounded() {
     // i % 24 keeps the generated clocks in 00:00..23:59; the point of the test
     // is the COUNT bound, not the clock values.
     let windows: Vec<String> = (0..=MAX_PEAK_WINDOWS)
-        .map(|i| window("[1]", &format!("{:02}:00", i % 24), &format!("{:02}:30", i % 24)))
+        .map(|i| {
+            window(
+                "[1]",
+                &format!("{:02}:00", i % 24),
+                &format!("{:02}:30", i % 24),
+            )
+        })
         .collect();
     let too_many = schedule_with(&format!("[{}]", windows.join(",")), "[]");
     assert!(too_many.validate().is_err());

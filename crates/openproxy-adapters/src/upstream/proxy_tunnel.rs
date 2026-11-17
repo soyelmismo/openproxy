@@ -334,7 +334,11 @@ mod tests {
     fn test_tunnel_dest_host_and_status_validation() {
         assert!(socks5_build_connect_req(&"a".repeat(256), 80).is_err());
         assert!(socks5_build_connect_req("bad\r\nhost", 80).is_err());
-        assert!(is_http_connect_status_200("HTTP/1.1 200 Connection established"));
-        assert!(!is_http_connect_status_200("HTTP/1.1 502 Bad Gateway (200 ms)"));
+        assert!(is_http_connect_status_200(
+            "HTTP/1.1 200 Connection established"
+        ));
+        assert!(!is_http_connect_status_200(
+            "HTTP/1.1 502 Bad Gateway (200 ms)"
+        ));
     }
 }

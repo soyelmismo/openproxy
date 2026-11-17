@@ -188,7 +188,13 @@ pub fn sync_to_local_cli_if_active(
             if !claude_code_account_matches(account, &disc) {
                 return false;
             }
-            write_account_to_claude_code_cli(account, access_token, refresh_token, expires_at, email)
+            write_account_to_claude_code_cli(
+                account,
+                access_token,
+                refresh_token,
+                expires_at,
+                email,
+            )
         }
         "antigravity" => {
             let Some(disc) = scan_antigravity_cli() else {

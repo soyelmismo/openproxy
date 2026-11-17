@@ -9,7 +9,14 @@ fn resolve_candidate_path(
     filename: &str,
     subpaths: &[&str],
 ) -> String {
-    resolve_engine_candidate_path("embeddinggemma2", explicit, env_var, filename, subpaths, false)
+    resolve_engine_candidate_path(
+        "embeddinggemma2",
+        explicit,
+        env_var,
+        filename,
+        subpaths,
+        false,
+    )
 }
 
 pub fn resolve_model_path(opt: Option<&str>) -> String {

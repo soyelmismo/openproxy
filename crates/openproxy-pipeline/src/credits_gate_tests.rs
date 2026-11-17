@@ -234,11 +234,7 @@ impl Harness {
     /// `grant_units = None` seeds a key with no ledger rows at all (not
     /// credit-governed). `with_worker = false` leaves the usage journal with
     /// nobody draining it, which lets a test observe admission's own drain.
-    pub(crate) fn start(
-        upstream: &Upstream,
-        grant_units: Option<i64>,
-        with_worker: bool,
-    ) -> Self {
+    pub(crate) fn start(upstream: &Upstream, grant_units: Option<i64>, with_worker: bool) -> Self {
         Self::start_with_options(
             upstream,
             None,
@@ -367,7 +363,10 @@ impl Harness {
         (req, cancel)
     }
 
-    pub(crate) fn request_with_max_tokens(&self, max_tokens: Option<u32>) -> crate::PipelineRequest {
+    pub(crate) fn request_with_max_tokens(
+        &self,
+        max_tokens: Option<u32>,
+    ) -> crate::PipelineRequest {
         let (mut req, _cancel) = self.request();
         std::sync::Arc::make_mut(&mut req.openai_request).max_tokens = max_tokens;
         req
@@ -459,7 +458,10 @@ impl Harness {
         .expect("count debits")
     }
 
-    pub(crate) async fn run_with_timeout(&self, req: crate::PipelineRequest) -> crate::PipelineResult {
+    pub(crate) async fn run_with_timeout(
+        &self,
+        req: crate::PipelineRequest,
+    ) -> crate::PipelineResult {
         tokio::time::timeout(Duration::from_secs(10), self.pipeline.run(req))
             .await
             .expect("pipeline run timed out: the credit gate leaked a lane")

@@ -112,9 +112,26 @@ macro_rules! define_provider_adapter { ( pub enum ProviderAdapterEnum { builtins
             fn is_anonymous_fallback(&self) -> bool { self.is_anonymous_fallback() }
             fn translate_non_streaming_response(&self, target_format: openproxy_types::TargetFormat, response_body: serde_json::Value) -> std::result::Result<openproxy_types::OpenAIResponse, openproxy_types::error::CoreError> { self.translate_non_streaming_response(target_format, response_body) }
         } }; }
-macro_rules! derive_default_from_new { ($name:ident) => { impl Default for $name { fn default() -> Self { Self::new() } } }; }
-pub(crate) use derive_default_from_new; macro_rules! impl_adapter_config { () => { fn config(&self) -> &$crate::adapters::ProviderAdapterConfig { &self.config }
-        fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> { Some(&mut self.config) } }; }
+macro_rules! derive_default_from_new {
+    ($name:ident) => {
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
+}
+pub(crate) use derive_default_from_new;
+macro_rules! impl_adapter_config {
+    () => {
+        fn config(&self) -> &$crate::adapters::ProviderAdapterConfig {
+            &self.config
+        }
+        fn config_mut(&mut self) -> Option<&mut $crate::adapters::ProviderAdapterConfig> {
+            Some(&mut self.config)
+        }
+    };
+}
 pub(crate) use impl_adapter_config;
 #[macro_export]
 macro_rules! declare_openai_adapter { (

@@ -152,7 +152,8 @@ mod tests {
                 openproxy_types::TargetFormat::Openai,
                 0,
                 None,
-            ).unwrap();
+            )
+            .unwrap();
             conn.execute("INSERT INTO model_capabilities_sync (provider_id, model_id, pricing_input_per_1m, pricing_output_per_1m, pricing_cached_per_1m) VALUES (?1, 'plan-model', 0.3, 1.2, 0.0)", [provider]).unwrap();
         }
         let catalog = PlanCatalog::load(&conn).unwrap();
@@ -160,9 +161,24 @@ mod tests {
         assert_eq!(price.input_per_1m, 0.3);
         assert_eq!(price.cached_per_1m, Some(0.0));
         conn.execute("UPDATE model_capabilities_sync SET pricing_input_per_1m=0.6 WHERE provider_id='plan-b'", []).unwrap();
-        assert!(catalog.model_price(&conn, "plan-model").is_none(), "different targets cannot be advertised as the cheapest rate");
-        assert_eq!(catalog.model_price(&conn, "plan-a/plan-model").unwrap().input_per_1m, 0.3);
-        assert_eq!(catalog.model_price(&conn, "plan-b/plan-model").unwrap().input_per_1m, 0.6);
+        assert!(
+            catalog.model_price(&conn, "plan-model").is_none(),
+            "different targets cannot be advertised as the cheapest rate"
+        );
+        assert_eq!(
+            catalog
+                .model_price(&conn, "plan-a/plan-model")
+                .unwrap()
+                .input_per_1m,
+            0.3
+        );
+        assert_eq!(
+            catalog
+                .model_price(&conn, "plan-b/plan-model")
+                .unwrap()
+                .input_per_1m,
+            0.6
+        );
         assert!(catalog.model_price(&conn, "plan-*").is_none());
     }
 

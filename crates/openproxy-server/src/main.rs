@@ -435,7 +435,10 @@ fn main() -> anyhow::Result<()> {
         println!("{}", render_cli_help());
         return Ok(());
     }
-    if std::env::args().skip(1).any(|a| a == "-V" || a == "--version") {
+    if std::env::args()
+        .skip(1)
+        .any(|a| a == "-V" || a == "--version")
+    {
         println!("{}", render_cli_version());
         return Ok(());
     }

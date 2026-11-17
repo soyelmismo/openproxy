@@ -36,8 +36,6 @@ pub mod devin;
 pub mod eac;
 #[cfg(feature = "laya-engine")]
 pub mod embed_engine;
-#[cfg(feature = "laya-engine")]
-pub(crate) mod native_engine_common;
 #[cfg(feature = "embed-engine")]
 pub mod embed_engine_adapter;
 pub mod factory;
@@ -52,6 +50,8 @@ pub mod laya_engine;
 pub mod minimax;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
+#[cfg(feature = "laya-engine")]
+pub(crate) mod native_engine_common;
 pub mod nous_research;
 pub mod nvidia_nim;
 pub mod ollama_cloud;

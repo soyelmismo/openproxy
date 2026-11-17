@@ -170,7 +170,13 @@ async fn parse_image_json(
     headers: &HeaderMap,
     json: serde_json::Value,
     upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
-) -> Result<(ParsedImageMultipartBody, Option<openproxy_types::ids::ApiKeyId>), ApiError> {
+) -> Result<
+    (
+        ParsedImageMultipartBody,
+        Option<openproxy_types::ids::ApiKeyId>,
+    ),
+    ApiError,
+> {
     let model_name = json
         .get("model")
         .and_then(|v| v.as_str())
@@ -181,12 +187,9 @@ async fn parse_image_json(
     // Authenticate and authorize the API key for `model_name` BEFORE fetching any
     // remote `http://`/`https://` image URLs so unauthorized keys cannot trigger
     // outbound downloads.
-    let api_key_id = crate::middleware::auth::authenticate_and_authorize_model(
-        state,
-        headers,
-        &model_name,
-    )
-    .await?;
+    let api_key_id =
+        crate::middleware::auth::authenticate_and_authorize_model(state, headers, &model_name)
+            .await?;
 
     let mut files = Vec::new();
     let mut form_fields = Vec::new();
@@ -219,7 +222,13 @@ async fn parse_and_authorize_image_request(
     req: Request,
     upstream_client: &Arc<openproxy_adapters::UpstreamClient>,
     body_limit: usize,
-) -> Result<(ParsedImageMultipartBody, Option<openproxy_types::ids::ApiKeyId>), ApiError> {
+) -> Result<
+    (
+        ParsedImageMultipartBody,
+        Option<openproxy_types::ids::ApiKeyId>,
+    ),
+    ApiError,
+> {
     let is_multipart = req
         .headers()
         .get(CONTENT_TYPE)

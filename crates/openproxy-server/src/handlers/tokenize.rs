@@ -84,7 +84,10 @@ pub async fn tokenize(
         tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
             let r = db_pool.reader();
             let plan = routing::resolve(&r, &model)?;
-            let RoutingPlan::Combo { combo_id, targets, .. } = plan else {
+            let RoutingPlan::Combo {
+                combo_id, targets, ..
+            } = plan
+            else {
                 return Err(ApiError(CoreError::model_not_found(
                     "<unknown>",
                     model.clone(),

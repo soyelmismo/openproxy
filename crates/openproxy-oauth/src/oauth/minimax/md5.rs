@@ -2,7 +2,6 @@
 
 pub use openproxy_adapters::adapters::zai::md5::{md5_bytes, md5_hex};
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
