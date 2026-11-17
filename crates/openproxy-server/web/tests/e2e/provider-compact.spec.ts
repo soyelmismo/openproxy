@@ -73,7 +73,7 @@ for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844
           await expect(view.locator('.filter-tab').first()).toHaveAttribute('aria-pressed', 'true');
         }
         if (index < 2 && [280, 858].includes(width)) {
-          await view.screenshot({ path: `/root/.hermes/cache/scratch/openproxy-tiling/dense-${viewport.width}-${width}-${index}.png` });
+          await view.screenshot({ path: `test-results/openproxy-tiling/dense-${viewport.width}-${width}-${index}.png` });
         }
         const metrics = await view.evaluate(element => {
           const panel = element.querySelector<HTMLElement>('[role="tabpanel"]:not([hidden])')!;

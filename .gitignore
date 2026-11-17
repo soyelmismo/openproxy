@@ -57,3 +57,6 @@ fixtures/codebuddy-extracted/codebuddy.js
 
 # Payments feature flag file (local only, never committed)
 payments.local
+
+# coverage instrumentation artifacts
+*.profraw
