@@ -3,11 +3,19 @@ import { html, render } from "lit-html";
 import { api } from "../state/api.js";
 import { state } from "../state/index.js";
 import { mountView, requestUpdate } from "../state/reactive.js";
-import { keyFormTemplate, buildKeyBodyFromForm, type TierOption } from "../handlers/key-handlers.js";
+import { keyFormTemplate, buildKeyBodyFromForm, type KeyQuotaState, type TierOption } from "../handlers/key-handlers.js";
 import { renderBlacklistedModelsChips } from "../components/model-picker.js";
 import { showToast } from "../components/toast.js";
 import { t } from "../i18n/index.js";
 import type { ApiKey, Provider } from "../lib/types/api.js";
+
+/** GET /keys/:id/quota wire shape (payments build only). */
+interface KeyQuotaResponse {
+  api_key_id: number;
+  tier_id?: number | null;
+  caps?: KeyQuotaState["caps"];
+  enabled?: boolean;
+}
 
 export async function mountKeyDetail(
   id: number,
@@ -20,16 +28,25 @@ export async function mountKeyDetail(
   let cleanup = (): void => {};
   render(html`<p role="status">${t("workspace.loading")}</p>`, container);
   try {
-    const [loaded, tiers] = await Promise.all([
+    const [loaded, tiers, quotaRes] = await Promise.all([
       api(`/keys/${id}`) as Promise<ApiKey>,
       // Payments-only endpoint; a disabled build shows no tier selector.
       __OP_PAYMENTS__
         ? api("/credits/tiers").catch(() => []) as Promise<TierOption[]>
         : Promise.resolve([] as TierOption[]),
+      // Whose caps does this key carry: a linked tier or its own custom ones.
+      // A failed fetch yields a LOCKED state: the save must not clear caps it
+      // could not read.
+      __OP_PAYMENTS__
+        ? api(`/keys/${id}/quota`).catch(() => null) as Promise<KeyQuotaResponse | null>
+        : Promise.resolve(null),
       state.providers.length ? Promise.resolve() : api("/providers").then(providers => { state.providers = providers as Provider[]; }),
     ]);
     if (disposed || !container.isConnected) return () => {};
     let key = loaded;
+    const quota: KeyQuotaState | undefined = quotaRes
+      ? { tier_id: quotaRes.tier_id ?? null, caps: quotaRes.caps ?? null }
+      : { locked: true };
     let expiryBaseline: string[] = [];
     const expiryValues = (form: HTMLFormElement): string[] => [
       (form.elements.namedItem("expires_amount") as HTMLInputElement | null)?.value ?? "",
@@ -82,7 +99,7 @@ export async function mountKeyDetail(
         <div class="cx-key-stat"><dt>${t("keys.detail.created")}</dt><dd title=${fullDate(key.created_at)}>${shortDate(key.created_at)}</dd></div>
         <div class="cx-key-stat"><dt>${t("keys.detail.last_used")}</dt><dd title=${fullDate(key.last_used_at)}>${shortDate(key.last_used_at)}</dd></div>
       </dl>
-      ${keyFormTemplate({ mode: "edit", key, tiers, wrapper: container, inline: true, onSubmit: event => { void save(event); }, onCancel: () => { location.hash = "#/keys"; } })}
+      ${keyFormTemplate({ mode: "edit", key, tiers, quota, wrapper: container, inline: true, onSubmit: event => { void save(event); }, onCancel: () => { location.hash = "#/keys"; } })}
     </section>`);
     renderBlacklistedModelsChips();
     const form = container.querySelector("form");

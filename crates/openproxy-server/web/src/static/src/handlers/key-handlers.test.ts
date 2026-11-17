@@ -22,6 +22,8 @@ function makeKeyForm(fields: {
   expiresAmount?: string;
   expiresUnit?: string;
   tierId?: string;
+  /** Dollar caps fieldset (payments build). Omitted → no fieldset in the DOM. */
+  quota?: { weekly?: string; fiveHour?: string; disabled?: boolean };
 } = {}): HTMLFormElement {
   const form = document.createElement("form");
   const append = (name: string, value: string, tag: "input" | "select" = "input", type = "text"): void => {
@@ -57,6 +59,21 @@ function makeKeyForm(fields: {
   if (fields.expiresAmount !== undefined) append("expires_amount", fields.expiresAmount, "input", "number");
   if (fields.expiresUnit !== undefined) append("expires_unit", fields.expiresUnit, "select");
   if (fields.tierId !== undefined) append("tier_id", fields.tierId, "select");
+  if (fields.quota) {
+    const fieldset = document.createElement("fieldset");
+    fieldset.id = "key-quota-fields";
+    if (fields.quota.disabled) fieldset.disabled = true;
+    const cap = (name: string, value: string | undefined): void => {
+      const input = document.createElement("input");
+      input.name = name;
+      input.type = "number";
+      input.value = value ?? "";
+      fieldset.appendChild(input);
+    };
+    cap("quota_weekly", fields.quota.weekly);
+    cap("quota_five_hour", fields.quota.fiveHour);
+    form.appendChild(fieldset);
+  }
   document.body.appendChild(form);
   return form;
 }
@@ -140,5 +157,37 @@ describe("buildKeyBodyFromForm", () => {
     expect(buildKeyBodyFromForm(blank)?.label).toBeNull();
     const named = track(makeKeyForm({ scopes: ["chat"], label: "  my-app  " }));
     expect(buildKeyBodyFromForm(named)?.label).toBe("my-app");
+  });
+
+  it("sends filled dollar caps as an object and empty ones as null (clear)", () => {
+    const capped = track(makeKeyForm({ scopes: ["chat"], quota: { weekly: "7.5", fiveHour: "2" } }));
+    expect(buildKeyBodyFromForm(capped)?.quota).toEqual({ weekly_usd_cap: 7.5, five_hour_usd_cap: 2 });
+
+    const halfCapped = track(makeKeyForm({ scopes: ["chat"], quota: { weekly: "10" } }));
+    expect(buildKeyBodyFromForm(halfCapped)?.quota).toEqual({ weekly_usd_cap: 10, five_hour_usd_cap: null });
+
+    const uncapped = track(makeKeyForm({ scopes: ["chat"], quota: {} }));
+    expect(buildKeyBodyFromForm(uncapped)?.quota).toBeNull();
+  });
+
+  it("omits quota when the caps fieldset is disabled (a plan owns the caps)", () => {
+    const form = track(makeKeyForm({ scopes: ["chat"], quota: { weekly: "7.5", disabled: true } }));
+    const body = buildKeyBodyFromForm(form);
+    expect(body).not.toBeNull();
+    expect("quota" in (body ?? {})).toBe(false);
+  });
+
+  it("omits quota when the form has no caps fieldset (non-payments DOM)", () => {
+    const form = track(makeKeyForm({ scopes: ["chat"] }));
+    expect("quota" in (buildKeyBodyFromForm(form) ?? {})).toBe(false);
+  });
+
+  it("rejects non-positive dollar caps with a toast and returns null", () => {
+    // A number input never carries non-numeric text (the browser sanitizes
+    // it to empty), so the realistic bad values are zero and negatives.
+    for (const bad of ["0", "-3"]) {
+      const form = track(makeKeyForm({ scopes: ["chat"], quota: { weekly: bad } }));
+      expect(buildKeyBodyFromForm(form), `weekly=${bad}`).toBeNull();
+    }
   });
 });
