@@ -46,8 +46,9 @@ test('tiling keeps independent live views, routes active panel, resizes, maximiz
   const second = page.locator('.workspace-tile').nth(1);
   await expect(first.locator('.tile-view')).toBeVisible();
   await expect(second.locator('.tile-view')).toBeVisible();
-  await expect(page.locator('.tile-view').nth(0)).toContainText('Combos');
-  await expect(page.locator('.tile-view').nth(1)).toContainText('Logs');
+  await expect(page.locator('.tile-view').nth(0)).toHaveAttribute('data-route', '#/combos');
+  await expect(page.locator('.tile-view').nth(1)).toHaveAttribute('data-route', '#/logs');
+  await expect(page.locator('.tile-view').nth(1).locator('.logs-control-deck')).toBeVisible();
   const originalUrl = await first.locator('.tile-view').evaluate(el => (el as HTMLElement).dataset['route']);
   await second.locator('.tile-title').click();
   await page.getByRole('menuitem', { name: 'API Keys', exact: true }).click();
@@ -55,10 +56,13 @@ test('tiling keeps independent live views, routes active panel, resizes, maximiz
   expect(await first.locator('.tile-view').evaluate(el => (el as HTMLElement).dataset['route'])).toBe(originalUrl);
   await expect(page).toHaveURL(/#\/keys$/);
 
-  const separator = page.getByRole('separator', { name: 'Resize panel columns' });
+  // Two side-by-side tiles share one vertical seam; its accessible name is
+  // "Resize <left label> and <right label> panels" and follows the tiles'
+  // routes. Keyboard steps rewrite the tiles' inline grid spans (no aria-valuenow).
+  const separator = page.getByRole('separator', { name: 'Resize Combos and API Keys panels' });
   await separator.focus();
   await page.keyboard.press('ArrowRight');
-  await expect(separator).toHaveAttribute('aria-valuenow', '56');
+  await expect(first).toHaveAttribute('style', /span 4/);
   await second.getByRole('button', { name: 'Maximize panel' }).click();
   await expect(first).toBeHidden();
   await second.getByRole('button', { name: 'Restore panel' }).click();

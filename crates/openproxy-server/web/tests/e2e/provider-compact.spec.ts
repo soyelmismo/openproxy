@@ -62,15 +62,15 @@ for (const viewport of [{ width: 1600, height: 1000 }, { width: 390, height: 844
           expect(await view.evaluate(el => el.scrollWidth > el.clientWidth + 1), `account overflow at ${width}`).toBe(false);
         }
         if (index === 1) {
-          const entry = view.getByRole('tabpanel').locator('.provider-entry').first();
-          await expect(entry).toBeVisible();
-          expect(await entry.evaluate(el => el.getBoundingClientRect().height), `summary too tall at ${width}`).toBeLessThan(width < 400 ? 220 : 160);
-          await expect(entry.locator('details')).not.toHaveAttribute('open');
-          await entry.locator('summary').click();
-          await expect(entry.locator('select').first()).toBeVisible();
-          expect(await view.evaluate(el => el.scrollWidth > el.clientWidth + 1), `expanded editor overflow at ${width}`).toBe(false);
-          await entry.locator('summary').click();
-          await expect(view.getByRole('tabpanel').locator('thead')).toHaveCount(0);
+          // The models tab is a filterable grid list (models.ts): search box,
+          // filter tabs and the models list. The old details/summary editor
+          // contract died with the accounts/models/config tab restructure.
+          const search = view.getByPlaceholder('Search models...');
+          await expect(search).toBeVisible();
+          await expect(view.locator('.models-list')).toBeVisible();
+          expect(await view.evaluate(el => el.scrollWidth > el.clientWidth + 1), `models tab overflow at ${width}`).toBe(false);
+          await view.locator('.filter-tab').first().click();
+          await expect(view.locator('.filter-tab').first()).toHaveAttribute('aria-pressed', 'true');
         }
         if (index < 2 && [280, 858].includes(width)) {
           await view.screenshot({ path: `/root/.hermes/cache/scratch/openproxy-tiling/dense-${viewport.width}-${width}-${index}.png` });

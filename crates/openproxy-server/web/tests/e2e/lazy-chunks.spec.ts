@@ -28,9 +28,12 @@ async function expectView(page: Page, route: string, reload = true): Promise<voi
   }
 
   const selectors: Record<string, string> = {
-    providers: ".page-header h2",
+    // providers' page-header h2 only renders on the load-error branch; the
+    // normal grid shows the toolbar.
+    providers: ".providers-toolbar",
     analytics: ".analytics-header h2",
-    config: ".config-editable-region .card",
+    // config's editable-region wrapper is gone; cards render as .config-card.
+    config: ".config-card",
     playground: ".playground-studio-wrapper",
     notifications: ".page-header h2",
   };

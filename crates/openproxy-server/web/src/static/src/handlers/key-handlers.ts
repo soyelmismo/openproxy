@@ -517,6 +517,10 @@ export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> 
   if (!(target instanceof HTMLFormElement)) return;
   const body = buildKeyBodyFromForm(target);
   if (!body) return;
+  // Create has no prior quota to clear: an explicit null is a pure no-op on
+  // payments builds and trips the non-payments server's reject-guard, so an
+  // untouched fieldset omits the field entirely.
+  if (body.quota === null) delete body.quota;
   const busy = beginButtonBusy(resolveBusyButton(e), { label: "Creating…" });
   try {
     const result = await api("/keys", { method: "POST", body: JSON.stringify(body) }) as KeyPlaintextResponse;

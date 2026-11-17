@@ -355,7 +355,17 @@ export function openSplit(s: WorkspaceState, route: string): void {
   if (existing) { existing.route = route; s.focused = existing.id; s.maximized = null; return; }
   if (s.tiles.length < MAX_PANELS) {
     const next = tile(route);
-    next.rect = findFreeRect(s.tiles, { w: 3, h: 3 }, next.id) ?? { x: 0, y: 0, w: 3, h: 3 };
+    const free = findFreeRect(s.tiles, { w: 3, h: 3 }, next.id);
+    if (free) next.rect = free;
+    else {
+      // The current arrangement leaves no free slot (e.g. one full-grid tile
+      // from a "single" layout): reflow every tile onto the canonical shape
+      // for the new panel count, so the new panel splits the space instead
+      // of stacking on top of the focused one.
+      const shape = SHAPES[LAYOUTS[s.tiles.length]!]!;
+      s.tiles.forEach((t, i) => { t.rect = { ...shape[i]! }; });
+      next.rect = { ...shape[s.tiles.length]! };
+    }
     s.tiles.push(next);
     s.focused = next.id;
     s.layout = LAYOUTS[s.tiles.length - 1]!;

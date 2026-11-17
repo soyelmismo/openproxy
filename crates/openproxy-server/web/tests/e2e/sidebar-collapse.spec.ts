@@ -29,55 +29,54 @@ async function sidebarWidth(page: Page): Promise<number | null> {
   });
 }
 
-test('sidebar collapse to icons + localStorage persistence', async ({ page }: { page: Page }) => {
+test('sidebar defaults to the compact rail; toggle expands + localStorage persistence', async ({ page }: { page: Page }) => {
   await page.goto(BASE);
   // The storage is per-origin; clearing it from a prior test run
-  // guarantees the expanded-state branch runs.
+  // guarantees the compact-default branch runs.
   await page.evaluate((k: string) => localStorage.removeItem(k), STORAGE_KEY);
   await page.reload();
 
   await expect(page.locator('.sidebar nav a').first()).toBeVisible();
-  const labelVisible = await page.locator('.sidebar nav a .nav-label').first().isVisible();
-  expect(labelVisible).toBe(true);
-  const expandedWidth = await sidebarWidth(page);
-  expect(expandedWidth).toBeGreaterThan(150);
+  // No stored preference => the compact rail is the product default
+  // (7a138c0d8): labels hidden, narrow width, collapsed body class.
+  const labelHidden = await page.locator('.sidebar nav a .nav-label').first().evaluate((el) => el.hasAttribute('hidden') || getComputedStyle(el).display === 'none');
+  expect(labelHidden).toBe(true);
+  await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
+  const collapsedWidth = await sidebarWidth(page);
+  expect(collapsedWidth).toBeLessThan(80);
 
   await page.locator('.sidebar-toggle').click();
 
   const stored = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
-  expect(stored).toBe('1');
+  expect(stored).toBe('0');
 
-  const labelAfter = page.locator('.sidebar nav a .nav-label').first();
-  const labelIsHiddenAttr = await labelAfter.evaluate((el) => el.hasAttribute('hidden'));
-  const labelDisplay = await labelAfter.evaluate((el) => getComputedStyle(el).display);
-  expect(labelIsHiddenAttr || labelDisplay === 'none').toBe(true);
-
-  await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
-
-  const collapsedWidth = await sidebarWidth(page);
-  expect(collapsedWidth).toBeLessThan(80);
+  const labelVisible = page.locator('.sidebar nav a .nav-label').first();
+  await expect(labelVisible).toBeVisible();
+  await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
+  const expandedWidth = await sidebarWidth(page);
+  expect(expandedWidth).toBeGreaterThan(150);
 
   await page.reload();
   const storedAfterReload = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
-  expect(storedAfterReload).toBe('1');
-  await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
+  expect(storedAfterReload).toBe('0');
+  await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
   const widthAfterReload = await sidebarWidth(page);
-  expect(widthAfterReload).toBeLessThan(80);
+  expect(widthAfterReload).toBeGreaterThan(150);
 
   await page.locator('.sidebar-toggle').click();
-  const storedExpanded = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
-  expect(storedExpanded).toBe('0');
-  const labelBackVisible = await page.locator('.sidebar nav a .nav-label').first().isVisible();
-  expect(labelBackVisible).toBe(true);
-  const widthExpanded = await sidebarWidth(page);
-  expect(widthExpanded).toBeGreaterThan(150);
+  const storedCollapsed = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
+  expect(storedCollapsed).toBe('1');
+  const labelBackHidden = await page.locator('.sidebar nav a .nav-label').first().evaluate((el) => el.hasAttribute('hidden') || getComputedStyle(el).display === 'none');
+  expect(labelBackHidden).toBe(true);
+  const widthCollapsed = await sidebarWidth(page);
+  expect(widthCollapsed).toBeLessThan(80);
 
   await page.reload();
-  await expect(page.locator('body')).not.toHaveClass(/sidebar-collapsed/);
-  const storedExpandedReload = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
-  expect(storedExpandedReload).toBe('0');
-  const widthExpandedReload = await sidebarWidth(page);
-  expect(widthExpandedReload).toBeGreaterThan(150);
+  await expect(page.locator('body')).toHaveClass(/sidebar-collapsed/);
+  const storedCollapsedReload = await page.evaluate((k: string) => localStorage.getItem(k), STORAGE_KEY);
+  expect(storedCollapsedReload).toBe('1');
+  const widthCollapsedReload = await sidebarWidth(page);
+  expect(widthCollapsedReload).toBeLessThan(80);
 });
 
 test('nav link click + active class works in both collapsed and expanded modes', async ({ page }: { page: Page }) => {

@@ -17,6 +17,7 @@ body.workspace-host #main, #workspace[hidden], #workspace [hidden] { display: no
 .workspace-layouts button.active { color: var(--color-primary); background: var(--color-primary-soft); }
 .workspace-layouts button:hover { background: var(--color-surface-2); }
 .workspace-presets, .tile-view-picker { position: relative; min-width: 0; }
+.workspace-presets { display: flex; align-items: center; padding: 4px 8px 0; }
 .workspace-preset-trigger { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; background: var(--color-surface); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--fs-xs); cursor: pointer; }
 .workspace-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 120; width: 214px; max-width: calc(100vw - 32px); max-height: min(60vh, 420px); overflow-y: auto; padding: 5px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-lg); }
 .workspace-menu button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 9px 8px; border: 0; background: transparent; color: var(--color-text); border-radius: var(--radius-sm); font-size: var(--fs-xs); text-align: left; cursor: pointer; }
@@ -150,6 +151,7 @@ body.workspace-host.sidebar-collapsed .sidebar { padding: 16px 5px 10px; }
   .workspace-tile { display: none !important; height: 100%; }
   .workspace-tile.mobile-active { display: grid !important; }
   .workspace-status { display: none; }
+  .workspace-presets { display: none !important; }
   .workspace-icon-button { flex-basis: 36px; min-width: 36px; height: 36px; }
   body.workspace-host.sidebar-collapsed .sidebar { padding: 0; }
   body.workspace-host .sidebar .sidebar-drawer { transition: none; visibility: hidden; }

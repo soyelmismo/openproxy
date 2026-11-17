@@ -98,6 +98,34 @@ fn resolve_debug_log_path() -> std::path::PathBuf {
         .join("debug.log")
 }
 
+/// (Re)open the debug log truncated with owner-only permissions. Shared by
+/// the 12 h tick and the size-cap rotation paths.
+async fn reopen_debug_log(path: &std::path::Path) -> Option<tokio::fs::File> {
+    let Ok(file) = tokio::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .await
+    else {
+        return None;
+    };
+    // ROOT FIX (audit A6-04): the debug log is written with the default
+    // umask (0644/0666 — verified) and can carry WARN/ERROR payloads
+    // from the money path. Tighten it to owner-only, like the master
+    // key file, on every (re)open including the 12 h rotation.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = file.metadata().await {
+            let mut perms = meta.permissions();
+            perms.set_mode(perms.mode() & 0o600);
+            let _ = tokio::fs::set_permissions(path, perms).await;
+        }
+    }
+    Some(file)
+}
+
 fn spawn_file_logger_task(
     path: std::path::PathBuf,
     mut rx: mpsc::Receiver<Arc<DebugLogEntry>>,
@@ -108,28 +136,9 @@ fn spawn_file_logger_task(
             let _ = tokio::fs::create_dir_all(parent).await;
         }
 
-        let Ok(mut file) = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&path)
-            .await
-        else {
+        let Some(mut file) = reopen_debug_log(&path).await else {
             return;
         };
-        // ROOT FIX (audit A6-04): the debug log is written with the default
-        // umask (0644/0666 — verified) and can carry WARN/ERROR payloads
-        // from the money path. Tighten it to owner-only, like the master
-        // key file, on every (re)open including the 12 h rotation.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(meta) = file.metadata().await {
-                let mut perms = meta.permissions();
-                perms.set_mode(perms.mode() & 0o600);
-                let _ = tokio::fs::set_permissions(&path, perms).await;
-            }
-        }
 
         let mut written_since_rotation: u64 = 0;
         let mut rotation_interval = tokio::time::interval(std::time::Duration::from_hours(12));
@@ -139,22 +148,7 @@ fn spawn_file_logger_task(
             tokio::select! {
                 _ = rotation_interval.tick() => {
                     written_since_rotation = 0;
-                    if let Ok(new_file) = tokio::fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .truncate(true)
-                        .open(&path)
-                        .await
-                    {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            if let Ok(meta) = new_file.metadata().await {
-                                let mut perms = meta.permissions();
-                                perms.set_mode(perms.mode() & 0o600);
-                                let _ = tokio::fs::set_permissions(&path, perms).await;
-                            }
-                        }
+                    if let Some(new_file) = reopen_debug_log(&path).await {
                         file = new_file;
                     }
                 }
@@ -168,45 +162,36 @@ fn spawn_file_logger_task(
                                     Err(_) => break,
                                 }
                             }
-                            // Serialize first so the byte cap can account for
-                            // the whole batch before anything is written.
+                            // Serialize first: the byte cap applies per line
+                            // below and needs the final JSON length.
                             let mut lines: Vec<String> = Vec::with_capacity(batch.len());
-                            let mut batch_bytes: u64 = 0;
                             for item in batch {
                                 if let Ok(mut json) = serde_json::to_string(item.as_ref()) {
                                     json.push('\n');
-                                    batch_bytes = batch_bytes.saturating_add(json.len() as u64);
                                     lines.push(json);
                                 }
                             }
                             // Security (audit H-12): rotate on SIZE, not only
                             // on the 12 h tick — the warn loop that fills the
-                            // shared disk is bounded by this cap.
-                            if written_since_rotation.saturating_add(batch_bytes) > max_bytes
-                                && let Ok(new_file) = tokio::fs::OpenOptions::new()
-                                    .create(true)
-                                    .write(true)
-                                    .truncate(true)
-                                    .open(&path)
-                                    .await
-                            {
-                                #[cfg(unix)]
-                                {
-                                    use std::os::unix::fs::PermissionsExt;
-                                    if let Ok(meta) = new_file.metadata().await {
-                                        let mut perms = meta.permissions();
-                                        perms.set_mode(perms.mode() & 0o600);
-                                        let _ =
-                                            tokio::fs::set_permissions(&path, perms).await;
-                                    }
-                                }
-                                file = new_file;
-                                written_since_rotation = 0;
-                            }
+                            // shared disk is bounded by this cap. The guard is
+                            // per LINE, not per batch: when a slow consumer
+                            // (coverage instrumentation, busy disk) lets a
+                            // batch pile up past the cap, truncating once and
+                            // then writing the whole batch would still blow
+                            // the cap by the full batch. Line-by-line the file
+                            // never exceeds max_bytes + one line under any
+                            // scheduling.
                             for line in lines {
+                                let line_len = line.len() as u64;
+                                if written_since_rotation.saturating_add(line_len) > max_bytes
+                                    && let Some(new_file) = reopen_debug_log(&path).await
+                                {
+                                    file = new_file;
+                                    written_since_rotation = 0;
+                                }
                                 let _ = file.write_all(line.as_bytes()).await;
                                 written_since_rotation =
-                                    written_since_rotation.saturating_add(line.len() as u64);
+                                    written_since_rotation.saturating_add(line_len);
                             }
                             let _ = file.flush().await;
                         }

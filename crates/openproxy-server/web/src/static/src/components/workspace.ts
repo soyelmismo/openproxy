@@ -15,6 +15,7 @@ import { beginTileDrag, beginViewDrag, beginResizeDrag, type DragHooks, type Gri
 import {
   WORKSPACE_KEY, VIEWS, GRID, MAX_PANELS, activeTile, closeTile,
   openSplit, restoreWorkspace, routeMeta, safeRoute, clampRect, overlaps, planDrop, swapTiles, assignTileRoute, placeTile, setTileRect, spawnTile,
+  applyPreset, PRESETS,
   type DropPlan, type Rect, type Tile, type WorkspaceState,
 } from "../state/workspace.js";
 
@@ -519,6 +520,19 @@ function gripTemplate(tile: Tile, corner: GripCorner): TemplateResult {
       beginResizeDrag(e, tile.id, corner, t("workspace.resize_panel"), { ...resizeDragHooks(tile.id, corner), onCancel: hideGhost });
     }}></span>`;
 }
+/** Desktop preset launcher: named layouts that write canonical rects.
+ *  Desktop-only chrome — the mobile topbar carries its own panel switcher. */
+function presetsTemplate(): TemplateResult {
+  const s = workspace!;
+  return html`<div class="workspace-presets">
+    <button class="workspace-preset-trigger" type="button" aria-haspopup="menu" aria-expanded=${menu === "presets"}
+      @click=${() => toggleMenu("presets")}>${t("workspace.layouts_trigger")}${icons.caretDown()}</button>
+    ${menu === "presets" ? html`<div class="workspace-menu workspace-layouts" role="menu" aria-label=${t("workspace.presets_label")}>
+      ${PRESETS.map(p => html`<button type="button" role="menuitem" tabindex="-1"
+        @click=${() => { applyPreset(s, p); menu = null; changed(); }}>${p.label}</button>`)}
+    </div>` : ""}
+  </div>`;
+}
 function viewMenu(id: string): TemplateResult {
   const allowedViews = isFullAdmin()
     ? VIEWS
@@ -611,6 +625,7 @@ function paint(): void {
         aria-label=${t("workspace.tiling_workspace")}>
         ${repeat(s.tiles, t => t.id, tileTemplate)}
       </div>
+      ${isFullAdmin() ? presetsTemplate() : ""}
       <footer class="workspace-status"><span>${t("workspace.panel_active", { index: s.tiles.findIndex(t => t.id === s.focused) + 1 })}</span><span>${s.maximized ? t("workspace.status_maximized") : t("workspace.status_saved")}</span></footer>
     </div>`, root);
   for (const t of s.tiles) {
@@ -711,7 +726,7 @@ export function mountWorkspace(route: string): void {
       e.preventDefault();
       navigateWorkspace(link.hash, e.shiftKey);
       document.body.classList.remove("mobile-nav-open");
-    } else if (menu && !target.closest(".tile-view-picker")) { menu = null; paint(); }
+    } else if (menu && !target.closest(".tile-view-picker, .workspace-presets")) { menu = null; paint(); }
   });
   document.addEventListener("openproxy:mutated", () => { void loadResources(); requestUpdate(); });
   document.addEventListener("keydown", (e: KeyboardEvent) => {

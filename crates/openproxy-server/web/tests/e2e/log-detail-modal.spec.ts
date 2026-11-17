@@ -40,7 +40,7 @@ async function openFirstLogRow(page: Page): Promise<string | null> {
   });
   await page.goto('http://localhost:8790/');
   await page.click('a[href="#/logs"]');
-  await expect(page.locator('#main')).toBeVisible();
+  await expect(page.locator('#logs')).toBeVisible();
 
   // Intercept the API detail calls, lookup in the window state
   await page.route('**/admin/api/usage/detail*', async (route) => {

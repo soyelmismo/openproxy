@@ -40,13 +40,15 @@ test.describe('SPA authentication gate', () => {
   test('authenticated session persists after reloading a protected view', async ({ page }) => {
     await page.goto('/#/providers');
     await expect(page).toHaveURL(/#\/providers$/);
-    await expect(page.getByRole('heading', { name: /providers/i }).first()).toBeVisible();
+    // The streamlined providers grid renders the toolbar; the page-header
+    // h2 only exists on the load-error branch.
+    await expect(page.locator('.tile-view[data-route="#/providers"] .providers-toolbar')).toBeVisible();
 
     await page.reload();
 
     await expect(page).toHaveURL(/#\/providers$/);
     await expect(loginHeading(page)).not.toBeVisible();
-    await expect(page.getByRole('heading', { name: /providers/i }).first()).toBeVisible();
+    await expect(page.locator('.tile-view[data-route="#/providers"] .providers-toolbar')).toBeVisible();
   });
 
   test('invalid localStorage token receives 401 and surfaces the auth gate', async ({ browser }) => {
