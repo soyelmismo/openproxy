@@ -177,7 +177,7 @@ impl DbPool {
     fn open_inner(path: &Path, num_readers: usize, synchronous: SqliteSynchronous) -> Result<Self> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
-        let writer = Connection::open_with_flags(path, flags).map_err(
+        let mut writer = Connection::open_with_flags(path, flags).map_err(
             crate::error::map_db_error_ctx(format!("open {}", path.display())),
         )?;
 
@@ -200,7 +200,7 @@ impl DbPool {
         // write happened without polling `PRAGMA data_version` (which only
         // sees external commits).
         let epoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        install_cache_hooks(&writer, &epoch);
+        install_cache_hooks(&mut writer, &epoch);
 
         // Extra handles on the same file keep mutex contention off the
         // high-throughput API endpoints.
@@ -550,11 +550,11 @@ impl DbPool {
     pub fn reopen(&self) -> Result<()> {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
-        let new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
+        let mut new_writer = Connection::open_with_flags(&*self.path, flags).map_err(
             crate::error::map_db_error_ctx(format!("reopen writer {}", self.path.display())),
         )?;
         configure_connection(&new_writer, true, self.synchronous)?;
-        install_cache_hooks(&new_writer, &self.epoch);
+        install_cache_hooks(&mut new_writer, &self.epoch);
 
         let mut new_readers = Vec::with_capacity(self.readers.len());
         for (i, _) in self.readers.iter().enumerate() {
@@ -630,7 +630,7 @@ fn configure_temp_dir(conn: &Connection, path: &Path) {
 /// AND inside `reopen()` — a reopened `Connection` is a fresh SQLite handle
 /// and loses every hook installed on the old one, so skipping this would
 /// silently freeze the caches after a VACUUM/repair reopen.
-fn install_cache_hooks(writer: &Connection, epoch: &Arc<std::sync::atomic::AtomicU64>) {
+fn install_cache_hooks(writer: &mut Connection, epoch: &Arc<std::sync::atomic::AtomicU64>) {
     {
         let epoch = Arc::clone(epoch);
         if let Err(e) = writer.commit_hook(Some(move || {

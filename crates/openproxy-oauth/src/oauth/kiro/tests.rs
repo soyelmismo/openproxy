@@ -62,7 +62,8 @@ fn sealed_meta_write_then_read_roundtrip() {
         [],
     )
     .unwrap();
-    conn.execute("INSERT INTO accounts (id) VALUES (1)", []).unwrap();
+    conn.execute("INSERT INTO accounts (id) VALUES (1)", [])
+        .unwrap();
 
     let meta = KiroProviderMeta {
         client_id: "cid-123".into(),

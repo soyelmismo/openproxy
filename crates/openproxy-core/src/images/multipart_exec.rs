@@ -474,8 +474,10 @@ pub(crate) async fn execute_image_multipart(
 
         let total_ms = started.elapsed().as_millis() as u64;
         let resp_json = serde_json::to_value(&parsed_response).ok();
-        let delivered_images =
-            crate::images::multipart::effective_delivered_images(images, parsed_response.data.len());
+        let delivered_images = crate::images::multipart::effective_delivered_images(
+            images,
+            parsed_response.data.len(),
+        );
         let args = UnaryUsageArgs {
             request_id,
             api_key_id,

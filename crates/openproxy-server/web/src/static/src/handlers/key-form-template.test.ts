@@ -8,7 +8,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { render } from "lit-html";
-import { keyFormTemplate } from "./key-handlers.js";
+import { keyFormTemplate, buildKeyBodyFromForm } from "./key-handlers.js";
 
 type KeyRow = NonNullable<Parameters<typeof keyFormTemplate>[0]["key"]>;
 
@@ -19,10 +19,15 @@ function mountCreate(inline = false): HTMLElement {
   return host;
 }
 
-function mountEdit(key: KeyRow, inline = false): HTMLElement {
+function mountEdit(
+  key: KeyRow,
+  quota?: Parameters<typeof keyFormTemplate>[0]["quota"],
+  inline = false,
+  tiers: Parameters<typeof keyFormTemplate>[0]["tiers"] = [],
+): HTMLElement {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  render(keyFormTemplate({ mode: "edit", key, tiers: [], wrapper: host, inline }), host);
+  render(keyFormTemplate({ mode: "edit", key, tiers, quota, wrapper: host, inline }), host);
   return host;
 }
 
@@ -272,5 +277,75 @@ describe("keyFormTemplate structure", () => {
     // The inline view sits under the page h1, so its sections are h2.
     expect([...host.querySelectorAll(".key-form-section-title")].map((el) => el.tagName))
       .toEqual(["H2", "H2", "H2", "H2"]);
+  });
+});
+
+describe("keyFormTemplate dollar caps (custom quotas)", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("renders an unlocked caps fieldset on create", () => {
+    const form = formOf(mountCreate());
+    const fieldset = form.querySelector<HTMLFieldSetElement>("#key-quota-fields");
+    expect(fieldset, "caps fieldset missing").not.toBeNull();
+    expect(fieldset!.disabled).toBe(false);
+    expect(form.querySelector('input[name="quota_weekly"]')).not.toBeNull();
+    expect(form.querySelector('input[name="quota_five_hour"]')).not.toBeNull();
+    expect((form.elements.namedItem("quota_weekly") as HTMLInputElement).value).toBe("");
+    expect(form.querySelector("#key-quota-hint")?.textContent).toContain("Custom dollar caps");
+  });
+
+  it("rehydrates saved caps and keeps the fieldset unlocked for planless keys", () => {
+    const form = formOf(mountEdit({ id: 7 }, {
+      tier_id: null,
+      caps: { weekly_usd_cap: 7.5, five_hour_usd_cap: null },
+    }));
+    expect((form.elements.namedItem("quota_weekly") as HTMLInputElement).value).toBe("7.5");
+    expect((form.elements.namedItem("quota_five_hour") as HTMLInputElement).value).toBe("");
+    expect(form.querySelector<HTMLFieldSetElement>("#key-quota-fields")!.disabled).toBe(false);
+    expect(form.querySelector("#key-quota-hint")?.textContent).toContain("Custom dollar caps");
+  });
+
+  it("locks the caps fieldset while a plan is linked and shows its caps read-only", () => {
+    const form = formOf(mountEdit({ id: 7 }, {
+      tier_id: 3,
+      caps: { weekly_usd_cap: 25, five_hour_usd_cap: 1 },
+    }));
+    const fieldset = form.querySelector<HTMLFieldSetElement>("#key-quota-fields")!;
+    expect(fieldset.disabled).toBe(true);
+    expect((form.elements.namedItem("quota_weekly") as HTMLInputElement).value).toBe("25");
+    expect((form.elements.namedItem("quota_five_hour") as HTMLInputElement).value).toBe("1");
+    expect(form.querySelector("#key-quota-hint")?.textContent).toContain("linked plan");
+  });
+
+  it("locks the caps when the quota state is unavailable so a save cannot clear them", () => {
+    const form = formOf(mountEdit({ id: 7 }, { locked: true }));
+    const fieldset = form.querySelector<HTMLFieldSetElement>("#key-quota-fields")!;
+    expect(fieldset.disabled).toBe(true);
+    expect(form.querySelector("#key-quota-hint")?.textContent).toContain("unavailable");
+    // The body builder must omit quota entirely for a locked fieldset.
+    expect("quota" in (buildKeyBodyFromForm(form) ?? {})).toBe(false);
+  });
+
+  it("unlocks the caps when the picker switches to detach", () => {
+    const host = mountEdit(
+      { id: 7 },
+      { tier_id: 3, caps: { weekly_usd_cap: 25, five_hour_usd_cap: 1 } },
+      false,
+      [{ id: 3, name: "Pro", price_usd: 30, credit_usd: 30, ttl_days: 30 }],
+    );
+    const form = formOf(host);
+    const tier = form.elements.namedItem("tier_id") as HTMLSelectElement;
+    const fieldset = form.querySelector<HTMLFieldSetElement>("#key-quota-fields")!;
+    expect(fieldset.disabled).toBe(true);
+    tier.value = "0";
+    tier.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(fieldset.disabled).toBe(false);
+    expect(form.querySelector("#key-quota-hint")?.textContent).toContain("Custom dollar caps");
+    tier.value = "3";
+    tier.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(fieldset.disabled).toBe(true);
+    expect(form.querySelector("#key-quota-hint")?.textContent).toContain("selected plan");
   });
 });

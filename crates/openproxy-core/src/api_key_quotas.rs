@@ -175,6 +175,19 @@ pub fn upsert(conn: &Connection, key_id: ApiKeyId, caps: &QuotaCaps) -> Result<(
     Ok(())
 }
 
+/// Remove the quota row entirely: the key goes back to unlimited. No-op when
+/// the key has no row; recorded spend history is untouched. This is how a
+/// planless key's custom caps are cleared — plan-managed keys must be
+/// detached (or their tier edited) instead, since the tier owns their caps.
+pub fn clear(conn: &Connection, key_id: ApiKeyId) -> Result<()> {
+    conn.execute(
+        "DELETE FROM api_key_quotas WHERE api_key_id = ?1",
+        params![key_id.0],
+    )
+    .map_err(openproxy_db::error::map_db_error)?;
+    Ok(())
+}
+
 // ── plan (tier) status ──────────────────────────────────────────────
 
 /// Plan attached to a key: tier name + credited amount + live balance.

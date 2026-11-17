@@ -174,10 +174,8 @@ impl PipelineStage for DispatchStage {
             CoreError::Internal("missing resolved_timeouts in pipeline context".into())
         })?;
 
-        let mut result = Box::pin(ctx
-            .pipeline
-            .dispatcher
-            .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
+        let mut result = Box::pin(ctx.pipeline.dispatcher.dispatch_upstream(
+            crate::upstream_dispatcher::DispatchParams {
                 target,
                 combo,
                 req: ctx.req.clone(),
@@ -193,8 +191,9 @@ impl PipelineStage for DispatchStage {
                 trace_id,
                 is_streaming: ctx.is_streaming.unwrap_or(false),
                 allow_loopback: adapter.config().allow_loopback,
-            }))
-            .await;
+            },
+        ))
+        .await;
 
         let starter_depleted = zai_route.as_ref().is_some_and(|prepared| {
             prepared.route.source == openproxy_types::quota::QuotaSource::AutoclawStarter
@@ -258,10 +257,8 @@ impl PipelineStage for DispatchStage {
             {
                 return fail_stage!(ctx, target, &error, Some(model));
             }
-            result = Box::pin(ctx
-                .pipeline
-                .dispatcher
-                .dispatch_upstream(crate::upstream_dispatcher::DispatchParams {
+            result = Box::pin(ctx.pipeline.dispatcher.dispatch_upstream(
+                crate::upstream_dispatcher::DispatchParams {
                     target,
                     combo,
                     req: ctx.req.clone(),
@@ -277,8 +274,9 @@ impl PipelineStage for DispatchStage {
                     trace_id: ctx.trace_id.clone(),
                     is_streaming: ctx.is_streaming.unwrap_or(false),
                     allow_loopback: adapter.config().allow_loopback,
-                }))
-                .await;
+                },
+            ))
+            .await;
         }
 
         if let Some(prepared) = zai_route.as_mut()

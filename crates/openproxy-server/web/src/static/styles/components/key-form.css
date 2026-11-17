@@ -77,6 +77,16 @@
 }
 .key-form-grid > .field { margin: 0; min-width: 0; gap: var(--space-1); }
 
+/* Custom dollar caps live in a fieldset only because it owns the disabled
+   state (a linked plan locks them); the inner grid does the layout. */
+.key-quota-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.key-quota-fields:disabled { opacity: 0.6; }
+
 .key-form .field label,
 .key-form .field .field-label {
   font-size: var(--fs-xs);
@@ -231,6 +241,12 @@
 
 @container key-form (min-width: 460px) {
   .key-form-grid--access {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container key-form (min-width: 640px) {
+  .key-quota-fields > .key-form-grid--quota {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

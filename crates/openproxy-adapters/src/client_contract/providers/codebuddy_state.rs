@@ -45,8 +45,8 @@ use super::codebuddy_runtime::{
     correspondence_from_evidence, parse_package_manifest, parse_product_document,
     pinned_package_url, pinned_product_url,
 };
-use super::codex_state::shared::{ActivatableVersion, ContractProvider};
 use super::codex_state::check_compiled_rules;
+use super::codex_state::shared::{ActivatableVersion, ContractProvider};
 use crate::client_contract::{
     Candidate, ClientIdentity, ContractError, ContractId, ContractLimits, ContractTransport,
     ContractValidator, EvidenceKind, IDENTITY_ORIGIN_OFFICIAL, Snapshot, SourceRef, TransportCache,

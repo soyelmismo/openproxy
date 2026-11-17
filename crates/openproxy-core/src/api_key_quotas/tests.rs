@@ -473,3 +473,23 @@ fn a_new_plan_supersedes_the_previous_grant() {
         "the old grant is expired, not stacked"
     );
 }
+
+#[test]
+fn clear_removes_the_row_and_unlimits() {
+    let conn = fresh_conn();
+    let key = make_key(&conn, "clearable");
+    let caps = QuotaCaps {
+        weekly_usd_cap: Some(7.0),
+        five_hour_usd_cap: None,
+    };
+    upsert(&conn, ApiIdAlias(key), &caps).expect("upsert");
+    assert!(get_caps(&conn, ApiIdAlias(key)).expect("get").is_some());
+
+    clear(&conn, ApiIdAlias(key)).expect("clear");
+    assert!(get_caps(&conn, ApiIdAlias(key)).expect("get").is_none());
+    let st = status(&conn, ApiIdAlias(key)).expect("status");
+    assert!(!st.enabled, "cleared key is unlimited again");
+
+    // Clearing an uncapped key is a no-op, not an error.
+    clear(&conn, ApiIdAlias(key)).expect("clear again");
+}

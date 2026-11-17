@@ -45,6 +45,23 @@ interface KeyRow {
   expires_at?: string | null;
 }
 
+/** Custom dollar caps for a planless key (payments build). */
+export interface KeyQuotaCaps {
+  weekly_usd_cap: number | null;
+  five_hour_usd_cap: number | null;
+}
+
+/** GET /keys/:id/quota state the editor needs: whose caps are these. */
+export interface KeyQuotaState {
+  /** Linked plan, if any — its tier owns the caps and the inputs lock. */
+  tier_id?: number | null;
+  /** Effective caps (plan's or the key's own custom ones). */
+  caps?: KeyQuotaCaps | null;
+  /** Quota state unavailable: lock the fieldset so a save cannot silently
+   *  clear caps the editor could not read. */
+  locked?: boolean;
+}
+
 interface KeyBody {
   label: string | null;
   scopes: string[];
@@ -53,6 +70,8 @@ interface KeyBody {
   expires_at: string | null;
   /** Plan link: number = link+apply, null = detach. Absent = no-op. */
   tier_id?: number | null;
+  /** Custom caps: object = upsert, null = clear. Absent = no-op (locked by a plan). */
+  quota?: KeyQuotaCaps | null;
 }
 
 /** Minimal tier row the plan picker needs. */
@@ -110,11 +129,13 @@ export function addCustomBlacklistedModel(): void {
   renderBlacklistedModelsChips();
 }
 
-export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onSubmit, onCancel }: {
+export function keyFormTemplate({ mode, key, tiers, quota, wrapper, inline = false, onSubmit, onCancel }: {
   mode: "create" | "edit";
   key?: KeyRow;
   /** Sellable plans for the picker (the tier owns access + caps). */
   tiers: TierOption[];
+  /** GET /keys/:id/quota state (payments build): linked tier + effective caps. */
+  quota?: KeyQuotaState | undefined;
   wrapper: HTMLElement;
   inline?: boolean;
   onSubmit?: (e: Event) => void;
@@ -131,12 +152,45 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
     blModelsVal = key!.blacklisted_models.join(",");
   }
   const availableProviders = getAvailableProviders();
-  const currentTierId = isEdit && key!.tier_id != null ? key!.tier_id : null;
+  const currentTierId = isEdit
+    ? (quota?.tier_id ?? key!.tier_id ?? null)
+    : null;
   const safeKey: KeyRow = key || { id: 0 };
   const title = isEdit ? `Edit API key #${safeKey.id}` : "Create API key";
   const submitLabel = isEdit ? "Save" : "Create key";
   const expiresAt = isEdit ? key!.expires_at : null;
   const expiryAmountVal = (isEdit && expiresAt) ? formatExpiryAmount(expiresAt) : "";
+  // Dollar caps: a linked plan owns them, so the inputs render locked with
+  // the plan's caps as read-only context. An unavailable quota state also
+  // locks (a save must not clear caps it could not read). Planless keys
+  // with known state edit freely.
+  const planOwnsCaps = currentTierId != null;
+  const capsLocked = planOwnsCaps || quota?.locked === true;
+  const capVal = (window: "weekly_usd_cap" | "five_hour_usd_cap"): string => {
+    const v = quota?.caps?.[window];
+    return (v != null && isFinite(v)) ? String(v) : "";
+  };
+  const weeklyCapVal = isEdit ? capVal("weekly_usd_cap") : "";
+  const fiveHourCapVal = isEdit ? capVal("five_hour_usd_cap") : "";
+  // Lock/unlock the caps fieldset when the plan picker moves between
+  // "keep current (tiered)", a tier, and detach/none. A fetch-locked state
+  // stays locked while the picker keeps the current (unknown) plan.
+  const lockedByFetch = quota?.locked === true;
+  const onTierChange = (e: Event): void => {
+    const sel = e.target as HTMLSelectElement;
+    const fields = document.getElementById("key-quota-fields") as HTMLFieldSetElement | null;
+    if (!fields) return;
+    const planOwns = sel.value !== "" && sel.value !== "0";
+    fields.disabled = planOwns || (lockedByFetch && sel.value === "");
+    const hint = document.getElementById("key-quota-hint");
+    if (hint) {
+      hint.textContent = planOwns
+        ? "Caps come from the selected plan"
+        : (lockedByFetch && sel.value === "")
+          ? "Caps unavailable right now"
+          : "Custom dollar caps · empty = none";
+    }
+  };
   const submitHandler = (e: Event): void => {
     e.preventDefault();
     if (onSubmit) { onSubmit(e); return; }
@@ -217,7 +271,11 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
                 ${inline
                   ? html`<h2 class="key-form-section-title" id="key-section-plan">Plan</h2>`
                   : html`<h3 class="key-form-section-title" id="key-section-plan">Plan</h3>`}
-                <p class="key-form-section-hint">The tier owns model access and caps</p>
+                ${__OP_PAYMENTS__
+                  ? html`<p class="key-form-section-hint" id="key-quota-hint">${capsLocked
+                    ? (planOwnsCaps ? "Caps come from the linked plan" : "Caps unavailable right now")
+                    : "Custom dollar caps · empty = none"}</p>`
+                  : html`<p class="key-form-section-hint">The tier owns model access and caps</p>`}
               </div>
               <div class="key-form-grid key-form-grid--access">
                 ${__OP_PAYMENTS__ ? html`
@@ -226,7 +284,7 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
                     <span class="field-label">Plan (tier)</span>
                     <span class="key-form-field-note">re-shapes the key</span>
                   </div>
-                  <select name="tier_id">
+                  <select name="tier_id" @change=${onTierChange}>
                     <option value="" ?selected=${currentTierId == null}>— keep current —</option>
                     <option value="0">detach plan</option>
                     ${tiers.map((tr) => html`
@@ -234,7 +292,32 @@ export function keyFormTemplate({ mode, key, tiers, wrapper, inline = false, onS
                         ${tr.name}${tr.price_usd != null ? ` — pay $${tr.price_usd}` : " — draft"}${tr.credit_usd != null ? ` → $${tr.credit_usd}` : ""} · ${tr.ttl_days}d
                       </option>`)}
                   </select>
-                </div>` : ''}
+                </div>
+                <fieldset class="key-quota-fields" id="key-quota-fields" ?disabled=${capsLocked}
+                          title=${capsLocked
+                            ? (planOwnsCaps
+                              ? "The linked plan owns the dollar caps; detach it to set custom ones"
+                              : "Dollar caps could not be loaded; reload before editing them")
+                            : "Optional spend limits this key can never exceed"}>
+                  <div class="key-form-grid key-form-grid--quota">
+                    <div class="field">
+                      <div class="key-form-field-head">
+                        <span class="field-label">Weekly cap ($)</span>
+                        <span class="key-form-field-note">Mon 00:00 UTC</span>
+                      </div>
+                      <input id="key-quota-weekly" name="quota_weekly" type="number" min="0.01" step="0.01"
+                             placeholder="no cap" .value=${weeklyCapVal}>
+                    </div>
+                    <div class="field">
+                      <div class="key-form-field-head">
+                        <span class="field-label">5h window cap ($)</span>
+                        <span class="key-form-field-note">first request opens</span>
+                      </div>
+                      <input id="key-quota-five-hour" name="quota_five_hour" type="number" min="0.01" step="0.01"
+                             placeholder="no cap" .value=${fiveHourCapVal}>
+                    </div>
+                  </div>
+                </fieldset>` : ''}
               </div>
             </section>
             <section class="key-form-section" aria-labelledby="key-section-restrictions">
@@ -393,7 +476,31 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
     if (tierEl.value === "0") tierId = null;
     else if (tierEl.value !== "") tierId = parseInt(tierEl.value, 10);
   }
-  return {
+  // Dollar caps tri-state: only when the form carries an ENABLED quota
+  // fieldset (payments build and no plan owning the caps). Both empty →
+  // `null` (clear/unlimited); any filled value → caps object. A disabled
+  // fieldset (linked plan) or an absent one (non-payments DOM) omits the
+  // field entirely so the backend treats it as a no-op.
+  const quotaFields = form.querySelector<HTMLFieldSetElement>("#key-quota-fields");
+  let quota: KeyQuotaCaps | null | undefined;
+  if (quotaFields && !quotaFields.disabled) {
+    const readCap = (name: string): number | null | "invalid" => {
+      const raw = quotaFields.querySelector<HTMLInputElement>(`input[name="${name}"]`)?.value.trim() ?? "";
+      if (!raw) return null;
+      const n = Number(raw);
+      return (Number.isFinite(n) && n > 0) ? n : "invalid";
+    };
+    const weekly = readCap("quota_weekly");
+    const fiveHour = readCap("quota_five_hour");
+    if (weekly === "invalid" || fiveHour === "invalid") {
+      showToast("Dollar caps must be positive numbers.", "error");
+      return null;
+    }
+    quota = (weekly === null && fiveHour === null)
+      ? null
+      : { weekly_usd_cap: weekly, five_hour_usd_cap: fiveHour };
+  }
+  const body: KeyBody = {
     label,
     scopes,
     blacklisted_providers: blacklistedProviders,
@@ -401,6 +508,8 @@ export function buildKeyBodyFromForm(form: HTMLFormElement): KeyBody | null {
     expires_at: expiresAt,
     ...(tierId !== undefined ? { tier_id: tierId } : {}),
   };
+  if (quota !== undefined) body.quota = quota;
+  return body;
 }
 
 export async function createKey(e: Event, wrapper?: HTMLElement): Promise<void> {

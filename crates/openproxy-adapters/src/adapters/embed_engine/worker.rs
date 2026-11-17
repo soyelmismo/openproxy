@@ -113,7 +113,6 @@ impl Client {
         .await?;
         Ok(Self(inner))
     }
-
 }
 
 #[cfg(test)]

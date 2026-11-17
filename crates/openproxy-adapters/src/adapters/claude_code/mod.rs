@@ -1,6 +1,6 @@
 use super::{
-    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ProviderAdapter,
-    ProviderAdapterConfig, ProviderId, Result, UpstreamClient, UpstreamRequest,
+    AdapterAuthType, AdapterFormat, Arc, DiscoveredModel, ProviderAdapter, ProviderAdapterConfig,
+    ProviderId, Result, UpstreamClient, UpstreamRequest,
 };
 use crate::client_contract::Snapshot;
 use crate::spoofer::claude_code_profile::ClaudeCodeProfile;
@@ -143,10 +143,7 @@ impl ClaudeCodeAdapter {
 crate::adapters::derive_default_from_new!(ClaudeCodeAdapter);
 
 pub mod models;
-pub use models::{
-    claude_code_builtin_models, merge_claude_models, parse_claude_models_response,
-};
+pub use models::{claude_code_builtin_models, merge_claude_models, parse_claude_models_response};
 
 #[cfg(test)]
 mod tests;
-

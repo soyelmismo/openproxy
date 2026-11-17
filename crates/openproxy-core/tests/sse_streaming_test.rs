@@ -5,12 +5,12 @@
 //! Exercise the SSE parsers the way the pipeline reads lines from upstream and
 //! translates them for the client.
 
+use openproxy_pipeline::SSE_DONE_BYTES;
 use openproxy_pipeline::sse::{
-    UpstreamSseChunk, format_sse_line,
-    parse_gemini_sse_line_test as parse_gemini_sse_line, parse_openai_sse_line,
+    UpstreamSseChunk, format_sse_line, parse_gemini_sse_line_test as parse_gemini_sse_line,
+    parse_openai_sse_line,
 };
 use openproxy_pipeline::translation::OpenAIUsage;
-use openproxy_pipeline::SSE_DONE_BYTES;
 
 /// The `[DONE]` sentinel as `&str`; `sse_done_bytes_matches_str` guards the
 /// parity with the pipeline's `Bytes` constant.

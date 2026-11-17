@@ -307,10 +307,8 @@ pub async fn execute_image_generation(
         let total_ms = started.elapsed().as_millis() as u64;
         let (req_json, resp_json) =
             crate::unary::serialize_recorded_bodies(true, &req, &parsed_response);
-        let delivered_images = super::multipart::effective_delivered_images(
-            Some(images),
-            parsed_response.data.len(),
-        );
+        let delivered_images =
+            super::multipart::effective_delivered_images(Some(images), parsed_response.data.len());
         // `effective_delivered_images` already returns Option<u32>.
         let args = UnaryUsageArgs::from_target(target, EndpointKind::Image, status_code, total_ms)
             .with_request_id(request_id)

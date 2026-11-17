@@ -177,7 +177,10 @@ impl ApiKey {
             return false;
         }
         if self.only_whitelisted {
-            return is_provider_strictly_allowed(self.allowed_providers.as_deref(), Some(provider_id));
+            return is_provider_strictly_allowed(
+                self.allowed_providers.as_deref(),
+                Some(provider_id),
+            );
         }
         is_provider_in_allowlist(self.allowed_providers.as_deref(), Some(provider_id))
     }

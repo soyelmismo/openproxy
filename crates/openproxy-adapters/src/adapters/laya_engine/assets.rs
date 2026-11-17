@@ -95,8 +95,8 @@ async fn download(path: &Path, artifact: &Artifact) -> Result<(), CoreError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::adapters::native_engine_common::TemporaryFile as Temporary;
     use super::*;
+    use crate::adapters::native_engine_common::TemporaryFile as Temporary;
 
     #[tokio::test]
     async fn verification_rejects_corrupt_artifact() {

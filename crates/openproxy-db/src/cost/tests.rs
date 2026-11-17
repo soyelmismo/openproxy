@@ -765,7 +765,7 @@ fn record_row_at_bills_the_band_of_the_instant_it_stores() {
         ),
     ];
 
-    for (billed_at, stored, expected) in cases.iter() {
+    for (billed_at, stored, expected) in &cases {
         use chrono::Timelike;
         let truncated = billed_at
             .with_nanosecond(0)
