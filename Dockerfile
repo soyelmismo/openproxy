@@ -16,14 +16,17 @@ FROM --platform=$BUILDPLATFORM alpine@sha256:294b683cb724975bec92580e1e685676bd4
 
 ARG TARGETARCH
 ARG ONNXRUNTIME_VERSION=1.20.1
-# Security (OP-09): expected SHA-256 of the onnxruntime release tarballs.
+# Security (OP-09): expected SHA-256 of the Microsoft.ML.OnnxRuntime 1.20.1
+# NuGet package, which bundles libonnxruntime.so for linux-x64 AND linux-arm64.
+# Source: https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.20.1/
+# The upstream GitHub release tarballs for this version were removed from the
+# microsoft/onnxruntime repo, so the NuGet package is the pinned artifact now.
 # The build FAILS if the downloaded artifact does not match — a compromised
-# release or a MITM'd build can no longer inject a trojanized libonnxruntime
+# artifact or a MITM'd build can no longer inject a trojanized libonnxruntime
 # (which the gateway dlopens into its own process).
-ARG ONNXRUNTIME_SHA256_X64=67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105
-ARG ONNXRUNTIME_SHA256_AARCH64=ae4fedbdc8c18d688c01306b4b50c63de3445cdf2dbd720e01a2fa3810b8106a
+ARG ONNXRUNTIME_NUPKG_SHA256=9c32108e9a1c78b090a95c2a219f244dd5f067d4caf68fb0f967103f3f20839c
 
-RUN apk add --no-cache curl tar
+RUN apk add --no-cache curl unzip
 
 # Security (OP-04): ship a real /etc/openproxy/config.toml. Previously the
 # CMD pointed at a file that did not exist in the image, so containers fell
@@ -34,14 +37,15 @@ RUN apk add --no-cache curl tar
 RUN mkdir -p /container-config && printf '[server]\n# Container default: must bind all interfaces for the port mapping to work.\nbind = "0.0.0.0:8787"\nrequest_max_body_bytes = 10485760\n\n[storage]\ndatabase_path = "/var/lib/openproxy/data.db"\nencryption_key_source = "env"\n' > /container-config/config.toml
 
 RUN case "${TARGETARCH}" in \
-      amd64) ORT_ARCH="x64"; ORT_SHA256="${ONNXRUNTIME_SHA256_X64}" ;; \
-      arm64) ORT_ARCH="aarch64"; ORT_SHA256="${ONNXRUNTIME_SHA256_AARCH64}" ;; \
+      amd64) ORT_ARCH="x64" ;; \
+      arm64) ORT_ARCH="arm64" ;; \
       *) echo "Unsupported target architecture for onnxruntime: ${TARGETARCH}"; exit 1 ;; \
     esac && \
     mkdir -p /opt/onnxruntime /tmp/ort && \
-    curl -fsSL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-${ORT_ARCH}-${ONNXRUNTIME_VERSION}.tgz" -o /tmp/ort/ort.tgz && \
-    echo "${ORT_SHA256}  /tmp/ort/ort.tgz" | sha256sum -c - && \
-    tar -xzf /tmp/ort/ort.tgz --wildcards --strip-components=2 -C /opt/onnxruntime "*/lib/libonnxruntime*.so*"
+    curl -fsSL "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${ONNXRUNTIME_VERSION}/microsoft.ml.onnxruntime.${ONNXRUNTIME_VERSION}.nupkg" -o /tmp/ort/ort.nupkg && \
+    echo "${ONNXRUNTIME_NUPKG_SHA256}  /tmp/ort/ort.nupkg" | sha256sum -c - && \
+    unzip -q /tmp/ort/ort.nupkg "runtimes/linux-${ORT_ARCH}/native/libonnxruntime*.so*" -d /tmp/ort && \
+    cp /tmp/ort/runtimes/linux-${ORT_ARCH}/native/libonnxruntime*.so* /opt/onnxruntime/
 
 # Security (OP-09, audit H-9): pin the runtime base by digest. The
 # `nonroot` tag is mutable — a rebuilt upstream tag silently changes the
