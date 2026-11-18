@@ -248,7 +248,9 @@ export function loadCatalog(): void {
       if (!p.enabled) {
         throw new Error("plan purchases are not enabled on this server");
       }
-      const plans = p.plans || [];
+      // The gateway returns tiers in arbitrary order; the checkout presents
+      // them cheapest-first so the default selection is the entry tier.
+      const plans = (p.plans || []).slice().sort((a, b) => a.usd - b.usd);
       if (plans.length === 0) {
         throw new Error("no plans are available right now");
       }

@@ -25,13 +25,13 @@
           <label>Plan</label>
           <div id="usd"></div>
         </div>
-        <label class="terms-check">
+        <label class="terms-check narrow">
           <input type="checkbox" id="terms-check">
           <span>I accept the <a href="/terms" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
-        <button id="create" class="btn primary" type="button">Create payment</button>
-        <div class="field"><small>No refunds: the credited balance expires on the date shown for the plan you pick. Unused balance is not returned. Plan prices include a network-fee allowance — pay the exact amount shown. Your key keeps working without a plan — buy again anytime.</small></div>
-        <div class="err hidden" id="buy-err"></div>
+        <button id="create" class="btn primary narrow" type="button">Create payment</button>
+        <div class="field narrow"><small>No refunds: the credited balance expires on the date shown for the plan you pick. Unused balance is not returned. Plan prices include a network-fee allowance — pay the exact amount shown. Your key keeps working without a plan — buy again anytime.</small></div>
+        <div class="err hidden narrow" id="buy-err"></div>
       </div>
 
       <div class="hidden" id="step-pay">
@@ -62,11 +62,11 @@
       </div>
 
       <div class="hidden" id="step-mykey">
-        <div class="field">
+        <div class="field narrow">
           <label for="mykey">Your API key</label>
           <input id="mykey" placeholder="op_live_..." autocomplete="off">
         </div>
-        <button id="mykey-load" class="btn btn-secondary" type="button">Load my plan</button>
+        <button id="mykey-load" class="btn btn-secondary narrow" type="button">Load my plan</button>
         <div id="mykey-data" class="hidden">
           <div class="amount" id="my-plan-name"></div>
           <div class="status" id="my-plan-credit"></div>
@@ -75,20 +75,20 @@
             <label>Renew or change plan</label>
             <div id="my-usd"></div>
           </div>
-          <label class="terms-check">
+          <label class="terms-check narrow">
           <input type="checkbox" id="terms-check-my">
           <span>I accept the <a href="/terms" data-modal="terms" rel="noopener">Terms of Service</a> — software credit, no refunds.</span>
         </label>
-        <button id="my-buy" class="btn btn-secondary" type="button">Buy this plan for this key</button>
-          <div class="field" style="margin-top:var(--space-3)">
+        <button id="my-buy" class="btn btn-secondary narrow" type="button">Buy this plan for this key</button>
+          <div class="field narrow" style="margin-top:var(--space-3)">
             <label>Rotate key (if leaked)</label>
             <small>If your key leaked, replace it: the old key stops working at once and your plan and balance stay. The new key is shown once — store it before you close this page.</small>
             <button id="my-rotate" class="btn btn-secondary" type="button">Rotate this key</button>
             <div class="key hidden" id="my-rotated-key"></div>
           </div>
         </div>
-        <div class="field"><small>Plan purchases to an existing key apply that plan's models and limits to the key. No refunds.</small></div>
-        <div class="err hidden" id="mykey-err"></div>
+        <div class="field narrow"><small>Plan purchases to an existing key apply that plan's models and limits to the key. No refunds.</small></div>
+        <div class="err hidden narrow" id="mykey-err"></div>
       </div>
 
       <div class="hidden" id="step-done">

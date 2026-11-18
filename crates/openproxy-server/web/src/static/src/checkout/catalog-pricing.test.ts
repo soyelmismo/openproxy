@@ -295,11 +295,13 @@ describe("legacy gateway without model_pricing", () => {
 describe("the pill never fights the card", () => {
   it("does not select the plan when a pill is tapped", async () => {
     await load();
-    expect(selectedPlanValue("usd")).toBe("tier:1");
+    // The checkout preselects the cheapest plan (cheapest-first ordering,
+    // tier 4 is the $5 one in this fixture).
+    expect(selectedPlanValue("usd")).toBe("tier:4");
 
     pillOf(2, "acme-pro")?.click();
 
-    expect(selectedPlanValue("usd")).toBe("tier:1");
+    expect(selectedPlanValue("usd")).toBe("tier:4");
     expect(cardOf(2)?.classList.contains("selected")).toBe(false);
     expect(panel()).not.toBeNull();
     expect(fetchCalls.every((call) => call.method === "GET")).toBe(true);

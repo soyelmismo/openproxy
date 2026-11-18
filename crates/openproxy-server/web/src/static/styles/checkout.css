@@ -4,6 +4,16 @@
      --space/--fs/--radius/--color. */
   body { display: flex; justify-content: center; padding: 40px 16px; }
   main.checkout { width: 100%; max-width: 480px; }
+  /* Wide screens: the plan grid earns real columns (plan-cards.css already
+     ships auto-fit minmax(280px, 1fr)); the 480px shell above is what forces
+     it to one column. Widen the shell and keep the form steps at a readable
+     width via .narrow / the step ids below. */
+  @media (min-width: 720px) {
+    main.checkout { max-width: 1000px; }
+    main.checkout .checkout-tabs { max-width: 520px; margin-left: auto; margin-right: auto; }
+    #step-pay, #step-key, #step-done { max-width: 520px; margin-left: auto; margin-right: auto; }
+    main.checkout .narrow { max-width: 520px; margin-left: auto; margin-right: auto; }
+  }
   /* Card surface: the same look section.card gets in the panel (layout.css),
      restated for this div-based card. */
   main.checkout .card {
@@ -135,6 +145,17 @@
     color: var(--color-text);
     border-color: var(--color-primary);
     background: var(--color-primary-soft);
+  }
+  /* Pill legibility: plan-cards.css paints the chip name in
+     --color-text-muted on --color-surface-2 (and the combo chip's whole label
+     in --color-primary on --color-primary-soft) — both wash out, especially
+     at --fs-2xs mono. The model name is product copy, not a hint: full text
+     color, slightly heavier; the estimate badge keeps its semantic color
+     (success / primary, checkout rules below). */
+  main.checkout .plan-models .chip,
+  main.checkout .plan-models .chip.combo-chip {
+    color: var(--color-text);
+    font-weight: 500;
   }
   .plan-models button.chip:focus-visible {
     outline: 2px solid var(--color-primary);
