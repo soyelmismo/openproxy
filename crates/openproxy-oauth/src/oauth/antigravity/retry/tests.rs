@@ -63,7 +63,7 @@ async fn drive_retry_success_after_one_invalid_grant() {
     assert!(!INVALID_GRANT_COUNTERS.contains_key(&account_id.0));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn drive_retry_marks_unhealthy_after_threshold() {
     let account_id = AccountId(9003);
     clear_counter(account_id);

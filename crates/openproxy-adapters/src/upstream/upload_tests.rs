@@ -9,9 +9,9 @@ fn profile() -> TimeoutProfile {
         dns_ms: 2000,
         dial_ms: 2000,
         tls_ms: 2000,
-        write_ms: 80,
-        headers_ms: 100,
-        body_chunk_ms: 80,
+        write_ms: 40,
+        headers_ms: 30,
+        body_chunk_ms: 40,
         total_ms: 1500,
     })
 }
@@ -51,11 +51,11 @@ async fn unary_delayed_headers_and_body_survive_stream_and_send_budgets_on_poole
         let (mut tcp, _) = listener.accept().await.unwrap();
         for _ in 0..2 {
             read_request(&mut tcp).await;
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(60)).await;
             tcp.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n")
                 .await
                 .unwrap();
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            tokio::time::sleep(Duration::from_millis(60)).await;
             tcp.write_all(b"OK").await.unwrap();
         }
     });

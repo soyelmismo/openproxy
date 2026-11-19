@@ -324,96 +324,108 @@ async fn run_runner_bridge_with_cut(
 
 #[tokio::test]
 async fn test_bridge_fifo_order_openai_format() {
-    // Upstream sends 1 valid chunk, then disconnects.
-    // Invariants:
-    // 1. Partial chunk arrives first.
-    // 2. Terminal error frame arrives in the exact SAME stream after the partial chunk.
-    // 3. No replacement chunk (retry halted because stream committed).
-    // 4. No [DONE] terminator.
-    // 5. hits_p1 == 1, hits_p2 == 0 despite retry limit = 2 and p2 available.
-    let (wire, hits1, hits2) = run_runner_bridge_with_cut(true, TargetFormat::Openai).await;
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        // Upstream sends 1 valid chunk, then disconnects.
+        // Invariants:
+        // 1. Partial chunk arrives first.
+        // 2. Terminal error frame arrives in the exact SAME stream after the partial chunk.
+        // 3. No replacement chunk (retry halted because stream committed).
+        // 4. No [DONE] terminator.
+        // 5. hits_p1 == 1, hits_p2 == 0 despite retry limit = 2 and p2 available.
+        let (wire, hits1, hits2) = run_runner_bridge_with_cut(true, TargetFormat::Openai).await;
 
-    assert_eq!(hits1, 1, "first target must be hit exactly once");
-    assert_eq!(
-        hits2, 0,
-        "second target must NOT be attempted after partial output was committed"
-    );
+        assert_eq!(hits1, 1, "first target must be hit exactly once");
+        assert_eq!(
+            hits2, 0,
+            "second target must NOT be attempted after partial output was committed"
+        );
 
-    let partial_pos = wire.find("partial-wire-content");
-    let error_pos = wire.find("\"error\":");
+        let partial_pos = wire.find("partial-wire-content");
+        let error_pos = wire.find("\"error\":");
 
-    assert!(
-        partial_pos.is_some(),
-        "wire must contain the initial partial data frame: {wire}"
-    );
-    assert!(
-        error_pos.is_some(),
-        "wire must contain terminal error frame: {wire}"
-    );
-    assert!(
-        partial_pos.unwrap() < error_pos.unwrap(),
-        "FIFO invariant violated: error frame preceded data frame: {wire}"
-    );
+        assert!(
+            partial_pos.is_some(),
+            "wire must contain the initial partial data frame: {wire}"
+        );
+        assert!(
+            error_pos.is_some(),
+            "wire must contain terminal error frame: {wire}"
+        );
+        assert!(
+            partial_pos.unwrap() < error_pos.unwrap(),
+            "FIFO invariant violated: error frame preceded data frame: {wire}"
+        );
 
-    assert!(
-        !wire.contains("replacement-chunk"),
-        "replacement chunk from second target must NEVER appear: {wire}"
-    );
-    assert!(
-        !wire.contains("[DONE]"),
-        "[DONE] frame must NEVER be emitted on upstream cut: {wire}"
-    );
+        assert!(
+            !wire.contains("replacement-chunk"),
+            "replacement chunk from second target must NEVER appear: {wire}"
+        );
+        assert!(
+            !wire.contains("[DONE]"),
+            "[DONE] frame must NEVER be emitted on upstream cut: {wire}"
+        );
+    });
 }
 
 #[tokio::test]
 async fn test_bridge_fifo_order_anthropic_format() {
-    let (wire, hits1, hits2) = run_runner_bridge_with_cut(true, TargetFormat::Anthropic).await;
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        let (wire, hits1, hits2) = run_runner_bridge_with_cut(true, TargetFormat::Anthropic).await;
 
-    assert_eq!(hits1, 1, "first target must be hit exactly once");
-    assert_eq!(
-        hits2, 0,
-        "second target must NOT be called after partial output"
-    );
+        assert_eq!(hits1, 1, "first target must be hit exactly once");
+        assert_eq!(
+            hits2, 0,
+            "second target must NOT be called after partial output"
+        );
 
-    let partial_pos = wire.find("partial-wire-content");
-    let error_pos = wire.find("event: error");
+        let partial_pos = wire.find("partial-wire-content");
+        let error_pos = wire.find("event: error");
 
-    assert!(partial_pos.is_some(), "must contain partial data: {wire}");
-    assert!(
-        error_pos.is_some(),
-        "must contain Anthropic error event: {wire}"
-    );
-    assert!(
-        partial_pos.unwrap() < error_pos.unwrap(),
-        "FIFO invariant violated: error preceded partial data in Anthropic format: {wire}"
-    );
+        assert!(partial_pos.is_some(), "must contain partial data: {wire}");
+        assert!(
+            error_pos.is_some(),
+            "must contain Anthropic error event: {wire}"
+        );
+        assert!(
+            partial_pos.unwrap() < error_pos.unwrap(),
+            "FIFO invariant violated: error preceded partial data in Anthropic format: {wire}"
+        );
 
-    assert!(!wire.contains("replacement-chunk"));
-    assert!(!wire.contains("[DONE]"));
+        assert!(!wire.contains("replacement-chunk"));
+        assert!(!wire.contains("[DONE]"));
+    });
 }
 
 #[tokio::test]
 async fn test_bridge_fifo_order_responses_format() {
-    let (wire, hits1, hits2) = run_runner_bridge_with_cut(true, TargetFormat::Responses).await;
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        let (wire, hits1, hits2) = run_runner_bridge_with_cut(true, TargetFormat::Responses).await;
 
-    assert_eq!(hits1, 1, "first target must be hit once");
-    assert_eq!(hits2, 0, "second target must NOT be called");
+        assert_eq!(hits1, 1, "first target must be hit once");
+        assert_eq!(hits2, 0, "second target must NOT be called");
 
-    let partial_pos = wire.find("partial-wire-content");
-    let error_pos = wire.find("event: response.failed");
+        let partial_pos = wire.find("partial-wire-content");
+        let error_pos = wire.find("event: response.failed");
 
-    assert!(partial_pos.is_some(), "must contain partial data: {wire}");
-    assert!(
-        error_pos.is_some(),
-        "must contain Responses response.failed event: {wire}"
-    );
-    assert!(
-        partial_pos.unwrap() < error_pos.unwrap(),
-        "FIFO invariant violated: response.failed preceded partial data: {wire}"
-    );
+        assert!(partial_pos.is_some(), "must contain partial data: {wire}");
+        assert!(
+            error_pos.is_some(),
+            "must contain Responses response.failed event: {wire}"
+        );
+        assert!(
+            partial_pos.unwrap() < error_pos.unwrap(),
+            "FIFO invariant violated: response.failed preceded partial data: {wire}"
+        );
 
-    assert!(!wire.contains("replacement-chunk"));
-    assert!(!wire.contains("[DONE]"));
+        assert!(!wire.contains("replacement-chunk"));
+        assert!(!wire.contains("[DONE]"));
+    });
 }
 
 #[test]
@@ -478,130 +490,142 @@ where
 
 #[tokio::test]
 async fn test_app_router_e2e_wire_cut_openai() {
-    // Full in-process router invocation via HTTP POST /v1/chat/completions
-    let env = setup_test_env(true).await;
-    let router = build_router(env.state.clone());
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        // Full in-process router invocation via HTTP POST /v1/chat/completions
+        let env = setup_test_env(true).await;
+        let router = build_router(env.state.clone());
 
-    let payload = serde_json::json!({
-        "model": "bridge-combo",
-        "stream": true,
-        "messages": [{"role": "user", "content": "hello"}]
+        let payload = serde_json::json!({
+            "model": "bridge-combo",
+            "stream": true,
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/chat/completions")
+            .header("authorization", format!("Bearer {}", env.client_key))
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let collected = resp.into_body().collect().await.unwrap().to_bytes();
+        let wire = String::from_utf8_lossy(&collected).to_string();
+
+        let hits1 = env.hits_p1.load(Ordering::SeqCst);
+        let hits2 = env.hits_p2.load(Ordering::SeqCst);
+
+        assert_eq!(hits1, 1);
+        assert_eq!(hits2, 0);
+
+        let partial_pos = wire.find("partial-wire-content");
+        let error_pos = wire.find("\"error\":");
+
+        assert!(partial_pos.is_some(), "payload: {wire}");
+        assert!(error_pos.is_some(), "payload: {wire}");
+        assert!(partial_pos.unwrap() < error_pos.unwrap());
+        assert!(!wire.contains("replacement-chunk"));
+        assert!(!wire.contains("[DONE]"));
     });
-
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/chat/completions")
-        .header("authorization", format!("Bearer {}", env.client_key))
-        .header("content-type", "application/json")
-        .body(Body::from(payload.to_string()))
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let collected = resp.into_body().collect().await.unwrap().to_bytes();
-    let wire = String::from_utf8_lossy(&collected).to_string();
-
-    let hits1 = env.hits_p1.load(Ordering::SeqCst);
-    let hits2 = env.hits_p2.load(Ordering::SeqCst);
-
-    assert_eq!(hits1, 1);
-    assert_eq!(hits2, 0);
-
-    let partial_pos = wire.find("partial-wire-content");
-    let error_pos = wire.find("\"error\":");
-
-    assert!(partial_pos.is_some(), "payload: {wire}");
-    assert!(error_pos.is_some(), "payload: {wire}");
-    assert!(partial_pos.unwrap() < error_pos.unwrap());
-    assert!(!wire.contains("replacement-chunk"));
-    assert!(!wire.contains("[DONE]"));
 }
 
 #[tokio::test]
 async fn test_app_router_e2e_wire_cut_anthropic() {
-    // Full in-process router invocation via HTTP POST /v1/messages
-    let env = setup_test_env(true).await;
-    let router = build_router(env.state.clone());
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        // Full in-process router invocation via HTTP POST /v1/messages
+        let env = setup_test_env(true).await;
+        let router = build_router(env.state.clone());
 
-    let payload = serde_json::json!({
-        "model": "bridge-combo",
-        "stream": true,
-        "max_tokens": 100,
-        "messages": [{"role": "user", "content": "hello"}]
+        let payload = serde_json::json!({
+            "model": "bridge-combo",
+            "stream": true,
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/messages")
+            .header("x-api-key", &env.client_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let collected = resp.into_body().collect().await.unwrap().to_bytes();
+        let wire = String::from_utf8_lossy(&collected).to_string();
+
+        let hits1 = env.hits_p1.load(Ordering::SeqCst);
+        let hits2 = env.hits_p2.load(Ordering::SeqCst);
+
+        assert_eq!(hits1, 1);
+        assert_eq!(hits2, 0);
+
+        let partial_pos = wire.find("partial-wire-content");
+        let error_pos = wire.find("event: error");
+
+        assert!(partial_pos.is_some(), "wire: {wire}");
+        assert!(error_pos.is_some(), "wire: {wire}");
+        assert!(partial_pos.unwrap() < error_pos.unwrap());
+        assert!(!wire.contains("replacement-chunk"));
+        assert!(!wire.contains("[DONE]"));
     });
-
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/messages")
-        .header("x-api-key", &env.client_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .body(Body::from(payload.to_string()))
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let collected = resp.into_body().collect().await.unwrap().to_bytes();
-    let wire = String::from_utf8_lossy(&collected).to_string();
-
-    let hits1 = env.hits_p1.load(Ordering::SeqCst);
-    let hits2 = env.hits_p2.load(Ordering::SeqCst);
-
-    assert_eq!(hits1, 1);
-    assert_eq!(hits2, 0);
-
-    let partial_pos = wire.find("partial-wire-content");
-    let error_pos = wire.find("event: error");
-
-    assert!(partial_pos.is_some(), "wire: {wire}");
-    assert!(error_pos.is_some(), "wire: {wire}");
-    assert!(partial_pos.unwrap() < error_pos.unwrap());
-    assert!(!wire.contains("replacement-chunk"));
-    assert!(!wire.contains("[DONE]"));
 }
 
 #[tokio::test]
 async fn test_app_router_e2e_wire_cut_responses() {
-    // Full in-process router invocation via HTTP POST /v1/responses
-    let env = setup_test_env(true).await;
-    let router = build_router(env.state.clone());
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        // Full in-process router invocation via HTTP POST /v1/responses
+        let env = setup_test_env(true).await;
+        let router = build_router(env.state.clone());
 
-    let payload = serde_json::json!({
-        "model": "bridge-combo",
-        "stream": true,
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+        let payload = serde_json::json!({
+            "model": "bridge-combo",
+            "stream": true,
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+        });
+
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header("authorization", format!("Bearer {}", env.client_key))
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let collected = resp.into_body().collect().await.unwrap().to_bytes();
+        let wire = String::from_utf8_lossy(&collected).to_string();
+
+        let hits1 = env.hits_p1.load(Ordering::SeqCst);
+        let hits2 = env.hits_p2.load(Ordering::SeqCst);
+
+        assert_eq!(hits1, 1);
+        assert_eq!(hits2, 0);
+
+        let partial_pos = wire.find("partial-wire-content");
+        let error_pos = wire.find("event: response.failed");
+
+        assert!(partial_pos.is_some(), "wire: {wire}");
+        assert!(error_pos.is_some(), "wire: {wire}");
+        assert!(partial_pos.unwrap() < error_pos.unwrap());
+        assert!(!wire.contains("replacement-chunk"));
+        assert!(!wire.contains("[DONE]"));
     });
-
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/responses")
-        .header("authorization", format!("Bearer {}", env.client_key))
-        .header("content-type", "application/json")
-        .body(Body::from(payload.to_string()))
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let collected = resp.into_body().collect().await.unwrap().to_bytes();
-    let wire = String::from_utf8_lossy(&collected).to_string();
-
-    let hits1 = env.hits_p1.load(Ordering::SeqCst);
-    let hits2 = env.hits_p2.load(Ordering::SeqCst);
-
-    assert_eq!(hits1, 1);
-    assert_eq!(hits2, 0);
-
-    let partial_pos = wire.find("partial-wire-content");
-    let error_pos = wire.find("event: response.failed");
-
-    assert!(partial_pos.is_some(), "wire: {wire}");
-    assert!(error_pos.is_some(), "wire: {wire}");
-    assert!(partial_pos.unwrap() < error_pos.unwrap());
-    assert!(!wire.contains("replacement-chunk"));
-    assert!(!wire.contains("[DONE]"));
 }
 
 /// Audit H-9 end-to-end: with PII enabled, the OpenAI `user` field must be
@@ -610,217 +634,224 @@ async fn test_app_router_e2e_wire_cut_responses() {
 /// reached the provider in clear text.
 #[tokio::test]
 async fn test_app_router_e2e_pii_user_field_redacted_upstream() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Runs on a big-stack thread: the full e2e pipeline future needs more
+    // stack than the test thread provides in debug builds (see run_with_big_stack).
+    run_with_big_stack(|| async {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // A mock upstream that captures the full request body.
-    let captured: Arc<parking_lot::Mutex<Vec<u8>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("addr");
-    let capture = Arc::clone(&captured);
-    let server = tokio::spawn(async move {
-        if let Ok((mut socket, _)) = listener.accept().await {
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 8192];
-            let header_len = loop {
-                let n = match socket.read(&mut chunk).await {
-                    Ok(n) if n > 0 => n,
-                    _ => return,
+        // A mock upstream that captures the full request body.
+        let captured: Arc<parking_lot::Mutex<Vec<u8>>> =
+            Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let capture = Arc::clone(&captured);
+        let server = tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let header_len = loop {
+                    let n = match socket.read(&mut chunk).await {
+                        Ok(n) if n > 0 => n,
+                        _ => return,
+                    };
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
                 };
-                buf.extend_from_slice(&chunk[..n]);
-                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                    break pos + 4;
+                let head = String::from_utf8_lossy(&buf[..header_len]).to_string();
+                let content_len = head
+                    .lines()
+                    .filter_map(|l| l.split_once(':'))
+                    .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                    .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                while buf.len() < header_len + content_len {
+                    match socket.read(&mut chunk).await {
+                        Ok(n) if n > 0 => buf.extend_from_slice(&chunk[..n]),
+                        _ => break,
+                    }
                 }
-            };
-            let head = String::from_utf8_lossy(&buf[..header_len]).to_string();
-            let content_len = head
-                .lines()
-                .filter_map(|l| l.split_once(':'))
-                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-                .and_then(|(_, v)| v.trim().parse::<usize>().ok())
-                .unwrap_or(0);
-            while buf.len() < header_len + content_len {
-                match socket.read(&mut chunk).await {
-                    Ok(n) if n > 0 => buf.extend_from_slice(&chunk[..n]),
-                    _ => break,
+                *capture.lock() = buf[header_len..].to_vec();
+                let body =
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                let _ = socket.flush().await;
+                let _ = socket.shutdown().await;
+            }
+        });
+
+        let pool = Arc::new(DbPool::test_pool_with_prefix("pii-e2e").expect("pool"));
+        let master_key = Arc::new(MasterKey::generate().expect("mk"));
+        let config = AppConfig {
+            pii: serde_json::from_value(serde_json::json!({
+                "pii_enabled": true,
+                "pii_entities": ["email"]
+            }))
+            .expect("pii config"),
+            retries: openproxy_types::config::RetriesConfig {
+                max_attempts: 1,
+                ..Default::default()
+            },
+            racing: openproxy_types::config::RacingConfig {
+                max_race_size: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(Vec::new())));
+        let state =
+            AppState::for_test(config, Arc::clone(&pool), Arc::clone(&master_key), adapters);
+        state.discovery_scheduler().cancel();
+        state.supervisor().shutdown();
+        state.discovery_scheduler().shutdown_and_wait().await;
+        state.supervisor().shutdown_and_wait().await;
+
+        let client_key = pool
+            .spawn_write({
+                let master_key = Arc::clone(&master_key);
+                move |conn| {
+                    let combo_id = create_combo(conn, "pii-combo", Strategy::Priority, 1)?;
+                    let p_id = create_provider(
+                        conn,
+                        CreateProviderInput {
+                            id: "pii-p1".into(),
+                            name: "pii-p1".into(),
+                            base_url: format!("http://{addr}/v1"),
+                            auth_type: "bearer".into(),
+                            format: "openai".into(),
+                            extra_headers_json: None,
+                            rate_limit_scope: None,
+                            stream_mode: None,
+                            prompt_cache_ttl: None,
+                            allow_loopback: None,
+                        },
+                    )?;
+                    openproxy_core::admin::create_account(
+                        conn,
+                        &master_key,
+                        openproxy_core::admin::CreateAccountInput {
+                            provider_id: "pii-p1".into(),
+                            api_key: Some("sk-test-mock-key".into()),
+                            label: Some("pii-acc".into()),
+                            priority: Some(10),
+                            extra_config_json: None,
+                        },
+                    )?;
+                    let m_id = create_custom_model(
+                        conn,
+                        CreateCustomModelInput {
+                            provider_id: "pii-p1".into(),
+                            model_id: "test-model".into(),
+                            display_name: Some("pii model".into()),
+                            target_format: "openai".into(),
+                            ttl_seconds: 3600,
+                            model_type: Some("chat".into()),
+                        },
+                    )?;
+                    add_target(
+                        conn,
+                        AddTargetInput {
+                            combo_id,
+                            provider_id: p_id,
+                            account_id: None,
+                            model_row_id: Some(m_id),
+                            sub_combo_id: None,
+                            priority_order: 0,
+                            description: None,
+                            selected_accounts: None,
+                            client_profile: None,
+                        },
+                    )?;
+
+                    let (_rec, plaintext) = openproxy_core::api_keys::create(
+                        conn,
+                        CreateApiKeyInput {
+                            label: Some("pii-e2e-key".into()),
+                            scopes: vec!["chat".into()],
+                            allowed_models: None,
+                            allowed_combos: None,
+                            blacklisted_providers: None,
+                            allowed_providers: None,
+                            blacklisted_models: None,
+                            only_whitelisted: false,
+                            expires_at: None,
+                        },
+                        "pii-e2e",
+                    )?;
+                    Ok(plaintext)
                 }
+            })
+            .await
+            .expect("seed");
+
+        state
+            .rebuild_adapters()
+            .await
+            .expect("rebuild custom adapters");
+
+        let router = build_router(state);
+        let payload = serde_json::json!({
+            "model": "pii-combo",
+            "stream": true,
+            "user": "alice@corp.com",
+            "metadata": {"user_id": "bob@corp.com"},
+            "messages": [{"role": "user", "content": "contact alice@corp.com please"}]
+        });
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/chat/completions")
+            .header("authorization", format!("Bearer {client_key}"))
+            .header("content-type", "application/json")
+            .body(Body::from(payload.to_string()))
+            .unwrap();
+        let resp = router.oneshot(req).await.expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK, "request must succeed");
+        let _ = resp.into_body().collect().await;
+
+        // Wait for the mock to finish capturing.
+        for _ in 0..50 {
+            if !captured.lock().is_empty() {
+                break;
             }
-            *capture.lock() = buf[header_len..].to_vec();
-            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n";
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = socket.write_all(resp.as_bytes()).await;
-            let _ = socket.flush().await;
-            let _ = socket.shutdown().await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        server.abort();
+
+        let upstream_body = String::from_utf8_lossy(&captured.lock()).to_string();
+        assert!(
+            !upstream_body.is_empty(),
+            "the mock upstream must have captured a request body"
+        );
+        assert!(
+            !upstream_body.contains("alice@corp.com"),
+            "PII in `user` must NOT reach the upstream body: {upstream_body}"
+        );
+        assert!(
+            !upstream_body.contains("bob@corp.com"),
+            "PII in `metadata.user_id` must NOT reach the upstream body: {upstream_body}"
+        );
+        // The redactor replaces identifiers with synthetic placeholders (realistic
+        // pseudonymous emails), so the sidecar values must simply DIFFER from the
+        // originals the client sent.
+        let upstream_json: serde_json::Value =
+            serde_json::from_str(upstream_body.trim()).expect("upstream body is JSON");
+        let redacted_user = upstream_json["user"].as_str().expect("user present");
+        let redacted_uid = upstream_json["metadata"]["user_id"]
+            .as_str()
+            .expect("metadata.user_id present");
+        assert_ne!(
+            redacted_user, "alice@corp.com",
+            "user must be pseudonymised"
+        );
+        assert_ne!(
+            redacted_uid, "bob@corp.com",
+            "metadata.user_id must be pseudonymised"
+        );
     });
-
-    let pool = Arc::new(DbPool::test_pool_with_prefix("pii-e2e").expect("pool"));
-    let master_key = Arc::new(MasterKey::generate().expect("mk"));
-    let config = AppConfig {
-        pii: serde_json::from_value(serde_json::json!({
-            "pii_enabled": true,
-            "pii_entities": ["email"]
-        }))
-        .expect("pii config"),
-        retries: openproxy_types::config::RetriesConfig {
-            max_attempts: 1,
-            ..Default::default()
-        },
-        racing: openproxy_types::config::RacingConfig {
-            max_race_size: 1,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let adapters = Arc::new(parking_lot::RwLock::new(Arc::new(Vec::new())));
-    let state = AppState::for_test(config, Arc::clone(&pool), Arc::clone(&master_key), adapters);
-    state.discovery_scheduler().cancel();
-    state.supervisor().shutdown();
-    state.discovery_scheduler().shutdown_and_wait().await;
-    state.supervisor().shutdown_and_wait().await;
-
-    let client_key = pool
-        .spawn_write({
-            let master_key = Arc::clone(&master_key);
-            move |conn| {
-                let combo_id = create_combo(conn, "pii-combo", Strategy::Priority, 1)?;
-                let p_id = create_provider(
-                    conn,
-                    CreateProviderInput {
-                        id: "pii-p1".into(),
-                        name: "pii-p1".into(),
-                        base_url: format!("http://{addr}/v1"),
-                        auth_type: "bearer".into(),
-                        format: "openai".into(),
-                        extra_headers_json: None,
-                        rate_limit_scope: None,
-                        stream_mode: None,
-                        prompt_cache_ttl: None,
-                        allow_loopback: None,
-                    },
-                )?;
-                openproxy_core::admin::create_account(
-                    conn,
-                    &master_key,
-                    openproxy_core::admin::CreateAccountInput {
-                        provider_id: "pii-p1".into(),
-                        api_key: Some("sk-test-mock-key".into()),
-                        label: Some("pii-acc".into()),
-                        priority: Some(10),
-                        extra_config_json: None,
-                    },
-                )?;
-                let m_id = create_custom_model(
-                    conn,
-                    CreateCustomModelInput {
-                        provider_id: "pii-p1".into(),
-                        model_id: "test-model".into(),
-                        display_name: Some("pii model".into()),
-                        target_format: "openai".into(),
-                        ttl_seconds: 3600,
-                        model_type: Some("chat".into()),
-                    },
-                )?;
-                add_target(
-                    conn,
-                    AddTargetInput {
-                        combo_id,
-                        provider_id: p_id,
-                        account_id: None,
-                        model_row_id: Some(m_id),
-                        sub_combo_id: None,
-                        priority_order: 0,
-                        description: None,
-                        selected_accounts: None,
-                        client_profile: None,
-                    },
-                )?;
-
-                let (_rec, plaintext) = openproxy_core::api_keys::create(
-                    conn,
-                    CreateApiKeyInput {
-                        label: Some("pii-e2e-key".into()),
-                        scopes: vec!["chat".into()],
-                        allowed_models: None,
-                        allowed_combos: None,
-                        blacklisted_providers: None,
-                        allowed_providers: None,
-                        blacklisted_models: None,
-                        only_whitelisted: false,
-                        expires_at: None,
-                    },
-                    "pii-e2e",
-                )?;
-                Ok(plaintext)
-            }
-        })
-        .await
-        .expect("seed");
-
-    state
-        .rebuild_adapters()
-        .await
-        .expect("rebuild custom adapters");
-
-    let router = build_router(state);
-    let payload = serde_json::json!({
-        "model": "pii-combo",
-        "stream": true,
-        "user": "alice@corp.com",
-        "metadata": {"user_id": "bob@corp.com"},
-        "messages": [{"role": "user", "content": "contact alice@corp.com please"}]
-    });
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri("/v1/chat/completions")
-        .header("authorization", format!("Bearer {client_key}"))
-        .header("content-type", "application/json")
-        .body(Body::from(payload.to_string()))
-        .unwrap();
-    let resp = router.oneshot(req).await.expect("oneshot");
-    assert_eq!(resp.status(), StatusCode::OK, "request must succeed");
-    let _ = resp.into_body().collect().await;
-
-    // Wait for the mock to finish capturing.
-    for _ in 0..50 {
-        if !captured.lock().is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    server.abort();
-
-    let upstream_body = String::from_utf8_lossy(&captured.lock()).to_string();
-    assert!(
-        !upstream_body.is_empty(),
-        "the mock upstream must have captured a request body"
-    );
-    assert!(
-        !upstream_body.contains("alice@corp.com"),
-        "PII in `user` must NOT reach the upstream body: {upstream_body}"
-    );
-    assert!(
-        !upstream_body.contains("bob@corp.com"),
-        "PII in `metadata.user_id` must NOT reach the upstream body: {upstream_body}"
-    );
-    // The redactor replaces identifiers with synthetic placeholders (realistic
-    // pseudonymous emails), so the sidecar values must simply DIFFER from the
-    // originals the client sent.
-    let upstream_json: serde_json::Value =
-        serde_json::from_str(upstream_body.trim()).expect("upstream body is JSON");
-    let redacted_user = upstream_json["user"].as_str().expect("user present");
-    let redacted_uid = upstream_json["metadata"]["user_id"]
-        .as_str()
-        .expect("metadata.user_id present");
-    assert_ne!(
-        redacted_user, "alice@corp.com",
-        "user must be pseudonymised"
-    );
-    assert_ne!(
-        redacted_uid, "bob@corp.com",
-        "metadata.user_id must be pseudonymised"
-    );
 }

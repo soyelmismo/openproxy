@@ -249,11 +249,15 @@ fn dummy_key(id: i64, hash: &str) -> openproxy_core::api_keys::ApiKey {
 }
 
 #[tokio::test]
-async fn test_api_key_cache_saturation_6000_keys() {
+async fn test_api_key_cache_evicts_oldest_at_capacity() {
     let state = make_state().await;
 
-    // Insert 6,000 distinct API keys
-    for i in 0..6000 {
+    // 100 entries past the 5,000 cap exercise the same saturation path as the
+    // original 6,000 (1,000 past) at a fraction of the eviction cost: each
+    // eviction scans and sorts the full cache, O(n log n) per insert.
+    const OVERFLOW: usize = 100;
+    let total = (AppState::MAX_API_KEY_CACHE_ENTRIES + OVERFLOW) as i64;
+    for i in 0..total {
         let key = Arc::new(dummy_key(i, &format!("key_hash_{i}")));
         state.cache_api_key(key);
         assert!(
@@ -268,15 +272,18 @@ async fn test_api_key_cache_saturation_6000_keys() {
         AppState::MAX_API_KEY_CACHE_ENTRIES
     );
 
-    // Oldest 1,000 (key_hash_0..999) evicted.
+    // Oldest OVERFLOW (key_hash_0..99) evicted.
     assert!(state.get_cached_api_key("key_hash_0").is_none());
-    assert!(state.get_cached_api_key("key_hash_500").is_none());
-    assert!(state.get_cached_api_key("key_hash_999").is_none());
+    assert!(state.get_cached_api_key("key_hash_50").is_none());
+    assert!(state.get_cached_api_key("key_hash_99").is_none());
 
-    // Newest 5,000 (key_hash_1000..5999) retained.
-    assert!(state.get_cached_api_key("key_hash_1000").is_some());
-    assert!(state.get_cached_api_key("key_hash_3000").is_some());
-    assert!(state.get_cached_api_key("key_hash_5999").is_some());
+    // Newest retained.
+    assert!(state.get_cached_api_key("key_hash_100").is_some());
+    assert!(
+        state
+            .get_cached_api_key(&format!("key_hash_{}", total - 1))
+            .is_some()
+    );
 }
 
 #[tokio::test]

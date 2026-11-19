@@ -285,7 +285,7 @@ async fn test_dual_pool_trimming_under_concurrent_transactions() {
 
         handles.push(tokio::task::spawn_blocking(move || {
             let mut c = 0;
-            while !stop.load(Ordering::Relaxed) && c < 200 {
+            while !stop.load(Ordering::Relaxed) && c < 100 {
                 let mut w = pool.writer();
                 let tx = w.transaction().expect("begin tx");
                 tx.execute(

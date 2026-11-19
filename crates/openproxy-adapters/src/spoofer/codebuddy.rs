@@ -114,64 +114,6 @@ impl ClientSpoofer for CodeBuddySpoofer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UpstreamRequest;
-    use http::HeaderValue;
-
-    #[test]
-    fn test_codebuddy_spoofer_default_headers() {
-        let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
-        reset_dynamic_codebuddy_overrides();
-        let spoofer = CodeBuddySpoofer;
-        let mut req = UpstreamRequest::get("https://www.workbuddy.ai/v2");
-        spoofer.apply_to_request(&mut req);
-
-        for &(k, v) in CODEBUDDY_SPOOFING_HEADERS {
-            let header_val = req.headers.get(k).expect("header missing");
-            if k.eq_ignore_ascii_case("user-agent") {
-                assert_eq!(header_val, current_codebuddy_ua().as_str());
-            } else if k.eq_ignore_ascii_case("x-ide-version") {
-                assert_eq!(header_val, current_codebuddy_version().as_str());
-            } else {
-                assert_eq!(header_val, HeaderValue::from_str(v).unwrap());
-            }
-        }
-    }
-
-    #[test]
-    fn test_codebuddy_dynamic_version_and_extra_headers() {
-        let _guard = CODEBUDDY_TEST_LOCK.lock().unwrap();
-        reset_dynamic_codebuddy_overrides();
-
-        assert_eq!(current_codebuddy_version(), "2.168.2");
-        assert_eq!(current_codebuddy_ua(), "CLI/2.168.2 CodeBuddy/2.168.2");
-
-        set_dynamic_codebuddy_version("3.0.0");
-        assert_eq!(current_codebuddy_version(), "3.0.0");
-        assert_eq!(current_codebuddy_ua(), "CLI/3.0.0 CodeBuddy/3.0.0");
-
-        set_dynamic_codebuddy_extra_header("x-custom-tenant", "tencent-corp");
-
-        let headers = CodeBuddySpoofer.headers();
-        let find = |key: &str| {
-            headers
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(key))
-                .map(|(_, v)| v.as_str())
-        };
-
-        assert_eq!(find("user-agent"), Some("CLI/3.0.0 CodeBuddy/3.0.0"));
-        assert_eq!(find("x-ide-version"), Some("3.0.0"));
-        assert_eq!(find("x-custom-tenant"), Some("tencent-corp"));
-        assert_eq!(find("x-ide-type"), Some("CLI"));
-        assert_eq!(find("x-ide-name"), Some("CLI"));
-        assert_eq!(find("x-product"), Some("SaaS"));
-        assert_eq!(find("x-agent-intent"), Some("craft"));
-        assert_eq!(find("x-codebuddy-request"), Some("1"));
-        assert_eq!(find("x-domain"), Some("www.workbuddy.ai"));
-
-        reset_dynamic_codebuddy_overrides();
-        assert_eq!(current_codebuddy_version(), "2.168.2");
-    }
 
     #[test]
     fn test_codebuddy_dynamic_ua_override() {

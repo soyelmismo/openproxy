@@ -71,7 +71,9 @@ async fn test_backpressure_and_concurrent_load() {
     assert_eq!(sender.max_capacity(), 8);
 
     let total_producers = 8;
-    let jobs_per_producer = 64;
+    // 32 jobs per producer still overflows the 8-cap channel many times over
+    // and keeps producer/consumer set parity, at half the DB write cost.
+    let jobs_per_producer = 32;
     let total_jobs = total_producers * jobs_per_producer;
     let expected_ids = generate_deterministic_request_ids(total_jobs, 10_000);
 

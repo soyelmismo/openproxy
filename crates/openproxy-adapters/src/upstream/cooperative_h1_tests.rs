@@ -14,9 +14,9 @@ fn profile() -> TimeoutProfile {
         dns_ms: 1000,
         dial_ms: 1000,
         tls_ms: 1000,
-        write_ms: 100,
-        headers_ms: 200,
-        body_chunk_ms: 100,
+        write_ms: 50,
+        headers_ms: 60,
+        body_chunk_ms: 50,
         total_ms: 2000,
     })
 }
@@ -206,7 +206,7 @@ async fn flushed_upload_arms_headers_but_unary_uses_total() {
             UpstreamRequest::post_json(format!("http://{addr}/"), Bytes::from_static(b"{}"));
         req.is_streaming = streaming;
         let mut timeouts = profile().resolve();
-        timeouts.total_ms = 500;
+        timeouts.total_ms = 150;
         let error = UpstreamClient::for_test_cooperative()
             .call(
                 req,
@@ -241,7 +241,7 @@ async fn early_response_during_upload_survives() {
         )
         .await
         .unwrap();
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
     });
     let response = UpstreamClient::for_test_cooperative()
         .call(

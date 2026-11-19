@@ -36,7 +36,7 @@ async fn adv_concurrent_invalid_grant_same_account() {
     clear_counter(account_id);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn adv_invalid_grant_then_success_different_account() {
     let acc_a = AccountId(11_001);
     let acc_b = AccountId(11_002);
@@ -242,7 +242,7 @@ async fn adv_network_error_does_not_bump_counter() {
     clear_counter(account_id);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn adv_on_unhealthy_cell_fires_exactly_once() {
     let account_id = AccountId(11_008);
     clear_counter(account_id);

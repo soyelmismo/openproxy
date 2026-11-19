@@ -7,8 +7,10 @@
 //!
 //! * loopback + flag    → dials
 //! * loopback w/o flag  → SSRF block before any dial
-//! * RFC1918 + flag     → dials (migration 000135)
 //! * link-local + flag  → still blocked (IMDS, audit A6-01)
+//!
+//! The connector policy unit tests cover RFC1918 admission without dialing
+//! an address that might belong to the host's network.
 //!
 //! Everything rides the default `CooperativeH1Transport` (plain HTTP, no
 //! proxy), the same path discovery ticks and local chat dispatch use.
@@ -115,26 +117,6 @@ async fn loopback_blocked_without_opt_in() {
         .await
         .expect_err("loopback without opt-in must be SSRF-blocked");
     assert!(is_ssrf_block(&err.to_string()), "unexpected error: {err}");
-}
-
-#[tokio::test]
-async fn rfc1918_admitted_with_opt_in_but_refused_without_listener() {
-    // No listener on this RFC1918 address: the filter must ADMIT it (the dial
-    // then fails with a connection error, not an SSRF block).
-    let client = UpstreamClient::new();
-    let err = client
-        .call(
-            request("http://10.240.0.21:1/".to_string(), true),
-            TimeoutProfile::ModelDiscovery,
-            CancellationToken::new(),
-        )
-        .await
-        .expect_err("nothing listens there; dial must fail");
-    let text = err.to_string();
-    assert!(
-        !is_ssrf_block(&text),
-        "RFC1918 + opt-in must pass the filter, got: {text}"
-    );
 }
 
 #[tokio::test]

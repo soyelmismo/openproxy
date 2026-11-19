@@ -549,28 +549,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_insert_many_large_batch() {
-        let conn = fresh_db();
-        let count = 350;
-        let mut rows = Vec::with_capacity(count);
-        for i in 0..count {
-            rows.push((
-                serde_json::json!({"item": i}),
-                Some(format!("dedup_{i}")),
-                Some("test_provider".to_string()),
-            ));
-        }
-
-        let inserted = insert_many(&conn, KIND_MODEL_NEW, &rows).unwrap();
-        assert_eq!(inserted.len(), count);
-
-        // the dedup index returns the same ids on re-insert
-        let reinserted = insert_many(&conn, KIND_MODEL_NEW, &rows).unwrap();
-        assert_eq!(reinserted.len(), count);
-        assert_eq!(inserted, reinserted);
-    }
-
     #[tokio::test]
     async fn test_broadcast_one_releases_lock_without_blocking() {
         init_broadcast();

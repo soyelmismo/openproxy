@@ -69,19 +69,28 @@ impl CooperativeH1Transport {
         timeouts: PhasedTimeouts,
         allow_loopback: bool,
     ) -> UpstreamResult<Idle> {
-        let mut connector = ObservedConnector(self.connector.clone());
         // Scope the task-locals from the request parameters, not from a
         // task-local re-read: the cooperative dial runs inline on whatever
         // task polls this future, which carries no ambient scope. Relying on
         // `call_allows_loopback()` here made every cooperative dial see
         // "no opt-in" and block loopback/RFC1918 even for providers whose row
         // explicitly opted in (migration 000135).
+        //
+        // The connector future must be CONSTRUCTED inside the scope: Rust
+        // evaluates `scope(value, fut)` arguments before entering the scope,
+        // and `PhasedConnector::call` reads the task-local while building the
+        // future. Building it outside made every cooperative dial fall back to
+        // `PhasedTimeouts::default()` (5 s dial) and ignore the request's
+        // `dial_ms` entirely.
         let io = CALL_PROXY
             .scope(
                 None,
                 CALL_ALLOW_LOOPBACK.scope(
                     allow_loopback,
-                    CALL_TIMEOUTS.scope(timeouts, connector.call(uri.clone())),
+                    CALL_TIMEOUTS.scope(timeouts, async {
+                        let mut connector = ObservedConnector(self.connector.clone());
+                        connector.call(uri.clone()).await
+                    }),
                 ),
             )
             .await

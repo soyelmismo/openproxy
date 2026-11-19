@@ -172,8 +172,10 @@ fn brotli_bomb_rejected_without_full_expansion() {
 #[test]
 fn zstd_bomb_rejected_without_full_expansion() {
     // 128 MiB of repetitive data compressed with the real zstd encoder.
+    // Level 5 keeps the bomb property (tiny wire, huge expansion) without the
+    // level-19 encoder CPU cost; the assertion only depends on the ratio.
     let payload = vec![b'z'; 128 * 1024 * 1024];
-    let bomb = zstd::encode_all(&payload[..], 19).expect("zstd encode");
+    let bomb = zstd::encode_all(&payload[..], 5).expect("zstd encode");
     drop(payload);
 
     let guard = TrackPeak::arm();
@@ -209,7 +211,10 @@ fn one_shot_wire_accumulation_is_capped_for_streaming_bodies() {
         x ^= x << 5;
         payload.extend_from_slice(&x.to_le_bytes());
     }
-    let wire = zstd::encode_all(&payload[..], 19).expect("zstd encode");
+    // Level 1 on purpose: the test pins the WIRE cap (~33 MiB must stay on
+    // the wire, ratio ~1:1), not the compression ratio. Level 19 on
+    // incompressible data costs ~17 s of encoder CPU for zero extra signal.
+    let wire = zstd::encode_all(&payload[..], 1).expect("zstd encode");
     assert!(
         wire.len() as u64 > 32 * 1024 * 1024,
         "fixture must exceed the wire cap ({} bytes)",

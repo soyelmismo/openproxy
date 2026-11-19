@@ -33,20 +33,31 @@ async fn spawn_mock_raw(
 
 #[tokio::test]
 async fn phase_timeout_tls() {
-    spawn_mock_raw(vec![(&[], Duration::from_secs(30))]).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        // Keep TCP open but never answer the TLS handshake.
+        std::future::pending::<()>().await;
+        drop(socket);
+    });
     let client = UpstreamClient::new();
     let mut to = TimeoutProfile::Chat.resolve();
-    to.dial_ms = 10;
-    let res = client
-        .call(
-            UpstreamRequest::get("http://192.0.2.1/"),
+    to.tls_ms = 100;
+    let res = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.call(
+            UpstreamRequest::get(format!("https://{addr}/")),
             TimeoutProfile::Custom(to),
             CancellationToken::new(),
-        )
-        .await;
+        ),
+    )
+    .await;
+    server.abort();
+    let _ = server.await;
     assert!(matches!(
-        res.unwrap_err(),
-        UpstreamError::Timeout(UpstreamPhase::Dns | UpstreamPhase::Dial | UpstreamPhase::Write)
+        res.expect("request exceeded the TLS budget").unwrap_err(),
+        UpstreamError::Timeout(UpstreamPhase::Tls)
     ));
 }
 
@@ -176,7 +187,7 @@ async fn phase_timeout_body_chunk_gap() {
                 req.is_streaming = true;
                 req
             },
-            custom_profile(10_000, 1_000, 5_000, 30_000),
+            custom_profile(10_000, 300, 5_000, 30_000),
             CancellationToken::new(),
         )
         .await
@@ -197,7 +208,7 @@ async fn phase_timeout_body_chunk_gap() {
         res.unwrap_err(),
         UpstreamError::Timeout(UpstreamPhase::Body)
     ));
-    assert!(gap_elapsed >= Duration::from_millis(800) && gap_elapsed < Duration::from_secs(4));
+    assert!(gap_elapsed >= Duration::from_millis(250) && gap_elapsed < Duration::from_secs(2));
 }
 
 #[tokio::test]
@@ -211,7 +222,7 @@ async fn stub_event_does_not_start_chunk_gap_timer() {
                 req.is_streaming = true;
                 req
             },
-            custom_profile(5_000, 500, 5_000, 2_000),
+            custom_profile(5_000, 250, 5_000, 1_000),
             CancellationToken::new(),
         )
         .await
@@ -231,7 +242,9 @@ async fn stub_event_does_not_start_chunk_gap_timer() {
         res.unwrap_err(),
         UpstreamError::Timeout(UpstreamPhase::Total)
     ));
-    assert!(elapsed >= Duration::from_millis(1_500) && elapsed < Duration::from_secs(3));
+    // The 250ms body-chunk gap timer must NOT have been armed by the stub
+    // event: the wait runs to the full 1s total instead of the 4x-shorter gap.
+    assert!(elapsed >= Duration::from_millis(700) && elapsed < Duration::from_secs(2));
 }
 
 #[tokio::test]
@@ -289,22 +302,36 @@ async fn sent_get_waits_for_headers_not_write_timeout() {
 }
 
 #[tokio::test]
-async fn phase_timeout_dial_real() {
-    let client = UpstreamClient::new();
+async fn cooperative_dial_honors_zero_budget() {
+    let addr = spawn_mock_raw(vec![(
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        Duration::ZERO,
+    )])
+    .await;
+    let client = UpstreamClient::for_test_cooperative();
     let mut to = TimeoutProfile::Chat.resolve();
-    to.dial_ms = 50;
-    to.total_ms = 60_000;
+    to.dial_ms = 0;
     let res = client
         .call(
-            UpstreamRequest::get("http://192.0.2.1/"),
+            UpstreamRequest::get(format!("http://{addr}/")),
             TimeoutProfile::Custom(to),
             CancellationToken::new(),
         )
         .await;
-    assert!(matches!(
-        res.unwrap_err(),
-        UpstreamError::Timeout(UpstreamPhase::Dial | UpstreamPhase::Write)
-    ));
+    assert!(
+        res.is_err(),
+        "a zero dial budget must not reach the local server"
+    );
+
+    let response = client
+        .call(
+            UpstreamRequest::get(format!("http://{addr}/")),
+            TimeoutProfile::Chat,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("the same listener must be reachable with a normal dial budget");
+    assert_eq!(response.status, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -366,8 +393,8 @@ async fn adversarial_phased_connector_respects_dynamic_timeouts_via_atomic() {
 #[tokio::test]
 async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
     let addr = spawn_mock_raw(vec![
-        (b"HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ntransfer-encoding: chunked\r\n\r\n5\r\nfirst\r\n", Duration::from_millis(200)),
-        (b"6\r\nsecond\r\n", Duration::from_millis(200)),
+        (b"HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ntransfer-encoding: chunked\r\n\r\n5\r\nfirst\r\n", Duration::from_millis(80)),
+        (b"6\r\nsecond\r\n", Duration::from_millis(80)),
         (b"5\r\nthird\r\n", Duration::from_secs(5)),
         (b"5\r\nfourth\r\n0\r\n\r\n", Duration::ZERO),
     ]).await;
@@ -379,7 +406,7 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
                 req.is_streaming = true;
                 req
             },
-            custom_profile(10_000, 1_000, 5_000, 30_000),
+            custom_profile(10_000, 300, 5_000, 30_000),
             CancellationToken::new(),
         )
         .await
@@ -405,7 +432,7 @@ async fn adversarial_phase_timeout_body_chunk_gap_resets_after_each_chunk() {
         res.unwrap_err(),
         UpstreamError::Timeout(UpstreamPhase::Body)
     ));
-    assert!(t.elapsed() >= Duration::from_millis(800) && t.elapsed() < Duration::from_secs(3));
+    assert!(t.elapsed() >= Duration::from_millis(250) && t.elapsed() < Duration::from_secs(2));
 }
 
 #[tokio::test]

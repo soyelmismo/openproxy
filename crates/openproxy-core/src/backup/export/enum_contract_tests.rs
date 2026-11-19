@@ -100,11 +100,15 @@ fn test_integrated_export_enum_failures() {
         ),
     ];
 
+    let mut conn = setup_test_db();
+    conn.execute_batch("PRAGMA ignore_check_constraints = ON;")
+        .unwrap();
     for (sql, run_export, expected_col, expected_err) in cases {
-        let conn = setup_test_db();
-        conn.execute_batch(&format!("PRAGMA ignore_check_constraints = ON; {sql}"))
-            .unwrap();
-        let err = run_export(&conn).unwrap_err();
+        // Each case mutates the same migrated fixture in isolation.
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch(sql).unwrap();
+        let err = run_export(&tx).unwrap_err();
+        tx.rollback().unwrap();
         let CoreError::Database { message, source } = err else {
             panic!("expected CoreError::Database, got {err:?}");
         };
