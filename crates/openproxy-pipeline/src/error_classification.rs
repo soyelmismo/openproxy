@@ -35,6 +35,14 @@ pub fn classify_upstream_error(status: u16, body: &str) -> UpstreamErrorClass {
         return UpstreamErrorClass::PermissionDenied;
     }
 
+    // Google CloudCode fingerprint gate (Antigravity-Manager 9b82fb7e): a 404
+    // "Requested entity was not found" on Argon-class models means the egress
+    // hub signature is outdated. Rotating accounts cannot fix it — every
+    // account egresses the same fingerprint; update it instead of hammering.
+    if status == 404 && body.contains("Requested entity was not found") {
+        return UpstreamErrorClass::FingerprintGate;
+    }
+
     if status == 400 {
         if body.contains("2013") || body.contains("function name or parameters is empty") {
             return UpstreamErrorClass::MalformedToolCall;
@@ -117,6 +125,22 @@ mod tests {
         assert_eq!(
             classify_upstream_error(429, r#"{"reason":"RESOURCE_EXHAUSTED"}"#),
             UpstreamErrorClass::ResourceExhausted
+        );
+    }
+
+    #[test]
+    fn classification_404_fingerprint_gate() {
+        assert_eq!(
+            classify_upstream_error(
+                404,
+                r#"{"error":{"code":404,"message":"Requested entity was not found."}}"#,
+            ),
+            UpstreamErrorClass::FingerprintGate
+        );
+        // 404 with a different body stays generic.
+        assert_eq!(
+            classify_upstream_error(404, r#"{"error":{"message":"model not found"}}"#),
+            UpstreamErrorClass::Generic
         );
     }
 

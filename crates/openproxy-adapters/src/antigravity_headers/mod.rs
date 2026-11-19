@@ -190,24 +190,24 @@ pub fn user_agent() -> HeaderValue {
     build_user_agent(&current_version())
 }
 
-/// Hub fingerprint pinned together to Antigravity-Manager 9f8e4f24.
+/// Hub fingerprint pinned together to Antigravity-Manager 9b82fb7e (v5.0.3, 2026-11-08).
 /// This is the language-service identity, NOT the IDE/OAuth version.
 /// Never combine a dynamically detected IDE version with this Hub changelist.
-pub const OFFICIAL_HUB_VERSION: &str = "2.23.1";
-pub const OFFICIAL_HUB_CL: &str = "998881661";
+/// Version+CL captured 2026-10-29 from an official Windows client and travel as a
+/// calibrated pair. >= 2.28.0 satisfies Google's Argon-class fingerprint gate; the
+/// old 2.23.1 signature gets 404 "Requested entity was not found" on Argon models.
+pub const OFFICIAL_HUB_VERSION: &str = "2.28.0";
+pub const OFFICIAL_HUB_CL: &str = "1008300195";
+
+/// Platform segment mirrors the official client the fingerprint was captured from
+/// (Windows/amd64), same doctrine as Antigravity-Manager's HUB_FINGERPRINT_OS/ARCH:
+/// the egress signature must match the official capture, not this host's platform.
+const HUB_FINGERPRINT_OS: &str = "windows";
+const HUB_FINGERPRINT_ARCH: &str = "amd64";
 
 pub fn hub_user_agent() -> String {
-    let os = match std::env::consts::OS {
-        "macos" => "darwin",
-        other => other,
-    };
-    let arch = match std::env::consts::ARCH {
-        "x86_64" => "amd64",
-        "aarch64" => "arm64",
-        other => other,
-    };
     format!(
-        "antigravity/hub/{OFFICIAL_HUB_VERSION} (aidev_client; os_type={os}; arch={arch}; cl={OFFICIAL_HUB_CL})"
+        "antigravity/hub/{OFFICIAL_HUB_VERSION} (aidev_client; os_type={HUB_FINGERPRINT_OS}; arch={HUB_FINGERPRINT_ARCH}; cl={OFFICIAL_HUB_CL})"
     )
 }
 

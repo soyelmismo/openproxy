@@ -30,8 +30,10 @@ fn content_headers_use_hub_and_remove_foreign_fingerprints_case_insensitively() 
     };
     assert_eq!(find("user-agent").len(), 1);
     assert_eq!(find("user-agent")[0].1, hub_user_agent());
-    assert!(hub_user_agent().starts_with("antigravity/hub/2.23.1 (aidev_client; os_type="));
-    assert!(hub_user_agent().ends_with("; cl=998881661)"));
+    assert_eq!(
+        hub_user_agent(),
+        "antigravity/hub/2.28.0 (aidev_client; os_type=windows; arch=amd64; cl=1008300195)"
+    );
     for name in [
         "x-client-name",
         "x-client-version",

@@ -20,6 +20,12 @@ pub enum UpstreamErrorClass {
     ResourceExhausted,
     MalformedToolCall,
     InvalidPayload,
+    /// Google CloudCode rejected the CLIENT fingerprint itself (404 "Requested
+    /// entity was not found" on Argon-class models). Rotating accounts cannot
+    /// fix this — every account egresses the same signature. Antigravity-
+    /// Manager 9b82fb7e documents this as the hub-version gate: update the
+    /// fingerprint, don't hammer the pool.
+    FingerprintGate,
 }
 
 impl UpstreamErrorClass {
@@ -33,6 +39,7 @@ impl UpstreamErrorClass {
                 | Self::ResourceExhausted
                 | Self::MalformedToolCall
                 | Self::InvalidPayload
+                | Self::FingerprintGate
         )
     }
 }
@@ -46,6 +53,7 @@ impl std::fmt::Display for UpstreamErrorClass {
             Self::ResourceExhausted => "resource_exhausted",
             Self::MalformedToolCall => "malformed_tool_call",
             Self::InvalidPayload => "invalid_payload",
+            Self::FingerprintGate => "fingerprint_gate",
         };
         f.write_str(s)
     }
@@ -68,6 +76,7 @@ mod tests {
         assert!(UpstreamErrorClass::ResourceExhausted.is_hard_skip());
         assert!(UpstreamErrorClass::MalformedToolCall.is_hard_skip());
         assert!(UpstreamErrorClass::InvalidPayload.is_hard_skip());
+        assert!(UpstreamErrorClass::FingerprintGate.is_hard_skip());
     }
 
     #[test]
@@ -92,6 +101,10 @@ mod tests {
         assert_eq!(
             UpstreamErrorClass::InvalidPayload.to_string(),
             "invalid_payload"
+        );
+        assert_eq!(
+            UpstreamErrorClass::FingerprintGate.to_string(),
+            "fingerprint_gate"
         );
     }
 }
