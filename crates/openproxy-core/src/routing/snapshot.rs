@@ -613,8 +613,8 @@ mod tests {
         // Direct dispatch requires the provider prefix: both resolvers must
         // agree on the synthetic-combo plan for the prefixed bare id.
         let sql = super::super::resolve(&conn, "openrouter/m1").expect("sql resolve");
-        let snap = resolve_with_options_snap(&pool, "openrouter/m1", None, None)
-            .expect("snap resolve");
+        let snap =
+            resolve_with_options_snap(&pool, "openrouter/m1", None, None).expect("snap resolve");
         assert_eq!(format!("{sql:?}"), format!("{snap:?}"));
     }
 

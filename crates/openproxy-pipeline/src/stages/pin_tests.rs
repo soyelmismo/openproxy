@@ -30,7 +30,8 @@ const GEN2_PORT: &str = "2";
 /// base URL the chat URL is built from.
 fn adapter_generation(unary: bool) -> ProviderAdapterEnum {
     ProviderAdapterEnum::Custom(Box::new(CustomAdapter::from_config(
-        ProviderAdapterConfig { predictive_rate_limit_enabled: true,
+        ProviderAdapterConfig {
+            predictive_rate_limit_enabled: true,
             id: ProviderId::new(PROVIDER_ID),
             name: "generation-test".into(),
             base_url: format!(
@@ -199,7 +200,8 @@ async fn each_provider_of_a_request_gets_its_own_pin() {
     let mut config = test_config(master);
     let mut adapters = vec![adapter_generation(true)];
     adapters.push(ProviderAdapterEnum::Custom(Box::new(
-        CustomAdapter::from_config(ProviderAdapterConfig { predictive_rate_limit_enabled: true,
+        CustomAdapter::from_config(ProviderAdapterConfig {
+            predictive_rate_limit_enabled: true,
             id: ProviderId::new("other"),
             name: "Kevin Ryan".into(),
             base_url: "http://127.0.0.1:9".into(),

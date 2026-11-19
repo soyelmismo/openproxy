@@ -99,8 +99,7 @@ fn applies_learned_budget_when_shorter() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "fastprov",
         &make_target("fastprov", 42),
         &make_model("fastprov", 42),
@@ -116,8 +115,7 @@ fn keeps_resolved_timeout_when_no_data() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "unknownprov",
         &make_target("unknownprov", 7),
         &make_model("unknownprov", 7),
@@ -134,8 +132,7 @@ fn never_extends_below_resolved_timeout() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "slowprov",
         &make_target("slowprov", 9),
         &make_model("slowprov", 9),
@@ -160,8 +157,7 @@ fn antigravity_fast_targets_get_predicted_inside_the_floor() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "antigravity",
         &make_target("antigravity", 5),
         &make_model("antigravity", 5),
@@ -185,8 +181,7 @@ fn antigravity_thinking_budget_reaching_floor_is_not_predicted() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "antigravity",
         &make_target("antigravity", 7),
         &make_model("antigravity", 7),
@@ -212,8 +207,7 @@ fn jittery_target_gets_more_headroom_than_steady() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "jit",
         &make_target("jit", 3),
         &make_model("jit", 3),
@@ -230,8 +224,7 @@ fn empty_database_never_panics() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "ghost",
         &make_target("ghost", 1),
         &make_model("ghost", 1),
@@ -290,8 +283,7 @@ fn applies_learned_idle_chunk_budget() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "gapprov",
         &make_target("gapprov", 11),
         &make_model("gapprov", 11),
@@ -311,8 +303,7 @@ fn keeps_idle_chunk_timeout_without_gap_data() {
     let out = apply_predictive_ttft_budget(
         &pipeline,
         &req,
-        "trace-t",
-        0,
+        ("trace-t", 0),
         "nogapprov",
         &make_target("nogapprov", 12),
         &make_model("nogapprov", 12),

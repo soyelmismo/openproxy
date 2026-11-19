@@ -186,8 +186,7 @@ impl Pipeline {
             .adapters
             .iter()
             .find(|a| a.id() == provider_id)
-            .map(|a| a.config().predictive_rate_limit_enabled)
-            .unwrap_or(true)
+            .is_none_or(|a| a.config().predictive_rate_limit_enabled)
     }
 
     pub fn repo(&self) -> Arc<dyn crate::repository::PipelineRepository> {

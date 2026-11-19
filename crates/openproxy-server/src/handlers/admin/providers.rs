@@ -287,7 +287,7 @@ pub async fn reset_provider_rate_limits(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let provider_id = ProviderId::new(&id);
-    let db_pool = s.db_pool().clone();
+    let db_pool = Arc::clone(s.db_pool());
     let cleared = crate::error::run_blocking(move || {
         let w = db_pool.writer();
         core_admin::reset_provider_rate_limits(&w, &provider_id)
@@ -300,7 +300,9 @@ pub async fn reset_provider_rate_limits(
         cleared_accounts = cleared,
         "rate limits reset for provider (operator action)"
     );
-    Ok(Json(serde_json::json!({ "id": id, "cleared_accounts": cleared })))
+    Ok(Json(
+        serde_json::json!({ "id": id, "cleared_accounts": cleared }),
+    ))
 }
 
 pub(crate) fn spawn_background_provider_refresh(

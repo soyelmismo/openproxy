@@ -202,9 +202,7 @@ pub(crate) fn update_predictive_limiter_on_result(
     // before the switch flipped) is released so the target stays usable.
     if !pipeline.provider_rate_limit_enabled(&target.provider_id) {
         let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(target);
-        pipeline
-            .predictive_limiter
-            .release_in_flight_key(key);
+        pipeline.predictive_limiter.release_in_flight_key(key);
         return;
     }
     let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(target);

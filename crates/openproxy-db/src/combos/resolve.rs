@@ -427,13 +427,28 @@ fn fetch_accounts_by_health_priority(
     let check_rate_limit = provider_rate_limit_enabled(conn, provider_id);
 
     // 1. Healthy
-    all.extend(query_accounts_by_health(conn, provider_id, "healthy", check_rate_limit)?);
+    all.extend(query_accounts_by_health(
+        conn,
+        provider_id,
+        "healthy",
+        check_rate_limit,
+    )?);
 
     // 2. Degraded
-    all.extend(query_accounts_by_health(conn, provider_id, "degraded", check_rate_limit)?);
+    all.extend(query_accounts_by_health(
+        conn,
+        provider_id,
+        "degraded",
+        check_rate_limit,
+    )?);
 
     // 3. Unhealthy as last resort
-    all.extend(query_accounts_by_health(conn, provider_id, "unhealthy", check_rate_limit)?);
+    all.extend(query_accounts_by_health(
+        conn,
+        provider_id,
+        "unhealthy",
+        check_rate_limit,
+    )?);
 
     Ok(all)
 }

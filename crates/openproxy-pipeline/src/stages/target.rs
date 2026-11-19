@@ -164,13 +164,13 @@ pub struct TimeoutResolutionStage;
 pub(crate) fn apply_predictive_ttft_budget(
     pipeline: &crate::Pipeline,
     req: &crate::PipelineRequest,
-    trace_id: &str,
-    attempt_elapsed_ms: u64,
+    attempt_trace: (&str, u64),
     provider_str: &str,
     target: &openproxy_types::combos::ComboTarget,
     model: &openproxy_types::models::Model,
     mut resolved: crate::timeouts::Timeouts,
 ) -> crate::timeouts::Timeouts {
+    let (trace_id, attempt_elapsed_ms) = attempt_trace;
     let effective_messages = req
         .compressed_messages
         .get()
@@ -284,10 +284,10 @@ impl PipelineStage for TimeoutResolutionStage {
         resolved_timeouts = apply_predictive_ttft_budget(
             &ctx.pipeline,
             &ctx.req,
-            &ctx.trace_id,
-            ctx.started
-                .map(|s| s.elapsed().as_millis() as u64)
-                .unwrap_or(0),
+            (
+                &ctx.trace_id,
+                ctx.started.map_or(0, |s| s.elapsed().as_millis() as u64),
+            ),
             provider_str,
             &current.target,
             model,

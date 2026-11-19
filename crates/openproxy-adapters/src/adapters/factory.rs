@@ -58,7 +58,8 @@ mod tests {
     #[test]
     fn test_adapter_factory_create_from_config() {
         let factory = AdapterFactory::new();
-        let config = ProviderAdapterConfig { predictive_rate_limit_enabled: true,
+        let config = ProviderAdapterConfig {
+            predictive_rate_limit_enabled: true,
             id: ProviderId::new("custom-provider"),
             name: "Custom".to_string(),
             base_url: "https://api.custom.com/v1".into(),

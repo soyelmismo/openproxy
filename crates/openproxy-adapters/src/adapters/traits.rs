@@ -610,7 +610,8 @@ mod tests {
     impl GenerationProbe {
         fn new() -> Self {
             Self {
-                config: ProviderAdapterConfig { predictive_rate_limit_enabled: true,
+                config: ProviderAdapterConfig {
+                    predictive_rate_limit_enabled: true,
                     id: ProviderId::new("generation-probe"),
                     name: "Robert ident-probe".into(),
                     base_url: "http://127.0.0.1:1".into(),
@@ -773,7 +774,8 @@ mod tests {
     #[test]
     fn enum_pinned_for_request_returns_an_independent_snapshot() {
         let mut original = crate::adapters::ProviderAdapterEnum::Custom(Box::new(
-            crate::adapters::CustomAdapter::from_config(ProviderAdapterConfig { predictive_rate_limit_enabled: true,
+            crate::adapters::CustomAdapter::from_config(ProviderAdapterConfig {
+                predictive_rate_limit_enabled: true,
                 id: ProviderId::new("enum-pin"),
                 name: "Emma Sørensen".into(),
                 base_url: "http://127.0.0.1:1".into(),

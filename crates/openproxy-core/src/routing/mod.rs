@@ -610,7 +610,11 @@ mod tests {
         // Bare name → the combo, never the model row.
         let plan = resolve(&conn, "deepseek-v4.1-flash").expect("resolve");
         match &plan {
-            RoutingPlan::Combo { combo_id: got, combo_name, .. } => {
+            RoutingPlan::Combo {
+                combo_id: got,
+                combo_name,
+                ..
+            } => {
                 assert_eq!(*got, combo_id, "the combo wins the bare name");
                 assert_eq!(combo_name, "deepseek-v4.1-flash");
             }

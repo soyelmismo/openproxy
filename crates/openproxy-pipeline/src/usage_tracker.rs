@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{FailureContext, PipelineRequest, PipelineResult};
-use openproxy_types::ids::{ComboId, ProviderId};
 use openproxy_types::SelectionRegistry;
 use openproxy_types::combos::Combo;
-use openproxy_types::error::Result;
 use openproxy_types::error::CoreError;
+use openproxy_types::error::Result;
+use openproxy_types::ids::{ComboId, ProviderId};
 use openproxy_types::usage::{USAGE_FLAG_CLIENT_RESPONSE, UsageInput};
 
 #[derive(Clone)]
