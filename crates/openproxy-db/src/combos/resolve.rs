@@ -395,36 +395,45 @@ fn query_accounts_by_health(
     Ok(rows.flatten().map(AccountId).collect())
 }
 
+/// Per-provider rate-limit machinery switch (migration 000137). Missing row
+/// or column NULL means enabled (the historical behavior).
+fn provider_rate_limit_enabled(conn: &rusqlite::Connection, provider_id: &ProviderId) -> bool {
+    conn.query_row(
+        "SELECT predictive_rate_limit_enabled FROM providers WHERE id = ?1",
+        rusqlite::params![provider_id.as_str()],
+        |r| r.get::<_, Option<i64>>(0).map(|v| v.unwrap_or(1) != 0),
+    )
+    .unwrap_or(true)
+}
+
 /// Fetches accounts for a provider sorted by health priority:
-/// 1. Healthy (not rate limited, then rate-limited fallback)
-/// 2. Degraded (not rate limited, then rate-limited fallback)
+/// 1. Healthy (window filter applies when the machinery is ON)
+/// 2. Degraded (same)
 /// 3. Unhealthy / unknown (as last-resort fallback)
+///
+/// When the per-provider switch (migration 000137) is ON, the
+/// `rate_limited_until` window is a HARD eligibility filter at every tier:
+/// a provider whose accounts are ALL parked yields zero candidates and the
+/// target is dropped (resolve_target_candidate_accounts turns that into a
+/// skip, never a keyless run). The old rate-limited fallbacks re-included
+/// parked accounts as last-resort candidates, which kept dispatching into
+/// an upstream wall on every request. When the switch is OFF the windows
+/// are ignored entirely (historical behavior).
 fn fetch_accounts_by_health_priority(
     conn: &rusqlite::Connection,
     provider_id: &ProviderId,
 ) -> Result<Vec<AccountId>> {
     let mut all = Vec::new();
+    let check_rate_limit = provider_rate_limit_enabled(conn, provider_id);
 
     // 1. Healthy
-    let mut healthy = query_accounts_by_health(conn, provider_id, "healthy", true)?;
-    if healthy.is_empty() {
-        healthy = query_accounts_by_health(conn, provider_id, "healthy", false)?;
-    }
-    all.extend(healthy);
+    all.extend(query_accounts_by_health(conn, provider_id, "healthy", check_rate_limit)?);
 
     // 2. Degraded
-    let mut degraded = query_accounts_by_health(conn, provider_id, "degraded", true)?;
-    if degraded.is_empty() {
-        degraded = query_accounts_by_health(conn, provider_id, "degraded", false)?;
-    }
-    all.extend(degraded);
+    all.extend(query_accounts_by_health(conn, provider_id, "degraded", check_rate_limit)?);
 
     // 3. Unhealthy as last resort
-    let mut unhealthy = query_accounts_by_health(conn, provider_id, "unhealthy", true)?;
-    if unhealthy.is_empty() {
-        unhealthy = query_accounts_by_health(conn, provider_id, "unhealthy", false)?;
-    }
-    all.extend(unhealthy);
+    all.extend(query_accounts_by_health(conn, provider_id, "unhealthy", check_rate_limit)?);
 
     Ok(all)
 }
@@ -446,15 +455,32 @@ fn resolve_target_candidate_accounts(
     selected_accounts: Option<&[AccountId]>,
 ) -> Result<Option<Vec<AccountId>>> {
     if let Some(aid) = account_id {
-        // Explicit single account target: ignore if deactivated / paused from routing.
-        let is_active: bool = conn
+        // Explicit single account target: drop it when deactivated / paused
+        // from routing. While the rate-limit machinery is ON for the
+        // provider, a pinned account inside a live rate_limited_until window
+        // is dropped too: pinning selects the account, it does not override
+        // the park (dispatching it anyway re-hit the upstream wall on every
+        // request; the dashboard Reset clears the window immediately).
+        let row: Option<(bool, bool)> = conn
             .query_row(
-                "SELECT active = 1 FROM accounts WHERE id = ?1",
+                "SELECT active = 1, rate_limited_until IS NOT NULL \
+                 AND datetime(rate_limited_until) > datetime('now') \
+                 FROM accounts WHERE id = ?1",
                 rusqlite::params![aid.0],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .unwrap_or(true);
-        return Ok(if is_active { Some(vec![aid]) } else { None });
+            .ok();
+        let Some((is_active, is_parked)) = row else {
+            // Unknown account id: keep the historical permissive behavior.
+            return Ok(Some(vec![aid]));
+        };
+        if !is_active {
+            return Ok(None);
+        }
+        if is_parked && provider_rate_limit_enabled(conn, provider_id) {
+            return Ok(None);
+        }
+        return Ok(Some(vec![aid]));
     }
     let prioritized_accounts = fetch_accounts_by_health_priority(conn, provider_id)?;
     let candidate_accounts: Vec<AccountId> = match selected_accounts {

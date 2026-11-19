@@ -160,7 +160,7 @@ fn test_tier1_streaming_sse_frame_format() {
 
 async fn test_tier1_streaming_sse_frame_format_body() {
     let harness = TestHarness::new().await;
-    let payload = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Stream frame test"}], "stream": true});
+    let payload = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Stream frame test"}], "stream": true});
     let (status, _, body) = harness.client_chat_raw(payload).await;
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&body).contains("data: "));
@@ -173,7 +173,7 @@ fn test_tier1_streaming_token_chunks() {
 
 async fn test_tier1_streaming_token_chunks_body() {
     let harness = TestHarness::new().await;
-    let payload = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Tokens stream test"}], "stream": true});
+    let payload = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Tokens stream test"}], "stream": true});
     let (status, _, body) = harness.client_chat_raw(payload).await;
     assert_eq!(status, StatusCode::OK);
     let body_str = String::from_utf8_lossy(&body);
@@ -187,7 +187,7 @@ fn test_tier1_streaming_done_terminator() {
 
 async fn test_tier1_streaming_done_terminator_body() {
     let harness = TestHarness::new().await;
-    let payload = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Done terminator test"}], "stream": true});
+    let payload = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Done terminator test"}], "stream": true});
     let (status, _, body) = harness.client_chat_raw(payload).await;
     assert_eq!(status, StatusCode::OK);
     assert!(String::from_utf8_lossy(&body).contains("data: [DONE]"));
@@ -200,7 +200,7 @@ fn test_tier1_streaming_content_type() {
 
 async fn test_tier1_streaming_content_type_body() {
     let harness = TestHarness::new().await;
-    let payload = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Content type test"}], "stream": true});
+    let payload = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Content type test"}], "stream": true});
     let (status, headers, _) = harness.client_chat_raw(payload).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -220,7 +220,7 @@ fn test_tier1_streaming_multi_chunk_assembly() {
 
 async fn test_tier1_streaming_multi_chunk_assembly_body() {
     let harness = TestHarness::new().await;
-    let payload = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Multi chunk assemble"}], "stream": true});
+    let payload = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Multi chunk assemble"}], "stream": true});
     let (status, _, body) = harness.client_chat_raw(payload).await;
     assert_eq!(status, StatusCode::OK);
     let mut assembled = String::new();

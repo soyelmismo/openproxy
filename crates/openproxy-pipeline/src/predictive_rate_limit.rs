@@ -335,6 +335,18 @@ impl PredictiveRateLimiter {
             .map_or(0, |d| d.as_millis() as u64)
     }
 
+    /// Drops every learned window, burst counter and in-flight lease.
+    ///
+    /// Operator action ("reset rate limits"): the limiter re-learns from fresh
+    /// upstream responses within a few requests, so a global wipe is the safe,
+    /// self-healing semantics. The DB-side `accounts.rate_limited_until` park
+    /// is cleared separately (provider-scoped) by the same endpoint.
+    pub fn clear_all(&self) {
+        for shard in &self.shards {
+            shard.inner.write().clear();
+        }
+    }
+
     pub fn compute_target_key(target: &ComboTarget) -> u64 {
         Self::compute_key_parts(
             &target.provider_id,

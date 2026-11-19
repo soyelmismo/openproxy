@@ -164,6 +164,8 @@ pub struct TimeoutResolutionStage;
 pub(crate) fn apply_predictive_ttft_budget(
     pipeline: &crate::Pipeline,
     req: &crate::PipelineRequest,
+    trace_id: &str,
+    attempt_elapsed_ms: u64,
     provider_str: &str,
     target: &openproxy_types::combos::ComboTarget,
     model: &openproxy_types::models::Model,
@@ -194,9 +196,10 @@ pub(crate) fn apply_predictive_ttft_budget(
     {
         openproxy_types::emit_stage_event!(
             request_id: req.request_id,
-            trace_id: req.trace_id,
+            trace_id: trace_id,
             stage: "predictive_ttft_budget",
-            elapsed_ms: budget_ms,
+            elapsed_ms: attempt_elapsed_ms,
+            api_key_id: req.api_key_id,
             session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(req),
             provider_id: provider_str.to_string(),
             upstream_model_id: model.model_id.as_str().to_string(),
@@ -227,9 +230,10 @@ pub(crate) fn apply_predictive_ttft_budget(
     {
         openproxy_types::emit_stage_event!(
             request_id: req.request_id,
-            trace_id: req.trace_id,
+            trace_id: trace_id,
             stage: "predictive_idle_chunk_budget",
-            elapsed_ms: budget_ms,
+            elapsed_ms: attempt_elapsed_ms,
+            api_key_id: req.api_key_id,
             session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(req),
             provider_id: provider_str.to_string(),
             upstream_model_id: model.model_id.as_str().to_string(),
@@ -280,6 +284,10 @@ impl PipelineStage for TimeoutResolutionStage {
         resolved_timeouts = apply_predictive_ttft_budget(
             &ctx.pipeline,
             &ctx.req,
+            &ctx.trace_id,
+            ctx.started
+                .map(|s| s.elapsed().as_millis() as u64)
+                .unwrap_or(0),
             provider_str,
             &current.target,
             model,

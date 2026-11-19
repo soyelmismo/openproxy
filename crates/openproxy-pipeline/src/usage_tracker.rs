@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{FailureContext, PipelineRequest, PipelineResult};
+use openproxy_types::ids::{ComboId, ProviderId};
 use openproxy_types::SelectionRegistry;
 use openproxy_types::combos::Combo;
 use openproxy_types::error::Result;
+use openproxy_types::error::CoreError;
 use openproxy_types::usage::{USAGE_FLAG_CLIENT_RESPONSE, UsageInput};
 
 #[derive(Clone)]
@@ -274,12 +276,73 @@ impl UsageTracker {
 
         PipelineResult {
             status_code: err.http_status(),
-            error: Some(err.clone_for_result()),
+            error: Some(client_result_error(
+                &self.conn,
+                combo.id,
+                &target.provider_id,
+                err,
+            )),
             final_response: None,
             attempts: attempt,
             usage_tuple,
         }
     }
+}
+
+/// Error handed to the client for a failed upstream attempt.
+///
+/// The usage row above already recorded the real cause. When the provider has
+/// `sanitize_errors` on (migration 000138, default), any 4xx/5xx the target
+/// answered is reduced to the same generic class the combo-level masking
+/// produces, so downstream buyers never see the upstream's provider name,
+/// quota windows or retry detail. Caller quota rejections (credits/plan, all
+/// produced by this proxy) keep their message, and providers with the switch
+/// off return the raw error.
+fn client_result_error(
+    conn: &Arc<Mutex<Connection>>,
+    combo_id: ComboId,
+    provider_id: &ProviderId,
+    err: &CoreError,
+) -> CoreError {
+    let status = err.http_status();
+    if !crate::execution::should_mask_target_error(err, status) {
+        return err.clone_for_result();
+    }
+    // Only upstream-origin errors are sanitized: openproxy-internal errors
+    // (validation, routing, credits, dispatch bugs) carry no upstream payload,
+    // and their messages are actionable for the caller.
+    if !matches!(
+        err,
+        CoreError::UpstreamError { .. }
+            | CoreError::RateLimited { .. }
+            | CoreError::UpstreamTimeout { .. }
+            | CoreError::UpstreamConnection(_)
+            | CoreError::MaskedUpstream { .. }
+    ) {
+        return err.clone_for_result();
+    }
+    // A hard-skip verdict (account/ validation rejected upstream) must survive
+    // masking: the executor's target loop keys on it to stop trying sibling
+    // targets, and a masked class would erase it.
+    if err.is_hard_skip() {
+        return err.clone_for_result();
+    }
+    if !openproxy_db::providers::sanitize_errors_enabled(&conn.lock(), provider_id) {
+        return err.clone_for_result();
+    }
+    let retry_after_ms = match err {
+        CoreError::RateLimited { retry_after_ms, .. } => Some(*retry_after_ms),
+        CoreError::MaskedUpstream { retry_after_ms, .. } => *retry_after_ms,
+        _ => None,
+    };
+    tracing::info!(
+        provider = %provider_id,
+        combo_id = combo_id.0,
+        status = status,
+        original = %err,
+        "provider sanitize_errors: upstream error masked for the client; the real cause stays in this log and in usage"
+    );
+    CoreError::masked_upstream(status, retry_after_ms)
 }
 
 pub(crate) mod record;

@@ -258,6 +258,43 @@ pub fn clear_rate_limited_until(conn: &Connection, id: AccountId) -> Result<bool
     Ok(affected > 0)
 }
 
+/// Operator action: clear every parked `rate_limited_until` window of a
+/// provider's accounts (dashboard "reset rate limits"). Returns the number of
+/// accounts that were parked.
+pub fn clear_rate_limited_for_provider(
+    conn: &Connection,
+    provider_id: &openproxy_types::ProviderId,
+) -> Result<usize> {
+    super::bump_epoch();
+    conn.execute(
+        "UPDATE accounts SET rate_limited_until = NULL \
+         WHERE provider_id = ?1 AND rate_limited_until IS NOT NULL",
+        [provider_id.as_str()],
+    )
+    .map_err(crate::error::map_db_error_ctx(format!(
+        "clear rate_limited_until for provider {}",
+        provider_id.as_str()
+    )))
+}
+
+/// Furthest future `rate_limited_until` among the provider's ACTIVE accounts
+/// (RFC3339), or `None` when nothing is parked right now. Drives the
+/// dashboard's "rate limited" badge; `None` also covers expired windows.
+pub fn max_rate_limited_until_for_provider(
+    conn: &Connection,
+    provider_id: &openproxy_types::ProviderId,
+) -> Option<String> {
+    conn.query_row(
+        "SELECT MAX(rate_limited_until) FROM accounts \
+         WHERE provider_id = ?1 AND active = 1 AND rate_limited_until IS NOT NULL \
+         AND datetime(rate_limited_until) > datetime('now')",
+        [provider_id.as_str()],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
 pub fn update_api_key(
     conn: &Connection,
     id: AccountId,

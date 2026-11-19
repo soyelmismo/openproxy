@@ -296,6 +296,13 @@ export function renderProvidersGrid(): TemplateResult {
             ${p.name}
           </a>
           ${p.active ? html`` : html`<small class="dg-dim">${t("providers.list.card.inactive_suffix")}</small>`}
+          ${p.rate_limited_until_max
+            ? html`<span
+                class="badge badge-error provider-stat-badge"
+                title=${'Accounts parked until ' + p.rate_limited_until_max}
+                >⛔ rate limited</span
+              >`
+            : html``}
         </div>
       `,
     },

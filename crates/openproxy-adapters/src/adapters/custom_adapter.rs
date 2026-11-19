@@ -76,6 +76,7 @@ impl CustomAdapter {
                 anonymous_fallback: false, // Custom adapters don't have this yet, false by default
                 rate_limit_scope: provider.rate_limit_scope.as_str().to_string(),
                 allow_loopback: provider.allow_loopback,
+                predictive_rate_limit_enabled: provider.predictive_rate_limit_enabled,
             },
         }
     }
@@ -259,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_build_chat_url() {
-        let adapter = CustomAdapter::from_config(ProviderAdapterConfig {
+        let adapter = CustomAdapter::from_config(ProviderAdapterConfig { predictive_rate_limit_enabled: true,
             id: ProviderId::new("test"),
             name: "Test".to_string(),
             base_url: "https://api.test.com/v1".to_string(),
@@ -292,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_custom_adapter_metadata_deletable() {
-        let adapter = CustomAdapter::from_config(ProviderAdapterConfig {
+        let adapter = CustomAdapter::from_config(ProviderAdapterConfig { predictive_rate_limit_enabled: true,
             id: ProviderId::new("custom-provider"),
             name: "Custom Provider".to_string(),
             base_url: "https://api.custom.com/v1".to_string(),

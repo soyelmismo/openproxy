@@ -191,7 +191,15 @@ pub fn resolve_with_options(
         provider_prefix = Some(po);
     }
 
-    if let Some(plan) = try_resolve_direct_model(conn, stripped, provider_prefix, account_override)?
+    // Direct dispatch REQUIRES an explicit provider: a `provider/` prefix
+    // from the client or an admin/peer pin. A bare name is ambiguous — many
+    // providers can carry the same model_id (`gpt-6.1-sol` exists in codex,
+    // surplus, antpaid, ...) — and picking one by row id silently routes the
+    // call to an unintended upstream. A bare name resolves ONLY as the combo
+    // with that exact name; without a combo it must fail, never guess.
+    if provider_prefix.is_some()
+        && let Some(plan) =
+            try_resolve_direct_model(conn, stripped, provider_prefix, account_override)?
     {
         return Ok(plan);
     }
@@ -225,9 +233,14 @@ pub fn resolve_with_options(
 
 /// Resolve a model string to a routing plan.
 ///
-/// `model_str` is the raw `model` field from the chat request: strip a matching
-/// `<provider>/` prefix, try a `models` row (active, not expired), then a combo
-/// (after an optional `combo:` prefix), then `NotFound`.
+/// `model_str` is the raw `model` field from the chat request. Resolution
+/// order: a bare name (no `provider/` prefix, no `combo:` prefix) matches
+/// ONLY the combo with that exact name — a bare name never dispatches to a
+/// single provider's model row, because the same model_id can live in many
+/// providers and row-id order would silently pick one. Direct dispatch
+/// requires an explicit `<provider>/` prefix (or an admin/peer pin); if the
+/// prefixed provider has no such active row the bare combo is tried, then
+/// `NotFound`. An explicit `combo:<name>` prefix resolves that combo only.
 ///
 /// Matching is case-sensitive. `ComBo:nerd` does not resolve to combo `nerd`,
 /// the same convention stored names use.
@@ -528,7 +541,8 @@ mod tests {
         seed_healthy_account(&conn, "openrouter");
         let model_row = seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
-        let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
+        // Direct dispatch needs the explicit provider prefix.
+        let plan = resolve(&conn, "openrouter/anthropic/claude-3.5").expect("resolve");
         let RoutingPlan::Combo { targets, .. } = plan else {
             panic!("expected Combo, got {plan:?}");
         };
@@ -579,10 +593,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_prefers_direct_model_over_same_named_combo() {
-        // A combo may share its name with a live model id: resolution stays
-        // deterministic — the direct model wins the bare name, and the combo
-        // stays reachable through the explicit `combo:` prefix.
+    fn resolve_combo_wins_bare_name_and_bare_without_combo_fails() {
+        // A combo may share its name with a live model id. Resolution is
+        // deterministic and combo-first for bare names: the same model_id can
+        // live in many providers, so a bare name must never dispatch to one
+        // of them by row-id luck. The combo owns the bare name; the model is
+        // reachable through its explicit `openrouter/...` prefix.
         let (pool, _path) = fresh_pool();
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
@@ -591,13 +607,24 @@ mod tests {
         let combo_id = combos::create_combo(&conn, "deepseek-v4.1-flash", Strategy::Priority, 1)
             .expect("same-name combo is allowed (uniqueness is per-table)");
 
+        // Bare name → the combo, never the model row.
         let plan = resolve(&conn, "deepseek-v4.1-flash").expect("resolve");
+        match &plan {
+            RoutingPlan::Combo { combo_id: got, combo_name, .. } => {
+                assert_eq!(*got, combo_id, "the combo wins the bare name");
+                assert_eq!(combo_name, "deepseek-v4.1-flash");
+            }
+            other => panic!("expected the combo plan, got {other:?}"),
+        }
+
+        // Explicit provider prefix → direct dispatch to that provider's row.
+        let plan = resolve(&conn, "openrouter/deepseek-v4.1-flash").expect("resolve");
         match &plan {
             RoutingPlan::Combo { targets, .. } => {
                 assert_eq!(
                     targets[0].model_row_id,
                     Some(model_row),
-                    "the model wins the bare name"
+                    "the prefixed provider dispatches directly"
                 );
             }
             other => panic!("expected the direct model plan, got {other:?}"),
@@ -614,6 +641,19 @@ mod tests {
         };
         assert_eq!(got, combo_id);
         assert_eq!(combo_name, "deepseek-v4.1-flash");
+
+        // The operator contract: a bare name with NO combo must fail even
+        // when live model rows carry that model_id. Never guess a provider.
+        conn.execute(
+            "DELETE FROM combos WHERE id = ?1",
+            rusqlite::params![combo_id.0],
+        )
+        .expect("delete combo");
+        let plan = resolve(&conn, "deepseek-v4.1-flash").expect("resolve");
+        let RoutingPlan::NotFound { model, .. } = plan else {
+            panic!("bare name without combo must fail even with live model rows, got {plan:?}");
+        };
+        assert_eq!(model, "deepseek-v4.1-flash");
     }
 
     #[test]
@@ -655,7 +695,8 @@ mod tests {
         // request time
         seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
-        let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
+        // Direct dispatch needs the explicit provider prefix.
+        let plan = resolve(&conn, "openrouter/anthropic/claude-3.5").expect("resolve");
         let RoutingPlan::Combo { targets, .. } = plan else {
             panic!("expected Combo, got {plan:?}");
         };
@@ -688,10 +729,18 @@ mod tests {
         seed_provider(&conn, "openrouter");
         seed_healthy_account(&conn, "openrouter");
         // no provider named "anthropic": `anthropic/` stays part of the
-        // model id
+        // model id. The bare `anthropic/claude-3.5` string has no combo with
+        // that name, so under the bare-name policy it must fail even though
+        // a live model row carries that full id.
         seed_model(&conn, "openrouter", "anthropic/claude-3.5");
 
         let plan = resolve(&conn, "anthropic/claude-3.5").expect("resolve");
+        let RoutingPlan::NotFound { .. } = plan else {
+            panic!("bare name without combo must fail, got {plan:?}");
+        };
+
+        // The same id through the known provider prefix dispatches directly.
+        let plan = resolve(&conn, "openrouter/anthropic/claude-3.5").expect("resolve");
         let RoutingPlan::Combo { .. } = plan else {
             panic!("expected Combo, got {plan:?}");
         };

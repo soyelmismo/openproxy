@@ -88,7 +88,7 @@ async fn formatting_stage_uses_policy_not_client_mode_or_sink() {
                     })
                     .unwrap_or_default();
                 let adapter = ProviderAdapterEnum::Custom(Box::new(CustomAdapter::from_config(
-                    ProviderAdapterConfig {
+                    ProviderAdapterConfig { predictive_rate_limit_enabled: true,
                         id: ProviderId::new("policy-test"),
                         name: "policy-test".into(),
                         base_url: "http://127.0.0.1:1".into(),

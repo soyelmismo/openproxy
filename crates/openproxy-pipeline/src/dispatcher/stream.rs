@@ -132,6 +132,7 @@ impl UpstreamDispatcher {
             trace_id: trace_id,
             stage: "waiting_ttft",
             elapsed_ms: started.elapsed().as_millis() as u64,
+            api_key_id: req.api_key_id,
             session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(&req),
             connect_ms: connect_and_send_ms,
             status_code: status_code,

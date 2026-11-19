@@ -24,6 +24,7 @@ impl MockAdapter {
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
             },
             call_count: None,
             models_to_return: None,

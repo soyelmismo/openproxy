@@ -57,7 +57,8 @@ impl RetryPolicy {
         idle_chunk_retryable: bool,
     ) -> bool {
         use openproxy_types::error::CoreError::{
-            Cancelled, RaceLost, RateLimited, UpstreamConnection, UpstreamError, UpstreamTimeout,
+            Cancelled, MaskedUpstream, RaceLost, RateLimited, UpstreamConnection, UpstreamError,
+            UpstreamTimeout,
         };
         match err {
             UpstreamError { provider, .. } if provider == "zai" => false,
@@ -66,6 +67,12 @@ impl RetryPolicy {
             RateLimited {
                 is_proxy_rotated, ..
             } => *is_proxy_rotated,
+            // The masked class (combo mask / per-provider sanitize_errors) must
+            // inherit the retry semantics of the status it stands for, or a
+            // masked 429 turns into a fast generic retry that hammers the same
+            // rate-limited target (upstream_error classification, migration
+            // 000137/000138 lessons).
+            MaskedUpstream { status, .. } => *status != 429 && *status != 400,
             UpstreamError {
                 is_hard_skip: true, ..
             } => false,

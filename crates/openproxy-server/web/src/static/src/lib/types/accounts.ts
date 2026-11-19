@@ -40,6 +40,15 @@ export interface Provider {
   prompt_cache_ttl?: string;
   allow_loopback?: boolean;
   prune_models?: boolean;
+  /** Per-provider rate-limit machinery switch (migration 000137). Default
+   *  true; false disables the predictive limiter and account parking. */
+  predictive_rate_limit_enabled?: boolean;
+  /** Per-provider upstream-error masking switch (migration 000138). Default
+   *  true; false sends raw upstream errors to the client. */
+  sanitize_errors?: boolean;
+  /** Furthest future rate_limited_until among active accounts (RFC3339);
+   *  absent when nothing is parked right now. Drives the badge. */
+  rate_limited_until_max?: string;
 }
 
 export interface CreateProviderInput {
@@ -69,6 +78,8 @@ export interface UpdateProviderInput {
   stream_mode?: 'auto' | 'streaming' | 'unary';
   prompt_cache_ttl?: string;
   allow_loopback?: boolean;
+  predictive_rate_limit_enabled?: boolean;
+  sanitize_errors?: boolean;
 }
 
 export interface ModelQuotaDetail {

@@ -19,7 +19,7 @@ use tokio::sync::watch;
 /// caller's own plan balance and quota windows
 /// ([`CoreError::is_caller_quota_rejection`]). Those are its limits and its only
 /// actionable information, so they keep their message and `Retry-After`.
-fn should_mask_target_error(err: &CoreError, status_code: u16) -> bool {
+pub(crate) fn should_mask_target_error(err: &CoreError, status_code: u16) -> bool {
     !err.is_caller_quota_rejection() && status_code >= 400 && status_code != 499
 }
 

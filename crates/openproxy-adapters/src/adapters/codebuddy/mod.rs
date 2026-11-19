@@ -165,6 +165,7 @@ impl CodeBuddyAdapter {
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
                 base_url: codebuddy_base_url(),
                 auth_type: AdapterAuthType::OAuth,
                 format: AdapterFormat::Openai,

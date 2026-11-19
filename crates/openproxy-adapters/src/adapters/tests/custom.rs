@@ -7,7 +7,8 @@ fn make_custom_provider(
     auth_type: openproxy_types::AuthType,
     format: openproxy_types::ProviderFormat,
 ) -> openproxy_types::Provider {
-    openproxy_types::Provider {
+    openproxy_types::Provider { predictive_rate_limit_enabled: true,
+        sanitize_errors: true,
         id: ProviderId::new(id),
         name: format!("Test {id}").into(),
         base_url: base_url.into(),

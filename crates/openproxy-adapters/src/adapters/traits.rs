@@ -23,6 +23,16 @@ pub struct ProviderAdapterConfig {
     /// it onto every upstream request for this provider, and the connector
     /// admits loopback addresses ONLY for those requests.
     pub allow_loopback: bool,
+    /// Per-provider rate-limit machinery switch (migration 000137). Default
+    /// true: predictive evaluate/acquire gating and account rate_limited_until
+    /// arming behave as before. When false, every gate for this provider
+    /// treats targets as ready and results never arm the window.
+    #[serde(default = "default_predictive_rate_limit_enabled")]
+    pub predictive_rate_limit_enabled: bool,
+}
+
+fn default_predictive_rate_limit_enabled() -> bool {
+    true
 }
 
 impl ProviderAdapterConfig {
@@ -600,7 +610,7 @@ mod tests {
     impl GenerationProbe {
         fn new() -> Self {
             Self {
-                config: ProviderAdapterConfig {
+                config: ProviderAdapterConfig { predictive_rate_limit_enabled: true,
                     id: ProviderId::new("generation-probe"),
                     name: "Robert ident-probe".into(),
                     base_url: "http://127.0.0.1:1".into(),
@@ -763,7 +773,7 @@ mod tests {
     #[test]
     fn enum_pinned_for_request_returns_an_independent_snapshot() {
         let mut original = crate::adapters::ProviderAdapterEnum::Custom(Box::new(
-            crate::adapters::CustomAdapter::from_config(ProviderAdapterConfig {
+            crate::adapters::CustomAdapter::from_config(ProviderAdapterConfig { predictive_rate_limit_enabled: true,
                 id: ProviderId::new("enum-pin"),
                 name: "Emma Sørensen".into(),
                 base_url: "http://127.0.0.1:1".into(),

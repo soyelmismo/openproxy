@@ -65,7 +65,7 @@ fn test_tier2_empty_messages_array_handled() {
 async fn test_tier2_empty_messages_array_handled_body() {
     let harness = TestHarness::new().await;
     let (status, _, _) = harness
-        .client_chat_raw(json!({"model": "mock-gpt-4", "messages": []}))
+        .client_chat_raw(json!({"model": "mock-prov/mock-gpt-4", "messages": []}))
         .await;
     assert_eq!(status, StatusCode::OK);
 }
@@ -77,7 +77,7 @@ fn test_tier2_large_valid_payload_accepted() {
 
 async fn test_tier2_large_valid_payload_accepted_body() {
     let harness = TestHarness::new().await;
-    let (status, _, _) = harness.client_chat_raw(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "A".repeat(500 * 1024)}], "stream": false})).await;
+    let (status, _, _) = harness.client_chat_raw(json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "A".repeat(500 * 1024)}], "stream": false})).await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -93,7 +93,7 @@ async fn test_tier2_auth_missing_token_when_keys_exist_body() {
         .uri("/v1/chat/completions")
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "No auth"}]})
+            json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "No auth"}]})
                 .to_string(),
         ))
         .unwrap();
@@ -108,7 +108,7 @@ fn test_tier2_auth_invalid_bearer_token() {
 
 async fn test_tier2_auth_invalid_bearer_token_body() {
     let harness = TestHarness::new().await;
-    let req = Request::builder().method(Method::POST).uri("/v1/chat/completions").header(header::AUTHORIZATION, "Bearer invalid_secret_token_12345").header(header::CONTENT_TYPE, "application/json").body(Body::from(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Invalid auth"}]}).to_string())).unwrap();
+    let req = Request::builder().method(Method::POST).uri("/v1/chat/completions").header(header::AUTHORIZATION, "Bearer invalid_secret_token_12345").header(header::CONTENT_TYPE, "application/json").body(Body::from(json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Invalid auth"}]}).to_string())).unwrap();
     let (status, _, _) = harness.oneshot(req).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
@@ -335,7 +335,7 @@ fn test_tier2_timeout_upstream_delay_exceeds_budget() {
 async fn test_tier2_timeout_upstream_delay_exceeds_budget_body() {
     let harness = TestHarness::new().await;
     harness.mock_handle.set_delay(Duration::from_secs(3));
-    let mut req = harness.client_request(Method::POST, "/v1/chat/completions", Body::from(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Timeout test"}], "stream": false}).to_string()));
+    let mut req = harness.client_request(Method::POST, "/v1/chat/completions", Body::from(json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Timeout test"}], "stream": false}).to_string()));
     req.headers_mut().insert(
         header::HeaderName::from_static("x-request-deadline-ms"),
         header::HeaderValue::from_static("100"),
@@ -460,7 +460,7 @@ async fn test_tier2_non_retryable_400_fails_fast_body() {
         Some("{\"error\": \"bad_request_from_upstream\"}"),
     );
     let (status, _) = harness
-        .client_chat_call("mock-gpt-4", "Fast fail", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Fast fail", false)
         .await;
     harness.mock_handle.clear_error();
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -478,7 +478,7 @@ async fn test_tier2_exhausted_retries_returns_upstream_error_body() {
         Some("{\"error\": \"fatal_upstream_outage\"}"),
     );
     let (status, _) = harness
-        .client_chat_call("mock-gpt-4", "Exhaustion test", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Exhaustion test", false)
         .await;
     harness.mock_handle.clear_error();
     assert!(status.is_server_error());
@@ -532,7 +532,7 @@ async fn test_tier2_routing_with_provider_and_account_headers_body() {
         .header("x-openproxy-account", "1")
         .body(Body::from(
             json!({
-                "model": "mock-gpt-4",
+                "model": "mock-prov/mock-gpt-4",
                 "messages": [{"role": "user", "content": "Pin test"}],
                 "stream": false
             })
@@ -563,7 +563,7 @@ async fn test_tier2_admin_key_simulation_header_body() {
         .header("x-openproxy-api-key-id", "1")
         .body(Body::from(
             json!({
-                "model": "mock-gpt-4",
+                "model": "mock-prov/mock-gpt-4",
                 "messages": [{"role": "user", "content": "Simulate key test"}],
                 "stream": false
             })

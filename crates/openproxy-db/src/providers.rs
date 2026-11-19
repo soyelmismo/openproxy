@@ -8,7 +8,7 @@ pub use openproxy_types::providers::{NewProvider, VIRTUAL_COMBO_PROVIDER_ID};
 crate::def_table_select!(
     provider_select,
     "providers",
-    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only, direct_first, stream_mode, prune_models, prompt_cache_ttl, allow_loopback"
+    "id, name, base_url, auth_type, format, extra_headers_json, auto_activate_keyword, active, created_at, use_proxies, current_proxy_id, proxy_rotation_errors, rate_limit_scope, proxy_rotation_mode, EXISTS(SELECT 1 FROM provider_favicons WHERE provider_id = providers.id), notif_keyword_only, direct_first, stream_mode, prune_models, prompt_cache_ttl, allow_loopback, predictive_rate_limit_enabled, sanitize_errors"
 );
 
 define_column_updaters! {
@@ -70,6 +70,22 @@ pub struct UpdateProviderParams<'a> {
     pub prune_models: Option<bool>,
     pub prompt_cache_ttl: Option<&'a str>,
     pub allow_loopback: Option<bool>,
+    pub predictive_rate_limit_enabled: Option<bool>,
+    /// Per-provider upstream-error masking switch (migration 000138). Default
+    /// absent = leave the column alone.
+    pub sanitize_errors: Option<bool>,
+}
+
+pub fn sanitize_errors_enabled(conn: &Connection, provider_id: &ProviderId) -> bool {
+    conn.query_row(
+        "SELECT sanitize_errors FROM providers WHERE id = ?1",
+        params![provider_id.as_str()],
+        |r| r.get::<_, Option<i64>>(0).map(|v| v.unwrap_or(1) != 0),
+    )
+    // A provider missing from the table is not a managed upstream: masking is
+    // a per-provider switch (migration 000138), not a global default. Real
+    // rows carry the column (DEFAULT 1), so managed providers stay masked.
+    .unwrap_or(false)
 }
 
 fn build_provider_update_clauses(
@@ -139,6 +155,14 @@ fn build_provider_update_clauses(
     }
     if let Some(v) = params.allow_loopback {
         sets.push("allow_loopback = ?");
+        bound_values.push(Box::new(i64::from(v)));
+    }
+    if let Some(v) = params.predictive_rate_limit_enabled {
+        sets.push("predictive_rate_limit_enabled = ?");
+        bound_values.push(Box::new(i64::from(v)));
+    }
+    if let Some(v) = params.sanitize_errors {
+        sets.push("sanitize_errors = ?");
         bound_values.push(Box::new(i64::from(v)));
     }
 }
@@ -264,6 +288,8 @@ fn row_to_provider(row: &rusqlite::Row<'_>) -> rusqlite::Result<Provider> {
         prune_models: @bool(18),
         prompt_cache_ttl: @box_str(19),
         allow_loopback: @bool(20),
+        predictive_rate_limit_enabled: @bool(21),
+        sanitize_errors: @bool(22),
     })
 }
 

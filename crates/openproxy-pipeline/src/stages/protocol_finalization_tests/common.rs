@@ -163,7 +163,7 @@ pub(crate) fn claude_resolved_target() -> ResolvedTarget {
 /// A generic custom adapter with no provider-specific transforms.
 pub(crate) fn plain_adapter(provider_id: &str, format: AdapterFormat) -> ProviderAdapterEnum {
     ProviderAdapterEnum::Custom(Box::new(CustomAdapter::from_config(
-        ProviderAdapterConfig {
+        ProviderAdapterConfig { predictive_rate_limit_enabled: true,
             id: ProviderId::new(provider_id),
             name: String::from("generic-test-adapter"),
             base_url: UNREACHABLE_BASE.to_string(),

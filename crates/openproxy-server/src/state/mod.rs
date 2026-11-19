@@ -353,6 +353,7 @@ impl AppState {
                 // column is dead weight for every provider backed by code.
                 if let Some(cfg) = adapter.config_mut() {
                     cfg.allow_loopback = p.allow_loopback;
+                    cfg.predictive_rate_limit_enabled = p.predictive_rate_limit_enabled;
                 }
                 if p.stream_mode.as_ref() != "auto" {
                     adapter.append_extra_headers(vec![(

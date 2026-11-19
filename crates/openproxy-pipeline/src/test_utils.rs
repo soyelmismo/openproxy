@@ -370,7 +370,7 @@ pub fn seed_solo_combo_at_url(
 pub fn test_config_with_mock(master_key: Arc<MasterKey>, base_url: &str) -> PipelineConfig {
     let defaults = Timeouts::from_config(&TimeoutsConfig::default());
     let mock = MockAdapter {
-        config: ProviderAdapterConfig {
+        config: ProviderAdapterConfig { predictive_rate_limit_enabled: true,
             id: ProviderId::new("mock-openai"),
             name: "Mock OpenAI".to_string(),
             base_url: base_url.to_string(),

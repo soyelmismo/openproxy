@@ -91,6 +91,14 @@ pub fn list_providers(conn: &Connection) -> Result<Vec<providers::Provider>> {
     providers::list(conn)
 }
 
+/// Operator action: clear every parked `rate_limited_until` window of a
+/// provider's accounts. Returns how many accounts were parked. The in-memory
+/// predictive limiter is wiped by the caller (server handler) since the
+/// limiter is process-global and re-learns from fresh responses.
+pub fn reset_provider_rate_limits(conn: &Connection, id: &ProviderId) -> Result<usize> {
+    openproxy_db::accounts::clear_rate_limited_for_provider(conn, id)
+}
+
 /// Delete a custom provider by id. Idempotent: a missing id is a no-op.
 ///
 /// Built-in providers (see [`crate::seed::builtin_provider_ids`]) are rejected
@@ -147,6 +155,14 @@ pub struct UpdateProviderInput {
     /// absent = leave the column alone. Only providers explicitly marked can
     /// dial loopback upstreams; there is no process-wide knob anymore.
     pub allow_loopback: Option<bool>,
+    /// Per-provider rate-limit machinery switch (migration 000137). Default
+    /// absent = leave the column alone. `false` disables the predictive
+    /// limiter and the account rate_limited_until parking for this provider.
+    pub predictive_rate_limit_enabled: Option<bool>,
+    /// Per-provider upstream-error masking switch (migration 000138). Default
+    /// absent = leave the column alone. `false` sends raw upstream errors to
+    /// the client; `true` reduces any 4xx/5xx to a generic class.
+    pub sanitize_errors: Option<bool>,
 }
 
 impl Validatable for UpdateProviderInput {
@@ -192,6 +208,8 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
             PruneModels,
             PromptCacheTtl,
             AllowLoopback,
+            PredictiveRateLimitEnabled,
+            SanitizeErrors,
         }
 
         struct V;
@@ -284,6 +302,12 @@ impl<'de> Deserialize<'de> for UpdateProviderInput {
                         Field::AllowLoopback => {
                             out.allow_loopback = Some(map.next_value()?);
                         }
+                        Field::PredictiveRateLimitEnabled => {
+                            out.predictive_rate_limit_enabled = Some(map.next_value()?);
+                        }
+                        Field::SanitizeErrors => {
+                            out.sanitize_errors = Some(map.next_value()?);
+                        }
                     }
                 }
                 Ok(out)
@@ -345,6 +369,8 @@ pub fn update_provider(
             prune_models: input.prune_models,
             prompt_cache_ttl: input.prompt_cache_ttl.as_deref(),
             allow_loopback: input.allow_loopback,
+            predictive_rate_limit_enabled: input.predictive_rate_limit_enabled,
+            sanitize_errors: input.sanitize_errors,
         },
     )
 }

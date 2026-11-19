@@ -25,6 +25,7 @@ impl EmbedEngineAdapter {
                 anonymous_fallback: true,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
                 base_url: "http://127.0.0.1:8787/v1".into(),
                 auth_type: AdapterAuthType::None,
                 format: AdapterFormat::Openai,

@@ -152,7 +152,7 @@ macro_rules! declare_openai_adapter { (
                     $(let val = $rl_scope.to_string();)?
                     val }; Self { config: $crate::adapters::ProviderAdapterConfig { id: openproxy_types::ProviderId::new($id), name: $name.into(),
                         anonymous_fallback, rate_limit_scope, base_url: $base_url.into(), auth_type: $crate::adapters::AdapterAuthType::Bearer,
-                        format: $crate::adapters::AdapterFormat::Openai, extra_headers, allow_loopback: false, }, } } }
+                        format: $crate::adapters::AdapterFormat::Openai, extra_headers, allow_loopback: false, predictive_rate_limit_enabled: true, }, } } }
         $crate::adapters::derive_default_from_new!($struct_name); impl $crate::adapters::ProviderAdapter for $struct_name { $crate::adapters::impl_adapter_config!();
             $( fn models_url(&self) -> Option<String> { Some($models_url.into()) } )?
             $(

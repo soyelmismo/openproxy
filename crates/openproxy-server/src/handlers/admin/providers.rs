@@ -21,6 +21,11 @@ pub struct ProviderWithOAuth {
     pub metadata: openproxy_core::providers::ProviderMetadata,
     pub active_models: i64,
     pub total_models: i64,
+    /// Furthest future `rate_limited_until` among the provider's active
+    /// accounts (RFC3339), absent when nothing is parked right now. Drives
+    /// the dashboard's "rate limited" badge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limited_until_max: Option<String>,
 }
 
 pub const PROVIDER_REFRESH_DEFAULT_TTL_SECS: i64 = 3_600;
@@ -46,6 +51,10 @@ pub fn router() -> axum::Router<AppState> {
             axum::routing::post(refresh_provider_models),
         )
         .route("/{id}/active", axum::routing::post(set_provider_active))
+        .route(
+            "/{id}/reset-rate-limits",
+            axum::routing::post(reset_provider_rate_limits),
+        )
         // Inside this router so it inherits `admin_auth_middleware` like every
         // other `/admin/api/*` route; the SPA fetches it with the Bearer header
         // and feeds the `<img>` an object URL (web `views/providers/shared.ts`).
@@ -267,6 +276,31 @@ pub async fn update_provider(
         core_admin::update_provider(&w, &provider_id, &body)
     });
     Ok(Json(serde_json::json!({ "id": id })))
+}
+
+/// Operator action: clear every parked `rate_limited_until` window of the
+/// provider's accounts and wipe the in-memory predictive limiter (it re-learns
+/// from fresh responses). No adapter reload needed: the switch and the parked
+/// windows are read live per request, never cached in the adapter registry.
+pub async fn reset_provider_rate_limits(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let provider_id = ProviderId::new(&id);
+    let db_pool = s.db_pool().clone();
+    let cleared = crate::error::run_blocking(move || {
+        let w = db_pool.writer();
+        core_admin::reset_provider_rate_limits(&w, &provider_id)
+            .map_err(crate::error::ApiError::from)
+    })
+    .await?;
+    s.predictive_limiter().clear_all();
+    tracing::info!(
+        provider_id = %id,
+        cleared_accounts = cleared,
+        "rate limits reset for provider (operator action)"
+    );
+    Ok(Json(serde_json::json!({ "id": id, "cleared_accounts": cleared })))
 }
 
 pub(crate) fn spawn_background_provider_refresh(
@@ -503,6 +537,8 @@ fn enrich_provider_with_oauth(
     );
 
     let model_counts = openproxy_db::models::count_by_provider(r, &p.id).unwrap_or_default();
+    let rate_limited_until_max =
+        openproxy_db::accounts::max_rate_limited_until_for_provider(r, &p.id);
 
     ProviderWithOAuth {
         provider: p,
@@ -510,6 +546,7 @@ fn enrich_provider_with_oauth(
         metadata,
         active_models: model_counts.active_models,
         total_models: model_counts.total_models,
+        rate_limited_until_max,
     }
 }
 

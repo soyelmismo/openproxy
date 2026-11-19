@@ -132,7 +132,7 @@ async fn test_tier3_sse_streaming_with_compression_body() {
         "Please explain the following data:\n{}",
         "key: value, repeated entry pattern\n".repeat(30)
     );
-    let (status, headers, body) = harness.client_chat_raw(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": repeated_prompt}], "stream": true})).await;
+    let (status, headers, body) = harness.client_chat_raw(json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": repeated_prompt}], "stream": true})).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         headers
@@ -157,7 +157,7 @@ fn test_tier3_bearer_auth_rate_limiting_usage() {
 async fn test_tier3_bearer_auth_rate_limiting_usage_body() {
     let harness = TestHarness::new().await;
     let (status, _) = harness
-        .client_chat_call("mock-gpt-4", "Tracking test", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Tracking test", false)
         .await;
     assert_eq!(status, StatusCode::OK);
 

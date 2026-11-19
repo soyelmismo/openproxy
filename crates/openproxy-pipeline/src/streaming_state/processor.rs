@@ -80,6 +80,7 @@ pub(super) fn record_ttft_if_first(ctx: &StreamContext<'_>, state: &mut Streamin
             trace_id: ctx.trace_id,
             stage: "streaming",
             elapsed_ms: ttft,
+            api_key_id: ctx.req.api_key_id,
             session_hash: crate::session_affinity::SessionAffinityRegistry::extract_session_hash(ctx.req),
             connect_ms: ctx.connect_and_send_ms,
             ttft_ms: state.ttft_ms,

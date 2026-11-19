@@ -438,7 +438,12 @@ pub fn resolve_with_options_snap(
         provider_prefix = Some(po);
     }
 
-    if let Some(plan) = try_resolve_direct(&snap, stripped, provider_prefix, account_override) {
+    // Mirror of the SQL policy in `resolve_with_options`: bare names resolve
+    // only as the same-named combo; direct dispatch needs an explicit
+    // provider prefix or pin.
+    if provider_prefix.is_some()
+        && let Some(plan) = try_resolve_direct(&snap, stripped, provider_prefix, account_override)
+    {
         return Ok(plan);
     }
 
@@ -605,9 +610,39 @@ mod tests {
         seed_healthy_account(&conn, "openrouter");
         seed_model(&conn, "openrouter", "m1");
 
+        // Direct dispatch requires the provider prefix: both resolvers must
+        // agree on the synthetic-combo plan for the prefixed bare id.
+        let sql = super::super::resolve(&conn, "openrouter/m1").expect("sql resolve");
+        let snap = resolve_with_options_snap(&pool, "openrouter/m1", None, None)
+            .expect("snap resolve");
+        assert_eq!(format!("{sql:?}"), format!("{snap:?}"));
+    }
+
+    #[test]
+    fn snapshot_bare_name_combo_first_matches_sql() {
+        let pool = fresh_pool();
+        let conn = pool.writer();
+        seed_provider(&conn, "openrouter");
+        seed_healthy_account(&conn, "openrouter");
+        seed_model(&conn, "openrouter", "m1");
+        let combo_id = combos::create_combo(&conn, "m1", Strategy::Priority, 1).expect("combo");
+        let model_row: i64 = conn
+            .query_row("SELECT id FROM models WHERE model_id = 'm1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO combo_targets(combo_id, provider_id, model_row_id, priority_order) \
+             VALUES (?1, 'openrouter', ?2, 0)",
+            rusqlite::params![combo_id.0, model_row],
+        )
+        .expect("target");
+
+        // Bare name with a same-named combo → the combo, on both resolvers.
         let sql = super::super::resolve(&conn, "m1").expect("sql resolve");
         let snap = resolve_with_options_snap(&pool, "m1", None, None).expect("snap resolve");
         assert_eq!(format!("{sql:?}"), format!("{snap:?}"));
+        assert!(matches!(snap, RoutingPlan::Combo { .. }));
     }
 
     #[test]
@@ -654,11 +689,13 @@ mod tests {
         let conn = pool.writer();
         seed_provider(&conn, "openrouter");
         // First resolve builds the snapshot without the model.
-        let first = resolve_with_options_snap(&pool, "late-model", None, None).expect("snap");
+        let first =
+            resolve_with_options_snap(&pool, "openrouter/late-model", None, None).expect("snap");
         assert!(matches!(first, RoutingPlan::NotFound { .. }));
         // Commit a row on the writer: data_version moves, next probe rebuilds.
         seed_model(&conn, "openrouter", "late-model");
-        let second = resolve_with_options_snap(&pool, "late-model", None, None).expect("snap");
+        let second =
+            resolve_with_options_snap(&pool, "openrouter/late-model", None, None).expect("snap");
         assert!(matches!(second, RoutingPlan::Combo { .. }));
     }
 
@@ -714,7 +751,8 @@ mod tests {
             seed_healthy_account(&conn, "openrouter");
         }
 
-        let first = resolve_with_options_snap(&pool, "ext-model", None, None).expect("snap");
+        let first =
+            resolve_with_options_snap(&pool, "openrouter/ext-model", None, None).expect("snap");
         assert!(matches!(first, RoutingPlan::NotFound { .. }));
 
         // Foreign handle on the same file: no hooks, no epoch bumps.
@@ -731,7 +769,8 @@ mod tests {
             .expect("external insert");
         drop(external);
 
-        let second = resolve_with_options_snap(&pool, "ext-model", None, None).expect("snap");
+        let second =
+            resolve_with_options_snap(&pool, "openrouter/ext-model", None, None).expect("snap");
         assert!(
             matches!(second, RoutingPlan::Combo { .. }),
             "external commit must invalidate the snapshot"

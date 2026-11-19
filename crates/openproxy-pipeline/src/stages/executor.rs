@@ -275,6 +275,8 @@ async fn execute_single_target_step(
     let remaining = &to_run[idx + 1..];
     if should_skip_preventive_target(
         &ctx.pipeline.predictive_limiter,
+        ctx.pipeline
+            .provider_rate_limit_enabled(&target.target.provider_id),
         combo,
         target,
         target_key,
@@ -302,7 +304,11 @@ async fn execute_single_target_step(
         return TargetLoopOutcome::Skip;
     }
 
-    if combo.preventive_rate_limit {
+    if combo.preventive_rate_limit
+        && ctx
+            .pipeline
+            .provider_rate_limit_enabled(&target.target.provider_id)
+    {
         let _ = ctx
             .pipeline
             .predictive_limiter

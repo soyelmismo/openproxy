@@ -72,7 +72,7 @@ struct TestMockAdapter {
 impl TestMockAdapter {
     fn new(id: &str, base_url: &str) -> Self {
         Self {
-            config: ProviderAdapterConfig {
+            config: ProviderAdapterConfig { predictive_rate_limit_enabled: true,
                 id: ProviderId::new(id),
                 name: format!("Mock {id}"),
                 base_url: base_url.into(),

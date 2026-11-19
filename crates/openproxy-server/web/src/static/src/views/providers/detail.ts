@@ -230,6 +230,106 @@ async function onToggleAllowLoopback(
   }
 }
 
+async function onTogglePredictiveRateLimit(
+  providerId: string,
+  next: boolean,
+): Promise<void> {
+  if (!next) {
+    const ok = await showConfirm({
+      title: 'Disable rate limiter',
+      message:
+        `Disable the rate-limit machinery for provider "${providerId}"?\n\n` +
+        `Predictive skipping and account rate-limit parking stop for this ` +
+        `provider: upstream 429s keep hitting it until the upstream itself ` +
+        `throttles. Useful when an upstream edge limiter keeps re-arming ` +
+        `the parked window on every retry.`,
+      danger: true,
+      confirmLabel: 'Disable rate limiter',
+    });
+    if (!ok) return;
+  }
+  try {
+    await api('/providers/' + encodeURIComponent(providerId), {
+      method: 'PATCH',
+      body: JSON.stringify({ predictive_rate_limit_enabled: next }),
+    });
+    showToast(
+      `Rate limiter ${next ? 'enabled' : 'disabled'} for ${providerId}`,
+      'success',
+    );
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating predictive_rate_limit_enabled');
+  }
+}
+
+async function onToggleSanitizeErrors(
+  providerId: string,
+  next: boolean,
+): Promise<void> {
+  if (!next) {
+    const ok = await showConfirm({
+      title: 'Show raw upstream errors?',
+      message:
+        `Disable error masking for provider "${providerId}"?\n\n` +
+        `Upstream 4xx/5xx responses reach the client with their original ` +
+        `message: provider name, quota windows and retry detail included. ` +
+        `Buyers routing through this provider will see the raw upstream.`,
+      danger: true,
+      confirmLabel: 'Show raw errors',
+    });
+    if (!ok) return;
+  }
+  try {
+    await api('/providers/' + encodeURIComponent(providerId), {
+      method: 'PATCH',
+      body: JSON.stringify({ sanitize_errors: next }),
+    });
+    showToast(
+      `Error masking ${next ? 'enabled' : 'disabled'} for ${providerId}`,
+      'success',
+    );
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error updating sanitize_errors');
+  }
+}
+
+async function onResetRateLimits(
+  providerId: string,
+  e: Event | null,
+): Promise<void> {
+  const target =
+    e && e.target && e.target instanceof HTMLButtonElement ? e.target : null;
+  const btn: HTMLButtonElement | null = target;
+  const original = btn ? btn.textContent : null;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Resetting...';
+  }
+  try {
+    const res = (await api(
+      '/providers/' + encodeURIComponent(providerId) + '/reset-rate-limits',
+      { method: 'POST' },
+    )) as { cleared_accounts?: number };
+    showToast(
+      `Rate limits reset for ${providerId} (${res?.cleared_accounts ?? 0} account(s) unparked)`,
+      'success',
+    );
+    state.providers = (await api('/providers')) as typeof state.providers;
+    requestUpdate();
+  } catch (err: unknown) {
+    showApiError(err, 'Error resetting rate limits');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      if (original !== null) btn.textContent = original;
+    }
+  }
+}
+
 async function onRefreshProvider(
   providerId: string,
   e: Event | null,
@@ -499,6 +599,50 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
           />
           loopback
         </label>
+        <label
+          class="chip loopback-chip${provider.predictive_rate_limit_enabled === false ? '' : ' combo-chip'}"
+          title="Rate-limit machinery (predictive limiter + account rate_limited_until parking) for this provider. Default ON. Turn OFF when an upstream edge limiter keeps re-arming the parked window."
+          style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 2px 8px;"
+        >
+          <input
+            type="checkbox"
+            class="loopback-toggle"
+            .checked=${provider.predictive_rate_limit_enabled !== false}
+            @change=${(e: Event) => {
+              const target = e.target instanceof HTMLInputElement ? e.target : null;
+              if (!target) return;
+              void onTogglePredictiveRateLimit(provider.id, target.checked);
+            }}
+          />
+          rate limiter
+        </label>
+        <label
+          class="chip loopback-chip${provider.sanitize_errors === false ? '' : ' combo-chip'}"
+          title="Mask upstream errors for this provider. Default ON: any upstream 4xx/5xx is reduced to a generic class before it reaches the client; the real cause stays in usage, logs and traces. Turn OFF to expose raw upstream errors (debugging)."
+          style="display: inline-flex; align-items: center; gap: 5px; cursor: pointer; padding: 2px 8px;"
+        >
+          <input
+            type="checkbox"
+            class="loopback-toggle"
+            .checked=${provider.sanitize_errors !== false}
+            @change=${(e: Event) => {
+              const target = e.target instanceof HTMLInputElement ? e.target : null;
+              if (!target) return;
+              void onToggleSanitizeErrors(provider.id, target.checked);
+            }}
+          />
+          mask errors
+        </label>
+        ${provider.rate_limited_until_max
+          ? html`<span
+              class="chip headers-chip"
+              title=${'Accounts parked until ' +
+                provider.rate_limited_until_max +
+                ' — use Reset Rate Limits to clear.'}
+              style="cursor: default; color: var(--color-danger, #ef4444); border-color: var(--color-danger, #ef4444);"
+              >⛔ parked</span
+            >`
+          : html``}
         ${provider.extra_headers_json
           ? html`<span class="chip headers-chip" title=${getHeadersChipTitle(provider.extra_headers_json)} style="cursor: pointer;" @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${getHeadersChipLabel(provider.extra_headers_json)}</span>`
           : html``}
@@ -510,6 +654,12 @@ export function renderDetailHeader(provider: Provider): TemplateResult {
         <button @click=${() => onEditBaseUrl(provider.id, provider.base_url)}>${icons.pencil()} Endpoint</button>
         <button @click=${() => onEditHeaders(provider.id, provider.extra_headers_json)}>${icons.pencil()} Headers</button>
         <button @click=${(e: Event) => onRefreshProvider(provider.id, e)}>${icons.refresh()} Sync Models</button>
+        <button
+          @click=${(e: Event) => onResetRateLimits(provider.id, e)}
+          title="Clear parked rate-limit windows for this provider's accounts and reset the predictive limiter"
+        >
+          ${icons.refresh()} Reset Rate Limits
+        </button>
         <button class="primary" @click=${() => onToggleProviderActive(provider.id, !provider.active)}>
           ${provider.active ? 'Deactivate' : 'Activate'}
         </button>

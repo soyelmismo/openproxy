@@ -364,11 +364,11 @@ async fn verify_combo_authorization(
         )));
     }
 
-    // Resolution is model-first: a combo whose name collides with a real model
-    // row (e.g. the `glm-5.3` combo next to the `glm-5.3` model rows other
-    // providers advertise) never wins. A key that is denied that model but is
-    // allowed the same-named combo asked for the combo, so resolve it through
-    // the explicit `combo:` prefix and dispatch there instead of a 401.
+    // Bare names resolve combo-first now (see routing::resolve_with_options):
+    // a bare name always lands on the same-named combo when one exists, and
+    // never on a provider's model row. A key denied that combo but allowed a
+    // colliding model can still reach the model through its explicit
+    // `provider/model` prefix instead of a 401.
     if allow_shadowed_combo && let Some(auth) = auth {
         let resolved_as_real_combo = matches!(
             &plan,

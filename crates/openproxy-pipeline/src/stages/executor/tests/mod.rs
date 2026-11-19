@@ -112,6 +112,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
     // When cooldown is enabled on target A and B is healthy -> should skip A
     assert!(should_skip_preventive_target(
         &limiter,
+        true,
         &combo,
         &target_a,
         key_a,
@@ -124,6 +125,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
     target_a_none.target.cooldown_mode = Some(CooldownMode::None);
     assert!(!should_skip_preventive_target(
         &limiter,
+        true,
         &combo,
         &target_a_none,
         key_a,
@@ -136,6 +138,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
     target_a_base0.target.cooldown_base_secs = Some(0);
     assert!(!should_skip_preventive_target(
         &limiter,
+        true,
         &combo,
         &target_a_base0,
         key_a,
@@ -147,6 +150,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
     combo.cooldown_mode = CooldownMode::None;
     assert!(!should_skip_preventive_target(
         &limiter,
+        true,
         &combo,
         &target_a,
         key_a,
@@ -165,6 +169,7 @@ fn test_should_skip_preventive_target_disabled_cooldown() {
     target_b_disabled.target.cooldown_mode = Some(CooldownMode::None);
     assert!(should_skip_preventive_target(
         &limiter,
+        true,
         &combo,
         &target_a,
         key_a,

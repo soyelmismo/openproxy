@@ -33,7 +33,7 @@ async fn test_systemone_direct_call_success_and_records_usage_body() {
     }
 
     let payload = json!({
-        "model": "mock-jev",
+        "model": "mock-prov/mock-jev",
         "state": "The user wants a fast and simple calculation.",
         "questions": {
             "intent": {
@@ -89,7 +89,7 @@ async fn test_systemone_missing_auth_returns_unauthorized_body() {
     let harness = TestHarness::new().await;
 
     let payload = json!({
-        "model": "mock-jev",
+        "model": "mock-prov/mock-jev",
         "state": "test prompt",
         "questions": {
             "choice": {
@@ -141,7 +141,7 @@ async fn test_systemone_upstream_error_handling_body() {
     );
 
     let payload = json!({
-        "model": "mock-jev-err",
+        "model": "mock-prov/mock-jev-err",
         "state": "error test",
         "questions": {
             "cat": {

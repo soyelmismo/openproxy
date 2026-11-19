@@ -71,6 +71,7 @@ impl HordeAdapter {
                 anonymous_fallback: true,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
                 base_url: "https://aihorde.net/api/v2".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Openai,

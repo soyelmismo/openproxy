@@ -195,13 +195,17 @@ pub(crate) fn matches_proxy_rotation_errors(err: &CoreError, rotation_errors_csv
 
 pub(super) fn should_skip_preventive_target(
     limiter: &crate::predictive_rate_limit::PredictiveRateLimiter,
+    provider_rate_limit_enabled: bool,
     combo: &openproxy_types::Combo,
     target: &crate::context::ResolvedTarget,
     target_key: u64,
     remaining_targets: &[crate::context::ResolvedTarget],
     now_ms: u64,
 ) -> bool {
-    if !combo.preventive_rate_limit || target.target.is_cooldown_disabled(combo) {
+    if !provider_rate_limit_enabled
+        || !combo.preventive_rate_limit
+        || target.target.is_cooldown_disabled(combo)
+    {
         return false;
     }
     let readiness = limiter.evaluate_key(target_key, now_ms);

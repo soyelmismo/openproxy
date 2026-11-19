@@ -32,6 +32,7 @@ impl GeminiAdapter {
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
                 base_url: "https://generativelanguage.googleapis.com/v1beta".into(),
                 auth_type: AdapterAuthType::GoogApiKey,
                 format: AdapterFormat::Gemini,

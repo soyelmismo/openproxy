@@ -104,6 +104,10 @@ fn calculate_upstream_delay(
             retry_after_ms,
             is_proxy_rotated: false,
             ..
+        }
+        | CoreError::MaskedUpstream {
+            retry_after_ms: Some(retry_after_ms),
+            ..
         } => std::time::Duration::from_millis(*retry_after_ms).max(base_delay),
         _ => base_delay,
     }
@@ -211,7 +215,11 @@ async fn perform_retry_iteration(
         return RetryStep::Abort;
     }
 
-    if combo.preventive_rate_limit {
+    if combo.preventive_rate_limit
+        && ctx
+            .pipeline
+            .provider_rate_limit_enabled(&target.target.provider_id)
+    {
         let key =
             crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(&target.target);
         let fingerprint = crate::predictive_rate_limit::compute_error_fingerprint(err);

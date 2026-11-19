@@ -24,6 +24,7 @@ impl AtomesusAdapter {
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
                 base_url: "https://api.atomesus.com/api".into(),
                 auth_type: AdapterAuthType::Bearer,
                 format: AdapterFormat::Atomesus,

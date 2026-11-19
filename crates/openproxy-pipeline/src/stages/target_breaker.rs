@@ -197,6 +197,16 @@ pub(crate) fn update_predictive_limiter_on_result(
     target: &openproxy_types::ComboTarget,
     result: &PipelineResult,
 ) {
+    // Per-provider switch (migration 000137): a disabled provider never
+    // feeds the predictive windows, and an in-flight lease (if any was taken
+    // before the switch flipped) is released so the target stays usable.
+    if !pipeline.provider_rate_limit_enabled(&target.provider_id) {
+        let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(target);
+        pipeline
+            .predictive_limiter
+            .release_in_flight_key(key);
+        return;
+    }
     let key = crate::predictive_rate_limit::PredictiveRateLimiter::compute_target_key(target);
     let now = crate::predictive_rate_limit::PredictiveRateLimiter::now_ms();
     match &result.error {
@@ -271,6 +281,12 @@ pub(crate) fn update_account_rate_limited_until_on_result(
     let Some(aid) = target.account_id else {
         return;
     };
+    // Per-provider switch (migration 000137): a disabled provider never arms
+    // the account window. Success still clears, so re-enabling the switch
+    // later does not resurrect a stale parked window.
+    if !pipeline.provider_rate_limit_enabled(&target.provider_id) {
+        return;
+    }
     if let Some(err) = &result.error {
         // Devin reports daily/weekly usage-quota exhaustion in the trailer
         // error body; upstream parks the credential until that window's
@@ -278,7 +294,16 @@ pub(crate) fn update_account_rate_limited_until_on_result(
         let devin_quota =
             devin_quota_exhaustion_kind(err, result.status_code, target.provider_id.as_str());
         let retry_secs = match err {
-            CoreError::RateLimited { retry_after_ms, .. } => Some((*retry_after_ms / 1000).max(5)),
+            // Arm ONLY on a real 429 from upstream. 503/408 route failures
+            // (no_healthy_sellers, edge throttling) are classified as
+            // RateLimited for the client response, but they are transient:
+            // arming on each one let a refusal cascade re-arm the window
+            // forever (an upstream answering 503 + Retry-After: 300 while its
+            // limiter was angry re-armed on every retry, so hammering never
+            // recovered).
+            CoreError::RateLimited { retry_after_ms, .. } if result.status_code == 429 => {
+                Some((*retry_after_ms / 1000).max(5))
+            }
             _ if result.status_code == 429 => Some(60),
             _ => None,
         };
@@ -286,6 +311,31 @@ pub(crate) fn update_account_rate_limited_until_on_result(
             let conn_clone = Arc::clone(&pipeline.conn);
             let handle = tokio::task::spawn_blocking(move || {
                 let conn = conn_clone.lock();
+                use rusqlite::OptionalExtension;
+                // Monotonic window: a window already armed in the future is
+                // authoritative until it expires. The rejection path re-reports
+                // the FULL default backoff (300s) on every hit, never the
+                // remaining time, so rewriting it on each dispatch slid the
+                // window forward forever and the account never recovered. Only
+                // the upstream-persisted Devin quota reset may set the window
+                // (stable timestamp per quota period). Success still clears.
+                if devin_quota.is_none() {
+                    let existing: Option<Option<String>> = conn
+                        .query_row(
+                            "SELECT rate_limited_until FROM accounts WHERE id = ?1",
+                            [aid.0],
+                            |r| r.get(0),
+                        )
+                        .optional()
+                        .unwrap_or(None);
+                    let parked = existing
+                        .flatten()
+                        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(&ts).ok())
+                        .is_some_and(|d| d.with_timezone(&chrono::Utc) > chrono::Utc::now());
+                    if parked {
+                        return;
+                    }
+                }
                 let until = devin_quota
                     .and_then(|kind| devin_quota_reset_until(&conn, aid, kind))
                     .unwrap_or_else(|| {

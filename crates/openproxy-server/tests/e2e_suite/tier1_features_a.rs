@@ -11,7 +11,7 @@ fn test_tier1_chat_completions_basic_success() {
 async fn test_tier1_chat_completions_basic_success_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_chat_call("mock-gpt-4", "Hello world", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Hello world", false)
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(resp["object"], "chat.completion");
@@ -25,7 +25,7 @@ fn test_tier1_chat_completions_system_and_user_messages() {
 
 async fn test_tier1_chat_completions_system_and_user_messages_body() {
     let harness = TestHarness::new().await;
-    let payload = json!({"model": "mock-gpt-4", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Summarize this request."}], "stream": false});
+    let payload = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Summarize this request."}], "stream": false});
     let (status, _, body) = harness.client_chat_raw(payload).await;
     assert_eq!(status, StatusCode::OK);
     let resp: Value = serde_json::from_slice(&body).unwrap();
@@ -41,7 +41,7 @@ fn test_tier1_chat_completions_custom_model_routing() {
 async fn test_tier1_chat_completions_custom_model_routing_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_chat_call("mock-gpt-4", "Test custom model", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Test custom model", false)
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(resp["model"], "mock-gpt-4");
@@ -55,7 +55,7 @@ fn test_tier1_chat_completions_response_format_json() {
 async fn test_tier1_chat_completions_response_format_json_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_chat_call("mock-gpt-4", "Validate JSON schema", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Validate JSON schema", false)
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -74,7 +74,7 @@ fn test_tier1_chat_completions_token_accounting() {
 async fn test_tier1_chat_completions_token_accounting_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_chat_call("mock-gpt-4", "Check tokens", false)
+        .client_chat_call("mock-prov/mock-gpt-4", "Check tokens", false)
         .await;
     assert_eq!(status, StatusCode::OK);
     let usage = &resp["usage"];
@@ -384,7 +384,7 @@ fn test_tier1_embeddings_single_input_success() {
 async fn test_tier1_embeddings_single_input_success_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_embeddings_call("mock-embed", json!("semantic search string"))
+        .client_embeddings_call("mock-prov/mock-embed", json!("semantic search string"))
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(resp["object"], "list");
@@ -400,7 +400,7 @@ async fn test_tier1_embeddings_multiple_inputs_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
         .client_embeddings_call(
-            "mock-embed",
+            "mock-prov/mock-embed",
             json!(["text snippet one", "text snippet two", "text snippet three"]),
         )
         .await;
@@ -416,7 +416,7 @@ fn test_tier1_embeddings_empty_input_validation() {
 async fn test_tier1_embeddings_empty_input_validation_body() {
     let harness = TestHarness::new().await;
     let (status, _) = harness
-        .client_embeddings_call("mock-embed", json!([]))
+        .client_embeddings_call("mock-prov/mock-embed", json!([]))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
@@ -429,7 +429,7 @@ fn test_tier1_embeddings_vector_structure() {
 async fn test_tier1_embeddings_vector_structure_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_embeddings_call("mock-embed", json!("vector test"))
+        .client_embeddings_call("mock-prov/mock-embed", json!("vector test"))
         .await;
     assert_eq!(status, StatusCode::OK);
     let vec = resp["data"][0]["embedding"].as_array().unwrap();
@@ -444,7 +444,7 @@ fn test_tier1_embeddings_usage_accounting() {
 async fn test_tier1_embeddings_usage_accounting_body() {
     let harness = TestHarness::new().await;
     let (status, resp) = harness
-        .client_embeddings_call("mock-embed", json!("check usage"))
+        .client_embeddings_call("mock-prov/mock-embed", json!("check usage"))
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(

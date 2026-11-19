@@ -292,12 +292,14 @@ mod tests {
             Some(&mk),
         );
 
-        // 501 for openai provider
+        // 501 for openai provider. Under the bare-name contract a bare name
+        // resolves only as a same-named combo, so the direct model row is
+        // reached through its explicit `openai/` prefix.
         let resp = post(
             &app,
             "/tokenize",
             Some(&key),
-            r#"{"model":"gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
+            r#"{"model":"openai/gpt-x","messages":[{"role":"user","content":"hi"}]}"#,
         )
         .await;
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);

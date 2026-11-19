@@ -265,6 +265,20 @@ pub struct Provider {
     /// hatch anymore.
     #[serde(default)]
     pub allow_loopback: bool,
+    /// Per-provider rate-limit machinery switch (migration 000137): the
+    /// predictive limiter and the account rate_limited_until parking. Default
+    /// true; when false, this provider's accounts neither arm nor honor
+    /// rate-limit cooldowns (resolve gate, evaluate/acquire, retry gate and
+    /// the result-driven arm all bypass it).
+    #[serde(default = "default_true")]
+    pub predictive_rate_limit_enabled: bool,
+    /// Per-provider upstream-error masking switch (migration 000138): any
+    /// 4xx/5xx this provider's target answers is reduced to a generic class
+    /// before it reaches the client (buyers never see the upstream's provider
+    /// name, quota windows or retry detail). The real cause stays in usage,
+    /// logs and traces. Default true.
+    #[serde(default = "default_true")]
+    pub sanitize_errors: bool,
 }
 
 fn default_prompt_cache_ttl() -> Box<str> {

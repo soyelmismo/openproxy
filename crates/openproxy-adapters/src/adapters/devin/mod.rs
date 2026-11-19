@@ -64,6 +64,7 @@ impl DevinAdapter {
                 anonymous_fallback: false,
                 rate_limit_scope: "account".into(),
                 allow_loopback: false,
+                predictive_rate_limit_enabled: true,
                 base_url: DEVIN_DEFAULT_BASE_URL.into(),
                 // Devin auth is the Basic `<token>-<token>` pair, built by
                 // `build_auth_header` below. Bearer keeps the provider's

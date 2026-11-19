@@ -176,6 +176,20 @@ pub struct PipelineServices {
 }
 
 impl Pipeline {
+    /// Per-provider rate-limit machinery switch (migration 000137, column
+    /// `providers.predictive_rate_limit_enabled`, default ON). When a provider
+    /// turns it off, none of its targets are predictively skipped, retried
+    /// against the learned windows, or parked via `accounts.rate_limited_until`.
+    /// Unknown providers default to enabled.
+    pub fn provider_rate_limit_enabled(&self, provider_id: &ProviderId) -> bool {
+        self.config
+            .adapters
+            .iter()
+            .find(|a| a.id() == provider_id)
+            .map(|a| a.config().predictive_rate_limit_enabled)
+            .unwrap_or(true)
+    }
+
     pub fn repo(&self) -> Arc<dyn crate::repository::PipelineRepository> {
         Arc::clone(&self.repo)
     }
@@ -411,6 +425,7 @@ pub fn is_upstream_health_issue(err: &CoreError) -> bool {
         CoreError::UpstreamTimeout { phase, .. } => phase != "idle_chunk",
         CoreError::UpstreamConnection(_) => true,
         CoreError::RateLimited { .. } => true,
+        CoreError::MaskedUpstream { status, .. } => *status >= 500 || *status == 429,
         CoreError::UpstreamError { status, body, .. } => {
             if *status >= 500 || *status == 429 {
                 true
@@ -432,6 +447,13 @@ pub fn is_model_wide_failure(target: &openproxy_types::ComboTarget, err: &CoreEr
         CoreError::ModelNotFound { .. } => true,
         CoreError::RateLimited { .. } => {
             target.rate_limit_scope == openproxy_types::RateLimitScope::Model
+        }
+        CoreError::MaskedUpstream { status, .. } => {
+            if *status == 429 || *status == 404 {
+                target.rate_limit_scope == openproxy_types::RateLimitScope::Model
+            } else {
+                false
+            }
         }
         CoreError::UpstreamError { status, body, .. } => {
             if *status == 429 {

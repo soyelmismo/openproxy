@@ -12,7 +12,7 @@ fn test_tier4_scenario_multiturn_conversation() {
 
 async fn test_tier4_scenario_multiturn_conversation_body() {
     let harness = TestHarness::new().await;
-    let turn1 = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "My project is named OpenProxy Gateway."}], "stream": false});
+    let turn1 = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "My project is named OpenProxy Gateway."}], "stream": false});
     let (status1, resp1) = harness
         .oneshot_json(harness.client_request(
             Method::POST,
@@ -26,7 +26,7 @@ async fn test_tier4_scenario_multiturn_conversation_body() {
         .unwrap()
         .to_string();
 
-    let turn2 = json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "My project is named OpenProxy Gateway."}, {"role": "assistant", "content": msg1}, {"role": "user", "content": "What did I say my project was named?"}], "stream": false});
+    let turn2 = json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "My project is named OpenProxy Gateway."}, {"role": "assistant", "content": msg1}, {"role": "user", "content": "What did I say my project was named?"}], "stream": false});
     let (status2, resp2) = harness
         .oneshot_json(harness.client_request(
             Method::POST,
@@ -115,7 +115,7 @@ async fn test_tier4_scenario_multi_client_analytics_accumulation_body() {
     let token_b = key_b["plaintext"].as_str().unwrap();
 
     for i in 1..=2 {
-        let req = Request::builder().method(Method::POST).uri("/v1/chat/completions").header(header::AUTHORIZATION, format!("Bearer {token_a}")).header(header::CONTENT_TYPE, "application/json").body(Body::from(json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": format!("Alpha msg {i}")}]}).to_string())).unwrap();
+        let req = Request::builder().method(Method::POST).uri("/v1/chat/completions").header(header::AUTHORIZATION, format!("Bearer {token_a}")).header(header::CONTENT_TYPE, "application/json").body(Body::from(json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": format!("Alpha msg {i}")}]}).to_string())).unwrap();
         assert_eq!(harness.oneshot(req).await.0, StatusCode::OK);
     }
     let req_b = Request::builder()
@@ -124,7 +124,7 @@ async fn test_tier4_scenario_multi_client_analytics_accumulation_body() {
         .header(header::AUTHORIZATION, format!("Bearer {token_b}"))
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            json!({"model": "mock-gpt-4", "messages": [{"role": "user", "content": "Beta msg 1"}]})
+            json!({"model": "mock-prov/mock-gpt-4", "messages": [{"role": "user", "content": "Beta msg 1"}]})
                 .to_string(),
         ))
         .unwrap();
@@ -284,7 +284,7 @@ async fn test_tier4_scenario_responses_api_streaming_and_non_streaming_body() {
 
     // 1. Streaming Responses request
     let stream_payload = json!({
-        "model": "mock-gpt-4",
+        "model": "mock-prov/mock-gpt-4",
         "input": [
             {"role": "user", "content": "Hello via Responses API stream"}
         ],
@@ -335,7 +335,7 @@ async fn test_tier4_scenario_responses_api_streaming_and_non_streaming_body() {
 
     // 2. Non-streaming Responses request
     let sync_payload = json!({
-        "model": "mock-gpt-4",
+        "model": "mock-prov/mock-gpt-4",
         "input": [
             {"role": "user", "content": "Hello via Responses API sync"}
         ],
