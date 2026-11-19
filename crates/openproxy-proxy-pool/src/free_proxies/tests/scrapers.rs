@@ -135,6 +135,74 @@ fn parse_custom_proxy_line_with_scheme_and_auth() {
 }
 
 #[test]
+fn parses_standard_legacy_and_typed_proxy_lists() {
+    for (line, scheme, host, user, pass) in [
+        (
+            "HTTP://alice:p%40ss@[2001:db8::1]:1080",
+            "http",
+            "2001:db8::1",
+            Some("alice"),
+            Some("p@ss"),
+        ),
+        (
+            "socks5h://alice%3Ab:p%25ss@PROXY.example:1080",
+            "socks5",
+            "proxy.example",
+            Some("alice:b"),
+            Some("p%ss"),
+        ),
+        (
+            "socks4a://alice@proxy.example:1080",
+            "socks4",
+            "proxy.example",
+            Some("alice"),
+            None,
+        ),
+        (
+            "[2001:db8::1]:1080:alice:p@ss",
+            "http",
+            "2001:db8::1",
+            Some("alice"),
+            Some("p@ss"),
+        ),
+    ] {
+        let proxy = parse_custom_proxy_line(line, "fixture", 3).expect(line);
+        assert_eq!(
+            (
+                &*proxy.r#type,
+                &*proxy.host,
+                proxy.port,
+                proxy.username.as_deref(),
+                proxy.password.as_deref()
+            ),
+            (scheme, host, 1080, user, pass)
+        );
+    }
+    for line in [
+        "ftp://proxy.example:1080",
+        "socks5://alice@proxy.example:1080",
+        "http://alice:%ZZ@proxy.example:1080",
+        "http://alice:%0A@proxy.example:1080",
+        "[not-ip]:1080",
+        "proxy.example:1080/path",
+    ] {
+        assert!(
+            parse_custom_proxy_line(line, "fixture", 0).is_none(),
+            "{line}"
+        );
+    }
+    let rows = parse_plain_proxy_lines(
+        "proxy.example:1080\nhttp://example.com:80",
+        "fixture",
+        "socks5",
+    );
+    assert_eq!(
+        rows.iter().map(|p| p.r#type.as_str()).collect::<Vec<_>>(),
+        ["socks5", "http"]
+    );
+}
+
+#[test]
 fn parse_custom_proxy_line_skips_comments_and_blanks() {
     assert!(parse_custom_proxy_line("# a comment", "src", 0).is_none());
     assert!(parse_custom_proxy_line("", "src", 0).is_none());
@@ -193,6 +261,40 @@ fn resolve_scraped_sources_for_unknown_builtin_falls_back_to_name() {
 fn resolve_scraped_sources_for_custom_returns_name() {
     let v = resolve_scraped_sources(false, "any-id", "Custom Source");
     assert_eq!(v, vec!["Custom Source"]);
+}
+
+#[test]
+fn scraped_protocol_changes_reset_health_but_cannot_replace_manual_proxies() {
+    let (_tmp, pool) = fresh_pool("proxy-upsert-health");
+    let mut conn = pool.writer();
+    let mut item = scraped_with_country("feed", "proxy.example", 1080, "socks5", "US");
+    upsert_scraped_proxies(&mut conn, std::slice::from_ref(&item)).expect("import");
+    let id: String = conn
+        .query_row("SELECT id FROM free_proxies", [], |r| r.get(0))
+        .expect("proxy");
+    update_proxy_status(&conn, &id, "alive", Some(120)).expect("alive");
+    item.r#type = "http".into();
+    upsert_scraped_proxies(&mut conn, std::slice::from_ref(&item)).expect("new protocol");
+    let changed = get_proxy(&conn, &id).expect("read").expect("proxy");
+    assert_eq!(changed.r#type, "http");
+    assert_eq!(changed.status, "unknown");
+    assert!(changed.latency_ms.is_none() && changed.last_validated.is_none());
+    add_custom_proxy(
+        &conn,
+        "proxy.example",
+        1080,
+        "socks5",
+        None,
+        Some("user"),
+        Some("pass"),
+    )
+    .expect("manual");
+    update_proxy_status(&conn, &id, "alive", Some(90)).expect("alive");
+    upsert_scraped_proxies(&mut conn, &[item]).expect("refresh");
+    let protected = get_proxy(&conn, &id).expect("read").expect("proxy");
+    assert_eq!(protected.r#type, "socks5");
+    assert_eq!(protected.username.as_deref(), Some("user"));
+    assert_eq!(protected.status, "alive");
 }
 
 #[test]
@@ -313,6 +415,127 @@ async fn sync_github_lists_hits_injected_base_and_parses_text() {
             .any(|p| p.host == "9.9.9.9" && p.port == 3128)
     );
     assert!(proxies.iter().any(|p| p.host == "8.8.8.8" && p.port == 80));
+}
+
+#[tokio::test]
+async fn public_text_builtins_import_their_feed_formats() {
+    use httpmock::prelude::*;
+
+    let server = MockServer::start();
+    let v4 = server.mock(|when, then| {
+        when.method(GET)
+            .path("/v4/free-proxy-list/get")
+            .query_param("request", "get_proxies")
+            .query_param("proxy_format", "protocolipport")
+            .query_param("format", "text")
+            .query_param("limit", "15000");
+        then.status(200).body(concat!(
+            "\u{feff}socks5://1.2.3.4:1080\r\n",
+            "socks4://1.2.3.5:1080\nhttp://1.2.3.6:8080\n",
+            "https://[2606:4700::1]:443\n",
+            "1.2.3.7:80\nftp://1.2.3.8:21\nhttp://127.0.0.1:80\n",
+            "socks5://proxy.example:1080\nhttp://224.0.0.1:80\n",
+            "http://1.2.3.9:8080:path\nhttp://1.2.3.10:65536\n",
+        ));
+    });
+    let proxy_scraper = server.mock(|when, then| {
+        when.method(GET)
+            .path("/ProxyScraper/ProxyScraper/main/socks5.txt");
+        then.status(200).body("1.2.3.4:1080\n1.2.3.11:1080\n");
+    });
+    let vpslab = server.mock(|when, then| {
+        when.method(GET)
+            .path("/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks5_all.txt");
+        then.status(200)
+            .body("socks5://1.2.3.12:1080\nhttp://1.2.3.13:80\n10.0.0.1:1080\n");
+    });
+    let (_tmp, pool) = fresh_pool("public-text-builtins");
+    for (id, label, protocols) in [
+        (
+            "builtin_proxyscrape_v4",
+            "proxyscrape_v4",
+            &["socks5", "socks4", "http", "https"][..],
+        ),
+        (
+            "builtin_proxyscraper",
+            "proxyscraper",
+            &["socks5", "socks5"][..],
+        ),
+        ("builtin_vpslab", "vpslab", &["socks5"][..]),
+    ] {
+        let def = BuiltinProxySourceDef::find_by_id(id).expect("registered source");
+        assert_eq!(resolve_scraped_sources(true, id, "ignored"), [label]);
+        let uri: http::Uri = def.url.parse().expect("valid feed URL");
+        let url = format!(
+            "{}{}",
+            server.base_url(),
+            uri.path_and_query().expect("feed path")
+        );
+        let rows = (def.sync_fn)(&url).await.expect("download and parse feed");
+        assert_eq!(
+            rows.iter().map(|p| p.r#type.as_str()).collect::<Vec<_>>(),
+            protocols
+        );
+        assert!(
+            rows.iter()
+                .all(|p| p.source == label && p.username.is_none() && p.password.is_none())
+        );
+        upsert_scraped_proxies(&mut pool.writer(), &rows).expect("store feed candidates");
+    }
+    v4.assert_calls(1);
+    proxy_scraper.assert_calls(1);
+    vpslab.assert_calls(1);
+    let (total, unknown): (i64, i64) = pool
+        .reader()
+        .query_row(
+            "SELECT count(*), sum(status = 'unknown') FROM free_proxies",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("read imported candidates");
+    assert_eq!(
+        (total, unknown),
+        (6, 6),
+        "overlapping feeds deduplicate; candidates are not alive yet"
+    );
+}
+
+#[tokio::test]
+async fn public_text_feed_reports_http_format_and_size_errors() {
+    use httpmock::prelude::*;
+    let server = MockServer::start();
+    for (path, status, body, expected) in [
+        (
+            "/service-unavailable",
+            503,
+            String::new(),
+            "HTTP status: 503",
+        ),
+        (
+            "/not-a-feed",
+            200,
+            "<html>not a feed</html>".into(),
+            "no valid public endpoints",
+        ),
+        (
+            "/oversized",
+            200,
+            "a".repeat(2 * 1024 * 1024 + 1),
+            "feed exceeds",
+        ),
+    ] {
+        server.mock(|when, then| {
+            when.method(GET).path(path);
+            then.status(status).body(body);
+        });
+        let url = format!("{}{path}", server.base_url());
+        let def = BuiltinProxySourceDef::find_by_id("builtin_proxyscrape_v4").expect("registered");
+        let error = (def.sync_fn)(&url)
+            .await
+            .expect_err("reject unusable feed")
+            .to_string();
+        assert!(error.contains(expected), "{error}");
+    }
 }
 
 #[tokio::test]

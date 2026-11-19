@@ -57,6 +57,7 @@ tower-http = { version = "0.7", features = ["compression-gzip", "set-header"] }
 httpmock = "0.8.3"
 bytes = "1"
 http = "1"
+percent-encoding = "2"
 memchr = "2"
 governor = "0.10.4"
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }

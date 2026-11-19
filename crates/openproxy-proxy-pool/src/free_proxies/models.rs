@@ -40,6 +40,11 @@ pub const PROXMINT_URL: &str =
     "https://raw.githubusercontent.com/proxmint/free-proxy-list/main/proxies/all.json";
 pub const PROXYSCRAPE_CDN_URL: &str =
     "https://cdn.jsdelivr.net/gh/proxyscrape/free-proxy-list@main/proxies/all/data.json";
+pub const PROXYSCRAPE_V4_URL: &str = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=get_proxies&proxy_format=protocolipport&format=text&limit=15000";
+pub const PROXYSCRAPER_URL: &str =
+    "https://raw.githubusercontent.com/ProxyScraper/ProxyScraper/main/socks5.txt";
+pub const VPSLAB_URL: &str =
+    "https://raw.githubusercontent.com/VPSLabCloud/VPSLab-Free-Proxy-List/main/socks5_all.txt";
 pub const GEONODE_URL: &str =
     "https://proxylist.geonode.com/api/proxy-list?limit=500&sort_by=lastChecked&sort_type=desc";
 pub const CLEARPROXY_URL: &str =

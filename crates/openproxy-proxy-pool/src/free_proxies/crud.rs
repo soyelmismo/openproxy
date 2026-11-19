@@ -169,6 +169,17 @@ pub fn add_custom_proxy(
     username: Option<&str>,
     password: Option<&str>,
 ) -> crate::error::Result<FreeProxy> {
+    use openproxy_types::proxy_endpoint::{canonical_host, canonical_scheme, valid_auth};
+    let r#type = canonical_scheme(r#type.trim())
+        .ok_or_else(|| crate::error::CoreError::Validation("Unsupported proxy protocol".into()))?;
+    let host = canonical_host(host)
+        .filter(|_| port != 0)
+        .ok_or_else(|| crate::error::CoreError::Validation("Invalid proxy host or port".into()))?;
+    if !valid_auth(r#type, username, password) {
+        return Err(crate::error::CoreError::Validation(
+            "Invalid credentials for proxy protocol".into(),
+        ));
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -181,6 +192,9 @@ pub fn add_custom_proxy(
            country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
            username = excluded.username, \
            password = excluded.password, \
+           status = CASE WHEN type IS NOT excluded.type OR username IS NOT excluded.username OR password IS NOT excluded.password THEN 'unknown' ELSE status END, \
+           latency_ms = CASE WHEN type IS NOT excluded.type OR username IS NOT excluded.username OR password IS NOT excluded.password THEN NULL ELSE latency_ms END, \
+           last_validated = CASE WHEN type IS NOT excluded.type OR username IS NOT excluded.username OR password IS NOT excluded.password THEN NULL ELSE last_validated END, \
            updated_at = excluded.updated_at",
         rusqlite::params![id, host, port, r#type.to_lowercase(), country_code, username, password, now, now],
     )
@@ -363,6 +377,18 @@ pub fn upsert_scraped_proxies(
     conn: &mut Connection,
     proxies: &[ScrapedProxy],
 ) -> crate::error::Result<()> {
+    use openproxy_types::proxy_endpoint::{canonical_host, canonical_scheme, valid_auth};
+    let proxies: Vec<_> = proxies
+        .iter()
+        .filter_map(|p| {
+            let host = canonical_host(&p.host)?;
+            let scheme = canonical_scheme(p.r#type.trim())?;
+            if p.port == 0 || !valid_auth(scheme, p.username.as_deref(), p.password.as_deref()) {
+                return None;
+            }
+            Some((p, host, scheme))
+        })
+        .collect();
     if proxies.is_empty() {
         return Ok(());
     }
@@ -374,13 +400,23 @@ pub fn upsert_scraped_proxies(
             .map_err(openproxy_db::error::map_db_error)?;
 
         let on_conflict_suffix = "ON CONFLICT(host, port) DO UPDATE SET \
-                   source = CASE WHEN free_proxies.source = 'custom' THEN 'custom' ELSE excluded.source END, \
+                   source = excluded.source, \
                    type = excluded.type, \
                    country_code = COALESCE(excluded.country_code, free_proxies.country_code), \
                    username = excluded.username, \
                    password = excluded.password, \
                    priority = excluded.priority, \
-                   updated_at = excluded.updated_at";
+                   status = CASE WHEN type IS NOT excluded.type OR username IS NOT excluded.username OR password IS NOT excluded.password THEN 'unknown' ELSE status END, \
+                   latency_ms = CASE WHEN type IS NOT excluded.type OR username IS NOT excluded.username OR password IS NOT excluded.password THEN NULL ELSE latency_ms END, \
+                   last_validated = CASE WHEN type IS NOT excluded.type OR username IS NOT excluded.username OR password IS NOT excluded.password THEN NULL ELSE last_validated END, \
+                   updated_at = excluded.updated_at \
+                   WHERE free_proxies.source != 'custom' \
+                     AND (free_proxies.source = excluded.source \
+                          OR (free_proxies.username IS NULL AND excluded.username IS NOT NULL) \
+                          OR (free_proxies.username IS NULL AND excluded.username IS NULL \
+                              AND (excluded.priority > free_proxies.priority \
+                                   OR (excluded.priority = free_proxies.priority \
+                                       AND excluded.source < free_proxies.source))))";
 
         openproxy_db::batch::batch_insert(
             &tx,
@@ -402,15 +438,15 @@ pub fn upsert_scraped_proxies(
                 "created_at",
                 "updated_at",
             ],
-            proxies,
+            &proxies,
             Some(on_conflict_suffix),
-            |p, params| {
+            |(p, host, scheme), params| {
                 let id = uuid::Uuid::new_v4().to_string();
                 params.push(id.into());
                 params.push(p.source.clone().into());
-                params.push(p.host.clone().into());
+                params.push(host.clone().into());
                 params.push(p.port.into());
-                params.push(p.r#type.clone().into());
+                params.push((*scheme).to_string().into());
                 match &p.country_code {
                     Some(cc) => params.push(cc.to_owned().into()),
                     None => params.push(rusqlite::types::Value::Null),

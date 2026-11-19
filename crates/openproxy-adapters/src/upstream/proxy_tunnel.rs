@@ -1,36 +1,55 @@
 use std::io;
 use tokio::net::TcpStream;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct ProxyConfig {
     pub(crate) scheme: String,
     pub(crate) host: String,
     pub(crate) port: u16,
-    pub(crate) auth: Option<String>,
+    pub(crate) auth: Option<(String, Option<String>)>,
 }
 
-fn extract_proxy_auth(uri: &http::Uri) -> Option<String> {
-    let a = uri.authority()?;
-    let (user_pass, _) = a.as_str().split_once('@')?;
-    Some(user_pass.to_string())
+type ProxyAuth = Option<(String, Option<String>)>;
+
+fn extract_proxy_auth(uri: &http::Uri, scheme: &str) -> Result<ProxyAuth, String> {
+    use openproxy_types::proxy_endpoint::{decode_userinfo, valid_auth};
+    let Some((raw, _)) = uri.authority().and_then(|a| a.as_str().split_once('@')) else {
+        return Ok(None);
+    };
+    let invalid = || "Invalid proxy credentials".to_string();
+    let (user, pass) = raw
+        .split_once(':')
+        .map_or((raw, None), |(u, p)| (u, Some(p)));
+    let user = decode_userinfo(user).ok_or_else(invalid)?;
+    let pass = match pass {
+        Some(p) => Some(decode_userinfo(p).ok_or_else(invalid)?),
+        None => None,
+    };
+    if !valid_auth(scheme, Some(&user), pass.as_deref()) {
+        return Err(invalid());
+    }
+    Ok(Some((user, pass)))
 }
 
 pub(crate) fn parse_proxy_url(url: &str) -> Result<ProxyConfig, String> {
     let uri: http::Uri = url
         .parse()
         .map_err(|e: http::uri::InvalidUri| format!("Invalid proxy URL: {e}"))?;
+    use openproxy_types::proxy_endpoint::{canonical_host, canonical_scheme};
     let scheme = uri
         .scheme_str()
-        .ok_or_else(|| "Missing proxy scheme".to_string())?
+        .and_then(canonical_scheme)
+        .ok_or_else(|| "Missing or unsupported proxy scheme".to_string())?
         .to_string();
     let host = uri
         .host()
-        .ok_or_else(|| "Missing proxy host".to_string())?
-        .to_string();
+        .and_then(canonical_host)
+        .ok_or_else(|| "Invalid proxy host".to_string())?;
     let port = uri
         .port_u16()
-        .ok_or_else(|| "Missing proxy port".to_string())?;
-    let auth = extract_proxy_auth(&uri);
+        .filter(|p| *p != 0)
+        .ok_or_else(|| "Invalid or missing proxy port".to_string())?;
+    let auth = extract_proxy_auth(&uri, &scheme)?;
 
     Ok(ProxyConfig {
         scheme,
@@ -85,15 +104,31 @@ async fn socks5_tunnel(
     mut stream: TcpStream,
     dest_host: &str,
     dest_port: u16,
+    credentials: Option<(&str, &str)>,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let req = socks5_build_connect_req(dest_host, dest_port)?;
-    stream.write_all(&[0x05, 0x01, 0x00]).await?;
+    let method = if credentials.is_some() { 0x02 } else { 0x00 };
+    stream.write_all(&[0x05, 0x01, method]).await?;
     let mut resp = [0u8; 2];
     stream.read_exact(&mut resp).await?;
-    if resp[0] != 0x05 || resp[1] != 0x00 {
-        return Err(io::Error::other("SOCKS5 auth negotiation failed").into());
+    if resp != [0x05, method] {
+        return Err(io::Error::other("Proxy authentication: SOCKS5 method rejected").into());
+    }
+    if let Some((user, pass)) = credentials {
+        let mut auth = Vec::with_capacity(3 + user.len() + pass.len());
+        auth.extend([1, u8::try_from(user.len())?]);
+        auth.extend(user.bytes());
+        auth.push(u8::try_from(pass.len())?);
+        auth.extend(pass.bytes());
+        stream.write_all(&auth).await?;
+        stream.read_exact(&mut resp).await?;
+        if resp != [1, 0] {
+            return Err(
+                io::Error::other("Proxy authentication: SOCKS5 credentials rejected").into(),
+            );
+        }
     }
 
     stream.write_all(&req).await?;
@@ -129,6 +164,7 @@ async fn socks4_tunnel(
     mut stream: TcpStream,
     dest_host: &str,
     dest_port: u16,
+    user: Option<&str>,
 ) -> Result<TcpStream, Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -146,6 +182,9 @@ async fn socks4_tunnel(
         false
     };
 
+    if let Some(user) = user {
+        req.extend_from_slice(user.as_bytes());
+    }
     req.push(0x00);
 
     if !is_ip {
@@ -209,24 +248,25 @@ where
     use tokio::io::AsyncWriteExt;
 
     validate_tunnel_dest_host(dest_host)?;
-    let auth_header = if let Some(ref auth) = proxy.auth {
-        if auth.contains(['\r', '\n', '\0']) {
-            return Err(io::Error::other("proxy credentials contain control characters").into());
-        }
+    let auth_header = if let Some((user, Some(pass))) = &proxy.auth {
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(auth.as_bytes());
+        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
         format!("Proxy-Authorization: Basic {encoded}\r\n")
     } else {
         String::new()
     };
+    let target = openproxy_types::proxy_endpoint::authority(dest_host, dest_port);
     let request = format!(
-        "CONNECT {dest_host}:{dest_port} HTTP/1.1\r\nHost: {dest_host}:{dest_port}\r\nProxy-Connection: Keep-Alive\r\n{auth_header}\r\n"
+        "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\nProxy-Connection: Keep-Alive\r\n{auth_header}\r\n"
     );
     stream.write_all(request.as_bytes()).await?;
 
     let headers_buf = read_http_connect_headers(&mut stream).await?;
     let resp_str = String::from_utf8_lossy(&headers_buf);
     let first_line = resp_str.lines().next().unwrap_or("");
+    if first_line.split_ascii_whitespace().nth(1) == Some("407") {
+        return Err(io::Error::other("Proxy authentication: HTTP CONNECT returned 407").into());
+    }
     if !is_http_connect_status_200(first_line) {
         return Err(
             io::Error::other(format!("HTTP CONNECT proxy returned error: {first_line}")).into(),
@@ -242,16 +282,25 @@ pub(crate) async fn run_proxy_tunnel(
     dest_port: u16,
 ) -> Result<super::connector_types::MaybeTlsStream, Box<dyn std::error::Error + Send + Sync>> {
     let scheme = proxy.scheme.as_str();
-    if scheme.eq_ignore_ascii_case("socks5") {
-        socks5_tunnel(stream, dest_host, dest_port)
+    if scheme == "socks5" {
+        let credentials = proxy
+            .auth
+            .as_ref()
+            .and_then(|(u, p)| Some((u.as_str(), p.as_deref()?)));
+        socks5_tunnel(stream, dest_host, dest_port, credentials)
             .await
             .and_then(|s| Ok(super::connector_types::Sock::from_tcp(s)?))
             .map(super::connector_types::MaybeTlsStream::Plain)
-    } else if scheme.eq_ignore_ascii_case("socks4") {
-        socks4_tunnel(stream, dest_host, dest_port)
-            .await
-            .and_then(|s| Ok(super::connector_types::Sock::from_tcp(s)?))
-            .map(super::connector_types::MaybeTlsStream::Plain)
+    } else if scheme == "socks4" {
+        socks4_tunnel(
+            stream,
+            dest_host,
+            dest_port,
+            proxy.auth.as_ref().map(|(u, _)| u.as_str()),
+        )
+        .await
+        .and_then(|s| Ok(super::connector_types::Sock::from_tcp(s)?))
+        .map(super::connector_types::MaybeTlsStream::Plain)
     } else if scheme.eq_ignore_ascii_case("http") {
         http_connect_tunnel(stream, proxy, dest_host, dest_port)
             .await
@@ -284,13 +333,61 @@ pub(crate) async fn run_proxy_tunnel(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn socks5_password_auth_uses_decoded_credentials() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("proxy address");
+        let mock = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut greeting = [0; 3];
+            stream.read_exact(&mut greeting).await.expect("greeting");
+            assert_eq!(greeting, [5, 1, 2]);
+            stream.write_all(&[5, 2]).await.expect("choose auth");
+            let mut credentials = [0; 9];
+            stream
+                .read_exact(&mut credentials)
+                .await
+                .expect("credentials");
+            assert_eq!(&credentials, b"\x01\x03u:x\x03p@x");
+            stream.write_all(&[1, 0]).await.expect("auth ok");
+            let expected = socks5_build_connect_req("example.com", 443).expect("fixture");
+            let mut request = vec![0; expected.len()];
+            stream.read_exact(&mut request).await.expect("request");
+            assert_eq!(request, expected);
+            stream
+                .write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+                .await
+                .expect("connected");
+        });
+        let proxy =
+            parse_proxy_url(&format!("socks5h://u%3Ax:p%40x@{addr}")).expect("valid proxy URL");
+        let stream = TcpStream::connect(addr).await.expect("connect");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            run_proxy_tunnel(stream, &proxy, "example.com", 443),
+        )
+        .await
+        .expect("deadline")
+        .expect("tunnel established");
+        mock.await.expect("fixture");
+        assert_eq!(
+            parse_proxy_url("http://[2001:db8::1]:3128")
+                .expect("ipv6")
+                .host,
+            "2001:db8::1"
+        );
+    }
+
     #[test]
     fn test_parse_proxy_url_valid() {
         let proxy = parse_proxy_url("http://user:pass@127.0.0.1:8080").expect("valid url");
         assert_eq!(proxy.scheme, "http");
         assert_eq!(proxy.host, "127.0.0.1");
         assert_eq!(proxy.port, 8080);
-        assert_eq!(proxy.auth.as_deref(), Some("user:pass"));
+        assert_eq!(proxy.auth, Some(("user".into(), Some("pass".into()))));
 
         let proxy_socks = parse_proxy_url("socks5://localhost:1080").expect("valid url");
         assert_eq!(proxy_socks.scheme, "socks5");

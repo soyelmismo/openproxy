@@ -1,12 +1,13 @@
 //! Background and on-demand proxy probe and testing execution.
 
-use super::crud::{get_proxy, update_proxy_status};
+use super::crud::get_proxy;
 use super::models::{FreeProxy, SHARED_PROXY_CLIENT};
 use futures::StreamExt;
 use openproxy_adapters::upstream::{
-    ResolvedTimeouts, TimeoutProfile, UpstreamRequest, is_private_or_reserved,
+    ResolvedTimeouts, TimeoutProfile, UpstreamError, UpstreamRequest, is_private_or_reserved,
 };
 use openproxy_db::DbPool;
+use openproxy_types::proxy_endpoint::{canonical_host, canonical_scheme, valid_auth};
 use rusqlite::Connection;
 use std::sync::Arc;
 
@@ -54,9 +55,17 @@ pub async fn validate_probe_url(url: &str) -> std::result::Result<(), String> {
         }
         return Ok(());
     }
-    let addrs = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| format!("failed to resolve url host '{host}': {e}"))?;
+    let mut addrs = tokio::time::timeout(
+        std::time::Duration::from_millis(1500),
+        tokio::net::lookup_host((host, port)),
+    )
+    .await
+    .map_err(|_| format!("DNS timeout for url host '{host}'"))?
+    .map_err(|e| format!("failed to resolve url host '{host}': {e}"))?
+    .peekable();
+    if addrs.peek().is_none() {
+        return Err(format!("no addresses for url host '{host}'"));
+    }
     for addr in addrs {
         if is_private_or_reserved(&addr.ip()) {
             return Err(format!(
@@ -82,22 +91,37 @@ async fn validated_probe_target(raw: &str) -> Option<String> {
     }
 }
 
-pub async fn test_proxy_connection(
-    test_url: &str,
-    r#type: &str,
-    host: &str,
-    port: u16,
-    username: Option<&str>,
-    password: Option<&str>,
-) -> Result<i64, String> {
-    let proxy_url = if let (Some(u), Some(p)) = (username, password) {
-        format!("{type}://{u}:{p}@{host}:{port}")
-    } else {
-        format!("{type}://{host}:{port}")
-    };
+const FALLBACK_PROBE_URL: &str = "https://www.gstatic.com/generate_204";
 
+type ProbeResult = Result<i64, ProbeFailure>;
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProbeFailure {
+    Invalid,
+    Authentication,
+    Timeout,
+    Transport,
+    Status(u16),
+}
+
+impl ProbeFailure {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Invalid => "invalid_configuration",
+            Self::Authentication => "authentication",
+            Self::Timeout => "timeout",
+            Self::Transport => "transport",
+            Self::Status(_) => "target_status",
+        }
+    }
+}
+
+async fn run_probe(test_url: &str, proxy_url: Option<&str>) -> ProbeResult {
     let client = &*SHARED_PROXY_CLIENT;
-    let req = build_probe_request(test_url, proxy_url);
+    let req = match proxy_url {
+        Some(url) => build_probe_request(test_url, url.to_owned()),
+        None => UpstreamRequest::get(test_url),
+    };
 
     let profile = TimeoutProfile::Custom(ResolvedTimeouts {
         dns_ms: 1500,
@@ -114,51 +138,129 @@ pub async fn test_proxy_connection(
     let res = client.call(req, profile, cancel).await;
 
     match res {
-        Ok(r) => {
-            if r.status == 204 || r.status == 200 {
-                let latency = start.elapsed().as_millis() as i64;
-                Ok(latency)
-            } else {
-                Err(format!("Status check failed: HTTP {}", r.status))
-            }
+        Ok(r) => match r.status.as_u16() {
+            200 | 204 => Ok(start.elapsed().as_millis() as i64),
+            407 => Err(ProbeFailure::Authentication),
+            code => Err(ProbeFailure::Status(code)),
+        },
+        Err(UpstreamError::Timeout(_)) => Err(ProbeFailure::Timeout),
+        Err(UpstreamError::Invalid(_)) => Err(ProbeFailure::Invalid),
+        Err(UpstreamError::Connection(msg)) if msg.contains("Proxy authentication:") => {
+            Err(ProbeFailure::Authentication)
         }
-        Err(e) => Err(format!("Connection probe failed: {e:?}")),
+        Err(_) => Err(ProbeFailure::Transport),
     }
 }
 
-type ParsedProxyTuple = (String, String, u16, Option<String>, Option<String>);
-
-fn fetch_proxy_test_target(conn: &Connection, id: &str) -> crate::error::Result<ParsedProxyTuple> {
-    let mut stmt = conn
-        .prepare("SELECT type, host, port, username, password FROM free_proxies WHERE id = ?1")
-        .map_err(|e| crate::error::CoreError::Database {
-            message: e.to_string(),
-            source: Some(std::sync::Arc::new(e)),
-        })?;
-    stmt.query_row(rusqlite::params![id], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, u16>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<String>>(4)?,
-        ))
-    })
-    .map_err(|e| crate::error::CoreError::Database {
-        message: e.to_string(),
-        source: Some(std::sync::Arc::new(e)),
-    })
+async fn healthy_probe_targets(primary: &str) -> Vec<String> {
+    let checks = [primary, FALLBACK_PROBE_URL];
+    let results =
+        futures::future::join_all(checks.into_iter().enumerate().map(|(i, url)| async move {
+            if i == 1 && url == primary {
+                return None;
+            }
+            // Direct controls prevent a public target outage from poisoning the pool.
+            let url = validated_probe_target(url).await?;
+            match run_probe(&url, None).await {
+                Ok(_) => Some(url),
+                Err(reason) => {
+                    tracing::warn!(category = reason.label(), "Proxy probe control failed");
+                    None
+                }
+            }
+        }))
+        .await;
+    results.into_iter().flatten().collect()
 }
 
-fn apply_single_proxy_test_result(
+async fn test_proxy_candidate(targets: &[String], proxy: &ParsedProxyTuple) -> ProbeResult {
+    let (scheme, host, port, username, password, status) = proxy;
+    let scheme = canonical_scheme(scheme).ok_or(ProbeFailure::Invalid)?;
+    let host = canonical_host(host)
+        .filter(|_| *port != 0)
+        .ok_or(ProbeFailure::Invalid)?;
+    if !valid_auth(scheme, username.as_deref(), password.as_deref()) {
+        return Err(ProbeFailure::Invalid);
+    }
+    let proxy_url = openproxy_db::free_proxies::format_proxy_url(
+        scheme,
+        &host,
+        i64::from(*port),
+        username.as_deref(),
+        password.as_deref(),
+    );
+    let first = run_probe(&targets[0], Some(&proxy_url)).await;
+    let retry = matches!(first, Err(ProbeFailure::Status(_)))
+        || (status == "alive"
+            && matches!(first, Err(ProbeFailure::Timeout | ProbeFailure::Transport)));
+    if retry {
+        let fallback = targets.get(1).unwrap_or(&targets[0]);
+        return run_probe(fallback, Some(&proxy_url)).await;
+    }
+    first
+}
+
+type ParsedProxyTuple = (String, String, u16, Option<String>, Option<String>, String);
+type ProxyTestCandidate = (String, ParsedProxyTuple, Option<String>);
+
+fn map_candidate(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProxyTestCandidate> {
+    Ok((
+        row.get(0)?,
+        (
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get(5)?,
+            row.get(6)?,
+        ),
+        row.get(7)?,
+    ))
+}
+
+fn fetch_proxy_test_target(
     conn: &Connection,
     id: &str,
-    test_res: Result<i64, String>,
+) -> crate::error::Result<ProxyTestCandidate> {
+    conn.query_row(
+        "SELECT id, type, host, port, username, password, status, last_validated FROM free_proxies WHERE id = ?1",
+        [id], map_candidate,
+    ).map_err(openproxy_db::error::map_db_error)
+}
+
+// A concurrent import or validation may have changed the candidate while the
+// network request was in flight. Never apply a result to that newer snapshot.
+const UPDATE_PROBE: &str = "UPDATE free_proxies
+    SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?3
+    WHERE id = ?4 AND type = ?5 AND host = ?6 AND port = ?7
+    AND username IS ?8 AND password IS ?9 AND status = ?10 AND last_validated IS ?11";
+
+fn apply_proxy_test_result(
+    stmt: &mut rusqlite::Statement<'_>,
+    candidate: &ProxyTestCandidate,
+    result: &ProbeResult,
+    now: &str,
 ) -> crate::error::Result<()> {
-    match test_res {
-        Ok(latency) => update_proxy_status(conn, id, "alive", Some(latency)),
-        Err(_) => update_proxy_status(conn, id, "dead", None),
-    }
+    let (id, (scheme, host, port, user, pass, previous), last_validated) = candidate;
+    let (status, latency) = match result {
+        Ok(ms) => ("alive", Some(*ms)),
+        Err(_) => ("dead", None),
+    };
+    stmt.execute(rusqlite::params![
+        status,
+        latency,
+        now,
+        id,
+        scheme,
+        host,
+        port,
+        user,
+        pass,
+        previous,
+        last_validated
+    ])
+    .map_err(openproxy_db::error::map_db_error)?;
+    Ok(())
 }
 
 pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::Result<FreeProxy> {
@@ -186,23 +288,17 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
     // Security (audit H-2): revalidate the stored probe target at every use
     // — a value planted via a restored backup or written straight to the DB
     // must never turn the probe into an internal scanner.
-    let Some(test_url) = validated_probe_target(&raw_test_url).await else {
-        return Err(crate::error::CoreError::Internal(
-            "proxy probe target rejected: not a public http(s) host".to_string(),
+    let targets = healthy_probe_targets(&raw_test_url).await;
+    if targets.is_empty() {
+        return Err(crate::error::CoreError::ServiceUnavailable(
+            "No healthy proxy probe target".into(),
         ));
-    };
-
-    let (r#type, host, port, username, password) = type_host_port_user_pass;
-
-    let test_res = test_proxy_connection(
-        &test_url,
-        &r#type,
-        &host,
-        port,
-        username.as_deref(),
-        password.as_deref(),
-    )
-    .await;
+    }
+    let candidate = type_host_port_user_pass;
+    let test_res = test_proxy_candidate(&targets, &candidate.1).await;
+    if let Err(reason) = &test_res {
+        tracing::info!(proxy_id = %id, category = reason.label(), "Manual proxy probe failed");
+    }
 
     let pool = Arc::clone(&db_pool);
     let id = id_owned;
@@ -212,7 +308,15 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
                 "test_single_proxy: writer lock not acquired within {LOCK_TIMEOUT:?}"
             ))
         })?;
-        apply_single_proxy_test_result(&w, &id, test_res)?;
+        let mut stmt = w
+            .prepare_cached(UPDATE_PROBE)
+            .map_err(openproxy_db::error::map_db_error)?;
+        apply_proxy_test_result(
+            &mut stmt,
+            &candidate,
+            &test_res,
+            &chrono::Utc::now().to_rfc3339(),
+        )?;
         get_proxy(&w, &id)?.ok_or_else(|| crate::error::CoreError::NotFound {
             what: "proxy".to_string(),
             id,
@@ -223,8 +327,6 @@ pub async fn test_single_proxy(db_pool: Arc<DbPool>, id: &str) -> crate::error::
 
     Ok(p)
 }
-
-type ProxyTestCandidate = (String, String, String, u16, Option<String>, Option<String>);
 
 pub const CANDIDATE_BATCH_LIMIT: usize = 100;
 
@@ -238,7 +340,7 @@ pub(crate) fn fetch_background_test_proxies_with_limit(
 ) -> Vec<ProxyTestCandidate> {
     let mut stmt = match conn.prepare(
         "
-        SELECT id, type, host, port, username, password FROM free_proxies 
+        SELECT id, type, host, port, username, password, status, last_validated FROM free_proxies
         WHERE 
             status = 'unknown' 
             OR (status = 'alive' AND (last_validated IS NULL OR datetime(last_validated) < datetime('now', '-30 minutes')))
@@ -264,16 +366,7 @@ pub(crate) fn fetch_background_test_proxies_with_limit(
             return Vec::new();
         }
     };
-    let rows = match stmt.query_map(rusqlite::params![limit as i64], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, u16>(3)?,
-            row.get::<_, Option<String>>(4)?,
-            row.get::<_, Option<String>>(5)?,
-        ))
-    }) {
+    let rows = match stmt.query_map(rusqlite::params![limit as i64], map_candidate) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("Failed to query list in background test: {}", e);
@@ -285,7 +378,7 @@ pub(crate) fn fetch_background_test_proxies_with_limit(
 
 fn execute_proxy_batch_update(
     conn: &mut Connection,
-    batch: &[(String, Result<i64, String>)],
+    batch: &[(ProxyTestCandidate, ProbeResult)],
 ) -> Result<(), crate::error::CoreError> {
     openproxy_db::error::with_busy_retry("execute_proxy_batch_update", || {
         let tx_db = conn
@@ -294,17 +387,11 @@ fn execute_proxy_batch_update(
         let now = chrono::Utc::now().to_rfc3339();
         {
             let mut stmt = tx_db
-                .prepare_cached(
-                    "UPDATE free_proxies SET status = ?1, latency_ms = ?2, last_validated = ?3, updated_at = ?4 WHERE id = ?5",
-                )
+                .prepare_cached(UPDATE_PROBE)
                 .map_err(openproxy_db::error::map_db_error)?;
 
-            for (id, test_res) in batch {
-                let (status, latency) = match test_res {
-                    Ok(lat) => ("alive", Some(*lat)),
-                    Err(_) => ("dead", None),
-                };
-                let _ = stmt.execute(rusqlite::params![status, latency, now, now, id]);
+            for (candidate, test_res) in batch {
+                apply_proxy_test_result(&mut stmt, candidate, test_res, &now)?;
             }
         }
         tx_db.commit().map_err(openproxy_db::error::map_db_error)?;
@@ -368,11 +455,10 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
         }
     };
 
-    // Security (audit H-2): revalidate the stored probe target at every use.
-    let Some(test_url) = validated_probe_target(&raw_test_url).await else {
-        return;
-    };
-
+    let mut targets = None;
+    let mut checked = 0;
+    let mut failures = std::collections::BTreeMap::new();
+    let started = std::time::Instant::now();
     for _ in 0..MAX_BATCHES {
         let pool_reader = Arc::clone(&db_pool);
         let proxies = match tokio::task::spawn_blocking(
@@ -402,58 +488,55 @@ pub async fn test_all_proxies(db_pool: Arc<DbPool>) {
             break;
         }
 
-        let batch_count = proxies.len();
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<(String, Result<i64, String>)>(100);
-        let pool_writer = Arc::clone(&db_pool);
-
-        let writer_handle = tokio::spawn(async move {
-            while let Some(first) = rx.recv().await {
-                let mut batch = vec![first];
-                while batch.len() < 50 {
-                    match rx.try_recv() {
-                        Ok(item) => batch.push(item),
-                        Err(_) => break,
-                    }
-                }
-
-                let pool = Arc::clone(&pool_writer);
-                let _ =
-                    tokio::task::spawn_blocking(move || -> Result<(), crate::error::CoreError> {
-                        let mut w = pool.writer();
-                        execute_proxy_batch_update(&mut w, &batch)
-                    })
-                    .await;
+        let targets = targets.get_or_insert_with(Vec::new);
+        if targets.is_empty() {
+            *targets = healthy_probe_targets(&raw_test_url).await;
+            if targets.is_empty() {
+                return;
             }
-        });
-
-        let test_url_ref = &test_url;
-        futures::stream::iter(proxies)
-            .for_each_concurrent(
-                CONCURRENT_PROBES,
-                |(id, r#type, host, port, username, password)| {
-                    let tx = tx.clone();
-                    async move {
-                        let test_res = test_proxy_connection(
-                            test_url_ref,
-                            &r#type,
-                            &host,
-                            port,
-                            username.as_deref(),
-                            password.as_deref(),
-                        )
-                        .await;
-                        let _ = tx.send((id, test_res)).await;
-                    }
-                },
-            )
+        }
+        let batch_count = proxies.len();
+        let targets = targets.as_slice();
+        let batch = futures::stream::iter(proxies)
+            .map(|candidate| async move {
+                let result = test_proxy_candidate(targets, &candidate.1).await;
+                (candidate, result)
+            })
+            .buffer_unordered(CONCURRENT_PROBES)
+            .collect::<Vec<_>>()
             .await;
-
-        drop(tx);
-        let _ = writer_handle.await;
+        for (_, result) in &batch {
+            if let Err(reason) = result {
+                *failures.entry(reason.label()).or_insert(0u32) += 1;
+            }
+        }
+        let pool = Arc::clone(&db_pool);
+        match tokio::task::spawn_blocking(move || {
+            let mut w = pool.try_writer_for(READER_LOCK_TIMEOUT).ok_or_else(|| {
+                crate::error::CoreError::Internal("Proxy validation writer lock timed out".into())
+            })?;
+            execute_proxy_batch_update(&mut w, &batch)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "Proxy validation batch write failed");
+                break;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Proxy validation writer task failed");
+                break;
+            }
+        }
+        checked += batch_count;
 
         if batch_count < CANDIDATE_BATCH_LIMIT {
             break;
         }
+    }
+    if checked != 0 {
+        tracing::info!(checked, failures = ?failures, elapsed_ms = started.elapsed().as_millis() as u64, "Proxy validation pass completed");
     }
 }
 
@@ -508,6 +591,45 @@ mod tests {
         validate_probe_url("https://1.1.1.1/cdn-cgi/trace")
             .await
             .expect("public literal must pass");
+    }
+
+    #[test]
+    fn changed_credentials_invalidate_health_and_inflight_results() {
+        let pool = openproxy_db::conn::DbPool::test_pool_with_prefix("proxy-config-change")
+            .expect("test db");
+        let mut conn = pool.writer();
+        let row = super::super::crud::add_custom_proxy(
+            &conn,
+            "proxy.example",
+            1080,
+            "socks5",
+            None,
+            Some("user"),
+            Some("old"),
+        )
+        .expect("fixture");
+        super::super::crud::update_proxy_status(&conn, &row.id, "alive", Some(120)).expect("alive");
+        let stale = fetch_proxy_test_target(&conn, &row.id).expect("snapshot");
+        let current = super::super::crud::add_custom_proxy(
+            &conn,
+            "proxy.example",
+            1080,
+            "socks5",
+            None,
+            Some("user"),
+            Some("new"),
+        )
+        .expect("updated");
+        assert_eq!(current.status, "unknown");
+        assert!(current.latency_ms.is_none());
+        assert!(current.last_validated.is_none());
+        execute_proxy_batch_update(&mut conn, &[(stale, Ok(120))]).expect("write");
+        let fresh = fetch_proxy_test_target(&conn, &row.id).expect("snapshot");
+        assert_eq!(fresh.1.5, "unknown");
+        execute_proxy_batch_update(&mut conn, &[(fresh, Ok(80))]).expect("write");
+        let current = get_proxy(&conn, &row.id).expect("read").expect("proxy");
+        assert_eq!(current.status, "alive");
+        assert_eq!(current.latency_ms, Some(80));
     }
 
     #[test]
@@ -654,19 +776,23 @@ mod tests {
             let pool = std::sync::Arc::clone(&pool);
             tasks.push(tokio::spawn(async move {
                 for iter in 0..5 {
-                    let batch = vec![
-                        (
-                            format!("proxy-stress-{}", (t * 5 + iter) % 50),
-                            Ok(150 + iter as i64),
-                        ),
-                        (
-                            format!("proxy-stress-{}", (t * 5 + iter + 1) % 50),
-                            Err("timeout".to_string()),
-                        ),
-                    ];
                     let pool_clone = std::sync::Arc::clone(&pool);
                     tokio::task::spawn_blocking(move || {
                         let mut w = pool_clone.writer();
+                        let first = fetch_proxy_test_target(
+                            &w,
+                            &format!("proxy-stress-{}", (t * 5 + iter) % 50),
+                        )
+                        .expect("candidate");
+                        let second = fetch_proxy_test_target(
+                            &w,
+                            &format!("proxy-stress-{}", (t * 5 + iter + 1) % 50),
+                        )
+                        .expect("candidate");
+                        let batch = [
+                            (first, Ok(150 + iter as i64)),
+                            (second, Err(ProbeFailure::Timeout)),
+                        ];
                         execute_proxy_batch_update(&mut w, &batch).expect("tester batch update");
                     })
                     .await

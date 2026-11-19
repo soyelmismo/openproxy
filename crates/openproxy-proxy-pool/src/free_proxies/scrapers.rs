@@ -70,35 +70,13 @@ pub async fn sync_proxifly(url: &str) -> crate::error::Result<Vec<ScrapedProxy>>
 }
 
 pub fn parse_proxy_host_port(proxy: &str) -> Option<(String, u16)> {
-    let (host, port_str) = proxy.rsplit_once(':')?;
-    let host = host.trim();
-    let port = port_str.trim().parse::<u16>().ok()?;
-    if host.is_empty() || port == 0 {
-        None
-    } else {
-        Some((host.to_string(), port))
-    }
+    let (host, port, tail) = split_host_port(proxy)?;
+    tail.is_none().then_some((host, port))
 }
 
 pub fn parse_plain_proxy_lines(text: &str, src_name: &str, proto: &str) -> Vec<ScrapedProxy> {
     text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                return None;
-            }
-            let (host, port) = parse_proxy_host_port(trimmed)?;
-            Some(ScrapedProxy {
-                source: src_name.to_string(),
-                host,
-                port,
-                r#type: proto.to_string(),
-                country_code: None,
-                username: None,
-                password: None,
-                priority: 0,
-            })
-        })
+        .filter_map(|line| parse_proxy_line(line, src_name, 0, proto))
         .collect()
 }
 
@@ -163,6 +141,11 @@ pub async fn sync_github_lists(base_url: &str) -> crate::error::Result<Vec<Scrap
             "thespeedx",
             "{base}/TheSpeedX/PROXY-List/master/{}.txt",
             &["http", "socks4", "socks5"],
+        ),
+        (
+            "monosans",
+            "{base}/monosans/proxy-list/main/proxies/{}.txt",
+            &["socks5"],
         ),
     ];
 
@@ -246,6 +229,85 @@ pub async fn sync_proxyscrape_cdn(url: &str) -> crate::error::Result<Vec<Scraped
     fetch_protocol_proxies(url, "proxyscrape_cdn", "ProxyScrape CDN").await
 }
 
+pub(super) async fn sync_public_proxy_text(
+    url: &str,
+    source: &str,
+    default_protocol: Option<&str>,
+) -> crate::error::Result<Vec<ScrapedProxy>> {
+    use crate::error::CoreError;
+    use openproxy_adapters::upstream::is_private_or_reserved;
+    use openproxy_types::proxy_endpoint::canonical_scheme;
+    use std::net::IpAddr;
+
+    const MAX_FEED_BYTES: usize = 2 * 1024 * 1024;
+    let mut res = SHARED_PROXY_CLIENT
+        .call(
+            UpstreamRequest::get(url),
+            TimeoutProfile::ModelDiscovery,
+            openproxy_adapters::upstream::CancellationToken::new(),
+        )
+        .await
+        .map_err(|e| CoreError::Internal(format!("{source} HTTP error: {e}")))?;
+    if res.status != 200 {
+        return Err(CoreError::Internal(format!(
+            "{source} HTTP status: {}",
+            res.status
+        )));
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res
+        .body
+        .next_chunk()
+        .await
+        .map_err(|e| CoreError::Internal(format!("{source} body error: {e}")))?
+    {
+        if chunk.len() > MAX_FEED_BYTES - bytes.len() {
+            return Err(CoreError::Internal(format!(
+                "{source} feed exceeds {MAX_FEED_BYTES} bytes"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|e| CoreError::Internal(format!("{source} UTF-8 error: {e}")))?;
+    let proxies: Vec<_> = text
+        .trim_start_matches('\u{feff}')
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (scheme, endpoint) = match line.split_once("://") {
+                Some(pair) => pair,
+                None => (default_protocol?, line),
+            };
+            let proto = canonical_scheme(scheme)?;
+            if default_protocol.is_some_and(|expected| expected != proto) {
+                return None;
+            }
+            let (host, port) = parse_proxy_host_port(endpoint)?;
+            let ip = host.parse::<IpAddr>().ok()?.to_canonical();
+            if is_private_or_reserved(&ip) || ip.is_multicast() {
+                return None;
+            }
+            Some(ScrapedProxy {
+                source: source.to_string(),
+                host: ip.to_string(),
+                port,
+                r#type: proto.to_string(),
+                country_code: None,
+                username: None,
+                password: None,
+                priority: 0,
+            })
+        })
+        .collect();
+    if proxies.is_empty() {
+        return Err(CoreError::Internal(format!(
+            "{source} feed has no valid public endpoints"
+        )));
+    }
+    Ok(proxies)
+}
+
 #[derive(serde::Deserialize)]
 struct GeonodeItem {
     ip: String,
@@ -327,11 +389,12 @@ struct VakhovItem {
 }
 
 pub fn parse_vakhov_port(port: &serde_json::Value) -> Option<u16> {
-    match port {
-        serde_json::Value::Number(n) => n.as_u64().map(|v| v as u16),
+    let port = match port {
+        serde_json::Value::Number(n) => u16::try_from(n.as_u64()?).ok(),
         serde_json::Value::String(s) => s.parse::<u16>().ok(),
         _ => None,
-    }
+    }?;
+    (port != 0).then_some(port)
 }
 
 pub async fn sync_vakhov(url: &str) -> crate::error::Result<Vec<ScrapedProxy>> {
@@ -401,29 +464,67 @@ pub fn parse_custom_proxy_line(
     source_name: &str,
     priority: i32,
 ) -> Option<ScrapedProxy> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-        return None;
-    }
+    parse_proxy_line(line, source_name, priority, "http")
+}
 
-    let (proto, host_port) = trimmed.split_once("://").unwrap_or(("http", trimmed));
-    let (raw_host, rest) = host_port.split_once(':')?;
-    let (raw_port, auth_part) = rest
+fn split_host_port(value: &str) -> Option<(String, u16, Option<&str>)> {
+    use openproxy_types::proxy_endpoint::canonical_host;
+    let value = value.trim();
+    let (host, rest) = if value.starts_with('[') {
+        let close = value.find(']')?;
+        (
+            &value[..=close],
+            value[close + 1..].trim_start().strip_prefix(':')?,
+        )
+    } else {
+        value.split_once(':')?
+    };
+    let (port, tail) = rest
         .split_once(':')
         .map_or((rest, None), |(p, a)| (p, Some(a)));
+    let port = port.trim().parse::<u16>().ok().filter(|p| *p != 0)?;
+    Some((canonical_host(host)?, port, tail))
+}
 
-    let host = raw_host.trim().to_string();
-    let port = raw_port.trim().parse::<u16>().ok()?;
-    if host.is_empty() || port == 0 {
+fn parse_proxy_line(
+    line: &str,
+    source_name: &str,
+    priority: i32,
+    default: &str,
+) -> Option<ScrapedProxy> {
+    use openproxy_types::proxy_endpoint::{canonical_scheme, decode_userinfo, valid_auth};
+    let line = line.trim_start_matches('\u{feff}').trim();
+    let (scheme, address) = line.split_once("://").unwrap_or((default, line));
+    let proto = canonical_scheme(scheme)?;
+    let (host, port, username, password) = if let Some((userinfo, endpoint)) =
+        address.split_once('@')
+        && let Some((host, port)) = parse_proxy_host_port(endpoint)
+    {
+        let (user, pass) = userinfo
+            .split_once(':')
+            .map_or((userinfo, None), |(u, p)| (u, Some(p)));
+        (
+            host,
+            port,
+            Some(decode_userinfo(user)?),
+            match pass {
+                Some(p) => Some(decode_userinfo(p)?),
+                None => None,
+            },
+        )
+    } else {
+        let (host, port, tail) = split_host_port(address)?;
+        let (user, pass) = parse_custom_proxy_auth(tail);
+        (host, port, user, pass)
+    };
+    if !valid_auth(proto, username.as_deref(), password.as_deref()) {
         return None;
     }
-
-    let (username, password) = parse_custom_proxy_auth(auth_part);
     Some(ScrapedProxy {
         source: source_name.to_string(),
         host,
         port,
-        r#type: proto.to_lowercase(),
+        r#type: proto.to_string(),
         country_code: None,
         username,
         password,

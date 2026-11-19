@@ -170,43 +170,6 @@ fn test_get_candidate_proxies_for_provider() {
 }
 
 #[test]
-fn test_proxyscrape_cdn_json_parsing() {
-    let json_data = r#"[
-        {
-            "protocol": "socks4",
-            "ip": "95.217.167.252",
-            "port": 11117,
-            "country": "Finland",
-            "country_code": "FI"
-        }
-    ]"#;
-    let items: Vec<serde_json::Value> = serde_json::from_str(json_data).unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["ip"], "95.217.167.252");
-    assert_eq!(items[0]["port"], 11117);
-    assert_eq!(items[0]["protocol"], "socks4");
-    assert_eq!(items[0]["country_code"], "FI");
-}
-
-#[test]
-fn test_geonode_json_parsing() {
-    let json_data = r#"{
-        "data": [
-            {
-                "ip": "193.233.72.56",
-                "port": "988",
-                "protocols": ["socks5"],
-                "country": "US"
-            }
-        ]
-    }"#;
-    let body: serde_json::Value = serde_json::from_str(json_data).unwrap();
-    assert_eq!(body["data"].as_array().unwrap().len(), 1);
-    assert_eq!(body["data"][0]["ip"], "193.233.72.56");
-    assert_eq!(body["data"][0]["port"], "988");
-}
-
-#[test]
 fn test_get_proxy_status_by_url() {
     let conn = setup_test_db();
 

@@ -2,11 +2,12 @@
 
 use super::models::{
     CLEARPROXY_URL, GEONODE_URL, GITHUB_LISTS_BASE_URL, GPROXYNET_URL, PROXIFLY_URL, PROXMINT_URL,
-    PROXYSCRAPE_CDN_URL, ScrapedProxy, VAKHOV_URL,
+    PROXYSCRAPE_CDN_URL, PROXYSCRAPE_V4_URL, PROXYSCRAPER_URL, ScrapedProxy, VAKHOV_URL,
+    VPSLAB_URL,
 };
 use super::scrapers::{
     sync_clearproxy, sync_geonode, sync_github_lists, sync_gproxynet, sync_proxifly, sync_proxmint,
-    sync_proxyscrape_cdn, sync_vakhov,
+    sync_proxyscrape_cdn, sync_public_proxy_text, sync_vakhov,
 };
 
 pub struct BuiltinProxySourceDef {
@@ -46,6 +47,7 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
             "anonymouswork",
             "kael_odin",
             "thespeedx",
+            "monosans",
         ],
         sync_fn: |url| {
             let u = url.to_string();
@@ -70,6 +72,38 @@ pub static BUILTIN_PROXY_SOURCES: &[BuiltinProxySourceDef] = &[
         sync_fn: |url| {
             let u = url.to_string();
             Box::pin(async move { sync_proxyscrape_cdn(&u).await })
+        },
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_proxyscrape_v4",
+        name: "ProxyScrape v4 (Built-in)",
+        url: PROXYSCRAPE_V4_URL,
+        scraped_sources: &["proxyscrape_v4"],
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_public_proxy_text(&u, "proxyscrape_v4", None).await })
+        },
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_proxyscraper",
+        name: "ProxyScraper SOCKS5 (Built-in)",
+        url: PROXYSCRAPER_URL,
+        scraped_sources: &["proxyscraper"],
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(
+                async move { sync_public_proxy_text(&u, "proxyscraper", Some("socks5")).await },
+            )
+        },
+    },
+    BuiltinProxySourceDef {
+        id: "builtin_vpslab",
+        name: "VPSLab SOCKS5 (Built-in)",
+        url: VPSLAB_URL,
+        scraped_sources: &["vpslab"],
+        sync_fn: |url| {
+            let u = url.to_string();
+            Box::pin(async move { sync_public_proxy_text(&u, "vpslab", Some("socks5")).await })
         },
     },
     BuiltinProxySourceDef {

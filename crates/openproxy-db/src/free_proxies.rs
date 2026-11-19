@@ -27,10 +27,17 @@ pub fn format_proxy_url(
     username: Option<&str>,
     password: Option<&str>,
 ) -> String {
-    if let (Some(u), Some(p)) = (username, password) {
-        format!("{}://{}:{}@{}:{}", proto.to_lowercase(), u, p, host, port)
-    } else {
-        format!("{}://{}:{}", proto.to_lowercase(), host, port)
+    use openproxy_types::proxy_endpoint::{authority, canonical_scheme, encode_userinfo};
+    let proto = canonical_scheme(proto).unwrap_or(proto);
+    let endpoint = authority(host, port);
+    match (username, password) {
+        (Some(user), Some(pass)) => format!(
+            "{proto}://{}:{}@{endpoint}",
+            encode_userinfo(user),
+            encode_userinfo(pass)
+        ),
+        (Some(user), None) => format!("{proto}://{}@{endpoint}", encode_userinfo(user)),
+        _ => format!("{proto}://{endpoint}"),
     }
 }
 

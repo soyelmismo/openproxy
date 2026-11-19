@@ -14,6 +14,7 @@ pub use error_classification::UpstreamErrorClass;
 pub mod ids;
 pub mod message;
 pub mod providers;
+pub mod proxy_endpoint;
 
 pub mod quota;
 pub mod responses;

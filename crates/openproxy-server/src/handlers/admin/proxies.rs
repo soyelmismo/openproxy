@@ -136,8 +136,12 @@ pub async fn create_custom_proxy(
         .as_deref()
         .map(str::trim)
         .map(String::from);
-    let username = body.username.as_deref().map(str::trim).map(String::from);
-    let password = body.password.as_deref().map(str::trim).map(String::from);
+    let username = body.username.filter(|u| !u.is_empty());
+    let password = if username.is_none() && body.password.as_deref() == Some("") {
+        None
+    } else {
+        body.password
+    };
     let port = body.port;
 
     let p = tokio::task::spawn_blocking(move || {
